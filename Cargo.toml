@@ -1,0 +1,11 @@
+[package]
+name = "rustycity"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winit = "0.30"
+wgpu = "0.20"
+pollster = "0.3"
+bytemuck = { version = "1.16", features = ["derive"] }
+glam = "0.27"  # for matrices and vectors
