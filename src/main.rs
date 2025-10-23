@@ -9,6 +9,8 @@ mod state;
 mod vertex;
 
 mod renderer;
+mod simulation_controls;
+mod ui;
 
 use app::App;
 use camera::Camera;
