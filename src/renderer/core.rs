@@ -1,5 +1,6 @@
 use crate::camera::Camera;
 pub use crate::renderer::pipelines::Pipelines;
+use crate::ui::UiSystem;
 use crate::vertex::{LineVtx, Vertex};
 use crate::{FrameTimer, Uniforms};
 use std::sync::Arc;
@@ -197,7 +198,7 @@ impl RenderCore {
             .create_view(&wgpu::TextureViewDescriptor::default());
     }
 
-    pub(crate) fn render(&mut self, camera: &Camera) {
+    pub(crate) fn render(&mut self, camera: &Camera, window: &Window, ui: &mut UiSystem) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
         let new_uniforms = Uniforms {
@@ -313,6 +314,13 @@ impl RenderCore {
             pass.set_vertex_buffer(0, self.pipelines.gizmo_vbuf.slice(..));
             pass.draw(0..6, 0..1);
         }
+        ui.render(
+            &self.device,
+            &self.queue,
+            window,
+            &mut encoder,
+            &surface_view,
+        );
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }

@@ -3,8 +3,10 @@ pub mod pipelines;
 pub mod render_passes;
 
 use crate::camera::Camera;
+use crate::ui::UiSystem;
 use core::RenderCore;
 use std::sync::Arc;
+use winit::window::Window;
 
 pub struct Renderer {
     pub core: RenderCore,
@@ -20,7 +22,7 @@ impl Renderer {
         self.core.resize(size);
     }
 
-    pub fn render(&mut self, camera: &Camera) {
-        self.core.render(camera);
+    pub fn render(&mut self, camera: &Camera, window: &Window, ui: &mut UiSystem) {
+        self.core.render(camera, window, ui);
     }
 }

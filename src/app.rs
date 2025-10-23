@@ -37,6 +37,8 @@ impl ApplicationHandler for App {
             None => return,
         };
 
+        state.ui.handle_event(&event);
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
@@ -45,10 +47,12 @@ impl ApplicationHandler for App {
                 let pressed = event.state == ElementState::Pressed;
 
                 // Movement keys (continuous)
-                if let Key::Character(ch) = &event.logical_key {
-                    let key = ch.to_lowercase();
-                    if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
-                        state.input.set_key(&key, pressed);
+                if !state.ui.wants_keyboard_input() {
+                    if let Key::Character(ch) = &event.logical_key {
+                        let key = ch.to_lowercase();
+                        if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
+                            state.input.set_key(&key, pressed);
+                        }
                     }
                 }
 
@@ -67,12 +71,18 @@ impl ApplicationHandler for App {
                 button,
                 ..
             } => {
+                if state.ui.wants_pointer_input() {
+                    return;
+                }
                 if button == winit::event::MouseButton::Middle {
                     state.mouse.dragging = mouse_state == ElementState::Pressed;
                     state.mouse.last_pos = None;
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if state.ui.wants_pointer_input() {
+                    return;
+                }
                 if state.mouse.dragging {
                     if let Some((lx, ly)) = state.mouse.last_pos {
                         let dx = position.x - lx;
@@ -95,6 +105,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if state.ui.wants_pointer_input() {
+                    return;
+                }
                 // zoom in/out
                 match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => {
