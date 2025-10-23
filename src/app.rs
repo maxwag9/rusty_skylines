@@ -56,7 +56,7 @@ impl ApplicationHandler for App {
                 if pressed {
                     if let Key::Named(winit::keyboard::NamedKey::F5) = &event.logical_key {
                         if let Some(state) = &mut self.state {
-                            state.cycle_msaa();
+                            state.renderer.core.cycle_msaa();
                         }
                     }
                 }

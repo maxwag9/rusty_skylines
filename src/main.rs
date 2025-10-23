@@ -8,10 +8,11 @@ mod input;
 mod state;
 mod vertex;
 
+mod renderer;
+
 use app::App;
 use camera::Camera;
 use input::{InputState, MouseState};
-use vertex::{LineVtx, Vertex};
 
 struct FrameTimer {
     last: Instant,
