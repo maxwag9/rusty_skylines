@@ -1,15 +1,23 @@
 use crate::state::State;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::Key;
 use winit::window::{Window, WindowId};
 
-#[derive(Default)]
 pub(crate) struct App {
     window: Option<Arc<Window>>,
-    state: Option<State>,
+    state: Option<Arc<Mutex<State>>>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            window: None,
+            state: None,
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -25,19 +33,39 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        let state = pollster::block_on(State::new(window.clone()));
-
-        self.window = Some(window);
+        // Initialize shared state
+        let state = Arc::new(Mutex::new(State::new(window.clone())));
         self.state = Some(state);
+        self.window = Some(window);
+        if let Some(state_arc) = &self.state {
+            let state_clone = state_arc.clone();
+            std::thread::spawn(move || {
+                use std::time::{Duration, Instant};
+                const TICK: Duration = Duration::from_millis(16); // ~60 Hz
+                let mut last = Instant::now();
+
+                loop {
+                    let now = Instant::now();
+                    let dt = (now - last).as_secs_f32();
+                    last = now;
+
+                    {
+                        let mut state = state_clone.lock().unwrap();
+                        state.simulation.update(dt);
+                    }
+
+                    std::thread::sleep(TICK);
+                }
+            });
+        }
+
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let state = match self.state.as_mut() {
-            Some(s) => s,
-            None => return,
+        let Some(state_arc) = &self.state else {
+            return;
         };
-
-        state.ui.handle_event(&event);
+        let mut state = state_arc.lock().unwrap();
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -46,22 +74,18 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
 
-                // Movement keys (continuous)
-                if !state.ui.wants_keyboard_input() {
-                    if let Key::Character(ch) = &event.logical_key {
-                        let key = ch.to_lowercase();
-                        if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
-                            state.input.set_key(&key, pressed);
-                        }
+                // Movement keys
+                if let Key::Character(ch) = &event.logical_key {
+                    let key = ch.to_lowercase();
+                    if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
+                        state.input.set_key(&key, pressed);
                     }
                 }
 
-                // F5 (toggle once)
+                // F5: toggle MSAA
                 if pressed {
                     if let Key::Named(winit::keyboard::NamedKey::F5) = &event.logical_key {
-                        if let Some(state) = &mut self.state {
-                            state.renderer.core.cycle_msaa();
-                        }
+                        state.renderer.core.cycle_msaa();
                     }
                 }
             }
@@ -71,18 +95,13 @@ impl ApplicationHandler for App {
                 button,
                 ..
             } => {
-                if state.ui.wants_pointer_input() {
-                    return;
-                }
                 if button == winit::event::MouseButton::Middle {
                     state.mouse.dragging = mouse_state == ElementState::Pressed;
                     state.mouse.last_pos = None;
                 }
             }
+
             WindowEvent::CursorMoved { position, .. } => {
-                if state.ui.wants_pointer_input() {
-                    return;
-                }
                 if state.mouse.dragging {
                     if let Some((lx, ly)) = state.mouse.last_pos {
                         let dx = position.x - lx;
@@ -90,28 +109,22 @@ impl ApplicationHandler for App {
                         let pitch_sensitivity = 0.002;
                         let yaw_sensitivity = 0.0016;
 
-                        // Apply smoothing directly to target angles
                         state.target_yaw += dx as f32 * yaw_sensitivity;
                         state.target_pitch += dy as f32 * pitch_sensitivity;
                         state.target_pitch = state
                             .target_pitch
                             .clamp(10.0f32.to_radians(), 89.0f32.to_radians());
 
-                        // record last angular velocity for soft stop
                         state.yaw_velocity = dx as f32 * yaw_sensitivity;
                         state.pitch_velocity = dy as f32 * pitch_sensitivity;
                     }
                     state.mouse.last_pos = Some((position.x, position.y));
                 }
             }
+
             WindowEvent::MouseWheel { delta, .. } => {
-                if state.ui.wants_pointer_input() {
-                    return;
-                }
-                // zoom in/out
                 match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                        // scroll direction affects velocity, proportional to distance
                         state.zoom_vel -= y * 1.0 * state.camera.radius;
                     }
                     winit::event::MouseScrollDelta::PixelDelta(pos) => {
@@ -125,7 +138,6 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Request redraw every frame
         if let Some(window) = &self.window {
             window.request_redraw();
         }

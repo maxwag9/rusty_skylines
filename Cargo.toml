@@ -9,6 +9,3 @@ wgpu = "27.0.1"
 pollster = "0.4.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
 glam = "0.30.8"  # for matrices and vectors
-egui = "0.27.2"
-egui_winit = "0.27.2"
-egui_wgpu = { version = "0.27.2", default-features = false, features = ["wgpu"] }

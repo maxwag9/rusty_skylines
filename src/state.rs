@@ -1,13 +1,14 @@
 use crate::renderer::Renderer;
-use crate::simulation_controls::SimulationControls;
-use crate::ui::UiSystem;
 use crate::{Camera, InputState, MouseState};
 use glam::Vec3;
 use std::sync::Arc;
 use winit::window::Window;
+use crate::simulation::Simulation;
+
+
 
 pub(crate) struct State {
-    window: Arc<Window>,
+    _window: Arc<Window>,
     pub(crate) camera: Camera,
     pub(crate) input: InputState,
     pub(crate) mouse: MouseState,
@@ -21,65 +22,48 @@ pub(crate) struct State {
     orbit_damping_release: f32,
     zoom_damping: f32,
     pub renderer: Renderer,
-    pub ui: UiSystem,
-    pub simulation_controls: SimulationControls,
+    simulation_running: bool,
+    pub simulation: Simulation,
 }
 
 impl State {
-    pub(crate) async fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: Arc<Window>) -> Self {
         let camera = Camera::new();
-        let renderer = Renderer::new(window.clone()).await;
-        let ui = {
-            let core = &renderer.core;
-            UiSystem::new(window.as_ref(), &core.device, core.config.format, core.size)
-        };
-
+        let renderer = Renderer::new(window.clone());
+        let simulation = Simulation::new();
+        
         Self {
-            window,
+            _window: window,
             input: InputState::new(),
             mouse: MouseState {
                 last_pos: None,
                 dragging: false,
             },
-
             velocity: Vec3::ZERO,
             zoom_vel: 0.0,
             target_yaw: camera.yaw,
             target_pitch: camera.pitch,
-            orbit_smoothness: 0.25, // 0.0 = instant, 1.0 = very slow follow
+            orbit_smoothness: 0.25,
             yaw_velocity: 0.0,
             pitch_velocity: 0.0,
-            orbit_damping_release: 4.0, // how fast rotation stops after release
+            orbit_damping_release: 4.0,
             zoom_damping: 12.0,
             camera,
             renderer,
-            ui,
-            simulation_controls: SimulationControls::default(),
+            simulation,
+            simulation_running: true,
         }
     }
 
+
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.renderer.resize(new_size);
-        self.ui.resize(new_size);
     }
 
-    //in state.rs, it is like this:  impl State {
-    //     pub(crate) async fn new(window: Arc<Window>) -> Self {...}   pub fn render(&mut self) {
-    //         self.renderer.render(&self.camera, //here I could pass it on);
-    //     }
-    //
-    //     pub(crate) fn update_camera(&mut self, dt: f32)  and then in core.rs:   impl RenderCore {
-    //     pub async fn new(window: Arc<Window>) -> Self {...}  pub(crate) fn render(&mut self, camera: &Camera) {
-    //         let dt = self.timer.dt();
-    //         .update_camera(dt);
     pub fn render(&mut self) {
-        let window = self.window.as_ref();
-        self.ui.begin_frame(window);
-        self.ui.draw_controls(&mut self.simulation_controls);
-        self.renderer.render(&self.camera, window, &mut self.ui);
+        self.renderer.render(&self.camera);
 
         let dt = self.renderer.core.timer.dt();
-        let dt = self.simulation_controls.scale_dt(dt);
         self.update_camera(dt)
     }
 
@@ -140,8 +124,6 @@ impl State {
             }
         }
 
-        // Apply velocity to target (pans the scene)
-        self.camera.target += self.velocity * dt;
 
         // smooth zoom update
         if self.zoom_vel.abs() > 0.0001 {

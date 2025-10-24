@@ -1,11 +1,12 @@
 use crate::camera::Camera;
 pub use crate::renderer::pipelines::Pipelines;
-use crate::ui::UiSystem;
+use crate::ui::{UiButton, UiRenderer};
 use crate::vertex::{LineVtx, Vertex};
 use crate::{FrameTimer, Uniforms};
 use std::sync::Arc;
-use wgpu::util::DeviceExt;
+use util::DeviceExt;
 use wgpu::*;
+use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 pub struct RenderCore {
@@ -13,7 +14,6 @@ pub struct RenderCore {
     pub device: Device,
     pub queue: Queue,
     pub config: SurfaceConfiguration,
-    pub size: winit::dpi::PhysicalSize<u32>,
 
     // --- new fields ---
     pub msaa_texture: Texture,
@@ -24,36 +24,41 @@ pub struct RenderCore {
     pub num_vertices: u32,
     pub pipelines: Pipelines,
     pub timer: FrameTimer,
+    ui_renderer: UiRenderer,
+    size: PhysicalSize<u32>,
 }
 
 impl RenderCore {
-    pub async fn new(window: Arc<Window>) -> Self {
-        let instance = wgpu::Instance::default();
+    pub fn new(window: Arc<Window>) -> Self {
+        use wgpu::*;
+
+        // --- Create instance and surface ---
+        let instance = Instance::default();
         let size = window.inner_size();
         let surface = instance
             .create_surface(window.clone())
             .expect("Surface creation failed");
 
-        // Pick an adapter
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
+        // --- Pick an adapter (blocking internally) ---
+        let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }))
             .expect("No suitable GPU adapters found");
 
         println!("Backend: {:?}", adapter.get_info().backend);
 
+
+        // --- Configure surface ---
         let surface_caps = surface.get_capabilities(&adapter);
         let format = surface_caps.formats[0];
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        let config = SurfaceConfiguration {
+            usage: TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo, // vsync
+            present_mode: PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -62,13 +67,13 @@ impl RenderCore {
         let mut msaa_samples = 4;
         let caps = adapter.get_texture_format_features(config.format);
         let supported = caps.flags.intersects(
-            wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8
-                | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4
-                | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2,
+            TextureFormatFeatureFlags::MULTISAMPLE_X8
+                | TextureFormatFeatureFlags::MULTISAMPLE_X4
+                | TextureFormatFeatureFlags::MULTISAMPLE_X2,
         );
         let can_render = caps
             .allowed_usages
-            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT);
+            .contains(TextureUsages::RENDER_ATTACHMENT);
         if supported && can_render {
             if msaa_samples < 8 {
                 println!("8x MSAA supported, but using {}x!", msaa_samples);
@@ -80,39 +85,37 @@ impl RenderCore {
             msaa_samples = 4;
         }
         // Request device + queue
-        let features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
-        let limits = wgpu::Limits::default();
+        let features = Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        let limits = Limits::default();
 
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = pollster::block_on(adapter
+            .request_device(&DeviceDescriptor {
                 label: Some("Device"),
                 required_features: features,
                 required_limits: limits,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            })
-            .await
-            .expect("Device creation failed");
+                experimental_features: ExperimentalFeatures::disabled(),
+                memory_hints: MemoryHints::default(),
+                trace: Trace::Off,
+            })).expect("Device creation failed");
 
         // Configure surface
         surface.configure(&device, &config);
 
-        let msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
+        let msaa_texture = device.create_texture(&TextureDescriptor {
             label: Some("MSAA Color Texture"),
-            size: wgpu::Extent3d {
+            size: Extent3d {
                 width: config.width,
                 height: config.height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: msaa_samples,
-            dimension: wgpu::TextureDimension::D2,
+            dimension: TextureDimension::D2,
             format: config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let msaa_view = msaa_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let msaa_view = msaa_texture.create_view(&TextureViewDescriptor::default());
 
         // === Vertex data ===
 
@@ -145,7 +148,7 @@ impl RenderCore {
             },
         ];
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
             usage: BufferUsages::VERTEX,
@@ -154,6 +157,7 @@ impl RenderCore {
         let num_vertices = vertices.len() as u32;
 
         let pipelines = Pipelines::new(&device, config.format, msaa_samples);
+        let ui_renderer = UiRenderer::new(&device, config.format, size);
 
         Self {
             surface,
@@ -161,13 +165,14 @@ impl RenderCore {
             queue,
             config,
             pipelines,
-            size,
             msaa_texture,
             msaa_view,
             msaa_samples,
             vertex_buffer,
             num_vertices,
             timer: FrameTimer::new(),
+            ui_renderer,
+            size,
         }
     }
 
@@ -179,26 +184,26 @@ impl RenderCore {
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
 
-        self.msaa_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+        self.msaa_texture = self.device.create_texture(&TextureDescriptor {
             label: Some("MSAA Color Texture"),
-            size: wgpu::Extent3d {
+            size: Extent3d {
                 width: new_size.width,
                 height: new_size.height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: self.msaa_samples,
-            dimension: wgpu::TextureDimension::D2,
+            dimension: TextureDimension::D2,
             format: self.config.format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         self.msaa_view = self
             .msaa_texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            .create_view(&TextureViewDescriptor::default());
     }
 
-    pub(crate) fn render(&mut self, camera: &Camera, window: &Window, ui: &mut UiSystem) {
+    pub(crate) fn render(&mut self, camera: &Camera) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
         let new_uniforms = Uniforms {
@@ -220,10 +225,10 @@ impl RenderCore {
         };
         let surface_view = frame
             .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            .create_view(&TextureViewDescriptor::default());
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
 
@@ -259,47 +264,51 @@ impl RenderCore {
                 color: [0.2, 0.6, 1.0],
             },
         ];
+        // --- Update gizmo vertex buffer ---
         self.queue
             .write_buffer(&self.pipelines.gizmo_vbuf, 0, bytemuck::cast_slice(&axes));
 
-        let color_attachment = if self.msaa_samples > 1 {
-            // Render to MSAA texture and resolve into the swapchain
-            wgpu::RenderPassColorAttachment {
-                view: &self.msaa_view,
-                resolve_target: Some(&surface_view),
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Discard,
-                },
-            }
-        } else {
-            // Render directly to the swapchain (no MSAA)
-            RenderPassColorAttachment {
-                view: &surface_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.2,
-                        b: 0.3,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            }
+        // --- Choose color attachment ---
+        let color_attachment = Some(RenderPassColorAttachment {
+            view: if self.msaa_samples > 1 { &self.msaa_view } else { &surface_view },
+            resolve_target: if self.msaa_samples > 1 { Some(&surface_view) } else { None },
+            depth_slice: None,
+            ops: Operations {
+                load: LoadOp::Clear(Color {
+                    r: 0.1,
+                    g: 0.2,
+                    b: 0.3,
+                    a: 1.0,
+                }),
+                store: StoreOp::Store,
+            },
+        });
+
+        // --- Draw UI rect data ---
+        // self.ui_renderer.draw_rects(
+        //     &self.queue,
+        //     &[
+        //         (50.0, 50.0, 200.0, 100.0, [1.0, 0.0, 0.0, 1.0]),
+        //         (300.0, 80.0, 100.0, 50.0, [0.2, 0.8, 0.2, 1.0]),
+        //     ],
+        // );
+
+        // --- Main render pass!! ---
+        let btn = UiButton {
+            x: 80.0,
+            y: self.size.height as f32 - 80.0,
+            radius: 40.0,
+            color: [0.1, 0.1, 0.1, 0.6], // translucent gray
+            active: true //simulation_running,
         };
+
+        let vertices = self.ui_renderer.generate_button_vertices(&btn);
+        self.ui_renderer.draw_custom(&self.queue, &vertices);
 
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Main Pass"),
-                color_attachments: &[Some(color_attachment)],
+                color_attachments: &[color_attachment],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -309,18 +318,35 @@ impl RenderCore {
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.draw(0..self.num_vertices, 0..1);
+
             pass.set_pipeline(&self.pipelines.gizmo_pipeline);
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
             pass.set_vertex_buffer(0, self.pipelines.gizmo_vbuf.slice(..));
             pass.draw(0..6, 0..1);
         }
-        ui.render(
-            &self.device,
-            &self.queue,
-            window,
-            &mut encoder,
-            &surface_view,
-        );
+
+        // --- UI pass ---
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("UI Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Load, // don’t clear, draw over
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            self.ui_renderer.render(&mut pass);
+        } // pass dropped here ✅
+
+        // --- Submit and present ---
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }
@@ -338,7 +364,7 @@ impl RenderCore {
 
         // Recreate MSAA color texture if needed
         if self.msaa_samples > 1 {
-            self.msaa_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            self.msaa_texture = self.device.create_texture(&TextureDescriptor {
                 label: Some("MSAA Color Texture"),
                 size: Extent3d {
                     width: self.config.width,
@@ -358,6 +384,7 @@ impl RenderCore {
         }
 
         // Recreate pipelines with new sample count
+        self.pipelines.msaa_samples = self.msaa_samples;
         self.pipelines.recreate_pipelines();
     }
 }
