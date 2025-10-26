@@ -50,8 +50,9 @@ impl ApplicationHandler for App {
                     last = now;
 
                     {
-                        let state = state_clone.lock().unwrap();
-                        let mut simulation = state.simulation.lock().unwrap();
+                        let state = state_clone.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut simulation =
+                            state.simulation.lock().unwrap_or_else(|e| e.into_inner());
                         simulation.update(dt);
                     }
 

@@ -164,7 +164,7 @@ impl RenderCore {
         let num_vertices = vertices.len() as u32;
 
         let pipelines = Pipelines::new(&device, config.format, msaa_samples);
-        let ui_renderer = UiRenderer::new(&device, config.format, size);
+        let ui_renderer = UiRenderer::new(&device, config.format, size, data.clone());
 
         Self {
             surface,
@@ -298,23 +298,11 @@ impl RenderCore {
             },
         });
 
-        // --- Draw UI rect data ---
-        // self.ui_renderer.draw_rects(
-        //     &self.queue,
-        //     &[
-        //         (50.0, 50.0, 200.0, 100.0, [1.0, 0.0, 0.0, 1.0]),
-        //         (300.0, 80.0, 100.0, 50.0, [0.2, 0.8, 0.2, 1.0]),
-        //     ],
-        // );
-
-        // --- Main render pass!! ---
-
         {
             let d = self.data.lock().unwrap();
             let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
             //ui_loader.l
             let all_vertices = ui_loader.collect_vertices();
-            println!("{:?}", all_vertices);
             self.ui_renderer.draw_custom(&self.queue, &all_vertices);
         }
 

@@ -11,15 +11,6 @@ pub struct UiVertex {
     pub roundness: f32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CircleParams {
-    pub center: [f32; 2],
-    pub radius: f32,
-    pub border: f32,
-    pub color: [f32; 4],
-}
-
 // --- all possible button shapes ---
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -85,22 +76,20 @@ pub struct UiButtonLoader {
 
 impl UiButtonLoader {
     pub fn new() -> Self {
-        let buttons = Self::load_gui_from_file("src/rendering/ui_data/gui_layout.json")
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to load GUI file: {e}");
-                Vec::new()
-            });
-
-        println!("{:?}", buttons);
+        let buttons = Self::load_gui_from_file("ui_data/gui_layout.json").unwrap_or_else(|e| {
+            eprintln!("Failed to load GUI file: {e}");
+            Vec::new()
+        });
         Self { buttons }
     }
 
     pub fn load_gui_from_file(path: &str) -> Result<Vec<UiButtonDef>> {
         let mut full_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
+        full_path.push("src/renderer");
         full_path.push(path);
+        // println!("readin' GUI layout from: {:?}", full_path);
 
-        let data = fs::read_to_string(full_path)?;
+        let data = fs::read_to_string(&full_path)?;
         let parsed: Vec<UiButtonDef> =
             serde_json::from_str(&data).expect("Invalid JSON in GUI layout");
         Ok(parsed)

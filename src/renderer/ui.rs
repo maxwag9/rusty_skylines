@@ -1,3 +1,4 @@
+use crate::data::SharedData;
 use crate::renderer::ui_editor::Vertex;
 use crate::vertex::UiVertex;
 use util::DeviceExt;
@@ -10,10 +11,28 @@ pub struct UiRenderer {
     pub num_vertices: u32,
     circle_pipeline: RenderPipeline,
     polygon_pipeline: RenderPipeline,
+    pub circle_bind_group: BindGroup,
+    circles: Vec<CircleParams>,
+    pub quad_buffer: Buffer,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CircleParams {
+    pub center_radius_border: [f32; 4], // cx, cy, radius, border
+    pub fill_color: [f32; 4],
+    pub border_color: [f32; 4],
+    pub glow_color: [f32; 4],
+    pub glow_misc: [f32; 4], // glow_size, 0, 0, 0
 }
 
 impl UiRenderer {
-    pub fn new(device: &Device, format: TextureFormat, size: PhysicalSize<u32>) -> Self {
+    pub fn new(
+        device: &Device,
+        format: TextureFormat,
+        size: PhysicalSize<u32>,
+        data: SharedData,
+    ) -> Self {
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
         pub struct ScreenUniform {
@@ -43,6 +62,76 @@ impl UiRenderer {
                     min_binding_size: None,
                 },
                 count: None,
+            }],
+        });
+
+        let circle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Circle Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, // <-- was FRAGMENT
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
+
+        let circles = vec![CircleParams {
+            center_radius_border: [100.0, 400.0, 60.0, 8.0],
+            fill_color: [1.0, 0.0, 0.0, 0.7],
+            border_color: [1.0, 1.0, 1.0, 0.8],
+            glow_color: [1.0, 0.2, 0.2, 0.5],
+            glow_misc: [100.0, 0.0, 0.0, 0.0], // glow_size in x
+        }];
+
+        // {
+        //     let d = data.lock().unwrap();
+        //     let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
+        //     circles = ui_loader.collect_circles()
+        // }
+
+        let quad_vertices = [
+            UiVertex {
+                pos: [-1.0, -1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            UiVertex {
+                pos: [1.0, -1.0],
+                color: [1.0, 1.0, 0.0, 1.0],
+            },
+            UiVertex {
+                pos: [-1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+            UiVertex {
+                pos: [1.0, 1.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+            },
+        ];
+
+        let quad_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("UI Quad VB"),
+            contents: bytemuck::cast_slice(&quad_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let circle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Circle Storage Buffer"),
+            contents: bytemuck::cast_slice(&circles), // now 80B per element
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let circle_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Circle Bind Group"),
+            layout: &circle_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: circle_buffer.as_entire_binding(),
             }],
         });
 
@@ -94,10 +183,17 @@ impl UiRenderer {
             cache: None,
         });
 
+        let circle_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Circle Pipeline Layout"),
+                bind_group_layouts: &[&layout, &circle_layout],
+                push_constant_ranges: &[],
+            });
+
         let circle_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("UI Circle Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: VertexState {
+            layout: Some(&circle_pipeline_layout),
+            vertex: wgpu::VertexState {
                 module: &circle_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[UiVertex::desc()],
@@ -136,6 +232,9 @@ impl UiRenderer {
             num_vertices: 0,
             circle_pipeline,
             polygon_pipeline,
+            circle_bind_group,
+            circles,
+            quad_buffer,
         }
     }
 
@@ -178,8 +277,10 @@ impl UiRenderer {
     pub fn render<'a>(&'a self, pass: &mut RenderPass<'a>) {
         pass.set_pipeline(&self.circle_pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(0..self.num_vertices, 0..1);
+        pass.set_bind_group(1, &self.circle_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+        pass.draw(0..4, 0..self.circles.len() as u32);
+
         pass.set_pipeline(&self.polygon_pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
