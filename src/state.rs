@@ -40,7 +40,10 @@ impl State {
             let mut d = data.lock().unwrap();
             d.set_cores(renderer.clone(), simulation.clone(), ui_loader.clone());
         }
-
+        {
+            let mut r = renderer.lock().unwrap();
+            r.core.make_circles()
+        }
         Self {
             _window: window,
             input: InputState::new(),

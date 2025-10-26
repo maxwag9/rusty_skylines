@@ -1,3 +1,4 @@
+use crate::renderer::ui::CircleParams;
 use serde::Deserialize;
 use std::fs;
 use std::io::Result;
@@ -22,7 +23,9 @@ pub enum UiButtonDef {
         stretch_x: f32,
         stretch_y: f32,
         radius: f32,
-        color: [f32; 4],
+        fill_color: [f32; 4],
+        border_color: [f32; 4],
+        glow_color: [f32; 4],
         active: bool,
     },
 
@@ -80,6 +83,7 @@ impl UiButtonLoader {
             eprintln!("Failed to load GUI file: {e}");
             Vec::new()
         });
+        println!("Loaded buttons: {:?}", buttons);
         Self { buttons }
     }
 
@@ -163,14 +167,41 @@ impl UiButtonLoader {
                     ]);
                 }
 
-                UiButtonDef::Circle { .. } => {
-                    // you'd generate the circle mesh procedurally here
-                }
-
                 _ => {}
             }
         }
 
         all_vertices
+    }
+
+    pub fn collect_circles(&self) -> Vec<CircleParams> {
+        let mut circles = Vec::new();
+
+        for def in &self.buttons {
+            if let UiButtonDef::Circle {
+                x,
+                y,
+                stretch_x: _,
+                stretch_y: _,
+                radius,
+                fill_color,
+                border_color,
+                glow_color,
+                active,
+            } = def
+            {
+                // Always push a circle, regardless of "active"
+                circles.push(CircleParams {
+                    center_radius_border: [*x, *y, *radius, 4.0],
+                    fill_color: *fill_color,
+                    border_color: *border_color,
+                    glow_color: *glow_color,
+                    // encode the "active" state, e.g. in glow_misc.w
+                    glow_misc: [50.0, 6.28, 0.4, if *active { 1.0 } else { 0.0 }],
+                });
+            }
+        }
+
+        circles
     }
 }

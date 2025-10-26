@@ -16,20 +16,41 @@ use app::App;
 use camera::Camera;
 use input::{InputState, MouseState};
 
-struct FrameTimer {
+pub struct FrameTimer {
     last: Instant,
+    start: Instant,
+    total: f32,
 }
+
 impl FrameTimer {
-    fn new() -> Self {
+    pub fn new() -> Self {
+        let now = Instant::now();
         Self {
-            last: Instant::now(),
+            last: now,
+            start: now,
+            total: 0.0,
         }
     }
-    fn dt(&mut self) -> f32 {
+
+    /// Returns the delta time in seconds since last frame.
+    pub fn dt(&mut self) -> f32 {
         let now = Instant::now();
         let dt = (now - self.last).as_secs_f32();
         self.last = now;
+        self.total += dt;
         dt
+    }
+
+    /// Returns the total elapsed time since creation, in seconds.
+    pub fn total_time(&self) -> f32 {
+        self.total
+    }
+
+    /// Optionally reset both counters.
+    pub fn reset(&mut self) {
+        self.start = Instant::now();
+        self.last = self.start;
+        self.total = 0.0;
     }
 }
 

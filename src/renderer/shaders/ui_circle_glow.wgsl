@@ -7,16 +7,31 @@ struct ScreenUniform {
 @group(0) @binding(0)
 var<uniform> screen: ScreenUniform;
 
+
+// 4x4 Bayer matrix, normalized to [0,1)!!
+const DITHER_MATRIX : array<array<f32, 4>, 4> = array(
+    array( 0.0/16.0,  8.0/16.0,  2.0/16.0, 10.0/16.0 ),
+    array(12.0/16.0,  4.0/16.0, 14.0/16.0,  6.0/16.0 ),
+    array( 3.0/16.0, 11.0/16.0,  1.0/16.0,  9.0/16.0 ),
+    array(15.0/16.0,  7.0/16.0, 13.0/16.0,  5.0/16.0 )
+);
+
+
 struct CircleParams {
     // (cx, cy, radius, border)
     center_radius_border: vec4<f32>,
-    // straight-alpha colors
+    // colors + alpha :)
     fill_color:   vec4<f32>,
     border_color: vec4<f32>,
     glow_color:   vec4<f32>,
     // (glow_size, pad, pad, pad)
     glow_misc:    vec4<f32>,
 };
+
+fn hash(p: vec2<f32>) -> f32 {
+    // deterministic pseudo-random hash
+    return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
 
 
 @group(1) @binding(0)
@@ -71,37 +86,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let crb = p.center_radius_border;
     let center = crb.xy;
     let radius = crb.z;
-    let border = crb.w;
     let glow_size = p.glow_misc.x;
-
+    let glow_pulse_speed = p.glow_misc.y;
+    let glow_pulse_intensity = p.glow_misc.z;
     let dist = distance(in.local_pos, center);
 
-    // Glow outside the circle
-    let glow_strength = 1.0 - smoothstep(radius, radius + glow_size, dist);
-    var glow_col = p.glow_color;
-    glow_col.a *= glow_strength;
+    // soft fade
+    // Glow pulse using time (cycles every ~2 seconds)
+    let pulse = 0.5 + glow_pulse_intensity * sin(screen.time * glow_pulse_speed);
+    // Multiplies between 0.5 → 1.0 smoothly
+    let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) * pulse;
+    var col = vec4<f32>(p.glow_color.rgb * glow_strength, glow_strength);
 
-    // Edges for fill + border
-    let outer_edge = smoothstep(radius, radius - 1.0, dist);
-    let inner_edge = smoothstep(radius - border, radius - border - 1.0, dist);
-    let border_mask = outer_edge - inner_edge;
+    // Screen-space coordinates in pixel units
+    let px = i32(in.local_pos.x) & 3;
+    let py = i32(in.local_pos.y) & 3;
+    let dither = DITHER_MATRIX[py][px] - 0.5;
 
-    // Fill
-    var col = mix(p.fill_color, p.border_color, border_mask);
-    col.a *= outer_edge;
+    // Compute small temporal noise using screen-space coords and time
+    let n = hash(in.local_pos.xy + vec2<f32>(screen.time, screen.time * 37.0));
 
-    // additive glow (expand swizzle)
+    // Scale to subtle SDR dithering range
+    let offset = (n - 0.5) * (1.0 / 255.0) * 3.0;
+
     col = vec4<f32>(
-        col.r + glow_col.r * glow_col.a,
-        col.g + glow_col.g * glow_col.a,
-        col.b + glow_col.b * glow_col.a,
+        col.r + offset,
+        col.g + offset,
+        col.b + offset,
         col.a
     );
-    // compute glow contribution
-    let glow_add = glow_col.rgb * glow_col.a * (1.0 - col.a);
-    let out_rgb = col.rgb + glow_add;
-    let out_a   = col.a + glow_col.a * (1.0 - col.a);
 
-    return vec4<f32>(out_rgb, out_a);
 
+    return col;
 }
+

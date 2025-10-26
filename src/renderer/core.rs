@@ -344,8 +344,23 @@ impl RenderCore {
                 occlusion_query_set: None,
             });
 
+            let elapsed = self.timer.total_time();
+            let enable_dither = 1; //if self.settings.dither_enabled { 1 } else { 0 };
+
+            let screen_uniform = crate::renderer::ui::ScreenUniform {
+                size: [self.size.width as f32, self.size.height as f32],
+                time: elapsed,
+                enable_dither,
+            };
+
+            self.queue.write_buffer(
+                &self.ui_renderer.uniform_buffer,
+                0,
+                bytemuck::bytes_of(&screen_uniform),
+            );
+
             self.ui_renderer.render(&mut pass);
-        } // pass dropped here ✅
+        }
 
         // --- Submit and present ---
         self.queue.submit(Some(encoder.finish()));
@@ -387,5 +402,14 @@ impl RenderCore {
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
         self.pipelines.recreate_pipelines();
+    }
+    pub fn make_circles(&mut self) {
+        {
+            let d = self.data.lock().unwrap();
+            let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
+            let circles = ui_loader.collect_circles();
+            println!("Circles {:#?}", circles);
+            self.ui_renderer.circles = circles;
+        }
     }
 }

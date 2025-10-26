@@ -5,6 +5,14 @@ use util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ScreenUniform {
+    pub size: [f32; 2],
+    pub time: f32,
+    pub enable_dither: u32, // use 0 = off, 1 = on
+}
+
 pub struct UiRenderer {
     pub vertex_buffer: Buffer,
     pub uniform_bind_group: BindGroup,
@@ -12,18 +20,35 @@ pub struct UiRenderer {
     circle_pipeline: RenderPipeline,
     polygon_pipeline: RenderPipeline,
     pub circle_bind_group: BindGroup,
-    circles: Vec<CircleParams>,
+    pub circles: Vec<CircleParams>,
     pub quad_buffer: Buffer,
+    glow_pipeline: RenderPipeline,
+    pub(crate) uniform_buffer: Buffer,
+    pub(crate) screen_uniform: ScreenUniform,
+    device: Device,
+    circle_layout: BindGroupLayout,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CircleParams {
     pub center_radius_border: [f32; 4], // cx, cy, radius, border
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
-    pub glow_misc: [f32; 4], // glow_size, 0, 0, 0
+    pub glow_misc: [f32; 4], // glow_size, glow_pulse_speed, glow_pulse_intensity, 0
+}
+
+impl Default for CircleParams {
+    fn default() -> Self {
+        Self {
+            center_radius_border: [0.0, 0.0, 0.0, 0.0],
+            fill_color: [0.0; 4],
+            border_color: [0.0; 4],
+            glow_color: [0.0; 4],
+            glow_misc: [0.0; 4],
+        }
+    }
 }
 
 impl UiRenderer {
@@ -33,14 +58,10 @@ impl UiRenderer {
         size: PhysicalSize<u32>,
         data: SharedData,
     ) -> Self {
-        #[repr(C)]
-        #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-        pub struct ScreenUniform {
-            pub size: [f32; 2],
-        }
-
         let screen_uniform = ScreenUniform {
             size: [size.width as f32, size.height as f32],
+            time: 0.0,
+            enable_dither: 1,
         };
 
         let screen_data = bytemuck::bytes_of(&screen_uniform);
@@ -65,7 +86,7 @@ impl UiRenderer {
             }],
         });
 
-        let circle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Circle Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -79,38 +100,25 @@ impl UiRenderer {
             }],
         });
 
-        println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
-
-        let circles = vec![CircleParams {
-            center_radius_border: [100.0, 400.0, 60.0, 8.0],
-            fill_color: [1.0, 0.0, 0.0, 0.7],
-            border_color: [1.0, 1.0, 1.0, 0.8],
-            glow_color: [1.0, 0.2, 0.2, 0.5],
-            glow_misc: [100.0, 0.0, 0.0, 0.0], // glow_size in x
-        }];
-
-        // {
-        //     let d = data.lock().unwrap();
-        //     let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
-        //     circles = ui_loader.collect_circles()
-        // }
+        // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
+        let circles = vec![CircleParams::default()];
 
         let quad_vertices = [
             UiVertex {
                 pos: [-1.0, -1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
+                color: [1.0; 4],
             },
             UiVertex {
                 pos: [1.0, -1.0],
-                color: [1.0, 1.0, 0.0, 1.0],
+                color: [1.0; 4],
             },
             UiVertex {
                 pos: [-1.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
+                color: [1.0; 4],
             },
             UiVertex {
                 pos: [1.0, 1.0],
-                color: [1.0, 1.0, 1.0, 1.0],
+                color: [1.0; 4],
             },
         ];
 
@@ -226,6 +234,55 @@ impl UiRenderer {
             mapped_at_creation: false,
         });
 
+        let glow_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle_glow.wgsl"));
+
+        let glow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("UI Glow Pipeline Layout"),
+            bind_group_layouts: &[&layout, &circle_layout],
+            push_constant_ranges: &[],
+        });
+
+        let glow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("UI Glow Pipeline"),
+            layout: Some(&glow_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &glow_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[UiVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &glow_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    // ✨ additive blend for halo
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             vertex_buffer,
             uniform_bind_group: bind_group,
@@ -235,6 +292,11 @@ impl UiRenderer {
             circle_bind_group,
             circles,
             quad_buffer,
+            glow_pipeline,
+            uniform_buffer,
+            screen_uniform,
+            device: device.clone(),
+            circle_layout,
         }
     }
 
@@ -275,9 +337,33 @@ impl UiRenderer {
     }
 
     pub fn render<'a>(&'a self, pass: &mut RenderPass<'a>) {
+        // Glow first (additive)
+        let circle_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Circle Storage Buffer"),
+                contents: bytemuck::cast_slice(&self.circles), // now 80B per element
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let circle_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Circle Bind Group"),
+            layout: &self.circle_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: circle_buffer.as_entire_binding(),
+            }],
+        });
+
+        pass.set_pipeline(&self.glow_pipeline);
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(1, &circle_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+        pass.draw(0..4, 0..self.circles.len() as u32);
+
         pass.set_pipeline(&self.circle_pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &self.circle_bind_group, &[]);
+        pass.set_bind_group(1, &circle_bind_group, &[]);
         pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
         pass.draw(0..4, 0..self.circles.len() as u32);
 
