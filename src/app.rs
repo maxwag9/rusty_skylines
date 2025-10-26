@@ -50,15 +50,15 @@ impl ApplicationHandler for App {
                     last = now;
 
                     {
-                        let mut state = state_clone.lock().unwrap();
-                        state.simulation.update(dt);
+                        let state = state_clone.lock().unwrap();
+                        let mut simulation = state.simulation.lock().unwrap();
+                        simulation.update(dt);
                     }
 
                     std::thread::sleep(TICK);
                 }
             });
         }
-
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -85,7 +85,8 @@ impl ApplicationHandler for App {
                 // F5: toggle MSAA
                 if pressed {
                     if let Key::Named(winit::keyboard::NamedKey::F5) = &event.logical_key {
-                        state.renderer.core.cycle_msaa();
+                        let mut renderer = state.renderer.lock().unwrap();
+                        renderer.core.cycle_msaa();
                     }
                 }
             }
@@ -122,16 +123,14 @@ impl ApplicationHandler for App {
                 }
             }
 
-            WindowEvent::MouseWheel { delta, .. } => {
-                match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => {
-                        state.zoom_vel -= y * 1.0 * state.camera.radius;
-                    }
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        state.zoom_vel -= pos.y as f32 * 0.04 * state.camera.radius;
-                    }
+            WindowEvent::MouseWheel { delta, .. } => match delta {
+                winit::event::MouseScrollDelta::LineDelta(_, y) => {
+                    state.zoom_vel -= y * 1.0 * state.camera.radius;
                 }
-            }
+                winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                    state.zoom_vel -= pos.y as f32 * 0.04 * state.camera.radius;
+                }
+            },
 
             _ => (),
         }

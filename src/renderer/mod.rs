@@ -1,8 +1,11 @@
 pub mod core;
 pub mod pipelines;
 pub mod render_passes;
+mod ui;
+pub mod ui_editor;
 
 use crate::camera::Camera;
+use crate::data::SharedData;
 use core::RenderCore;
 use std::sync::Arc;
 
@@ -11,11 +14,10 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: Arc<winit::window::Window>) -> Self {
-        let core = RenderCore::new(window);
+    pub fn new(window: Arc<winit::window::Window>, data: SharedData) -> Self {
+        let core = RenderCore::new(window, data.clone());
         Self { core }
     }
-
 
     pub fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
         self.core.resize(size);

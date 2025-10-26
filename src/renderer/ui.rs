@@ -1,13 +1,15 @@
-use util::DeviceExt;
-use winit::dpi::PhysicalSize;
+use crate::renderer::ui_editor::Vertex;
 use crate::vertex::UiVertex;
+use util::DeviceExt;
 use wgpu::*;
+use winit::dpi::PhysicalSize;
 
 pub struct UiRenderer {
     pub vertex_buffer: Buffer,
     pub uniform_bind_group: BindGroup,
     pub num_vertices: u32,
-    pipeline: RenderPipeline,
+    circle_pipeline: RenderPipeline,
+    polygon_pipeline: RenderPipeline,
 }
 
 impl UiRenderer {
@@ -53,7 +55,9 @@ impl UiRenderer {
             }],
         });
 
-        let ui_shader = device.create_shader_module(include_wgsl!("renderer/shaders/ui.wgsl"));
+        //let ui_shader = device.create_shader_module(include_wgsl!("shaders/ui.wgsl"));
+        let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
+        let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Pipeline Layout"),
@@ -61,45 +65,77 @@ impl UiRenderer {
             push_constant_ranges: &[],
         });
 
-        let ui_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("UI Pipeline"),
+        let polygon_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("UI Polygon Pipeline"),
             layout: Some(&pipeline_layout),
-            vertex: VertexState {
-                module: &ui_shader,
+            vertex: wgpu::VertexState {
+                module: &polygon_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[UiVertex::desc()],
                 compilation_options: Default::default(),
             },
-            fragment: Some(FragmentState {
-                module: &ui_shader,
+            fragment: Some(wgpu::FragmentState {
+                module: &polygon_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format,
-                    blend: Some(BlendState::ALPHA_BLENDING),
-                    write_mask: ColorWrites::ALL,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: PrimitiveState::default(),
+            primitive: PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: MultisampleState::default(),
             multiview: None,
             cache: None,
         });
 
-        // Start empty (we’ll upload real data later)
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let circle_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("UI Circle Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: VertexState {
+                module: &circle_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[UiVertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &circle_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("UI VB"),
             size: 1024 * 1024, // 1MB buffer
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         Self {
-            pipeline: ui_pipeline,
             vertex_buffer,
             uniform_bind_group: bind_group,
             num_vertices: 0,
+            circle_pipeline,
+            polygon_pipeline,
         }
     }
 
@@ -112,11 +148,26 @@ impl UiRenderer {
         for &(x, y, w, h, color) in rects {
             vertices.extend_from_slice(&[
                 UiVertex { pos: [x, y], color },
-                UiVertex { pos: [x + w, y], color },
-                UiVertex { pos: [x, y + h], color },
-                UiVertex { pos: [x + w, y], color },
-                UiVertex { pos: [x + w, y + h], color },
-                UiVertex { pos: [x, y + h], color },
+                UiVertex {
+                    pos: [x + w, y],
+                    color,
+                },
+                UiVertex {
+                    pos: [x, y + h],
+                    color,
+                },
+                UiVertex {
+                    pos: [x + w, y],
+                    color,
+                },
+                UiVertex {
+                    pos: [x + w, y + h],
+                    color,
+                },
+                UiVertex {
+                    pos: [x, y + h],
+                    color,
+                },
             ]);
         }
 
@@ -125,18 +176,22 @@ impl UiRenderer {
     }
 
     pub fn render<'a>(&'a self, pass: &mut RenderPass<'a>) {
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.circle_pipeline);
+        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.draw(0..self.num_vertices, 0..1);
+        pass.set_pipeline(&self.polygon_pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.draw(0..self.num_vertices, 0..1);
     }
 
-    pub fn draw_custom(&mut self, queue: &Queue, vertices: &[UiVertex]) {
+    pub fn draw_custom(&mut self, queue: &Queue, vertices: &Vec<Vertex>) {
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
         self.num_vertices = vertices.len() as u32;
     }
 
-    pub fn generate_button_vertices(&self, btn: &UiButton) -> Vec<UiVertex> {
+    pub fn generate_button_vertices(&self, btn: &UiButtonCircle) -> Vec<UiVertex> {
         let mut vertices = Vec::new();
         let cx = btn.x;
         let cy = btn.y;
@@ -150,9 +205,18 @@ impl UiRenderer {
             let p0 = [cx + r * a0.cos(), cy + r * a0.sin()];
             let p1 = [cx + r * a1.cos(), cy + r * a1.sin()];
             vertices.extend_from_slice(&[
-                UiVertex { pos: [cx, cy], color: btn.color },
-                UiVertex { pos: p0, color: btn.color },
-                UiVertex { pos: p1, color: btn.color },
+                UiVertex {
+                    pos: [cx, cy],
+                    color: btn.color,
+                },
+                UiVertex {
+                    pos: p0,
+                    color: btn.color,
+                },
+                UiVertex {
+                    pos: p1,
+                    color: btn.color,
+                },
             ]);
         }
 
@@ -172,12 +236,30 @@ impl UiRenderer {
 
             let add_rect = |x: f32, vertices: &mut Vec<UiVertex>| {
                 vertices.extend_from_slice(&[
-                    UiVertex { pos: [x, top_y], color: icon_color },
-                    UiVertex { pos: [x + bar_w, top_y], color: icon_color },
-                    UiVertex { pos: [x, bot_y], color: icon_color },
-                    UiVertex { pos: [x + bar_w, top_y], color: icon_color },
-                    UiVertex { pos: [x + bar_w, bot_y], color: icon_color },
-                    UiVertex { pos: [x, bot_y], color: icon_color },
+                    UiVertex {
+                        pos: [x, top_y],
+                        color: icon_color,
+                    },
+                    UiVertex {
+                        pos: [x + bar_w, top_y],
+                        color: icon_color,
+                    },
+                    UiVertex {
+                        pos: [x, bot_y],
+                        color: icon_color,
+                    },
+                    UiVertex {
+                        pos: [x + bar_w, top_y],
+                        color: icon_color,
+                    },
+                    UiVertex {
+                        pos: [x + bar_w, bot_y],
+                        color: icon_color,
+                    },
+                    UiVertex {
+                        pos: [x, bot_y],
+                        color: icon_color,
+                    },
                 ]);
             };
 
@@ -195,9 +277,18 @@ impl UiRenderer {
             let bottom = cy + t_h / 2.0;
 
             vertices.extend_from_slice(&[
-                UiVertex { pos: [left, top], color: icon_color },
-                UiVertex { pos: [right, cy], color: icon_color },
-                UiVertex { pos: [left, bottom], color: icon_color },
+                UiVertex {
+                    pos: [left, top],
+                    color: icon_color,
+                },
+                UiVertex {
+                    pos: [right, cy],
+                    color: icon_color,
+                },
+                UiVertex {
+                    pos: [left, bottom],
+                    color: icon_color,
+                },
             ]);
         }
         vertices
@@ -205,7 +296,7 @@ impl UiRenderer {
 }
 
 #[derive(Debug)]
-pub struct UiButton {
+pub struct UiButtonCircle {
     pub x: f32,
     pub y: f32,
     pub radius: f32,

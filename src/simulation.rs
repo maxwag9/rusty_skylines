@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub struct Simulation {
     pub running: bool,
@@ -15,9 +15,16 @@ impl Simulation {
         }
     }
 
-    pub fn _toggle(&mut self) {
-        self.running = !self.running;
-        println!("Simulation {}", if self.running { "started" } else { "paused" });
+    pub fn toggle(&mut self) {
+        if self.running {
+            self.stop()
+        } else {
+            self.start()
+        }
+        println!(
+            "Simulation {}",
+            if self.running { "started" } else { "paused" }
+        );
     }
 
     pub fn start(&mut self) {

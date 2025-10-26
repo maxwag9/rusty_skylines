@@ -14,6 +14,7 @@ pub struct Pipelines {
     pipeline_layout: PipelineLayout,
     pub(crate) msaa_samples: u32,
     line_shader: ShaderModule,
+
     format: TextureFormat,
 }
 
@@ -134,7 +135,6 @@ impl Pipelines {
             cache: None,
         });
 
-
         Self {
             shader,
             gizmo_vbuf,
@@ -169,8 +169,7 @@ impl Pipelines {
                     targets: &[Some(ColorTargetState {
                         format: self.format,
                         blend: Some(BlendState::REPLACE),
-                        write_mask:
-                        ColorWrites::ALL,
+                        write_mask: ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
                 }),

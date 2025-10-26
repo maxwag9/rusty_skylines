@@ -1,11 +1,11 @@
+use crate::data::Data;
 use crate::renderer::Renderer;
+use crate::renderer::ui_editor::UiButtonLoader;
+use crate::simulation::Simulation;
 use crate::{Camera, InputState, MouseState};
 use glam::Vec3;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use winit::window::Window;
-use crate::simulation::Simulation;
-
-
 
 pub(crate) struct State {
     _window: Arc<Window>,
@@ -21,17 +21,26 @@ pub(crate) struct State {
     pub(crate) pitch_velocity: f32,
     orbit_damping_release: f32,
     zoom_damping: f32,
-    pub renderer: Renderer,
+    pub renderer: Arc<Mutex<Renderer>>,
     simulation_running: bool,
-    pub simulation: Simulation,
+    pub simulation: Arc<Mutex<Simulation>>,
+    pub ui_loader: Arc<Mutex<UiButtonLoader>>,
 }
 
 impl State {
     pub fn new(window: Arc<Window>) -> Self {
+        let mut data = Data::empty();
+
+        let renderer = Arc::new(Mutex::new(Renderer::new(window.clone(), data.clone())));
         let camera = Camera::new();
-        let renderer = Renderer::new(window.clone());
-        let simulation = Simulation::new();
-        
+        let simulation = Arc::new(Mutex::new(Simulation::new()));
+        let ui_loader = Arc::new(Mutex::new(UiButtonLoader::new()));
+
+        {
+            let mut d = data.lock().unwrap();
+            d.set_cores(renderer.clone(), simulation.clone(), ui_loader.clone());
+        }
+
         Self {
             _window: window,
             input: InputState::new(),
@@ -52,40 +61,38 @@ impl State {
             renderer,
             simulation,
             simulation_running: true,
+            ui_loader,
         }
     }
 
-
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.renderer.resize(new_size);
+        self.renderer.lock().unwrap().resize(new_size);
     }
-
     pub fn render(&mut self) {
-        self.renderer.render(&self.camera);
-
-        let dt = self.renderer.core.timer.dt();
-        self.update_camera(dt)
+        let dt;
+        {
+            let mut renderer = self.renderer.lock().unwrap();
+            renderer.render(&self.camera);
+            dt = renderer.core.timer.dt();
+        }
+        self.update_camera(dt);
     }
 
     pub(crate) fn update_camera(&mut self, dt: f32) {
-        // Direction from camera to target (what you’re looking at):
         let eye = self.camera.position();
         let mut fwd3d = self.camera.target - eye;
         if fwd3d.length_squared() > 0.0 {
             fwd3d = fwd3d.normalize();
         }
 
-        // Flatten to XZ for planar WASD
         let mut forward = Vec3::new(fwd3d.x, 0.0, fwd3d.z);
         if forward.length_squared() > 0.0 {
             forward = forward.normalize();
         }
 
-        // Right = forward × up (RH system)
         let right = forward.cross(Vec3::Y).normalize();
         let up = Vec3::Y;
 
-        // Desired move direction
         let mut wish = Vec3::ZERO;
         if self.input.pressed.contains("w") {
             wish += forward;
@@ -123,7 +130,6 @@ impl State {
                 self.velocity = Vec3::ZERO;
             }
         }
-
 
         // smooth zoom update
         if self.zoom_vel.abs() > 0.0001 {

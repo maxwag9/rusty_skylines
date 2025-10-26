@@ -1,6 +1,7 @@
 use crate::camera::Camera;
+use crate::data::SharedData;
 pub use crate::renderer::pipelines::Pipelines;
-use crate::ui::{UiButton, UiRenderer};
+use crate::renderer::ui::UiRenderer;
 use crate::vertex::{LineVtx, Vertex};
 use crate::{FrameTimer, Uniforms};
 use std::sync::Arc;
@@ -26,12 +27,12 @@ pub struct RenderCore {
     pub timer: FrameTimer,
     ui_renderer: UiRenderer,
     size: PhysicalSize<u32>,
+    data: SharedData,
 }
 
 impl RenderCore {
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: Arc<Window>, data: SharedData) -> Self {
         use wgpu::*;
-
         // --- Create instance and surface ---
         let instance = Instance::default();
         let size = window.inner_size();
@@ -45,21 +46,27 @@ impl RenderCore {
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         }))
-            .expect("No suitable GPU adapters found");
+        .expect("No suitable GPU adapters found");
 
         println!("Backend: {:?}", adapter.get_info().backend);
-
 
         // --- Configure surface ---
         let surface_caps = surface.get_capabilities(&adapter);
         let format = surface_caps.formats[0];
+        let alpha_mode = surface_caps
+            .alpha_modes
+            .iter()
+            .copied()
+            .find(|m| *m == wgpu::CompositeAlphaMode::PostMultiplied)
+            .unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -88,15 +95,15 @@ impl RenderCore {
         let features = Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
         let limits = Limits::default();
 
-        let (device, queue) = pollster::block_on(adapter
-            .request_device(&DeviceDescriptor {
-                label: Some("Device"),
-                required_features: features,
-                required_limits: limits,
-                experimental_features: ExperimentalFeatures::disabled(),
-                memory_hints: MemoryHints::default(),
-                trace: Trace::Off,
-            })).expect("Device creation failed");
+        let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
+            label: Some("Device"),
+            required_features: features,
+            required_limits: limits,
+            experimental_features: ExperimentalFeatures::disabled(),
+            memory_hints: MemoryHints::default(),
+            trace: Trace::Off,
+        }))
+        .expect("Device creation failed");
 
         // Configure surface
         surface.configure(&device, &config);
@@ -123,7 +130,7 @@ impl RenderCore {
             // bottom left triangle
             Vertex {
                 position: [-1.0, 0.0, -1.0],
-                color: [0.2, 0.9, 0.4],
+                color: [1.0, 1.0, 1.0],
             },
             Vertex {
                 position: [1.0, 0.0, -1.0],
@@ -173,10 +180,11 @@ impl RenderCore {
             timer: FrameTimer::new(),
             ui_renderer,
             size,
+            data: data.clone(),
         }
     }
 
-    pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+    pub(crate) fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
@@ -223,9 +231,7 @@ impl RenderCore {
                 self.surface.get_current_texture().unwrap()
             }
         };
-        let surface_view = frame
-            .texture
-            .create_view(&TextureViewDescriptor::default());
+        let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor {
@@ -270,8 +276,16 @@ impl RenderCore {
 
         // --- Choose color attachment ---
         let color_attachment = Some(RenderPassColorAttachment {
-            view: if self.msaa_samples > 1 { &self.msaa_view } else { &surface_view },
-            resolve_target: if self.msaa_samples > 1 { Some(&surface_view) } else { None },
+            view: if self.msaa_samples > 1 {
+                &self.msaa_view
+            } else {
+                &surface_view
+            },
+            resolve_target: if self.msaa_samples > 1 {
+                Some(&surface_view)
+            } else {
+                None
+            },
             depth_slice: None,
             ops: Operations {
                 load: LoadOp::Clear(Color {
@@ -294,16 +308,15 @@ impl RenderCore {
         // );
 
         // --- Main render pass!! ---
-        let btn = UiButton {
-            x: 80.0,
-            y: self.size.height as f32 - 80.0,
-            radius: 40.0,
-            color: [0.1, 0.1, 0.1, 0.6], // translucent gray
-            active: true //simulation_running,
-        };
 
-        let vertices = self.ui_renderer.generate_button_vertices(&btn);
-        self.ui_renderer.draw_custom(&self.queue, &vertices);
+        {
+            let d = self.data.lock().unwrap();
+            let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
+            //ui_loader.l
+            let all_vertices = ui_loader.collect_vertices();
+            println!("{:?}", all_vertices);
+            self.ui_renderer.draw_custom(&self.queue, &all_vertices);
+        }
 
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {

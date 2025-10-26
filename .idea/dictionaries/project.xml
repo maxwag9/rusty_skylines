@@ -2,7 +2,9 @@
   <dictionary name="project">
     <words>
       <w>decel</w>
+      <w>roundedrectangle</w>
       <w>swapchain</w>
+      <w>uiloader</w>
       <w>vbuf</w>
       <w>wgsl</w>
     </words>

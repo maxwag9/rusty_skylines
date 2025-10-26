@@ -8,8 +8,8 @@ mod input;
 mod state;
 mod vertex;
 
+mod data;
 mod renderer;
-mod ui;
 mod simulation;
 
 use app::App;

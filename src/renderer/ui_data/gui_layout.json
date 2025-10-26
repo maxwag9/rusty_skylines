@@ -1,0 +1,77 @@
+[
+  {
+    "type": "circle",
+    "x": 80.0,
+    "y": 600.0,
+    "stretch_x": 1.0,
+    "stretch_y": 1.0,
+    "radius": 40.0,
+    "color": [
+      0.1,
+      0.1,
+      0.1,
+      0.6
+    ],
+    "active": true
+  },
+  {
+    "type": "rectangle",
+    "x": 200.0,
+    "y": 500.0,
+    "stretch_x": 1.0,
+    "stretch_y": 1.0,
+    "top_left_vertex": {
+      "pos": [
+        0.0,
+        0.0
+      ],
+      "color": [
+        1.0,
+        0.0,
+        0.0,
+        0.5
+      ],
+      "roundness": 0.0
+    },
+    "bottom_left_vertex": {
+      "pos": [
+        0.0,
+        100.0
+      ],
+      "color": [
+        0.0,
+        1.0,
+        0.0,
+        1.0
+      ],
+      "roundness": 0.0
+    },
+    "top_right_vertex": {
+      "pos": [
+        100.0,
+        0.0
+      ],
+      "color": [
+        0.0,
+        0.0,
+        1.0,
+        0.5
+      ],
+      "roundness": 0.0
+    },
+    "bottom_right_vertex": {
+      "pos": [
+        100.0,
+        150.0
+      ],
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roundness": 0.0
+    },
+    "active": true
+  }
+]
