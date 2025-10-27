@@ -65,7 +65,7 @@ impl RenderCore {
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: PresentMode::Fifo,
+            present_mode: PresentMode::Mailbox,
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,

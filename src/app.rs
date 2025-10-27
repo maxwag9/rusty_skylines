@@ -1,14 +1,21 @@
 use crate::state::State;
+use atomic_float::AtomicF32;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::Key;
 use winit::window::{Window, WindowId};
 
 pub(crate) struct App {
     window: Option<Arc<Window>>,
     state: Option<Arc<Mutex<State>>>,
+    last_frame: Instant,
+    target_fps: f32,
+    target_frame_time: Duration,
+    simulation_dt: Arc<AtomicF32>,
 }
 
 impl Default for App {
@@ -16,13 +23,17 @@ impl Default for App {
         Self {
             window: None,
             state: None,
+            last_frame: Instant::now(),
+            target_fps: 100.0,
+            target_frame_time: Duration::from_millis(10),
+            simulation_dt: Arc::new(AtomicF32::new(10.0)),
         }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Create the window when resumed
+        // Create the window
         let window = Arc::new(
             event_loop
                 .create_window(
@@ -32,34 +43,46 @@ impl ApplicationHandler for App {
                 )
                 .unwrap(),
         );
-
-        // Initialize shared state
+        self.last_frame = Instant::now();
+        // Shared state
         let state = Arc::new(Mutex::new(State::new(window.clone())));
-        self.state = Some(state);
-        self.window = Some(window);
-        if let Some(state_arc) = &self.state {
-            let state_clone = state_arc.clone();
-            std::thread::spawn(move || {
-                use std::time::{Duration, Instant};
-                const TICK: Duration = Duration::from_millis(16); // ~60 Hz
-                let mut last = Instant::now();
-
-                loop {
-                    let now = Instant::now();
-                    let dt = (now - last).as_secs_f32();
-                    last = now;
-
-                    {
-                        let state = state_clone.lock().unwrap_or_else(|e| e.into_inner());
-                        let mut simulation =
-                            state.simulation.lock().unwrap_or_else(|e| e.into_inner());
-                        simulation.update(dt);
-                    }
-
-                    std::thread::sleep(TICK);
-                }
-            });
+        {
+            self.target_fps = state.lock().unwrap().settings.target_fps;
         }
+        self.state = Some(state.clone());
+
+        self.target_frame_time = Duration::from_secs_f32(1.0 / self.target_fps);
+        self.window = Some(window);
+
+        let state_clone = state.clone();
+        let sim_dt_clone = self.simulation_dt.clone();
+        // Simulation thread (fixed timestep)
+        thread::spawn(move || {
+            let tick = Duration::from_secs_f64(1.0 / 60.0); // 60 Hz
+
+            let mut last = Instant::now();
+
+            loop {
+                let now = Instant::now();
+                let dt = (now - last).as_secs_f32();
+                last = now;
+
+                // write without locking
+                sim_dt_clone.store(dt, std::sync::atomic::Ordering::Relaxed);
+
+                if let Ok(s) = state_clone.lock() {
+                    s.update_simulation(dt);
+                }
+
+                let elapsed = now.elapsed();
+                if elapsed < tick {
+                    thread::sleep(tick - elapsed);
+                }
+            }
+        });
+
+        //self.window.as_ref().unwrap().request_redraw();
+        event_loop.set_control_flow(ControlFlow::Poll);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -71,16 +94,40 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
-            WindowEvent::RedrawRequested => state.render(),
+            WindowEvent::RedrawRequested => {
+                let frame_start = Instant::now();
+                let dt = self
+                    .simulation_dt
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                state.render(dt); // your render logic
+
+                // Measure and schedule next frame
+                let elapsed = frame_start.elapsed();
+                if elapsed < self.target_frame_time {
+                    thread::sleep(self.target_frame_time - elapsed);
+                }
+
+                self.window.as_ref().unwrap().request_redraw();
+            }
+
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
 
-                // Movement keys
-                if let Key::Character(ch) = &event.logical_key {
-                    let key = ch.to_lowercase();
-                    if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
-                        state.input.set_key(&key, pressed);
+                match &event.logical_key {
+                    Key::Character(ch) => {
+                        let key = ch.to_lowercase();
+                        if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
+                            state.input.set_key(&key, pressed);
+                        }
                     }
+                    Key::Named(winit::keyboard::NamedKey::Shift) => {
+                        state.input.shift_pressed = pressed
+                    }
+                    Key::Named(winit::keyboard::NamedKey::Control) => {
+                        state.input.ctrl_pressed = pressed
+                    }
+
+                    _ => {}
                 }
 
                 // F5: toggle MSAA
@@ -134,12 +181,6 @@ impl ApplicationHandler for App {
             },
 
             _ => (),
-        }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(window) = &self.window {
-            window.request_redraw();
         }
     }
 }

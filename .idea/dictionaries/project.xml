@@ -2,6 +2,7 @@
   <dictionary name="project">
     <words>
       <w>decel</w>
+      <w>frametime</w>
       <w>readin</w>
       <w>roundedrectangle</w>
       <w>swapchain</w>

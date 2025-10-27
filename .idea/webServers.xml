@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="a9c2a961-ffc9-45c3-bd42-13044b57cf2e" name="Local backup" url="http://localhost">
+        <fileTransfer mountedRoot="/mnt/2tb/Backups/rustycity" accessType="MOUNT" port="0" />
+      </webServer>
+    </option>
+  </component>
+</project>

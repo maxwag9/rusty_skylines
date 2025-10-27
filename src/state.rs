@@ -1,4 +1,4 @@
-use crate::data::Data;
+use crate::data::{Data, Settings};
 use crate::renderer::Renderer;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::simulation::Simulation;
@@ -25,11 +25,14 @@ pub(crate) struct State {
     simulation_running: bool,
     pub simulation: Arc<Mutex<Simulation>>,
     pub ui_loader: Arc<Mutex<UiButtonLoader>>,
+    pub settings: Settings,
 }
 
 impl State {
     pub fn new(window: Arc<Window>) -> Self {
-        let mut data = Data::empty();
+        let data = Data::empty();
+        let settings = Settings::load("src/settings.toml");
+        println!("Loaded settings: {:?}", settings);
 
         let renderer = Arc::new(Mutex::new(Renderer::new(window.clone(), data.clone())));
         let camera = Camera::new();
@@ -65,13 +68,14 @@ impl State {
             simulation,
             simulation_running: true,
             ui_loader,
+            settings,
         }
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.renderer.lock().unwrap().resize(new_size);
     }
-    pub fn render(&mut self) {
+    pub fn render(&mut self, simulation_dt: f32) {
         let dt;
         {
             let mut renderer = self.renderer.lock().unwrap();
@@ -118,13 +122,22 @@ impl State {
 
         // --- Adaptive movement speed ---
         let base_speed = 8.0; // base units/sec
+        let mut speed = base_speed;
+
+        match (self.input.shift_pressed, self.input.ctrl_pressed) {
+            (true, false) => speed *= 3.0, // faster
+            (false, true) => speed *= 0.4, // slower
+            (true, true) => speed *= 0.1,  // ultra slow
+            _ => {}                        // normal speed
+        }
+
         let decay_rate = 6.0; // damping when no input
         let dist = self.camera.radius;
         let speed_factor = (dist / 10.0).clamp(0.1, 10.0); // scales with zoom
 
         if wish.length_squared() > 0.0 {
             wish = wish.normalize();
-            self.velocity = wish * base_speed * speed_factor;
+            self.velocity = wish * speed * speed_factor;
         } else {
             // exponential decay towards zero
             let k = (1.0 - decay_rate * dt).max(0.0);
@@ -161,6 +174,12 @@ impl State {
             .camera
             .pitch
             .clamp(10.0f32.to_radians(), 89.0f32.to_radians());
+        println!("{}", dt);
         self.camera.target += self.velocity * dt;
+    }
+    pub fn update_simulation(&self, dt: f32) {
+        if let Ok(mut sim) = self.simulation.lock() {
+            sim.update(dt);
+        }
     }
 }
