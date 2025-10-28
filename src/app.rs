@@ -1,6 +1,5 @@
-use crate::state::State;
-use atomic_float::AtomicF32;
-use std::sync::{Arc, Mutex};
+use crate::state::{SimulationHandle, State};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
@@ -11,11 +10,10 @@ use winit::window::{Window, WindowId};
 
 pub(crate) struct App {
     window: Option<Arc<Window>>,
-    state: Option<Arc<Mutex<State>>>,
+    state: Option<State>,
     last_frame: Instant,
     target_fps: f32,
     target_frame_time: Duration,
-    simulation_dt: Arc<AtomicF32>,
 }
 
 impl Default for App {
@@ -26,7 +24,6 @@ impl Default for App {
             last_frame: Instant::now(),
             target_fps: 100.0,
             target_frame_time: Duration::from_millis(10),
-            simulation_dt: Arc::new(AtomicF32::new(10.0)),
         }
     }
 }
@@ -45,17 +42,14 @@ impl ApplicationHandler for App {
         );
         self.last_frame = Instant::now();
         // Shared state
-        let state = Arc::new(Mutex::new(State::new(window.clone())));
-        {
-            self.target_fps = state.lock().unwrap().settings.target_fps;
-        }
-        self.state = Some(state.clone());
+        let state = State::new(window.clone());
+        self.target_fps = state.settings.target_fps;
+        let simulation_handle: SimulationHandle = state.simulation_handle();
+        self.state = Some(state);
 
         self.target_frame_time = Duration::from_secs_f32(1.0 / self.target_fps);
         self.window = Some(window);
 
-        let state_clone = state.clone();
-        let sim_dt_clone = self.simulation_dt.clone();
         // Simulation thread (fixed timestep)
         thread::spawn(move || {
             let tick = Duration::from_secs_f64(1.0 / 60.0); // 60 Hz
@@ -67,11 +61,8 @@ impl ApplicationHandler for App {
                 let dt = (now - last).as_secs_f32();
                 last = now;
 
-                // write without locking
-                sim_dt_clone.store(dt, std::sync::atomic::Ordering::Relaxed);
-
-                if let Ok(s) = state_clone.lock() {
-                    s.update_simulation(dt);
+                if let Ok(mut sim) = simulation_handle.lock() {
+                    sim.update(dt);
                 }
 
                 let elapsed = now.elapsed();
@@ -86,20 +77,16 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let Some(state_arc) = &self.state else {
+        let Some(state) = self.state.as_mut() else {
             return;
         };
-        let mut state = state_arc.lock().unwrap();
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size),
             WindowEvent::RedrawRequested => {
                 let frame_start = Instant::now();
-                let dt = self
-                    .simulation_dt
-                    .load(std::sync::atomic::Ordering::Relaxed);
-                state.render(dt); // your render logic
+                state.render();
 
                 // Measure and schedule next frame
                 let elapsed = frame_start.elapsed();
@@ -133,8 +120,7 @@ impl ApplicationHandler for App {
                 // F5: toggle MSAA
                 if pressed {
                     if let Key::Named(winit::keyboard::NamedKey::F5) = &event.logical_key {
-                        let mut renderer = state.renderer.lock().unwrap();
-                        renderer.core.cycle_msaa();
+                        state.renderer.core.cycle_msaa();
                     }
                 }
             }

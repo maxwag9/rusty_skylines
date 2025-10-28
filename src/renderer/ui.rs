@@ -1,4 +1,3 @@
-use crate::data::SharedData;
 use crate::renderer::ui_editor::Vertex;
 use crate::vertex::UiVertex;
 use util::DeviceExt;
@@ -52,12 +51,7 @@ impl Default for CircleParams {
 }
 
 impl UiRenderer {
-    pub fn new(
-        device: &Device,
-        format: TextureFormat,
-        size: PhysicalSize<u32>,
-        data: SharedData,
-    ) -> Self {
+    pub fn new(device: &Device, format: TextureFormat, size: PhysicalSize<u32>) -> Self {
         let screen_uniform = ScreenUniform {
             size: [size.width as f32, size.height as f32],
             time: 0.0,

@@ -1,7 +1,7 @@
 use crate::camera::Camera;
-use crate::data::SharedData;
 pub use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ui::UiRenderer;
+use crate::renderer::ui_editor::UiButtonLoader;
 use crate::vertex::{LineVtx, Vertex};
 use crate::{FrameTimer, Uniforms};
 use std::sync::Arc;
@@ -27,11 +27,10 @@ pub struct RenderCore {
     pub timer: FrameTimer,
     ui_renderer: UiRenderer,
     size: PhysicalSize<u32>,
-    data: SharedData,
 }
 
 impl RenderCore {
-    pub fn new(window: Arc<Window>, data: SharedData) -> Self {
+    pub fn new(window: Arc<Window>) -> Self {
         use wgpu::*;
         // --- Create instance and surface ---
         let instance = Instance::default();
@@ -164,7 +163,7 @@ impl RenderCore {
         let num_vertices = vertices.len() as u32;
 
         let pipelines = Pipelines::new(&device, config.format, msaa_samples);
-        let ui_renderer = UiRenderer::new(&device, config.format, size, data.clone());
+        let ui_renderer = UiRenderer::new(&device, config.format, size);
 
         Self {
             surface,
@@ -180,7 +179,6 @@ impl RenderCore {
             timer: FrameTimer::new(),
             ui_renderer,
             size,
-            data: data.clone(),
         }
     }
 
@@ -211,7 +209,7 @@ impl RenderCore {
             .create_view(&TextureViewDescriptor::default());
     }
 
-    pub(crate) fn render(&mut self, camera: &Camera) {
+    pub(crate) fn render(&mut self, camera: &Camera, ui_loader: &UiButtonLoader) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
         let new_uniforms = Uniforms {
@@ -298,13 +296,8 @@ impl RenderCore {
             },
         });
 
-        {
-            let d = self.data.lock().unwrap();
-            let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
-            //ui_loader.l
-            let all_vertices = ui_loader.collect_vertices();
-            self.ui_renderer.draw_custom(&self.queue, &all_vertices);
-        }
+        let all_vertices = ui_loader.collect_vertices();
+        self.ui_renderer.draw_custom(&self.queue, &all_vertices);
 
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -403,13 +396,9 @@ impl RenderCore {
         self.pipelines.msaa_samples = self.msaa_samples;
         self.pipelines.recreate_pipelines();
     }
-    pub fn make_circles(&mut self) {
-        {
-            let d = self.data.lock().unwrap();
-            let ui_loader = d.ui_loader.as_ref().unwrap().lock().unwrap();
-            let circles = ui_loader.collect_circles();
-            println!("Circles {:#?}", circles);
-            self.ui_renderer.circles = circles;
-        }
+    pub fn make_circles(&mut self, ui_loader: &UiButtonLoader) {
+        let circles = ui_loader.collect_circles();
+        println!("Circles {:#?}", circles);
+        self.ui_renderer.circles = circles;
     }
 }

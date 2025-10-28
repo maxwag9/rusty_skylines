@@ -1,4 +1,7 @@
-use wgpu::{vertex_attr_array, BufferAddress, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
+use wgpu::{
+    BufferAddress, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode,
+    vertex_attr_array,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
