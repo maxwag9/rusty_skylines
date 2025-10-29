@@ -1,3 +1,4 @@
+use crate::app::TimingData;
 use crate::data::Settings;
 use crate::renderer::Renderer;
 use crate::renderer::ui_editor::UiButtonLoader;
@@ -71,10 +72,14 @@ impl State {
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.renderer.resize(new_size);
     }
-    pub fn render(&mut self) {
-        self.renderer.render(&self.camera, &self.ui_loader);
-        let dt = self.renderer.core.timer.dt();
-        self.update_camera(dt);
+    pub fn render(&mut self, timing_data: Arc<Mutex<TimingData>>) {
+        let _ = self.renderer.core.timer.dt();
+        {
+            let timing = timing_data.lock().unwrap();
+            self.update_camera(timing.sim_dt);
+        }
+        self.renderer
+            .render(&self.camera, &self.ui_loader, timing_data);
     }
 
     pub(crate) fn update_camera(&mut self, dt: f32) {

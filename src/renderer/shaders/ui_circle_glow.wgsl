@@ -90,12 +90,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let glow_pulse_speed = p.glow_misc.y;
     let glow_pulse_intensity = p.glow_misc.z;
     let dist = distance(in.local_pos, center);
+    // Period = 2π/glow_pulse_speed
+    let t = screen.time * glow_pulse_speed;
+    let base = 0.2; // baseline glow
+    let pulse = base + (1.0 - base) * (0.5 - 0.5 * cos(screen.time * glow_pulse_speed))
+                * glow_pulse_intensity;
 
-    // soft fade
-    // Glow pulse using time (cycles every ~2 seconds)
-    let pulse = 0.5 + glow_pulse_intensity * sin(screen.time * glow_pulse_speed);
-    // Multiplies between 0.5 → 1.0 smoothly
     let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) * pulse;
+
     var col = vec4<f32>(p.glow_color.rgb * glow_strength, glow_strength);
 
     // Screen-space coordinates in pixel units

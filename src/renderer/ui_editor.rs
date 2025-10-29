@@ -1,4 +1,5 @@
 use crate::renderer::ui::CircleParams;
+use crate::vertex::UiVertexPoly;
 use serde::Deserialize;
 use std::fs;
 use std::io::Result;
@@ -10,6 +11,14 @@ pub struct UiVertex {
     pub pos: [f32; 2],
     pub color: [f32; 4],
     pub roundness: f32,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GlowSettings {
+    pub glow_color: [f32; 4],
+    pub glow_size: f32,
+    pub glow_speed: f32,
+    pub glow_intensity: f32,
 }
 
 // --- all possible button shapes ---
@@ -25,7 +34,7 @@ pub enum UiButtonDef {
         radius: f32,
         fill_color: [f32; 4],
         border_color: [f32; 4],
-        glow_color: [f32; 4],
+        glow_settings: GlowSettings,
         active: bool,
     },
 
@@ -65,13 +74,6 @@ pub enum UiButtonDef {
     },
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
-pub struct Vertex {
-    pub position: [f32; 2],
-    pub color: [f32; 4],
-}
-
 // --- the loader ---
 pub struct UiButtonLoader {
     pub buttons: Vec<UiButtonDef>,
@@ -100,7 +102,7 @@ impl UiButtonLoader {
     }
 
     /// Collects all vertices from active buttons for rendering
-    pub fn collect_vertices(&self) -> Vec<Vertex> {
+    pub fn collect_vertices(&self) -> Vec<UiVertexPoly> {
         let mut all_vertices = Vec::new();
 
         for def in &self.buttons {
@@ -109,8 +111,8 @@ impl UiButtonLoader {
                     vertices, active, ..
                 } if *active => {
                     for v in vertices {
-                        all_vertices.push(Vertex {
-                            position: v.pos,
+                        all_vertices.push(UiVertexPoly {
+                            pos: v.pos,
                             color: v.color,
                         });
                     }
@@ -125,20 +127,20 @@ impl UiButtonLoader {
                     ..
                 } if *active => {
                     all_vertices.extend([
-                        Vertex {
-                            position: top_left_vertex.pos,
+                        UiVertexPoly {
+                            pos: top_left_vertex.pos,
                             color: top_left_vertex.color,
                         },
-                        Vertex {
-                            position: top_right_vertex.pos,
+                        UiVertexPoly {
+                            pos: top_right_vertex.pos,
                             color: top_right_vertex.color,
                         },
-                        Vertex {
-                            position: bottom_left_vertex.pos,
+                        UiVertexPoly {
+                            pos: bottom_left_vertex.pos,
                             color: bottom_left_vertex.color,
                         },
-                        Vertex {
-                            position: bottom_right_vertex.pos,
+                        UiVertexPoly {
+                            pos: bottom_right_vertex.pos,
                             color: bottom_right_vertex.color,
                         },
                     ]);
@@ -152,16 +154,16 @@ impl UiButtonLoader {
                     ..
                 } if *active => {
                     all_vertices.extend([
-                        Vertex {
-                            position: top_vertex.pos,
+                        UiVertexPoly {
+                            pos: top_vertex.pos,
                             color: top_vertex.color,
                         },
-                        Vertex {
-                            position: left_vertex.pos,
+                        UiVertexPoly {
+                            pos: left_vertex.pos,
                             color: left_vertex.color,
                         },
-                        Vertex {
-                            position: right_vertex.pos,
+                        UiVertexPoly {
+                            pos: right_vertex.pos,
                             color: right_vertex.color,
                         },
                     ]);
@@ -186,7 +188,7 @@ impl UiButtonLoader {
                 radius,
                 fill_color,
                 border_color,
-                glow_color,
+                glow_settings,
                 active,
             } = def
             {
@@ -195,13 +197,23 @@ impl UiButtonLoader {
                     center_radius_border: [*x, *y, *radius, 4.0],
                     fill_color: *fill_color,
                     border_color: *border_color,
-                    glow_color: *glow_color,
+                    glow_color: glow_settings.glow_color,
                     // encode the "active" state, e.g. in glow_misc.w
-                    glow_misc: [50.0, 6.28, 0.4, if *active { 1.0 } else { 0.0 }],
+                    glow_misc: [
+                        glow_settings.glow_size,
+                        glow_settings.glow_speed,
+                        glow_settings.glow_intensity,
+                        if *active { 1.0 } else { 0.0 },
+                    ],
                 });
             }
         }
 
         circles
+    }
+
+    pub fn collect_text(&self) -> String {
+        let text = String::new();
+        text
     }
 }

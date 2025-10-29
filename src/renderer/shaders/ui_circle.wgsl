@@ -8,20 +8,15 @@ struct ScreenUniform {
 var<uniform> screen: ScreenUniform;
 
 struct CircleParams {
-    // (cx, cy, radius, border)
-    center_radius_border: vec4<f32>,
-    // straight-alpha colors
+    center_radius_border: vec4<f32>, // cx, cy, radius, border
     fill_color:   vec4<f32>,
     border_color: vec4<f32>,
     glow_color:   vec4<f32>,
-    // (glow_size, pad, pad, pad)
-    glow_misc:    vec4<f32>,
+    glow_misc:    vec4<f32>,         // (glow_size, ...)
 };
-
 
 @group(1) @binding(0)
 var<storage, read> circles: array<CircleParams>;
-
 
 struct VertexInput {
     @location(0) pos: vec2<f32>,
@@ -31,39 +26,29 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
-    @location(0) color: vec4<f32>,
-    @location(1) local_pos: vec2<f32>,
-    @location(2) circle_index: u32,
+    @location(0) local_pos: vec2<f32>,
+    @location(1) circle_index: u32,
 };
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     let params = circles[in.instance];
-    let glow_size = params.glow_misc.x;
     let crb = params.center_radius_border;
 
     let center = crb.xy;
     let radius = crb.z;
 
-    // quad covers full circle + halo
-    let world = center + in.pos * (radius + glow_size);
-
-
-
+    // only cover the visible circle area (no halo)
+    let world = center + in.pos * radius;
 
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (world.y / screen.size.y) * 2.0;
     out.pos = vec4<f32>(x, y, 0.0, 1.0);
     out.local_pos = world;
     out.circle_index = in.instance;
-    out.color = vec4<f32>(1.0, 0.0, 0.0, 0.2);
-
-
     return out;
-
 }
-
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -72,36 +57,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let center = crb.xy;
     let radius = crb.z;
     let border = crb.w;
-    let glow_size = p.glow_misc.x;
 
     let dist = distance(in.local_pos, center);
 
-    // Glow outside the circle
-    let glow_strength = 1.0 - smoothstep(radius, radius + glow_size, dist);
-    var glow_col = p.glow_color;
-    glow_col.a *= glow_strength;
-
-    // Edges for fill + border
+    // Smooth edge
     let outer_edge = smoothstep(radius, radius - 1.0, dist);
     let inner_edge = smoothstep(radius - border, radius - border - 1.0, dist);
     let border_mask = outer_edge - inner_edge;
 
-    // Fill
+    // Fill + border
     var col = mix(p.fill_color, p.border_color, border_mask);
     col.a *= outer_edge;
 
-    // additive glow (expand swizzle)
-    col = vec4<f32>(
-        col.r + glow_col.r * glow_col.a,
-        col.g + glow_col.g * glow_col.a,
-        col.b + glow_col.b * glow_col.a,
-        col.a
-    );
-    // compute glow contribution
-    let glow_add = glow_col.rgb * glow_col.a * (1.0 - col.a);
-    let out_rgb = col.rgb + glow_add;
-    let out_a   = col.a + glow_col.a * (1.0 - col.a);
-
-    return vec4<f32>(out_rgb, out_a);
-
+    return col;
 }

@@ -1,5 +1,5 @@
 use crate::state::{SimulationHandle, State};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
@@ -8,12 +8,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::Key;
 use winit::window::{Window, WindowId};
 
+#[derive(Default, Clone)]
+pub struct TimingData {
+    pub sim_dt: f32,
+    pub render_dt: f32,
+    pub render_fps: f32,
+}
+
 pub(crate) struct App {
     window: Option<Arc<Window>>,
     state: Option<State>,
     last_frame: Instant,
     target_fps: f32,
     target_frame_time: Duration,
+    sim_dt: f32,
+    timing: Arc<Mutex<TimingData>>,
 }
 
 impl Default for App {
@@ -24,6 +33,8 @@ impl Default for App {
             last_frame: Instant::now(),
             target_fps: 100.0,
             target_frame_time: Duration::from_millis(10),
+            sim_dt: 1.0 / 60.0,
+            timing: Arc::new(Mutex::new(Default::default())),
         }
     }
 }
@@ -50,6 +61,8 @@ impl ApplicationHandler for App {
         self.target_frame_time = Duration::from_secs_f32(1.0 / self.target_fps);
         self.window = Some(window);
 
+        let timing_clone = self.timing.clone();
+
         // Simulation thread (fixed timestep)
         thread::spawn(move || {
             let tick = Duration::from_secs_f64(1.0 / 60.0); // 60 Hz
@@ -61,6 +74,9 @@ impl ApplicationHandler for App {
                 let dt = (now - last).as_secs_f32();
                 last = now;
 
+                if let Ok(mut t) = timing_clone.lock() {
+                    t.sim_dt = dt;
+                }
                 if let Ok(mut sim) = simulation_handle.lock() {
                     sim.update(dt);
                 }
@@ -86,7 +102,15 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => state.resize(size),
             WindowEvent::RedrawRequested => {
                 let frame_start = Instant::now();
-                state.render();
+                {
+                    let mut timing = self.timing.lock().unwrap();
+                    let now = Instant::now();
+                    let dt = (now - self.last_frame).as_secs_f32();
+                    self.last_frame = now;
+                    timing.render_dt = dt;
+                    timing.render_fps = 1.0 / dt;
+                }
+                state.render(self.timing.clone());
 
                 // Measure and schedule next frame
                 let elapsed = frame_start.elapsed();

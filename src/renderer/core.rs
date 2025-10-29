@@ -1,14 +1,18 @@
+use crate::app::TimingData;
 use crate::camera::Camera;
 pub use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::vertex::{LineVtx, Vertex};
 use crate::{FrameTimer, Uniforms};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
+
+// top-level (once)
+pub const FONT_TTF: &[u8] = include_bytes!("ui_data/ttf/JetBrainsMono-Regular.ttf");
 
 pub struct RenderCore {
     pub surface: Surface<'static>,
@@ -163,7 +167,8 @@ impl RenderCore {
         let num_vertices = vertices.len() as u32;
 
         let pipelines = Pipelines::new(&device, config.format, msaa_samples);
-        let ui_renderer = UiRenderer::new(&device, config.format, size);
+        let mut ui_renderer = UiRenderer::new(&device, config.format, size);
+        let _ = ui_renderer.build_text_atlas(&device, &queue, &FONT_TTF, &[14, 18, 24], 1024, 1024);
 
         Self {
             surface,
@@ -209,7 +214,12 @@ impl RenderCore {
             .create_view(&TextureViewDescriptor::default());
     }
 
-    pub(crate) fn render(&mut self, camera: &Camera, ui_loader: &UiButtonLoader) {
+    pub(crate) fn render(
+        &mut self,
+        camera: &Camera,
+        ui_loader: &UiButtonLoader,
+        timing_data: Arc<Mutex<TimingData>>,
+    ) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
         let new_uniforms = Uniforms {
@@ -352,7 +362,8 @@ impl RenderCore {
                 bytemuck::bytes_of(&screen_uniform),
             );
 
-            self.ui_renderer.render(&mut pass);
+            self.ui_renderer
+                .render(&mut pass, &ui_loader, &self.queue, timing_data);
         }
 
         // --- Submit and present ---
@@ -398,7 +409,7 @@ impl RenderCore {
     }
     pub fn make_circles(&mut self, ui_loader: &UiButtonLoader) {
         let circles = ui_loader.collect_circles();
-        println!("Circles {:#?}", circles);
+        //println!("Circles {:#?}", circles);
         self.ui_renderer.circles = circles;
     }
 }
