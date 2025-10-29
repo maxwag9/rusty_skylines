@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use wgpu::{BufferAddress, VertexAttribute, VertexBufferLayout, VertexStepMode, vertex_attr_array};
 
 #[repr(C)]
@@ -102,4 +103,98 @@ impl UiVertexText {
             ],
         }
     }
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct UiVertex {
+    pub pos: [f32; 2],
+    pub color: [f32; 4],
+    pub roundness: f32,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GlowSettings {
+    pub glow_color: [f32; 4],
+    pub glow_size: f32,
+    pub glow_speed: f32,
+    pub glow_intensity: f32,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GuiLayout {
+    #[serde(default)]
+    pub texts: Vec<UiButtonText>,
+    #[serde(default)]
+    pub circles: Vec<UiButtonCircle>,
+    #[serde(default)]
+    pub rectangles: Vec<UiButtonRectangle>,
+    #[serde(default)]
+    pub triangles: Vec<UiButtonTriangle>,
+    #[serde(default)]
+    pub polygons: Vec<UiButtonPolygon>,
+}
+
+// --- all possible button shapes ---
+#[derive(Deserialize, Debug)]
+pub struct UiButtonText {
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub top_left_vertex: UiVertex,
+    pub bottom_left_vertex: UiVertex,
+    pub top_right_vertex: UiVertex,
+    pub bottom_right_vertex: UiVertex,
+    pub px: u16,
+    pub color: [f32; 4],
+    pub text: String,
+    pub active: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UiButtonCircle {
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub radius: f32,
+    pub fill_color: [f32; 4],
+    pub border_color: [f32; 4],
+    pub glow_settings: GlowSettings,
+    pub active: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UiButtonRectangle {
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub top_left_vertex: UiVertex,
+    pub bottom_left_vertex: UiVertex,
+    pub top_right_vertex: UiVertex,
+    pub bottom_right_vertex: UiVertex,
+    pub active: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UiButtonPolygon {
+    vertices: Vec<UiVertex>,
+    x: f32,
+    y: f32,
+    stretch_x: f32,
+    stretch_y: f32,
+    active: bool,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct UiButtonTriangle {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    top_vertex: UiVertex,
+    left_vertex: UiVertex,
+    right_vertex: UiVertex,
+    active: bool,
 }

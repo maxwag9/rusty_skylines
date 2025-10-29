@@ -1,215 +1,142 @@
 use crate::renderer::ui::CircleParams;
-use crate::vertex::UiVertexPoly;
-use serde::Deserialize;
+use crate::vertex::{
+    GuiLayout, UiButtonCircle, UiButtonPolygon, UiButtonRectangle, UiButtonText, UiButtonTriangle,
+    UiVertex, UiVertexPoly,
+};
 use std::fs;
 use std::io::Result;
 use std::path::PathBuf;
 
-// --- your basic per-vertex data ---
-#[derive(Deserialize, Debug, Clone, Copy)]
-pub struct UiVertex {
-    pub pos: [f32; 2],
-    pub color: [f32; 4],
-    pub roundness: f32,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct GlowSettings {
-    pub glow_color: [f32; 4],
-    pub glow_size: f32,
-    pub glow_speed: f32,
-    pub glow_intensity: f32,
-}
-
-// --- all possible button shapes ---
-#[derive(Deserialize, Debug)]
-#[serde(tag = "type")]
-pub enum UiButtonDef {
-    #[serde(rename = "circle")]
-    Circle {
-        x: f32,
-        y: f32,
-        stretch_x: f32,
-        stretch_y: f32,
-        radius: f32,
-        fill_color: [f32; 4],
-        border_color: [f32; 4],
-        glow_settings: GlowSettings,
-        active: bool,
-    },
-
-    #[serde(rename = "rectangle")]
-    Rectangle {
-        x: f32,
-        y: f32,
-        stretch_x: f32,
-        stretch_y: f32,
-        top_left_vertex: UiVertex,
-        bottom_left_vertex: UiVertex,
-        top_right_vertex: UiVertex,
-        bottom_right_vertex: UiVertex,
-        active: bool,
-    },
-
-    #[serde(rename = "polygon")]
-    Polygon {
-        vertices: Vec<UiVertex>,
-        x: f32,
-        y: f32,
-        stretch_x: f32,
-        stretch_y: f32,
-        active: bool,
-    },
-
-    #[serde(rename = "triangle")]
-    Triangle {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        top_vertex: UiVertex,
-        left_vertex: UiVertex,
-        right_vertex: UiVertex,
-        active: bool,
-    },
-}
-
-// --- the loader ---
 pub struct UiButtonLoader {
-    pub buttons: Vec<UiButtonDef>,
+    pub texts: Vec<UiButtonText>,
+    pub circles: Vec<UiButtonCircle>,
+    pub rectangles: Vec<UiButtonRectangle>,
+    pub triangles: Vec<UiButtonTriangle>,
+    pub polygons: Vec<UiButtonPolygon>,
 }
 
 impl UiButtonLoader {
     pub fn new() -> Self {
-        let buttons = Self::load_gui_from_file("ui_data/gui_layout.json").unwrap_or_else(|e| {
-            eprintln!("Failed to load GUI file: {e}");
-            Vec::new()
-        });
-        println!("Loaded buttons: {:?}", buttons);
-        Self { buttons }
+        match Self::load_gui_from_file("ui_data/gui_layout.json") {
+            Ok(layout) => {
+                println!(
+                    "✅ Loaded GUI layout with {} texts, {} circles, {} rectangles",
+                    layout.texts.len(),
+                    layout.circles.len(),
+                    layout.rectangles.len()
+                );
+                Self {
+                    texts: layout.texts,
+                    circles: layout.circles,
+                    rectangles: layout.rectangles,
+                    triangles: layout.triangles,
+                    polygons: layout.polygons,
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to load GUI layout: {e}");
+                Self {
+                    texts: Vec::new(),
+                    circles: Vec::new(),
+                    rectangles: Vec::new(),
+                    triangles: Vec::new(),
+                    polygons: Vec::new(),
+                }
+            }
+        }
     }
 
-    pub fn load_gui_from_file(path: &str) -> Result<Vec<UiButtonDef>> {
+    pub fn load_gui_from_file(path: &str) -> Result<GuiLayout> {
         let mut full_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         full_path.push("src/renderer");
         full_path.push(path);
-        // println!("readin' GUI layout from: {:?}", full_path);
 
         let data = fs::read_to_string(&full_path)?;
-        let parsed: Vec<UiButtonDef> =
-            serde_json::from_str(&data).expect("Invalid JSON in GUI layout");
+        let parsed: GuiLayout = serde_json::from_str(&data)?;
         Ok(parsed)
     }
 
-    /// Collects all vertices from active buttons for rendering
-    pub fn collect_vertices(&self) -> Vec<UiVertexPoly> {
-        let mut all_vertices = Vec::new();
+    pub fn collect_texts(&self) -> Vec<UiButtonText> {
+        self.texts
+            .iter()
+            .filter(|t| t.active)
+            .map(|t| UiButtonText {
+                x: t.x,
+                y: t.y,
+                stretch_x: 0.0,
+                stretch_y: 0.0,
+                top_left_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    roundness: 0.0,
+                },
+                bottom_left_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    roundness: 0.0,
+                },
+                top_right_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    roundness: 0.0,
+                },
+                bottom_right_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    roundness: 0.0,
+                },
+                px: t.px,
+                color: t.color,
+                text: t.text.clone(),
+                active: false,
+            })
+            .collect()
+    }
 
-        for def in &self.buttons {
-            match def {
-                UiButtonDef::Polygon {
-                    vertices, active, ..
-                } if *active => {
-                    for v in vertices {
-                        all_vertices.push(UiVertexPoly {
-                            pos: v.pos,
-                            color: v.color,
-                        });
-                    }
-                }
-
-                UiButtonDef::Rectangle {
-                    top_left_vertex,
-                    top_right_vertex,
-                    bottom_left_vertex,
-                    bottom_right_vertex,
-                    active,
-                    ..
-                } if *active => {
-                    all_vertices.extend([
-                        UiVertexPoly {
-                            pos: top_left_vertex.pos,
-                            color: top_left_vertex.color,
-                        },
-                        UiVertexPoly {
-                            pos: top_right_vertex.pos,
-                            color: top_right_vertex.color,
-                        },
-                        UiVertexPoly {
-                            pos: bottom_left_vertex.pos,
-                            color: bottom_left_vertex.color,
-                        },
-                        UiVertexPoly {
-                            pos: bottom_right_vertex.pos,
-                            color: bottom_right_vertex.color,
-                        },
-                    ]);
-                }
-
-                UiButtonDef::Triangle {
-                    top_vertex,
-                    left_vertex,
-                    right_vertex,
-                    active,
-                    ..
-                } if *active => {
-                    all_vertices.extend([
-                        UiVertexPoly {
-                            pos: top_vertex.pos,
-                            color: top_vertex.color,
-                        },
-                        UiVertexPoly {
-                            pos: left_vertex.pos,
-                            color: left_vertex.color,
-                        },
-                        UiVertexPoly {
-                            pos: right_vertex.pos,
-                            color: right_vertex.color,
-                        },
-                    ]);
-                }
-
-                _ => {}
+    pub fn collect_rectangles(&self) -> Vec<UiVertexPoly> {
+        let mut verts = Vec::new();
+        for r in &self.rectangles {
+            if !r.active {
+                continue;
             }
+            verts.extend([
+                UiVertexPoly {
+                    pos: r.top_left_vertex.pos,
+                    color: r.top_left_vertex.color,
+                },
+                UiVertexPoly {
+                    pos: r.top_right_vertex.pos,
+                    color: r.top_right_vertex.color,
+                },
+                UiVertexPoly {
+                    pos: r.bottom_left_vertex.pos,
+                    color: r.bottom_left_vertex.color,
+                },
+                UiVertexPoly {
+                    pos: r.bottom_right_vertex.pos,
+                    color: r.bottom_right_vertex.color,
+                },
+            ]);
         }
-
-        all_vertices
+        verts
     }
 
     pub fn collect_circles(&self) -> Vec<CircleParams> {
-        let mut circles = Vec::new();
-
-        for def in &self.buttons {
-            if let UiButtonDef::Circle {
-                x,
-                y,
-                stretch_x: _,
-                stretch_y: _,
-                radius,
-                fill_color,
-                border_color,
-                glow_settings,
-                active,
-            } = def
-            {
-                // Always push a circle, regardless of "active"
-                circles.push(CircleParams {
-                    center_radius_border: [*x, *y, *radius, 4.0],
-                    fill_color: *fill_color,
-                    border_color: *border_color,
-                    glow_color: glow_settings.glow_color,
-                    // encode the "active" state, e.g. in glow_misc.w
-                    glow_misc: [
-                        glow_settings.glow_size,
-                        glow_settings.glow_speed,
-                        glow_settings.glow_intensity,
-                        if *active { 1.0 } else { 0.0 },
-                    ],
-                });
-            }
-        }
-
-        circles
+        self.circles
+            .iter()
+            .map(|c| CircleParams {
+                center_radius_border: [c.x, c.y, c.radius, 4.0],
+                fill_color: c.fill_color,
+                border_color: c.border_color,
+                glow_color: c.glow_settings.glow_color,
+                glow_misc: [
+                    c.glow_settings.glow_size,
+                    c.glow_settings.glow_speed,
+                    c.glow_settings.glow_intensity,
+                    if c.active { 1.0 } else { 0.0 },
+                ],
+            })
+            .collect()
     }
 
     pub fn collect_text(&self) -> String {

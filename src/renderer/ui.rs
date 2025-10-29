@@ -1,6 +1,6 @@
 use crate::app::TimingData;
 use crate::renderer::ui_editor::UiButtonLoader;
-use crate::vertex::{UiVertexPoly, UiVertexText};
+use crate::vertex::{UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
@@ -39,14 +39,6 @@ pub struct TextAtlas {
     pub size: (u32, u32),
     pub glyphs: HashMap<(char, u16), GlyphUv>, // (char, px_size) -> uv+metrics
     pub line_height: f32,
-}
-
-pub struct GuiTextCmd {
-    pub x: f32,
-    pub y: f32,  // screen-space or your GUI units
-    pub px: u16, // font size used in atlas
-    pub color: [f32; 4],
-    pub text: String,
 }
 
 pub struct UiRenderer {
@@ -392,14 +384,20 @@ impl UiRenderer {
     pub fn render<'a>(
         &mut self,
         pass: &mut RenderPass<'a>,
-        _ui_loader: &UiButtonLoader,
+        ui_loader: &UiButtonLoader,
         queue: &Queue,
         timing_data: Arc<Mutex<TimingData>>,
     ) {
-        // Glow first (additive)
+        let circles = ui_loader.collect_circles();
+        let circle_data = if circles.is_empty() {
+            vec![CircleParams::default()]
+        } else {
+            circles
+        };
+
         let circle_buffer = self.device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Circle Storage Buffer"),
-            contents: bytemuck::cast_slice(&self.circles), // now 80B per element
+            contents: bytemuck::cast_slice(&circle_data),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
@@ -419,65 +417,98 @@ impl UiRenderer {
             let sim_ms = timing.sim_dt;
             s = format!("FPS: {fps:.1} | FrameTime: {ft_ms:.2}ms | SimDT: {sim_ms:.2}ms");
         }
-
+        let fps_text = UiButtonText {
+            x: 150.0,
+            y: 60.0,
+            stretch_x: 0.0,
+            stretch_y: 0.0,
+            top_left_vertex: UiVertex {
+                pos: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+            },
+            bottom_left_vertex: UiVertex {
+                pos: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+            },
+            top_right_vertex: UiVertex {
+                pos: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+            },
+            bottom_right_vertex: UiVertex {
+                pos: [0.0, 0.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+            },
+            px: 24,
+            color: [1.0, 1.0, 1.0, 1.0],
+            text: s,
+            active: true,
+        };
+        let mut texts = ui_loader.collect_texts();
+        texts.push(fps_text);
         let mut text_vertices = Vec::new();
-        let mut pen_x = 12.0;
 
         if let Some(atlas) = &self.text_atlas {
-            // use a visible baseline a bit below the top
-            let baseline_y = 24.0 + atlas.line_height;
+            for t in texts {
+                let mut pen_x = t.x;
+                let baseline_y = t.y + atlas.line_height;
 
-            for ch in s.chars() {
-                if let Some(g) = atlas.glyphs.get(&(ch, 24)) {
-                    // compute quad corners using fontdue's metrics
-                    let x0 = pen_x + g.bearing_x;
-                    let y0 = baseline_y - g.bearing_y; // baseline_y = 24.0 - atlas.line_height
-                    let x1 = x0 + g.w;
-                    let y1 = y0 + g.h;
+                for ch in t.text.chars() {
+                    if let Some(g) = atlas.glyphs.get(&(ch, t.px)) {
+                        let x0 = pen_x + g.bearing_x;
+                        let y0 = baseline_y - g.bearing_y;
+                        let x1 = x0 + g.w;
+                        let y1 = y0 + g.h;
 
-                    // two triangles per glyph
-                    text_vertices.extend_from_slice(&[
-                        UiVertexText {
-                            pos: [x0, y0],
-                            uv: [g.u0, g.v0],
-                            color: [1.0; 4],
-                        },
-                        UiVertexText {
-                            pos: [x1, y0],
-                            uv: [g.u1, g.v0],
-                            color: [1.0; 4],
-                        },
-                        UiVertexText {
-                            pos: [x1, y1],
-                            uv: [g.u1, g.v1],
-                            color: [1.0; 4],
-                        },
-                        UiVertexText {
-                            pos: [x0, y0],
-                            uv: [g.u0, g.v0],
-                            color: [1.0; 4],
-                        },
-                        UiVertexText {
-                            pos: [x1, y1],
-                            uv: [g.u1, g.v1],
-                            color: [1.0; 4],
-                        },
-                        UiVertexText {
-                            pos: [x0, y1],
-                            uv: [g.u0, g.v1],
-                            color: [1.0; 4],
-                        },
-                    ]);
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: t.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y0],
+                                uv: [g.u1, g.v0],
+                                color: t.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: t.color,
+                            },
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: t.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: t.color,
+                            },
+                            UiVertexText {
+                                pos: [x0, y1],
+                                uv: [g.u0, g.v1],
+                                color: t.color,
+                            },
+                        ]);
 
-                    pen_x += g.advance;
+                        pen_x += g.advance;
+                    }
                 }
             }
         }
+
         queue.write_buffer(
             &self.text_vertex_buffer,
             0,
             bytemuck::cast_slice(&text_vertices),
         );
+        self.text_vertex_count = text_vertices.len() as u32;
+
         self.text_vertex_count = text_vertices.len() as u32;
 
         pass.set_pipeline(&self.circle_pipeline);

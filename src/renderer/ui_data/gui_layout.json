@@ -1,95 +1,168 @@
-[
-  {
-    "type": "circle",
-    "x": 1000.0,
-    "y": 600.0,
-    "stretch_x": 1.0,
-    "stretch_y": 1.0,
-    "radius": 60.0,
-    "fill_color": [
-      0.1,
-      0.8,
-      0.1,
-      0.6
-    ],
-    "border_color": [
-      0.1,
-      0.3,
-      0.1,
-      0.8
-    ],
-    "glow_settings": {
-      "glow_color": [
+{
+  "texts": [
+    {
+      "type": "text",
+      "x": 200.0,
+      "y": 500.0,
+      "stretch_x": 1.0,
+      "stretch_y": 1.0,
+      "top_left_vertex": {
+        "pos": [
+          550.0,
+          500.0
+        ],
+        "color": [
+          1.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "bottom_left_vertex": {
+        "pos": [
+          500.0,
+          950.0
+        ],
+        "color": [
+          0.0,
+          1.0,
+          0.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "top_right_vertex": {
+        "pos": [
+          950.0,
+          500.0
+        ],
+        "color": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "bottom_right_vertex": {
+        "pos": [
+          900.0,
+          950.0
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "px": 24,
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "text": "String!!!",
+      "active": true
+    }
+  ],
+  "circles": [
+    {
+      "type": "circle",
+      "x": 1000.0,
+      "y": 600.0,
+      "stretch_x": 1.0,
+      "stretch_y": 1.0,
+      "radius": 60.0,
+      "fill_color": [
         0.1,
+        0.8,
         0.1,
-        0.4,
         0.6
       ],
-      "glow_size": 100.0,
-      "glow_speed": 1.0,
-      "glow_intensity": 2.0
-    },
-
-    "active": false
-  },
-  {
-    "type": "rectangle",
-    "x": 200.0,
-    "y": 500.0,
-    "stretch_x": 1.0,
-    "stretch_y": 1.0,
-    "top_left_vertex": {
-      "pos": [
-        550.0,
-        500.0
+      "border_color": [
+        0.1,
+        0.3,
+        0.1,
+        0.8
       ],
-      "color": [
-        1.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "roundness": 0.0
-    },
-    "bottom_left_vertex": {
-      "pos": [
-        500.0,
-        950.0
-      ],
-      "color": [
-        0.0,
-        1.0,
-        0.0,
-        1.0
-      ],
-      "roundness": 0.0
-    },
-    "top_right_vertex": {
-      "pos": [
-        950.0,
-        500.0
-      ],
-      "color": [
-        0.0,
-        0.0,
-        1.0,
-        1.0
-      ],
-      "roundness": 0.0
-    },
-    "bottom_right_vertex": {
-      "pos": [
-        900.0,
-        950.0
-      ],
-      "color": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ],
-      "roundness": 0.0
-    },
-    "active": true
-  }
-]
+      "glow_settings": {
+        "glow_color": [
+          0.9,
+          0.9,
+          0.0,
+          1.0
+        ],
+        "glow_size": 200.0,
+        "glow_speed": 1.0,
+        "glow_intensity": 1.0
+      },
+      "active": false
+    }
+  ],
+  "rectangles": [
+    {
+      "type": "rectangle",
+      "x": 200.0,
+      "y": 500.0,
+      "stretch_x": 1.0,
+      "stretch_y": 1.0,
+      "top_left_vertex": {
+        "pos": [
+          550.0,
+          500.0
+        ],
+        "color": [
+          1.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "bottom_left_vertex": {
+        "pos": [
+          500.0,
+          950.0
+        ],
+        "color": [
+          0.0,
+          1.0,
+          0.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "top_right_vertex": {
+        "pos": [
+          950.0,
+          500.0
+        ],
+        "color": [
+          0.0,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "bottom_right_vertex": {
+        "pos": [
+          900.0,
+          950.0
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roundness": 0.0
+      },
+      "active": true
+    }
+  ]
+}

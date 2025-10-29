@@ -306,8 +306,8 @@ impl RenderCore {
             },
         });
 
-        let all_vertices = ui_loader.collect_vertices();
-        self.ui_renderer.draw_custom(&self.queue, &all_vertices);
+        self.ui_renderer
+            .draw_custom(&self.queue, &ui_loader.collect_rectangles());
 
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
