@@ -1,11 +1,10 @@
-use crate::app::TimingData;
-use crate::camera::Camera;
+use crate::components::camera::Camera;
 pub use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
+use crate::resources::{FrameTimer, TimingData, Uniforms};
 use crate::vertex::{LineVtx, Vertex};
-use crate::{FrameTimer, Uniforms};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -217,8 +216,8 @@ impl RenderCore {
     pub(crate) fn render(
         &mut self,
         camera: &Camera,
-        ui_loader: &Arc<Mutex<UiButtonLoader>>,
-        timing_data: Arc<Mutex<TimingData>>,
+        ui_loader: &mut UiButtonLoader,
+        timing_data: &TimingData,
     ) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
@@ -307,9 +306,8 @@ impl RenderCore {
         });
 
         {
-            let ui_loader_clone = ui_loader.lock().unwrap();
-            let rects = &ui_loader_clone.collect_rectangles();
-            self.ui_renderer.draw_custom(&self.queue, rects);
+            let rects = ui_loader.collect_rectangles();
+            self.ui_renderer.draw_custom(&self.queue, &rects);
         }
 
         {
@@ -366,7 +364,7 @@ impl RenderCore {
             );
 
             self.ui_renderer
-                .render(&mut pass, &ui_loader, &self.queue, timing_data);
+                .render(&mut pass, ui_loader, &self.queue, timing_data);
         }
 
         // --- Submit and present ---

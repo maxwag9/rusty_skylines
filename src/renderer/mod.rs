@@ -4,11 +4,11 @@ pub mod render_passes;
 mod ui;
 pub mod ui_editor;
 
-use crate::app::TimingData;
-use crate::camera::Camera;
+use crate::components::camera::Camera;
 use crate::renderer::ui_editor::UiButtonLoader;
+use crate::resources::TimingData;
 use core::RenderCore;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub struct Renderer {
     pub core: RenderCore,
@@ -27,8 +27,8 @@ impl Renderer {
     pub fn render(
         &mut self,
         camera: &Camera,
-        ui_loader: &Arc<Mutex<UiButtonLoader>>,
-        timing_data: Arc<Mutex<TimingData>>,
+        ui_loader: &mut UiButtonLoader,
+        timing_data: &TimingData,
     ) {
         self.core.render(camera, ui_loader, timing_data);
     }
