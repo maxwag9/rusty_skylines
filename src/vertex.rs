@@ -43,7 +43,7 @@ impl Vertex {
 
 // For polygons (holy square) — pos + color
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct UiVertexPoly {
     pub pos: [f32; 2],
     pub color: [f32; 4],
@@ -113,13 +113,17 @@ pub struct UiVertex {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct GlowSettings {
-    pub glow_color: [f32; 4],
+pub struct GlowMisc {
     pub glow_size: f32,
     pub glow_speed: f32,
     pub glow_intensity: f32,
 }
-
+#[derive(Deserialize, Debug)]
+pub struct MiscButtonSettings {
+    pub active: bool,
+    pub touched_time: f32,
+    pub is_touched: bool,
+}
 #[derive(Deserialize, Debug)]
 pub struct GuiLayout {
     #[serde(default)]
@@ -137,6 +141,7 @@ pub struct GuiLayout {
 // --- all possible button shapes ---
 #[derive(Deserialize, Debug)]
 pub struct UiButtonText {
+    pub id: Option<String>,
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
@@ -153,6 +158,7 @@ pub struct UiButtonText {
 
 #[derive(Deserialize, Debug)]
 pub struct UiButtonCircle {
+    pub id: Option<String>,
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
@@ -160,12 +166,14 @@ pub struct UiButtonCircle {
     pub radius: f32,
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
-    pub glow_settings: GlowSettings,
-    pub active: bool,
+    pub glow_color: [f32; 4],
+    pub glow_misc: GlowMisc,
+    pub misc: MiscButtonSettings,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct UiButtonRectangle {
+    pub id: Option<String>,
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
@@ -179,6 +187,7 @@ pub struct UiButtonRectangle {
 
 #[derive(Deserialize, Debug)]
 pub struct UiButtonPolygon {
+    pub id: Option<String>,
     vertices: Vec<UiVertex>,
     x: f32,
     y: f32,
@@ -189,6 +198,7 @@ pub struct UiButtonPolygon {
 
 #[derive(Deserialize, Debug)]
 pub struct UiButtonTriangle {
+    pub id: Option<String>,
     x: f32,
     y: f32,
     width: f32,

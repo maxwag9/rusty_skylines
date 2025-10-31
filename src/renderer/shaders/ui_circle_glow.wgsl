@@ -24,8 +24,9 @@ struct CircleParams {
     fill_color:   vec4<f32>,
     border_color: vec4<f32>,
     glow_color:   vec4<f32>,
-    // (glow_size, pad, pad, pad)
+    // (glow_size, glow_speed, glow_intensity, pad)
     glow_misc:    vec4<f32>,
+    misc:         vec4<f32>,
 };
 
 fn hash(p: vec2<f32>) -> f32 {
@@ -83,42 +84,52 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let p = circles[in.circle_index];
-    let crb = p.center_radius_border;
-    let center = crb.xy;
-    let radius = crb.z;
+
+    let center = p.center_radius_border.xy;
+    let radius = p.center_radius_border.z;
     let glow_size = p.glow_misc.x;
-    let glow_pulse_speed = p.glow_misc.y;
-    let glow_pulse_intensity = p.glow_misc.z;
+    let glow_speed = p.glow_misc.y;
+    let glow_intensity = p.glow_misc.z;
+    let held_time = p.misc.y;
+    let is_down = p.misc.z;
+    let id_hash = p.misc.w;
+
     let dist = distance(in.local_pos, center);
-    // Period = 2π/glow_pulse_speed
-    let t = screen.time * glow_pulse_speed;
-    let base = 0.2; // baseline glow
-    let pulse = base + (1.0 - base) * (0.5 - 0.5 * cos(screen.time * glow_pulse_speed))
-                * glow_pulse_intensity;
 
-    let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) * pulse;
+    // ---------------------------------------------------------------
+    // Base pulsing glow (slow breathing...)
+    // ---------------------------------------------------------------
+    let pulse = 0.5 + 0.5 * sin(screen.time * glow_speed + id_hash * 314.15);
+    let base_glow = mix(0.15, 1.0, pulse) * glow_intensity;
 
+    // ---------------------------------------------------------------
+    // Press animation (with quick flash lightning bolt + decay)
+    // ---------------------------------------------------------------
+    // stronger flash right when button is pressed (held_time near 0)
+    let press_flash = max(exp(-held_time * 4.0) * is_down, 0.6);
+
+    // combine pulsing and press effects
+    let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) *
+                        (base_glow + press_flash);
+
+    // ---------------------------------------------------------------
+    // Apply color + alpha
+    // ---------------------------------------------------------------
     var col = vec4<f32>(p.glow_color.rgb * glow_strength, glow_strength);
 
-    // Screen-space coordinates in pixel units
+    // ---------------------------------------------------------------
+    // Dither and gentle subtle noise
+    // ---------------------------------------------------------------
     let px = i32(in.local_pos.x) & 3;
     let py = i32(in.local_pos.y) & 3;
     let dither = DITHER_MATRIX[py][px] - 0.5;
 
-    // Compute small temporal noise using screen-space coords and time
+    // small temporal noise for film-like motion
     let n = hash(in.local_pos.xy + vec2<f32>(screen.time, screen.time * 37.0));
-
-    // Scale to subtle SDR dithering range
     let offset = (n - 0.5) * (1.0 / 255.0) * 3.0;
 
-    col = vec4<f32>(
-        col.r + offset,
-        col.g + offset,
-        col.b + offset,
-        col.a
-    );
+    col = vec4<f32>(col.rgb + offset, col.a);
 
 
     return col;
 }
-

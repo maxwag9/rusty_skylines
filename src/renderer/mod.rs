@@ -27,7 +27,7 @@ impl Renderer {
     pub fn render(
         &mut self,
         camera: &Camera,
-        ui_loader: &UiButtonLoader,
+        ui_loader: &Arc<Mutex<UiButtonLoader>>,
         timing_data: Arc<Mutex<TimingData>>,
     ) {
         self.core.render(camera, ui_loader, timing_data);

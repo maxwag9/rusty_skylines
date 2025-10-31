@@ -26,7 +26,7 @@ pub(crate) struct State {
     zoom_damping: f32,
     pub(crate) renderer: Renderer,
     simulation: SimulationHandle,
-    pub(crate) ui_loader: UiButtonLoader,
+    pub(crate) ui_loader: Arc<Mutex<UiButtonLoader>>,
     pub settings: Settings,
 }
 
@@ -39,14 +39,19 @@ impl State {
         let simulation = Arc::new(Mutex::new(Simulation::new()));
         let ui_loader = UiButtonLoader::new();
         let mut renderer = Renderer::new(window.clone());
-        renderer.core.make_circles(&ui_loader);
 
         Self {
             _window: window,
             input: InputState::new(),
             mouse: MouseState {
                 last_pos: None,
-                dragging: false,
+                pos_x: 0.0,
+                pos_y: 0.0,
+                middle_pressed: false,
+                left_pressed: false,
+                right_pressed: false,
+                back_pressed: false,
+                forward_pressed: false,
             },
             velocity: Vec3::ZERO,
             zoom_vel: 0.0,
@@ -60,7 +65,7 @@ impl State {
             camera,
             renderer,
             simulation,
-            ui_loader,
+            ui_loader: Arc::new(Mutex::new(ui_loader)),
             settings,
         }
     }
@@ -159,7 +164,7 @@ impl State {
         self.camera.pitch += (self.target_pitch - self.camera.pitch) * t;
 
         // --- Gentle decel after release ---
-        if !self.mouse.dragging {
+        if !self.mouse.middle_pressed {
             self.target_yaw += self.yaw_velocity;
             self.target_pitch += self.pitch_velocity;
             self.yaw_velocity *= (1.0 - self.orbit_damping_release * dt).max(0.0);

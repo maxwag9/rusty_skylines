@@ -1,3 +1,4 @@
+#![allow(unused)]
 use glam::{Mat4, Vec3};
 use std::time::Instant;
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -11,6 +12,7 @@ mod vertex;
 mod data;
 mod renderer;
 mod simulation;
+mod touch_handler;
 
 use app::App;
 use camera::Camera;

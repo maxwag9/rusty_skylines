@@ -217,7 +217,7 @@ impl RenderCore {
     pub(crate) fn render(
         &mut self,
         camera: &Camera,
-        ui_loader: &UiButtonLoader,
+        ui_loader: &Arc<Mutex<UiButtonLoader>>,
         timing_data: Arc<Mutex<TimingData>>,
     ) {
         // update camera uniforms
@@ -306,8 +306,11 @@ impl RenderCore {
             },
         });
 
-        self.ui_renderer
-            .draw_custom(&self.queue, &ui_loader.collect_rectangles());
+        {
+            let ui_loader_clone = ui_loader.lock().unwrap();
+            let rects = &ui_loader_clone.collect_rectangles();
+            self.ui_renderer.draw_custom(&self.queue, rects);
+        }
 
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -406,10 +409,5 @@ impl RenderCore {
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
         self.pipelines.recreate_pipelines();
-    }
-    pub fn make_circles(&mut self, ui_loader: &UiButtonLoader) {
-        let circles = ui_loader.collect_circles();
-        //println!("Circles {:#?}", circles);
-        self.ui_renderer.circles = circles;
     }
 }

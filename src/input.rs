@@ -24,6 +24,12 @@ impl InputState {
 }
 
 pub(crate) struct MouseState {
-    pub(crate) last_pos: Option<(f64, f64)>,
-    pub(crate) dragging: bool,
+    pub(crate) last_pos: Option<(f32, f32)>,
+    pub(crate) pos_x: f32,
+    pub(crate) pos_y: f32,
+    pub(crate) middle_pressed: bool,
+    pub(crate) left_pressed: bool,
+    pub(crate) right_pressed: bool,
+    pub(crate) back_pressed: bool,
+    pub(crate) forward_pressed: bool,
 }

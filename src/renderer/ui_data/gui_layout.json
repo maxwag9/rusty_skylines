@@ -60,17 +60,18 @@
       },
       "px": 24,
       "color": [
+        0.0,
         1.0,
-        1.0,
-        1.0,
-        1.0
+        0.0,
+        0.7
       ],
       "text": "String!!!",
-      "active": true
+      "active": false
     }
   ],
   "circles": [
     {
+      "id": "toggle_simulation",
       "type": "circle",
       "x": 1000.0,
       "y": 600.0,
@@ -89,18 +90,22 @@
         0.1,
         0.8
       ],
-      "glow_settings": {
-        "glow_color": [
-          0.9,
-          0.9,
-          0.0,
-          1.0
-        ],
+      "glow_color": [
+        0.9,
+        0.9,
+        0.0,
+        1.0
+      ],
+      "glow_misc": {
         "glow_size": 200.0,
         "glow_speed": 1.0,
         "glow_intensity": 1.0
       },
-      "active": false
+      "misc": {
+        "active": true,
+        "touched_time": 0.0,
+        "is_touched": false
+      }
     }
   ],
   "rectangles": [
@@ -162,7 +167,7 @@
         ],
         "roundness": 0.0
       },
-      "active": true
+      "active": false
     }
   ]
 }

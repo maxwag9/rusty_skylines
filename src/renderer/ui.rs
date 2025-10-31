@@ -68,7 +68,8 @@ pub struct CircleParams {
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
-    pub glow_misc: [f32; 4], // glow_size, glow_pulse_speed, glow_pulse_intensity, 0
+    pub glow_misc: [f32; 4], // glow_size, glow_pulse_speed, glow_pulse_intensity
+    pub misc: [f32; 4],      // active, touched_time, is_touched, id_hash
 }
 
 impl Default for CircleParams {
@@ -79,6 +80,7 @@ impl Default for CircleParams {
             border_color: [0.0; 4],
             glow_color: [0.0; 4],
             glow_misc: [0.0; 4],
+            misc: [0.0; 4],
         }
     }
 }
@@ -90,13 +92,36 @@ impl UiRenderer {
             time: 0.0,
             enable_dither: 1,
         };
-
         let screen_data = bytemuck::bytes_of(&screen_uniform);
 
-        let uniform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("UI Uniforms"),
-            contents: screen_data,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        let quad_vertices = [
+            UiVertexPoly {
+                pos: [-1.0, -1.0],
+                color: [1.0; 4],
+            },
+            UiVertexPoly {
+                pos: [1.0, -1.0],
+                color: [1.0; 4],
+            },
+            UiVertexPoly {
+                pos: [-1.0, 1.0],
+                color: [1.0; 4],
+            },
+            UiVertexPoly {
+                pos: [1.0, 1.0],
+                color: [1.0; 4],
+            },
+        ];
+        let quad_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("UI Quad VB"),
+            contents: bytemuck::cast_slice(&quad_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+        let vertex_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("UI VB"),
+            size: 1024 * 1024, // 1MB buffer
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
@@ -112,9 +137,21 @@ impl UiRenderer {
                 count: None,
             }],
         });
+        let uniform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("UI Uniforms"),
+            contents: screen_data,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+        let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("UI Bind Group"),
+            layout: &layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
 
         let text_shader = device.create_shader_module(include_wgsl!("shaders/text.wgsl"));
-
         let text_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Text Layout"),
             entries: &[
@@ -136,13 +173,11 @@ impl UiRenderer {
                 },
             ],
         });
-
         let text_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Text Pipeline Layout"),
             bind_group_layouts: &[&layout, &text_layout],
             push_constant_ranges: &[],
         });
-
         let text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("UI Text Pipeline"),
             layout: Some(&text_pipeline_layout),
@@ -171,7 +206,16 @@ impl UiRenderer {
             multiview: None,
             cache: None,
         });
+        let text_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("UI Text VB"),
+            size: 256 * 1024,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
+        // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
+        let circles = vec![CircleParams::default()];
+        let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
         let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Circle Layout"),
             entries: &[BindGroupLayoutEntry {
@@ -185,89 +229,11 @@ impl UiRenderer {
                 count: None,
             }],
         });
-
-        // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
-        let circles = vec![CircleParams::default()];
-
-        let quad_vertices = [
-            UiVertexPoly {
-                pos: [-1.0, -1.0],
-                color: [1.0; 4],
-            },
-            UiVertexPoly {
-                pos: [1.0, -1.0],
-                color: [1.0; 4],
-            },
-            UiVertexPoly {
-                pos: [-1.0, 1.0],
-                color: [1.0; 4],
-            },
-            UiVertexPoly {
-                pos: [1.0, 1.0],
-                color: [1.0; 4],
-            },
-        ];
-
-        let quad_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("UI Quad VB"),
-            contents: bytemuck::cast_slice(&quad_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("UI Bind Group"),
-            layout: &layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        //let ui_shader = device.create_shader_module(include_wgsl!("shaders/ui.wgsl"));
-        let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
-        let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
-
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("UI Pipeline Layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-
-        let polygon_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("UI Polygon Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: VertexState {
-                module: &polygon_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[UiVertexPoly::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &polygon_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format,
-                    blend: Some(BlendState::ALPHA_BLENDING),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
         let circle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Circle Pipeline Layout"),
             bind_group_layouts: &[&layout, &circle_layout],
             push_constant_ranges: &[],
         });
-
         let circle_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("UI Circle Pipeline"),
             layout: Some(&circle_pipeline_layout),
@@ -297,21 +263,47 @@ impl UiRenderer {
             cache: None,
         });
 
-        let vertex_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("UI VB"),
-            size: 1024 * 1024, // 1MB buffer
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
+        let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("UI Pipeline Layout"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let polygon_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("UI Polygon Pipeline"),
+            layout: Some(&polygon_pipeline_layout),
+            vertex: VertexState {
+                module: &polygon_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[UiVertexPoly::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &polygon_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format,
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
         });
 
         let glow_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle_glow.wgsl"));
-
         let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Glow Pipeline Layout"),
             bind_group_layouts: &[&layout, &circle_layout],
             push_constant_ranges: &[],
         });
-
         let glow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("UI Glow Pipeline"),
             layout: Some(&glow_pipeline_layout),
@@ -353,16 +345,9 @@ impl UiRenderer {
             cache: None,
         });
 
-        let text_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("UI Text VB"),
-            size: 256 * 1024,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
             vertex_buffer,
-            uniform_bind_group: bind_group,
+            uniform_bind_group,
             num_vertices: 0,
             circle_pipeline,
             polygon_pipeline,
@@ -384,23 +369,26 @@ impl UiRenderer {
     pub fn render<'a>(
         &mut self,
         pass: &mut RenderPass<'a>,
-        ui_loader: &UiButtonLoader,
+        ui_loader: &&Arc<Mutex<UiButtonLoader>>,
         queue: &Queue,
         timing_data: Arc<Mutex<TimingData>>,
     ) {
-        let circles = ui_loader.collect_circles();
-        let circle_data = if circles.is_empty() {
-            vec![CircleParams::default()]
-        } else {
-            circles
+        let circles = {
+            let mut ui_loader_lock = ui_loader.lock().unwrap();
+            let collected = ui_loader_lock.collect_circles();
+
+            if collected.is_empty() {
+                vec![CircleParams::default()]
+            } else {
+                collected
+            }
         };
 
         let circle_buffer = self.device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Circle Storage Buffer"),
-            contents: bytemuck::cast_slice(&circle_data),
+            contents: bytemuck::cast_slice(&circles),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
-
         let circle_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("Circle Bind Group"),
             layout: &self.circle_layout,
@@ -409,15 +397,17 @@ impl UiRenderer {
                 resource: circle_buffer.as_entire_binding(),
             }],
         });
+
         let mut s = "FPS: 60 | FrameTime: 16ms | SimDT: 16ms".to_string();
         {
             let timing = timing_data.lock().unwrap();
             let fps = timing.render_fps;
-            let ft_ms = timing.render_dt;
-            let sim_ms = timing.sim_dt;
+            let ft_ms = timing.render_dt * 1000.0;
+            let sim_ms = timing.sim_dt * 1000.0;
             s = format!("FPS: {fps:.1} | FrameTime: {ft_ms:.2}ms | SimDT: {sim_ms:.2}ms");
         }
         let fps_text = UiButtonText {
+            id: Option::from("fps_text".to_string()),
             x: 150.0,
             y: 60.0,
             stretch_x: 0.0,
@@ -447,7 +437,11 @@ impl UiRenderer {
             text: s,
             active: true,
         };
-        let mut texts = ui_loader.collect_texts();
+        let mut texts = {
+            let ui_loader_lock = ui_loader.lock().unwrap();
+            let collected = ui_loader_lock.collect_texts();
+            collected
+        };
         texts.push(fps_text);
         let mut text_vertices = Vec::new();
 
@@ -458,8 +452,8 @@ impl UiRenderer {
 
                 for ch in t.text.chars() {
                     if let Some(g) = atlas.glyphs.get(&(ch, t.px)) {
-                        let x0 = pen_x + g.bearing_x;
-                        let y0 = baseline_y - g.bearing_y;
+                        let x0 = (pen_x + g.bearing_x).round();
+                        let y0 = (baseline_y - g.bearing_y).round();
                         let x1 = x0 + g.w;
                         let y1 = y0 + g.h;
 
@@ -501,14 +495,11 @@ impl UiRenderer {
                 }
             }
         }
-
         queue.write_buffer(
             &self.text_vertex_buffer,
             0,
             bytemuck::cast_slice(&text_vertices),
         );
-        self.text_vertex_count = text_vertices.len() as u32;
-
         self.text_vertex_count = text_vertices.len() as u32;
 
         pass.set_pipeline(&self.circle_pipeline);
@@ -523,13 +514,11 @@ impl UiRenderer {
         pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
         pass.draw(0..4, 0..self.circles.len() as u32);
 
-        // polygons
         pass.set_pipeline(&self.polygon_pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.draw(0..self.num_vertices, 0..1);
 
-        // text
         if let (Some(bind), Some(_atlas)) = (&self.text_bind_group, &self.text_atlas) {
             pass.set_pipeline(&self.text_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
