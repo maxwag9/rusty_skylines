@@ -1,6 +1,4 @@
-use crate::renderer::ui_editor::UiButtonLoader;
-use crate::state::State;
-use std::sync::{Arc, Mutex};
+use crate::events::{Event, Events};
 use std::time::Instant;
 
 pub struct Simulation {
@@ -20,9 +18,9 @@ impl Simulation {
 
     pub fn toggle(&mut self) {
         if self.running {
-            self.stop()
+            self.stop();
         } else {
-            self.start()
+            self.start();
         }
         println!(
             "Simulation {}",
@@ -39,25 +37,21 @@ impl Simulation {
         self.running = false;
     }
 
-    pub fn update(
-        &mut self,
-        dt: f32,
-        ui_loader: &Arc<Mutex<UiButtonLoader>>,
-        state: &Arc<Mutex<State>>,
-    ) {
-        {
-            let mut ui_loader_lock = ui_loader.lock().unwrap();
-            let mouse = &state.lock().unwrap().mouse;
-            ui_loader_lock.handle_touches(&mouse, dt);
+    pub fn process_events(&mut self, events: &mut Events) {
+        for event in events.drain() {
+            match event {
+                Event::ToggleSimulation => self.toggle(),
+            }
         }
-        // up here update regardless of is the simulation running or not ^
+    }
+
+    pub fn update(&mut self, _dt: f32) {
         if !self.running {
             return;
         }
-        // Down here update only if the simulation is running \/
-        self.tick += 1;
 
-        // TODO: Add city logic here
-        //println!("Sim tick {} (dt = {:.3} s)", self.tick, dt);
+        self.tick += 1;
+        self.last_update = Instant::now();
+        // TODO: Add simulation logic here
     }
 }

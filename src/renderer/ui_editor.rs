@@ -1,5 +1,5 @@
-use crate::input::MouseState;
 use crate::renderer::ui::CircleParams;
+use crate::resources::MouseState;
 use crate::vertex::{
     GuiLayout, UiButtonCircle, UiButtonPolygon, UiButtonRectangle, UiButtonText, UiButtonTriangle,
     UiVertex, UiVertexPoly,
@@ -243,8 +243,8 @@ impl UiButtonLoader {
             if !c.misc.active {
                 continue;
             }
-            let dx = mouse.pos_x - c.x;
-            let dy = mouse.pos_y - c.y;
+            let dx = mouse.pos.x - c.x;
+            let dy = mouse.pos.y - c.y;
             let dist = (dx * dx + dy * dy).sqrt();
             let touched = dist <= c.radius && mouse.left_pressed;
             if let Some(id) = &c.id {
@@ -262,10 +262,10 @@ impl UiButtonLoader {
             let top = r.y;
             let bottom = r.y + (r.stretch_y * 100.0);
 
-            let inside = mouse.pos_x >= left
-                && mouse.pos_x <= right
-                && mouse.pos_y >= top
-                && mouse.pos_y <= bottom;
+            let inside = mouse.pos.x >= left
+                && mouse.pos.x <= right
+                && mouse.pos.y >= top
+                && mouse.pos.y <= bottom;
             if let Some(id) = &r.id {
                 self.ui_runtime
                     .update_touch(id, inside && mouse.left_pressed, dt);

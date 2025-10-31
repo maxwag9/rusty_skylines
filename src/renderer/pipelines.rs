@@ -1,4 +1,4 @@
-use crate::Uniforms;
+use crate::resources::Uniforms;
 use crate::vertex::{LineVtx, Vertex};
 use util::DeviceExt;
 use wgpu::*;

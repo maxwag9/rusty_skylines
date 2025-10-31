@@ -1,10 +1,9 @@
-use crate::app::TimingData;
 use crate::renderer::ui_editor::UiButtonLoader;
+use crate::resources::TimingData;
 use crate::vertex::{UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -369,24 +368,19 @@ impl UiRenderer {
     pub fn render<'a>(
         &mut self,
         pass: &mut RenderPass<'a>,
-        ui_loader: &&Arc<Mutex<UiButtonLoader>>,
+        ui_loader: &mut UiButtonLoader,
         queue: &Queue,
-        timing_data: Arc<Mutex<TimingData>>,
+        timing_data: &TimingData,
     ) {
-        let circles = {
-            let mut ui_loader_lock = ui_loader.lock().unwrap();
-            let collected = ui_loader_lock.collect_circles();
-
-            if collected.is_empty() {
-                vec![CircleParams::default()]
-            } else {
-                collected
-            }
-        };
+        let mut circles = ui_loader.collect_circles();
+        if circles.is_empty() {
+            circles.push(CircleParams::default());
+        }
+        self.circles = circles;
 
         let circle_buffer = self.device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Circle Storage Buffer"),
-            contents: bytemuck::cast_slice(&circles),
+            contents: bytemuck::cast_slice(&self.circles),
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
         let circle_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
@@ -398,14 +392,10 @@ impl UiRenderer {
             }],
         });
 
-        let mut s = "FPS: 60 | FrameTime: 16ms | SimDT: 16ms".to_string();
-        {
-            let timing = timing_data.lock().unwrap();
-            let fps = timing.render_fps;
-            let ft_ms = timing.render_dt * 1000.0;
-            let sim_ms = timing.sim_dt * 1000.0;
-            s = format!("FPS: {fps:.1} | FrameTime: {ft_ms:.2}ms | SimDT: {sim_ms:.2}ms");
-        }
+        let fps = timing_data.render_fps;
+        let ft_ms = timing_data.render_dt * 1000.0;
+        let sim_ms = timing_data.sim_dt * 1000.0;
+        let s = format!("FPS: {fps:.1} | FrameTime: {ft_ms:.2}ms | SimDT: {sim_ms:.2}ms");
         let fps_text = UiButtonText {
             id: Option::from("fps_text".to_string()),
             x: 150.0,
@@ -437,11 +427,7 @@ impl UiRenderer {
             text: s,
             active: true,
         };
-        let mut texts = {
-            let ui_loader_lock = ui_loader.lock().unwrap();
-            let collected = ui_loader_lock.collect_texts();
-            collected
-        };
+        let mut texts = ui_loader.collect_texts();
         texts.push(fps_text);
         let mut text_vertices = Vec::new();
 
