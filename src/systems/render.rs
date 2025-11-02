@@ -6,6 +6,6 @@ pub fn render_system(world: &mut World, resources: &mut Resources) {
     if let Some(camera) = world.camera(camera_entity) {
         resources
             .renderer
-            .render(camera, &mut resources.ui_loader, &resources.timing);
+            .render(camera, &mut resources.ui_loader, &resources.time);
     }
 }

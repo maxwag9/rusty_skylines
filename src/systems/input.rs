@@ -3,7 +3,7 @@ use crate::world::World;
 use glam::Vec3;
 
 pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
-    let dt = resources.time.delta;
+    let dt = resources.time.sim_dt;
     if dt <= 0.0 {
         return;
     }

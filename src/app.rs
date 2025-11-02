@@ -104,7 +104,7 @@ impl ApplicationHandler for App {
                     (self.world.as_mut(), self.resources.as_mut())
                 {
                     let frame_start = Instant::now();
-                    resources.update_time();
+                    resources.update_render_time();
                     self.schedule.run(world, resources);
 
                     let elapsed = frame_start.elapsed();

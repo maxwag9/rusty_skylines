@@ -1,6 +1,7 @@
-use crate::renderer::ui_editor::UiButtonLoader;
-use crate::resources::TimingData;
-use crate::vertex::{UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
+use crate::renderer::helper::rebuild_layer_cache;
+use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
+use crate::resources::TimeSystem;
+use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
@@ -84,31 +85,41 @@ impl Default for CircleParams {
     }
 }
 
+pub struct TextParams {
+    pub pos: [f32; 2],
+    pub px: u16,
+    pub color: [f32; 4],
+    pub id_hash: f32,
+    pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
+    pub text: String,
+}
+
 impl UiRenderer {
     pub fn new(device: &Device, format: TextureFormat, size: PhysicalSize<u32>) -> Self {
-        let screen_uniform = ScreenUniform {
-            size: [size.width as f32, size.height as f32],
-            time: 0.0,
-            enable_dither: 1,
-        };
-        let screen_data = bytemuck::bytes_of(&screen_uniform);
-
         let quad_vertices = [
             UiVertexPoly {
                 pos: [-1.0, -1.0],
+                _pad: [1.0; 2],
                 color: [1.0; 4],
+                misc: [1.0, 0.0, 0.0, 0.0],
             },
             UiVertexPoly {
                 pos: [1.0, -1.0],
+                _pad: [1.0; 2],
                 color: [1.0; 4],
+                misc: [1.0, 0.0, 0.0, 0.0],
             },
             UiVertexPoly {
                 pos: [-1.0, 1.0],
+                _pad: [1.0; 2],
                 color: [1.0; 4],
+                misc: [1.0, 0.0, 0.0, 0.0],
             },
             UiVertexPoly {
                 pos: [1.0, 1.0],
+                _pad: [1.0; 2],
                 color: [1.0; 4],
+                misc: [1.0, 0.0, 0.0, 0.0],
             },
         ];
         let quad_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -136,6 +147,14 @@ impl UiRenderer {
                 count: None,
             }],
         });
+
+        let screen_uniform = ScreenUniform {
+            size: [size.width as f32, size.height as f32],
+            time: 0.0,
+            enable_dither: 1,
+        };
+        let screen_data = bytemuck::bytes_of(&screen_uniform);
+
         let uniform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("UI Uniforms"),
             contents: screen_data,
@@ -368,149 +387,80 @@ impl UiRenderer {
     pub fn render<'a>(
         &mut self,
         pass: &mut RenderPass<'a>,
-        ui_loader: &mut UiButtonLoader,
+        ui: &mut UiButtonLoader,
         queue: &Queue,
-        timing_data: &TimingData,
+        time: &TimeSystem,
+        size: (f32, f32),
     ) {
-        let mut circles = ui_loader.collect_circles();
-        if circles.is_empty() {
-            circles.push(CircleParams::default());
-        }
-        self.circles = circles;
-
-        let circle_buffer = self.device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Circle Storage Buffer"),
-            contents: bytemuck::cast_slice(&self.circles),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        });
-        let circle_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Circle Bind Group"),
-            layout: &self.circle_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: circle_buffer.as_entire_binding(),
-            }],
-        });
-
-        let fps = timing_data.render_fps;
-        let ft_ms = timing_data.render_dt * 1000.0;
-        let sim_ms = timing_data.sim_dt * 1000.0;
-        let s = format!("FPS: {fps:.1} | FrameTime: {ft_ms:.2}ms | SimDT: {sim_ms:.2}ms");
-        let fps_text = UiButtonText {
-            id: Option::from("fps_text".to_string()),
-            x: 150.0,
-            y: 60.0,
-            stretch_x: 0.0,
-            stretch_y: 0.0,
-            top_left_vertex: UiVertex {
-                pos: [0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                roundness: 0.0,
-            },
-            bottom_left_vertex: UiVertex {
-                pos: [0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                roundness: 0.0,
-            },
-            top_right_vertex: UiVertex {
-                pos: [0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                roundness: 0.0,
-            },
-            bottom_right_vertex: UiVertex {
-                pos: [0.0, 0.0],
-                color: [1.0, 1.0, 1.0, 1.0],
-                roundness: 0.0,
-            },
-            px: 24,
-            color: [1.0, 1.0, 1.0, 1.0],
-            text: s,
-            active: true,
+        let new_uniform = ScreenUniform {
+            size: [size.0, size.1],
+            time: time.total_time,
+            enable_dither: 1,
         };
-        let mut texts = ui_loader.collect_texts();
-        texts.push(fps_text);
-        let mut text_vertices = Vec::new();
 
-        if let Some(atlas) = &self.text_atlas {
-            for t in texts {
-                let mut pen_x = t.x;
-                let baseline_y = t.y + atlas.line_height;
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&new_uniform));
 
-                for ch in t.text.chars() {
-                    if let Some(g) = atlas.glyphs.get(&(ch, t.px)) {
-                        let x0 = (pen_x + g.bearing_x).round();
-                        let y0 = (baseline_y - g.bearing_y).round();
-                        let x1 = x0 + g.w;
-                        let y1 = y0 + g.h;
+        self.update_fps_layer(ui, time);
+        let dirty_layers: Vec<usize> = ui
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.active && l.dirty)
+            .map(|(i, _)| i)
+            .collect();
 
-                        text_vertices.extend_from_slice(&[
-                            UiVertexText {
-                                pos: [x0, y0],
-                                uv: [g.u0, g.v0],
-                                color: t.color,
-                            },
-                            UiVertexText {
-                                pos: [x1, y0],
-                                uv: [g.u1, g.v0],
-                                color: t.color,
-                            },
-                            UiVertexText {
-                                pos: [x1, y1],
-                                uv: [g.u1, g.v1],
-                                color: t.color,
-                            },
-                            UiVertexText {
-                                pos: [x0, y0],
-                                uv: [g.u0, g.v0],
-                                color: t.color,
-                            },
-                            UiVertexText {
-                                pos: [x1, y1],
-                                uv: [g.u1, g.v1],
-                                color: t.color,
-                            },
-                            UiVertexText {
-                                pos: [x0, y1],
-                                uv: [g.u0, g.v1],
-                                color: t.color,
-                            },
-                        ]);
+        // now safely rebuild and upload
+        for i in dirty_layers {
+            let layer = &mut ui.layers[i];
+            let runtime = &ui.ui_runtime;
+            rebuild_layer_cache(layer, runtime);
+            self.upload_layer(queue, layer);
+        }
 
-                        pen_x += g.advance;
-                    }
+        //println!("{}", ui.layers.len());
+        for layer in ui.layers.iter().filter(|l| l.active) {
+            // println!("{}", layer.order);
+            // circle
+            if layer.gpu.circle_count > 0 {
+                let circle_bg = self.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some(&format!("{}_circle_bg", layer.name)),
+                    layout: &self.circle_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
+                    }],
+                });
+                pass.set_pipeline(&self.circle_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &circle_bg, &[]);
+                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                pass.draw(0..4, 0..layer.gpu.circle_count);
+
+                pass.set_pipeline(&self.glow_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &circle_bg, &[]);
+                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                pass.draw(0..4, 0..layer.gpu.circle_count);
+            }
+
+            // polygons
+            if layer.gpu.poly_count > 0 {
+                pass.set_pipeline(&self.polygon_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, layer.gpu.poly_vbo.as_ref().unwrap().slice(..));
+                pass.draw(0..layer.gpu.poly_count, 0..1);
+            }
+
+            // text
+            if layer.gpu.text_count > 0 {
+                if let (Some(bind), Some(_)) = (&self.text_bind_group, &self.text_atlas) {
+                    pass.set_pipeline(&self.text_pipeline);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, bind, &[]);
+                    pass.set_vertex_buffer(0, layer.gpu.text_vbo.as_ref().unwrap().slice(..));
+                    pass.draw(0..layer.gpu.text_count, 0..1);
                 }
             }
-        }
-        queue.write_buffer(
-            &self.text_vertex_buffer,
-            0,
-            bytemuck::cast_slice(&text_vertices),
-        );
-        self.text_vertex_count = text_vertices.len() as u32;
-
-        pass.set_pipeline(&self.circle_pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &circle_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-        pass.draw(0..4, 0..self.circles.len() as u32);
-
-        pass.set_pipeline(&self.glow_pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &circle_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-        pass.draw(0..4, 0..self.circles.len() as u32);
-
-        pass.set_pipeline(&self.polygon_pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.draw(0..self.num_vertices, 0..1);
-
-        if let (Some(bind), Some(_atlas)) = (&self.text_bind_group, &self.text_atlas) {
-            pass.set_pipeline(&self.text_pipeline);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_bind_group(1, bind, &[]);
-            pass.set_vertex_buffer(0, self.text_vertex_buffer.slice(..));
-            pass.draw(0..self.text_vertex_count, 0..1);
         }
     }
 
@@ -671,5 +621,185 @@ impl UiRenderer {
         self.text_bind_group = Some(text_bind_group);
 
         Ok(())
+    }
+
+    fn upload_layer(&self, queue: &wgpu::Queue, layer: &mut RuntimeLayer) {
+        // ---- circles (SSBO) ----
+        let circle_len = layer.cache.circle_params.len() as u32;
+        if circle_len > 0 {
+            let bytes = bytemuck::cast_slice(&layer.cache.circle_params);
+            let need_new = layer
+                .gpu
+                .circle_ssbo
+                .as_ref()
+                .map(|b| b.size() < bytes.len() as u64)
+                .unwrap_or(true);
+            if need_new {
+                layer.gpu.circle_ssbo = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{}_circle_ssbo", layer.name)),
+                    size: bytes.len() as u64,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            queue.write_buffer(layer.gpu.circle_ssbo.as_ref().unwrap(), 0, bytes);
+        }
+        layer.gpu.circle_count = circle_len;
+
+        // ---- polygons (VBO) : rects + tris + polys concatenated ----
+        let mut poly_vertices: Vec<UiVertexPoly> = Vec::with_capacity(
+            layer.cache.rect_vertices.len()
+                + layer.cache.triangle_vertices.len()
+                + layer.cache.polygon_vertices.len(),
+        );
+        poly_vertices.extend_from_slice(&layer.cache.rect_vertices);
+        poly_vertices.extend_from_slice(&layer.cache.triangle_vertices);
+        poly_vertices.extend_from_slice(&layer.cache.polygon_vertices);
+
+        let poly_count = poly_vertices.len() as u32;
+        if poly_count > 0 {
+            let bytes = bytemuck::cast_slice(&poly_vertices);
+            let need_new = layer
+                .gpu
+                .poly_vbo
+                .as_ref()
+                .map(|b| b.size() < bytes.len() as u64)
+                .unwrap_or(true);
+            if need_new {
+                layer.gpu.poly_vbo = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{}_poly_vbo", layer.name)),
+                    size: bytes.len() as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            queue.write_buffer(layer.gpu.poly_vbo.as_ref().unwrap(), 0, bytes);
+        }
+        layer.gpu.poly_count = poly_count;
+
+        // ---- text (VBO) : build glyphs for this layer only ----
+        let mut text_vertices: Vec<UiVertexText> = Vec::new();
+        if let Some(atlas) = &self.text_atlas {
+            for tp in &layer.cache.texts {
+                let mut pen_x = tp.pos[0];
+                let baseline_y = tp.pos[1] + atlas.line_height;
+                for ch in tp.text.chars() {
+                    if let Some(g) = atlas.glyphs.get(&(ch, tp.px)) {
+                        let x0 = (pen_x + g.bearing_x).round();
+                        let y0 = (baseline_y - g.bearing_y).round();
+                        let x1 = x0 + g.w;
+                        let y1 = y0 + g.h;
+
+                        let col = tp.color;
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [x1, y0],
+                                uv: [g.u1, g.v0],
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [x0, y1],
+                                uv: [g.u0, g.v1],
+                                color: col,
+                            },
+                        ]);
+                        pen_x += g.advance;
+                    }
+                }
+            }
+        }
+        let text_bytes = bytemuck::cast_slice(&text_vertices);
+        if !text_vertices.is_empty() {
+            let need_new = layer
+                .gpu
+                .text_vbo
+                .as_ref()
+                .map(|b| b.size() < text_bytes.len() as u64)
+                .unwrap_or(true);
+            if need_new {
+                layer.gpu.text_vbo = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("{}_text_vbo", layer.name)),
+                    size: text_bytes.len() as u64,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            queue.write_buffer(layer.gpu.text_vbo.as_ref().unwrap(), 0, text_bytes);
+        }
+        layer.gpu.text_count = (text_vertices.len() as u32);
+    }
+
+    fn update_fps_layer(&mut self, ui: &mut UiButtonLoader, t: &TimeSystem) {
+        let name = "debug_fps";
+        if let Some(layer) = ui.layers.iter_mut().find(|l| l.name == name) {
+            let s = format!(
+                "FPS: {:.1} | Frame: {:.2}ms | Sim: {:.2}ms",
+                t.render_fps,
+                t.render_dt * 1000.0,
+                t.sim_dt * 1000.0
+            );
+
+            // ensure it has one text
+            if layer.texts.is_empty() {
+                layer.texts.push(UiButtonText {
+                    id: Some("fps_text".into()),
+                    x: 150.0,
+                    y: 60.0,
+                    stretch_x: 0.0,
+                    stretch_y: 0.0,
+                    top_left_vertex: UiVertex {
+                        pos: [0.0, 0.0],
+                        color: [1.0; 4],
+                        roundness: 0.0,
+                    },
+                    bottom_left_vertex: UiVertex {
+                        pos: [0.0, 0.0],
+                        color: [1.0; 4],
+                        roundness: 0.0,
+                    },
+                    top_right_vertex: UiVertex {
+                        pos: [0.0, 0.0],
+                        color: [1.0; 4],
+                        roundness: 0.0,
+                    },
+                    bottom_right_vertex: UiVertex {
+                        pos: [0.0, 0.0],
+                        color: [1.0; 4],
+                        roundness: 0.0,
+                    },
+                    px: 24,
+                    color: [1.0; 4],
+                    text: s.clone(),
+                    misc: MiscButtonSettings {
+                        active: true,
+                        touched_time: 0.0,
+                        is_touched: false,
+                    },
+                });
+            } else {
+                layer.texts[0].text = s;
+            }
+            layer.dirty = true; // only this layer rebuilds each frame
+        }
     }
 }

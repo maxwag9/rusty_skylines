@@ -1,20 +1,64 @@
-use crate::renderer::ui::CircleParams;
+use crate::renderer::helper;
+use crate::renderer::ui::{CircleParams, TextParams};
 use crate::resources::MouseState;
 use crate::vertex::{
-    GuiLayout, UiButtonCircle, UiButtonPolygon, UiButtonRectangle, UiButtonText, UiButtonTriangle,
-    UiVertex, UiVertexPoly,
+    GuiLayout, LayerGpu, UiButtonCircle, UiButtonPolygon, UiButtonRectangle, UiButtonText,
+    UiButtonTriangle, UiVertexPoly,
 };
 use std::collections::HashMap;
 use std::fs;
 use std::io::Result;
 use std::path::PathBuf;
 
-pub struct UiButtonLoader {
+#[derive(Debug, serde::Deserialize)]
+pub struct UiLayer {
+    pub name: String,
+    pub order: u32,
+    pub texts: Option<Vec<UiButtonText>>,
+    pub circles: Option<Vec<UiButtonCircle>>,
+    pub rectangles: Option<Vec<UiButtonRectangle>>,
+    pub triangles: Option<Vec<UiButtonTriangle>>,
+    pub polygons: Option<Vec<UiButtonPolygon>>,
+    pub active: Option<bool>,
+}
+pub struct LayerCache {
+    pub texts: Vec<TextParams>,
+    pub circle_params: Vec<CircleParams>,
+    pub rect_vertices: Vec<UiVertexPoly>,
+    pub triangle_vertices: Vec<UiVertexPoly>,
+    pub polygon_vertices: Vec<UiVertexPoly>,
+}
+
+impl Default for LayerCache {
+    fn default() -> Self {
+        Self {
+            texts: vec![],
+            circle_params: vec![],
+            rect_vertices: vec![],
+            triangle_vertices: vec![],
+            polygon_vertices: vec![],
+        }
+    }
+}
+
+pub struct RuntimeLayer {
+    pub name: String,
+    pub order: u32,
     pub texts: Vec<UiButtonText>,
     pub circles: Vec<UiButtonCircle>,
     pub rectangles: Vec<UiButtonRectangle>,
     pub triangles: Vec<UiButtonTriangle>,
     pub polygons: Vec<UiButtonPolygon>,
+    pub active: bool,
+    // NEW: cached GPU data!!!
+    pub cache: LayerCache,
+
+    pub dirty: bool, // set true when anything changes or the screen will be dirty asf!
+    pub gpu: LayerGpu,
+}
+
+pub struct UiButtonLoader {
+    pub layers: Vec<RuntimeLayer>,
     pub ui_runtime: UiRuntime,
     pub id_lookup: HashMap<u32, String>,
 }
@@ -82,39 +126,38 @@ impl UiRuntime {
 
 impl UiButtonLoader {
     pub fn new() -> Self {
-        match Self::load_gui_from_file("ui_data/gui_layout.json") {
-            Ok(layout) => {
-                println!(
-                    "✅ Loaded GUI layout with {} texts, {} circles, {} rectangles {} triangles, {} polygons",
-                    layout.texts.len(),
-                    layout.circles.len(),
-                    layout.rectangles.len(),
-                    layout.triangles.len(),
-                    layout.polygons.len(),
-                );
-                Self {
-                    texts: layout.texts,
-                    circles: layout.circles,
-                    rectangles: layout.rectangles,
-                    triangles: layout.triangles,
-                    polygons: layout.polygons,
-                    ui_runtime: UiRuntime::new(),
-                    id_lookup: Default::default(),
-                }
-            }
-            Err(e) => {
-                eprintln!("❌ Failed to load GUI layout: {e}");
-                Self {
-                    texts: Vec::new(),
-                    circles: Vec::new(),
-                    rectangles: Vec::new(),
-                    triangles: Vec::new(),
-                    polygons: Vec::new(),
-                    ui_runtime: UiRuntime::new(),
-                    id_lookup: Default::default(),
-                }
-            }
+        let layout = Self::load_gui_from_file("ui_data/gui_layout.json").unwrap_or_else(|e| {
+            eprintln!("❌ Failed to load GUI layout: {e}");
+            GuiLayout { layers: vec![] }
+        });
+
+        let mut loader = Self {
+            layers: Vec::new(),
+            ui_runtime: UiRuntime::new(),
+            id_lookup: HashMap::new(),
+        };
+
+        // JSON layers to runtime layers
+        for l in layout.layers {
+            loader.layers.push(RuntimeLayer {
+                name: l.name,
+                order: l.order,
+                active: l.active.unwrap_or(true),
+                cache: Default::default(),
+                texts: l.texts.unwrap_or_default(),
+                circles: l.circles.unwrap_or_default(),
+                rectangles: l.rectangles.unwrap_or_default(),
+                triangles: l.triangles.unwrap_or_default(),
+                polygons: l.polygons.unwrap_or_default(),
+                dirty: true,
+                gpu: LayerGpu::default(),
+            });
         }
+
+        loader.add_editor_layers();
+        loader.layers.sort_by_key(|l| l.order); // SORT!
+
+        loader
     }
 
     pub fn load_gui_from_file(path: &str) -> Result<GuiLayout> {
@@ -127,154 +170,116 @@ impl UiButtonLoader {
         Ok(parsed)
     }
 
-    pub fn collect_texts(&self) -> Vec<UiButtonText> {
-        self.texts
-            .iter()
-            .map(|t| UiButtonText {
-                id: t.id.clone(),
-                x: t.x,
-                y: t.y,
-                stretch_x: 0.0,
-                stretch_y: 0.0,
-                top_left_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    roundness: 0.0,
-                },
-                bottom_left_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    roundness: 0.0,
-                },
-                top_right_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    roundness: 0.0,
-                },
-                bottom_right_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    roundness: 0.0,
-                },
-                px: t.px,
-                color: t.color,
-                text: t.text.clone(),
-                active: false,
-            })
-            .collect()
-    }
+    fn add_editor_layers(&mut self) {
+        self.layers.push(RuntimeLayer {
+            name: "editor_selection".into(),
+            order: 900,
+            active: false,
+            cache: LayerCache::default(),
+            texts: vec![],
+            circles: vec![],
+            rectangles: vec![],
+            triangles: vec![],
+            polygons: vec![],
+            dirty: true,
+            gpu: LayerGpu::default(),
+        });
 
-    pub fn collect_rectangles(&self) -> Vec<UiVertexPoly> {
-        let mut verts = Vec::new();
-        for r in &self.rectangles {
-            verts.extend([
-                UiVertexPoly {
-                    pos: r.top_left_vertex.pos,
-                    color: r.top_left_vertex.color,
-                },
-                UiVertexPoly {
-                    pos: r.top_right_vertex.pos,
-                    color: r.top_right_vertex.color,
-                },
-                UiVertexPoly {
-                    pos: r.bottom_left_vertex.pos,
-                    color: r.bottom_left_vertex.color,
-                },
-                UiVertexPoly {
-                    pos: r.bottom_right_vertex.pos,
-                    color: r.bottom_right_vertex.color,
-                },
-            ]);
-        }
-        verts
-    }
-
-    pub fn collect_circles(&mut self) -> Vec<CircleParams> {
-        self.circles
-            .iter()
-            .map(|c| {
-                // `c.id` is Option<String>, so get &str
-                let id_str = c.id.as_deref().unwrap_or("");
-                let id_hash = if !id_str.is_empty() {
-                    UiButtonLoader::hash_id(id_str)
-                } else {
-                    f32::MAX
-                };
-
-                // keep an owned clone for lookup table (safe clone, small strings)
-                if let Some(id_owned) = &c.id {
-                    self.id_lookup.insert(id_hash as u32, id_owned.clone());
-                }
-
-                // runtime lookup
-                let r = self
-                    .ui_runtime
-                    .elements
-                    .get(id_str)
-                    .copied()
-                    .unwrap_or_default();
-
-                CircleParams {
-                    center_radius_border: [c.x, c.y, c.radius, 6.0],
-                    fill_color: c.fill_color,
-                    border_color: c.border_color,
-                    glow_color: c.glow_color,
-                    glow_misc: [
-                        c.glow_misc.glow_size,
-                        c.glow_misc.glow_speed,
-                        c.glow_misc.glow_intensity,
-                        1.0,
-                    ],
-                    misc: [
-                        f32::from(c.misc.active),
-                        r.touched_time,
-                        f32::from(r.is_down),
-                        id_hash,
-                    ],
-                }
-            })
-            .collect()
+        self.layers.push(RuntimeLayer {
+            name: "editor_handles".into(),
+            order: 950,
+            active: false,
+            cache: LayerCache::default(),
+            texts: vec![],
+            circles: vec![],
+            rectangles: vec![],
+            triangles: vec![],
+            polygons: vec![],
+            dirty: true,
+            gpu: LayerGpu::default(),
+        });
     }
 
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32) {
-        // === Circles ===
+        for layer in self.layers.iter().filter(|l| l.active) {
+            // === Circles ===
+            for c in &layer.circles {
+                if !c.misc.active {
+                    continue;
+                }
+                let dx = mouse.pos.x - c.x;
+                let dy = mouse.pos.y - c.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let touched = dist <= c.radius && mouse.left_pressed;
+                if let Some(id) = &c.id {
+                    self.ui_runtime.update_touch(id, touched, dt);
+                }
+            }
 
-        for c in &self.circles {
-            if !c.misc.active {
-                continue;
+            // === Rectangles ===
+            for r in &layer.rectangles {
+                if !r.misc.active {
+                    continue;
+                }
+
+                // Gather vertices in order (assume TL, BL, TR, BR? Adjust order if needed for winding).
+                let verts = [
+                    r.top_left_vertex.pos,
+                    r.bottom_left_vertex.pos,
+                    r.bottom_right_vertex.pos,
+                    r.top_right_vertex.pos,
+                ];
+                let vertices_struct = [
+                    r.top_left_vertex,
+                    r.bottom_left_vertex,
+                    r.bottom_right_vertex,
+                    r.top_right_vertex,
+                ];
+
+                let mouse_pos = [mouse.pos.x, mouse.pos.y];
+
+                // Quick AABB cull.
+                let (min_x, min_y, max_x, max_y) = helper::get_aabb(&verts);
+                if mouse_pos[0] < min_x
+                    || mouse_pos[0] > max_x
+                    || mouse_pos[1] < min_y
+                    || mouse_pos[1] > max_y
+                {
+                    continue;
+                }
+
+                let mut inside = false;
+                let is_rounded = helper::has_roundness(&vertices_struct);
+
+                if !is_rounded && helper::is_axis_aligned_rect(&verts) {
+                    // Optimized rect case.
+                    inside = mouse_pos[0] >= min_x
+                        && mouse_pos[0] <= max_x
+                        && mouse_pos[1] >= min_y
+                        && mouse_pos[1] <= max_y;
+                } else if is_rounded {
+                    // Assume uniform roundness (take max or avg; adjust as needed).
+                    let radius = vertices_struct
+                        .iter()
+                        .map(|v| v.roundness)
+                        .fold(0.0, f32::max);
+                    inside = helper::is_point_in_rounded_rect(mouse_pos, &verts, radius);
+                } else {
+                    // General quad PIP.
+                    inside = helper::is_point_in_quad(mouse_pos, &verts);
+                }
+
+                if let Some(id) = &r.id {
+                    self.ui_runtime
+                        .update_touch(id, inside && mouse.left_pressed, dt);
+                }
             }
-            let dx = mouse.pos.x - c.x;
-            let dy = mouse.pos.y - c.y;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let touched = dist <= c.radius && mouse.left_pressed;
-            if let Some(id) = &c.id {
-                self.ui_runtime.update_touch(id, touched, dt);
-            }
+
+            // Add more types! (triangles, polygons)
         }
-
-        // === Rectangles ===
-        for r in &self.rectangles {
-            if !r.active {
-                continue;
-            }
-            let left = r.x;
-            let right = r.x + (r.stretch_x * 100.0);
-            let top = r.y;
-            let bottom = r.y + (r.stretch_y * 100.0);
-
-            let inside = mouse.pos.x >= left
-                && mouse.pos.x <= right
-                && mouse.pos.y >= top
-                && mouse.pos.y <= bottom;
-            if let Some(id) = &r.id {
-                self.ui_runtime
-                    .update_touch(id, inside && mouse.left_pressed, dt);
-            }
-        }
-
-        // Add more types as needed (triangles, polygons)
     }
-    fn hash_id(id: &str) -> f32 {
+
+    pub(crate) fn hash_id(id: &str) -> f32 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         id.hash(&mut hasher);

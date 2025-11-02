@@ -2,7 +2,7 @@ use crate::components::camera::Camera;
 pub use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
-use crate::resources::{FrameTimer, TimingData, Uniforms};
+use crate::resources::{TimeSystem, Uniforms};
 use crate::vertex::{LineVtx, Vertex};
 use std::sync::Arc;
 use util::DeviceExt;
@@ -27,7 +27,6 @@ pub struct RenderCore {
     pub vertex_buffer: Buffer,
     pub num_vertices: u32,
     pub pipelines: Pipelines,
-    pub timer: FrameTimer,
     ui_renderer: UiRenderer,
     size: PhysicalSize<u32>,
 }
@@ -180,7 +179,6 @@ impl RenderCore {
             msaa_samples,
             vertex_buffer,
             num_vertices,
-            timer: FrameTimer::new(),
             ui_renderer,
             size,
         }
@@ -217,7 +215,7 @@ impl RenderCore {
         &mut self,
         camera: &Camera,
         ui_loader: &mut UiButtonLoader,
-        timing_data: &TimingData,
+        time: &TimeSystem,
     ) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
@@ -306,11 +304,6 @@ impl RenderCore {
         });
 
         {
-            let rects = ui_loader.collect_rectangles();
-            self.ui_renderer.draw_custom(&self.queue, &rects);
-        }
-
-        {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Main Pass"),
                 color_attachments: &[color_attachment],
@@ -348,8 +341,9 @@ impl RenderCore {
                 occlusion_query_set: None,
             });
 
-            let elapsed = self.timer.total_time();
-            let enable_dither = 1; //if self.settings.dither_enabled { 1 } else { 0 };
+            let elapsed = time.total_time;
+            let enable_dither = 1;
+            //if self.settings.dither_enabled { 1 } else { 0 };
 
             let screen_uniform = crate::renderer::ui::ScreenUniform {
                 size: [self.size.width as f32, self.size.height as f32],
@@ -362,9 +356,9 @@ impl RenderCore {
                 0,
                 bytemuck::bytes_of(&screen_uniform),
             );
-
+            let size = (self.config.width as f32, self.config.height as f32);
             self.ui_renderer
-                .render(&mut pass, ui_loader, &self.queue, timing_data);
+                .render(&mut pass, ui_loader, &self.queue, &time, size);
         }
 
         // --- Submit and present ---

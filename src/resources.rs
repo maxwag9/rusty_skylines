@@ -11,8 +11,7 @@ use winit::window::Window;
 
 pub struct Resources {
     pub settings: Settings,
-    pub timing: TimingData,
-    pub time: Time,
+    pub time: TimeSystem,
     pub input: InputState,
     pub mouse: MouseState,
     pub renderer: Renderer,
@@ -28,8 +27,7 @@ impl Resources {
         let renderer = Renderer::new(window.clone());
         Self {
             settings,
-            timing: TimingData::default(),
-            time: Time::new(),
+            time: TimeSystem::new(),
             input: InputState::new(),
             mouse: MouseState::new(),
             renderer,
@@ -40,45 +38,57 @@ impl Resources {
         }
     }
 
-    pub fn update_time(&mut self) -> f32 {
-        let dt = self.time.update();
-        self.timing.sim_dt = dt;
-        self.timing.render_dt = dt;
-        self.timing.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-        dt
+    pub fn update_sim_time(&mut self) {
+        self.time.update_sim();
+    }
+
+    pub fn update_render_time(&mut self) {
+        self.time.update_render();
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct TimingData {
+#[derive(Debug, Clone)]
+pub struct TimeSystem {
+    pub last_sim: Instant,
+    pub last_render: Instant,
+    pub start: Instant,
+
     pub sim_dt: f32,
     pub render_dt: f32,
     pub render_fps: f32,
+
+    pub total_time: f32,
 }
 
-pub struct Time {
-    last: Instant,
-    pub delta: f32,
-    pub total: f32,
-}
-
-impl Time {
+impl TimeSystem {
     pub fn new() -> Self {
         let now = Instant::now();
         Self {
-            last: now,
-            delta: 0.0,
-            total: 0.0,
+            last_sim: now,
+            last_render: now,
+            start: now,
+
+            sim_dt: 0.0,
+            render_dt: 0.0,
+            render_fps: 0.0,
+            total_time: 0.0,
         }
     }
 
-    pub fn update(&mut self) -> f32 {
+    pub fn update_sim(&mut self) {
         let now = Instant::now();
-        let dt = (now - self.last).as_secs_f32();
-        self.last = now;
-        self.delta = dt;
-        self.total += dt;
-        dt
+        let dt = (now - self.last_sim).as_secs_f32();
+        self.last_sim = now;
+        self.sim_dt = dt;
+        self.total_time += dt;
+    }
+
+    pub fn update_render(&mut self) {
+        let now = Instant::now();
+        let dt = (now - self.last_render).as_secs_f32();
+        self.last_render = now;
+        self.render_dt = dt;
+        self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
     }
 }
 
@@ -132,41 +142,6 @@ impl MouseState {
             back_pressed: false,
             forward_pressed: false,
         }
-    }
-}
-
-pub struct FrameTimer {
-    last: Instant,
-    start: Instant,
-    total: f32,
-}
-
-impl FrameTimer {
-    pub fn new() -> Self {
-        let now = Instant::now();
-        Self {
-            last: now,
-            start: now,
-            total: 0.0,
-        }
-    }
-
-    pub fn dt(&mut self) -> f32 {
-        let now = Instant::now();
-        let dt = (now - self.last).as_secs_f32();
-        self.last = now;
-        self.total += dt;
-        dt
-    }
-
-    pub fn total_time(&self) -> f32 {
-        self.total
-    }
-
-    pub fn reset(&mut self) {
-        self.start = Instant::now();
-        self.last = self.start;
-        self.total = 0.0;
     }
 }
 
