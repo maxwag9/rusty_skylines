@@ -4,6 +4,8 @@ use std::{fs, path::Path};
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Settings {
     pub target_fps: f32,
+    pub target_tps: f32,
+
     pub present_mode: String, // "Fifo", "Mailbox", or "Immediate"
 }
 
@@ -11,6 +13,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             target_fps: 60.0,
+            target_tps: 60.0,
+
             present_mode: "Mailbox".to_string(),
         }
     }

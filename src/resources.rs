@@ -54,9 +54,13 @@ pub struct TimeSystem {
     pub start: Instant,
 
     pub sim_dt: f32,
+    pub sim_accumulator: f32,
+    pub sim_target_step: f32,
+
     pub render_dt: f32,
     pub render_fps: f32,
-
+    pub target_fps: f32,
+    pub target_frametime: f32,
     pub total_time: f32,
 }
 
@@ -69,10 +73,25 @@ impl TimeSystem {
             start: now,
 
             sim_dt: 0.0,
+            sim_accumulator: 0.0,
+            sim_target_step: 0.0,
+
             render_dt: 0.0,
             render_fps: 0.0,
+            target_fps: 100.0,
+            target_frametime: 0.0,
             total_time: 0.0,
         }
+    }
+
+    pub fn set_tps(&mut self, tps: f32) {
+        self.sim_target_step = 1.0 / tps;
+        self.sim_accumulator = 0.0;
+    }
+
+    pub fn set_fps(&mut self, target_fps: f32) {
+        self.target_fps = target_fps;
+        self.target_frametime = 1.0 / target_fps;
     }
 
     pub fn update_sim(&mut self) {
@@ -89,6 +108,7 @@ impl TimeSystem {
         self.last_render = now;
         self.render_dt = dt;
         self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        self.sim_accumulator += dt;
     }
 }
 

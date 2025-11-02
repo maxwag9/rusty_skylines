@@ -4,6 +4,7 @@ use glam::Vec3;
 
 pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let dt = resources.time.sim_dt;
+    println!("{}", dt);
     if dt <= 0.0 {
         return;
     }
@@ -63,7 +64,10 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     if wish.length_squared() > 0.0 {
         wish = wish.normalize();
-        controller.velocity = wish * speed * speed_factor;
+        let target_vel = wish * speed * speed_factor;
+        controller.velocity = controller
+            .velocity
+            .lerp(target_vel, 1.0 - (-10.0 * dt).exp());
     } else {
         let k = (1.0 - decay_rate * dt).max(0.0);
         controller.velocity *= k;

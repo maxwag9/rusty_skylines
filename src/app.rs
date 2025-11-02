@@ -19,7 +19,6 @@ pub struct App {
     world: Option<World>,
     resources: Option<Resources>,
     schedule: Schedule,
-    target_frame_time: Duration,
 }
 
 impl App {
@@ -29,7 +28,6 @@ impl App {
             world: None,
             resources: None,
             schedule: Schedule::new(),
-            target_frame_time: Duration::from_secs_f32(1.0 / 60.0),
         }
     }
 }
@@ -41,7 +39,9 @@ impl Default for App {
 }
 
 struct Schedule {
-    systems: Vec<SystemFn>,
+    sim_systems: Vec<SystemFn>,
+    render_systems: Vec<SystemFn>,
+    input_systems: Vec<SystemFn>,
 }
 
 type SystemFn = fn(&mut World, &mut Resources);
@@ -49,18 +49,26 @@ type SystemFn = fn(&mut World, &mut Resources);
 impl Schedule {
     fn new() -> Self {
         Self {
-            systems: vec![
-                camera_input_system,
-                simulation_system,
-                ui_system,
-                audio_system,
-                render_system,
-            ],
+            sim_systems: vec![simulation_system, audio_system],
+            render_systems: vec![ui_system, render_system],
+            input_systems: vec![camera_input_system],
         }
     }
 
-    fn run(&self, world: &mut World, resources: &mut Resources) {
-        for system in &self.systems {
+    pub fn run_sim(&self, world: &mut World, resources: &mut Resources) {
+        for system in &self.sim_systems {
+            (system)(world, resources);
+        }
+    }
+
+    pub fn run_render(&self, world: &mut World, resources: &mut Resources) {
+        for system in &self.render_systems {
+            (system)(world, resources);
+        }
+    }
+
+    pub fn run_inputs(&self, world: &mut World, resources: &mut Resources) {
+        for system in &self.input_systems {
             (system)(world, resources);
         }
     }
@@ -79,9 +87,13 @@ impl ApplicationHandler for App {
         );
 
         let world = World::new();
-        let resources = Resources::new(window.clone());
-        self.target_frame_time =
-            Duration::from_secs_f32(1.0 / resources.settings.target_fps.max(1.0));
+        let mut resources = Resources::new(window.clone());
+        resources
+            .time
+            .set_tps(resources.settings.target_tps.max(1.0));
+        resources
+            .time
+            .set_fps(resources.settings.target_fps.max(1.0));
 
         self.window = Some(window.clone());
         self.world = Some(world);
@@ -104,12 +116,28 @@ impl ApplicationHandler for App {
                     (self.world.as_mut(), self.resources.as_mut())
                 {
                     let frame_start = Instant::now();
-                    resources.update_render_time();
-                    self.schedule.run(world, resources);
+
+                    // update render time
+                    resources.time.update_render();
+
+                    // simulate time independent of render fps
+                    resources.time.update_sim();
+                    resources.time.sim_accumulator += resources.time.sim_dt;
+
+                    while resources.time.sim_accumulator >= resources.time.sim_target_step {
+                        resources.time.sim_dt = resources.time.sim_target_step;
+                        self.schedule.run_inputs(world, resources);
+                        self.schedule.run_sim(world, resources);
+                        resources.time.sim_accumulator -= resources.time.sim_target_step;
+                    }
+
+                    self.schedule.run_render(world, resources);
 
                     let elapsed = frame_start.elapsed();
-                    if elapsed < self.target_frame_time {
-                        thread::sleep(self.target_frame_time - elapsed);
+                    if elapsed < Duration::from_secs_f32(resources.time.target_frametime) {
+                        thread::sleep(
+                            Duration::from_secs_f32(resources.time.target_frametime) - elapsed,
+                        );
                     }
                 }
 
