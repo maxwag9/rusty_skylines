@@ -143,13 +143,13 @@ pub struct UiVertex {
     pub roundness: f32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct GlowMisc {
     pub glow_size: f32,
     pub glow_speed: f32,
     pub glow_intensity: f32,
 }
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct MiscButtonSettings {
     pub active: bool,
     pub touched_time: f32,
@@ -161,7 +161,7 @@ pub struct GuiLayout {
 }
 
 // --- all possible button shapes ---
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonText {
     pub id: Option<String>,
     pub x: f32,
@@ -178,7 +178,7 @@ pub struct UiButtonText {
     pub misc: MiscButtonSettings,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircle {
     pub id: Option<String>,
     pub x: f32,
@@ -193,7 +193,7 @@ pub struct UiButtonCircle {
     pub misc: MiscButtonSettings,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonRectangle {
     pub id: Option<String>,
     pub top_left_vertex: UiVertex,
@@ -203,14 +203,14 @@ pub struct UiButtonRectangle {
     pub misc: MiscButtonSettings,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: Option<String>,
     pub(crate) vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonTriangle {
     pub id: Option<String>,
     pub top_vertex: UiVertex,

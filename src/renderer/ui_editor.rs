@@ -28,6 +28,12 @@ pub struct LayerCache {
     pub triangle_vertices: Vec<UiVertexPoly>,
     pub polygon_vertices: Vec<UiVertexPoly>,
 }
+#[derive(Debug, Clone, Default)]
+pub struct SelectedUiElement {
+    pub layer_name: String,
+    pub element_id: String,
+    pub active: bool,
+}
 
 impl Default for LayerCache {
     fn default() -> Self {
@@ -39,6 +45,15 @@ impl Default for LayerCache {
             polygon_vertices: vec![],
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub enum UiElement {
+    Circle(UiButtonCircle),
+    Rectangle(UiButtonRectangle),
+    Triangle(UiButtonTriangle),
+    Polygon(UiButtonPolygon),
+    Text(UiButtonText),
 }
 
 pub struct RuntimeLayer {
@@ -73,16 +88,24 @@ pub struct ButtonRuntime {
 
 pub struct UiRuntime {
     pub elements: HashMap<String, ButtonRuntime>,
+    pub selected_ui_element: SelectedUiElement,
 }
 
 impl UiRuntime {
     pub fn new() -> Self {
         Self {
             elements: HashMap::new(),
+            selected_ui_element: SelectedUiElement::default(),
         }
     }
 
-    pub fn update_touch(&mut self, id: &str, touched_now: bool, dt: f32) {
+    pub fn update_touch(
+        &mut self,
+        id: &str,
+        touched_now: bool,
+        dt: f32,
+        layer_name: &String,
+    ) -> bool {
         let entry = self
             .elements
             .entry(id.to_string())
@@ -98,11 +121,13 @@ impl UiRuntime {
                 entry.just_pressed = true;
                 entry.touched_time = 0.0;
                 println!("{dt}Pressed {}", id);
+                false
             }
 
             // still holding
             (true, true) => {
                 entry.touched_time += dt;
+                false
             }
 
             // released this frame
@@ -110,11 +135,18 @@ impl UiRuntime {
                 entry.is_down = false;
                 entry.just_released = true;
                 println!("Released {}", id);
+                self.selected_ui_element = SelectedUiElement {
+                    layer_name: layer_name.clone(),
+                    element_id: id.parse().unwrap(),
+                    active: true,
+                };
+                true
             }
 
             // idle
             (false, false) => {
                 entry.touched_time = 0.0;
+                false
             }
         }
     }
@@ -201,6 +233,8 @@ impl UiButtonLoader {
     }
 
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32) {
+        let mut trigger_selection = false;
+
         for layer in self.layers.iter().filter(|l| l.active) {
             // === Circles ===
             for c in &layer.circles {
@@ -211,8 +245,11 @@ impl UiButtonLoader {
                 let dy = mouse.pos.y - c.y;
                 let dist = (dx * dx + dy * dy).sqrt();
                 let touched = dist <= c.radius && mouse.left_pressed;
+
                 if let Some(id) = &c.id {
-                    self.ui_runtime.update_touch(id, touched, dt);
+                    if self.ui_runtime.update_touch(id, touched, dt, &layer.name) {
+                        trigger_selection = true;
+                    }
                 }
             }
 
@@ -222,7 +259,6 @@ impl UiButtonLoader {
                     continue;
                 }
 
-                // Gather vertices in order (assume TL, BL, TR, BR? Adjust order if needed for winding).
                 let verts = [
                     r.top_left_vertex.pos,
                     r.bottom_left_vertex.pos,
@@ -237,8 +273,6 @@ impl UiButtonLoader {
                 ];
 
                 let mouse_pos = [mouse.pos.x, mouse.pos.y];
-
-                // Quick AABB cull.
                 let (min_x, min_y, max_x, max_y) = helper::get_aabb(&verts);
                 if mouse_pos[0] < min_x
                     || mouse_pos[0] > max_x
@@ -252,30 +286,35 @@ impl UiButtonLoader {
                 let is_rounded = helper::has_roundness(&vertices_struct);
 
                 if !is_rounded && helper::is_axis_aligned_rect(&verts) {
-                    // Optimized rect case.
                     inside = mouse_pos[0] >= min_x
                         && mouse_pos[0] <= max_x
                         && mouse_pos[1] >= min_y
                         && mouse_pos[1] <= max_y;
                 } else if is_rounded {
-                    // Assume uniform roundness (take max or avg; adjust as needed).
                     let radius = vertices_struct
                         .iter()
                         .map(|v| v.roundness)
                         .fold(0.0, f32::max);
                     inside = helper::is_point_in_rounded_rect(mouse_pos, &verts, radius);
                 } else {
-                    // General quad PIP.
                     inside = helper::is_point_in_quad(mouse_pos, &verts);
                 }
 
                 if let Some(id) = &r.id {
-                    self.ui_runtime
-                        .update_touch(id, inside && mouse.left_pressed, dt);
+                    if self.ui_runtime.update_touch(
+                        id,
+                        inside && mouse.left_pressed,
+                        dt,
+                        &layer.name,
+                    ) {
+                        trigger_selection = true;
+                    }
                 }
             }
+        }
 
-            // Add more types! (triangles, polygons)
+        if trigger_selection {
+            self.update_selection();
         }
     }
 
@@ -286,5 +325,107 @@ impl UiButtonLoader {
         let hash_u64 = hasher.finish(); // 64-bit
         // map to [0, 1]
         (hash_u64 as f64 / u64::MAX as f64) as f32
+    }
+
+    pub fn update_selection(&mut self) {
+        if !self.ui_runtime.selected_ui_element.active {
+            return;
+        }
+
+        let sel = self.ui_runtime.selected_ui_element.clone();
+
+        if let Some(element) = self.find_element(&sel.layer_name, &sel.element_id) {
+            if let Some(editor_layer) = self
+                .layers
+                .iter_mut()
+                .find(|l| l.name == "editor_selection")
+            {
+                editor_layer.active = true;
+                editor_layer.dirty = true;
+                println!("here");
+                match element {
+                    UiElement::Circle(mut c) => {
+                        // Change specs here
+                        c.radius *= 1.1; // e.g. enlarge slightly
+                        c.fill_color = [1.0, 1.0, 0.0, 0.6]; // highlight color
+                        let mut x = 0;
+                        while x < 1000 {
+                            editor_layer.circles.push(c.clone());
+                            x += 1;
+                        }
+                    }
+                    UiElement::Rectangle(mut r) => {
+                        //r. = [1.0, 0.8, 0.2, 0.7];
+                        editor_layer.rectangles.push(r);
+                    }
+                    UiElement::Triangle(mut t) => {
+                        //t.misc.color = [1.0, 1.0, 0.2, 0.7];
+                        editor_layer.triangles.push(t);
+                    }
+                    UiElement::Polygon(mut p) => {
+                        //p.misc.color = [1.0, 0.7, 0.1, 0.7];
+                        editor_layer.polygons.push(p);
+                    }
+                    UiElement::Text(mut tx) => {
+                        tx.color = [1.0, 1.0, 0.0, 1.0];
+                        tx.misc.active = true;
+                        editor_layer.texts.push(tx);
+                    }
+                }
+            }
+        }
+
+        self.ui_runtime.selected_ui_element.active = false;
+    }
+
+    pub fn find_element(&self, layer_name: &str, element_id: &str) -> Option<UiElement> {
+        let layer = self.layers.iter().find(|l| l.name == layer_name)?;
+
+        // Circles
+        for c in &layer.circles {
+            if let Some(id) = &c.id {
+                if id == element_id {
+                    return Some(UiElement::Circle(c.clone()));
+                }
+            }
+        }
+
+        // Rectangles
+        for r in &layer.rectangles {
+            if let Some(id) = &r.id {
+                if id == element_id {
+                    return Some(UiElement::Rectangle(r.clone()));
+                }
+            }
+        }
+
+        // Triangles
+        for t in &layer.triangles {
+            if let Some(id) = &t.id {
+                if id == element_id {
+                    return Some(UiElement::Triangle(t.clone()));
+                }
+            }
+        }
+
+        // Polygons
+        for p in &layer.polygons {
+            if let Some(id) = &p.id {
+                if id == element_id {
+                    return Some(UiElement::Polygon(p.clone()));
+                }
+            }
+        }
+
+        // Texts
+        for tx in &layer.texts {
+            if let Some(id) = &tx.id {
+                if id == element_id {
+                    return Some(UiElement::Text(tx.clone()));
+                }
+            }
+        }
+
+        None
     }
 }
