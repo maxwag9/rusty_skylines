@@ -1,7 +1,7 @@
 # Rusty Skylines Settings
 
 # Frame rate target in Hz
-target_fps = 60.0
+target_fps = 100.0
 target_tps = 60.0
 
 # Available modes: "Fifo", "Mailbox" (<-best for everything!), "Immediate"

@@ -20,6 +20,7 @@ pub struct UiLayer {
     pub triangles: Option<Vec<UiButtonTriangle>>,
     pub polygons: Option<Vec<UiButtonPolygon>>,
     pub active: Option<bool>,
+    pub opaque: Option<bool>,
 }
 pub struct LayerCache {
     pub texts: Vec<TextParams>,
@@ -70,6 +71,7 @@ pub struct RuntimeLayer {
 
     pub dirty: bool, // set true when anything changes or the screen will be dirty asf!
     pub gpu: LayerGpu,
+    pub opaque: bool,
 }
 
 pub struct UiButtonLoader {
@@ -183,6 +185,7 @@ impl UiButtonLoader {
                 polygons: l.polygons.unwrap_or_default(),
                 dirty: true,
                 gpu: LayerGpu::default(),
+                opaque: l.opaque.unwrap_or(false),
             });
         }
 
@@ -215,6 +218,7 @@ impl UiButtonLoader {
             polygons: vec![],
             dirty: true,
             gpu: LayerGpu::default(),
+            opaque: true,
         });
 
         self.layers.push(RuntimeLayer {
@@ -229,6 +233,7 @@ impl UiButtonLoader {
             polygons: vec![],
             dirty: true,
             gpu: LayerGpu::default(),
+            opaque: true,
         });
     }
 
@@ -347,12 +352,12 @@ impl UiButtonLoader {
                     UiElement::Circle(mut c) => {
                         // Change specs here
                         c.radius *= 1.1; // e.g. enlarge slightly
-                        c.fill_color = [1.0, 1.0, 0.0, 0.6]; // highlight color
-                        let mut x = 0;
-                        while x < 1000 {
-                            editor_layer.circles.push(c.clone());
-                            x += 1;
-                        }
+                        c.fill_color = [0.0, 0.0, 0.0, 1.0]; // highlight color
+                        //c.
+                        c.border_color = [0.0, 0.0, 0.0, 1.0];
+                        c.glow_misc.glow_intensity = 0.0;
+                        c.glow_misc.glow_size = 0.0;
+                        editor_layer.circles.push(c.clone());
                     }
                     UiElement::Rectangle(mut r) => {
                         //r. = [1.0, 0.8, 0.2, 0.7];

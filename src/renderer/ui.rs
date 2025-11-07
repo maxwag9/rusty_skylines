@@ -1,4 +1,4 @@
-use crate::renderer::helper::rebuild_layer_cache;
+use crate::renderer::helper::{make_pipeline, make_uniform_layout, rebuild_layer_cache};
 use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
 use crate::resources::TimeSystem;
 use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
@@ -46,7 +46,9 @@ pub struct UiRenderer {
     pub uniform_bind_group: BindGroup,
     pub num_vertices: u32,
     circle_pipeline: RenderPipeline,
+    overlay_circle_pipeline: RenderPipeline,
     polygon_pipeline: RenderPipeline,
+    overlay_polygon_pipeline: RenderPipeline,
     pub circles: Vec<CircleParams>,
     pub quad_buffer: Buffer,
     glow_pipeline: RenderPipeline,
@@ -134,19 +136,7 @@ impl UiRenderer {
             mapped_at_creation: false,
         });
 
-        let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("UI Bind Layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let layout = make_uniform_layout(device, "UI Bind Layout");
 
         let screen_uniform = ScreenUniform {
             size: [size.width as f32, size.height as f32],
@@ -196,34 +186,19 @@ impl UiRenderer {
             bind_group_layouts: &[&layout, &text_layout],
             push_constant_ranges: &[],
         });
-        let text_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("UI Text Pipeline"),
-            layout: Some(&text_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &text_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[UiVertexText::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &text_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let text_pipeline = make_pipeline(
+            device,
+            "UI Text Pipeline",
+            &text_pipeline_layout,
+            &text_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexText::desc()],
+            format,
+            Some(BlendState::ALPHA_BLENDING),
+            PrimitiveTopology::TriangleList,
+        );
+
         let text_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("UI Text VB"),
             size: 256 * 1024,
@@ -252,34 +227,42 @@ impl UiRenderer {
             bind_group_layouts: &[&layout, &circle_layout],
             push_constant_ranges: &[],
         });
-        let circle_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("UI Circle Pipeline"),
-            layout: Some(&circle_pipeline_layout),
-            vertex: VertexState {
-                module: &circle_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[UiVertexPoly::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &circle_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format,
-                    blend: Some(BlendState::ALPHA_BLENDING),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
+
+        let circle_pipeline = make_pipeline(
+            device,
+            "UI Circle Pipeline",
+            &circle_pipeline_layout,
+            &circle_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexPoly::desc()],
+            format,
+            Some(BlendState::ALPHA_BLENDING),
+            PrimitiveTopology::TriangleStrip,
+        );
+        let overlay_circle_pipeline = make_pipeline(
+            device,
+            "UI Overlay Circle Pipeline",
+            &circle_pipeline_layout,
+            &circle_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexPoly::desc()],
+            format,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
             }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+            PrimitiveTopology::TriangleStrip,
+        );
 
         let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
         let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -287,34 +270,30 @@ impl UiRenderer {
             bind_group_layouts: &[&layout],
             push_constant_ranges: &[],
         });
-        let polygon_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("UI Polygon Pipeline"),
-            layout: Some(&polygon_pipeline_layout),
-            vertex: VertexState {
-                module: &polygon_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[UiVertexPoly::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &polygon_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format,
-                    blend: Some(BlendState::ALPHA_BLENDING),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let polygon_pipeline = make_pipeline(
+            device,
+            "UI Polygon Pipeline",
+            &polygon_pipeline_layout,
+            &polygon_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexPoly::desc()],
+            format,
+            Some(BlendState::ALPHA_BLENDING),
+            PrimitiveTopology::TriangleStrip,
+        );
+        let overlay_polygon_pipeline = make_pipeline(
+            device,
+            "UI Polygon Pipeline",
+            &polygon_pipeline_layout,
+            &polygon_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexPoly::desc()],
+            format,
+            None,
+            PrimitiveTopology::TriangleStrip,
+        );
 
         let glow_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle_glow.wgsl"));
         let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -322,53 +301,40 @@ impl UiRenderer {
             bind_group_layouts: &[&layout, &circle_layout],
             push_constant_ranges: &[],
         });
-        let glow_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("UI Glow Pipeline"),
-            layout: Some(&glow_pipeline_layout),
-            vertex: VertexState {
-                module: &glow_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[UiVertexPoly::desc()],
-                compilation_options: Default::default(),
+        let additive_blend = BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
             },
-            fragment: Some(FragmentState {
-                module: &glow_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format,
-                    // ✨ additive blend for halo
-                    blend: Some(BlendState {
-                        color: BlendComponent {
-                            src_factor: BlendFactor::One,
-                            dst_factor: BlendFactor::One,
-                            operation: BlendOperation::Add,
-                        },
-                        alpha: BlendComponent {
-                            src_factor: BlendFactor::One,
-                            dst_factor: BlendFactor::OneMinusSrcAlpha,
-                            operation: BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleStrip,
-                ..Default::default()
+            alpha: BlendComponent {
+                src_factor: BlendFactor::One,
+                dst_factor: BlendFactor::OneMinusSrcAlpha,
+                operation: BlendOperation::Add,
             },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        };
+
+        let glow_pipeline = make_pipeline(
+            device,
+            "UI Glow Pipeline",
+            &glow_pipeline_layout,
+            &glow_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexPoly::desc()],
+            format,
+            Some(additive_blend),
+            PrimitiveTopology::TriangleStrip,
+        );
 
         Self {
             vertex_buffer,
             uniform_bind_group,
             num_vertices: 0,
             circle_pipeline,
+            overlay_circle_pipeline,
             polygon_pipeline,
+            overlay_polygon_pipeline,
             circles,
             quad_buffer,
             glow_pipeline,
@@ -409,7 +375,6 @@ impl UiRenderer {
             .map(|(i, _)| i)
             .collect();
 
-        // now safely rebuild and upload
         for i in dirty_layers {
             let layer = &mut ui.layers[i];
             let runtime = &ui.ui_runtime;
@@ -430,7 +395,12 @@ impl UiRenderer {
                         resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
                     }],
                 });
-                pass.set_pipeline(&self.circle_pipeline);
+                if !layer.opaque {
+                    pass.set_pipeline(&self.circle_pipeline);
+                } else {
+                    pass.set_pipeline(&self.overlay_circle_pipeline)
+                }
+
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_bind_group(1, &circle_bg, &[]);
                 pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
@@ -462,11 +432,6 @@ impl UiRenderer {
                 }
             }
         }
-    }
-
-    pub fn draw_custom(&mut self, queue: &Queue, vertices: &Vec<UiVertexPoly>) {
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(vertices));
-        self.num_vertices = vertices.len() as u32;
     }
 
     pub fn build_text_atlas(

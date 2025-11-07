@@ -1,6 +1,7 @@
 use crate::renderer::ui::{CircleParams, TextParams};
 use crate::renderer::ui_editor::{LayerCache, RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::vertex::{UiVertex, UiVertexPoly};
+use wgpu::*;
 
 pub(crate) fn is_point_in_quad(point: [f32; 2], verts: &[[f32; 2]; 4]) -> bool {
     // Assumes verts in order: TL, BL, BR, TR (or any cyclic order).
@@ -225,4 +226,62 @@ pub fn rebuild_layer_cache(layer: &mut RuntimeLayer, runtime: &UiRuntime) {
     }
 
     l.dirty = false;
+}
+
+pub(crate) fn make_pipeline(
+    device: &Device,
+    label: &str,
+    layout: &PipelineLayout,
+    shader: &ShaderModule,
+    vs_entry: &str,
+    fs_entry: &str,
+    buffers: &[VertexBufferLayout],
+    format: TextureFormat,
+    blend: Option<BlendState>,
+    topology: PrimitiveTopology,
+) -> RenderPipeline {
+    device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: VertexState {
+            module: shader,
+            entry_point: Some(vs_entry),
+            buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(FragmentState {
+            module: shader,
+            entry_point: Some(fs_entry),
+            targets: &[Some(ColorTargetState {
+                format,
+                blend,
+                write_mask: ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: PrimitiveState {
+            topology,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+pub fn make_uniform_layout(device: &Device, label: &str) -> BindGroupLayout {
+    device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX_FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
 }
