@@ -1,9 +1,9 @@
 use crate::renderer::helper;
-use crate::renderer::ui::{CircleParams, TextParams};
+use crate::renderer::ui::{CircleOutlineParams, CircleParams, TextParams};
 use crate::resources::MouseState;
 use crate::vertex::{
-    GuiLayout, LayerGpu, UiButtonCircle, UiButtonPolygon, UiButtonRectangle, UiButtonText,
-    UiButtonTriangle, UiVertexPoly,
+    DashMisc, GuiLayout, LayerGpu, UiButtonCircle, UiButtonCircleOutline, UiButtonPolygon,
+    UiButtonRectangle, UiButtonText, UiButtonTriangle, UiVertexPoly,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -16,6 +16,7 @@ pub struct UiLayer {
     pub order: u32,
     pub texts: Option<Vec<UiButtonText>>,
     pub circles: Option<Vec<UiButtonCircle>>,
+    pub circle_outlines: Option<Vec<UiButtonCircleOutline>>,
     pub rectangles: Option<Vec<UiButtonRectangle>>,
     pub triangles: Option<Vec<UiButtonTriangle>>,
     pub polygons: Option<Vec<UiButtonPolygon>>,
@@ -25,6 +26,7 @@ pub struct UiLayer {
 pub struct LayerCache {
     pub texts: Vec<TextParams>,
     pub circle_params: Vec<CircleParams>,
+    pub circle_outline_params: Vec<CircleOutlineParams>,
     pub rect_vertices: Vec<UiVertexPoly>,
     pub triangle_vertices: Vec<UiVertexPoly>,
     pub polygon_vertices: Vec<UiVertexPoly>,
@@ -41,6 +43,7 @@ impl Default for LayerCache {
         Self {
             texts: vec![],
             circle_params: vec![],
+            circle_outline_params: vec![],
             rect_vertices: vec![],
             triangle_vertices: vec![],
             polygon_vertices: vec![],
@@ -62,6 +65,7 @@ pub struct RuntimeLayer {
     pub order: u32,
     pub texts: Vec<UiButtonText>,
     pub circles: Vec<UiButtonCircle>,
+    pub circle_outlines: Vec<UiButtonCircleOutline>,
     pub rectangles: Vec<UiButtonRectangle>,
     pub triangles: Vec<UiButtonTriangle>,
     pub polygons: Vec<UiButtonPolygon>,
@@ -180,6 +184,7 @@ impl UiButtonLoader {
                 cache: Default::default(),
                 texts: l.texts.unwrap_or_default(),
                 circles: l.circles.unwrap_or_default(),
+                circle_outlines: l.circle_outlines.unwrap_or_default(),
                 rectangles: l.rectangles.unwrap_or_default(),
                 triangles: l.triangles.unwrap_or_default(),
                 polygons: l.polygons.unwrap_or_default(),
@@ -213,6 +218,7 @@ impl UiButtonLoader {
             cache: LayerCache::default(),
             texts: vec![],
             circles: vec![],
+            circle_outlines: vec![],
             rectangles: vec![],
             triangles: vec![],
             polygons: vec![],
@@ -228,6 +234,7 @@ impl UiButtonLoader {
             cache: LayerCache::default(),
             texts: vec![],
             circles: vec![],
+            circle_outlines: vec![],
             rectangles: vec![],
             triangles: vec![],
             polygons: vec![],
@@ -347,34 +354,55 @@ impl UiButtonLoader {
             {
                 editor_layer.active = true;
                 editor_layer.dirty = true;
+                editor_layer.circles.clear();
+                editor_layer.rectangles.clear();
+                editor_layer.triangles.clear();
+                editor_layer.polygons.clear();
                 println!("here");
                 match element {
-                    UiElement::Circle(mut c) => {
-                        // Change specs here
-                        c.radius *= 1.1; // e.g. enlarge slightly
-                        c.fill_color = [0.0, 0.0, 0.0, 1.0]; // highlight color
-                        //c.
-                        c.border_color = [0.0, 0.0, 0.0, 1.0];
-                        c.glow_misc.glow_intensity = 0.0;
-                        c.glow_misc.glow_size = 0.0;
-                        editor_layer.circles.push(c.clone());
+                    UiElement::Circle(c) => {
+                        let circle_outline = UiButtonCircleOutline {
+                            id: Some("Circle Outline".to_string()),
+                            x: c.x,
+                            y: c.y,
+                            stretch_x: c.stretch_x,
+                            stretch_y: c.stretch_y,
+                            radius: c.radius * 1.1,
+                            dash_thickness: 8.0,
+                            dash_color: [0.0, 0.0, 0.6, 0.8],
+                            dash_misc: DashMisc {
+                                dash_len: 3.0,
+                                dash_spacing: 1.5,
+                                dash_roundness: 1.0,
+                                dash_speed: 2.0,
+                            },
+                            sub_dash_color: [0.8, 0.8, 0.8, 0.9],
+                            sub_dash_misc: DashMisc {
+                                dash_len: 3.0,
+                                dash_spacing: 1.5,
+                                dash_roundness: 1.0,
+                                dash_speed: 2.0,
+                            },
+                            misc: c.misc,
+                        };
+                        editor_layer.circle_outlines.push(circle_outline);
                     }
-                    UiElement::Rectangle(mut r) => {
+                    UiElement::Rectangle(r) => {
                         //r. = [1.0, 0.8, 0.2, 0.7];
-                        editor_layer.rectangles.push(r);
+                        //editor_layer.rectangles.push(r);
                     }
-                    UiElement::Triangle(mut t) => {
+                    UiElement::Triangle(t) => {
                         //t.misc.color = [1.0, 1.0, 0.2, 0.7];
-                        editor_layer.triangles.push(t);
+                        //editor_layer.triangles.push(t);
                     }
-                    UiElement::Polygon(mut p) => {
+                    UiElement::Polygon(p) => {
                         //p.misc.color = [1.0, 0.7, 0.1, 0.7];
-                        editor_layer.polygons.push(p);
+                        //editor_layer.polygons.push(p);
                     }
                     UiElement::Text(mut tx) => {
-                        tx.color = [1.0, 1.0, 0.0, 1.0];
-                        tx.misc.active = true;
-                        editor_layer.texts.push(tx);
+                        //tx.color = [1.0, 1.0, 0.0, 1.0];
+                        //tx.misc.active = true;
+                        //editor_layer.texts.push(tx);
                     }
                 }
             }

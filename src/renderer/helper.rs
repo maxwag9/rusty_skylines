@@ -1,4 +1,4 @@
-use crate::renderer::ui::{CircleParams, TextParams};
+use crate::renderer::ui::{CircleOutlineParams, CircleParams, TextParams};
 use crate::renderer::ui_editor::{LayerCache, RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::vertex::{UiVertex, UiVertexPoly};
 use wgpu::*;
@@ -129,7 +129,7 @@ pub fn rebuild_layer_cache(layer: &mut RuntimeLayer, runtime: &UiRuntime) {
         };
 
         l.cache.circle_params.push(CircleParams {
-            center_radius_border: [c.x, c.y, c.radius, 6.0],
+            center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
             fill_color: c.fill_color,
             border_color: c.border_color,
             glow_color: c.glow_color,
@@ -138,6 +138,40 @@ pub fn rebuild_layer_cache(layer: &mut RuntimeLayer, runtime: &UiRuntime) {
                 c.glow_misc.glow_speed,
                 c.glow_misc.glow_intensity,
                 1.0,
+            ],
+            misc: [
+                f32::from(c.misc.active),
+                rt.touched_time,
+                f32::from(rt.is_down),
+                hash,
+            ],
+        });
+    }
+
+    for c in &l.circle_outlines {
+        let id_str = c.id.as_deref().unwrap_or("");
+        let rt = runtime.get(id_str);
+        let hash = if id_str.is_empty() {
+            f32::MAX
+        } else {
+            UiButtonLoader::hash_id(id_str)
+        };
+
+        l.cache.circle_outline_params.push(CircleOutlineParams {
+            center_radius_border: [c.x, c.y, c.radius, c.dash_thickness],
+            dash_color: c.dash_color,
+            dash_misc: [
+                c.dash_misc.dash_len,
+                c.dash_misc.dash_spacing,
+                c.dash_misc.dash_roundness,
+                c.dash_misc.dash_speed,
+            ],
+            sub_dash_color: c.sub_dash_color,
+            sub_dash_misc: [
+                c.sub_dash_misc.dash_len,
+                c.sub_dash_misc.dash_spacing,
+                c.sub_dash_misc.dash_roundness,
+                c.sub_dash_misc.dash_speed,
             ],
             misc: [
                 f32::from(c.misc.active),

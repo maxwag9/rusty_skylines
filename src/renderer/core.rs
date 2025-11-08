@@ -35,7 +35,13 @@ impl RenderCore {
     pub fn new(window: Arc<Window>) -> Self {
         use wgpu::*;
         // --- Create instance and surface ---
-        let instance = Instance::default();
+        let instance = wgpu::Instance::new(&InstanceDescriptor {
+            backends: Backends::all(),
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
+        });
+
         let size = window.inner_size();
         let surface = instance
             .create_surface(window.clone())

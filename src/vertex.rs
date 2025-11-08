@@ -26,6 +26,9 @@ pub struct LayerGpu {
     pub circle_ssbo: Option<Buffer>,
     pub circle_count: u32,
 
+    pub circle_outline_ssbo: Option<Buffer>,
+    pub circle_outline_count: u32,
+
     pub poly_vbo: Option<Buffer>, // rectangles + triangles + polygons in one stream
     pub poly_count: u32,          // vertex count
 
@@ -38,6 +41,8 @@ impl Default for LayerGpu {
         Self {
             circle_ssbo: None,
             circle_count: 0,
+            circle_outline_ssbo: None,
+            circle_outline_count: 0,
             poly_vbo: None,
             poly_count: 0,
             text_vbo: None,
@@ -149,6 +154,14 @@ pub struct GlowMisc {
     pub glow_speed: f32,
     pub glow_intensity: f32,
 }
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct DashMisc {
+    pub dash_len: f32,
+    pub dash_spacing: f32,
+    pub dash_roundness: f32,
+    pub dash_speed: f32,
+}
 #[derive(Deserialize, Debug, Clone)]
 pub struct MiscButtonSettings {
     pub active: bool,
@@ -186,10 +199,26 @@ pub struct UiButtonCircle {
     pub stretch_x: f32,
     pub stretch_y: f32,
     pub radius: f32,
+    pub border_thickness: f32,
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
     pub glow_misc: GlowMisc,
+    pub misc: MiscButtonSettings,
+}
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonCircleOutline {
+    pub id: Option<String>,
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub radius: f32,
+    pub dash_thickness: f32,
+    pub dash_color: [f32; 4],
+    pub dash_misc: DashMisc,
+    pub sub_dash_color: [f32; 4],
+    pub sub_dash_misc: DashMisc,
     pub misc: MiscButtonSettings,
 }
 
