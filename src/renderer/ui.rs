@@ -87,15 +87,15 @@ impl Default for CircleParams {
     }
 }
 
-#[repr(C)]
+#[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CircleOutlineParams {
     pub(crate) center_radius_border: [f32; 4], // cx, cy, radius, thickness
     pub(crate) dash_color: [f32; 4],
     pub(crate) dash_misc: [f32; 4], // (dash_len, dash_spacing, dash_roundness, speed)
-    pub(crate) misc: [f32; 4],      // active, touched_time, is_touched, id_hash
     pub sub_dash_color: [f32; 4],
     pub sub_dash_misc: [f32; 4], // (dash_len, dash_spacing, dash_roundness, speed)
+    pub(crate) misc: [f32; 4],   // active, touched_time, is_touched, id_hash
 }
 impl Default for CircleOutlineParams {
     fn default() -> Self {
