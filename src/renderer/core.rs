@@ -2,7 +2,7 @@ use crate::components::camera::Camera;
 pub use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
-use crate::resources::{TimeSystem, Uniforms};
+use crate::resources::{MouseState, TimeSystem, Uniforms};
 use crate::vertex::{LineVtx, Vertex};
 use std::sync::Arc;
 use util::DeviceExt;
@@ -222,6 +222,7 @@ impl RenderCore {
         camera: &Camera,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
+        mouse: &MouseState,
     ) {
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
@@ -355,6 +356,7 @@ impl RenderCore {
                 size: [self.size.width as f32, self.size.height as f32],
                 time: elapsed,
                 enable_dither,
+                mouse: mouse.pos.to_array(),
             };
 
             self.queue.write_buffer(
@@ -364,7 +366,7 @@ impl RenderCore {
             );
             let size = (self.config.width as f32, self.config.height as f32);
             self.ui_renderer
-                .render(&mut pass, ui_loader, &self.queue, &time, size);
+                .render(&mut pass, ui_loader, &self.queue, &time, size, mouse);
         }
 
         // --- Submit and present ---

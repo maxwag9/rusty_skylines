@@ -1,6 +1,6 @@
 use crate::renderer::helper::{make_pipeline, make_uniform_layout, rebuild_layer_cache};
 use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
-use crate::resources::TimeSystem;
+use crate::resources::{MouseState, TimeSystem};
 use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
@@ -17,6 +17,7 @@ pub struct ScreenUniform {
     pub size: [f32; 2],
     pub time: f32,
     pub enable_dither: u32, // use 0 = off, 1 = on
+    pub mouse: [f32; 2],    // position!
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +62,9 @@ pub struct UiRenderer {
     pub text_bind_group: Option<BindGroup>,
     pub text_vertex_buffer: Buffer,
     pub text_vertex_count: u32,
+    pub handle_pipeline: RenderPipeline,
+    pub handle_layout: BindGroupLayout,
+    pub handle_quad_buffer: Buffer,
 }
 
 #[repr(C)]
@@ -110,6 +114,29 @@ impl Default for CircleOutlineParams {
     }
 }
 
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct HandleParams {
+    pub center_radius_mode: [f32; 4], // cx, cy, is_circle, ?
+    pub(crate) handle_color: [f32; 4],
+    pub(crate) handle_misc: [f32; 4], // (handle_len, handle_width, handle_roundness, ?)
+    pub sub_handle_color: [f32; 4], // color of the center line drawn on top of the center of the normal handle
+    pub sub_handle_misc: [f32; 4],  // (sub_handle_len, sub_handle_width, sub_handle_roundness, ?)
+    pub(crate) misc: [f32; 4],      // active, touched_time, is_touched, id_hash
+}
+impl Default for HandleParams {
+    fn default() -> Self {
+        Self {
+            center_radius_mode: [0.0; 4], // cx, cy, is_circle, ?
+            handle_color: [0.0, 0.2, 0.7, 0.8],
+            handle_misc: [2.0, 1.0, 1.0, 2.0], // (dash_len, dash_spacing, dash_roundness, speed)
+            sub_handle_color: [0.3, 0.4, 0.5, 0.9],
+            sub_handle_misc: [2.0, 1.0, 1.0, -2.0], // (sub_dash_len, sub_dash_spacing, sub_dash_roundness, sub_speed)
+            misc: [1.0, 0.0, 0.0, 0.0],             // active, touched_time, is_touched, id_hash
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PolygonOutlineParams {
@@ -140,6 +167,38 @@ pub struct TextParams {
 
 impl UiRenderer {
     pub fn new(device: &Device, format: TextureFormat, size: PhysicalSize<u32>) -> Self {
+        let handle_quad_vertices = [
+            UiVertexPoly {
+                pos: [-3.0, -3.0],
+                _pad: [1.0; 2],
+                color: [1.0; 4],
+                misc: [1.0; 4],
+            },
+            UiVertexPoly {
+                pos: [3.0, -3.0],
+                _pad: [1.0; 2],
+                color: [1.0; 4],
+                misc: [1.0; 4],
+            },
+            UiVertexPoly {
+                pos: [-3.0, 3.0],
+                _pad: [1.0; 2],
+                color: [1.0; 4],
+                misc: [1.0; 4],
+            },
+            UiVertexPoly {
+                pos: [3.0, 3.0],
+                _pad: [1.0; 2],
+                color: [1.0; 4],
+                misc: [1.0; 4],
+            },
+        ];
+        let handle_quad_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Handle Quad VB"),
+            contents: bytemuck::cast_slice(&handle_quad_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+
         let quad_vertices = [
             UiVertexPoly {
                 pos: [-1.0, -1.0],
@@ -184,6 +243,7 @@ impl UiRenderer {
             size: [size.width as f32, size.height as f32],
             time: 0.0,
             enable_dither: 1,
+            mouse: [0.0, 0.0],
         };
         let screen_data = bytemuck::bytes_of(&screen_uniform);
 
@@ -253,6 +313,7 @@ impl UiRenderer {
         let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
         let circle_outline_shader =
             device.create_shader_module(include_wgsl!("shaders/ui_circle_outline.wgsl"));
+        let handle_shader = device.create_shader_module(include_wgsl!("shaders/ui_handle.wgsl"));
         let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Circle Layout"),
             entries: &[BindGroupLayoutEntry {
@@ -284,56 +345,62 @@ impl UiRenderer {
             Some(BlendState::ALPHA_BLENDING),
             PrimitiveTopology::TriangleStrip,
         );
-        let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Circle Layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Circle Layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+        let good_blend = Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
         });
         let circle_outline_pipeline = make_pipeline(
             device,
-            "UI Overlay Circle Pipeline",
+            "UI Circle Outline Pipeline",
             &circle_pipeline_layout,
             &circle_outline_shader,
             "vs_main",
             "fs_main",
             &[UiVertexPoly::desc()],
             format,
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                    operation: wgpu::BlendOperation::Add,
-                },
-            }),
+            good_blend,
             PrimitiveTopology::TriangleStrip,
         );
+        let handle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Handle Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let handle_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Handle Pipeline Layout"),
+                bind_group_layouts: &[&layout, &handle_layout],
+                push_constant_ranges: &[],
+            });
 
+        let handle_pipeline = make_pipeline(
+            device,
+            "UI Handle Pipeline",
+            &handle_pipeline_layout,
+            &handle_shader,
+            "vs_main",
+            "fs_main",
+            &[UiVertexPoly::desc()],
+            format,
+            good_blend,
+            PrimitiveTopology::TriangleStrip,
+        );
         let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
         let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Pipeline Layout"),
@@ -405,10 +472,13 @@ impl UiRenderer {
             circle_outline_pipeline,
             polygon_pipeline,
             overlay_polygon_pipeline,
+            handle_pipeline,
             circles,
             quad_buffer,
+            handle_quad_buffer,
             glow_pipeline,
             uniform_buffer,
+            handle_layout,
             device: device.clone(),
             circle_layout,
             text_atlas: None,
@@ -427,11 +497,13 @@ impl UiRenderer {
         queue: &Queue,
         time: &TimeSystem,
         size: (f32, f32),
+        mouse: &MouseState,
     ) {
         let new_uniform = ScreenUniform {
             size: [size.0, size.1],
             time: time.total_time,
             enable_dither: 1,
+            mouse: mouse.pos.to_array(),
         };
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&new_uniform));
@@ -499,6 +571,23 @@ impl UiRenderer {
                 pass.set_bind_group(1, &circle_outline_bg, &[]);
                 pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
                 pass.draw(0..4, 0..layer.gpu.circle_outline_count);
+            }
+
+            if layer.gpu.handle_count > 0 {
+                let handle_bg = self.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some(&format!("{}_handle_bg", layer.name)),
+                    layout: &self.handle_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: layer.gpu.handle_ssbo.as_ref().unwrap().as_entire_binding(),
+                    }],
+                });
+
+                pass.set_pipeline(&self.handle_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &handle_bg, &[]);
+                pass.set_vertex_buffer(0, self.handle_quad_buffer.slice(..));
+                pass.draw(0..4, 0..layer.gpu.handle_count);
             }
 
             // polygons
@@ -720,6 +809,27 @@ impl UiRenderer {
             queue.write_buffer(layer.gpu.circle_outline_ssbo.as_ref().unwrap(), 0, bytes);
         }
         layer.gpu.circle_outline_count = circle_outline_len;
+
+        let handle_len = layer.cache.handle_params.len() as u32;
+        if handle_len > 0 {
+            let bytes = bytemuck::cast_slice(&layer.cache.handle_params);
+            let need_new = layer
+                .gpu
+                .handle_ssbo
+                .as_ref()
+                .map(|b| b.size() < bytes.len() as u64)
+                .unwrap_or(true);
+            if need_new {
+                layer.gpu.handle_ssbo = Some(self.device.create_buffer(&BufferDescriptor {
+                    label: Some(&format!("{}_handle_ssbo", layer.name)),
+                    size: bytes.len() as u64,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            queue.write_buffer(layer.gpu.handle_ssbo.as_ref().unwrap(), 0, bytes);
+        }
+        layer.gpu.handle_count = handle_len;
 
         // ---- polygons (VBO) : rects + tris + polys concatenated ----
         let mut poly_vertices: Vec<UiVertexPoly> = Vec::with_capacity(

@@ -29,6 +29,9 @@ pub struct LayerGpu {
     pub circle_outline_ssbo: Option<Buffer>,
     pub circle_outline_count: u32,
 
+    pub handle_ssbo: Option<Buffer>,
+    pub handle_count: u32,
+
     pub poly_vbo: Option<Buffer>, // rectangles + triangles + polygons in one stream
     pub poly_count: u32,          // vertex count
 
@@ -43,6 +46,8 @@ impl Default for LayerGpu {
             circle_count: 0,
             circle_outline_ssbo: None,
             circle_outline_count: 0,
+            handle_ssbo: None,
+            handle_count: 0,
             poly_vbo: None,
             poly_count: 0,
             text_vbo: None,
@@ -162,6 +167,15 @@ pub struct DashMisc {
     pub dash_roundness: f32,
     pub dash_speed: f32,
 }
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct HandleMisc {
+    pub handle_len: f32,
+    pub handle_width: f32,
+    pub handle_roundness: f32,
+    pub handle_speed: f32,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct MiscButtonSettings {
     pub active: bool,
@@ -220,6 +234,21 @@ pub struct UiButtonCircleOutline {
     pub sub_dash_color: [f32; 4],
     pub sub_dash_misc: DashMisc,
     pub misc: MiscButtonSettings,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonHandle {
+    pub id: Option<String>,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub handle_thickness: f32,
+    pub handle_color: [f32; 4],
+    pub handle_misc: HandleMisc,
+    pub sub_handle_color: [f32; 4],
+    pub sub_handle_misc: HandleMisc,
+    pub misc: MiscButtonSettings,
+    pub parent_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

@@ -1,9 +1,10 @@
 use crate::renderer::helper;
-use crate::renderer::ui::{CircleOutlineParams, CircleParams, TextParams};
+use crate::renderer::ui::{CircleOutlineParams, CircleParams, HandleParams, TextParams};
 use crate::resources::MouseState;
 use crate::vertex::{
-    DashMisc, GuiLayout, LayerGpu, UiButtonCircle, UiButtonCircleOutline, UiButtonPolygon,
-    UiButtonRectangle, UiButtonText, UiButtonTriangle, UiVertexPoly,
+    DashMisc, GuiLayout, HandleMisc, LayerGpu, MiscButtonSettings, UiButtonCircle,
+    UiButtonCircleOutline, UiButtonHandle, UiButtonPolygon, UiButtonRectangle, UiButtonText,
+    UiButtonTriangle, UiVertexPoly,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -17,6 +18,7 @@ pub struct UiLayer {
     pub texts: Option<Vec<UiButtonText>>,
     pub circles: Option<Vec<UiButtonCircle>>,
     pub circle_outlines: Option<Vec<UiButtonCircleOutline>>,
+    pub handles: Option<Vec<UiButtonHandle>>,
     pub rectangles: Option<Vec<UiButtonRectangle>>,
     pub triangles: Option<Vec<UiButtonTriangle>>,
     pub polygons: Option<Vec<UiButtonPolygon>>,
@@ -27,6 +29,7 @@ pub struct LayerCache {
     pub texts: Vec<TextParams>,
     pub circle_params: Vec<CircleParams>,
     pub circle_outline_params: Vec<CircleOutlineParams>,
+    pub handle_params: Vec<HandleParams>,
     pub rect_vertices: Vec<UiVertexPoly>,
     pub triangle_vertices: Vec<UiVertexPoly>,
     pub polygon_vertices: Vec<UiVertexPoly>,
@@ -44,6 +47,7 @@ impl Default for LayerCache {
             texts: vec![],
             circle_params: vec![],
             circle_outline_params: vec![],
+            handle_params: vec![],
             rect_vertices: vec![],
             triangle_vertices: vec![],
             polygon_vertices: vec![],
@@ -54,6 +58,7 @@ impl Default for LayerCache {
 #[derive(Clone, Debug)]
 pub enum UiElement {
     Circle(UiButtonCircle),
+    Handle(UiButtonHandle),
     Rectangle(UiButtonRectangle),
     Triangle(UiButtonTriangle),
     Polygon(UiButtonPolygon),
@@ -66,6 +71,7 @@ pub struct RuntimeLayer {
     pub texts: Vec<UiButtonText>,
     pub circles: Vec<UiButtonCircle>,
     pub circle_outlines: Vec<UiButtonCircleOutline>,
+    pub handles: Vec<UiButtonHandle>,
     pub rectangles: Vec<UiButtonRectangle>,
     pub triangles: Vec<UiButtonTriangle>,
     pub polygons: Vec<UiButtonPolygon>,
@@ -185,6 +191,7 @@ impl UiButtonLoader {
                 texts: l.texts.unwrap_or_default(),
                 circles: l.circles.unwrap_or_default(),
                 circle_outlines: l.circle_outlines.unwrap_or_default(),
+                handles: l.handles.unwrap_or_default(),
                 rectangles: l.rectangles.unwrap_or_default(),
                 triangles: l.triangles.unwrap_or_default(),
                 polygons: l.polygons.unwrap_or_default(),
@@ -219,6 +226,7 @@ impl UiButtonLoader {
             texts: vec![],
             circles: vec![],
             circle_outlines: vec![],
+            handles: vec![],
             rectangles: vec![],
             triangles: vec![],
             polygons: vec![],
@@ -235,6 +243,7 @@ impl UiButtonLoader {
             texts: vec![],
             circles: vec![],
             circle_outlines: vec![],
+            handles: vec![],
             rectangles: vec![],
             triangles: vec![],
             polygons: vec![],
@@ -327,6 +336,9 @@ impl UiButtonLoader {
 
         if trigger_selection {
             self.update_selection();
+        } else if mouse.left_pressed {
+            self.ui_runtime.selected_ui_element.active = false;
+            self.update_selection();
         }
     }
 
@@ -341,6 +353,19 @@ impl UiButtonLoader {
 
     pub fn update_selection(&mut self) {
         if !self.ui_runtime.selected_ui_element.active {
+            if let Some(editor_layer) = self
+                .layers
+                .iter_mut()
+                .find(|l| l.name == "editor_selection")
+            {
+                editor_layer.active = false;
+                editor_layer.circles.clear();
+                editor_layer.circle_outlines.clear();
+                editor_layer.handles.clear();
+                editor_layer.rectangles.clear();
+                editor_layer.triangles.clear();
+                editor_layer.polygons.clear();
+            }
             return;
         }
 
@@ -355,6 +380,8 @@ impl UiButtonLoader {
                 editor_layer.active = true;
                 editor_layer.dirty = true;
                 editor_layer.circles.clear();
+                editor_layer.circle_outlines.clear();
+                editor_layer.handles.clear();
                 editor_layer.rectangles.clear();
                 editor_layer.triangles.clear();
                 editor_layer.polygons.clear();
@@ -367,12 +394,12 @@ impl UiButtonLoader {
                             y: c.y,
                             stretch_x: c.stretch_x,
                             stretch_y: c.stretch_y,
-                            radius: c.radius * 1.1,
-                            dash_thickness: 7.0,
-                            dash_color: [0.0, 0.1, 0.8, 0.8],
+                            radius: c.radius,
+                            dash_thickness: 6.0,
+                            dash_color: [0.1, 0.2, 0.8, 0.8],
                             dash_misc: DashMisc {
-                                dash_len: 3.0,
-                                dash_spacing: 1.0,
+                                dash_len: 4.0,
+                                dash_spacing: 1.5,
                                 dash_roundness: 1.0,
                                 dash_speed: 4.0,
                             },
@@ -386,7 +413,37 @@ impl UiButtonLoader {
                             misc: c.misc,
                         };
                         editor_layer.circle_outlines.push(circle_outline);
+
+                        let handle = UiButtonHandle {
+                            id: Some("Circle Handle".to_string()),
+                            parent_id: c.id,
+                            x: c.x,
+                            y: c.y,
+                            radius: c.radius,
+                            handle_thickness: 10.0,
+                            handle_color: [0.1, 0.1, 0.1, 1.0],
+                            handle_misc: HandleMisc {
+                                handle_len: 0.6,
+                                handle_width: 0.3,
+                                handle_roundness: 0.3,
+                                handle_speed: 0.0,
+                            },
+                            sub_handle_color: [0.8, 0.8, 0.8, 1.0],
+                            sub_handle_misc: HandleMisc {
+                                handle_len: 0.9,
+                                handle_width: 0.25,
+                                handle_roundness: 0.5,
+                                handle_speed: 0.0,
+                            },
+                            misc: MiscButtonSettings {
+                                active: true,
+                                touched_time: 0.0,
+                                is_touched: false,
+                            },
+                        };
+                        editor_layer.handles.push(handle);
                     }
+                    UiElement::Handle(h) => {}
                     UiElement::Rectangle(r) => {
                         //r. = [1.0, 0.8, 0.2, 0.7];
                         //editor_layer.rectangles.push(r);
@@ -455,6 +512,48 @@ impl UiButtonLoader {
             if let Some(id) = &tx.id {
                 if id == element_id {
                     return Some(UiElement::Text(tx.clone()));
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn find_element_index_by_hash(&self, id_hash: f32) -> Option<(String, usize)> {
+        for layer in &self.layers {
+            // Circles
+            for (i, c) in layer.circles.iter().enumerate() {
+                if let Some(id) = &c.id {
+                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
+                        return Some((layer.name.clone(), i));
+                    }
+                }
+            }
+
+            // Rectangles
+            for (i, r) in layer.rectangles.iter().enumerate() {
+                if let Some(id) = &r.id {
+                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
+                        return Some((layer.name.clone(), i));
+                    }
+                }
+            }
+
+            // Polygons
+            for (i, p) in layer.polygons.iter().enumerate() {
+                if let Some(id) = &p.id {
+                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
+                        return Some((layer.name.clone(), i));
+                    }
+                }
+            }
+
+            // Texts
+            for (i, t) in layer.texts.iter().enumerate() {
+                if let Some(id) = &t.id {
+                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
+                        return Some((layer.name.clone(), i));
+                    }
                 }
             }
         }

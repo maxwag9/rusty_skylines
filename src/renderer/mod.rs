@@ -7,7 +7,7 @@ pub mod ui_editor;
 
 use crate::components::camera::Camera;
 use crate::renderer::ui_editor::UiButtonLoader;
-use crate::resources::TimeSystem;
+use crate::resources::{MouseState, TimeSystem};
 use core::RenderCore;
 use std::sync::Arc;
 
@@ -25,7 +25,13 @@ impl Renderer {
         self.core.resize(size);
     }
 
-    pub fn render(&mut self, camera: &Camera, ui_loader: &mut UiButtonLoader, time: &TimeSystem) {
-        self.core.render(camera, ui_loader, time);
+    pub fn render(
+        &mut self,
+        camera: &Camera,
+        ui_loader: &mut UiButtonLoader,
+        time: &TimeSystem,
+        mouse: &MouseState,
+    ) {
+        self.core.render(camera, ui_loader, time, mouse);
     }
 }

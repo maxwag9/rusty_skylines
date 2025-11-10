@@ -1,4 +1,4 @@
-use crate::renderer::ui::{CircleOutlineParams, CircleParams, TextParams};
+use crate::renderer::ui::{CircleOutlineParams, CircleParams, HandleParams, TextParams};
 use crate::renderer::ui_editor::{LayerCache, RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::vertex::{UiVertex, UiVertexPoly};
 use wgpu::*;
@@ -175,6 +175,40 @@ pub fn rebuild_layer_cache(layer: &mut RuntimeLayer, runtime: &UiRuntime) {
             ],
             misc: [
                 f32::from(c.misc.active),
+                rt.touched_time,
+                f32::from(rt.is_down),
+                hash,
+            ],
+        });
+    }
+
+    for h in &l.handles {
+        let id_str = h.id.as_deref().unwrap_or("");
+        let rt = runtime.get(id_str);
+        let hash = if id_str.is_empty() {
+            f32::MAX
+        } else {
+            UiButtonLoader::hash_id(id_str)
+        };
+        //let circle_index = runtime.selected_ui_element.
+        l.cache.handle_params.push(HandleParams {
+            center_radius_mode: [h.x, h.y, h.radius, 1.0],
+            handle_color: h.handle_color,
+            handle_misc: [
+                h.handle_misc.handle_len,
+                h.handle_misc.handle_width,
+                h.handle_misc.handle_roundness,
+                h.handle_misc.handle_speed,
+            ],
+            sub_handle_color: h.sub_handle_color,
+            sub_handle_misc: [
+                h.sub_handle_misc.handle_len,
+                h.sub_handle_misc.handle_width,
+                h.sub_handle_misc.handle_roundness,
+                h.sub_handle_misc.handle_speed,
+            ],
+            misc: [
+                f32::from(h.misc.active),
                 rt.touched_time,
                 f32::from(rt.is_down),
                 hash,
