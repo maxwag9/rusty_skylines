@@ -81,33 +81,33 @@
         {
           "id": "toggle_simulation",
           "type": "circle",
-          "x": 1000.0,
-          "y": 600.0,
+          "x": 1500.0,
+          "y": 200.0,
           "stretch_x": 1.0,
           "stretch_y": 1.0,
           "radius": 60.0,
           "border_thickness": 13.0,
           "fill_color": [
             0.1,
-            0.4,
+            0.3,
             0.1,
-            0.6
+            1.0
           ],
           "border_color": [
             0.1,
             0.3,
-            0.1,
-            0.8
+            0.3,
+            1.0
           ],
           "glow_color": [
-            0.4,
-            0.4,
+            0.15,
+            0.0,
             0.0,
             1.0
           ],
           "glow_misc": {
             "glow_size": 200.0,
-            "glow_speed": 10.0,
+            "glow_speed": 2.0,
             "glow_intensity": 1.0
           },
           "misc": {

@@ -6,8 +6,10 @@
       <w>fard</w>
       <w>frametime</w>
       <w>iscircle</w>
+      <w>lerp</w>
       <w>readin</w>
       <w>roundedrectangle</w>
+      <w>rustrover</w>
       <w>ssbo</w>
       <w>swapchain</w>
       <w>uiloader</w>

@@ -41,7 +41,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let crb = c.center_radius_border;
 
     let center = crb.xy;
-    let radius = crb.z + crb.w; // slightly expand for outline thickness
+    let radius = crb.z + crb.w * crb.z * 0.01; // slightly expand for outline thickness
     let world = center + in.pos * radius;
 
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
@@ -81,7 +81,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let crb = c.center_radius_border;
     let center = crb.xy;
     let radius = crb.z;
-    let thickness = crb.w;
+    let hundredth_radius = radius * 0.01;
+    let thickness = crb.w * hundredth_radius;
 
     // --- main dash pattern setup ---
     let dash_len   = max(0.001, c.dash_misc.x);
@@ -97,8 +98,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let arc_px  = (angle + PI) * radius;
     let circ_px = 2.0 * PI * radius;
 
-    var dash_px   = dash_len * thickness;
-    var space_px  = dash_space * thickness;
+    var dash_px   = dash_len * thickness * hundredth_radius;
+    var space_px  = dash_space * thickness * hundredth_radius;
     var period_px = dash_px + space_px;
 
     // fit integer number of dashes around circumference

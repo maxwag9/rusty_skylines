@@ -106,45 +106,6 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => {
-                if let Some(resources) = self.resources.as_mut() {
-                    resources.renderer.resize(size);
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                if let (Some(world), Some(resources)) =
-                    (self.world.as_mut(), self.resources.as_mut())
-                {
-                    let frame_start = Instant::now();
-
-                    // update render time
-                    resources.time.update_render();
-
-                    // simulate time independent of render fps
-                    resources.time.update_sim();
-                    resources.time.sim_accumulator += resources.time.sim_dt;
-
-                    while resources.time.sim_accumulator >= resources.time.sim_target_step {
-                        resources.time.sim_dt = resources.time.sim_target_step;
-                        self.schedule.run_inputs(world, resources);
-                        self.schedule.run_sim(world, resources);
-                        resources.time.sim_accumulator -= resources.time.sim_target_step;
-                    }
-
-                    self.schedule.run_render(world, resources);
-
-                    let elapsed = frame_start.elapsed();
-                    if elapsed < Duration::from_secs_f32(resources.time.target_frametime) {
-                        thread::sleep(
-                            Duration::from_secs_f32(resources.time.target_frametime) - elapsed,
-                        );
-                    }
-                }
-
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let Some(resources) = self.resources.as_mut() else {
                     return;
@@ -174,28 +135,34 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                let Some(resources) = self.resources.as_mut() else {
-                    return;
-                };
-                match button {
-                    winit::event::MouseButton::Left => {
-                        resources.mouse.left_pressed = state == ElementState::Pressed;
+                if let Some(resources) = self.resources.as_mut() {
+                    let mouse = &mut resources.mouse;
+                    match button {
+                        winit::event::MouseButton::Left => {
+                            let pressed = state == ElementState::Pressed;
+                            mouse.left_just_pressed = pressed && !mouse.left_pressed;
+                            mouse.left_just_released = !pressed && mouse.left_pressed;
+                            mouse.left_pressed = pressed;
+                        }
+                        winit::event::MouseButton::Right => {
+                            let pressed = state == ElementState::Pressed;
+                            mouse.right_just_pressed = pressed && !mouse.right_pressed;
+                            mouse.right_just_released = !pressed && mouse.right_pressed;
+                            mouse.right_pressed = pressed;
+                        }
+                        winit::event::MouseButton::Middle => {
+                            let pressed = state == ElementState::Pressed;
+                            mouse.middle_pressed = pressed;
+                            mouse.last_pos = None;
+                        }
+                        winit::event::MouseButton::Back => {
+                            mouse.back_pressed = state == ElementState::Pressed;
+                        }
+                        winit::event::MouseButton::Forward => {
+                            mouse.forward_pressed = state == ElementState::Pressed;
+                        }
+                        _ => {}
                     }
-                    winit::event::MouseButton::Middle => {
-                        let pressed = state == ElementState::Pressed;
-                        resources.mouse.middle_pressed = pressed;
-                        resources.mouse.last_pos = None;
-                    }
-                    winit::event::MouseButton::Right => {
-                        resources.mouse.right_pressed = state == ElementState::Pressed;
-                    }
-                    winit::event::MouseButton::Back => {
-                        resources.mouse.back_pressed = state == ElementState::Pressed;
-                    }
-                    winit::event::MouseButton::Forward => {
-                        resources.mouse.forward_pressed = state == ElementState::Pressed;
-                    }
-                    _ => {}
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -245,6 +212,50 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::Resized(size) => {
+                if let Some(resources) = self.resources.as_mut() {
+                    resources.renderer.resize(size);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let (Some(world), Some(resources)) =
+                    (self.world.as_mut(), self.resources.as_mut())
+                {
+                    let frame_start = Instant::now();
+
+                    // update render time
+                    resources.time.update_render();
+
+                    // simulate time independent of render fps
+                    resources.time.update_sim();
+                    resources.time.sim_accumulator += resources.time.sim_dt;
+
+                    while resources.time.sim_accumulator >= resources.time.sim_target_step {
+                        resources.time.sim_dt = resources.time.sim_target_step;
+                        self.schedule.run_inputs(world, resources);
+                        self.schedule.run_sim(world, resources);
+                        resources.time.sim_accumulator -= resources.time.sim_target_step;
+                    }
+
+                    self.schedule.run_render(world, resources);
+
+                    let elapsed = frame_start.elapsed();
+                    if elapsed < Duration::from_secs_f32(resources.time.target_frametime) {
+                        thread::sleep(
+                            Duration::from_secs_f32(resources.time.target_frametime) - elapsed,
+                        );
+                    }
+                }
+
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+
+                if let Some(resources) = self.resources.as_mut() {
+                    resources.mouse.update_just_states();
+                }
+            }
+
             _ => {}
         }
     }

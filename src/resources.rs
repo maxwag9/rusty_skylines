@@ -149,6 +149,11 @@ pub struct MouseState {
     pub right_pressed: bool,
     pub back_pressed: bool,
     pub forward_pressed: bool,
+
+    pub left_just_pressed: bool,
+    pub left_just_released: bool,
+    pub right_just_pressed: bool,
+    pub right_just_released: bool,
 }
 
 impl MouseState {
@@ -161,7 +166,20 @@ impl MouseState {
             right_pressed: false,
             back_pressed: false,
             forward_pressed: false,
+
+            left_just_pressed: false,
+            left_just_released: false,
+            right_just_pressed: false,
+            right_just_released: false,
         }
+    }
+
+    pub fn update_just_states(&mut self) {
+        // Reset per-frame flags
+        self.left_just_pressed = false;
+        self.left_just_released = false;
+        self.right_just_pressed = false;
+        self.right_just_released = false;
     }
 }
 

@@ -223,6 +223,7 @@ pub struct UiButtonCircle {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircleOutline {
     pub id: Option<String>,
+    pub parent_id: Option<String>,
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
