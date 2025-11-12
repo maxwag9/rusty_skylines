@@ -46,16 +46,21 @@ jobs:
           OUTDIR="artifacts/${{ matrix.os }}"
           mkdir -p "$OUTDIR"
 
-          # Copy main executable
-          cp target/${{ matrix.target }}/release/${GAME_NAME,,}${{ matrix.ext }} "$OUTDIR/" || cp target/${{ matrix.target }}/release/*.${{ matrix.ext#'.' }} "$OUTDIR/" || true
+          # Copy the compiled binary (try to detect filename automatically)
+          BIN_PATH="target/${{ matrix.target }}/release"
+          if [ "${{ matrix.ext }}" = ".exe" ]; then
+            find "$BIN_PATH" -maxdepth 1 -type f -name "*.exe" -exec cp {} "$OUTDIR/" \;
+          else
+            find "$BIN_PATH" -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" ! -name "*.exe" -perm -u+x -exec cp {} "$OUTDIR/" \;
+          fi
 
-          # Optional: copy assets if your game needs them
+          # Copy assets if present
           if [ -d "assets" ]; then cp -r assets "$OUTDIR/"; fi
 
-          # Create compressed archive (ZIP for Windows, tar.gz otherwise)
+          # Create compressed archive
           cd artifacts
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            7z a "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.zip" "${{ matrix.os }}"
+            zip -r "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.zip" "${{ matrix.os }}"
           else
             tar -czf "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.tar.gz" "${{ matrix.os }}"
           fi
