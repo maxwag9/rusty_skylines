@@ -1,0 +1,97 @@
+name: Build & Release Rust Game
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag name for release (e.g. v1.0.0a)"
+        required: true
+
+jobs:
+  build:
+    name: Build for all platforms
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            ext: ""
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          GAME_NAME="RustySkylines"
+          VERSION="${{ github.event.inputs.release_tag }}"
+          OUTDIR="artifacts/${{ matrix.os }}"
+          mkdir -p "$OUTDIR"
+
+          # Copy main executable
+          cp target/${{ matrix.target }}/release/${GAME_NAME,,}${{ matrix.ext }} "$OUTDIR/" || cp target/${{ matrix.target }}/release/*.${{ matrix.ext#'.' }} "$OUTDIR/" || true
+
+          # Optional: copy assets if your game needs them
+          if [ -d "assets" ]; then cp -r assets "$OUTDIR/"; fi
+
+          # Create compressed archive (ZIP for Windows, tar.gz otherwise)
+          cd artifacts
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            7z a "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.zip" "${{ matrix.os }}"
+          else
+            tar -czf "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.tar.gz" "${{ matrix.os }}"
+          fi
+          cd ..
+
+      - name: Upload compressed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-package
+          path: |
+            RustySkylines_${{ github.event.inputs.release_tag }}_${{ matrix.os }}.zip
+            RustySkylines_${{ github.event.inputs.release_tag }}_${{ matrix.os }}.tar.gz
+          if-no-files-found: ignore
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather release notes
+        id: notes
+        run: |
+          DESC=$(git log -1 --pretty=%B | sed 's/"/\\"/g')
+          echo "desc=$DESC" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: RustySkylines ${{ github.event.inputs.release_tag }}
+          body: ${{ steps.notes.outputs.desc }}
+          files: artifacts/**/*.zip,artifacts/**/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
