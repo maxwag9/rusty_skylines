@@ -132,6 +132,13 @@ impl ApplicationHandler for App {
                     if let Key::Named(winit::keyboard::NamedKey::F5) = &event.logical_key {
                         resources.renderer.core.cycle_msaa();
                     }
+                    if let Key::Named(winit::keyboard::NamedKey::F6) = &event.logical_key {
+                        resources.settings.editor_mode = !resources.settings.editor_mode;
+                        resources
+                            .ui_loader
+                            .ui_runtime
+                            .update_editor_mode(resources.settings.editor_mode);
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -196,18 +203,36 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let Some(world) = self.world.as_mut() else {
-                    return;
-                };
-                let entity = world.main_camera();
-                let radius = world.camera(entity).map(|c| c.radius).unwrap_or(1.0);
-                if let Some(controller) = world.camera_controller_mut(entity) {
+                let mut editor_mode = false;
+                if let Some(resources) = self.resources.as_mut() {
+                    editor_mode = resources.settings.editor_mode;
+                    let mouse = &mut resources.mouse;
                     match delta {
-                        MouseScrollDelta::LineDelta(_, y) => {
-                            controller.zoom_velocity -= y * 1.0 * radius;
+                        MouseScrollDelta::LineDelta(x, y) => {
+                            mouse.scroll_delta.x += x;
+                            mouse.scroll_delta.y += y;
                         }
                         MouseScrollDelta::PixelDelta(pos) => {
-                            controller.zoom_velocity -= pos.y as f32 * 0.04 * radius;
+                            mouse.scroll_delta.x += pos.x as f32 * 0.1;
+                            mouse.scroll_delta.y += pos.y as f32 * 0.1;
+                        }
+                    }
+                }
+                if !editor_mode {
+                    let Some(world) = self.world.as_mut() else {
+                        return;
+                    };
+
+                    let entity = world.main_camera();
+                    let radius = world.camera(entity).map(|c| c.radius).unwrap_or(1.0);
+                    if let Some(controller) = world.camera_controller_mut(entity) {
+                        match delta {
+                            MouseScrollDelta::LineDelta(_, y) => {
+                                controller.zoom_velocity -= y * 1.0 * radius;
+                            }
+                            MouseScrollDelta::PixelDelta(pos) => {
+                                controller.zoom_velocity -= pos.y as f32 * 0.04 * radius;
+                            }
                         }
                     }
                 }

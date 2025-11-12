@@ -6,3 +6,5 @@ target_tps = 60.0
 
 # Available modes: "Fifo", "Mailbox" (<-best for everything!), "Immediate"
 present_mode = "Mailbox"
+
+editor_mode = true

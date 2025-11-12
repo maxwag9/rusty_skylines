@@ -24,6 +24,7 @@ pub struct Resources {
 impl Resources {
     pub fn new(window: Arc<Window>) -> Self {
         let settings = Settings::load("src/settings.toml");
+        let editor_mode = settings.editor_mode.clone();
         let renderer = Renderer::new(window.clone());
         Self {
             settings,
@@ -32,7 +33,7 @@ impl Resources {
             mouse: MouseState::new(),
             renderer,
             simulation: Simulation::new(),
-            ui_loader: UiButtonLoader::new(),
+            ui_loader: UiButtonLoader::new(editor_mode),
             events: Events::new(),
             window,
         }
@@ -154,6 +155,8 @@ pub struct MouseState {
     pub left_just_released: bool,
     pub right_just_pressed: bool,
     pub right_just_released: bool,
+
+    pub scroll_delta: Vec2,
 }
 
 impl MouseState {
@@ -171,6 +174,8 @@ impl MouseState {
             left_just_released: false,
             right_just_pressed: false,
             right_just_released: false,
+
+            scroll_delta: Vec2::ZERO,
         }
     }
 
@@ -180,6 +185,7 @@ impl MouseState {
         self.left_just_released = false;
         self.right_just_pressed = false;
         self.right_just_released = false;
+        self.scroll_delta = Vec2::ZERO;
     }
 }
 

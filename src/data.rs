@@ -7,6 +7,7 @@ pub struct Settings {
     pub target_tps: f32,
 
     pub present_mode: String, // "Fifo", "Mailbox", or "Immediate"
+    pub editor_mode: bool,
 }
 
 impl Default for Settings {
@@ -16,6 +17,8 @@ impl Default for Settings {
             target_tps: 60.0,
 
             present_mode: "Mailbox".to_string(),
+
+            editor_mode: false,
         }
     }
 }

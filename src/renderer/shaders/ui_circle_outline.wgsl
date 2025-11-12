@@ -81,7 +81,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let crb = c.center_radius_border;
     let center = crb.xy;
     let radius = crb.z;
-    let hundredth_radius = radius * 0.01;
+    let hundredth_radius = radius * 0.015;
     let thickness = crb.w * hundredth_radius;
 
     // --- main dash pattern setup ---

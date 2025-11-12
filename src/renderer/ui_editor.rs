@@ -108,13 +108,17 @@ pub struct ButtonRuntime {
 pub struct UiRuntime {
     pub elements: HashMap<String, ButtonRuntime>,
     pub selected_ui_element: SelectedUiElement,
+    pub drag_offset: Option<(f32, f32)>,
+    pub editor_mode: bool,
 }
 
 impl UiRuntime {
-    pub fn new() -> Self {
+    pub fn new(editor_mode: bool) -> Self {
         Self {
             elements: HashMap::new(),
             selected_ui_element: SelectedUiElement::default(),
+            drag_offset: None,
+            editor_mode,
         }
     }
 
@@ -123,7 +127,7 @@ impl UiRuntime {
         id: &str,
         touched_now: bool,
         dt: f32,
-        layer_name: &String,
+        _layer_name: &String,
     ) -> TouchState {
         let entry = self
             .elements
@@ -153,13 +157,17 @@ impl UiRuntime {
         }
     }
 
+    pub fn update_editor_mode(&mut self, editor_mode: bool) {
+        self.editor_mode = editor_mode;
+    }
+
     pub fn get(&self, id: &str) -> ButtonRuntime {
         *self.elements.get(id).unwrap_or(&ButtonRuntime::default())
     }
 }
 
 impl UiButtonLoader {
-    pub fn new() -> Self {
+    pub fn new(editor_mode: bool) -> Self {
         let layout = Self::load_gui_from_file("ui_data/gui_layout.json").unwrap_or_else(|e| {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { layers: vec![] }
@@ -167,7 +175,7 @@ impl UiButtonLoader {
 
         let mut loader = Self {
             layers: Vec::new(),
-            ui_runtime: UiRuntime::new(),
+            ui_runtime: UiRuntime::new(editor_mode),
             id_lookup: HashMap::new(),
         };
 
@@ -246,16 +254,21 @@ impl UiButtonLoader {
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32) {
         let mut trigger_selection = false;
         let mut pending_circle_updates: Vec<(String, f32, f32)> = Vec::new();
+        let mut moved_any_circle = false;
 
         // Cache mouse state
         let mx = mouse.pos.x;
         let my = mouse.pos.y;
         let pressed = mouse.left_pressed;
         let just_pressed = mouse.left_just_pressed;
-        let just_released = mouse.left_just_released;
+        //let just_released = mouse.left_just_released;
+        let scroll = mouse.scroll_delta.y;
+
+        // Current mode
+        let editor_mode = self.ui_runtime.editor_mode;
 
         // ============================================================
-        // 1) PRE-PASS: did THIS click start on any UI element?
+        // 1) PRE-PASS: detect clicks (shared between modes)
         // ============================================================
         let mut press_began_on_ui = false;
         if just_pressed {
@@ -272,11 +285,13 @@ impl UiButtonLoader {
                         break 'outer_scan;
                     }
                 }
-                // rectangles
+
+                // rectangles (includes future buttons)
                 for r in &layer.rectangles {
                     if !r.misc.active {
                         continue;
                     }
+
                     let verts = [
                         r.top_left_vertex.pos,
                         r.bottom_left_vertex.pos,
@@ -296,39 +311,41 @@ impl UiButtonLoader {
                         || mouse_pos[1] < min_y
                         || mouse_pos[1] > max_y
                     {
-                        // not in AABB, skip
+                        continue;
+                    }
+
+                    let is_rounded = helper::has_roundness(&vertices_struct);
+                    let inside = if !is_rounded && helper::is_axis_aligned_rect(&verts) {
+                        mouse_pos[0] >= min_x
+                            && mouse_pos[0] <= max_x
+                            && mouse_pos[1] >= min_y
+                            && mouse_pos[1] <= max_y
+                    } else if is_rounded {
+                        let radius = vertices_struct
+                            .iter()
+                            .map(|v| v.roundness)
+                            .fold(0.0, f32::max);
+                        helper::is_point_in_rounded_rect(mouse_pos, &verts, radius)
                     } else {
-                        let is_rounded = helper::has_roundness(&vertices_struct);
-                        let inside = if !is_rounded && helper::is_axis_aligned_rect(&verts) {
-                            mouse_pos[0] >= min_x
-                                && mouse_pos[0] <= max_x
-                                && mouse_pos[1] >= min_y
-                                && mouse_pos[1] <= max_y
-                        } else if is_rounded {
-                            let radius = vertices_struct
-                                .iter()
-                                .map(|v| v.roundness)
-                                .fold(0.0, f32::max);
-                            helper::is_point_in_rounded_rect(mouse_pos, &verts, radius)
-                        } else {
-                            helper::is_point_in_quad(mouse_pos, &verts)
-                        };
-                        if inside {
-                            press_began_on_ui = true;
-                            break 'outer_scan;
-                        }
+                        helper::is_point_in_quad(mouse_pos, &verts)
+                    };
+
+                    if inside {
+                        press_began_on_ui = true;
+                        break 'outer_scan;
                     }
                 }
-                // handles: start only if inside the visible band
+
+                // handles       -
                 for h in &layer.handles {
-                    if !h.misc.active {
+                    if !h.misc.active || !editor_mode {
                         continue;
                     }
                     let dx = mx - h.x;
                     let dy = my - h.y;
                     let dist2 = dx * dx + dy * dy;
 
-                    let width_ratio = h.handle_misc.handle_width; // fraction of radius
+                    let width_ratio = h.handle_misc.handle_width;
                     let half_thick = 0.5 * h.radius * width_ratio;
                     let inner = h.radius - half_thick;
                     let outer = h.radius + half_thick;
@@ -343,39 +360,157 @@ impl UiButtonLoader {
                 }
             }
         }
-        // println!("2: {:?} {:?}", just_pressed, press_began_on_ui);
-        if just_pressed && !press_began_on_ui {
-            // Released after a click that began on empty space -> deselect
-            self.ui_runtime.selected_ui_element.active = false;
-            println!("2: {:?}", self.ui_runtime.selected_ui_element);
-            self.update_selection();
-        }
-        // ============================================================
-        // 2) MAIN PASS: update touches, selection and handle drags
-        // ============================================================
-        for layer_index in 0..self.layers.len() {
-            let (_before, layer_rest) = self.layers.split_at_mut(layer_index);
-            let (layer, _after) = layer_rest.split_first_mut().unwrap();
 
-            if !layer.active {
-                continue;
+        if just_pressed && !press_began_on_ui && editor_mode {
+            // Prevent accidental deselection if near a handle
+            let mut near_handle = false;
+            for layer in self.layers.iter().filter(|l| l.active) {
+                for h in &layer.handles {
+                    if !h.misc.active {
+                        continue;
+                    }
+                    let dx = mx - h.x;
+                    let dy = my - h.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let margin = (h.radius * 0.2).max(12.0);
+                    if (dist - h.radius).abs() < margin {
+                        near_handle = true;
+                        break;
+                    }
+                }
+                if near_handle {
+                    break;
+                }
             }
 
-            // --- circles ---
-            for c in &layer.circles {
-                if !c.misc.active {
+            if !near_handle {
+                self.ui_runtime.selected_ui_element.active = false;
+                self.update_selection();
+            }
+        }
+
+        // ============================================================
+        // 2) EDITOR-ONLY interactions (drag, resize, etc.)
+        // ============================================================
+        if editor_mode {
+            for layer_index in 0..self.layers.len() {
+                let (_before, layer_rest) = self.layers.split_at_mut(layer_index);
+                let (layer, _after) = layer_rest.split_first_mut().unwrap();
+
+                if !layer.active {
                     continue;
                 }
-                let dx = mx - c.x;
-                let dy = my - c.y;
-                let touched_now = dx * dx + dy * dy <= c.radius * c.radius && just_pressed;
 
-                if let Some(id) = &c.id {
-                    match self
-                        .ui_runtime
-                        .update_touch(id, touched_now, dt, &layer.name)
+                // --- circles (draggable, identical behavior restored) ---
+                for c in &mut layer.circles {
+                    if !c.misc.active {
+                        continue;
+                    }
+
+                    let dx = mx - c.x;
+                    let dy = my - c.y;
+
+                    let drag_radius = (c.radius * 0.8).max(8.0);
+                    let inside = dx * dx + dy * dy <= drag_radius * drag_radius;
+
+                    if let Some(id) = &c.id {
+                        let runtime = self.ui_runtime.get(id);
+                        let touched_now = if !runtime.is_down {
+                            inside && just_pressed
+                        } else {
+                            pressed
+                        };
+
+                        let state = self
+                            .ui_runtime
+                            .update_touch(id, touched_now, dt, &layer.name);
+
+                        match state {
+                            TouchState::Pressed => {
+                                // Store grab offset so it doesn’t snap to mouse center
+                                self.ui_runtime.drag_offset = Some((mx - c.x, my - c.y));
+                            }
+                            TouchState::Held => {
+                                let (ox, oy) = self.ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
+                                let new_x = mx - ox;
+                                let new_y = my - oy;
+
+                                if (new_x - c.x).abs() > 0.001 || (new_y - c.y).abs() > 0.001 {
+                                    c.x = new_x;
+                                    c.y = new_y;
+                                    layer.dirty = true;
+                                    moved_any_circle = true;
+                                }
+                            }
+                            TouchState::Released => {
+                                self.ui_runtime.drag_offset = None;
+                                trigger_selection = true;
+                                self.ui_runtime.selected_ui_element = SelectedUiElement {
+                                    layer_name: layer.name.clone(),
+                                    element_id: id.clone(),
+                                    active: true,
+                                };
+                            }
+                            TouchState::Idle => {}
+                        }
+                    }
+                }
+
+                // --- rectangles (for editor interactions) ---
+                for r in &layer.rectangles {
+                    if !r.misc.active {
+                        continue;
+                    }
+
+                    let verts = [
+                        r.top_left_vertex.pos,
+                        r.bottom_left_vertex.pos,
+                        r.bottom_right_vertex.pos,
+                        r.top_right_vertex.pos,
+                    ];
+                    let vertices_struct = [
+                        r.top_left_vertex,
+                        r.bottom_left_vertex,
+                        r.bottom_right_vertex,
+                        r.top_right_vertex,
+                    ];
+                    let mouse_pos = [mx, my];
+                    let (min_x, min_y, max_x, max_y) = helper::get_aabb(&verts);
+                    let mut inside = false;
+                    if !(mouse_pos[0] < min_x
+                        || mouse_pos[0] > max_x
+                        || mouse_pos[1] < min_y
+                        || mouse_pos[1] > max_y)
                     {
-                        TouchState::Released => {
+                        let is_rounded = helper::has_roundness(&vertices_struct);
+                        inside = if !is_rounded && helper::is_axis_aligned_rect(&verts) {
+                            mouse_pos[0] >= min_x
+                                && mouse_pos[0] <= max_x
+                                && mouse_pos[1] >= min_y
+                                && mouse_pos[1] <= max_y
+                        } else if is_rounded {
+                            let radius = vertices_struct
+                                .iter()
+                                .map(|v| v.roundness)
+                                .fold(0.0, f32::max);
+                            helper::is_point_in_rounded_rect(mouse_pos, &verts, radius)
+                        } else {
+                            helper::is_point_in_quad(mouse_pos, &verts)
+                        };
+                    }
+
+                    if let Some(id) = &r.id {
+                        let runtime = self.ui_runtime.get(id);
+                        let touched_now = if !runtime.is_down {
+                            inside && just_pressed
+                        } else {
+                            pressed
+                        };
+
+                        if let TouchState::Released =
+                            self.ui_runtime
+                                .update_touch(id, touched_now, dt, &layer.name)
+                        {
                             trigger_selection = true;
                             self.ui_runtime.selected_ui_element = SelectedUiElement {
                                 layer_name: layer.name.clone(),
@@ -383,204 +518,154 @@ impl UiButtonLoader {
                                 active: true,
                             };
                         }
-                        _ => {}
                     }
                 }
-            }
 
-            // --- rectangles ---
-            for r in &layer.rectangles {
-                if !r.misc.active {
-                    continue;
-                }
+                // --- handles (resize, original sticky logic restored) ---
+                for h in &mut layer.handles {
+                    if !h.misc.active {
+                        continue;
+                    }
 
-                let verts = [
-                    r.top_left_vertex.pos,
-                    r.bottom_left_vertex.pos,
-                    r.bottom_right_vertex.pos,
-                    r.top_right_vertex.pos,
-                ];
-                let vertices_struct = [
-                    r.top_left_vertex,
-                    r.bottom_left_vertex,
-                    r.bottom_right_vertex,
-                    r.top_right_vertex,
-                ];
+                    let dx = mx - h.x;
+                    let dy = my - h.y;
+                    let dist2 = dx * dx + dy * dy;
 
-                let mouse_pos = [mx, my];
-                let (min_x, min_y, max_x, max_y) = helper::get_aabb(&verts);
-                let mut inside = false;
-                if !(mouse_pos[0] < min_x
-                    || mouse_pos[0] > max_x
-                    || mouse_pos[1] < min_y
-                    || mouse_pos[1] > max_y)
-                {
-                    let is_rounded = helper::has_roundness(&vertices_struct);
-                    inside = if !is_rounded && helper::is_axis_aligned_rect(&verts) {
-                        mouse_pos[0] >= min_x
-                            && mouse_pos[0] <= max_x
-                            && mouse_pos[1] >= min_y
-                            && mouse_pos[1] <= max_y
-                    } else if is_rounded {
-                        let radius = vertices_struct
-                            .iter()
-                            .map(|v| v.roundness)
-                            .fold(0.0, f32::max);
-                        helper::is_point_in_rounded_rect(mouse_pos, &verts, radius)
-                    } else {
-                        helper::is_point_in_quad(mouse_pos, &verts)
-                    };
-                }
+                    let width_ratio = h.handle_misc.handle_width;
+                    let half_thick = 0.5 * h.radius * width_ratio;
+                    let inner = h.radius - half_thick;
+                    let outer = h.radius + half_thick;
+                    // Expand the grab zone by a constant margin (in pixels)
+                    let margin = (h.radius * 0.15).max(10.0); // 15% of radius, at least 10 px
+                    let inner_grab = (inner - margin).max(0.0);
+                    let outer_grab = outer + margin;
+                    let inside_band =
+                        dist2 >= inner_grab * inner_grab && dist2 <= outer_grab * outer_grab;
 
-                if let Some(id) = &r.id {
-                    // Make rectangles behave like handles: start only on just_pressed,
-                    // then stay active while held if this rectangle already had the grab.
-                    let runtime = self.ui_runtime.get(id);
+                    let runtime = self.ui_runtime.get(h.id.as_ref().unwrap());
                     let touched_now = if !runtime.is_down {
-                        inside && just_pressed
+                        inside_band && just_pressed
                     } else {
-                        // continue only while the mouse is still down
                         pressed
                     };
 
-                    if let TouchState::Released =
-                        self.ui_runtime
-                            .update_touch(id, touched_now, dt, &layer.name)
-                    {
-                        trigger_selection = true;
-                        self.ui_runtime.selected_ui_element = SelectedUiElement {
-                            layer_name: layer.name.clone(),
-                            element_id: id.clone(),
-                            active: true,
-                        };
-                    }
-                }
-            }
+                    if let Some(id) = &h.id {
+                        let state = self
+                            .ui_runtime
+                            .update_touch(id, touched_now, dt, &layer.name);
 
-            // --- handles (sticky once grabbed; must start on band) ---
-            for h in &mut layer.handles {
-                if !h.misc.active {
-                    continue;
-                }
-
-                let dx = mx - h.x;
-                let dy = my - h.y;
-                let dist2 = dx * dx + dy * dy;
-
-                let width_ratio = h.handle_misc.handle_width;
-                let half_thick = 0.5 * h.radius * width_ratio;
-                let inner = h.radius - half_thick;
-                let outer = h.radius + half_thick;
-                let inner2 = inner * inner;
-                let outer2 = outer * outer;
-
-                let inside_band = dist2 >= inner2 && dist2 <= outer2;
-
-                let runtime = self.ui_runtime.get(h.id.as_ref().unwrap());
-                let touched_now = if !runtime.is_down {
-                    // only start grab when the mouse was just pressed over the handle
-                    inside_band && just_pressed
-                } else {
-                    // once grabbed, stay active as long as the button is held
-                    pressed
-                };
-
-                if let Some(id) = &h.id {
-                    let state = self
-                        .ui_runtime
-                        .update_touch(id, touched_now, dt, &layer.name);
-
-                    if let Some(parent_id) = &h.parent_id {
-                        match state {
-                            TouchState::Held => {
-                                pending_circle_updates.push((parent_id.clone(), mx, my));
+                        if let Some(parent_id) = &h.parent_id {
+                            match state {
+                                TouchState::Held => {
+                                    pending_circle_updates.push((parent_id.clone(), mx, my));
+                                }
+                                TouchState::Released => {}
+                                TouchState::Pressed => {}
+                                TouchState::Idle => {}
                             }
-                            TouchState::Released => {}
-                            TouchState::Pressed => {}
-                            TouchState::Idle => {}
                         }
                     }
                 }
             }
-        }
 
-        // ============================================================
-        // 3) Apply deferred handle-driven radius updates (smoothed)
-        // ============================================================
-        for (parent_id, mx, my) in pending_circle_updates {
-            let mut target_radius = 0.0f32;
-            let mut current_radius = 0.0f32;
-            let mut layer_name: Option<String> = None;
-            let mut cx = 0.0f32;
-            let mut cy = 0.0f32;
+            // ============================================================
+            // Apply deferred handle-driven radius updates
+            // ============================================================
+            for (parent_id, mx, my) in pending_circle_updates {
+                let mut target_radius = 0.0f32;
+                let mut current_radius = 0.0f32;
+                let mut layer_name: Option<String> = None;
+                let mut cx = 0.0f32;
+                let mut cy = 0.0f32;
 
-            for layer in &mut self.layers {
-                for c in &mut layer.circles {
-                    if let Some(id) = &c.id {
-                        if id == &parent_id {
-                            current_radius = c.radius;
-                            cx = c.x;
-                            cy = c.y;
-                            // absolute distance ensures we always get positive radius
-                            target_radius = ((mx - cx).powi(2) + (my - cy).powi(2)).sqrt();
-                            layer_name = Some(layer.name.clone());
-                            break;
-                        }
-                    }
-                }
-                if layer_name.is_some() {
-                    break;
-                }
-            }
-
-            if let Some(layer_name) = layer_name {
-                // --- smoothing ---
-                let smoothing_speed = 10.0;
-                let dt_effective = dt.clamp(1.0 / 240.0, 0.1);
-                let k = 1.0 - (-smoothing_speed * dt_effective).exp();
-
-                // Smooth radius, absolute, and clamp to a reasonable minimum
-                let new_radius = (current_radius + (target_radius - current_radius) * k)
-                    .abs()
-                    .max(2.0); // avoid collapse at center
-
-                // Update the parent circle
                 for layer in &mut self.layers {
                     for c in &mut layer.circles {
                         if let Some(id) = &c.id {
                             if id == &parent_id {
-                                c.radius = new_radius;
+                                current_radius = c.radius;
+                                cx = c.x;
+                                cy = c.y;
+                                target_radius = ((mx - cx).powi(2) + (my - cy).powi(2)).sqrt();
+                                layer_name = Some(layer.name.clone());
+                                break;
                             }
                         }
+                    }
+                    if layer_name.is_some() {
+                        break;
                     }
                 }
 
-                // Update handles + outlines
-                for layer in &mut self.layers {
-                    for h in &mut layer.handles {
-                        if let Some(pid) = &h.parent_id {
-                            if pid == &parent_id {
-                                h.radius = new_radius;
-                                layer.dirty = true;
-                            }
-                        }
-                    }
-                    for o in &mut layer.circle_outlines {
-                        if let Some(pid) = &o.parent_id {
-                            if pid == &parent_id {
-                                o.radius = new_radius;
-                                layer.dirty = true;
-                            }
-                        }
-                    }
-                }
+                if let Some(layer_name) = layer_name {
+                    let smoothing_speed = 10.0;
+                    let dt_effective = dt.clamp(1.0 / 240.0, 0.1);
+                    let k = 1.0 - (-smoothing_speed * dt_effective).exp();
+                    let new_radius = (current_radius + (target_radius - current_radius) * k)
+                        .abs()
+                        .max(2.0);
 
-                self.mark_layer_dirty(&layer_name);
+                    for layer in &mut self.layers {
+                        for c in &mut layer.circles {
+                            if let Some(id) = &c.id {
+                                if id == &parent_id {
+                                    c.radius = new_radius;
+                                }
+                            }
+                        }
+                    }
+
+                    for layer in &mut self.layers {
+                        for h in &mut layer.handles {
+                            if let Some(pid) = &h.parent_id {
+                                if pid == &parent_id {
+                                    h.radius = new_radius;
+                                    layer.dirty = true;
+                                }
+                            }
+                        }
+                        for o in &mut layer.circle_outlines {
+                            if let Some(pid) = &o.parent_id {
+                                if pid == &parent_id {
+                                    o.radius = new_radius;
+                                    layer.dirty = true;
+                                }
+                            }
+                        }
+                    }
+
+                    self.mark_layer_dirty(&layer_name);
+                }
             }
-        }
 
+            if moved_any_circle {
+                for layer in &mut self.layers {
+                    if layer.name == "editor_selection" || layer.name == "editor_handles" {
+                        layer.dirty = true;
+                    }
+                }
+                trigger_selection = true;
+            }
+
+            // Scroll-wheel resize (editor only)
+            if self.ui_runtime.selected_ui_element.active && scroll.abs() > 0.0 {
+                for layer in &mut self.layers {
+                    for c in &mut layer.circles {
+                        if let Some(id) = &c.id {
+                            if *id == self.ui_runtime.selected_ui_element.element_id {
+                                c.radius = (c.radius + scroll * 3.0).max(2.0);
+                                layer.dirty = true;
+                                trigger_selection = true;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if self.ui_runtime.selected_ui_element.active {
+            self.ui_runtime.selected_ui_element.active = false;
+            self.update_selection();
+        }
         // ============================================================
-        // 4) Selection / deselection
+        // 3) Selection / deselection
         // ============================================================
         if trigger_selection {
             self.update_selection();
@@ -716,20 +801,20 @@ impl UiButtonLoader {
                         };
                         editor_layer.handles.push(handle);
                     }
-                    UiElement::Handle(h) => {}
-                    UiElement::Rectangle(r) => {
+                    UiElement::Handle(_h) => {}
+                    UiElement::Rectangle(_r) => {
                         //r. = [1.0, 0.8, 0.2, 0.7];
                         //editor_layer.rectangles.push(r);
                     }
-                    UiElement::Triangle(t) => {
+                    UiElement::Triangle(_t) => {
                         //t.misc.color = [1.0, 1.0, 0.2, 0.7];
                         //editor_layer.triangles.push(t);
                     }
-                    UiElement::Polygon(p) => {
+                    UiElement::Polygon(_p) => {
                         //p.misc.color = [1.0, 0.7, 0.1, 0.7];
                         //editor_layer.polygons.push(p);
                     }
-                    UiElement::Text(mut tx) => {
+                    UiElement::Text(_tx) => {
                         //tx.color = [1.0, 1.0, 0.0, 1.0];
                         //tx.misc.active = true;
                         //editor_layer.texts.push(tx);
