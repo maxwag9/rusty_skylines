@@ -35,10 +35,10 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: |
-          cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare artifacts
+      - name: Prepare artifacts (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           GAME_NAME="RustySkylines"
@@ -46,25 +46,29 @@ jobs:
           OUTDIR="artifacts/${{ matrix.os }}"
           mkdir -p "$OUTDIR"
 
-          # Copy the compiled binary (try to detect filename automatically)
           BIN_PATH="target/${{ matrix.target }}/release"
-          if [ "${{ matrix.ext }}" = ".exe" ]; then
-            find "$BIN_PATH" -maxdepth 1 -type f -name "*.exe" -exec cp {} "$OUTDIR/" \;
-          else
-            find "$BIN_PATH" -maxdepth 1 -type f ! -name "*.d" ! -name "*.rlib" ! -name "*.exe" -perm -u+x -exec cp {} "$OUTDIR/" \;
-          fi
+          find "$BIN_PATH" -maxdepth 1 -type f -perm -u+x ! -name "*.d" ! -name "*.rlib" -exec cp {} "$OUTDIR/" \;
 
-          # Copy assets if present
           if [ -d "assets" ]; then cp -r assets "$OUTDIR/"; fi
 
-          # Create compressed archive
           cd artifacts
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            zip -r "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.zip" "${{ matrix.os }}"
-          else
-            tar -czf "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.tar.gz" "${{ matrix.os }}"
-          fi
+          tar -czf "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.tar.gz" "${{ matrix.os }}"
           cd ..
+
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $GameName = "RustySkylines"
+          $Version = "${{ github.event.inputs.release_tag }}"
+          $OutDir = "artifacts/${{ matrix.os }}"
+          New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+          $BinPath = "target/${{ matrix.target }}/release"
+          Copy-Item "$BinPath\*.exe" $OutDir -ErrorAction SilentlyContinue
+          if (Test-Path "assets") { Copy-Item -Recurse -Force "assets" $OutDir }
+
+          Compress-Archive -Path "$OutDir\*" -DestinationPath "RustySkylines_${Version}_${{ matrix.os }}.zip"
 
       - name: Upload compressed artifact
         uses: actions/upload-artifact@v4
