@@ -1,5 +1,5 @@
-use crate::renderer::helper::{make_pipeline, make_uniform_layout, rebuild_layer_cache};
-use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
+use crate::renderer::helper::{make_pipeline, make_uniform_layout};
+use crate::renderer::ui_editor::{ButtonRuntime, RuntimeLayer, UiButtonLoader};
 use crate::resources::{MouseState, TimeSystem};
 use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
@@ -47,7 +47,7 @@ pub struct UiRenderer {
     pub uniform_bind_group: BindGroup,
     pub num_vertices: u32,
     circle_pipeline: RenderPipeline,
-    circle_outline_pipeline: RenderPipeline,
+    outline_pipeline: RenderPipeline,
     polygon_pipeline: RenderPipeline,
     overlay_polygon_pipeline: RenderPipeline,
     pub circles: Vec<CircleParams>,
@@ -65,6 +65,7 @@ pub struct UiRenderer {
     pub handle_pipeline: RenderPipeline,
     pub handle_layout: BindGroupLayout,
     pub handle_quad_buffer: Buffer,
+    pub outline_layout: BindGroupLayout,
 }
 
 #[repr(C)]
@@ -93,18 +94,29 @@ impl Default for CircleParams {
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CircleOutlineParams {
-    pub(crate) center_radius_border: [f32; 4], // cx, cy, radius, thickness
+pub struct OutlineParams {
+    pub(crate) mode: f32,          // 0.0 = circle, 1.0 = polygon
+    pub(crate) vertex_offset: u32, // polygon vertices start index (ignored for circle)
+    pub(crate) vertex_count: u32,  // polygon vertex count (ignored for circle)
+    pub(crate) _pad0: u32,
+
+    pub(crate) shape_data: [f32; 4], // (cx, cy, radius, thickness_factor)
     pub(crate) dash_color: [f32; 4],
     pub(crate) dash_misc: [f32; 4], // (dash_len, dash_spacing, dash_roundness, speed)
-    pub sub_dash_color: [f32; 4],
-    pub sub_dash_misc: [f32; 4], // (dash_len, dash_spacing, dash_roundness, speed)
-    pub(crate) misc: [f32; 4],   // active, touched_time, is_touched, id_hash
+    pub(crate) sub_dash_color: [f32; 4],
+    pub(crate) sub_dash_misc: [f32; 4], // (sub_dash_len, sub_dash_spacing, sub_roundness, sub_speed)
+    pub(crate) misc: [f32; 4],          // active, touched_time, is_touched, id_hash
 }
-impl Default for CircleOutlineParams {
+
+impl Default for OutlineParams {
     fn default() -> Self {
         Self {
-            center_radius_border: [0.0; 4], // cx, cy, radius, thickness
+            mode: 0.0,
+            vertex_offset: 0,
+            vertex_count: 0,
+            _pad0: 1,
+
+            shape_data: [600.0, 600.0, 60.0, 10.0],
             dash_color: [0.0, 0.2, 0.7, 0.8],
             dash_misc: [2.0, 1.0, 1.0, 2.0], // (dash_len, dash_spacing, dash_roundness, speed)
             sub_dash_color: [0.3, 0.4, 0.5, 0.9],
@@ -156,6 +168,7 @@ impl Default for PolygonOutlineParams {
     }
 }
 
+#[derive(Debug)]
 pub struct TextParams {
     pub pos: [f32; 2],
     pub px: u16,
@@ -163,6 +176,11 @@ pub struct TextParams {
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
+}
+
+#[derive(Copy, Clone)]
+pub struct UiRuntimeView<'a> {
+    pub get: &'a dyn Fn(&str) -> ButtonRuntime,
 }
 
 impl UiRenderer {
@@ -311,8 +329,8 @@ impl UiRenderer {
         // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
         let circles = vec![CircleParams::default()];
         let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
-        let circle_outline_shader =
-            device.create_shader_module(include_wgsl!("shaders/ui_circle_outline.wgsl"));
+        let outline_shader =
+            device.create_shader_module(include_wgsl!("shaders/ui_shape_outline.wgsl"));
         let handle_shader = device.create_shader_module(include_wgsl!("shaders/ui_handle.wgsl"));
         let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Circle Layout"),
@@ -354,14 +372,47 @@ impl UiRenderer {
             alpha: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
                 dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
+                operation: BlendOperation::Add,
             },
         });
-        let circle_outline_pipeline = make_pipeline(
+        let outline_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Outline Layout"),
+            entries: &[
+                // binding 0 = ShapeParams SSBO
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 1 = PolygonVertices SSBO
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Outline Pipeline Layout"),
+            bind_group_layouts: &[&layout, &outline_layout],
+            push_constant_ranges: &[],
+        });
+
+        let outline_pipeline = make_pipeline(
             device,
-            "UI Circle Outline Pipeline",
-            &circle_pipeline_layout,
-            &circle_outline_shader,
+            "UI Outline Pipeline",
+            &outline_pipeline_layout,
+            &outline_shader,
             "vs_main",
             "fs_main",
             &[UiVertexPoly::desc()],
@@ -469,7 +520,7 @@ impl UiRenderer {
             uniform_bind_group,
             num_vertices: 0,
             circle_pipeline,
-            circle_outline_pipeline,
+            outline_pipeline,
             polygon_pipeline,
             overlay_polygon_pipeline,
             handle_pipeline,
@@ -487,6 +538,7 @@ impl UiRenderer {
             text_bind_group: None,
             text_vertex_buffer,
             text_vertex_count: 0,
+            outline_layout,
         }
     }
 
@@ -509,6 +561,7 @@ impl UiRenderer {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&new_uniform));
 
         self.update_fps_layer(ui, time);
+
         let dirty_layers: Vec<usize> = ui
             .layers
             .iter()
@@ -517,10 +570,15 @@ impl UiRenderer {
             .map(|(i, _)| i)
             .collect();
 
+        // Take a snapshot so we don't borrow ui while mutably using it
+        // immutable borrow, does not overlap
+
         for i in dirty_layers {
+            {
+                ui.rebuild_layer_cache_index(i);
+            }
+
             let layer = &mut ui.layers[i];
-            let runtime = &ui.ui_runtime;
-            rebuild_layer_cache(layer, runtime);
             self.upload_layer(queue, layer);
         }
 
@@ -551,28 +609,6 @@ impl UiRenderer {
                 pass.draw(0..4, 0..layer.gpu.circle_count);
             }
 
-            if layer.gpu.circle_outline_count > 0 {
-                let circle_outline_bg = self.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some(&format!("{}_circle_outline_bg", layer.name)),
-                    layout: &self.circle_layout,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: layer
-                            .gpu
-                            .circle_outline_ssbo
-                            .as_ref()
-                            .unwrap()
-                            .as_entire_binding(),
-                    }],
-                });
-
-                pass.set_pipeline(&self.circle_outline_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &circle_outline_bg, &[]);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.draw(0..4, 0..layer.gpu.circle_outline_count);
-            }
-
             if layer.gpu.handle_count > 0 {
                 let handle_bg = self.device.create_bind_group(&BindGroupDescriptor {
                     label: Some(&format!("{}_handle_bg", layer.name)),
@@ -598,6 +634,39 @@ impl UiRenderer {
                 pass.draw(0..layer.gpu.poly_count, 0..1);
             }
 
+            if layer.gpu.outline_count > 0 {
+                let outline_bg = self.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some(&format!("{}_outline_bg", layer.name)),
+                    layout: &self.outline_layout,
+                    entries: &[
+                        // binding 0 = shapes
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: layer
+                                .gpu
+                                .outline_shapes_ssbo
+                                .as_ref()
+                                .unwrap()
+                                .as_entire_binding(),
+                        },
+                        // binding 1 = polygon vertex buffer
+                        BindGroupEntry {
+                            binding: 1,
+                            resource: layer
+                                .gpu
+                                .outline_poly_vertices_ssbo
+                                .as_ref()
+                                .unwrap()
+                                .as_entire_binding(),
+                        },
+                    ],
+                });
+                pass.set_pipeline(&self.outline_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &outline_bg, &[]);
+                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                pass.draw(0..4, 0..layer.gpu.outline_count);
+            }
             // text
             if layer.gpu.text_count > 0 {
                 if let (Some(bind), Some(_)) = (&self.text_bind_group, &self.text_atlas) {
@@ -788,27 +857,73 @@ impl UiRenderer {
         }
         layer.gpu.circle_count = circle_len;
 
-        let circle_outline_len = layer.cache.circle_outline_params.len() as u32;
-        if circle_outline_len > 0 {
-            let bytes = bytemuck::cast_slice(&layer.cache.circle_outline_params);
+        // ---- 1. ShapeParams SSBO ----
+        let outline_len = layer.cache.outline_params.len() as u32;
+        if outline_len > 0 {
+            let bytes = bytemuck::cast_slice(&layer.cache.outline_params);
             let need_new = layer
                 .gpu
-                .circle_outline_ssbo
+                .outline_shapes_ssbo
                 .as_ref()
                 .map(|b| b.size() < bytes.len() as u64)
                 .unwrap_or(true);
+
             if need_new {
-                layer.gpu.circle_outline_ssbo =
+                layer.gpu.outline_shapes_ssbo =
                     Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some(&format!("{}_circle_outline_ssbo", layer.name)),
+                        label: Some(&format!("{}_outline_shapes_ssbo", layer.name)),
                         size: bytes.len() as u64,
                         usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     }));
             }
-            queue.write_buffer(layer.gpu.circle_outline_ssbo.as_ref().unwrap(), 0, bytes);
+
+            queue.write_buffer(layer.gpu.outline_shapes_ssbo.as_ref().unwrap(), 0, bytes);
         }
-        layer.gpu.circle_outline_count = circle_outline_len;
+        layer.gpu.outline_count = outline_len;
+
+        // ---- 2. Polygon vertex buffer (vec2<f32>) ----
+        let poly_verts = &layer.cache.outline_poly_vertices;
+        let poly_vcount = poly_verts.len() as u32;
+
+        if poly_vcount > 0 {
+            // upload real polygon vertices
+            let bytes = bytemuck::cast_slice(poly_verts);
+
+            let need_new = layer
+                .gpu
+                .outline_poly_vertices_ssbo
+                .as_ref()
+                .map(|b| b.size() < bytes.len() as u64)
+                .unwrap_or(true);
+
+            if need_new {
+                layer.gpu.outline_poly_vertices_ssbo =
+                    Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(&format!("{}_outline_poly_ssbo", layer.name)),
+                        size: bytes.len() as u64,
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+            }
+
+            queue.write_buffer(
+                layer.gpu.outline_poly_vertices_ssbo.as_ref().unwrap(),
+                0,
+                bytes,
+            );
+        } else {
+            // No polygon outlines → still must provide SOME buffer to satisfy wgpu layout
+            if layer.gpu.outline_poly_vertices_ssbo.is_none() {
+                layer.gpu.outline_poly_vertices_ssbo =
+                    Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(&format!("{}_outline_poly_dummy", layer.name)),
+                        size: 16, // one vec2<f32> worth of space
+                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    }));
+            }
+        }
 
         let handle_len = layer.cache.handle_params.len() as u32;
         if handle_len > 0 {
@@ -831,14 +946,9 @@ impl UiRenderer {
         }
         layer.gpu.handle_count = handle_len;
 
-        // ---- polygons (VBO) : rects + tris + polys concatenated ----
-        let mut poly_vertices: Vec<UiVertexPoly> = Vec::with_capacity(
-            layer.cache.rect_vertices.len()
-                + layer.cache.triangle_vertices.len()
-                + layer.cache.polygon_vertices.len(),
-        );
-        poly_vertices.extend_from_slice(&layer.cache.rect_vertices);
-        poly_vertices.extend_from_slice(&layer.cache.triangle_vertices);
+        // ---- polygons (VBO) : polys concatenated ----
+        let mut poly_vertices: Vec<UiVertexPoly> =
+            Vec::with_capacity(layer.cache.polygon_vertices.len());
         poly_vertices.extend_from_slice(&layer.cache.polygon_vertices);
 
         let poly_count = poly_vertices.len() as u32;

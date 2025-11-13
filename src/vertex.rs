@@ -22,17 +22,19 @@ impl LineVtx {
     }
 }
 
+#[derive(Debug)]
 pub struct LayerGpu {
     pub circle_ssbo: Option<Buffer>,
     pub circle_count: u32,
 
-    pub circle_outline_ssbo: Option<Buffer>,
-    pub circle_outline_count: u32,
+    pub outline_poly_vertices_ssbo: Option<Buffer>,
+    pub outline_shapes_ssbo: Option<Buffer>,
+    pub outline_count: u32,
 
     pub handle_ssbo: Option<Buffer>,
     pub handle_count: u32,
 
-    pub poly_vbo: Option<Buffer>, // rectangles + triangles + polygons in one stream
+    pub poly_vbo: Option<Buffer>, // polygons, I know, right??
     pub poly_count: u32,          // vertex count
 
     pub text_vbo: Option<Buffer>, // UiVertexText stream
@@ -44,8 +46,9 @@ impl Default for LayerGpu {
         Self {
             circle_ssbo: None,
             circle_count: 0,
-            circle_outline_ssbo: None,
-            circle_outline_count: 0,
+            outline_poly_vertices_ssbo: None,
+            outline_shapes_ssbo: None,
+            outline_count: 0,
             handle_ssbo: None,
             handle_count: 0,
             poly_vbo: None,
@@ -169,6 +172,14 @@ pub struct DashMisc {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+pub struct ShapeData {
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub border_thickness: f32,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct HandleMisc {
     pub handle_len: f32,
     pub handle_width: f32,
@@ -221,19 +232,21 @@ pub struct UiButtonCircle {
     pub misc: MiscButtonSettings,
 }
 #[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonCircleOutline {
+pub struct UiButtonOutline {
     pub id: Option<String>,
     pub parent_id: Option<String>,
-    pub x: f32,
-    pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
-    pub radius: f32,
-    pub dash_thickness: f32,
+
+    pub mode: f32, // 0 = circle, 1 = polygon
+
+    pub vertex_offset: u32,    // index into global vertex buffer
+    pub vertex_count: u32,     // how many vertices
+    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
+
     pub dash_color: [f32; 4],
     pub dash_misc: DashMisc,
     pub sub_dash_color: [f32; 4],
     pub sub_dash_misc: DashMisc,
+
     pub misc: MiscButtonSettings,
 }
 
@@ -253,27 +266,8 @@ pub struct UiButtonHandle {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonRectangle {
-    pub id: Option<String>,
-    pub top_left_vertex: UiVertex,
-    pub bottom_left_vertex: UiVertex,
-    pub top_right_vertex: UiVertex,
-    pub bottom_right_vertex: UiVertex,
-    pub misc: MiscButtonSettings,
-}
-
-#[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: Option<String>,
     pub(crate) vertices: Vec<UiVertex>,
-    pub misc: MiscButtonSettings,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonTriangle {
-    pub id: Option<String>,
-    pub top_vertex: UiVertex,
-    pub left_vertex: UiVertex,
-    pub right_vertex: UiVertex,
     pub misc: MiscButtonSettings,
 }

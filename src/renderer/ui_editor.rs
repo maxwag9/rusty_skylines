@@ -1,10 +1,9 @@
-use crate::renderer::helper;
-use crate::renderer::ui::{CircleOutlineParams, CircleParams, HandleParams, TextParams};
+use crate::renderer::helper::{point_in_polygon, polygon_edge_distance};
+use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::resources::MouseState;
 use crate::vertex::{
-    DashMisc, GuiLayout, HandleMisc, LayerGpu, MiscButtonSettings, UiButtonCircle,
-    UiButtonCircleOutline, UiButtonHandle, UiButtonPolygon, UiButtonRectangle, UiButtonText,
-    UiButtonTriangle, UiVertexPoly,
+    DashMisc, GuiLayout, HandleMisc, LayerGpu, MiscButtonSettings, ShapeData, UiButtonCircle,
+    UiButtonHandle, UiButtonOutline, UiButtonPolygon, UiButtonText, UiVertex, UiVertexPoly,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -24,22 +23,20 @@ pub struct UiLayer {
     pub order: u32,
     pub texts: Option<Vec<UiButtonText>>,
     pub circles: Option<Vec<UiButtonCircle>>,
-    pub circle_outlines: Option<Vec<UiButtonCircleOutline>>,
+    pub outlines: Option<Vec<UiButtonOutline>>,
     pub handles: Option<Vec<UiButtonHandle>>,
-    pub rectangles: Option<Vec<UiButtonRectangle>>,
-    pub triangles: Option<Vec<UiButtonTriangle>>,
     pub polygons: Option<Vec<UiButtonPolygon>>,
     pub active: Option<bool>,
     pub opaque: Option<bool>,
 }
+#[derive(Debug)]
 pub struct LayerCache {
     pub texts: Vec<TextParams>,
     pub circle_params: Vec<CircleParams>,
-    pub circle_outline_params: Vec<CircleOutlineParams>,
+    pub outline_params: Vec<OutlineParams>,
     pub handle_params: Vec<HandleParams>,
-    pub rect_vertices: Vec<UiVertexPoly>,
-    pub triangle_vertices: Vec<UiVertexPoly>,
     pub polygon_vertices: Vec<UiVertexPoly>,
+    pub outline_poly_vertices: Vec<[f32; 2]>,
 }
 #[derive(Debug, Clone, Default)]
 pub struct SelectedUiElement {
@@ -53,11 +50,10 @@ impl Default for LayerCache {
         Self {
             texts: vec![],
             circle_params: vec![],
-            circle_outline_params: vec![],
+            outline_params: vec![],
             handle_params: vec![],
-            rect_vertices: vec![],
-            triangle_vertices: vec![],
             polygon_vertices: vec![],
+            outline_poly_vertices: vec![],
         }
     }
 }
@@ -66,21 +62,18 @@ impl Default for LayerCache {
 pub enum UiElement {
     Circle(UiButtonCircle),
     Handle(UiButtonHandle),
-    Rectangle(UiButtonRectangle),
-    Triangle(UiButtonTriangle),
     Polygon(UiButtonPolygon),
     Text(UiButtonText),
 }
 
+#[derive(Debug)]
 pub struct RuntimeLayer {
     pub name: String,
     pub order: u32,
     pub texts: Vec<UiButtonText>,
     pub circles: Vec<UiButtonCircle>,
-    pub circle_outlines: Vec<UiButtonCircleOutline>,
+    pub outlines: Vec<UiButtonOutline>,
     pub handles: Vec<UiButtonHandle>,
-    pub rectangles: Vec<UiButtonRectangle>,
-    pub triangles: Vec<UiButtonTriangle>,
     pub polygons: Vec<UiButtonPolygon>,
     pub active: bool,
     // NEW: cached GPU data!!!
@@ -188,10 +181,8 @@ impl UiButtonLoader {
                 cache: Default::default(),
                 texts: l.texts.unwrap_or_default(),
                 circles: l.circles.unwrap_or_default(),
-                circle_outlines: l.circle_outlines.unwrap_or_default(),
+                outlines: l.outlines.unwrap_or_default(),
                 handles: l.handles.unwrap_or_default(),
-                rectangles: l.rectangles.unwrap_or_default(),
-                triangles: l.triangles.unwrap_or_default(),
                 polygons: l.polygons.unwrap_or_default(),
                 dirty: true,
                 gpu: LayerGpu::default(),
@@ -223,10 +214,8 @@ impl UiButtonLoader {
             cache: LayerCache::default(),
             texts: vec![],
             circles: vec![],
-            circle_outlines: vec![],
+            outlines: vec![],
             handles: vec![],
-            rectangles: vec![],
-            triangles: vec![],
             polygons: vec![],
             dirty: true,
             gpu: LayerGpu::default(),
@@ -240,10 +229,8 @@ impl UiButtonLoader {
             cache: LayerCache::default(),
             texts: vec![],
             circles: vec![],
-            circle_outlines: vec![],
+            outlines: vec![],
             handles: vec![],
-            rectangles: vec![],
-            triangles: vec![],
             polygons: vec![],
             dirty: true,
             gpu: LayerGpu::default(),
@@ -286,51 +273,20 @@ impl UiButtonLoader {
                     }
                 }
 
-                // rectangles (includes future buttons)
-                for r in &layer.rectangles {
-                    if !r.misc.active {
+                // polygons
+                for poly in &layer.polygons {
+                    if !poly.misc.active {
                         continue;
                     }
 
-                    let verts = [
-                        r.top_left_vertex.pos,
-                        r.bottom_left_vertex.pos,
-                        r.bottom_right_vertex.pos,
-                        r.top_right_vertex.pos,
-                    ];
-                    let vertices_struct = [
-                        r.top_left_vertex,
-                        r.bottom_left_vertex,
-                        r.bottom_right_vertex,
-                        r.top_right_vertex,
-                    ];
-                    let mouse_pos = [mx, my];
-                    let (min_x, min_y, max_x, max_y) = helper::get_aabb(&verts);
-                    if mouse_pos[0] < min_x
-                        || mouse_pos[0] > max_x
-                        || mouse_pos[1] < min_y
-                        || mouse_pos[1] > max_y
-                    {
-                        continue;
+                    let verts = &poly.vertices;
+
+                    if point_in_polygon(mx, my, verts) {
+                        press_began_on_ui = true;
+                        break 'outer_scan;
                     }
 
-                    let is_rounded = helper::has_roundness(&vertices_struct);
-                    let inside = if !is_rounded && helper::is_axis_aligned_rect(&verts) {
-                        mouse_pos[0] >= min_x
-                            && mouse_pos[0] <= max_x
-                            && mouse_pos[1] >= min_y
-                            && mouse_pos[1] <= max_y
-                    } else if is_rounded {
-                        let radius = vertices_struct
-                            .iter()
-                            .map(|v| v.roundness)
-                            .fold(0.0, f32::max);
-                        helper::is_point_in_rounded_rect(mouse_pos, &verts, radius)
-                    } else {
-                        helper::is_point_in_quad(mouse_pos, &verts)
-                    };
-
-                    if inside {
+                    if polygon_edge_distance(mx, my, verts) < 8.0 {
                         press_began_on_ui = true;
                         break 'outer_scan;
                     }
@@ -456,71 +412,6 @@ impl UiButtonLoader {
                     }
                 }
 
-                // --- rectangles (for editor interactions) ---
-                for r in &layer.rectangles {
-                    if !r.misc.active {
-                        continue;
-                    }
-
-                    let verts = [
-                        r.top_left_vertex.pos,
-                        r.bottom_left_vertex.pos,
-                        r.bottom_right_vertex.pos,
-                        r.top_right_vertex.pos,
-                    ];
-                    let vertices_struct = [
-                        r.top_left_vertex,
-                        r.bottom_left_vertex,
-                        r.bottom_right_vertex,
-                        r.top_right_vertex,
-                    ];
-                    let mouse_pos = [mx, my];
-                    let (min_x, min_y, max_x, max_y) = helper::get_aabb(&verts);
-                    let mut inside = false;
-                    if !(mouse_pos[0] < min_x
-                        || mouse_pos[0] > max_x
-                        || mouse_pos[1] < min_y
-                        || mouse_pos[1] > max_y)
-                    {
-                        let is_rounded = helper::has_roundness(&vertices_struct);
-                        inside = if !is_rounded && helper::is_axis_aligned_rect(&verts) {
-                            mouse_pos[0] >= min_x
-                                && mouse_pos[0] <= max_x
-                                && mouse_pos[1] >= min_y
-                                && mouse_pos[1] <= max_y
-                        } else if is_rounded {
-                            let radius = vertices_struct
-                                .iter()
-                                .map(|v| v.roundness)
-                                .fold(0.0, f32::max);
-                            helper::is_point_in_rounded_rect(mouse_pos, &verts, radius)
-                        } else {
-                            helper::is_point_in_quad(mouse_pos, &verts)
-                        };
-                    }
-
-                    if let Some(id) = &r.id {
-                        let runtime = self.ui_runtime.get(id);
-                        let touched_now = if !runtime.is_down {
-                            inside && just_pressed
-                        } else {
-                            pressed
-                        };
-
-                        if let TouchState::Released =
-                            self.ui_runtime
-                                .update_touch(id, touched_now, dt, &layer.name)
-                        {
-                            trigger_selection = true;
-                            self.ui_runtime.selected_ui_element = SelectedUiElement {
-                                layer_name: layer.name.clone(),
-                                element_id: id.clone(),
-                                active: true,
-                            };
-                        }
-                    }
-                }
-
                 // --- handles (resize, original sticky logic restored) ---
                 for h in &mut layer.handles {
                     if !h.misc.active {
@@ -563,6 +454,69 @@ impl UiButtonLoader {
                                 TouchState::Pressed => {}
                                 TouchState::Idle => {}
                             }
+                        }
+                    }
+                }
+
+                // POLYGON selection --------------------------------
+                for poly in &mut layer.polygons {
+                    if !poly.misc.active {
+                        continue;
+                    }
+
+                    let verts = &mut poly.vertices;
+
+                    let inside = point_in_polygon(mx, my, verts);
+                    let near_edge = polygon_edge_distance(mx, my, verts) < 8.0;
+
+                    if let Some(id) = &poly.id {
+                        let runtime = self.ui_runtime.get(id);
+                        let touched_now = if !runtime.is_down {
+                            (inside || near_edge) && just_pressed
+                        } else {
+                            pressed
+                        };
+
+                        match self
+                            .ui_runtime
+                            .update_touch(id, touched_now, dt, &layer.name)
+                        {
+                            TouchState::Pressed => {
+                                // drag offset from first vertex
+                                let fx = verts[0].pos[0];
+                                let fy = verts[0].pos[1];
+                                self.ui_runtime.drag_offset = Some((mx - fx, my - fy));
+                            }
+
+                            TouchState::Held => {
+                                let (ox, oy) = self.ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
+                                let new_x = mx - ox;
+                                let new_y = my - oy;
+
+                                let dx = new_x - verts[0].pos[0];
+                                let dy = new_y - verts[0].pos[1];
+
+                                if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                                    // move all vertices
+                                    for v in verts.iter_mut() {
+                                        v.pos[0] += dx;
+                                        v.pos[1] += dy;
+                                    }
+                                    layer.dirty = true;
+                                }
+                            }
+
+                            TouchState::Released => {
+                                self.ui_runtime.drag_offset = None;
+                                trigger_selection = true;
+                                self.ui_runtime.selected_ui_element = SelectedUiElement {
+                                    layer_name: layer.name.clone(),
+                                    element_id: id.clone(),
+                                    active: true,
+                                };
+                            }
+
+                            _ => {}
                         }
                     }
                 }
@@ -623,10 +577,10 @@ impl UiButtonLoader {
                                 }
                             }
                         }
-                        for o in &mut layer.circle_outlines {
+                        for o in &mut layer.outlines {
                             if let Some(pid) = &o.parent_id {
                                 if pid == &parent_id {
-                                    o.radius = new_radius;
+                                    o.shape_data.radius = new_radius;
                                     layer.dirty = true;
                                 }
                             }
@@ -718,10 +672,8 @@ impl UiButtonLoader {
             {
                 editor_layer.active = false;
                 editor_layer.circles.clear();
-                editor_layer.circle_outlines.clear();
+                editor_layer.outlines.clear();
                 editor_layer.handles.clear();
-                editor_layer.rectangles.clear();
-                editor_layer.triangles.clear();
                 editor_layer.polygons.clear();
             }
             return;
@@ -738,22 +690,17 @@ impl UiButtonLoader {
                 editor_layer.active = true;
                 editor_layer.dirty = true;
                 editor_layer.circles.clear();
-                editor_layer.circle_outlines.clear();
+                editor_layer.outlines.clear();
                 editor_layer.handles.clear();
-                editor_layer.rectangles.clear();
-                editor_layer.triangles.clear();
                 editor_layer.polygons.clear();
                 match element {
                     UiElement::Circle(c) => {
-                        let circle_outline = UiButtonCircleOutline {
+                        let circle_outline = UiButtonOutline {
                             id: Some("Circle Outline".to_string()),
                             parent_id: c.id.clone(),
-                            x: c.x,
-                            y: c.y,
-                            stretch_x: c.stretch_x,
-                            stretch_y: c.stretch_y,
-                            radius: c.radius,
-                            dash_thickness: 6.0,
+                            mode: 0.0,
+                            vertex_offset: 0,
+                            vertex_count: 0,
                             dash_color: [0.2, 0.0, 0.4, 0.8],
                             dash_misc: DashMisc {
                                 dash_len: 4.0,
@@ -769,8 +716,14 @@ impl UiButtonLoader {
                                 dash_speed: -2.0,
                             },
                             misc: c.misc,
+                            shape_data: ShapeData {
+                                x: c.x,
+                                y: c.y,
+                                radius: c.radius,
+                                border_thickness: c.border_thickness,
+                            },
                         };
-                        editor_layer.circle_outlines.push(circle_outline);
+                        editor_layer.outlines.push(circle_outline);
 
                         let handle = UiButtonHandle {
                             id: Some("Circle Handle".to_string()),
@@ -802,17 +755,51 @@ impl UiButtonLoader {
                         editor_layer.handles.push(handle);
                     }
                     UiElement::Handle(_h) => {}
-                    UiElement::Rectangle(_r) => {
-                        //r. = [1.0, 0.8, 0.2, 0.7];
-                        //editor_layer.rectangles.push(r);
-                    }
-                    UiElement::Triangle(_t) => {
-                        //t.misc.color = [1.0, 1.0, 0.2, 0.7];
-                        //editor_layer.triangles.push(t);
-                    }
-                    UiElement::Polygon(_p) => {
-                        //p.misc.color = [1.0, 0.7, 0.1, 0.7];
-                        //editor_layer.polygons.push(p);
+                    UiElement::Polygon(p) => {
+                        let mut cx = 0.0;
+                        let mut cy = 0.0;
+                        for v in &p.vertices {
+                            cx += v.pos[0];
+                            cy += v.pos[1];
+                        }
+                        cx /= p.vertices.len() as f32;
+                        cy /= p.vertices.len() as f32;
+
+                        let mut radius: f32 = 0.0;
+                        for v in &p.vertices {
+                            let dx = v.pos[0] - cx;
+                            let dy = v.pos[1] - cy;
+                            radius = radius.max((dx * dx + dy * dy).sqrt());
+                        }
+                        let polygon_outline = UiButtonOutline {
+                            id: Some("Polygon Outline".to_string()),
+                            parent_id: p.id.clone(),
+                            mode: 1.0,
+                            vertex_offset: 0,
+                            vertex_count: p.vertices.len() as u32,
+                            dash_color: [0.2, 0.0, 0.4, 0.8],
+                            dash_misc: DashMisc {
+                                dash_len: 4.0,
+                                dash_spacing: 1.5,
+                                dash_roundness: 1.0,
+                                dash_speed: 4.0,
+                            },
+                            sub_dash_color: [0.8, 1.0, 1.0, 0.5],
+                            sub_dash_misc: DashMisc {
+                                dash_len: 1.0,
+                                dash_spacing: 1.0,
+                                dash_roundness: 0.0,
+                                dash_speed: -2.0,
+                            },
+                            misc: p.misc,
+                            shape_data: ShapeData {
+                                x: cx,
+                                y: cy,
+                                radius,
+                                border_thickness: 10.0,
+                            },
+                        };
+                        editor_layer.outlines.push(polygon_outline);
                     }
                     UiElement::Text(_tx) => {
                         //tx.color = [1.0, 1.0, 0.0, 1.0];
@@ -834,24 +821,6 @@ impl UiButtonLoader {
             if let Some(id) = &c.id {
                 if id == element_id {
                     return Some(UiElement::Circle(c.clone()));
-                }
-            }
-        }
-
-        // Rectangles
-        for r in &layer.rectangles {
-            if let Some(id) = &r.id {
-                if id == element_id {
-                    return Some(UiElement::Rectangle(r.clone()));
-                }
-            }
-        }
-
-        // Triangles
-        for t in &layer.triangles {
-            if let Some(id) = &t.id {
-                if id == element_id {
-                    return Some(UiElement::Triangle(t.clone()));
                 }
             }
         }
@@ -888,15 +857,6 @@ impl UiButtonLoader {
                 }
             }
 
-            // Rectangles
-            for (i, r) in layer.rectangles.iter().enumerate() {
-                if let Some(id) = &r.id {
-                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
-                        return Some((layer.name.clone(), i));
-                    }
-                }
-            }
-
             // Polygons
             for (i, p) in layer.polygons.iter().enumerate() {
                 if let Some(id) = &p.id {
@@ -917,5 +877,228 @@ impl UiButtonLoader {
         }
 
         None
+    }
+
+    pub fn rebuild_layer_cache_index(&mut self, layer_index: usize) {
+        let runtime = &self.ui_runtime;
+        // Split so we can have &mut to this layer and & to all others.
+        let (before, rest) = self.layers.split_at_mut(layer_index);
+        let (layer, after) = rest.split_first_mut().unwrap();
+        let l = layer;
+
+        l.cache = LayerCache::default();
+
+        // ------- TEXTS -------
+        for t in &l.texts {
+            let id_str = t.id.as_deref().unwrap_or("");
+            let rt = runtime.get(id_str);
+
+            let hash = if id_str.is_empty() {
+                f32::MAX
+            } else {
+                UiButtonLoader::hash_id(id_str)
+            };
+
+            l.cache.texts.push(TextParams {
+                pos: [t.x, t.y],
+                px: t.px,
+                color: t.color,
+                id_hash: hash,
+                misc: [
+                    f32::from(t.misc.active),
+                    rt.touched_time,
+                    f32::from(rt.is_down),
+                    hash,
+                ],
+                text: t.text.clone(),
+            });
+        }
+
+        // ------- CIRCLES -------
+        for c in &l.circles {
+            let id_str = c.id.as_deref().unwrap_or("");
+            let rt = runtime.get(id_str);
+
+            let hash = if id_str.is_empty() {
+                f32::MAX
+            } else {
+                UiButtonLoader::hash_id(id_str)
+            };
+
+            l.cache.circle_params.push(CircleParams {
+                center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
+                fill_color: c.fill_color,
+                border_color: c.border_color,
+                glow_color: c.glow_color,
+                glow_misc: [
+                    c.glow_misc.glow_size,
+                    c.glow_misc.glow_speed,
+                    c.glow_misc.glow_intensity,
+                    1.0,
+                ],
+                misc: [
+                    f32::from(c.misc.active),
+                    rt.touched_time,
+                    f32::from(rt.is_down),
+                    hash,
+                ],
+            });
+        }
+
+        // Local helper that searches ALL OTHER layers (before + after) for a polygon id
+        fn find_polygon_by_id<'a>(
+            id: &Option<String>,
+            before: &'a [RuntimeLayer],
+            after: &'a [RuntimeLayer],
+        ) -> Option<&'a UiButtonPolygon> {
+            let target = match id {
+                Some(s) => s,
+                None => return None,
+            };
+
+            for layer in before.iter().chain(after.iter()) {
+                for p in &layer.polygons {
+                    if let Some(pid) = &p.id {
+                        if pid == target {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        // ------- OUTLINES -------
+        for o in &mut l.outlines {
+            if o.mode == 1.0 {
+                if let Some(poly) = find_polygon_by_id(&o.parent_id, before, after) {
+                    o.vertex_offset = l.cache.outline_poly_vertices.len() as u32;
+
+                    for v in &poly.vertices {
+                        l.cache.outline_poly_vertices.push([v.pos[0], v.pos[1]]);
+                    }
+
+                    o.vertex_count = poly.vertices.len() as u32;
+                }
+            }
+
+            let id_str = o.id.as_deref().unwrap_or("");
+            let rt = runtime.get(id_str);
+
+            let hash = if id_str.is_empty() {
+                f32::MAX
+            } else {
+                UiButtonLoader::hash_id(id_str)
+            };
+
+            l.cache.outline_params.push(OutlineParams {
+                mode: o.mode,
+                vertex_offset: o.vertex_offset,
+                vertex_count: o.vertex_count,
+                _pad0: 0, // u32 padding, must be integer
+                shape_data: [
+                    o.shape_data.x,
+                    o.shape_data.y,
+                    o.shape_data.radius,
+                    o.shape_data.border_thickness,
+                ],
+                dash_color: o.dash_color,
+                dash_misc: [
+                    o.dash_misc.dash_len,
+                    o.dash_misc.dash_spacing,
+                    o.dash_misc.dash_roundness,
+                    o.dash_misc.dash_speed,
+                ],
+                sub_dash_color: o.sub_dash_color,
+                sub_dash_misc: [
+                    o.sub_dash_misc.dash_len,
+                    o.sub_dash_misc.dash_spacing,
+                    o.sub_dash_misc.dash_roundness,
+                    o.sub_dash_misc.dash_speed,
+                ],
+                misc: [
+                    f32::from(o.misc.active),
+                    rt.touched_time,
+                    f32::from(rt.is_down),
+                    hash,
+                ],
+            });
+
+            println!(
+                "outline gpu: id={:?}, mode={}, center=({},{})",
+                o.id, o.mode, o.shape_data.x, o.shape_data.y
+            );
+        }
+
+        // ------- HANDLES -------
+        for h in &l.handles {
+            let id_str = h.id.as_deref().unwrap_or("");
+            let rt = runtime.get(id_str);
+
+            let hash = if id_str.is_empty() {
+                f32::MAX
+            } else {
+                UiButtonLoader::hash_id(id_str)
+            };
+
+            l.cache.handle_params.push(HandleParams {
+                center_radius_mode: [h.x, h.y, h.radius, 1.0],
+                handle_color: h.handle_color,
+                handle_misc: [
+                    h.handle_misc.handle_len,
+                    h.handle_misc.handle_width,
+                    h.handle_misc.handle_roundness,
+                    h.handle_misc.handle_speed,
+                ],
+                sub_handle_color: h.sub_handle_color,
+                sub_handle_misc: [
+                    h.sub_handle_misc.handle_len,
+                    h.sub_handle_misc.handle_width,
+                    h.sub_handle_misc.handle_roundness,
+                    h.sub_handle_misc.handle_speed,
+                ],
+                misc: [
+                    f32::from(h.misc.active),
+                    rt.touched_time,
+                    f32::from(rt.is_down),
+                    hash,
+                ],
+            });
+        }
+
+        // Common builder for vertex-emitting shapes
+        let push_with_misc = |v: &UiVertex, misc: [f32; 4], out: &mut Vec<UiVertexPoly>| {
+            out.push(UiVertexPoly {
+                pos: v.pos,
+                _pad: [1.0; 2],
+                color: v.color,
+                misc,
+            });
+        };
+
+        // ------- POLYGONS (N verts) -------
+        for poly in &l.polygons {
+            let id_str = poly.id.as_deref().unwrap_or("");
+            let rt = runtime.get(id_str);
+
+            let hash = if id_str.is_empty() {
+                f32::MAX
+            } else {
+                UiButtonLoader::hash_id(id_str)
+            };
+
+            let misc = [
+                f32::from(poly.misc.active),
+                rt.touched_time,
+                f32::from(rt.is_down),
+                hash,
+            ];
+
+            for v in &poly.vertices {
+                push_with_misc(v, misc, &mut l.cache.polygon_vertices);
+            }
+        }
+
+        l.dirty = false;
     }
 }
