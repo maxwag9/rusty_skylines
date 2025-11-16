@@ -1,9 +1,11 @@
-use crate::renderer::helper::{point_in_polygon, polygon_edge_distance};
+use crate::renderer::helper::{dist, order_vertices_ccw, polygon_sdf, triangulate_polygon};
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::renderer::ui_editor::UiElement::Polygon;
 use crate::resources::MouseState;
 use crate::vertex::{
     DashMisc, GuiLayout, HandleMisc, LayerGpu, MiscButtonSettings, ShapeData, UiButtonCircle,
-    UiButtonHandle, UiButtonOutline, UiButtonPolygon, UiButtonText, UiVertex, UiVertexPoly,
+    UiButtonHandle, UiButtonOutline, UiButtonPolygon, UiButtonText, UiButtonVertexSelection,
+    UiVertex, UiVertexPoly,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -25,6 +27,7 @@ pub struct UiLayer {
     pub circles: Option<Vec<UiButtonCircle>>,
     pub outlines: Option<Vec<UiButtonOutline>>,
     pub handles: Option<Vec<UiButtonHandle>>,
+    pub vertex_selections: Option<Vec<UiButtonVertexSelection>>,
     pub polygons: Option<Vec<UiButtonPolygon>>,
     pub active: Option<bool>,
     pub opaque: Option<bool>,
@@ -62,6 +65,7 @@ impl Default for LayerCache {
 pub enum UiElement {
     Circle(UiButtonCircle),
     Handle(UiButtonHandle),
+    VertexSelection(UiButtonVertexSelection),
     Polygon(UiButtonPolygon),
     Text(UiButtonText),
 }
@@ -74,6 +78,7 @@ pub struct RuntimeLayer {
     pub circles: Vec<UiButtonCircle>,
     pub outlines: Vec<UiButtonOutline>,
     pub handles: Vec<UiButtonHandle>,
+    pub vertex_selections: Vec<UiButtonVertexSelection>,
     pub polygons: Vec<UiButtonPolygon>,
     pub active: bool,
     // NEW: cached GPU data!!!
@@ -101,6 +106,7 @@ pub struct ButtonRuntime {
 pub struct UiRuntime {
     pub elements: HashMap<String, ButtonRuntime>,
     pub selected_ui_element: SelectedUiElement,
+    pub active_vertex: Option<usize>,
     pub drag_offset: Option<(f32, f32)>,
     pub editor_mode: bool,
 }
@@ -110,6 +116,7 @@ impl UiRuntime {
         Self {
             elements: HashMap::new(),
             selected_ui_element: SelectedUiElement::default(),
+            active_vertex: None,
             drag_offset: None,
             editor_mode,
         }
@@ -174,6 +181,12 @@ impl UiButtonLoader {
 
         // JSON layers to runtime layers
         for l in layout.layers {
+            let mut polys = l.polygons.unwrap_or_default();
+
+            // ORDER THE REAL POLYGONS
+            for p in &mut polys {
+                order_vertices_ccw(&mut p.vertices);
+            }
             loader.layers.push(RuntimeLayer {
                 name: l.name,
                 order: l.order,
@@ -183,7 +196,8 @@ impl UiButtonLoader {
                 circles: l.circles.unwrap_or_default(),
                 outlines: l.outlines.unwrap_or_default(),
                 handles: l.handles.unwrap_or_default(),
-                polygons: l.polygons.unwrap_or_default(),
+                vertex_selections: l.vertex_selections.unwrap_or_default(),
+                polygons: polys,
                 dirty: true,
                 gpu: LayerGpu::default(),
                 opaque: l.opaque.unwrap_or(false),
@@ -216,6 +230,7 @@ impl UiButtonLoader {
             circles: vec![],
             outlines: vec![],
             handles: vec![],
+            vertex_selections: vec![],
             polygons: vec![],
             dirty: true,
             gpu: LayerGpu::default(),
@@ -231,6 +246,7 @@ impl UiButtonLoader {
             circles: vec![],
             outlines: vec![],
             handles: vec![],
+            vertex_selections: vec![],
             polygons: vec![],
             dirty: true,
             gpu: LayerGpu::default(),
@@ -241,7 +257,7 @@ impl UiButtonLoader {
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32) {
         let mut trigger_selection = false;
         let mut pending_circle_updates: Vec<(String, f32, f32)> = Vec::new();
-        let mut moved_any_circle = false;
+        let mut moved_any_selected_object = false;
 
         // Cache mouse state
         let mx = mouse.pos.x;
@@ -281,12 +297,13 @@ impl UiButtonLoader {
 
                     let verts = &poly.vertices;
 
-                    if point_in_polygon(mx, my, verts) {
-                        press_began_on_ui = true;
-                        break 'outer_scan;
-                    }
+                    let sdf = polygon_sdf(mx, my, verts);
 
-                    if polygon_edge_distance(mx, my, verts) < 8.0 {
+                    let inside = sdf < 0.0;
+                    let near_edge = sdf.abs() < 8.0;
+                    let hit = inside || near_edge;
+
+                    if hit {
                         press_began_on_ui = true;
                         break 'outer_scan;
                     }
@@ -395,7 +412,7 @@ impl UiButtonLoader {
                                     c.x = new_x;
                                     c.y = new_y;
                                     layer.dirty = true;
-                                    moved_any_circle = true;
+                                    moved_any_selected_object = true;
                                 }
                             }
                             TouchState::Released => {
@@ -465,16 +482,49 @@ impl UiButtonLoader {
                     }
 
                     let verts = &mut poly.vertices;
+                    if verts.is_empty() {
+                        continue;
+                    }
 
-                    let inside = point_in_polygon(mx, my, verts);
-                    let near_edge = polygon_edge_distance(mx, my, verts) < 8.0;
+                    // --- stable centroid for anchoring ---
+                    let mut cx = 0.0f32;
+                    let mut cy = 0.0f32;
+                    for v in verts.iter() {
+                        cx += v.pos[0];
+                        cy += v.pos[1];
+                    }
+                    let inv_n = 1.0 / verts.len() as f32;
+                    cx *= inv_n;
+                    cy *= inv_n;
+
+                    // polygon hit
+                    let sdf = polygon_sdf(mx, my, verts);
+                    let inside = sdf < 0.0;
+                    let near_edge = sdf.abs() < 8.0;
+                    let poly_hit = inside || near_edge;
+
+                    // vertex hit
+                    const VERTEX_RADIUS: f32 = 8.0;
+                    let vertex_hit = verts
+                        .iter()
+                        .enumerate()
+                        .find(|(_, v)| dist(mx, my, v.pos[0], v.pos[1]) < VERTEX_RADIUS)
+                        .map(|(i, _)| i);
+
+                    // final hit priority:
+                    // 1. vertex hit > 2. polygon hit
+                    let hit = match vertex_hit {
+                        Some(_) => true,
+                        None => poly_hit,
+                    };
 
                     if let Some(id) = &poly.id {
                         let runtime = self.ui_runtime.get(id);
+
                         let touched_now = if !runtime.is_down {
-                            (inside || near_edge) && just_pressed
+                            hit && just_pressed
                         } else {
-                            pressed
+                            pressed // continue drag
                         };
 
                         match self
@@ -482,32 +532,63 @@ impl UiButtonLoader {
                             .update_touch(id, touched_now, dt, &layer.name)
                         {
                             TouchState::Pressed => {
-                                // drag offset from first vertex
-                                let fx = verts[0].pos[0];
-                                let fy = verts[0].pos[1];
-                                self.ui_runtime.drag_offset = Some((mx - fx, my - fy));
+                                if let Some(vidx) = vertex_hit {
+                                    // start a vertex drag
+                                    self.ui_runtime.drag_offset =
+                                        Some((mx - verts[vidx].pos[0], my - verts[vidx].pos[1]));
+                                    self.ui_runtime.active_vertex = Some(vidx); // <-- NEW
+                                } else {
+                                    // start a centroid drag
+                                    self.ui_runtime.drag_offset = Some((mx - cx, my - cy));
+                                    self.ui_runtime.active_vertex = None;
+                                }
                             }
 
                             TouchState::Held => {
-                                let (ox, oy) = self.ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
-                                let new_x = mx - ox;
-                                let new_y = my - oy;
-
-                                let dx = new_x - verts[0].pos[0];
-                                let dy = new_y - verts[0].pos[1];
-
-                                if dx.abs() > 0.001 || dy.abs() > 0.001 {
-                                    // move all vertices
-                                    for v in verts.iter_mut() {
-                                        v.pos[0] += dx;
-                                        v.pos[1] += dy;
-                                    }
+                                if let Some(vidx) = self.ui_runtime.active_vertex {
+                                    // === drag vertex only ===
+                                    let (ox, oy) = self.ui_runtime.drag_offset.unwrap();
+                                    let new_x = mx - ox;
+                                    let new_y = my - oy;
+                                    verts[vidx].pos = [new_x, new_y];
                                     layer.dirty = true;
+                                    moved_any_selected_object = true;
+                                } else {
+                                    // === centroid drag ===
+                                    let (ox, oy) = self.ui_runtime.drag_offset.unwrap();
+
+                                    // recompute centroid
+                                    let mut ccx = 0.0;
+                                    let mut ccy = 0.0;
+                                    for v in verts.iter() {
+                                        ccx += v.pos[0];
+                                        ccy += v.pos[1];
+                                    }
+                                    let inv_n = 1.0 / verts.len() as f32;
+                                    ccx *= inv_n;
+                                    ccy *= inv_n;
+
+                                    let new_cx = mx - ox;
+                                    let new_cy = my - oy;
+
+                                    let dx = new_cx - ccx;
+                                    let dy = new_cy - ccy;
+
+                                    if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                                        for v in verts.iter_mut() {
+                                            v.pos[0] += dx;
+                                            v.pos[1] += dy;
+                                        }
+                                        layer.dirty = true;
+                                        moved_any_selected_object = true;
+                                    }
                                 }
                             }
 
                             TouchState::Released => {
                                 self.ui_runtime.drag_offset = None;
+                                self.ui_runtime.active_vertex = None;
+
                                 trigger_selection = true;
                                 self.ui_runtime.selected_ui_element = SelectedUiElement {
                                     layer_name: layer.name.clone(),
@@ -516,7 +597,7 @@ impl UiButtonLoader {
                                 };
                             }
 
-                            _ => {}
+                            TouchState::Idle => {}
                         }
                     }
                 }
@@ -591,7 +672,7 @@ impl UiButtonLoader {
                 }
             }
 
-            if moved_any_circle {
+            if moved_any_selected_object {
                 for layer in &mut self.layers {
                     if layer.name == "editor_selection" || layer.name == "editor_handles" {
                         layer.dirty = true;
@@ -723,6 +804,7 @@ impl UiButtonLoader {
                                 border_thickness: c.border_thickness,
                             },
                         };
+                        println!("{:?}", circle_outline);
                         editor_layer.outlines.push(circle_outline);
 
                         let handle = UiButtonHandle {
@@ -750,12 +832,15 @@ impl UiButtonLoader {
                                 active: true,
                                 touched_time: 0.0,
                                 is_touched: false,
+                                pressable: true,
+                                editable: false,
                             },
                         };
                         editor_layer.handles.push(handle);
                     }
                     UiElement::Handle(_h) => {}
-                    UiElement::Polygon(p) => {
+                    UiElement::VertexSelection(_) => {}
+                    Polygon(p) => {
                         let mut cx = 0.0;
                         let mut cy = 0.0;
                         for v in &p.vertices {
@@ -796,7 +881,7 @@ impl UiButtonLoader {
                                 x: cx,
                                 y: cy,
                                 radius,
-                                border_thickness: 10.0,
+                                border_thickness: 3.0,
                             },
                         };
                         editor_layer.outlines.push(polygon_outline);
@@ -1023,11 +1108,6 @@ impl UiButtonLoader {
                     hash,
                 ],
             });
-
-            println!(
-                "outline gpu: id={:?}, mode={}, center=({},{})",
-                o.id, o.mode, o.shape_data.x, o.shape_data.y
-            );
         }
 
         // ------- HANDLES -------
@@ -1094,8 +1174,16 @@ impl UiButtonLoader {
                 hash,
             ];
 
-            for v in &poly.vertices {
-                push_with_misc(v, misc, &mut l.cache.polygon_vertices);
+            let tris = triangulate_polygon(&poly.vertices);
+
+            for [i0, i1, i2] in tris {
+                let v0 = &poly.vertices[i0];
+                let v1 = &poly.vertices[i1];
+                let v2 = &poly.vertices[i2];
+
+                push_with_misc(v0, misc, &mut l.cache.polygon_vertices);
+                push_with_misc(v1, misc, &mut l.cache.polygon_vertices);
+                push_with_misc(v2, misc, &mut l.cache.polygon_vertices);
             }
         }
 

@@ -1,5 +1,5 @@
 use crate::renderer::helper::{make_pipeline, make_uniform_layout};
-use crate::renderer::ui_editor::{ButtonRuntime, RuntimeLayer, UiButtonLoader};
+use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
 use crate::resources::{MouseState, TimeSystem};
 use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
@@ -176,11 +176,6 @@ pub struct TextParams {
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
-}
-
-#[derive(Copy, Clone)]
-pub struct UiRuntimeView<'a> {
-    pub get: &'a dyn Fn(&str) -> ButtonRuntime,
 }
 
 impl UiRenderer {
@@ -1066,21 +1061,25 @@ impl UiRenderer {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
+                        selected: false,
                     },
                     bottom_left_vertex: UiVertex {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
+                        selected: false,
                     },
                     top_right_vertex: UiVertex {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
+                        selected: false,
                     },
                     bottom_right_vertex: UiVertex {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
+                        selected: false,
                     },
                     px: 24,
                     color: [1.0; 4],
@@ -1089,6 +1088,8 @@ impl UiRenderer {
                         active: true,
                         touched_time: 0.0,
                         is_touched: false,
+                        pressable: false,
+                        editable: false,
                     },
                 });
             } else {

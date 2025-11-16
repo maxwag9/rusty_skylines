@@ -154,6 +154,7 @@ pub struct UiVertex {
     pub pos: [f32; 2],
     pub color: [f32; 4],
     pub roundness: f32,
+    pub selected: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -192,6 +193,8 @@ pub struct MiscButtonSettings {
     pub active: bool,
     pub touched_time: f32,
     pub is_touched: bool,
+    pub pressable: bool,
+    pub editable: bool,
 }
 #[derive(Deserialize, Debug)]
 pub struct GuiLayout {
@@ -261,6 +264,18 @@ pub struct UiButtonHandle {
     pub handle_misc: HandleMisc,
     pub sub_handle_color: [f32; 4],
     pub sub_handle_misc: HandleMisc,
+    pub misc: MiscButtonSettings,
+    pub parent_id: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonVertexSelection {
+    pub id: Option<String>,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub closeness: f32,
+    pub color: [f32; 4],
     pub misc: MiscButtonSettings,
     pub parent_id: Option<String>,
 }

@@ -21,7 +21,8 @@
               0.0,
               1.0
             ],
-            "roundness": 0.0
+            "roundness": 0.0,
+            "selected": false
           },
           "bottom_left_vertex": {
             "pos": [
@@ -34,7 +35,8 @@
               0.0,
               1.0
             ],
-            "roundness": 0.0
+            "roundness": 0.0,
+            "selected": false
           },
           "top_right_vertex": {
             "pos": [
@@ -47,7 +49,8 @@
               1.0,
               1.0
             ],
-            "roundness": 0.0
+            "roundness": 0.0,
+            "selected": false
           },
           "bottom_right_vertex": {
             "pos": [
@@ -60,7 +63,8 @@
               1.0,
               1.0
             ],
-            "roundness": 0.0
+            "roundness": 0.0,
+            "selected": false
           },
           "px": 24,
           "color": [
@@ -73,7 +77,9 @@
           "misc": {
             "active": true,
             "touched_time": 0.0,
-            "is_touched": false
+            "is_touched": false,
+            "pressable": false,
+            "editable": true
           }
         }
       ],
@@ -113,7 +119,9 @@
           "misc": {
             "active": true,
             "touched_time": 0.0,
-            "is_touched": false
+            "is_touched": false,
+            "pressable": true,
+            "editable": true
           }
         }
       ],
@@ -128,25 +136,13 @@
                 500.0
               ],
               "color": [
-                1.0,
-                0.0,
-                0.0,
-                1.0
+                1,
+                0,
+                0,
+                1
               ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                500.0,
-                950.0
-              ],
-              "color": [
-                0.0,
-                1.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
+              "roundness": 0,
+              "selected": false
             },
             {
               "pos": [
@@ -154,12 +150,13 @@
                 500.0
               ],
               "color": [
-                0.0,
-                0.0,
-                1.0,
-                1.0
+                0,
+                0,
+                1,
+                1
               ],
-              "roundness": 0.0
+              "roundness": 0,
+              "selected": false
             },
             {
               "pos": [
@@ -167,18 +164,36 @@
                 950.0
               ],
               "color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
+                1,
+                1,
+                1,
+                1
               ],
-              "roundness": 0.0
+              "roundness": 0,
+              "selected": false
+            },
+            {
+              "pos": [
+                500.0,
+                950.0
+              ],
+              "color": [
+                0,
+                1,
+                0,
+                1
+              ],
+              "roundness": 0,
+              "selected": false
             }
           ],
+
           "misc": {
             "active": true,
             "touched_time": 0.0,
-            "is_touched": false
+            "is_touched": false,
+            "pressable": true,
+            "editable": true
           }
         }
       ]
