@@ -6,6 +6,7 @@
       "texts": [
         {
           "type": "text",
+          "z_index": 0,
           "x": 200.0,
           "y": 500.0,
           "stretch_x": 1.0,
@@ -80,6 +81,7 @@
       "circles": [
         {
           "id": "toggle_simulation",
+          "z_index": 0,
           "type": "circle",
           "x": 1500.0,
           "y": 200.0,
@@ -118,6 +120,7 @@
         },
         {
           "id": "toggle_simulation2",
+          "z_index": 0,
           "type": "circle",
           "x": 1200.0,
           "y": 200.0,
@@ -158,6 +161,7 @@
       "polygons": [
         {
           "id": "fard",
+          "z_index": 0,
           "type": "polygon",
           "vertices": [
             {
@@ -222,6 +226,7 @@
         },
         {
           "id": "fard2",
+          "z_index": -30,
           "type": "polygon",
           "vertices": [
             {

@@ -1,6 +1,6 @@
 use crate::renderer::helper::{dist, ensure_ccw, polygon_sdf, triangulate_polygon};
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::resources::MouseState;
+use crate::resources::{InputState, MouseState};
 use crate::vertex::UiElement::*;
 pub(crate) use crate::vertex::*;
 use std::collections::HashMap;
@@ -193,11 +193,10 @@ impl UiButtonLoader {
         });
     }
 
-    pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32) {
+    pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32, input_state: &InputState) {
         let mut trigger_selection = false;
         let mut pending_circle_updates: Vec<(String, f32, f32)> = Vec::new();
         let mut moved_any_selected_object = false;
-
         // Cache mouse state
         let mx = mouse.pos.x;
         let my = mouse.pos.y;
@@ -297,7 +296,7 @@ impl UiButtonLoader {
 
             if !near_handle {
                 self.ui_runtime.selected_ui_element.active = false;
-                self.update_selection();
+                self.update_selection(mouse);
             }
         }
 
@@ -443,7 +442,7 @@ impl UiButtonLoader {
                     let poly_hit = inside || near_edge;
 
                     // vertex hit
-                    const VERTEX_RADIUS: f32 = 8.0;
+                    const VERTEX_RADIUS: f32 = 20.0;
                     let vertex_hit = verts
                         .iter()
                         .enumerate()
@@ -638,13 +637,13 @@ impl UiButtonLoader {
             }
         } else if self.ui_runtime.selected_ui_element.active {
             self.ui_runtime.selected_ui_element.active = false;
-            self.update_selection();
+            self.update_selection(mouse);
         }
         // ============================================================
         // 3) Selection / deselection
         // ============================================================
         if trigger_selection {
-            self.update_selection();
+            self.update_selection(mouse);
         }
     }
 
@@ -663,7 +662,7 @@ impl UiButtonLoader {
         (hash_u64 as f64 / u64::MAX as f64) as f32
     }
 
-    pub fn update_selection(&mut self) {
+    pub fn update_selection(&mut self, mouse: &MouseState) {
         if !self.ui_runtime.selected_ui_element.active {
             if let Some(editor_layer) = self
                 .layers
@@ -678,7 +677,6 @@ impl UiButtonLoader {
             }
             return;
         }
-
         let sel = self.ui_runtime.selected_ui_element.clone();
 
         if let Some(element) = self.find_element(&sel.layer_name, &sel.element_id) {
@@ -697,6 +695,7 @@ impl UiButtonLoader {
                     Circle(c) => {
                         let circle_outline = UiButtonOutline {
                             id: Some("Circle Outline".to_string()),
+                            z_index: c.z_index,
                             parent_id: c.id.clone(),
                             mode: 0.0,
                             vertex_offset: 0,
@@ -753,6 +752,7 @@ impl UiButtonLoader {
                                 pressable: true,
                                 editable: false,
                             },
+                            z_index: c.z_index,
                         };
                         editor_layer.handles.push(handle);
                     }
@@ -772,23 +772,26 @@ impl UiButtonLoader {
                             let dx = v.pos[0] - cx;
                             let dy = v.pos[1] - cy;
                             let distance = (dx * dx + dy * dy).sqrt();
+
                             println!("{}, {}", v.pos[0], v.pos[1]);
                             radius = radius.max(distance);
                             let vertex_outline = UiButtonCircle {
                                 id: Some(format!("vertex_outline_{}", i)),
+                                z_index: i as i32,
                                 x: v.pos[0],
                                 y: v.pos[1],
                                 stretch_x: 0.0,
                                 stretch_y: 0.0,
-                                radius: 10.0,
+                                radius: 15.0,
                                 border_thickness: 0.0,
+                                fade: [1.0, 0.0, 0.0, 0.0],
                                 fill_color: [0.0, 1.0, 0.0, 1.0],
                                 border_color: [0.5, 0.0, 0.0, 1.0],
-                                glow_color: [0.0, 0.0, 0.5, 1.0],
+                                glow_color: [0.0, 0.0, 0.5, 0.0],
                                 glow_misc: GlowMisc {
-                                    glow_size: 100.0,
+                                    glow_size: 0.0,
                                     glow_speed: 0.0,
-                                    glow_intensity: 1.0,
+                                    glow_intensity: 0.0,
                                 },
                                 misc: MiscButtonSettings {
                                     active: false,
@@ -807,6 +810,7 @@ impl UiButtonLoader {
                         }
                         let polygon_outline = UiButtonOutline {
                             id: Some("Polygon Outline".to_string()),
+                            z_index: p.z_index,
                             parent_id: p.id.clone(),
                             mode: 1.0,
                             vertex_offset: 0,
@@ -961,6 +965,7 @@ impl UiButtonLoader {
 
             l.cache.circle_params.push(CircleParams {
                 center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
+                fade: c.fade,
                 fill_color: c.fill_color,
                 border_color: c.border_color,
                 glow_color: c.glow_color,

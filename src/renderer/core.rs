@@ -301,8 +301,8 @@ impl RenderCore {
             depth_slice: None,
             ops: Operations {
                 load: LoadOp::Clear(Color {
-                    r: 0.1,
-                    g: 0.2,
+                    r: 0.0,
+                    g: 0.0,
                     b: 0.3,
                     a: 1.0,
                 }),

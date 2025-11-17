@@ -1,7 +1,9 @@
+
 struct ScreenUniform {
     size: vec2<f32>,
     time: f32,
     enable_dither: u32,
+    mouse: vec2<f32>,
 };
 
 @group(0) @binding(0)
@@ -20,6 +22,7 @@ const DITHER_MATRIX : array<array<f32, 4>, 4> = array(
 struct CircleParams {
     // (cx, cy, radius, border)
     center_radius_border: vec4<f32>,
+    fade: vec4<f32>,
     // colors + alpha :)
     fill_color:   vec4<f32>,
     border_color: vec4<f32>,
@@ -106,11 +109,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Press animation (with quick flash lightning bolt + decay)
     // ---------------------------------------------------------------
     // stronger flash right when button is pressed (held_time near 0)
-    let press_flash = max(exp(-held_time * 4.0) * is_down, 0.6);
+    let flash = exp(-held_time * 4.0) * is_down;
 
     // combine pulsing and press effects
-    let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) *
-                        (base_glow + press_flash);
+    let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) * (base_glow + flash);
+
 
     // ---------------------------------------------------------------
     // Apply color + alpha

@@ -1,7 +1,9 @@
+
 struct ScreenUniform {
     size: vec2<f32>,
     time: f32,
     enable_dither: u32,
+    mouse: vec2<f32>,
 };
 
 @group(0) @binding(0)
@@ -9,6 +11,7 @@ var<uniform> screen: ScreenUniform;
 
 struct CircleParams {
     center_radius_border: vec4<f32>, // cx, cy, radius, border
+    fade: vec4<f32>,
     fill_color:   vec4<f32>,
     border_color: vec4<f32>,
     glow_color:   vec4<f32>,
@@ -61,14 +64,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let dist = distance(in.local_pos, center);
 
-    // Smooth edge
     let outer_edge = smoothstep(radius, radius - 1.0, dist);
     let inner_edge = smoothstep(radius - border, radius - border - 1.0, dist);
     let border_mask = outer_edge - inner_edge;
 
-    // Fill + border
     var col = mix(p.fill_color, p.border_color, border_mask);
     col.a *= outer_edge;
 
+    if p.fade.x > 0.9 {
+        let mouse = screen.mouse;
+        let d = distance(in.local_pos, mouse);
+        let max_dist = 300.0;
+        let proximity = clamp(1.0 - d / max_dist, 0.0, 1.0);
+        let fade = proximity * proximity;
+
+        col.a *= fade;
+    }
+
+
     return col;
 }
+

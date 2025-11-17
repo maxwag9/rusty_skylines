@@ -5,6 +5,7 @@ use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, Ui
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
+use std::ops::Range;
 use util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -72,6 +73,7 @@ pub struct UiRenderer {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CircleParams {
     pub center_radius_border: [f32; 4], // cx, cy, radius, border
+    pub fade: [f32; 4],
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
@@ -83,6 +85,7 @@ impl Default for CircleParams {
     fn default() -> Self {
         Self {
             center_radius_border: [0.0, 0.0, 0.0, 0.0],
+            fade: [0.0; 4],
             fill_color: [0.0; 4],
             border_color: [0.0; 4],
             glow_color: [0.0; 4],
@@ -176,6 +179,16 @@ pub struct TextParams {
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
+}
+
+pub struct DrawCmd<'a> {
+    pub z: i32,
+    pub pipeline: &'a wgpu::RenderPipeline,
+    pub bind_group0: &'a wgpu::BindGroup,
+    pub bind_group1: Option<wgpu::BindGroup>,
+    pub vertex_buffer: Option<&'a wgpu::Buffer>,
+    pub vertex_range: Range<u32>,
+    pub instance_range: Range<u32>,
 }
 
 impl UiRenderer {
@@ -539,9 +552,9 @@ impl UiRenderer {
 
     pub fn render<'a>(
         &mut self,
-        pass: &mut RenderPass<'a>,
+        pass: &mut wgpu::RenderPass<'a>,
         ui: &mut UiButtonLoader,
-        queue: &Queue,
+        queue: &wgpu::Queue,
         time: &TimeSystem,
         size: (f32, f32),
         mouse: &MouseState,
@@ -554,7 +567,6 @@ impl UiRenderer {
         };
 
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&new_uniform));
-
         self.update_fps_layer(ui, time);
 
         let dirty_layers: Vec<usize> = ui
@@ -565,84 +577,112 @@ impl UiRenderer {
             .map(|(i, _)| i)
             .collect();
 
-        // Take a snapshot so we don't borrow ui while mutably using it
-        // immutable borrow, does not overlap
-
         for i in dirty_layers {
-            {
-                ui.rebuild_layer_cache_index(i);
-            }
-
+            ui.rebuild_layer_cache_index(i);
             let layer = &mut ui.layers[i];
             self.upload_layer(queue, layer);
         }
 
-        //println!("{}", ui.layers.len());
         for layer in ui.layers.iter().filter(|l| l.active) {
-            // println!("{}", layer.order);
-            // circle
+            let mut cmds: Vec<DrawCmd> = Vec::new();
+
             if layer.gpu.circle_count > 0 {
-                let circle_bg = self.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some(&format!("{}_circle_bg", layer.name)),
+                let circle_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
                     layout: &self.circle_layout,
-                    entries: &[BindGroupEntry {
+                    entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
                     }],
                 });
-                pass.set_pipeline(&self.circle_pipeline);
 
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &circle_bg, &[]);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.draw(0..4, 0..layer.gpu.circle_count);
+                let mut zlist: Vec<(i32, u32)> = Vec::new();
+                for (i, c) in layer.circles.iter().enumerate() {
+                    zlist.push((c.z_index, i as u32));
+                }
+                zlist.sort_by_key(|v| v.0);
 
-                pass.set_pipeline(&self.glow_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &circle_bg, &[]);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.draw(0..4, 0..layer.gpu.circle_count);
+                for (_, idx) in zlist.iter() {
+                    let z = layer.circles[*idx as usize].z_index;
+
+                    cmds.push(DrawCmd {
+                        z,
+                        pipeline: &self.circle_pipeline,
+                        bind_group0: &self.uniform_bind_group,
+                        bind_group1: Some(circle_bg.clone()),
+                        vertex_buffer: Some(&self.quad_buffer),
+                        vertex_range: 0..4,
+                        instance_range: *idx..*idx + 1,
+                    });
+
+                    cmds.push(DrawCmd {
+                        z,
+                        pipeline: &self.glow_pipeline,
+                        bind_group0: &self.uniform_bind_group,
+                        bind_group1: Some(circle_bg.clone()),
+                        vertex_buffer: Some(&self.quad_buffer),
+                        vertex_range: 0..4,
+                        instance_range: *idx..*idx + 1,
+                    });
+                }
             }
 
             if layer.gpu.handle_count > 0 {
-                let handle_bg = self.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some(&format!("{}_handle_bg", layer.name)),
+                let handle_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
                     layout: &self.handle_layout,
-                    entries: &[BindGroupEntry {
+                    entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: layer.gpu.handle_ssbo.as_ref().unwrap().as_entire_binding(),
                     }],
                 });
 
-                pass.set_pipeline(&self.handle_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &handle_bg, &[]);
-                pass.set_vertex_buffer(0, self.handle_quad_buffer.slice(..));
-                pass.draw(0..4, 0..layer.gpu.handle_count);
+                let mut zlist: Vec<(i32, u32)> = Vec::new();
+                for (i, h) in layer.handles.iter().enumerate() {
+                    zlist.push((h.z_index, i as u32));
+                }
+                zlist.sort_by_key(|v| v.0);
+
+                for (_, idx) in zlist.iter() {
+                    cmds.push(DrawCmd {
+                        z: layer.handles[*idx as usize].z_index,
+                        pipeline: &self.handle_pipeline,
+                        bind_group0: &self.uniform_bind_group,
+                        bind_group1: Some(handle_bg.clone()),
+                        vertex_buffer: Some(&self.handle_quad_buffer),
+                        vertex_range: 0..4,
+                        instance_range: *idx..*idx + 1,
+                    });
+                }
             }
 
-            // polygons
             if layer.gpu.poly_count > 0 {
-                pass.set_pipeline(&self.polygon_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, layer.gpu.poly_vbo.as_ref().unwrap().slice(..));
-                let mut offset: u32 = 0;
+                let mut offset = 0u32;
+                if let Some(poly_vbo) = &layer.gpu.poly_vbo {
+                    for p in layer.polygons.iter() {
+                        let count = (p.tri_count * 3) as u32;
 
-                for polygon in layer.polygons.iter() {
-                    let count = (polygon.tri_count * 3) as u32;
+                        cmds.push(DrawCmd {
+                            z: p.z_index,
+                            pipeline: &self.polygon_pipeline,
+                            bind_group0: &self.uniform_bind_group,
+                            bind_group1: None,
+                            vertex_buffer: Some(poly_vbo),
+                            vertex_range: offset..offset + count,
+                            instance_range: 0..1,
+                        });
 
-                    pass.draw(offset..offset + count, 0..1);
-                    offset += count;
+                        offset += count;
+                    }
                 }
             }
 
             if layer.gpu.outline_count > 0 {
-                let outline_bg = self.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some(&format!("{}_outline_bg", layer.name)),
+                let outline_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
                     layout: &self.outline_layout,
                     entries: &[
-                        // binding 0 = shapes
-                        BindGroupEntry {
+                        wgpu::BindGroupEntry {
                             binding: 0,
                             resource: layer
                                 .gpu
@@ -651,8 +691,7 @@ impl UiRenderer {
                                 .unwrap()
                                 .as_entire_binding(),
                         },
-                        // binding 1 = polygon vertex buffer
-                        BindGroupEntry {
+                        wgpu::BindGroupEntry {
                             binding: 1,
                             resource: layer
                                 .gpu
@@ -663,177 +702,52 @@ impl UiRenderer {
                         },
                     ],
                 });
-                pass.set_pipeline(&self.outline_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &outline_bg, &[]);
-                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
-                pass.draw(0..4, 0..layer.gpu.outline_count);
+
+                for (i, o) in layer.outlines.iter().enumerate() {
+                    cmds.push(DrawCmd {
+                        z: o.z_index,
+                        pipeline: &self.outline_pipeline,
+                        bind_group0: &self.uniform_bind_group,
+                        bind_group1: Some(outline_bg.clone()),
+                        vertex_buffer: Some(&self.quad_buffer),
+                        vertex_range: 0..4,
+                        instance_range: i as u32..i as u32 + 1,
+                    });
+                }
             }
-            // text
+
             if layer.gpu.text_count > 0 {
-                if let (Some(bind), Some(_)) = (&self.text_bind_group, &self.text_atlas) {
-                    pass.set_pipeline(&self.text_pipeline);
-                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                    pass.set_bind_group(1, bind, &[]);
-                    pass.set_vertex_buffer(0, layer.gpu.text_vbo.as_ref().unwrap().slice(..));
-                    pass.draw(0..layer.gpu.text_count, 0..1);
+                if let (Some(text_bg), Some(_)) = (&self.text_bind_group, &self.text_atlas) {
+                    if let Some(text_vbo) = &layer.gpu.text_vbo {
+                        let z = layer.texts.iter().map(|t| t.z_index).max().unwrap_or(0);
+
+                        cmds.push(DrawCmd {
+                            z,
+                            pipeline: &self.text_pipeline,
+                            bind_group0: &self.uniform_bind_group,
+                            bind_group1: Some(text_bg.clone()),
+                            vertex_buffer: Some(text_vbo),
+                            vertex_range: 0..layer.gpu.text_count,
+                            instance_range: 0..1,
+                        });
+                    }
                 }
             }
-        }
-    }
 
-    pub fn build_text_atlas(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        ttf_bytes: &[u8],
-        px_sizes: &[u16], // e.g. &[18, 24]
-        atlas_w: u32,
-        atlas_h: u32, // e.g. 1024, 1024
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // 1) Load font
-        let font = Font::from_bytes(ttf_bytes, fontdue::FontSettings::default())
-            .map_err(|e| format!("Failed to load font: {e}"))?;
+            cmds.sort_by_key(|c| c.z);
 
-        // 2) Prepare packer & CPU atlas (R8, 1 byte/px)
-        let mut packer = DensePacker::new(atlas_w as i32, atlas_h as i32);
-        let mut cpu_atlas = vec![0u8; (atlas_w * atlas_h) as usize];
-
-        // ASCII HUD charset
-        let charset: Vec<char> = (32u8..127).map(|c| c as char).collect();
-        let mut glyphs: HashMap<(char, u16), GlyphUv> = HashMap::new();
-        let mut max_line_h = 0.0f32;
-
-        // 3) Rasterize, pack, blit
-        for &px in px_sizes {
-            for ch in &charset {
-                let (metrics, bitmap) = font.rasterize(*ch, px as f32);
-                if metrics.width == 0 || metrics.height == 0 {
-                    continue;
+            for c in cmds {
+                pass.set_pipeline(c.pipeline);
+                pass.set_bind_group(0, c.bind_group0, &[]);
+                if let Some(bg1) = &c.bind_group1 {
+                    pass.set_bind_group(1, bg1, &[]);
                 }
-
-                // pack rect for this glyph
-                let rect = packer
-                    .pack(
-                        (metrics.width as i32) + 2 * PAD,
-                        (metrics.height as i32) + 2 * PAD,
-                        false,
-                    )
-                    .ok_or("Atlas full")?;
-                let gx = rect.x + PAD;
-                let gy = rect.y + PAD;
-                // copy bitmap rows into the CPU atlas
-                for row in 0..metrics.height {
-                    let src_start = row * metrics.width;
-                    let src_end = src_start + metrics.width;
-
-                    let dst_y = (gy as usize) + (row as usize);
-                    let dst_x = gx as usize;
-                    let dst_index = dst_y * (atlas_w as usize) + dst_x;
-
-                    cpu_atlas[dst_index..dst_index + (metrics.width as usize)]
-                        .copy_from_slice(&bitmap[src_start..src_end]);
+                if let Some(vb) = c.vertex_buffer {
+                    pass.set_vertex_buffer(0, vb.slice(..));
                 }
-
-                // UVs in [0,1]
-                let u0 = (gx as f32) / atlas_w as f32;
-                let v0 = (gy as f32) / atlas_h as f32;
-                let u1 = (gx + metrics.width as i32) as f32 / atlas_w as f32;
-                let v1 = (gy + metrics.height as i32) as f32 / atlas_h as f32;
-
-                // Store glyph info; NOTE: flip ymin sign for baseline math later
-                glyphs.insert(
-                    (*ch, px),
-                    GlyphUv {
-                        u0,
-                        v0,
-                        u1,
-                        v1,
-                        advance: metrics.advance_width,
-                        w: metrics.width as f32,
-                        h: metrics.height as f32,
-                        bearing_x: metrics.xmin as f32,
-                        bearing_y: (metrics.ymin + metrics.height as i32) as f32,
-                    },
-                );
-
-                max_line_h = max_line_h.max(metrics.height as f32);
+                pass.draw(c.vertex_range.clone(), c.instance_range.clone());
             }
         }
-
-        // 4) Create GPU texture and upload
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Text Atlas"),
-            size: Extent3d {
-                width: atlas_w,
-                height: atlas_h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // For your wgpu build, bytes_per_row expects a plain u32
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            &cpu_atlas,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(atlas_w), // R8 => 1 byte/px * atlas_w
-                rows_per_image: Some(atlas_h),
-            },
-            Extent3d {
-                width: atlas_w,
-                height: atlas_h,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-
-        // 5) Bind group for the text pipeline
-        let text_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Text Atlas Bind Group"),
-            layout: &self.text_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        // 6) Save into renderer state
-        self.text_atlas = Some(TextAtlas {
-            tex,
-            view,
-            sampler,
-            size: (atlas_w, atlas_h),
-            glyphs,
-            line_height: max_line_h,
-        });
-        self.text_bind_group = Some(text_bind_group);
-
-        Ok(())
     }
 
     fn upload_layer(&self, queue: &wgpu::Queue, layer: &mut RuntimeLayer) {
@@ -1046,6 +960,160 @@ impl UiRenderer {
         layer.gpu.text_count = (text_vertices.len() as u32);
     }
 
+    pub fn build_text_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        ttf_bytes: &[u8],
+        px_sizes: &[u16], // e.g. &[18, 24]
+        atlas_w: u32,
+        atlas_h: u32, // e.g. 1024, 1024
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // 1) Load font
+        let font = Font::from_bytes(ttf_bytes, fontdue::FontSettings::default())
+            .map_err(|e| format!("Failed to load font: {e}"))?;
+
+        // 2) Prepare packer & CPU atlas (R8, 1 byte/px)
+        let mut packer = DensePacker::new(atlas_w as i32, atlas_h as i32);
+        let mut cpu_atlas = vec![0u8; (atlas_w * atlas_h) as usize];
+
+        // ASCII HUD charset
+        let charset: Vec<char> = (32u8..127).map(|c| c as char).collect();
+        let mut glyphs: HashMap<(char, u16), GlyphUv> = HashMap::new();
+        let mut max_line_h = 0.0f32;
+
+        // 3) Rasterize, pack, blit
+        for &px in px_sizes {
+            for ch in &charset {
+                let (metrics, bitmap) = font.rasterize(*ch, px as f32);
+                if metrics.width == 0 || metrics.height == 0 {
+                    continue;
+                }
+
+                // pack rect for this glyph
+                let rect = packer
+                    .pack(
+                        (metrics.width as i32) + 2 * PAD,
+                        (metrics.height as i32) + 2 * PAD,
+                        false,
+                    )
+                    .ok_or("Atlas full")?;
+                let gx = rect.x + PAD;
+                let gy = rect.y + PAD;
+                // copy bitmap rows into the CPU atlas
+                for row in 0..metrics.height {
+                    let src_start = row * metrics.width;
+                    let src_end = src_start + metrics.width;
+
+                    let dst_y = (gy as usize) + (row as usize);
+                    let dst_x = gx as usize;
+                    let dst_index = dst_y * (atlas_w as usize) + dst_x;
+
+                    cpu_atlas[dst_index..dst_index + (metrics.width as usize)]
+                        .copy_from_slice(&bitmap[src_start..src_end]);
+                }
+
+                // UVs in [0,1]
+                let u0 = (gx as f32) / atlas_w as f32;
+                let v0 = (gy as f32) / atlas_h as f32;
+                let u1 = (gx + metrics.width as i32) as f32 / atlas_w as f32;
+                let v1 = (gy + metrics.height as i32) as f32 / atlas_h as f32;
+
+                // Store glyph info; NOTE: flip ymin sign for baseline math later
+                glyphs.insert(
+                    (*ch, px),
+                    GlyphUv {
+                        u0,
+                        v0,
+                        u1,
+                        v1,
+                        advance: metrics.advance_width,
+                        w: metrics.width as f32,
+                        h: metrics.height as f32,
+                        bearing_x: metrics.xmin as f32,
+                        bearing_y: (metrics.ymin + metrics.height as i32) as f32,
+                    },
+                );
+
+                max_line_h = max_line_h.max(metrics.height as f32);
+            }
+        }
+
+        // 4) Create GPU texture and upload
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Text Atlas"),
+            size: Extent3d {
+                width: atlas_w,
+                height: atlas_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // For your wgpu build, bytes_per_row expects a plain u32
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &cpu_atlas,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(atlas_w), // R8 => 1 byte/px * atlas_w
+                rows_per_image: Some(atlas_h),
+            },
+            Extent3d {
+                width: atlas_w,
+                height: atlas_h,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // 5) Bind group for the text pipeline
+        let text_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Text Atlas Bind Group"),
+            layout: &self.text_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        // 6) Save into renderer state
+        self.text_atlas = Some(TextAtlas {
+            tex,
+            view,
+            sampler,
+            size: (atlas_w, atlas_h),
+            glyphs,
+            line_height: max_line_h,
+        });
+        self.text_bind_group = Some(text_bind_group);
+
+        Ok(())
+    }
+
     fn update_fps_layer(&mut self, ui: &mut UiButtonLoader, t: &TimeSystem) {
         let name = "debug_fps";
         if let Some(layer) = ui.layers.iter_mut().find(|l| l.name == name) {
@@ -1060,6 +1128,7 @@ impl UiRenderer {
             if layer.texts.is_empty() {
                 layer.texts.push(UiButtonText {
                     id: Some("fps_text".into()),
+                    z_index: 50,
                     x: 150.0,
                     y: 60.0,
                     stretch_x: 0.0,

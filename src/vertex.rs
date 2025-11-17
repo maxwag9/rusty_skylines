@@ -331,6 +331,7 @@ pub struct GuiLayout {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonText {
     pub id: Option<String>,
+    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
@@ -349,6 +350,8 @@ impl UiButtonText {
     pub(crate) fn from_json(t: UiButtonTextJson) -> Self {
         UiButtonText {
             id: t.id,
+            z_index: t.z_index,
+
             x: t.x,
             y: t.y,
             stretch_x: t.stretch_x,
@@ -398,6 +401,8 @@ impl UiButtonText {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonTextJson {
     pub id: Option<String>,
+    pub z_index: i32,
+
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
@@ -415,12 +420,15 @@ pub struct UiButtonTextJson {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircle {
     pub id: Option<String>,
+    pub z_index: i32,
+
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
     pub stretch_y: f32,
     pub radius: f32,
     pub border_thickness: f32,
+    pub fade: [f32; 4],
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
@@ -432,12 +440,15 @@ impl UiButtonCircle {
     pub(crate) fn from_json(c: UiButtonCircleJson) -> Self {
         UiButtonCircle {
             id: c.id,
+
+            z_index: c.z_index,
             x: c.x,
             y: c.y,
             stretch_x: c.stretch_x,
             stretch_y: c.stretch_y,
             radius: c.radius,
             border_thickness: c.border_thickness,
+            fade: [0.0; 4],
             fill_color: c.fill_color,
             border_color: c.border_color,
             glow_color: c.glow_color,
@@ -456,6 +467,7 @@ impl UiButtonCircle {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircleJson {
     pub id: Option<String>,
+    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub stretch_x: f32,
@@ -471,6 +483,7 @@ pub struct UiButtonCircleJson {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonOutline {
     pub id: Option<String>,
+    pub z_index: i32,
     pub parent_id: Option<String>,
 
     pub mode: f32, // 0 = circle, 1 = polygon
@@ -491,6 +504,8 @@ impl UiButtonOutline {
     pub(crate) fn from_json(o: UiButtonOutlineJson) -> Self {
         UiButtonOutline {
             id: o.id,
+
+            z_index: o.z_index,
             parent_id: o.parent_id,
             mode: o.mode,
             vertex_offset: 0,
@@ -514,6 +529,7 @@ impl UiButtonOutline {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonOutlineJson {
     pub id: Option<String>,
+    pub z_index: i32,
     pub parent_id: Option<String>,
     pub mode: f32,             // 0 = circle, 1 = polygon
     pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
@@ -529,6 +545,7 @@ pub struct UiButtonOutlineJson {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonHandle {
     pub id: Option<String>,
+    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub radius: f32,
@@ -545,6 +562,7 @@ impl UiButtonHandle {
     pub(crate) fn from_json(h: UiButtonHandleJson) -> Self {
         UiButtonHandle {
             id: h.id,
+            z_index: h.z_index,
             x: h.x,
             y: h.y,
             radius: h.radius,
@@ -568,6 +586,7 @@ impl UiButtonHandle {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonHandleJson {
     pub id: Option<String>,
+    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub radius: f32,
@@ -583,6 +602,7 @@ pub struct UiButtonHandleJson {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: Option<String>,
+    pub z_index: i32,
     pub vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
     pub tri_count: u32,
@@ -603,6 +623,7 @@ impl UiButtonPolygon {
 
         UiButtonPolygon {
             id: p.id,
+            z_index: p.z_index,
             vertices: verts,
             misc: MiscButtonSettings {
                 active: p.misc.active,
@@ -619,6 +640,7 @@ impl UiButtonPolygon {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygonJson {
     pub id: Option<String>,
+    pub z_index: i32,
     pub vertices: Vec<UiVertexJson>,
     pub misc: MiscButtonSettingsJson,
 }
