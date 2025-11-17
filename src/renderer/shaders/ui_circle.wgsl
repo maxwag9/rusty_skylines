@@ -13,6 +13,7 @@ struct CircleParams {
     border_color: vec4<f32>,
     glow_color:   vec4<f32>,
     glow_misc:    vec4<f32>,         // (glow_size, ...)
+    misc:         vec4<f32>, // THIS MOTHERFUCKER11111!!!11 AMERICA NUMBER 1
 };
 
 @group(1) @binding(0)

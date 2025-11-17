@@ -16,7 +16,9 @@
       <w>valv</w>
       <w>vbuf</w>
       <w>vcount</w>
+      <w>vertice</w>
       <w>verts</w>
+      <w>vidx</w>
       <w>wgsl</w>
       <w>ymax</w>
     </words>

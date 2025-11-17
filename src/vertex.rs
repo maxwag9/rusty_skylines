@@ -1,4 +1,5 @@
-use crate::renderer::ui_editor::UiLayer;
+use crate::renderer::helper::ensure_ccw;
+use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use serde::Deserialize;
 use wgpu::{
     Buffer, BufferAddress, VertexAttribute, VertexBufferLayout, VertexStepMode, vertex_attr_array,
@@ -58,6 +59,60 @@ impl Default for LayerGpu {
         }
     }
 }
+
+pub enum TouchState {
+    Pressed,
+    Held,
+    Released,
+    Idle,
+}
+
+#[derive(Debug)]
+pub struct LayerCache {
+    pub texts: Vec<TextParams>,
+    pub circle_params: Vec<CircleParams>,
+    pub outline_params: Vec<OutlineParams>,
+    pub handle_params: Vec<HandleParams>,
+    pub polygon_vertices: Vec<UiVertexPoly>,
+    pub outline_poly_vertices: Vec<[f32; 2]>,
+}
+
+impl Default for LayerCache {
+    fn default() -> Self {
+        Self {
+            texts: vec![],
+            circle_params: vec![],
+            outline_params: vec![],
+            handle_params: vec![],
+            polygon_vertices: vec![],
+            outline_poly_vertices: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SelectedUiElement {
+    pub layer_name: String,
+    pub element_id: String,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum UiElement {
+    Circle(UiButtonCircle),
+    Handle(UiButtonHandle),
+    Polygon(UiButtonPolygon),
+    Text(UiButtonText),
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ButtonRuntime {
+    pub touched_time: f32,
+    pub is_down: bool,
+    pub just_pressed: bool,
+    pub just_released: bool,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Vertex {
@@ -149,12 +204,76 @@ impl UiVertexText {
     }
 }
 
+#[derive(Debug)]
+pub struct RuntimeLayer {
+    pub name: String,
+    pub order: u32,
+    pub texts: Vec<UiButtonText>,
+    pub circles: Vec<UiButtonCircle>,
+    pub outlines: Vec<UiButtonOutline>,
+    pub handles: Vec<UiButtonHandle>,
+    pub polygons: Vec<UiButtonPolygon>,
+    pub active: bool,
+    // NEW: cached GPU data!!!
+    pub cache: LayerCache,
+
+    pub dirty: bool, // set true when anything changes or the screen will be dirty asf!
+    pub gpu: LayerGpu,
+    pub opaque: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UiLayer {
+    pub name: String,
+    pub order: u32,
+    pub texts: Option<Vec<UiButtonText>>,
+    pub circles: Option<Vec<UiButtonCircle>>,
+    pub outlines: Option<Vec<UiButtonOutline>>,
+    pub handles: Option<Vec<UiButtonHandle>>,
+    pub polygons: Option<Vec<UiButtonPolygon>>,
+    pub active: Option<bool>,
+    pub opaque: Option<bool>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UiLayerJson {
+    pub name: String,
+    pub order: u32,
+    pub texts: Option<Vec<UiButtonTextJson>>,
+    pub circles: Option<Vec<UiButtonCircleJson>>,
+    pub outlines: Option<Vec<UiButtonOutlineJson>>,
+    pub handles: Option<Vec<UiButtonHandleJson>>,
+    pub polygons: Option<Vec<UiButtonPolygonJson>>,
+    pub active: Option<bool>,
+    pub opaque: Option<bool>,
+}
+
 #[derive(Deserialize, Debug, Clone, Copy)]
 pub struct UiVertex {
     pub pos: [f32; 2],
     pub color: [f32; 4],
     pub roundness: f32,
     pub selected: bool,
+    pub id: usize,
+}
+
+impl UiVertex {
+    fn from_json(v: UiVertexJson, id: usize) -> Self {
+        UiVertex {
+            pos: v.pos,
+            color: v.color,
+            roundness: v.roundness,
+            selected: false,
+            id,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct UiVertexJson {
+    pub pos: [f32; 2],
+    pub color: [f32; 4],
+    pub roundness: f32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -196,9 +315,16 @@ pub struct MiscButtonSettings {
     pub pressable: bool,
     pub editable: bool,
 }
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct MiscButtonSettingsJson {
+    pub active: bool,
+    pub pressable: bool,
+    pub editable: bool,
+}
 #[derive(Deserialize, Debug)]
 pub struct GuiLayout {
-    pub layers: Vec<UiLayer>,
+    pub layers: Vec<UiLayerJson>,
 }
 
 // --- all possible button shapes ---
@@ -219,6 +345,73 @@ pub struct UiButtonText {
     pub misc: MiscButtonSettings,
 }
 
+impl UiButtonText {
+    pub(crate) fn from_json(t: UiButtonTextJson) -> Self {
+        UiButtonText {
+            id: t.id,
+            x: t.x,
+            y: t.y,
+            stretch_x: t.stretch_x,
+            stretch_y: t.stretch_y,
+            top_left_vertex: UiVertex {
+                pos: t.top_left_vertex.pos,
+                color: t.top_left_vertex.color,
+                roundness: t.top_left_vertex.roundness,
+                selected: false,
+                id: 0,
+            },
+            bottom_left_vertex: UiVertex {
+                pos: t.bottom_left_vertex.pos,
+                color: t.bottom_left_vertex.color,
+                roundness: t.bottom_left_vertex.roundness,
+                selected: false,
+                id: 0,
+            },
+            top_right_vertex: UiVertex {
+                pos: t.top_right_vertex.pos,
+                color: t.top_right_vertex.color,
+                roundness: t.top_right_vertex.roundness,
+                selected: false,
+                id: 0,
+            },
+            bottom_right_vertex: UiVertex {
+                pos: t.bottom_right_vertex.pos,
+                color: t.bottom_right_vertex.color,
+                roundness: t.bottom_right_vertex.roundness,
+                selected: false,
+                id: 0,
+            },
+            px: t.px,
+            color: t.color,
+            text: t.text,
+            misc: MiscButtonSettings {
+                active: t.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: t.misc.pressable,
+                editable: t.misc.editable,
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonTextJson {
+    pub id: Option<String>,
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub top_left_vertex: UiVertexJson,
+    pub bottom_left_vertex: UiVertexJson,
+    pub top_right_vertex: UiVertexJson,
+    pub bottom_right_vertex: UiVertexJson,
+    pub px: u16,
+    pub color: [f32; 4],
+    pub text: String,
+    pub misc: MiscButtonSettingsJson,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircle {
     pub id: Option<String>,
@@ -233,6 +426,47 @@ pub struct UiButtonCircle {
     pub glow_color: [f32; 4],
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
+}
+
+impl UiButtonCircle {
+    pub(crate) fn from_json(c: UiButtonCircleJson) -> Self {
+        UiButtonCircle {
+            id: c.id,
+            x: c.x,
+            y: c.y,
+            stretch_x: c.stretch_x,
+            stretch_y: c.stretch_y,
+            radius: c.radius,
+            border_thickness: c.border_thickness,
+            fill_color: c.fill_color,
+            border_color: c.border_color,
+            glow_color: c.glow_color,
+            glow_misc: c.glow_misc,
+            misc: MiscButtonSettings {
+                active: c.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: c.misc.pressable,
+                editable: c.misc.editable,
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonCircleJson {
+    pub id: Option<String>,
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub radius: f32,
+    pub border_thickness: f32,
+    pub fill_color: [f32; 4],
+    pub border_color: [f32; 4],
+    pub glow_color: [f32; 4],
+    pub glow_misc: GlowMisc,
+    pub misc: MiscButtonSettingsJson,
 }
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonOutline {
@@ -253,6 +487,45 @@ pub struct UiButtonOutline {
     pub misc: MiscButtonSettings,
 }
 
+impl UiButtonOutline {
+    pub(crate) fn from_json(o: UiButtonOutlineJson) -> Self {
+        UiButtonOutline {
+            id: o.id,
+            parent_id: o.parent_id,
+            mode: o.mode,
+            vertex_offset: 0,
+            vertex_count: 0,
+            shape_data: o.shape_data,
+            dash_color: o.dash_color,
+            dash_misc: o.dash_misc,
+            sub_dash_color: o.sub_dash_color,
+            sub_dash_misc: o.sub_dash_misc,
+            misc: MiscButtonSettings {
+                active: o.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: o.misc.pressable,
+                editable: o.misc.editable,
+            },
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonOutlineJson {
+    pub id: Option<String>,
+    pub parent_id: Option<String>,
+    pub mode: f32,             // 0 = circle, 1 = polygon
+    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
+
+    pub dash_color: [f32; 4],
+    pub dash_misc: DashMisc,
+    pub sub_dash_color: [f32; 4],
+    pub sub_dash_misc: DashMisc,
+
+    pub misc: MiscButtonSettingsJson,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonHandle {
     pub id: Option<String>,
@@ -268,21 +541,84 @@ pub struct UiButtonHandle {
     pub parent_id: Option<String>,
 }
 
+impl UiButtonHandle {
+    pub(crate) fn from_json(h: UiButtonHandleJson) -> Self {
+        UiButtonHandle {
+            id: h.id,
+            x: h.x,
+            y: h.y,
+            radius: h.radius,
+            handle_thickness: h.handle_thickness,
+            handle_color: h.handle_color,
+            handle_misc: h.handle_misc,
+            sub_handle_color: h.sub_handle_color,
+            sub_handle_misc: h.sub_handle_misc,
+            parent_id: h.parent_id,
+            misc: MiscButtonSettings {
+                active: h.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: h.misc.pressable,
+                editable: h.misc.editable,
+            },
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonVertexSelection {
+pub struct UiButtonHandleJson {
     pub id: Option<String>,
     pub x: f32,
     pub y: f32,
     pub radius: f32,
-    pub closeness: f32,
-    pub color: [f32; 4],
-    pub misc: MiscButtonSettings,
+    pub handle_thickness: f32,
+    pub handle_color: [f32; 4],
+    pub handle_misc: HandleMisc,
+    pub sub_handle_color: [f32; 4],
+    pub sub_handle_misc: HandleMisc,
+    pub misc: MiscButtonSettingsJson,
     pub parent_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: Option<String>,
-    pub(crate) vertices: Vec<UiVertex>,
+    pub vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
+    pub tri_count: u32,
+}
+impl UiButtonPolygon {
+    pub(crate) fn from_json(p: UiButtonPolygonJson, id_gen: &mut usize) -> Self {
+        let mut verts: Vec<UiVertex> = p
+            .vertices
+            .into_iter()
+            .map(|vj| {
+                let id = *id_gen;
+                *id_gen += 1;
+                UiVertex::from_json(vj, id)
+            })
+            .collect();
+
+        ensure_ccw(&mut verts);
+
+        UiButtonPolygon {
+            id: p.id,
+            vertices: verts,
+            misc: MiscButtonSettings {
+                active: p.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: p.misc.pressable,
+                editable: p.misc.editable,
+            },
+            tri_count: 0,
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonPolygonJson {
+    pub id: Option<String>,
+    pub vertices: Vec<UiVertexJson>,
+    pub misc: MiscButtonSettingsJson,
 }

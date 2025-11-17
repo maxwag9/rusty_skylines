@@ -626,7 +626,14 @@ impl UiRenderer {
                 pass.set_pipeline(&self.polygon_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, layer.gpu.poly_vbo.as_ref().unwrap().slice(..));
-                pass.draw(0..layer.gpu.poly_count, 0..1);
+                let mut offset: u32 = 0;
+
+                for polygon in layer.polygons.iter() {
+                    let count = (polygon.tri_count * 3) as u32;
+
+                    pass.draw(offset..offset + count, 0..1);
+                    offset += count;
+                }
             }
 
             if layer.gpu.outline_count > 0 {
@@ -1062,24 +1069,28 @@ impl UiRenderer {
                         color: [1.0; 4],
                         roundness: 0.0,
                         selected: false,
+                        id: 0,
                     },
                     bottom_left_vertex: UiVertex {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
                         selected: false,
+                        id: 1,
                     },
                     top_right_vertex: UiVertex {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
                         selected: false,
+                        id: 2,
                     },
                     bottom_right_vertex: UiVertex {
                         pos: [0.0, 0.0],
                         color: [1.0; 4],
                         roundness: 0.0,
                         selected: false,
+                        id: 3,
                     },
                     px: 24,
                     color: [1.0; 4],

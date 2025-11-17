@@ -62,21 +62,20 @@ pub fn dist(a: f32, b: f32, c: f32, d: f32) -> f32 {
     ((a - c) * (a - c) + (b - d) * (b - d)).sqrt()
 }
 
-pub fn order_vertices_ccw(verts: &mut Vec<UiVertex>) {
-    let mut cx = 0.0;
-    let mut cy = 0.0;
-    for v in verts.iter() {
-        cx += v.pos[0];
-        cy += v.pos[1];
+pub fn ensure_ccw(verts: &mut [UiVertex]) {
+    if compute_signed_area(verts) < 0.0 {
+        verts.reverse();
     }
-    cx /= verts.len() as f32;
-    cy /= verts.len() as f32;
-
-    verts.sort_by(|a, b| {
-        let ang_a = (a.pos[1] - cy).atan2(a.pos[0] - cx);
-        let ang_b = (b.pos[1] - cy).atan2(b.pos[0] - cx);
-        ang_a.partial_cmp(&ang_b).unwrap()
-    });
+}
+fn compute_signed_area(verts: &[UiVertex]) -> f32 {
+    let mut area = 0.0;
+    let n = verts.len();
+    for i in 0..n {
+        let p0 = verts[i].pos;
+        let p1 = verts[(i + 1) % n].pos;
+        area += p0[0] * p1[1] - p1[0] * p0[1];
+    }
+    area * 0.5
 }
 
 #[inline]

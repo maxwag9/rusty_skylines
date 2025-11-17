@@ -21,8 +21,7 @@
               0.0,
               1.0
             ],
-            "roundness": 0.0,
-            "selected": false
+            "roundness": 0.0
           },
           "bottom_left_vertex": {
             "pos": [
@@ -35,8 +34,7 @@
               0.0,
               1.0
             ],
-            "roundness": 0.0,
-            "selected": false
+            "roundness": 0.0
           },
           "top_right_vertex": {
             "pos": [
@@ -49,8 +47,7 @@
               1.0,
               1.0
             ],
-            "roundness": 0.0,
-            "selected": false
+            "roundness": 0.0
           },
           "bottom_right_vertex": {
             "pos": [
@@ -63,21 +60,18 @@
               1.0,
               1.0
             ],
-            "roundness": 0.0,
-            "selected": false
+            "roundness": 0.0
           },
           "px": 24,
           "color": [
             0.0,
             1.0,
-            0.0,
+            1.0,
             0.7
           ],
           "text": "String!!!",
           "misc": {
             "active": true,
-            "touched_time": 0.0,
-            "is_touched": false,
             "pressable": false,
             "editable": true
           }
@@ -118,8 +112,44 @@
           },
           "misc": {
             "active": true,
-            "touched_time": 0.0,
-            "is_touched": false,
+            "pressable": true,
+            "editable": true
+          }
+        },
+        {
+          "id": "toggle_simulation2",
+          "type": "circle",
+          "x": 1200.0,
+          "y": 200.0,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 60.0,
+          "border_thickness": 13.0,
+          "fill_color": [
+            0.1,
+            0.3,
+            0.1,
+            1.0
+          ],
+          "border_color": [
+            0.1,
+            0.3,
+            0.3,
+            1.0
+          ],
+          "glow_color": [
+            0.15,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_misc": {
+            "glow_size": 200.0,
+            "glow_speed": 2.0,
+            "glow_intensity": 1.0
+          },
+          "misc": {
+            "active": true,
             "pressable": true,
             "editable": true
           }
@@ -141,8 +171,7 @@
                 0,
                 1
               ],
-              "roundness": 0,
-              "selected": false
+              "roundness": 0
             },
             {
               "pos": [
@@ -155,8 +184,7 @@
                 1,
                 1
               ],
-              "roundness": 0,
-              "selected": false
+              "roundness": 0
             },
             {
               "pos": [
@@ -169,8 +197,7 @@
                 1,
                 1
               ],
-              "roundness": 0,
-              "selected": false
+              "roundness": 0
             },
             {
               "pos": [
@@ -183,15 +210,75 @@
                 0,
                 1
               ],
-              "roundness": 0,
-              "selected": false
+              "roundness": 0
             }
           ],
 
           "misc": {
             "active": true,
-            "touched_time": 0.0,
-            "is_touched": false,
+            "pressable": true,
+            "editable": true
+          }
+        },
+        {
+          "id": "fard2",
+          "type": "polygon",
+          "vertices": [
+            {
+              "pos": [
+                1550.0,
+                1500.0
+              ],
+              "color": [
+                1,
+                0,
+                0,
+                1
+              ],
+              "roundness": 0
+            },
+            {
+              "pos": [
+                1950.0,
+                1500.0
+              ],
+              "color": [
+                0,
+                0,
+                1,
+                1
+              ],
+              "roundness": 0
+            },
+            {
+              "pos": [
+                1900.0,
+                950.0
+              ],
+              "color": [
+                1,
+                1,
+                1,
+                1
+              ],
+              "roundness": 0
+            },
+            {
+              "pos": [
+                1500.0,
+                950.0
+              ],
+              "color": [
+                0,
+                1,
+                0,
+                1
+              ],
+              "roundness": 0
+            }
+          ],
+          "misc": {
+            "active": true,
             "pressable": true,
             "editable": true
           }

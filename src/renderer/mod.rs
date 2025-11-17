@@ -2,7 +2,7 @@ pub mod core;
 pub mod helper;
 pub mod pipelines;
 pub mod render_passes;
-mod ui;
+pub(crate) mod ui;
 pub mod ui_editor;
 
 use crate::components::camera::Camera;
