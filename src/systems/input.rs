@@ -28,23 +28,25 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let up = Vec3::Y;
 
     let mut wish = Vec3::ZERO;
-    if resources.input.pressed("w") {
-        wish += forward;
-    }
-    if resources.input.pressed("s") {
-        wish -= forward;
-    }
-    if resources.input.pressed("a") {
-        wish -= right;
-    }
-    if resources.input.pressed("d") {
-        wish += right;
-    }
-    if resources.input.pressed("q") {
-        wish += up;
-    }
-    if resources.input.pressed("e") {
-        wish -= up;
+    if !resources.settings.editor_mode {
+        if resources.input.pressed("w") {
+            wish += forward;
+        }
+        if resources.input.pressed("s") {
+            wish -= forward;
+        }
+        if resources.input.pressed("a") {
+            wish -= right;
+        }
+        if resources.input.pressed("d") {
+            wish += right;
+        }
+        if resources.input.pressed("q") {
+            wish += up;
+        }
+        if resources.input.pressed("e") {
+            wish -= up;
+        }
     }
 
     let base_speed = 8.0;

@@ -1,6 +1,6 @@
 use crate::renderer::helper::ensure_ccw;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use wgpu::{
     Buffer, BufferAddress, VertexAttribute, VertexBufferLayout, VertexStepMode, vertex_attr_array,
 };
@@ -235,7 +235,7 @@ pub struct UiLayer {
     pub opaque: Option<bool>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UiLayerJson {
     pub name: String,
     pub order: u32,
@@ -267,23 +267,31 @@ impl UiVertex {
             id,
         }
     }
+
+    pub fn to_json(&self) -> UiVertexJson {
+        UiVertexJson {
+            pos: self.pos,
+            color: self.color,
+            roundness: self.roundness,
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
 pub struct UiVertexJson {
     pub pos: [f32; 2],
     pub color: [f32; 4],
     pub roundness: f32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct GlowMisc {
     pub glow_size: f32,
     pub glow_speed: f32,
     pub glow_intensity: f32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DashMisc {
     pub dash_len: f32,
     pub dash_spacing: f32,
@@ -291,7 +299,7 @@ pub struct DashMisc {
     pub dash_speed: f32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ShapeData {
     pub x: f32,
     pub y: f32,
@@ -299,7 +307,7 @@ pub struct ShapeData {
     pub border_thickness: f32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct HandleMisc {
     pub handle_len: f32,
     pub handle_width: f32,
@@ -307,7 +315,7 @@ pub struct HandleMisc {
     pub handle_speed: f32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct MiscButtonSettings {
     pub active: bool,
     pub touched_time: f32,
@@ -316,13 +324,24 @@ pub struct MiscButtonSettings {
     pub editable: bool,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+impl MiscButtonSettings {
+    pub fn to_json(&self) -> MiscButtonSettingsJson {
+        MiscButtonSettingsJson {
+            active: self.active,
+            pressable: self.pressable,
+            editable: self.editable,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct MiscButtonSettingsJson {
     pub active: bool,
     pub pressable: bool,
     pub editable: bool,
 }
-#[derive(Deserialize, Debug)]
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct GuiLayout {
     pub layers: Vec<UiLayerJson>,
 }
@@ -396,9 +415,31 @@ impl UiButtonText {
             },
         }
     }
+
+    pub fn to_json(&self) -> UiButtonTextJson {
+        UiButtonTextJson {
+            id: self.id.clone(),
+            z_index: self.z_index,
+
+            x: self.x,
+            y: self.y,
+            stretch_x: self.stretch_x,
+            stretch_y: self.stretch_y,
+
+            top_left_vertex: self.top_left_vertex.to_json(),
+            bottom_left_vertex: self.bottom_left_vertex.to_json(),
+            top_right_vertex: self.top_right_vertex.to_json(),
+            bottom_right_vertex: self.bottom_right_vertex.to_json(),
+
+            px: self.px,
+            color: self.color,
+            text: self.text.clone(),
+            misc: self.misc.to_json(),
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonTextJson {
     pub id: Option<String>,
     pub z_index: i32,
@@ -462,9 +503,31 @@ impl UiButtonCircle {
             },
         }
     }
+
+    pub fn to_json(&self) -> UiButtonCircleJson {
+        UiButtonCircleJson {
+            id: self.id.clone(),
+            z_index: self.z_index,
+
+            x: self.x,
+            y: self.y,
+            stretch_x: self.stretch_x,
+            stretch_y: self.stretch_y,
+
+            radius: self.radius,
+            border_thickness: self.border_thickness,
+
+            fill_color: self.fill_color,
+            border_color: self.border_color,
+            glow_color: self.glow_color,
+            glow_misc: self.glow_misc.clone(),
+
+            misc: self.misc.to_json(),
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonCircleJson {
     pub id: Option<String>,
     pub z_index: i32,
@@ -524,9 +587,27 @@ impl UiButtonOutline {
             },
         }
     }
+
+    pub fn to_json(&self) -> UiButtonOutlineJson {
+        UiButtonOutlineJson {
+            id: self.id.clone(),
+            z_index: self.z_index,
+            parent_id: self.parent_id.clone(),
+
+            mode: self.mode,
+            shape_data: self.shape_data.clone(),
+
+            dash_color: self.dash_color,
+            dash_misc: self.dash_misc.clone(),
+            sub_dash_color: self.sub_dash_color,
+            sub_dash_misc: self.sub_dash_misc.clone(),
+
+            misc: self.misc.to_json(),
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonOutlineJson {
     pub id: Option<String>,
     pub z_index: i32,
@@ -581,9 +662,29 @@ impl UiButtonHandle {
             },
         }
     }
+
+    pub fn to_json(&self) -> UiButtonHandleJson {
+        UiButtonHandleJson {
+            id: self.id.clone(),
+            z_index: self.z_index,
+            x: self.x,
+            y: self.y,
+            radius: self.radius,
+
+            handle_thickness: self.handle_thickness,
+            handle_color: self.handle_color,
+            handle_misc: self.handle_misc.clone(),
+
+            sub_handle_color: self.sub_handle_color,
+            sub_handle_misc: self.sub_handle_misc.clone(),
+
+            parent_id: self.parent_id.clone(),
+            misc: self.misc.to_json(),
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonHandleJson {
     pub id: Option<String>,
     pub z_index: i32,
@@ -635,9 +736,20 @@ impl UiButtonPolygon {
             tri_count: 0,
         }
     }
+
+    pub fn to_json(&self) -> UiButtonPolygonJson {
+        UiButtonPolygonJson {
+            id: self.id.clone(),
+            z_index: self.z_index,
+
+            vertices: self.vertices.iter().map(|v| v.to_json()).collect(),
+
+            misc: self.misc.to_json(),
+        }
+    }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonPolygonJson {
     pub id: Option<String>,
     pub z_index: i32,

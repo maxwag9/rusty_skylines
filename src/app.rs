@@ -139,6 +139,21 @@ impl ApplicationHandler for App {
                             .ui_runtime
                             .update_editor_mode(resources.settings.editor_mode);
                     }
+
+                    if resources.input.ctrl_pressed {
+                        if let Key::Character(ch) = &event.logical_key {
+                            if ch.eq_ignore_ascii_case("s") {
+                                if let Err(e) = resources
+                                    .ui_loader
+                                    .save_gui_to_file("ui_data/gui_layout.json")
+                                {
+                                    eprintln!("Failed to save GUI layout...: {e}...");
+                                } else {
+                                    println!("Saved GUI layout successfullay!");
+                                }
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {

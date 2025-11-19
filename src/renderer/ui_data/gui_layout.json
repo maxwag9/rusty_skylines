@@ -5,7 +5,7 @@
       "order": 1,
       "texts": [
         {
-          "type": "text",
+          "id": null,
           "z_index": 0,
           "x": 200.0,
           "y": 500.0,
@@ -82,12 +82,11 @@
         {
           "id": "toggle_simulation",
           "z_index": 0,
-          "type": "circle",
-          "x": 1500.0,
-          "y": 200.0,
+          "x": 550.1285,
+          "y": 502.934,
           "stretch_x": 1.0,
           "stretch_y": 1.0,
-          "radius": 60.0,
+          "radius": 250.61922,
           "border_thickness": 13.0,
           "fill_color": [
             0.1,
@@ -121,9 +120,8 @@
         {
           "id": "toggle_simulation2",
           "z_index": 0,
-          "type": "circle",
-          "x": 1200.0,
-          "y": 200.0,
+          "x": 2085.457,
+          "y": 272.3594,
           "stretch_x": 1.0,
           "stretch_y": 1.0,
           "radius": 60.0,
@@ -158,37 +156,25 @@
           }
         }
       ],
+      "outlines": [],
+      "handles": [],
       "polygons": [
         {
           "id": "fard",
           "z_index": 0,
-          "type": "polygon",
           "vertices": [
             {
               "pos": [
-                550.0,
-                500.0
+                2070.164,
+                284.28088
               ],
               "color": [
-                1,
-                0,
-                0,
-                1
+                0.0,
+                1.0,
+                0.0,
+                1.0
               ],
-              "roundness": 0
-            },
-            {
-              "pos": [
-                950.0,
-                500.0
-              ],
-              "color": [
-                0,
-                0,
-                1,
-                1
-              ],
-              "roundness": 0
+              "roundness": 0.0
             },
             {
               "pos": [
@@ -196,28 +182,40 @@
                 950.0
               ],
               "color": [
-                1,
-                1,
-                1,
-                1
+                1.0,
+                1.0,
+                1.0,
+                1.0
               ],
-              "roundness": 0
+              "roundness": 0.0
             },
             {
               "pos": [
-                500.0,
-                950.0
+                950.0,
+                500.0
               ],
               "color": [
-                0,
-                1,
-                0,
-                1
+                0.0,
+                0.0,
+                1.0,
+                1.0
               ],
-              "roundness": 0
+              "roundness": 0.0
+            },
+            {
+              "pos": [
+                550.0,
+                500.0
+              ],
+              "color": [
+                1.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "roundness": 0.0
             }
           ],
-
           "misc": {
             "active": true,
             "pressable": true,
@@ -227,59 +225,58 @@
         {
           "id": "fard2",
           "z_index": -30,
-          "type": "polygon",
           "vertices": [
             {
               "pos": [
-                1550.0,
-                1500.0
+                1098.2051,
+                944.90393
               ],
               "color": [
-                1,
-                0,
-                0,
-                1
+                1.0,
+                0.0,
+                0.0,
+                1.0
               ],
-              "roundness": 0
+              "roundness": 0.0
             },
             {
               "pos": [
-                1950.0,
-                1500.0
+                399.57578,
+                1142.3796
               ],
               "color": [
-                0,
-                0,
-                1,
-                1
+                0.0,
+                0.0,
+                1.0,
+                1.0
               ],
-              "roundness": 0
+              "roundness": 0.0
             },
             {
               "pos": [
-                1900.0,
-                950.0
+                1448.2051,
+                394.904
               ],
               "color": [
-                1,
-                1,
-                1,
-                1
+                1.0,
+                1.0,
+                1.0,
+                1.0
               ],
-              "roundness": 0
+              "roundness": 0.0
             },
             {
               "pos": [
-                1500.0,
-                950.0
+                2325.3782,
+                1214.3868
               ],
               "color": [
-                0,
-                1,
-                0,
-                1
+                0.0,
+                1.0,
+                0.0,
+                1.0
               ],
-              "roundness": 0
+              "roundness": 0.0
             }
           ],
           "misc": {
@@ -288,11 +285,94 @@
             "editable": true
           }
         }
-      ]
+      ],
+      "active": true,
+      "opaque": false
     },
     {
       "name": "debug_fps",
-      "order": 2
+      "order": 2,
+      "texts": [
+        {
+          "id": "fps_text",
+          "z_index": 50,
+          "x": 150.0,
+          "y": 60.0,
+          "stretch_x": 0.0,
+          "stretch_y": 0.0,
+          "top_left_vertex": {
+            "pos": [
+              0.0,
+              0.0
+            ],
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "roundness": 0.0
+          },
+          "bottom_left_vertex": {
+            "pos": [
+              0.0,
+              0.0
+            ],
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "roundness": 0.0
+          },
+          "top_right_vertex": {
+            "pos": [
+              0.0,
+              0.0
+            ],
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "roundness": 0.0
+          },
+          "bottom_right_vertex": {
+            "pos": [
+              0.0,
+              0.0
+            ],
+            "color": [
+              1.0,
+              1.0,
+              1.0,
+              1.0
+            ],
+            "roundness": 0.0
+          },
+          "px": 24,
+          "color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "text": "FPS: 99.0 | Frame: 10.11ms | Sim: 0.00ms",
+          "misc": {
+            "active": true,
+            "pressable": false,
+            "editable": false
+          }
+        }
+      ],
+      "circles": [],
+      "outlines": [],
+      "handles": [],
+      "polygons": [],
+      "active": true,
+      "opaque": false
     }
   ]
 }

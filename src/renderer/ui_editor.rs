@@ -166,6 +166,50 @@ impl UiButtonLoader {
         Ok(parsed)
     }
 
+    pub fn save_gui_to_file(&self, path: &str) -> anyhow::Result<()> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let mut full_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        full_path.push("src/renderer");
+        full_path.push(path);
+
+        // Convert runtime → serializable JSON
+        let layout = self.to_gui_layout();
+
+        let json = serde_json::to_string_pretty(&layout)?;
+        fs::write(&full_path, json)?;
+
+        println!("GUI saved to {}", full_path.display());
+        Ok(())
+    }
+
+    fn to_gui_layout(&self) -> GuiLayout {
+        let mut layers = Vec::new();
+
+        for l in &self.layers {
+            // Skip editor-only layers to avoid saving internal junk
+            if l.name == "editor" || l.name == "editor_selection" || l.name == "editor_handles" {
+                continue;
+            }
+
+            layers.push(UiLayerJson {
+                name: l.name.clone(),
+                order: l.order,
+                active: Some(l.active),
+                opaque: Some(l.opaque),
+
+                texts: Some(l.texts.iter().map(|t| t.to_json()).collect()),
+                circles: Some(l.circles.iter().map(|c| c.to_json()).collect()),
+                outlines: Some(l.outlines.iter().map(|o| o.to_json()).collect()),
+                handles: Some(l.handles.iter().map(|h| h.to_json()).collect()),
+                polygons: Some(l.polygons.iter().map(|p| p.to_json()).collect()),
+            });
+        }
+
+        GuiLayout { layers }
+    }
+
     fn add_editor_layers(&mut self) {
         self.layers.push(RuntimeLayer {
             name: "editor_selection".into(),
