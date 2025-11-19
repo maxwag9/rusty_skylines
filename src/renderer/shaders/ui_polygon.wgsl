@@ -24,5 +24,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color; // plain polygon color
+    // Base color
+    let c = in.color;
+
+    return vec4<f32>(c.rgb, c.a);
 }
+

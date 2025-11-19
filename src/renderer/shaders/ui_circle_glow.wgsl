@@ -88,32 +88,35 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let p = circles[in.circle_index];
 
-    let center = p.center_radius_border.xy;
-    let radius = p.center_radius_border.z;
-    let glow_size = p.glow_misc.x;
-    let glow_speed = p.glow_misc.y;
+    let center      = p.center_radius_border.xy;
+    let radius      = p.center_radius_border.z;
+    let glow_size   = p.glow_misc.x;
+    let glow_speed  = p.glow_misc.y;
     let glow_intensity = p.glow_misc.z;
-    let held_time = p.misc.y;
-    let is_down = p.misc.z;
-    let id_hash = p.misc.w;
+    let held_time   = p.misc.y;
+    let is_down     = p.misc.z;
+    let id_hash     = p.misc.w;
 
+    // radial distance from center
     let dist = distance(in.local_pos, center);
 
     // ---------------------------------------------------------------
-    // Base pulsing glow (slow breathing...)
+    // Base pulsing glow
     // ---------------------------------------------------------------
     let pulse = 0.5 + 0.5 * sin(screen.time * glow_speed + id_hash * 314.15);
     let base_glow = mix(0.15, 1.0, pulse) * glow_intensity;
 
     // ---------------------------------------------------------------
-    // Press animation (with quick flash lightning bolt + decay)
+    // Press animation (flash on click)
     // ---------------------------------------------------------------
-    // stronger flash right when button is pressed (held_time near 0)
     let flash = exp(-held_time * 4.0) * is_down;
 
-    // combine pulsing and press effects
-    let glow_strength = (1.0 - smoothstep(radius, radius + glow_size, dist)) * (base_glow + flash);
+    // radial mask from inner edge of glow to outer falloff
+    // 1.0 at radius, 0.0 at radius + glow_size
+    let radial_mask = 1.0 - smoothstep(radius, radius + glow_size, dist);
 
+    // combine pulsing and press effects
+    let glow_strength = radial_mask * (base_glow + flash);
 
     // ---------------------------------------------------------------
     // Apply color + alpha
@@ -121,18 +124,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var col = vec4<f32>(p.glow_color.rgb * glow_strength, glow_strength);
 
     // ---------------------------------------------------------------
-    // Dither and gentle subtle noise
+    // Bayer dither (optional)
+    // use pixel-ish coordinates, not radius based
     // ---------------------------------------------------------------
-    let px = i32(in.local_pos.x) & 3;
-    let py = i32(in.local_pos.y) & 3;
+    let px = i32(floor(in.local_pos.x)) & 3;
+    let py = i32(floor(in.local_pos.y)) & 3;
     let dither = DITHER_MATRIX[py][px] - 0.5;
 
-    // small temporal noise for film-like motion
-    let n = hash(in.local_pos.xy + vec2<f32>(screen.time, screen.time * 37.0));
-    let offset = (n - 0.5) * (1.0 / 255.0) * 3.0;
+    // ---------------------------------------------------------------
+    // Temporal noise scaled by radial glow
+    // ---------------------------------------------------------------
+    // raw noise in [-0.5, 0.5]
+    let n = hash(in.local_pos.xy + vec2<f32>(screen.time, screen.time * 37.0)) - 0.5;
 
-    col = vec4<f32>(col.rgb + offset, col.a);
+    // make noise strongest near the bright part and fade out toward outer edge
+    // square the mask for a steeper falloff at the edge
+    let noise_scale = (radial_mask * radial_mask);
+
+    // final offset is tiny and radially attenuated
+    let offset = n * (3.0 / 255.0) * noise_scale;
+
+    col = vec4<f32>(col.rgb + vec3<f32>(offset), col.a);
 
 
     return col;
 }
+

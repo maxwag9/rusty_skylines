@@ -171,7 +171,7 @@ impl RenderCore {
         let num_vertices = vertices.len() as u32;
 
         let pipelines = Pipelines::new(&device, config.format, msaa_samples);
-        let mut ui_renderer = UiRenderer::new(&device, config.format, size);
+        let mut ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples);
         let _ = ui_renderer.build_text_atlas(&device, &queue, &FONT_TTF, &[14, 18, 24], 1024, 1024);
 
         Self {
@@ -328,25 +328,8 @@ impl RenderCore {
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
             pass.set_vertex_buffer(0, self.pipelines.gizmo_vbuf.slice(..));
             pass.draw(0..6, 0..1);
-        }
 
-        // --- UI pass ---
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("UI Pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &surface_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load, // don’t clear, draw over
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            // --- UI pass ---
 
             let elapsed = time.total_time;
             let enable_dither = 1;
@@ -360,7 +343,7 @@ impl RenderCore {
             };
 
             self.queue.write_buffer(
-                &self.ui_renderer.uniform_buffer,
+                &self.ui_renderer.pipelines.uniform_buffer,
                 0,
                 bytemuck::bytes_of(&screen_uniform),
             );
@@ -409,5 +392,8 @@ impl RenderCore {
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
         self.pipelines.recreate_pipelines();
+
+        self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
+        self.ui_renderer.pipelines.rebuild_pipelines();
     }
 }

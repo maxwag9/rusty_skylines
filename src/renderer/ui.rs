@@ -1,12 +1,11 @@
-use crate::renderer::helper::{make_pipeline, make_uniform_layout};
 use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
+use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::{MouseState, TimeSystem};
 use crate::vertex::{MiscButtonSettings, UiButtonText, UiVertex, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
 use std::ops::Range;
-use util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 
@@ -41,32 +40,6 @@ pub struct TextAtlas {
     pub size: (u32, u32),
     pub glyphs: HashMap<(char, u16), GlyphUv>, // (char, px_size) -> uv+metrics
     pub line_height: f32,
-}
-
-pub struct UiRenderer {
-    pub vertex_buffer: Buffer,
-    pub uniform_bind_group: BindGroup,
-    pub num_vertices: u32,
-    circle_pipeline: RenderPipeline,
-    outline_pipeline: RenderPipeline,
-    polygon_pipeline: RenderPipeline,
-    overlay_polygon_pipeline: RenderPipeline,
-    pub circles: Vec<CircleParams>,
-    pub quad_buffer: Buffer,
-    glow_pipeline: RenderPipeline,
-    pub(crate) uniform_buffer: Buffer,
-    device: Device,
-    circle_layout: BindGroupLayout,
-    pub text_atlas: Option<TextAtlas>,
-    pub text_pipeline: RenderPipeline,
-    pub text_layout: BindGroupLayout,
-    pub text_bind_group: Option<BindGroup>,
-    pub text_vertex_buffer: Buffer,
-    pub text_vertex_count: u32,
-    pub handle_pipeline: RenderPipeline,
-    pub handle_layout: BindGroupLayout,
-    pub handle_quad_buffer: Buffer,
-    pub outline_layout: BindGroupLayout,
 }
 
 #[repr(C)]
@@ -191,362 +164,24 @@ pub struct DrawCmd<'a> {
     pub instance_range: Range<u32>,
 }
 
+pub struct UiRenderer {
+    pub pipelines: UiPipelines,
+
+    device: Device,
+}
+
 impl UiRenderer {
-    pub fn new(device: &Device, format: TextureFormat, size: PhysicalSize<u32>) -> Self {
-        let handle_quad_vertices = [
-            UiVertexPoly {
-                pos: [-3.0, -3.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0; 4],
-            },
-            UiVertexPoly {
-                pos: [3.0, -3.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0; 4],
-            },
-            UiVertexPoly {
-                pos: [-3.0, 3.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0; 4],
-            },
-            UiVertexPoly {
-                pos: [3.0, 3.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0; 4],
-            },
-        ];
-        let handle_quad_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Handle Quad VB"),
-            contents: bytemuck::cast_slice(&handle_quad_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let quad_vertices = [
-            UiVertexPoly {
-                pos: [-1.0, -1.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0, 0.0, 0.0, 0.0],
-            },
-            UiVertexPoly {
-                pos: [1.0, -1.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0, 0.0, 0.0, 0.0],
-            },
-            UiVertexPoly {
-                pos: [-1.0, 1.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0, 0.0, 0.0, 0.0],
-            },
-            UiVertexPoly {
-                pos: [1.0, 1.0],
-                _pad: [1.0; 2],
-                color: [1.0; 4],
-                misc: [1.0, 0.0, 0.0, 0.0],
-            },
-        ];
-        let quad_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("UI Quad VB"),
-            contents: bytemuck::cast_slice(&quad_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-        let vertex_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("UI VB"),
-            size: 1024 * 1024, // 1MB buffer
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let layout = make_uniform_layout(device, "UI Bind Layout");
-
-        let screen_uniform = ScreenUniform {
-            size: [size.width as f32, size.height as f32],
-            time: 0.0,
-            enable_dither: 1,
-            mouse: [0.0, 0.0],
-        };
-        let screen_data = bytemuck::bytes_of(&screen_uniform);
-
-        let uniform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("UI Uniforms"),
-            contents: screen_data,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-        let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("UI Bind Group"),
-            layout: &layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        let text_shader = device.create_shader_module(include_wgsl!("shaders/text.wgsl"));
-        let text_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Text Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let text_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Text Pipeline Layout"),
-            bind_group_layouts: &[&layout, &text_layout],
-            push_constant_ranges: &[],
-        });
-        let text_pipeline = make_pipeline(
-            device,
-            "UI Text Pipeline",
-            &text_pipeline_layout,
-            &text_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexText::desc()],
-            format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleList,
-        );
-
-        let text_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("UI Text VB"),
-            size: 256 * 1024,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
-        let circles = vec![CircleParams::default()];
-        let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
-        let outline_shader =
-            device.create_shader_module(include_wgsl!("shaders/ui_shape_outline.wgsl"));
-        let handle_shader = device.create_shader_module(include_wgsl!("shaders/ui_handle.wgsl"));
-        let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Circle Layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX_FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let circle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Circle Pipeline Layout"),
-            bind_group_layouts: &[&layout, &circle_layout],
-            push_constant_ranges: &[],
-        });
-
-        let circle_pipeline = make_pipeline(
-            device,
-            "UI Circle Pipeline",
-            &circle_pipeline_layout,
-            &circle_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleStrip,
-        );
-        let good_blend = Some(wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::SrcAlpha,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: BlendOperation::Add,
-            },
-        });
-        let outline_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Outline Layout"),
-            entries: &[
-                // binding 0 = ShapeParams SSBO
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 1 = PolygonVertices SSBO
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Outline Pipeline Layout"),
-            bind_group_layouts: &[&layout, &outline_layout],
-            push_constant_ranges: &[],
-        });
-
-        let outline_pipeline = make_pipeline(
-            device,
-            "UI Outline Pipeline",
-            &outline_pipeline_layout,
-            &outline_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            good_blend,
-            PrimitiveTopology::TriangleStrip,
-        );
-        let handle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Handle Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let handle_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Handle Pipeline Layout"),
-                bind_group_layouts: &[&layout, &handle_layout],
-                push_constant_ranges: &[],
-            });
-
-        let handle_pipeline = make_pipeline(
-            device,
-            "UI Handle Pipeline",
-            &handle_pipeline_layout,
-            &handle_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            good_blend,
-            PrimitiveTopology::TriangleStrip,
-        );
-        let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
-        let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("UI Pipeline Layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
-        });
-        let polygon_pipeline = make_pipeline(
-            device,
-            "UI Polygon Pipeline",
-            &polygon_pipeline_layout,
-            &polygon_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleStrip,
-        );
-        let overlay_polygon_pipeline = make_pipeline(
-            device,
-            "UI Polygon Pipeline",
-            &polygon_pipeline_layout,
-            &polygon_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            None,
-            PrimitiveTopology::TriangleStrip,
-        );
-
-        let glow_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle_glow.wgsl"));
-        let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("UI Glow Pipeline Layout"),
-            bind_group_layouts: &[&layout, &circle_layout],
-            push_constant_ranges: &[],
-        });
-        let additive_blend = BlendState {
-            color: BlendComponent {
-                src_factor: BlendFactor::One,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::Add,
-            },
-            alpha: BlendComponent {
-                src_factor: BlendFactor::One,
-                dst_factor: BlendFactor::OneMinusSrcAlpha,
-                operation: BlendOperation::Add,
-            },
-        };
-
-        let glow_pipeline = make_pipeline(
-            device,
-            "UI Glow Pipeline",
-            &glow_pipeline_layout,
-            &glow_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            Some(additive_blend),
-            PrimitiveTopology::TriangleStrip,
-        );
+    pub fn new(
+        device: &Device,
+        format: TextureFormat,
+        size: PhysicalSize<u32>,
+        msaa_samples: u32,
+    ) -> Self {
+        let pipelines = UiPipelines::new(device, format, msaa_samples, size);
 
         Self {
-            vertex_buffer,
-            uniform_bind_group,
-            num_vertices: 0,
-            circle_pipeline,
-            outline_pipeline,
-            polygon_pipeline,
-            overlay_polygon_pipeline,
-            handle_pipeline,
-            circles,
-            quad_buffer,
-            handle_quad_buffer,
-            glow_pipeline,
-            uniform_buffer,
-            handle_layout,
+            pipelines,
             device: device.clone(),
-            circle_layout,
-            text_atlas: None,
-            text_pipeline,
-            text_layout,
-            text_bind_group: None,
-            text_vertex_buffer,
-            text_vertex_count: 0,
-            outline_layout,
         }
     }
 
@@ -566,7 +201,11 @@ impl UiRenderer {
             mouse: mouse.pos.to_array(),
         };
 
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&new_uniform));
+        queue.write_buffer(
+            &self.pipelines.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&new_uniform),
+        );
         self.update_fps_layer(ui, time);
 
         let dirty_layers: Vec<usize> = ui
@@ -589,7 +228,7 @@ impl UiRenderer {
             if layer.gpu.circle_count > 0 {
                 let circle_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
-                    layout: &self.circle_layout,
+                    layout: &self.pipelines.circle_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
@@ -607,20 +246,20 @@ impl UiRenderer {
 
                     cmds.push(DrawCmd {
                         z,
-                        pipeline: &self.circle_pipeline,
-                        bind_group0: &self.uniform_bind_group,
+                        pipeline: &self.pipelines.circle_pipeline,
+                        bind_group0: &self.pipelines.uniform_bind_group,
                         bind_group1: Some(circle_bg.clone()),
-                        vertex_buffer: Some(&self.quad_buffer),
+                        vertex_buffer: Some(&self.pipelines.quad_buffer),
                         vertex_range: 0..4,
                         instance_range: *idx..*idx + 1,
                     });
 
                     cmds.push(DrawCmd {
                         z,
-                        pipeline: &self.glow_pipeline,
-                        bind_group0: &self.uniform_bind_group,
+                        pipeline: &self.pipelines.glow_pipeline,
+                        bind_group0: &self.pipelines.uniform_bind_group,
                         bind_group1: Some(circle_bg.clone()),
-                        vertex_buffer: Some(&self.quad_buffer),
+                        vertex_buffer: Some(&self.pipelines.quad_buffer),
                         vertex_range: 0..4,
                         instance_range: *idx..*idx + 1,
                     });
@@ -630,7 +269,7 @@ impl UiRenderer {
             if layer.gpu.handle_count > 0 {
                 let handle_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
-                    layout: &self.handle_layout,
+                    layout: &self.pipelines.handle_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
                         resource: layer.gpu.handle_ssbo.as_ref().unwrap().as_entire_binding(),
@@ -646,10 +285,10 @@ impl UiRenderer {
                 for (_, idx) in zlist.iter() {
                     cmds.push(DrawCmd {
                         z: layer.handles[*idx as usize].z_index,
-                        pipeline: &self.handle_pipeline,
-                        bind_group0: &self.uniform_bind_group,
+                        pipeline: &self.pipelines.handle_pipeline,
+                        bind_group0: &self.pipelines.uniform_bind_group,
                         bind_group1: Some(handle_bg.clone()),
-                        vertex_buffer: Some(&self.handle_quad_buffer),
+                        vertex_buffer: Some(&self.pipelines.handle_quad_buffer),
                         vertex_range: 0..4,
                         instance_range: *idx..*idx + 1,
                     });
@@ -664,8 +303,8 @@ impl UiRenderer {
 
                         cmds.push(DrawCmd {
                             z: p.z_index,
-                            pipeline: &self.polygon_pipeline,
-                            bind_group0: &self.uniform_bind_group,
+                            pipeline: &self.pipelines.polygon_pipeline,
+                            bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: None,
                             vertex_buffer: Some(poly_vbo),
                             vertex_range: offset..offset + count,
@@ -680,7 +319,7 @@ impl UiRenderer {
             if layer.gpu.outline_count > 0 {
                 let outline_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: None,
-                    layout: &self.outline_layout,
+                    layout: &self.pipelines.outline_layout,
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
@@ -706,10 +345,10 @@ impl UiRenderer {
                 for (i, o) in layer.outlines.iter().enumerate() {
                     cmds.push(DrawCmd {
                         z: o.z_index,
-                        pipeline: &self.outline_pipeline,
-                        bind_group0: &self.uniform_bind_group,
+                        pipeline: &self.pipelines.outline_pipeline,
+                        bind_group0: &self.pipelines.uniform_bind_group,
                         bind_group1: Some(outline_bg.clone()),
-                        vertex_buffer: Some(&self.quad_buffer),
+                        vertex_buffer: Some(&self.pipelines.quad_buffer),
                         vertex_range: 0..4,
                         instance_range: i as u32..i as u32 + 1,
                     });
@@ -717,14 +356,16 @@ impl UiRenderer {
             }
 
             if layer.gpu.text_count > 0 {
-                if let (Some(text_bg), Some(_)) = (&self.text_bind_group, &self.text_atlas) {
+                if let (Some(text_bg), Some(_)) =
+                    (&self.pipelines.text_bind_group, &self.pipelines.text_atlas)
+                {
                     if let Some(text_vbo) = &layer.gpu.text_vbo {
                         let z = layer.texts.iter().map(|t| t.z_index).max().unwrap_or(0);
 
                         cmds.push(DrawCmd {
                             z,
-                            pipeline: &self.text_pipeline,
-                            bind_group0: &self.uniform_bind_group,
+                            pipeline: &self.pipelines.text_pipeline,
+                            bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(text_bg.clone()),
                             vertex_buffer: Some(text_vbo),
                             vertex_range: 0..layer.gpu.text_count,
@@ -890,7 +531,7 @@ impl UiRenderer {
 
         // ---- text (VBO) : build glyphs for this layer only ----
         let mut text_vertices: Vec<UiVertexText> = Vec::new();
-        if let Some(atlas) = &self.text_atlas {
+        if let Some(atlas) = &self.pipelines.text_atlas {
             for tp in &layer.cache.texts {
                 let mut pen_x = tp.pos[0];
                 let baseline_y = tp.pos[1] + atlas.line_height;
@@ -1087,7 +728,7 @@ impl UiRenderer {
         // 5) Bind group for the text pipeline
         let text_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Text Atlas Bind Group"),
-            layout: &self.text_layout,
+            layout: &self.pipelines.text_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1101,7 +742,7 @@ impl UiRenderer {
         });
 
         // 6) Save into renderer state
-        self.text_atlas = Some(TextAtlas {
+        self.pipelines.text_atlas = Some(TextAtlas {
             tex,
             view,
             sampler,
@@ -1109,7 +750,7 @@ impl UiRenderer {
             glyphs,
             line_height: max_line_h,
         });
-        self.text_bind_group = Some(text_bind_group);
+        self.pipelines.text_bind_group = Some(text_bind_group);
 
         Ok(())
     }

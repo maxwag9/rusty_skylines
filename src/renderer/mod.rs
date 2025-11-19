@@ -2,8 +2,10 @@ pub mod core;
 pub mod helper;
 pub mod pipelines;
 pub mod render_passes;
+mod touches;
 pub(crate) mod ui;
 pub mod ui_editor;
+mod ui_pipelines;
 
 use crate::components::camera::Camera;
 use crate::renderer::ui_editor::UiButtonLoader;

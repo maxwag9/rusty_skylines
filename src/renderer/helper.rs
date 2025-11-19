@@ -178,6 +178,7 @@ pub(crate) fn make_pipeline(
     format: TextureFormat,
     blend: Option<BlendState>,
     topology: PrimitiveTopology,
+    multisample: MultisampleState,
 ) -> RenderPipeline {
     device.create_render_pipeline(&RenderPipelineDescriptor {
         label: Some(label),
@@ -203,7 +204,7 @@ pub(crate) fn make_pipeline(
             ..Default::default()
         },
         depth_stencil: None,
-        multisample: MultisampleState::default(),
+        multisample,
         multiview: None,
         cache: None,
     })
