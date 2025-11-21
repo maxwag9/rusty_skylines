@@ -365,6 +365,70 @@ pub struct UiButtonText {
     pub misc: MiscButtonSettings,
 }
 
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonPolygon {
+    pub id: Option<String>,
+    pub z_index: i32,
+    pub vertices: Vec<UiVertex>,
+    pub misc: MiscButtonSettings,
+    pub tri_count: u32,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonCircle {
+    pub id: Option<String>,
+    pub z_index: i32,
+
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub radius: f32,
+    pub border_thickness: f32,
+    pub fade: [f32; 4],
+    pub fill_color: [f32; 4],
+    pub border_color: [f32; 4],
+    pub glow_color: [f32; 4],
+    pub glow_misc: GlowMisc,
+    pub misc: MiscButtonSettings,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonOutline {
+    pub id: Option<String>,
+    pub z_index: i32,
+    pub parent_id: Option<String>,
+
+    pub mode: f32, // 0 = circle, 1 = polygon
+
+    pub vertex_offset: u32,    // index into global vertex buffer
+    pub vertex_count: u32,     // how many vertices
+    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
+
+    pub dash_color: [f32; 4],
+    pub dash_misc: DashMisc,
+    pub sub_dash_color: [f32; 4],
+    pub sub_dash_misc: DashMisc,
+
+    pub misc: MiscButtonSettings,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct UiButtonHandle {
+    pub id: Option<String>,
+    pub z_index: i32,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub handle_thickness: f32,
+    pub handle_color: [f32; 4],
+    pub handle_misc: HandleMisc,
+    pub sub_handle_color: [f32; 4],
+    pub sub_handle_misc: HandleMisc,
+    pub misc: MiscButtonSettings,
+    pub parent_id: Option<String>,
+}
+
 impl UiButtonText {
     pub(crate) fn from_json(t: UiButtonTextJson) -> Self {
         UiButtonText {
@@ -439,44 +503,6 @@ impl UiButtonText {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonTextJson {
-    pub id: Option<String>,
-    pub z_index: i32,
-
-    pub x: f32,
-    pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
-    pub top_left_vertex: UiVertexJson,
-    pub bottom_left_vertex: UiVertexJson,
-    pub top_right_vertex: UiVertexJson,
-    pub bottom_right_vertex: UiVertexJson,
-    pub px: u16,
-    pub color: [f32; 4],
-    pub text: String,
-    pub misc: MiscButtonSettingsJson,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonCircle {
-    pub id: Option<String>,
-    pub z_index: i32,
-
-    pub x: f32,
-    pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
-    pub radius: f32,
-    pub border_thickness: f32,
-    pub fade: [f32; 4],
-    pub fill_color: [f32; 4],
-    pub border_color: [f32; 4],
-    pub glow_color: [f32; 4],
-    pub glow_misc: GlowMisc,
-    pub misc: MiscButtonSettings,
-}
-
 impl UiButtonCircle {
     pub(crate) fn from_json(c: UiButtonCircleJson) -> Self {
         UiButtonCircle {
@@ -527,40 +553,49 @@ impl UiButtonCircle {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonCircleJson {
-    pub id: Option<String>,
-    pub z_index: i32,
-    pub x: f32,
-    pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
-    pub radius: f32,
-    pub border_thickness: f32,
-    pub fill_color: [f32; 4],
-    pub border_color: [f32; 4],
-    pub glow_color: [f32; 4],
-    pub glow_misc: GlowMisc,
-    pub misc: MiscButtonSettingsJson,
-}
-#[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonOutline {
-    pub id: Option<String>,
-    pub z_index: i32,
-    pub parent_id: Option<String>,
+impl UiButtonHandle {
+    pub(crate) fn from_json(h: UiButtonHandleJson) -> Self {
+        UiButtonHandle {
+            id: h.id,
+            z_index: h.z_index,
+            x: h.x,
+            y: h.y,
+            radius: h.radius,
+            handle_thickness: h.handle_thickness,
+            handle_color: h.handle_color,
+            handle_misc: h.handle_misc,
+            sub_handle_color: h.sub_handle_color,
+            sub_handle_misc: h.sub_handle_misc,
+            parent_id: h.parent_id,
+            misc: MiscButtonSettings {
+                active: h.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: h.misc.pressable,
+                editable: h.misc.editable,
+            },
+        }
+    }
 
-    pub mode: f32, // 0 = circle, 1 = polygon
+    pub fn to_json(&self) -> UiButtonHandleJson {
+        UiButtonHandleJson {
+            id: self.id.clone(),
+            z_index: self.z_index,
+            x: self.x,
+            y: self.y,
+            radius: self.radius,
 
-    pub vertex_offset: u32,    // index into global vertex buffer
-    pub vertex_count: u32,     // how many vertices
-    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
+            handle_thickness: self.handle_thickness,
+            handle_color: self.handle_color,
+            handle_misc: self.handle_misc.clone(),
 
-    pub dash_color: [f32; 4],
-    pub dash_misc: DashMisc,
-    pub sub_dash_color: [f32; 4],
-    pub sub_dash_misc: DashMisc,
+            sub_handle_color: self.sub_handle_color,
+            sub_handle_misc: self.sub_handle_misc.clone(),
 
-    pub misc: MiscButtonSettings,
+            parent_id: self.parent_id.clone(),
+            misc: self.misc.to_json(),
+        }
+    }
 }
 
 impl UiButtonOutline {
@@ -607,107 +642,6 @@ impl UiButtonOutline {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonOutlineJson {
-    pub id: Option<String>,
-    pub z_index: i32,
-    pub parent_id: Option<String>,
-    pub mode: f32,             // 0 = circle, 1 = polygon
-    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
-
-    pub dash_color: [f32; 4],
-    pub dash_misc: DashMisc,
-    pub sub_dash_color: [f32; 4],
-    pub sub_dash_misc: DashMisc,
-
-    pub misc: MiscButtonSettingsJson,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonHandle {
-    pub id: Option<String>,
-    pub z_index: i32,
-    pub x: f32,
-    pub y: f32,
-    pub radius: f32,
-    pub handle_thickness: f32,
-    pub handle_color: [f32; 4],
-    pub handle_misc: HandleMisc,
-    pub sub_handle_color: [f32; 4],
-    pub sub_handle_misc: HandleMisc,
-    pub misc: MiscButtonSettings,
-    pub parent_id: Option<String>,
-}
-
-impl UiButtonHandle {
-    pub(crate) fn from_json(h: UiButtonHandleJson) -> Self {
-        UiButtonHandle {
-            id: h.id,
-            z_index: h.z_index,
-            x: h.x,
-            y: h.y,
-            radius: h.radius,
-            handle_thickness: h.handle_thickness,
-            handle_color: h.handle_color,
-            handle_misc: h.handle_misc,
-            sub_handle_color: h.sub_handle_color,
-            sub_handle_misc: h.sub_handle_misc,
-            parent_id: h.parent_id,
-            misc: MiscButtonSettings {
-                active: h.misc.active,
-                touched_time: 0.0,
-                is_touched: false,
-                pressable: h.misc.pressable,
-                editable: h.misc.editable,
-            },
-        }
-    }
-
-    pub fn to_json(&self) -> UiButtonHandleJson {
-        UiButtonHandleJson {
-            id: self.id.clone(),
-            z_index: self.z_index,
-            x: self.x,
-            y: self.y,
-            radius: self.radius,
-
-            handle_thickness: self.handle_thickness,
-            handle_color: self.handle_color,
-            handle_misc: self.handle_misc.clone(),
-
-            sub_handle_color: self.sub_handle_color,
-            sub_handle_misc: self.sub_handle_misc.clone(),
-
-            parent_id: self.parent_id.clone(),
-            misc: self.misc.to_json(),
-        }
-    }
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonHandleJson {
-    pub id: Option<String>,
-    pub z_index: i32,
-    pub x: f32,
-    pub y: f32,
-    pub radius: f32,
-    pub handle_thickness: f32,
-    pub handle_color: [f32; 4],
-    pub handle_misc: HandleMisc,
-    pub sub_handle_color: [f32; 4],
-    pub sub_handle_misc: HandleMisc,
-    pub misc: MiscButtonSettingsJson,
-    pub parent_id: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct UiButtonPolygon {
-    pub id: Option<String>,
-    pub z_index: i32,
-    pub vertices: Vec<UiVertex>,
-    pub misc: MiscButtonSettings,
-    pub tri_count: u32,
-}
 impl UiButtonPolygon {
     pub(crate) fn from_json(p: UiButtonPolygonJson, id_gen: &mut usize) -> Self {
         let mut verts: Vec<UiVertex> = p
@@ -749,10 +683,336 @@ impl UiButtonPolygon {
     }
 }
 
+impl Default for UiButtonText {
+    fn default() -> Self {
+        Self {
+            id: None,
+            z_index: 0,
+            x: 0.0,
+            y: 0.0,
+            stretch_x: 1.0,
+            stretch_y: 1.0,
+            top_left_vertex: UiVertex::default(),
+            bottom_left_vertex: UiVertex::default(),
+            top_right_vertex: UiVertex::default(),
+            bottom_right_vertex: UiVertex::default(),
+            px: 14,
+            color: [1.0, 1.0, 1.0, 1.0],
+            text: "".into(),
+            misc: MiscButtonSettings::default(),
+        }
+    }
+}
+
+impl Default for UiButtonPolygon {
+    fn default() -> Self {
+        let verts = vec![
+            UiVertex {
+                pos: [-30.0, 30.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+                selected: false,
+                id: 0,
+            },
+            UiVertex {
+                pos: [0.0, -30.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+                selected: false,
+                id: 1,
+            },
+            UiVertex {
+                pos: [30.0, 30.0],
+                color: [1.0, 1.0, 1.0, 1.0],
+                roundness: 0.0,
+                selected: false,
+                id: 2,
+            },
+            UiVertex {
+                pos: [30.0, 50.0],
+                color: [1.0, 1.0, 0.0, 1.0],
+                roundness: 0.0,
+                selected: false,
+                id: 3,
+            },
+            UiVertex {
+                pos: [50.0, 30.0],
+                color: [1.0, 0.0, 1.0, 1.0],
+                roundness: 0.0,
+                selected: false,
+                id: 5,
+            },
+        ];
+
+        Self {
+            id: None,
+            z_index: 0,
+            vertices: verts,
+            misc: MiscButtonSettings::default(),
+            tri_count: 0,
+        }
+    }
+}
+
+impl Default for UiButtonCircle {
+    fn default() -> Self {
+        Self {
+            id: None,
+            z_index: 0,
+            x: 0.0,
+            y: 0.0,
+            stretch_x: 1.0,
+            stretch_y: 1.0,
+            radius: 10.0,
+            border_thickness: 1.0,
+            fade: [0.0; 4],
+            fill_color: [1.0, 1.0, 1.0, 1.0],
+            border_color: [0.0, 0.0, 0.0, 1.0],
+            glow_color: [1.0, 1.0, 1.0, 0.0],
+            glow_misc: GlowMisc::default(),
+            misc: MiscButtonSettings::default(),
+        }
+    }
+}
+
+impl Default for UiButtonOutline {
+    fn default() -> Self {
+        Self {
+            id: None,
+            z_index: 0,
+            parent_id: None,
+            mode: 1.0,
+            vertex_offset: 0,
+            vertex_count: 0,
+            shape_data: ShapeData::default(),
+            dash_color: [1.0, 1.0, 1.0, 1.0],
+            dash_misc: DashMisc::default(),
+            sub_dash_color: [1.0, 1.0, 1.0, 1.0],
+            sub_dash_misc: DashMisc::default(),
+            misc: MiscButtonSettings::default(),
+        }
+    }
+}
+
+impl Default for UiButtonHandle {
+    fn default() -> Self {
+        Self {
+            id: None,
+            z_index: 0,
+            x: 0.0,
+            y: 0.0,
+            radius: 6.0,
+            handle_thickness: 2.0,
+            handle_color: [1.0, 1.0, 1.0, 1.0],
+            handle_misc: HandleMisc::default(),
+            sub_handle_color: [1.0, 1.0, 1.0, 1.0],
+            sub_handle_misc: HandleMisc::default(),
+            misc: MiscButtonSettings::default(),
+            parent_id: None,
+        }
+    }
+}
+
+impl Default for GlowMisc {
+    fn default() -> Self {
+        Self {
+            glow_size: 0.0,
+            glow_speed: 0.0,
+            glow_intensity: 0.0,
+        }
+    }
+}
+
+impl Default for DashMisc {
+    fn default() -> Self {
+        Self {
+            dash_len: 20.0,
+            dash_spacing: 10.0,
+            dash_roundness: 0.0,
+            dash_speed: 0.0,
+        }
+    }
+}
+
+impl Default for ShapeData {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            radius: 10.0,
+            border_thickness: 1.0,
+        }
+    }
+}
+
+impl Default for HandleMisc {
+    fn default() -> Self {
+        Self {
+            handle_len: 10.0,
+            handle_width: 2.0,
+            handle_roundness: 0.0,
+            handle_speed: 0.0,
+        }
+    }
+}
+
+impl Default for MiscButtonSettings {
+    fn default() -> Self {
+        Self {
+            active: true,
+            touched_time: 0.0,
+            is_touched: false,
+            pressable: true,
+            editable: false,
+        }
+    }
+}
+
+impl Default for UiVertex {
+    fn default() -> Self {
+        Self {
+            pos: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            roundness: 0.0,
+            selected: false,
+            id: 0,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UiButtonTextJson {
+    pub id: Option<String>,
+    pub z_index: i32,
+
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub top_left_vertex: UiVertexJson,
+    pub bottom_left_vertex: UiVertexJson,
+    pub top_right_vertex: UiVertexJson,
+    pub bottom_right_vertex: UiVertexJson,
+    pub px: u16,
+    pub color: [f32; 4],
+    pub text: String,
+    pub misc: MiscButtonSettingsJson,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UiButtonCircleJson {
+    pub id: Option<String>,
+    pub z_index: i32,
+    pub x: f32,
+    pub y: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub radius: f32,
+    pub border_thickness: f32,
+    pub fill_color: [f32; 4],
+    pub border_color: [f32; 4],
+    pub glow_color: [f32; 4],
+    pub glow_misc: GlowMisc,
+    pub misc: MiscButtonSettingsJson,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UiButtonHandleJson {
+    pub id: Option<String>,
+    pub z_index: i32,
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+    pub handle_thickness: f32,
+    pub handle_color: [f32; 4],
+    pub handle_misc: HandleMisc,
+    pub sub_handle_color: [f32; 4],
+    pub sub_handle_misc: HandleMisc,
+    pub misc: MiscButtonSettingsJson,
+    pub parent_id: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UiButtonOutlineJson {
+    pub id: Option<String>,
+    pub z_index: i32,
+    pub parent_id: Option<String>,
+    pub mode: f32,             // 0 = circle, 1 = polygon
+    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
+
+    pub dash_color: [f32; 4],
+    pub dash_misc: DashMisc,
+    pub sub_dash_color: [f32; 4],
+    pub sub_dash_misc: DashMisc,
+
+    pub misc: MiscButtonSettingsJson,
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonPolygonJson {
     pub id: Option<String>,
     pub z_index: i32,
     pub vertices: Vec<UiVertexJson>,
     pub misc: MiscButtonSettingsJson,
+}
+
+pub fn ensure_id<T: UiElementId>(mut item: T) -> T {
+    if item.get_id().is_none() {
+        item.set_id(Some(gen_id()));
+    }
+    item
+}
+
+pub fn gen_id() -> String {
+    nanoid::nanoid!(8) // 8 chars is enough, change if you want longer
+}
+
+pub trait UiElementId {
+    fn get_id(&self) -> &Option<String>;
+    fn set_id(&mut self, id: Option<String>);
+}
+
+impl UiElementId for UiButtonCircle {
+    fn get_id(&self) -> &Option<String> {
+        &self.id
+    }
+    fn set_id(&mut self, id: Option<String>) {
+        self.id = id;
+    }
+}
+
+impl UiElementId for UiButtonPolygon {
+    fn get_id(&self) -> &Option<String> {
+        &self.id
+    }
+    fn set_id(&mut self, id: Option<String>) {
+        self.id = id;
+    }
+}
+
+impl UiElementId for UiButtonText {
+    fn get_id(&self) -> &Option<String> {
+        &self.id
+    }
+    fn set_id(&mut self, id: Option<String>) {
+        self.id = id;
+    }
+}
+
+impl UiElementId for UiButtonHandle {
+    fn get_id(&self) -> &Option<String> {
+        &self.id
+    }
+    fn set_id(&mut self, id: Option<String>) {
+        self.id = id;
+    }
+}
+
+impl UiElementId for UiButtonOutline {
+    fn get_id(&self) -> &Option<String> {
+        &self.id
+    }
+    fn set_id(&mut self, id: Option<String>) {
+        self.id = id;
+    }
 }

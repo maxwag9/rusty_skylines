@@ -4,6 +4,8 @@ use crate::systems::input::camera_input_system;
 use crate::systems::physics::simulation_system;
 use crate::systems::render::render_system;
 use crate::systems::ui::ui_system;
+use crate::vertex::UiButtonPolygon;
+use crate::vertex::UiElement::Polygon;
 use crate::world::World;
 use std::sync::Arc;
 use std::thread;
@@ -11,7 +13,7 @@ use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::Key;
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 pub struct App {
@@ -110,29 +112,46 @@ impl ApplicationHandler for App {
                 let Some(resources) = self.resources.as_mut() else {
                     return;
                 };
-                let pressed = event.state == ElementState::Pressed;
 
+                let down = event.state == ElementState::Pressed;
+                let input = &mut resources.input;
+
+                // Always track physical key
+                let phys = event.physical_key;
+                input.set_physical(phys, down);
+
+                // Track logical key (NamedKey or Character)
                 match &event.logical_key {
-                    Key::Character(ch) => {
-                        let key = ch.to_lowercase();
-                        if ["w", "a", "s", "d", "q", "e"].contains(&key.as_str()) {
-                            resources.input.set_key(&key, pressed);
+                    Key::Named(named) => {
+                        input.set_logical(*named, down);
+
+                        if matches!(named, NamedKey::Shift) {
+                            input.shift_pressed = down;
+                        }
+                        if matches!(named, NamedKey::Control) {
+                            input.ctrl_pressed = down;
                         }
                     }
-                    Key::Named(winit::keyboard::NamedKey::Shift) => {
-                        resources.input.shift_pressed = pressed;
+
+                    Key::Character(s) => {
+                        // This is text meaning, not hardware key
+                        // Use only first char for keybindings
+                        if let Some(c) = s.chars().next() {
+                            let lower = c.to_ascii_lowercase().to_string();
+                            input.set_character(&lower, down);
+                        }
                     }
-                    Key::Named(winit::keyboard::NamedKey::Control) => {
-                        resources.input.ctrl_pressed = pressed;
-                    }
+
                     _ => {}
                 }
 
-                if pressed {
-                    if let Key::Named(winit::keyboard::NamedKey::F5) = &event.logical_key {
+                // -------- special logic --------
+                if down {
+                    if let Key::Named(NamedKey::F5) = &event.logical_key {
                         resources.renderer.core.cycle_msaa();
                     }
-                    if let Key::Named(winit::keyboard::NamedKey::F6) = &event.logical_key {
+
+                    if let Key::Named(NamedKey::F6) = &event.logical_key {
                         resources.settings.editor_mode = !resources.settings.editor_mode;
                         resources
                             .ui_loader
@@ -140,22 +159,31 @@ impl ApplicationHandler for App {
                             .update_editor_mode(resources.settings.editor_mode);
                     }
 
-                    if resources.input.ctrl_pressed {
+                    if input.ctrl_pressed {
                         if let Key::Character(ch) = &event.logical_key {
                             if ch.eq_ignore_ascii_case("s") {
                                 if let Err(e) = resources
                                     .ui_loader
                                     .save_gui_to_file("ui_data/gui_layout.json")
                                 {
-                                    eprintln!("Failed to save GUI layout...: {e}...");
+                                    eprintln!("Failed to save GUI layout: {e}");
                                 } else {
-                                    println!("Saved GUI layout successfullay!");
+                                    println!("GUI layout saved");
                                 }
                             }
                         }
                     }
+                    if input.pressed_physical(&PhysicalKey::Code(KeyCode::KeyP)) {
+                        let result = resources.ui_loader.add_element(
+                            "base_gui",
+                            Polygon(UiButtonPolygon::default()),
+                            &resources.mouse,
+                        );
+                        println!("Added GUI element: {:?}", result);
+                    }
                 }
             }
+
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
                     let mouse = &mut resources.mouse;

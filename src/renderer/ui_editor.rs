@@ -10,8 +10,8 @@ use crate::vertex::UiElement::*;
 pub(crate) use crate::vertex::*;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Result;
 use std::path::PathBuf;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 pub struct UiButtonLoader {
     pub layers: Vec<RuntimeLayer>,
@@ -156,7 +156,7 @@ impl UiButtonLoader {
         loader
     }
 
-    pub fn load_gui_from_file(path: &str) -> Result<GuiLayout> {
+    pub fn load_gui_from_file(path: &str) -> Result<GuiLayout, Box<dyn std::error::Error>> {
         let mut full_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         full_path.push("src/renderer");
         full_path.push(path);
@@ -243,7 +243,6 @@ impl UiButtonLoader {
     }
 
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32, input_state: &InputState) {
-        let _ = input_state;
         let mut trigger_selection = false;
         let mouse_snapshot = MouseSnapshot::from_mouse(mouse);
         let editor_mode = self.ui_runtime.editor_mode;
@@ -289,6 +288,108 @@ impl UiButtonLoader {
         if trigger_selection {
             self.update_selection(mouse);
         }
+
+        if input_state.pressed_physical(&PhysicalKey::Code(KeyCode::KeyX))
+            && self.ui_runtime.selected_ui_element.active
+        {
+            println!("deleting");
+            let element_id = self.ui_runtime.selected_ui_element.element_id.clone();
+            let layer_name = self.ui_runtime.selected_ui_element.layer_name.clone();
+
+            self.ui_runtime.selected_ui_element.active = false;
+
+            let _ = self.delete_element(&layer_name, &element_id);
+        }
+    }
+
+    pub fn add_element(
+        &mut self,
+        layer_name: &str,
+        mut element: UiElement,
+        mouse: &MouseState,
+    ) -> Result<String, String> {
+        let layer = self
+            .layers
+            .iter_mut()
+            .find(|l| l.name == layer_name)
+            .ok_or_else(|| format!("Layer '{layer_name}' not found"))?;
+
+        // === apply mouse positioning ===
+        match &mut element {
+            UiElement::Circle(c) => {
+                c.x = mouse.pos.x;
+                c.y = mouse.pos.y;
+            }
+            UiElement::Handle(h) => {
+                h.x = mouse.pos.x;
+                h.y = mouse.pos.y;
+            }
+            UiElement::Text(t) => {
+                t.x = mouse.pos.x;
+                t.y = mouse.pos.y;
+            }
+            UiElement::Polygon(p) => {
+                if !p.vertices.is_empty() {
+                    // compute centroid!
+                    let mut cx = 0.0;
+                    let mut cy = 0.0;
+                    for v in &p.vertices {
+                        cx += v.pos[0];
+                        cy += v.pos[1];
+                    }
+                    cx /= p.vertices.len() as f32;
+                    cy /= p.vertices.len() as f32;
+
+                    let dx = mouse.pos.x - cx;
+                    let dy = mouse.pos.y - cy;
+
+                    // translate all vertices
+                    for v in &mut p.vertices {
+                        v.pos[0] += dx;
+                        v.pos[1] += dy;
+                    }
+                }
+            }
+        };
+
+        // === insert into layer ===
+        let id = match &mut element {
+            UiElement::Circle(c) => {
+                if c.id.is_none() {
+                    c.id = Some(gen_id());
+                }
+                let id = c.id.clone().unwrap();
+                layer.circles.push(c.clone());
+                id
+            }
+            UiElement::Handle(h) => {
+                if h.id.is_none() {
+                    h.id = Some(gen_id());
+                }
+                let id = h.id.clone().unwrap();
+                layer.handles.push(h.clone());
+                id
+            }
+            UiElement::Polygon(p) => {
+                if p.id.is_none() {
+                    p.id = Some(gen_id());
+                }
+                let id = p.id.clone().unwrap();
+                layer.polygons.push(p.clone());
+                id
+            }
+            UiElement::Text(t) => {
+                if t.id.is_none() {
+                    t.id = Some(gen_id());
+                }
+                let id = t.id.clone().unwrap();
+                layer.texts.push(t.clone());
+                id
+            }
+        };
+
+        layer.dirty = true;
+        Ok(id)
     }
 
     pub(crate) fn mark_layer_dirty(&mut self, layer_name: &str) {
@@ -417,7 +518,6 @@ impl UiButtonLoader {
                             let dy = v.pos[1] - cy;
                             let distance = (dx * dx + dy * dy).sqrt();
 
-                            println!("{}, {}", v.pos[0], v.pos[1]);
                             radius = radius.max(distance);
                             let vertex_outline = UiButtonCircle {
                                 id: Some(format!("vertex_outline_{}", i)),
@@ -446,11 +546,6 @@ impl UiButtonLoader {
                                 },
                             };
                             editor_layer.circles.push(vertex_outline);
-                            println!(
-                                "{} => {}",
-                                format!("vertex_outline_{}", i),
-                                UiButtonLoader::hash_id(format!("vertex_outline_{}", i).as_str())
-                            );
                         }
                         let polygon_outline = UiButtonOutline {
                             id: Some("Polygon Outline".to_string()),
@@ -528,34 +623,38 @@ impl UiButtonLoader {
         None
     }
 
-    pub fn find_element_index_by_hash(&self, id_hash: f32) -> Option<(String, usize)> {
-        for layer in &self.layers {
-            // Circles
-            for (i, c) in layer.circles.iter().enumerate() {
-                if let Some(id) = &c.id {
-                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
-                        return Some((layer.name.clone(), i));
-                    }
-                }
-            }
+    pub fn delete_element(&mut self, layer_name: &str, element_id: &str) -> Option<UiElement> {
+        // get mutable layer
+        let layer = self.layers.iter_mut().find(|l| l.name == layer_name)?;
 
-            // Polygons
-            for (i, p) in layer.polygons.iter().enumerate() {
-                if let Some(id) = &p.id {
-                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
-                        return Some((layer.name.clone(), i));
-                    }
-                }
-            }
+        // Circles
+        if let Some(pos) = layer
+            .circles
+            .iter()
+            .position(|c| c.id.as_deref() == Some(element_id))
+        {
+            let removed = layer.circles.remove(pos);
+            return Some(UiElement::Circle(removed));
+        }
 
-            // Texts
-            for (i, t) in layer.texts.iter().enumerate() {
-                if let Some(id) = &t.id {
-                    if (UiButtonLoader::hash_id(id) - id_hash).abs() < f32::EPSILON {
-                        return Some((layer.name.clone(), i));
-                    }
-                }
-            }
+        // Polygons
+        if let Some(pos) = layer
+            .polygons
+            .iter()
+            .position(|p| p.id.as_deref() == Some(element_id))
+        {
+            let removed = layer.polygons.remove(pos);
+            return Some(UiElement::Polygon(removed));
+        }
+
+        // Texts
+        if let Some(pos) = layer
+            .texts
+            .iter()
+            .position(|t| t.id.as_deref() == Some(element_id))
+        {
+            let removed = layer.texts.remove(pos);
+            return Some(UiElement::Text(removed));
         }
 
         None
@@ -772,16 +871,11 @@ impl UiButtonLoader {
                 hash,
             ];
 
-            let tris = triangulate_polygon(&poly.vertices);
-            poly.tri_count = tris.len() as u32;
-            for [i0, i1, i2] in tris {
-                let v0 = &poly.vertices[i0];
-                let v1 = &poly.vertices[i1];
-                let v2 = &poly.vertices[i2];
+            let tris = triangulate_polygon(&mut poly.vertices);
+            poly.tri_count = tris.len() as u32 / 3;
 
-                push_with_misc(v0, misc, &mut l.cache.polygon_vertices);
-                push_with_misc(v1, misc, &mut l.cache.polygon_vertices);
-                push_with_misc(v2, misc, &mut l.cache.polygon_vertices);
+            for vertex in &tris {
+                push_with_misc(vertex, misc, &mut l.cache.polygon_vertices);
             }
         }
 

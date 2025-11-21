@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-winit = "0.30.12"
+winit = { version = "0.30.12", features = ["serde"] }
+
 wgpu = "27.0.1"
 pollster = "0.4.0"
 bytemuck = { version = "1.24.0", features = ["derive"] }
@@ -15,3 +16,4 @@ serde = { version = "1.0.228", features = ["derive"] }
 fontdue = "0.9.3"
 rect_packer = "0.2"
 anyhow = "1.0.100"
+nanoid = "0.4.0"

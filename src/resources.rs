@@ -4,9 +4,11 @@ use crate::renderer::Renderer;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::simulation::Simulation;
 use glam::{Mat4, Vec2, Vec3};
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
+use winit::keyboard::{NamedKey, PhysicalKey};
 use winit::window::Window;
 
 pub struct Resources {
@@ -113,31 +115,98 @@ impl TimeSystem {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct SerializableKeybind {
+    pub key: String,
+    pub action: String,
+}
+
 pub struct InputState {
-    pressed: HashSet<String>,
+    pub physical: HashMap<PhysicalKey, bool>,
+    pub logical: HashMap<NamedKey, bool>,
+    pub character: HashSet<String>, // for text keys only
+
+    pub keybinds: HashMap<PhysicalKey, String>, // <key, action>ccc
     pub shift_pressed: bool,
     pub ctrl_pressed: bool,
 }
 
 impl InputState {
     pub fn new() -> Self {
-        Self {
-            pressed: HashSet::new(),
+        let mut s = Self {
+            physical: HashMap::new(),
+            logical: HashMap::new(),
+            character: HashSet::new(),
+            keybinds: HashMap::new(),
             shift_pressed: false,
             ctrl_pressed: false,
-        }
+        };
+
+        s.load_keybinds("keybinds.toml");
+
+        s
     }
 
-    pub fn set_key(&mut self, key: &str, down: bool) {
+    pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
+        self.physical.insert(key, down);
+    }
+
+    pub fn set_logical(&mut self, key: NamedKey, down: bool) {
+        self.logical.insert(key, down);
+    }
+
+    pub fn set_character(&mut self, ch: &str, down: bool) {
         if down {
-            self.pressed.insert(key.to_string());
+            self.character.insert(ch.to_string());
         } else {
-            self.pressed.remove(key);
+            self.character.remove(ch);
         }
     }
 
-    pub fn pressed(&self, key: &str) -> bool {
-        self.pressed.contains(key)
+    pub fn pressed_physical(&self, key: &PhysicalKey) -> bool {
+        *self.physical.get(key).unwrap_or(&false)
+    }
+
+    pub fn pressed_logical(&self, key: &NamedKey) -> bool {
+        *self.logical.get(key).unwrap_or(&false)
+    }
+
+    pub fn pressed_char(&self, ch: &str) -> bool {
+        self.character.contains(ch)
+    }
+
+    pub fn save_keybinds(&self, path: &str) {
+        let toml = toml::to_string(&self.keybinds).expect("Failed to serialize keybinds");
+
+        std::fs::write(path, toml).expect("Failed to write keybind file");
+    }
+
+    pub fn load_keybinds(&mut self, path: &str) {
+        let data = match std::fs::read_to_string(path) {
+            Ok(d) => d,
+            Err(_) => {
+                // file missing → load defaults
+                self.keybinds = default_keybinds();
+
+                // save defaults to disk
+                self.save_keybinds(path);
+                return;
+            }
+        };
+
+        // try parsing file
+        let parsed = toml::from_str::<HashMap<PhysicalKey, String>>(&data);
+
+        match parsed {
+            Ok(map) => {
+                self.keybinds = map;
+            }
+            Err(_) => {
+                // corrupted file → reset to defaults
+                self.keybinds = default_keybinds();
+                self.save_keybinds(path);
+            }
+        }
     }
 }
 
@@ -207,4 +276,19 @@ impl Uniforms {
             view_proj: (proj * view).to_cols_array_2d(),
         }
     }
+}
+
+fn default_keybinds() -> HashMap<PhysicalKey, String> {
+    use winit::keyboard::{KeyCode, PhysicalKey};
+
+    let mut m = HashMap::new();
+
+    m.insert(PhysicalKey::Code(KeyCode::KeyW), "editor.move_up".into());
+    m.insert(PhysicalKey::Code(KeyCode::KeyA), "editor.move_left".into());
+    m.insert(PhysicalKey::Code(KeyCode::KeyS), "editor.move_down".into());
+    m.insert(PhysicalKey::Code(KeyCode::KeyD), "editor.move_right".into());
+    m.insert(PhysicalKey::Code(KeyCode::Space), "simulation.pause".into());
+    m.insert(PhysicalKey::Code(KeyCode::Escape), "editor.cancel".into());
+
+    m
 }

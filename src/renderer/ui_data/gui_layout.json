@@ -82,11 +82,11 @@
         {
           "id": "toggle_simulation",
           "z_index": 0,
-          "x": 550.1285,
-          "y": 502.934,
+          "x": 1786.2706,
+          "y": 399.6372,
           "stretch_x": 1.0,
           "stretch_y": 1.0,
-          "radius": 250.61922,
+          "radius": 71.589096,
           "border_thickness": 13.0,
           "fill_color": [
             0.1,
@@ -120,8 +120,8 @@
         {
           "id": "toggle_simulation2",
           "z_index": 0,
-          "x": 2085.457,
-          "y": 272.3594,
+          "x": 2213.6243,
+          "y": 335.69962,
           "stretch_x": 1.0,
           "stretch_y": 1.0,
           "radius": 60.0,
@@ -154,138 +154,505 @@
             "pressable": true,
             "editable": true
           }
+        },
+        {
+          "id": "hCc-otq0",
+          "z_index": 0,
+          "x": 1726.1578,
+          "y": 729.47186,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 62.227192,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "M4Kvy9CP",
+          "z_index": 0,
+          "x": 1877.0984,
+          "y": 1118.6184,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "fhWaJoD7",
+          "z_index": 0,
+          "x": 1846.3027,
+          "y": 1082.3828,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "Bw4CgmJP",
+          "z_index": 0,
+          "x": 1793.4641,
+          "y": 921.77423,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "kARYntCl",
+          "z_index": 0,
+          "x": 1581.641,
+          "y": 347.77615,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 164.92477,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "53KjVhT1",
+          "z_index": 0,
+          "x": 1711.3464,
+          "y": 950.6406,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "9jPlZWIt",
+          "z_index": 0,
+          "x": 1709.9929,
+          "y": 1136.3903,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "oUHJkM5_",
+          "z_index": 0,
+          "x": 1963.818,
+          "y": 1134.0012,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "VhiUwKuE",
+          "z_index": 0,
+          "x": 2086.786,
+          "y": 1093.8512,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "XzOZGhw5",
+          "z_index": 0,
+          "x": 2168.1558,
+          "y": 1205.7031,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "PnAQzb90",
+          "z_index": 0,
+          "x": 1398.5168,
+          "y": 1242.7766,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "o7LM_kKf",
+          "z_index": 0,
+          "x": 1222.7015,
+          "y": 1013.2676,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
+        },
+        {
+          "id": "fQBC0h89",
+          "z_index": 0,
+          "x": 1454.3074,
+          "y": 925.9551,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+          "radius": 10.0,
+          "border_thickness": 1.0,
+          "fill_color": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "border_color": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_color": [
+            1.0,
+            1.0,
+            1.0,
+            0.0
+          ],
+          "glow_misc": {
+            "glow_size": 0.0,
+            "glow_speed": 0.0,
+            "glow_intensity": 0.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": false
+          }
         }
       ],
       "outlines": [],
       "handles": [],
-      "polygons": [
-        {
-          "id": "fard",
-          "z_index": 0,
-          "vertices": [
-            {
-              "pos": [
-                2070.164,
-                284.28088
-              ],
-              "color": [
-                0.0,
-                1.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                900.0,
-                950.0
-              ],
-              "color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                950.0,
-                500.0
-              ],
-              "color": [
-                0.0,
-                0.0,
-                1.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                550.0,
-                500.0
-              ],
-              "color": [
-                1.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
-            }
-          ],
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": true
-          }
-        },
-        {
-          "id": "fard2",
-          "z_index": -30,
-          "vertices": [
-            {
-              "pos": [
-                1098.2051,
-                944.90393
-              ],
-              "color": [
-                1.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                399.57578,
-                1142.3796
-              ],
-              "color": [
-                0.0,
-                0.0,
-                1.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                1448.2051,
-                394.904
-              ],
-              "color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                2325.3782,
-                1214.3868
-              ],
-              "color": [
-                0.0,
-                1.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
-            }
-          ],
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": true
-          }
-        }
-      ],
+      "polygons": [],
       "active": true,
       "opaque": false
     },
@@ -359,7 +726,7 @@
             1.0,
             1.0
           ],
-          "text": "FPS: 99.0 | Frame: 10.11ms | Sim: 0.00ms",
+          "text": "FPS: 98.9 | Frame: 10.12ms | Sim: 0.01ms",
           "misc": {
             "active": true,
             "pressable": false,

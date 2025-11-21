@@ -1,6 +1,7 @@
 use crate::resources::Resources;
 use crate::world::World;
 use glam::Vec3;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let dt = resources.time.sim_dt;
@@ -29,22 +30,40 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let mut wish = Vec3::ZERO;
     if !resources.settings.editor_mode {
-        if resources.input.pressed("w") {
+        if resources
+            .input
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyW))
+        {
             wish += forward;
         }
-        if resources.input.pressed("s") {
+        if resources
+            .input
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyA))
+        {
             wish -= forward;
         }
-        if resources.input.pressed("a") {
+        if resources
+            .input
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyS))
+        {
             wish -= right;
         }
-        if resources.input.pressed("d") {
+        if resources
+            .input
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyD))
+        {
             wish += right;
         }
-        if resources.input.pressed("q") {
+        if resources
+            .input
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyQ))
+        {
             wish += up;
         }
-        if resources.input.pressed("e") {
+        if resources
+            .input
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyE))
+        {
             wish -= up;
         }
     }

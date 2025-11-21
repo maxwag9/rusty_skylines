@@ -1,4 +1,4 @@
-use crate::renderer::helper::{dist, ensure_ccw, polygon_sdf};
+use crate::renderer::helper::{dist, polygon_sdf};
 use crate::renderer::ui_editor::{UiButtonLoader, UiRuntime};
 use crate::resources::MouseState;
 use crate::vertex::{
@@ -599,7 +599,6 @@ fn process_polygons(
                     let (ox, oy) = ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
                     let new_x = mouse.mx - ox;
                     let new_y = mouse.my - oy;
-                    ensure_ccw(verts);
                     if let Some(v) = verts.iter_mut().find(|v| v.id == active_id) {
                         v.pos = [new_x, new_y];
                         layer.dirty = true;
