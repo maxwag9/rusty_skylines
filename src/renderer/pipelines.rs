@@ -2,6 +2,7 @@ use crate::resources::Uniforms;
 use crate::vertex::{LineVtx, Vertex};
 use std::borrow::Cow;
 use std::fs;
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use util::DeviceExt;
 use wgpu::*;

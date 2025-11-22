@@ -125,7 +125,7 @@ impl UiPipelines {
         });
         let vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("UI VB"),
-            size: 1024 * 1024, // 1MB buffer
+            size: (1024 * 1024) as u64, // 1MB buffer
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
