@@ -1,5 +1,8 @@
 use crate::resources::Uniforms;
 use crate::vertex::{LineVtx, Vertex};
+use std::borrow::Cow;
+use std::fs;
+use std::path::{Path, PathBuf};
 use util::DeviceExt;
 use wgpu::*;
 
@@ -16,11 +19,22 @@ pub struct Pipelines {
     line_shader: ShaderModule,
 
     format: TextureFormat,
+
+    shader_path: PathBuf,
+    line_shader_path: PathBuf,
 }
 
 impl Pipelines {
-    pub fn new(device: &Device, format: TextureFormat, msaa_samples: u32) -> Self {
-        let shader = device.create_shader_module(include_wgsl!("shaders/ground.wgsl"));
+    pub fn new(
+        device: &Device,
+        format: TextureFormat,
+        msaa_samples: u32,
+        shader_dir: &Path,
+    ) -> anyhow::Result<Self> {
+        let shader_path = shader_dir.join("ground.wgsl");
+        let line_shader_path = shader_dir.join("lines.wgsl");
+
+        let shader = load_shader(device, &shader_path, "Ground Shader")?;
 
         let uniforms = Uniforms::new();
 
@@ -100,7 +114,7 @@ impl Pipelines {
             cache: None,
         });
 
-        let line_shader = device.create_shader_module(include_wgsl!("shaders/lines.wgsl"));
+        let line_shader = load_shader(device, &line_shader_path, "Line Shader")?;
 
         let gizmo_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("Gizmo Pipeline"),
@@ -135,7 +149,7 @@ impl Pipelines {
             cache: None,
         });
 
-        Self {
+        Ok(Self {
             shader,
             gizmo_vbuf,
             uniform_buffer,
@@ -147,7 +161,9 @@ impl Pipelines {
             msaa_samples,
             format,
             line_shader,
-        }
+            shader_path,
+            line_shader_path,
+        })
     }
 
     pub(crate) fn recreate_pipelines(&mut self) {
@@ -219,4 +235,21 @@ impl Pipelines {
                 cache: None,
             });
     }
+
+    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
+        self.shader = load_shader(&self.device, &self.shader_path, "Ground Shader")?;
+        self.line_shader = load_shader(&self.device, &self.line_shader_path, "Line Shader")?;
+
+        self.recreate_pipelines();
+        Ok(())
+    }
+}
+
+fn load_shader(device: &Device, path: &Path, label: &str) -> anyhow::Result<ShaderModule> {
+    let src = fs::read_to_string(path)?;
+    let module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some(label),
+        source: ShaderSource::Wgsl(Cow::Owned(src)),
+    });
+    Ok(module)
 }
