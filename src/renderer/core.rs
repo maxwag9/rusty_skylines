@@ -422,7 +422,7 @@ impl RenderCore {
             return;
         };
 
-        let changed = watcher.take_changed_paths();
+        let changed = watcher.take_changed_wgsl_files();
         if changed.is_empty() {
             return;
         }

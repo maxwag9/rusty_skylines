@@ -38,13 +38,13 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         }
         if resources
             .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyA))
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyS))
         {
             wish -= forward;
         }
         if resources
             .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyS))
+            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyA))
         {
             wish -= right;
         }

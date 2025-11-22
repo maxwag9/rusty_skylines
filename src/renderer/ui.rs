@@ -215,6 +215,8 @@ impl UiRenderer {
         );
         self.update_fps_layer(ui, time);
 
+        ui.sync_console_ui();
+
         let dirty_layers: Vec<usize> = ui
             .layers
             .iter()

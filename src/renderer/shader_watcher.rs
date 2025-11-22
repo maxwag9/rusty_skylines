@@ -1,38 +1,46 @@
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 
 pub struct ShaderWatcher {
-    rx: Receiver<notify::Result<Event>>,
-    #[allow(dead_code)]
-    watcher: RecommendedWatcher,
+    pub rx: Receiver<notify::Result<Event>>,
+    _watcher: notify::RecommendedWatcher,
 }
 
 impl ShaderWatcher {
     pub fn new(shader_dir: &PathBuf) -> anyhow::Result<Self> {
         let (tx, rx) = channel();
 
-        let mut watcher = notify::recommended_watcher(move |res| {
+        let mut watcher = recommended_watcher(move |res| {
             let _ = tx.send(res);
         })?;
 
-        watcher.configure(Config::OngoingEvents(Some(
-            std::time::Duration::from_millis(50),
-        )))?;
         watcher.watch(shader_dir, RecursiveMode::Recursive)?;
 
-        Ok(Self { rx, watcher })
+        Ok(Self {
+            rx,
+            _watcher: watcher,
+        })
     }
 
-    pub fn take_changed_paths(&self) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
+    pub fn take_changed_wgsl_files(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+
         while let Ok(event) = self.rx.try_recv() {
             if let Ok(ev) = event {
-                if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(_)) {
-                    paths.extend(ev.paths);
+                match ev.kind {
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
+                        for path in ev.paths {
+                            if path.extension().and_then(|x| x.to_str()) == Some("wgsl") {
+                                out.push(path);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
-        paths
+
+        out
     }
 }

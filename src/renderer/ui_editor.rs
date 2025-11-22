@@ -275,15 +275,13 @@ impl UiButtonLoader {
         &mut self.layers[idx]
     }
 
-    pub fn log_console(&mut self, message: impl Into<String>) {
+    pub fn sync_console_ui(&mut self) {
+        let lines: Vec<String> = self.console_lines.iter().cloned().collect();
+
         let layer = self.ensure_console_layer();
-        self.console_lines.push_back(message.into());
-        while self.console_lines.len() > 6 {
-            self.console_lines.pop_front();
-        }
 
         layer.texts.clear();
-        for (i, line) in self.console_lines.iter().enumerate() {
+        for (i, line) in lines.into_iter().enumerate() {
             layer.texts.push(UiButtonText {
                 id: Some(format!("console_line_{}", i)),
                 z_index: 980 + i as i32,
@@ -333,6 +331,14 @@ impl UiButtonLoader {
         }
 
         layer.dirty = true;
+    }
+
+    pub fn log_console(&mut self, message: impl Into<String>) {
+        self.console_lines.push_back(message.into());
+
+        while self.console_lines.len() > 6 {
+            self.console_lines.pop_front();
+        }
     }
 
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32, input_state: &InputState) {
