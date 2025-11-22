@@ -9,6 +9,7 @@ use crate::resources::{InputState, MouseState};
 use crate::vertex::UiElement::*;
 pub(crate) use crate::vertex::*;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -17,6 +18,7 @@ pub struct UiButtonLoader {
     pub layers: Vec<RuntimeLayer>,
     pub ui_runtime: UiRuntime,
     pub id_lookup: HashMap<u32, String>,
+    console_lines: VecDeque<String>,
 }
 
 pub struct UiRuntime {
@@ -93,6 +95,7 @@ impl UiButtonLoader {
             layers: Vec::new(),
             ui_runtime: UiRuntime::new(editor_mode),
             id_lookup: HashMap::new(),
+            console_lines: VecDeque::new(),
         };
 
         // JSON layers to runtime layers...…
@@ -151,6 +154,7 @@ impl UiButtonLoader {
         }
 
         loader.add_editor_layers();
+        loader.ensure_console_layer();
         loader.layers.sort_by_key(|l| l.order); // SORT!
 
         loader
@@ -240,6 +244,95 @@ impl UiButtonLoader {
             gpu: LayerGpu::default(),
             opaque: true,
         });
+    }
+
+    fn ensure_console_layer(&mut self) -> &mut RuntimeLayer {
+        if let Some(idx) = self.layers.iter().position(|l| l.name == "shader_console") {
+            return &mut self.layers[idx];
+        }
+
+        self.layers.push(RuntimeLayer {
+            name: "shader_console".into(),
+            order: 980,
+            active: true,
+            cache: LayerCache::default(),
+            texts: vec![],
+            circles: vec![],
+            outlines: vec![],
+            handles: vec![],
+            polygons: vec![],
+            dirty: true,
+            gpu: LayerGpu::default(),
+            opaque: false,
+        });
+        self.layers.sort_by_key(|l| l.order);
+
+        let idx = self
+            .layers
+            .iter()
+            .position(|l| l.name == "shader_console")
+            .expect("shader_console layer missing");
+        &mut self.layers[idx]
+    }
+
+    pub fn log_console(&mut self, message: impl Into<String>) {
+        let layer = self.ensure_console_layer();
+        self.console_lines.push_back(message.into());
+        while self.console_lines.len() > 6 {
+            self.console_lines.pop_front();
+        }
+
+        layer.texts.clear();
+        for (i, line) in self.console_lines.iter().enumerate() {
+            layer.texts.push(UiButtonText {
+                id: Some(format!("console_line_{}", i)),
+                z_index: 980 + i as i32,
+                x: 20.0,
+                y: 20.0 + i as f32 * 22.0,
+                stretch_x: 0.0,
+                stretch_y: 0.0,
+                top_left_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0; 4],
+                    roundness: 0.0,
+                    selected: false,
+                    id: 0,
+                },
+                bottom_left_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0; 4],
+                    roundness: 0.0,
+                    selected: false,
+                    id: 1,
+                },
+                top_right_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0; 4],
+                    roundness: 0.0,
+                    selected: false,
+                    id: 2,
+                },
+                bottom_right_vertex: UiVertex {
+                    pos: [0.0, 0.0],
+                    color: [1.0; 4],
+                    roundness: 0.0,
+                    selected: false,
+                    id: 3,
+                },
+                px: 18,
+                color: [0.95, 0.9, 0.8, 0.95],
+                text: line.to_string(),
+                misc: MiscButtonSettings {
+                    active: true,
+                    touched_time: 0.0,
+                    is_touched: false,
+                    pressable: false,
+                    editable: false,
+                },
+            });
+        }
+
+        layer.dirty = true;
     }
 
     pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32, input_state: &InputState) {

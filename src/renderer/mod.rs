@@ -2,6 +2,7 @@ pub mod core;
 pub mod helper;
 pub mod pipelines;
 pub mod render_passes;
+mod shader_watcher;
 mod touches;
 pub(crate) mod ui;
 pub mod ui_editor;

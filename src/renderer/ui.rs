@@ -6,6 +6,7 @@ use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::Path;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 
@@ -176,13 +177,19 @@ impl UiRenderer {
         format: TextureFormat,
         size: PhysicalSize<u32>,
         msaa_samples: u32,
-    ) -> Self {
-        let pipelines = UiPipelines::new(device, format, msaa_samples, size);
+        shader_dir: &Path,
+    ) -> anyhow::Result<Self> {
+        let pipelines = UiPipelines::new(device, format, msaa_samples, size, shader_dir)?;
 
-        Self {
+        Ok(Self {
             pipelines,
             device: device.clone(),
-        }
+        })
+    }
+
+    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
+        self.pipelines.reload_shaders()?;
+        Ok(())
     }
 
     pub fn render<'a>(
