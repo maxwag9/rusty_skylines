@@ -1,9 +1,11 @@
 use crate::components::camera::Camera;
-pub use crate::renderer::pipelines::Pipelines;
+use crate::renderer::pipelines::Pipelines;
+use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::resources::{MouseState, TimeSystem, Uniforms};
 use crate::vertex::{LineVtx, Vertex};
+use std::path::PathBuf;
 use std::sync::Arc;
 use util::DeviceExt;
 use wgpu::*;
@@ -29,6 +31,8 @@ pub struct RenderCore {
     pub pipelines: Pipelines,
     ui_renderer: UiRenderer,
     size: PhysicalSize<u32>,
+
+    shader_watcher: Option<ShaderWatcher>,
 }
 
 impl RenderCore {
@@ -170,8 +174,15 @@ impl RenderCore {
 
         let num_vertices = vertices.len() as u32;
 
-        let pipelines = Pipelines::new(&device, config.format, msaa_samples);
-        let mut ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples);
+        let shader_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/shaders");
+        let _ = std::fs::create_dir_all(&shader_dir);
+        let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
+
+        let pipelines = Pipelines::new(&device, config.format, msaa_samples, &shader_dir)
+            .expect("Failed to create render pipelines");
+        let mut ui_renderer =
+            UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
+                .expect("Failed to create UI pipelines");
         let _ = ui_renderer.build_text_atlas(&device, &queue, &FONT_TTF, &[14, 18, 24], 1024, 1024);
 
         Self {
@@ -187,6 +198,7 @@ impl RenderCore {
             num_vertices,
             ui_renderer,
             size,
+            shader_watcher,
         }
     }
 
@@ -224,6 +236,8 @@ impl RenderCore {
         time: &TimeSystem,
         mouse: &MouseState,
     ) {
+        self.check_shader_changes(ui_loader);
+
         // update camera uniforms
         let aspect = self.config.width as f32 / self.config.height as f32;
         let new_uniforms = Uniforms {
@@ -395,5 +409,40 @@ impl RenderCore {
 
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
         self.ui_renderer.pipelines.rebuild_pipelines();
+    }
+
+    fn reload_all_shaders(&mut self) -> anyhow::Result<()> {
+        self.pipelines.reload_shaders()?;
+        self.ui_renderer.reload_shaders()?;
+        Ok(())
+    }
+
+    fn check_shader_changes(&mut self, ui_loader: &mut UiButtonLoader) {
+        let Some(watcher) = &self.shader_watcher else {
+            return;
+        };
+
+        let changed = watcher.take_changed_paths();
+        if changed.is_empty() {
+            return;
+        }
+
+        let summary = changed
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        match self.reload_all_shaders() {
+            Ok(()) => {
+                let label = if summary.is_empty() {
+                    "Shaders reloaded".to_string()
+                } else {
+                    format!("Shaders reloaded: {summary}")
+                };
+                ui_loader.log_console(format!("✅ {label}"));
+            }
+            Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
+        }
     }
 }

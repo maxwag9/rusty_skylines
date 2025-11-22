@@ -1,6 +1,9 @@
 use crate::renderer::helper::{make_pipeline, make_uniform_layout};
 use crate::renderer::ui::{ScreenUniform, TextAtlas};
 use crate::vertex::{UiVertexPoly, UiVertexText};
+use std::borrow::Cow;
+use std::fs;
+use std::path::{Path, PathBuf};
 use wgpu::util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -45,6 +48,8 @@ pub struct UiPipelines {
     pub outline_pipeline_layout: PipelineLayout,
     pub good_blend: Option<BlendState>,
     pub additive_blend: BlendState,
+
+    shader_dir: PathBuf,
 }
 
 impl UiPipelines {
@@ -53,7 +58,8 @@ impl UiPipelines {
         format: TextureFormat,
         msaa_samples: u32,
         size: PhysicalSize<u32>,
-    ) -> Self {
+        shader_dir: &Path,
+    ) -> anyhow::Result<Self> {
         let handle_quad_vertices = [
             UiVertexPoly {
                 pos: [-3.0, -3.0],
@@ -119,7 +125,7 @@ impl UiPipelines {
         });
         let vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("UI VB"),
-            size: 1024 * 1024, // 1MB buffer
+            size: (1024 * 1024) as u64, // 1MB buffer
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -148,7 +154,7 @@ impl UiPipelines {
             }],
         });
 
-        let text_shader = device.create_shader_module(include_wgsl!("shaders/text.wgsl"));
+        let text_shader = load_shader(device, &shader_dir.join("text.wgsl"), "UI Text Shader")?;
         let text_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Text Layout"),
             entries: &[
@@ -201,10 +207,21 @@ impl UiPipelines {
         });
 
         // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
-        let circle_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle.wgsl"));
-        let outline_shader =
-            device.create_shader_module(include_wgsl!("shaders/ui_shape_outline.wgsl"));
-        let handle_shader = device.create_shader_module(include_wgsl!("shaders/ui_handle.wgsl"));
+        let circle_shader = load_shader(
+            device,
+            &shader_dir.join("ui_circle.wgsl"),
+            "UI Circle Shader",
+        )?;
+        let outline_shader = load_shader(
+            device,
+            &shader_dir.join("ui_shape_outline.wgsl"),
+            "UI Outline Shader",
+        )?;
+        let handle_shader = load_shader(
+            device,
+            &shader_dir.join("ui_handle.wgsl"),
+            "UI Handle Shader",
+        )?;
         let circle_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Circle Layout"),
             entries: &[BindGroupLayoutEntry {
@@ -341,7 +358,11 @@ impl UiPipelines {
                 alpha_to_coverage_enabled: false,
             },
         );
-        let polygon_shader = device.create_shader_module(include_wgsl!("shaders/ui_polygon.wgsl"));
+        let polygon_shader = load_shader(
+            device,
+            &shader_dir.join("ui_polygon.wgsl"),
+            "UI Polygon Shader",
+        )?;
         let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Pipeline Layout"),
             bind_group_layouts: &[&layout],
@@ -365,7 +386,11 @@ impl UiPipelines {
             },
         );
 
-        let glow_shader = device.create_shader_module(include_wgsl!("shaders/ui_circle_glow.wgsl"));
+        let glow_shader = load_shader(
+            device,
+            &shader_dir.join("ui_circle_glow.wgsl"),
+            "UI Glow Shader",
+        )?;
         let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Glow Pipeline Layout"),
             bind_group_layouts: &[&layout, &circle_layout],
@@ -402,7 +427,7 @@ impl UiPipelines {
             },
         );
 
-        Self {
+        Ok(Self {
             device: device.clone(),
             uniform_buffer,
             uniform_bind_group,
@@ -450,7 +475,8 @@ impl UiPipelines {
             good_blend,
 
             num_vertices: 0,
-        }
+            shader_dir: shader_dir.to_path_buf(),
+        })
     }
 
     pub(crate) fn rebuild_pipelines(&mut self) {
@@ -557,4 +583,49 @@ impl UiPipelines {
             },
         );
     }
+
+    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
+        self.text_shader = load_shader(
+            &self.device,
+            &self.shader_dir.join("text.wgsl"),
+            "UI Text Shader",
+        )?;
+        self.circle_shader = load_shader(
+            &self.device,
+            &self.shader_dir.join("ui_circle.wgsl"),
+            "UI Circle Shader",
+        )?;
+        self.outline_shader = load_shader(
+            &self.device,
+            &self.shader_dir.join("ui_shape_outline.wgsl"),
+            "UI Outline Shader",
+        )?;
+        self.handle_shader = load_shader(
+            &self.device,
+            &self.shader_dir.join("ui_handle.wgsl"),
+            "UI Handle Shader",
+        )?;
+        self.polygon_shader = load_shader(
+            &self.device,
+            &self.shader_dir.join("ui_polygon.wgsl"),
+            "UI Polygon Shader",
+        )?;
+        self.glow_shader = load_shader(
+            &self.device,
+            &self.shader_dir.join("ui_circle_glow.wgsl"),
+            "UI Glow Shader",
+        )?;
+
+        self.rebuild_pipelines();
+        Ok(())
+    }
+}
+
+fn load_shader(device: &Device, path: &Path, label: &str) -> anyhow::Result<ShaderModule> {
+    let src = fs::read_to_string(path)?;
+    let module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some(label),
+        source: ShaderSource::Wgsl(Cow::Owned(src)),
+    });
+    Ok(module)
 }
