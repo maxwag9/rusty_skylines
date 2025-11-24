@@ -1,6 +1,9 @@
 {
-  "layers": [
+  "menus": [
     {
+      "name": "Editor_Menu",
+      "layers": [
+        {
       "name": "base_gui",
       "order": 1,
       "texts": [
@@ -119,7 +122,7 @@
         },
         {
           "id": "toggle_simulation2",
-          "z_index": 0,
+          "z_index": 1,
           "x": 2213.6243,
           "y": 335.69962,
           "stretch_x": 1.0,
@@ -154,592 +157,407 @@
             "pressable": true,
             "editable": true
           }
-        },
-        {
-          "id": "hCc-otq0",
-          "z_index": 0,
-          "x": 1726.1578,
-          "y": 729.47186,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 62.227192,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "M4Kvy9CP",
-          "z_index": 0,
-          "x": 1877.0984,
-          "y": 1118.6184,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "fhWaJoD7",
-          "z_index": 0,
-          "x": 1846.3027,
-          "y": 1082.3828,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "Bw4CgmJP",
-          "z_index": 0,
-          "x": 1793.4641,
-          "y": 921.77423,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "kARYntCl",
-          "z_index": 0,
-          "x": 1581.641,
-          "y": 347.77615,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 164.92477,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "53KjVhT1",
-          "z_index": 0,
-          "x": 1711.3464,
-          "y": 950.6406,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "9jPlZWIt",
-          "z_index": 0,
-          "x": 1709.9929,
-          "y": 1136.3903,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "oUHJkM5_",
-          "z_index": 0,
-          "x": 1963.818,
-          "y": 1134.0012,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "VhiUwKuE",
-          "z_index": 0,
-          "x": 2086.786,
-          "y": 1093.8512,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "XzOZGhw5",
-          "z_index": 0,
-          "x": 2168.1558,
-          "y": 1205.7031,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "PnAQzb90",
-          "z_index": 0,
-          "x": 1398.5168,
-          "y": 1242.7766,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "o7LM_kKf",
-          "z_index": 0,
-          "x": 1222.7015,
-          "y": 1013.2676,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
-        },
-        {
-          "id": "fQBC0h89",
-          "z_index": 0,
-          "x": 1454.3074,
-          "y": 925.9551,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 10.0,
-          "border_thickness": 1.0,
-          "fill_color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
-          ],
-          "border_color": [
-            0.0,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_color": [
-            1.0,
-            1.0,
-            1.0,
-            0.0
-          ],
-          "glow_misc": {
-            "glow_size": 0.0,
-            "glow_speed": 0.0,
-            "glow_intensity": 0.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": false
-          }
         }
       ],
-      "outlines": [],
-      "handles": [],
-      "polygons": [],
-      "active": true,
-      "opaque": false
+          "outlines": [],
+          "handles": [],
+          "polygons": [
+        {
+          "id": "fard",
+          "z_index": 0,
+          "vertices": [
+            {
+              "pos": [
+                2070.164,
+                284.28088
+              ],
+              "color": [
+                0.0,
+                1.0,
+                0.0,
+                1.0
+              ],
+              "roundness": 0.0
+            },
+            {
+              "pos": [
+                900.0,
+                950.0
+              ],
+              "color": [
+                1.0,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "roundness": 0.0
+            },
+            {
+              "pos": [
+                950.0,
+                500.0
+              ],
+              "color": [
+                0.0,
+                0.0,
+                1.0,
+                1.0
+              ],
+              "roundness": 0.0
+            },
+            {
+              "pos": [
+                550.0,
+                500.0
+              ],
+              "color": [
+                1.0,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "roundness": 0.0
+            }
+          ],
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": true
+          }
+        }
+          ],
+          "active": true,
+          "opaque": false
+        },
+        {
+          "name": "editor_information",
+          "order": 2,
+          "texts": [
+          ],
+          "circles": [
+            {
+              "id": "toggle_simulation3",
+              "z_index": 8,
+              "x": 110.2706,
+              "y": 399.6372,
+          "stretch_x": 1.0,
+          "stretch_y": 1.0,
+              "radius": 71.589096,
+              "border_thickness": 13.0,
+          "fill_color": [
+            0.1,
+            0.3,
+            0.1,
+            1.0
+          ],
+          "border_color": [
+            0.1,
+            0.3,
+            0.3,
+            1.0
+          ],
+          "glow_color": [
+            0.15,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "glow_misc": {
+            "glow_size": 200.0,
+            "glow_speed": 2.0,
+            "glow_intensity": 1.0
+          },
+          "misc": {
+            "active": true,
+            "pressable": true,
+            "editable": true
+          }
+        }
+          ],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        }
+      ]
+
     },
     {
-      "name": "debug_fps",
-      "order": 2,
-      "texts": [
+      "name": "Debug_Menu",
+      "layers": [
         {
-          "id": "fps_text",
-          "z_index": 50,
-          "x": 150.0,
-          "y": 60.0,
-          "stretch_x": 0.0,
-          "stretch_y": 0.0,
-          "top_left_vertex": {
-            "pos": [
-              0.0,
-              0.0
-            ],
-            "color": [
-              1.0,
-              1.0,
-              1.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "bottom_left_vertex": {
-            "pos": [
-              0.0,
-              0.0
-            ],
-            "color": [
-              1.0,
-              1.0,
-              1.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "top_right_vertex": {
-            "pos": [
-              0.0,
-              0.0
-            ],
-            "color": [
-              1.0,
-              1.0,
-              1.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "bottom_right_vertex": {
-            "pos": [
-              0.0,
-              0.0
-            ],
-            "color": [
-              1.0,
-              1.0,
-              1.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "px": 24,
-          "color": [
-            1.0,
-            1.0,
-            1.0,
-            1.0
+          "name": "debug_texts",
+          "order": 2,
+          "texts": [
+            {
+              "id": "selected_menu_text",
+              "z_index": 50,
+              "x": 150.0,
+              "y": 110.0,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "bottom_left_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "top_right_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "bottom_right_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Menu: {selected_menu}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            },
+            {
+              "id": "selected_layer_text",
+              "z_index": 50,
+              "x": 150.0,
+              "y": 150.0,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "bottom_left_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "top_right_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "bottom_right_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Layer: {selected_layer}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            },
+            {
+              "id": "fps_text",
+              "z_index": 51,
+              "x": 150.0,
+              "y": 60.0,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "bottom_left_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "top_right_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "bottom_right_vertex": {
+                "pos": [
+                  0.0,
+                  0.0
+                ],
+                "color": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0
+                ],
+                "roundness": 0.0
+              },
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            }
           ],
-          "text": "FPS: 98.9 | Frame: 10.12ms | Sim: 0.01ms",
-          "misc": {
-            "active": true,
-            "pressable": false,
-            "editable": false
-          }
+          "circles": [
+            {
+              "id": "toggle_simulation3",
+              "z_index": 8,
+              "x": 110.2706,
+              "y": 399.6372,
+              "stretch_x": 1.0,
+              "stretch_y": 1.0,
+              "radius": 71.589096,
+              "border_thickness": 13.0,
+              "fill_color": [
+                0.1,
+                0.3,
+                0.1,
+                1.0
+              ],
+              "border_color": [
+                0.1,
+                0.3,
+                0.3,
+                1.0
+              ],
+              "glow_color": [
+                0.15,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "glow_misc": {
+                "glow_size": 200.0,
+                "glow_speed": 2.0,
+                "glow_intensity": 1.0
+              },
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              }
+            }
+          ],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
         }
-      ],
-      "circles": [],
-      "outlines": [],
-      "handles": [],
-      "polygons": [],
-      "active": true,
-      "opaque": false
+      ]
+
     }
   ]
 }

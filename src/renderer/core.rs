@@ -1,4 +1,5 @@
 use crate::components::camera::Camera;
+use crate::data::Settings;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
@@ -36,7 +37,7 @@ pub struct RenderCore {
 }
 
 impl RenderCore {
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: Arc<Window>, settings: &Settings) -> Self {
         use wgpu::*;
         // --- Create instance and surface ---
         let instance = wgpu::Instance::new(&InstanceDescriptor {
@@ -70,13 +71,14 @@ impl RenderCore {
             .copied()
             .find(|m| *m == wgpu::CompositeAlphaMode::PostMultiplied)
             .unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+        let present_mode = settings.present_mode.clone().to_wgpu();
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: PresentMode::Mailbox,
+            present_mode,
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -235,6 +237,7 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         mouse: &MouseState,
+        settings: &Settings,
     ) {
         self.check_shader_changes(ui_loader);
 
@@ -299,7 +302,12 @@ impl RenderCore {
         // --- Update gizmo vertex buffer ---
         self.queue
             .write_buffer(&self.pipelines.gizmo_vbuf, 0, bytemuck::cast_slice(&axes));
-
+        let background_color = Color {
+            r: settings.background_color[0] as f64,
+            g: settings.background_color[1] as f64,
+            b: settings.background_color[2] as f64,
+            a: settings.background_color[3] as f64,
+        };
         // --- Choose color attachment ---
         let color_attachment = Some(RenderPassColorAttachment {
             view: if self.msaa_samples > 1 {
@@ -314,12 +322,7 @@ impl RenderCore {
             },
             depth_slice: None,
             ops: Operations {
-                load: LoadOp::Clear(Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.3,
-                    a: 1.0,
-                }),
+                load: LoadOp::Clear(background_color),
                 store: StoreOp::Store,
             },
         });

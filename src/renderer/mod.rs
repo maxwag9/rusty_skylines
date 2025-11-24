@@ -1,5 +1,6 @@
 pub mod core;
 pub mod helper;
+mod parser;
 pub mod pipelines;
 pub mod render_passes;
 mod shader_watcher;
@@ -9,6 +10,7 @@ pub mod ui_editor;
 mod ui_pipelines;
 
 use crate::components::camera::Camera;
+use crate::data::Settings;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::resources::{MouseState, TimeSystem};
 use core::RenderCore;
@@ -19,8 +21,8 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: Arc<winit::window::Window>) -> Self {
-        let core = RenderCore::new(window);
+    pub fn new(window: Arc<winit::window::Window>, settings: &Settings) -> Self {
+        let core = RenderCore::new(window, settings);
         Self { core }
     }
 
@@ -34,7 +36,8 @@ impl Renderer {
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         mouse: &MouseState,
+        settings: &Settings,
     ) {
-        self.core.render(camera, ui_loader, time, mouse);
+        self.core.render(camera, ui_loader, time, mouse, settings);
     }
 }

@@ -1,13 +1,38 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")] // "fifo", "mailbox", ...
+pub enum PresentModeSetting {
+    Immediate,
+    Mailbox,
+    Fifo,
+}
+
+impl PresentModeSetting {
+    pub fn to_wgpu(self) -> wgpu::PresentMode {
+        match self {
+            PresentModeSetting::Immediate => wgpu::PresentMode::Immediate,
+            PresentModeSetting::Mailbox => wgpu::PresentMode::Mailbox,
+            PresentModeSetting::Fifo => wgpu::PresentMode::Fifo,
+        }
+    }
+}
+
+impl Default for PresentModeSetting {
+    fn default() -> Self {
+        PresentModeSetting::Mailbox
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Settings {
     pub target_fps: f32,
     pub target_tps: f32,
 
-    pub present_mode: String, // "Fifo", "Mailbox", or "Immediate"
+    pub present_mode: PresentModeSetting,
     pub editor_mode: bool,
+    pub background_color: [f32; 4],
 }
 
 impl Default for Settings {
@@ -15,10 +40,9 @@ impl Default for Settings {
         Self {
             target_fps: 60.0,
             target_tps: 60.0,
-
-            present_mode: "Mailbox".to_string(),
-
+            present_mode: PresentModeSetting::Mailbox,
             editor_mode: false,
+            background_color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }

@@ -1,9 +1,10 @@
 use crate::renderer::helper::{dist, polygon_sdf};
-use crate::renderer::ui_editor::{UiButtonLoader, UiRuntime};
+use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime};
 use crate::resources::MouseState;
 use crate::vertex::{
     RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle, UiButtonPolygon,
 };
+use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MouseSnapshot {
@@ -55,38 +56,21 @@ pub(crate) struct EditorInteractionResult {
 }
 
 pub(crate) fn press_began_on_ui(
-    layers: &[RuntimeLayer],
+    menus: &HashMap<String, Menu>,
     mouse: &MouseSnapshot,
     editor_mode: bool,
 ) -> bool {
-    for layer in layers.iter().filter(|l| l.active) {
-        if circle_hit(layer, mouse.mx, mouse.my) {
-            return true;
-        }
-
-        if polygon_hit(layer, mouse.mx, mouse.my) {
-            return true;
-        }
-
-        if editor_mode && handle_hit(layer, mouse.mx, mouse.my) {
-            return true;
-        }
-    }
-
-    false
-}
-
-pub(crate) fn near_handle(layers: &[RuntimeLayer], mouse: &MouseSnapshot) -> bool {
-    for layer in layers.iter().filter(|l| l.active) {
-        for h in &layer.handles {
-            if !h.misc.active {
-                continue;
+    for (_, menu) in menus.iter().filter(|(_, menu)| menu.active) {
+        for layer in menu.layers.iter().filter(|l| l.active) {
+            if circle_hit(layer, mouse.mx, mouse.my) {
+                return true;
             }
-            let dx = mouse.mx - h.x;
-            let dy = mouse.my - h.y;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let margin = (h.radius * 0.2).max(12.0);
-            if (dist - h.radius).abs() < margin {
+
+            if polygon_hit(layer, mouse.mx, mouse.my) {
+                return true;
+            }
+
+            if editor_mode && handle_hit(layer, mouse.mx, mouse.my) {
                 return true;
             }
         }
@@ -94,76 +78,96 @@ pub(crate) fn near_handle(layers: &[RuntimeLayer], mouse: &MouseSnapshot) -> boo
     false
 }
 
+pub(crate) fn near_handle(menus: &HashMap<String, Menu>, mouse: &MouseSnapshot) -> bool {
+    for (_, menu) in menus.iter().filter(|(_, menu)| menu.active) {
+        for layer in menu.layers.iter().filter(|l| l.active) {
+            for h in &layer.handles {
+                if !h.misc.active {
+                    continue;
+                }
+                let dx = mouse.mx - h.x;
+                let dy = mouse.my - h.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                let margin = (h.radius * 0.2).max(12.0);
+                if (dist - h.radius).abs() < margin {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn find_top_hit(
-    layers: &[RuntimeLayer],
+    menus: &HashMap<String, Menu>,
     mouse: &MouseSnapshot,
     editor_mode: bool,
 ) -> Option<HitResult> {
     let mut best: Option<HitResult> = None;
-
-    for (layer_index, layer) in layers.iter().enumerate() {
-        if !layer.active {
-            continue;
-        }
-
-        for (circle_index, circle) in layer.circles.iter().enumerate() {
-            if !circle.misc.active {
+    for (_, menu) in menus.iter().filter(|(_, menu)| menu.active) {
+        for (layer_index, layer) in menu.layers.iter().enumerate() {
+            if !layer.active {
                 continue;
             }
 
-            let drag_radius = (circle.radius * 0.8).max(8.0);
-            if hit_circle(mouse.mx, mouse.my, circle, drag_radius) {
-                consider_candidate(
-                    &mut best,
-                    HitResult {
-                        layer_index,
-                        element: HitElement::Circle(circle_index),
-                        z_index: circle.z_index,
-                        layer_order: layer.order,
-                    },
-                );
-            }
-        }
-
-        if editor_mode {
-            for (handle_index, handle) in layer.handles.iter().enumerate() {
-                if !handle.misc.active {
+            for (circle_index, circle) in layer.circles.iter().enumerate() {
+                if !circle.misc.active {
                     continue;
                 }
 
-                if hit_handle(mouse.mx, mouse.my, handle) {
+                let drag_radius = (circle.radius * 0.8).max(8.0);
+                if hit_circle(mouse.mx, mouse.my, circle, drag_radius) {
                     consider_candidate(
                         &mut best,
                         HitResult {
                             layer_index,
-                            element: HitElement::Handle(handle_index),
-                            z_index: handle.z_index,
+                            element: HitElement::Circle(circle_index),
+                            z_index: circle.z_index,
+                            layer_order: layer.order,
+                        },
+                    );
+                }
+            }
+
+            if editor_mode {
+                for (handle_index, handle) in layer.handles.iter().enumerate() {
+                    if !handle.misc.active {
+                        continue;
+                    }
+
+                    if hit_handle(mouse.mx, mouse.my, handle) {
+                        consider_candidate(
+                            &mut best,
+                            HitResult {
+                                layer_index,
+                                element: HitElement::Handle(handle_index),
+                                z_index: handle.z_index,
+                                layer_order: layer.order,
+                            },
+                        );
+                    }
+                }
+            }
+
+            for (poly_index, poly) in layer.polygons.iter().enumerate() {
+                if !poly.misc.active {
+                    continue;
+                }
+
+                if hit_polygon(mouse.mx, mouse.my, poly) {
+                    consider_candidate(
+                        &mut best,
+                        HitResult {
+                            layer_index,
+                            element: HitElement::Polygon(poly_index),
+                            z_index: poly.z_index,
                             layer_order: layer.order,
                         },
                     );
                 }
             }
         }
-
-        for (poly_index, poly) in layer.polygons.iter().enumerate() {
-            if !poly.misc.active {
-                continue;
-            }
-
-            if hit_polygon(mouse.mx, mouse.my, poly) {
-                consider_candidate(
-                    &mut best,
-                    HitResult {
-                        layer_index,
-                        element: HitElement::Polygon(poly_index),
-                        z_index: poly.z_index,
-                        layer_order: layer.order,
-                    },
-                );
-            }
-        }
     }
-
     best
 }
 
@@ -176,41 +180,43 @@ pub(crate) fn handle_editor_mode_interactions(
     let mut result = EditorInteractionResult::default();
 
     let ui_runtime = &mut loader.ui_runtime;
+    for (menu_name, mut menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
+        for (layer_index, layer) in menu.layers.iter_mut().enumerate() {
+            if !layer.active {
+                continue;
+            }
 
-    for (layer_index, layer) in loader.layers.iter_mut().enumerate() {
-        if !layer.active {
-            continue;
+            process_circles(
+                ui_runtime,
+                menu_name,
+                layer,
+                layer_index,
+                dt,
+                mouse,
+                top_hit,
+                &mut result,
+            );
+            process_handles(
+                ui_runtime,
+                layer,
+                layer_index,
+                dt,
+                mouse,
+                top_hit,
+                &mut result,
+            );
+            process_polygons(
+                ui_runtime,
+                menu_name,
+                layer,
+                layer_index,
+                dt,
+                mouse,
+                top_hit,
+                &mut result,
+            );
         }
-
-        process_circles(
-            ui_runtime,
-            layer,
-            layer_index,
-            dt,
-            mouse,
-            top_hit,
-            &mut result,
-        );
-        process_handles(
-            ui_runtime,
-            layer,
-            layer_index,
-            dt,
-            mouse,
-            top_hit,
-            &mut result,
-        );
-        process_polygons(
-            ui_runtime,
-            layer,
-            layer_index,
-            dt,
-            mouse,
-            top_hit,
-            &mut result,
-        );
     }
-
     result
 }
 
@@ -220,71 +226,72 @@ pub(crate) fn apply_pending_circle_updates(
     pending_circle_updates: Vec<(String, f32, f32)>,
 ) {
     for (parent_id, mx, my) in pending_circle_updates {
-        let mut target_radius = 0.0f32;
         let mut current_radius = 0.0f32;
-        let mut layer_name: Option<String> = None;
-        for layer in &mut loader.layers {
-            for circle in &mut layer.circles {
-                if let Some(id) = &circle.id {
-                    if id == &parent_id {
+        let mut target_radius = 0.0f32;
+        let mut found_layer_name: Option<String> = None;
+
+        // 1. Find the element across active menus
+        for (_, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+            for layer in &mut menu.layers {
+                for circle in &mut layer.circles {
+                    if circle.id.as_ref() == Some(&parent_id) {
                         current_radius = circle.radius;
                         target_radius = ((mx - circle.x).powi(2) + (my - circle.y).powi(2)).sqrt();
-                        layer_name = Some(layer.name.clone());
-                        break;
+                        found_layer_name = Some(layer.name.clone());
                     }
                 }
-            }
-            if layer_name.is_some() {
-                break;
             }
         }
 
-        if let Some(layer_name) = layer_name {
-            let smoothing_speed = 10.0;
-            let dt_effective = dt.clamp(1.0 / 240.0, 0.1);
-            let k = 1.0 - (-smoothing_speed * dt_effective).exp();
-            let new_radius = (current_radius + (target_radius - current_radius) * k)
-                .abs()
-                .max(2.0);
+        // 2. If not found, skip update
+        let Some(layer_name) = found_layer_name else {
+            continue;
+        };
 
-            for layer in &mut loader.layers {
+        // 3. Smooth transitioning
+        let smoothing_speed = 10.0;
+        let dt_effective = dt.clamp(1.0 / 240.0, 0.1);
+        let k = 1.0 - (-smoothing_speed * dt_effective).exp();
+        let new_radius = (current_radius + (target_radius - current_radius) * k)
+            .abs()
+            .max(2.0);
+
+        // 4. Apply updated radius to ALL relevant objects
+        for (_, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+            for layer in &mut menu.layers {
                 for circle in &mut layer.circles {
-                    if let Some(id) = &circle.id {
-                        if id == &parent_id {
-                            circle.radius = new_radius;
-                        }
+                    if circle.id.as_ref() == Some(&parent_id) {
+                        circle.radius = new_radius;
+                        layer.dirty = true;
                     }
                 }
-            }
 
-            for layer in &mut loader.layers {
                 for handle in &mut layer.handles {
-                    if let Some(pid) = &handle.parent_id {
-                        if pid == &parent_id {
-                            handle.radius = new_radius;
-                            layer.dirty = true;
-                        }
+                    if handle.parent_id.as_ref() == Some(&parent_id) {
+                        handle.radius = new_radius;
+                        layer.dirty = true;
                     }
                 }
+
                 for outline in &mut layer.outlines {
-                    if let Some(pid) = &outline.parent_id {
-                        if pid == &parent_id {
-                            outline.shape_data.radius = new_radius;
-                            layer.dirty = true;
-                        }
+                    if outline.parent_id.as_ref() == Some(&parent_id) {
+                        outline.shape_data.radius = new_radius;
+                        layer.dirty = true;
                     }
                 }
             }
-
-            loader.mark_layer_dirty(&layer_name);
         }
     }
 }
 
-pub(crate) fn mark_editor_layers_dirty(layers: &mut [RuntimeLayer]) {
-    for layer in layers {
-        if layer.name == "editor_selection" || layer.name == "editor_handles" {
-            layer.dirty = true;
+pub(crate) fn mark_editor_layers_dirty(menu: Option<&mut Menu>) {
+    const TARGETS: [&str; 2] = ["editor_selection", "editor_handles"];
+
+    if let Some(menu) = menu {
+        for layer in &mut menu.layers {
+            if TARGETS.contains(&layer.name.as_str()) {
+                layer.dirty = true;
+            }
         }
     }
 }
@@ -296,18 +303,19 @@ pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> 
 
     let selected_id = loader.ui_runtime.selected_ui_element.element_id.clone();
     let mut selection_changed = false;
-    for layer in &mut loader.layers {
-        for circle in &mut layer.circles {
-            if let Some(id) = &circle.id {
-                if *id == selected_id {
-                    circle.radius = (circle.radius + scroll * 3.0).max(2.0);
-                    layer.dirty = true;
-                    selection_changed = true;
+    for (_, menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
+        for layer in &mut menu.layers {
+            for circle in &mut layer.circles {
+                if let Some(id) = &circle.id {
+                    if *id == selected_id {
+                        circle.radius = (circle.radius + scroll * 3.0).max(2.0);
+                        layer.dirty = true;
+                        selection_changed = true;
+                    }
                 }
             }
         }
     }
-
     selection_changed
 }
 
@@ -404,6 +412,7 @@ fn consider_candidate(best: &mut Option<HitResult>, candidate: HitResult) {
 
 fn process_circles(
     ui_runtime: &mut UiRuntime,
+    menu_name: &str,
     layer: &mut RuntimeLayer,
     layer_index: usize,
     dt: f32,
@@ -456,6 +465,7 @@ fn process_circles(
             TouchState::Released => {
                 ui_runtime.drag_offset = None;
                 ui_runtime.selected_ui_element = SelectedUiElement {
+                    menu_name: menu_name.to_string(),
                     layer_name: layer.name.clone(),
                     element_id: id.clone(),
                     active: true,
@@ -514,6 +524,7 @@ fn process_handles(
 
 fn process_polygons(
     ui_runtime: &mut UiRuntime,
+    menu_name: &str,
     layer: &mut RuntimeLayer,
     layer_index: usize,
     dt: f32,
@@ -635,10 +646,12 @@ fn process_polygons(
                 ui_runtime.drag_offset = None;
                 ui_runtime.active_vertex = None;
                 ui_runtime.selected_ui_element = SelectedUiElement {
+                    menu_name: menu_name.to_string(),
                     layer_name: layer.name.clone(),
                     element_id: id.clone(),
                     active: true,
                 };
+
                 result.trigger_selection = true;
             }
             TouchState::Idle => {}

@@ -179,7 +179,14 @@ impl ApplicationHandler for App {
                             Polygon(UiButtonPolygon::default()),
                             &resources.mouse,
                         );
-                        println!("Added GUI element: {:?}", result);
+                        match result {
+                            Ok(r) => {
+                                println!("Added GUI element: {:?}", r);
+                            }
+                            Err(r) => {
+                                println!("Failed adding GUI element: {:?}", r);
+                            }
+                        }
                     }
                 }
             }
@@ -293,6 +300,15 @@ impl ApplicationHandler for App {
 
                     // update render time
                     resources.time.update_render();
+
+                    let ui = &mut resources.ui_loader;
+
+                    ui.variables
+                        .set("fps", format!("{}", resources.time.render_fps));
+                    ui.variables
+                        .set("render_dt", format!("{}", resources.time.render_dt));
+                    ui.variables
+                        .set("sim_dt", format!("{}", resources.time.sim_dt));
 
                     // simulate time independent of render fps
                     resources.time.update_sim();

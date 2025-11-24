@@ -27,7 +27,7 @@ impl Resources {
     pub fn new(window: Arc<Window>) -> Self {
         let settings = Settings::load("src/settings.toml");
         let editor_mode = settings.editor_mode.clone();
-        let renderer = Renderer::new(window.clone());
+        let renderer = Renderer::new(window.clone(), &settings);
         Self {
             settings,
             time: TimeSystem::new(),

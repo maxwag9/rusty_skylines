@@ -92,17 +92,19 @@ impl Default for LayerCache {
 
 #[derive(Debug, Clone, Default)]
 pub struct SelectedUiElement {
+    pub menu_name: String,
     pub layer_name: String,
     pub element_id: String,
     pub active: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub enum UiElement {
     Circle(UiButtonCircle),
     Handle(UiButtonHandle),
     Polygon(UiButtonPolygon),
     Text(UiButtonText),
+    Outline(UiButtonOutline),
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -343,6 +345,12 @@ pub struct MiscButtonSettingsJson {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GuiLayout {
+    pub menus: Vec<MenuJson>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MenuJson {
+    pub name: String,
     pub layers: Vec<UiLayerJson>,
 }
 
@@ -362,6 +370,7 @@ pub struct UiButtonText {
     pub px: u16,
     pub color: [f32; 4],
     pub text: String,
+    pub template: String,
     pub misc: MiscButtonSettings,
 }
 
@@ -469,7 +478,8 @@ impl UiButtonText {
             },
             px: t.px,
             color: t.color,
-            text: t.text,
+            text: t.text.clone(),
+            template: t.text,
             misc: MiscButtonSettings {
                 active: t.misc.active,
                 touched_time: 0.0,
@@ -699,6 +709,7 @@ impl Default for UiButtonText {
             px: 14,
             color: [1.0, 1.0, 1.0, 1.0],
             text: "".into(),
+            template: "".to_string(),
             misc: MiscButtonSettings::default(),
         }
     }

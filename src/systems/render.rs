@@ -9,6 +9,7 @@ pub fn render_system(world: &mut World, resources: &mut Resources) {
             &mut resources.ui_loader,
             &resources.time,
             &resources.mouse,
+            &resources.settings,
         );
     }
 }
