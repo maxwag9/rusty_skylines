@@ -222,6 +222,7 @@ pub struct RuntimeLayer {
     pub dirty: bool, // set true when anything changes or the screen will be dirty asf!
     pub gpu: LayerGpu,
     pub opaque: bool,
+    pub saveable: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -363,15 +364,17 @@ pub struct UiButtonText {
     pub y: f32,
     pub stretch_x: f32,
     pub stretch_y: f32,
-    pub top_left_vertex: UiVertex,
-    pub bottom_left_vertex: UiVertex,
-    pub top_right_vertex: UiVertex,
-    pub bottom_right_vertex: UiVertex,
+    pub top_left_offset: [f32; 2],
+    pub bottom_left_offset: [f32; 2],
+    pub top_right_offset: [f32; 2],
+    pub bottom_right_offset: [f32; 2],
     pub px: u16,
     pub color: [f32; 4],
     pub text: String,
     pub template: String,
     pub misc: MiscButtonSettings,
+    pub natural_width: f32,
+    pub natural_height: f32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -448,34 +451,10 @@ impl UiButtonText {
             y: t.y,
             stretch_x: t.stretch_x,
             stretch_y: t.stretch_y,
-            top_left_vertex: UiVertex {
-                pos: t.top_left_vertex.pos,
-                color: t.top_left_vertex.color,
-                roundness: t.top_left_vertex.roundness,
-                selected: false,
-                id: 0,
-            },
-            bottom_left_vertex: UiVertex {
-                pos: t.bottom_left_vertex.pos,
-                color: t.bottom_left_vertex.color,
-                roundness: t.bottom_left_vertex.roundness,
-                selected: false,
-                id: 0,
-            },
-            top_right_vertex: UiVertex {
-                pos: t.top_right_vertex.pos,
-                color: t.top_right_vertex.color,
-                roundness: t.top_right_vertex.roundness,
-                selected: false,
-                id: 0,
-            },
-            bottom_right_vertex: UiVertex {
-                pos: t.bottom_right_vertex.pos,
-                color: t.bottom_right_vertex.color,
-                roundness: t.bottom_right_vertex.roundness,
-                selected: false,
-                id: 0,
-            },
+            top_left_offset: t.top_left_offset,
+            bottom_left_offset: t.bottom_left_offset,
+            top_right_offset: t.top_right_offset,
+            bottom_right_offset: t.bottom_right_offset,
             px: t.px,
             color: t.color,
             text: t.text.clone(),
@@ -487,6 +466,8 @@ impl UiButtonText {
                 pressable: t.misc.pressable,
                 editable: t.misc.editable,
             },
+            natural_width: 50.0,
+            natural_height: 20.0,
         }
     }
 
@@ -500,14 +481,14 @@ impl UiButtonText {
             stretch_x: self.stretch_x,
             stretch_y: self.stretch_y,
 
-            top_left_vertex: self.top_left_vertex.to_json(),
-            bottom_left_vertex: self.bottom_left_vertex.to_json(),
-            top_right_vertex: self.top_right_vertex.to_json(),
-            bottom_right_vertex: self.bottom_right_vertex.to_json(),
+            top_left_offset: self.top_left_offset,
+            bottom_left_offset: self.bottom_left_offset,
+            top_right_offset: self.top_right_offset,
+            bottom_right_offset: self.bottom_right_offset,
 
             px: self.px,
             color: self.color,
-            text: self.text.clone(),
+            text: self.template.clone(),
             misc: self.misc.to_json(),
         }
     }
@@ -702,15 +683,17 @@ impl Default for UiButtonText {
             y: 0.0,
             stretch_x: 1.0,
             stretch_y: 1.0,
-            top_left_vertex: UiVertex::default(),
-            bottom_left_vertex: UiVertex::default(),
-            top_right_vertex: UiVertex::default(),
-            bottom_right_vertex: UiVertex::default(),
+            top_left_offset: [0.0; 2],
+            bottom_left_offset: [0.0; 2],
+            top_right_offset: [0.0; 2],
+            bottom_right_offset: [0.0; 2],
             px: 14,
             color: [1.0, 1.0, 1.0, 1.0],
             text: "".into(),
             template: "".to_string(),
             misc: MiscButtonSettings::default(),
+            natural_width: 50.0,
+            natural_height: 20.0,
         }
     }
 }
@@ -900,10 +883,10 @@ pub struct UiButtonTextJson {
     pub y: f32,
     pub stretch_x: f32,
     pub stretch_y: f32,
-    pub top_left_vertex: UiVertexJson,
-    pub bottom_left_vertex: UiVertexJson,
-    pub top_right_vertex: UiVertexJson,
-    pub bottom_right_vertex: UiVertexJson,
+    pub top_left_offset: [f32; 2],
+    pub bottom_left_offset: [f32; 2],
+    pub top_right_offset: [f32; 2],
+    pub bottom_right_offset: [f32; 2],
     pub px: u16,
     pub color: [f32; 4],
     pub text: String,

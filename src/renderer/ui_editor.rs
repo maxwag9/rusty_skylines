@@ -28,7 +28,6 @@ impl UiVariableRegistry {
 
     pub fn set(&mut self, name: &str, value: impl Into<String>) {
         self.vars.insert(name.to_string(), value.into());
-        println!("{:?}", self.vars)
     }
 
     pub fn get(&self, name: &str) -> Option<&str> {
@@ -74,6 +73,10 @@ impl Menu {
                     hash,
                 ],
                 text: t.text.clone(),
+
+                natural_width: t.natural_width,
+                natural_height: t.natural_height,
+                id: t.id.clone(),
             });
         }
 
@@ -272,6 +275,7 @@ pub struct UiRuntime {
     pub active_vertex: Option<usize>,
     pub drag_offset: Option<(f32, f32)>,
     pub editor_mode: bool,
+    pub editing_text: bool,
 }
 
 impl UiRuntime {
@@ -282,6 +286,7 @@ impl UiRuntime {
             active_vertex: None,
             drag_offset: None,
             editor_mode,
+            editing_text: false,
         }
     }
 
@@ -331,8 +336,6 @@ impl UiRuntime {
 
 pub struct UiButtonLoader {
     pub menus: HashMap<String, Menu>,
-    pub selected_menu: String, //ONLY IN EDITING, It says which menu is being EDITED right now, that's it, bye!
-    pub selected_layer: String, //ONLY IN EDITING, It says which layer is being EDITED right now, that's it, bye!
 
     pub id_lookup: HashMap<u32, String>,
     pub console_lines: VecDeque<String>,
@@ -352,8 +355,6 @@ impl UiButtonLoader {
             ui_runtime: UiRuntime::new(editor_mode),
             id_lookup: HashMap::new(),
             console_lines: VecDeque::new(),
-            selected_menu: "None! Menu".to_string(),
-            selected_layer: "No Layer...".to_string(),
             variables: UiVariableRegistry::new(),
         };
 
@@ -411,6 +412,7 @@ impl UiButtonLoader {
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
                     dirty: true,
+                    saveable: true,
                 });
             }
 
@@ -424,12 +426,7 @@ impl UiButtonLoader {
                 },
             );
         }
-        loader
-            .variables
-            .set("selected_menu", format!("{}", loader.selected_menu));
-        loader
-            .variables
-            .set("selected_layer", format!("{}", loader.selected_layer));
+
         loader.add_editor_layers();
         loader.ensure_console_layer();
 
@@ -470,9 +467,8 @@ impl UiButtonLoader {
             let mut layers = Vec::new();
 
             for l in &menu.layers {
-                // Skip editor-only layers to avoid saving internal junk
-                if l.name == "editor" || l.name == "editor_selection" || l.name == "editor_handles"
-                {
+                // Skip editor-only layers to avoid saving internal crap
+                if !l.saveable {
                     continue;
                 }
 
@@ -519,6 +515,7 @@ impl UiButtonLoader {
             dirty: true,
             gpu: LayerGpu::default(),
             opaque: true,
+            saveable: false,
         });
 
         menu.layers.push(RuntimeLayer {
@@ -534,19 +531,11 @@ impl UiButtonLoader {
             dirty: true,
             gpu: LayerGpu::default(),
             opaque: true,
+            saveable: false,
         });
 
         // ensure correct draw order
         menu.layers.sort_by_key(|l| l.order);
-
-        // select this menu by default — needed for editor mode
-        self.selected_menu = "Editor_Menu".into();
-        self.variables
-            .set("selected_menu", format!("{}", self.selected_menu));
-        println!("Editor_Menu now contains:");
-        for l in &menu.layers {
-            println!("  - {} (order {})", l.name, l.order);
-        }
     }
 
     pub fn ensure_console_layer(&mut self) -> &mut RuntimeLayer {
@@ -575,6 +564,7 @@ impl UiButtonLoader {
             dirty: true,
             gpu: LayerGpu::default(),
             opaque: false,
+            saveable: false,
         });
 
         // 4. Sort by order
@@ -604,34 +594,10 @@ impl UiButtonLoader {
                 y: 20.0 + i as f32 * 22.0,
                 stretch_x: 0.0,
                 stretch_y: 0.0,
-                top_left_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0; 4],
-                    roundness: 0.0,
-                    selected: false,
-                    id: 0,
-                },
-                bottom_left_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0; 4],
-                    roundness: 0.0,
-                    selected: false,
-                    id: 1,
-                },
-                top_right_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0; 4],
-                    roundness: 0.0,
-                    selected: false,
-                    id: 2,
-                },
-                bottom_right_vertex: UiVertex {
-                    pos: [0.0, 0.0],
-                    color: [1.0; 4],
-                    roundness: 0.0,
-                    selected: false,
-                    id: 3,
-                },
+                top_left_offset: [0.0, 0.0],
+                bottom_left_offset: [0.0, 0.0],
+                top_right_offset: [0.0, 0.0],
+                bottom_right_offset: [0.0, 0.0],
                 px: 18,
                 color: [0.95, 0.9, 0.8, 0.95],
                 text: line.to_string(),
@@ -643,6 +609,8 @@ impl UiButtonLoader {
                     pressable: false,
                     editable: false,
                 },
+                natural_width: 50.0,
+                natural_height: 20.0,
             });
         }
 
@@ -698,7 +666,7 @@ impl UiButtonLoader {
         if mouse_snapshot.just_pressed && !press_started_on_ui && editor_mode {
             if !near_handle(&self.menus, &mouse_snapshot) {
                 self.ui_runtime.selected_ui_element.active = false;
-                self.update_selection(mouse);
+                self.update_selection();
             }
         }
 
@@ -709,6 +677,9 @@ impl UiButtonLoader {
                 pending_circle_updates,
                 moved_any_selected_object,
             } = handle_editor_mode_interactions(self, dt, &mouse_snapshot, top_hit);
+            if !pending_circle_updates.is_empty() {
+                println!("{:?}", pending_circle_updates);
+            }
 
             apply_pending_circle_updates(self, dt, pending_circle_updates);
 
@@ -724,11 +695,11 @@ impl UiButtonLoader {
             trigger_selection = selection;
         } else if self.ui_runtime.selected_ui_element.active {
             self.ui_runtime.selected_ui_element.active = false;
-            self.update_selection(mouse);
+            self.update_selection();
         }
 
         if trigger_selection {
-            self.update_selection(mouse);
+            self.update_selection();
         }
 
         if input_state.pressed_physical(&PhysicalKey::Code(KeyCode::KeyX))
@@ -753,8 +724,13 @@ impl UiButtonLoader {
         // 1. Get selected menu
         let menu = self
             .menus
-            .get_mut(&self.selected_menu)
-            .ok_or_else(|| format!("Menu *{}* doesn't exist", self.selected_menu))?;
+            .get_mut(&self.ui_runtime.selected_ui_element.menu_name)
+            .ok_or_else(|| {
+                format!(
+                    "Menu *{}* doesn't exist",
+                    self.ui_runtime.selected_ui_element.menu_name
+                )
+            })?;
 
         // 2. Get selected layer
         let layer = menu
@@ -764,7 +740,7 @@ impl UiButtonLoader {
             .ok_or_else(|| {
                 format!(
                     "Layer *{}* not found in *{}* menu",
-                    layer_name, self.selected_menu
+                    layer_name, self.ui_runtime.selected_ui_element.menu_name
                 )
             })?;
         let id = mouse.pos.x as u32 - mouse.pos.y as u32;
@@ -818,7 +794,7 @@ impl UiButtonLoader {
         (hash_u64 as f64 / u64::MAX as f64) as f32
     }
 
-    pub fn update_selection(&mut self, _mouse: &MouseState) {
+    pub fn update_selection(&mut self) {
         if !self.ui_runtime.selected_ui_element.active {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu
@@ -839,7 +815,6 @@ impl UiButtonLoader {
 
         if let Some(element) = self.find_element(&sel.menu_name, &sel.layer_name, &sel.element_id) {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
-                println!("{:?}", editor_menu.layers);
                 if let Some(editor_layer) = editor_menu
                     .layers
                     .iter_mut()

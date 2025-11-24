@@ -1,8 +1,9 @@
 use crate::renderer::helper::{dist, polygon_sdf};
-use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime};
+use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime, UiVariableRegistry};
 use crate::resources::MouseState;
 use crate::vertex::{
     RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle, UiButtonPolygon,
+    UiButtonText,
 };
 use std::collections::HashMap;
 
@@ -27,24 +28,26 @@ impl MouseSnapshot {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum HitElement {
     Circle(usize),
     Handle(usize),
     Polygon(usize),
+    Text(usize),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub(crate) struct HitResult {
-    pub layer_index: usize,
+    pub menu_name: String,
+    pub layer_name: String,
     pub element: HitElement,
     pub z_index: i32,
     pub layer_order: u32,
 }
 
 impl HitResult {
-    pub fn matches(&self, layer_index: usize, element: HitElement) -> bool {
-        self.layer_index == layer_index && self.element == element
+    pub fn matches(&self, menu_name: &str, layer_name: &str, element: HitElement) -> bool {
+        self.menu_name == menu_name && self.layer_name == layer_name && self.element == element
     }
 }
 
@@ -104,23 +107,21 @@ pub(crate) fn find_top_hit(
     editor_mode: bool,
 ) -> Option<HitResult> {
     let mut best: Option<HitResult> = None;
-    for (_, menu) in menus.iter().filter(|(_, menu)| menu.active) {
-        for (layer_index, layer) in menu.layers.iter().enumerate() {
-            if !layer.active {
-                continue;
-            }
-
+    for (menu_name, menu) in menus.iter().filter(|(_, menu)| menu.active) {
+        for layer in menu.layers.iter().filter(|l| l.active) {
+            // Circles
             for (circle_index, circle) in layer.circles.iter().enumerate() {
                 if !circle.misc.active {
                     continue;
                 }
 
-                let drag_radius = (circle.radius * 0.8).max(8.0);
+                let drag_radius = (circle.radius * 0.9).max(8.0);
                 if hit_circle(mouse.mx, mouse.my, circle, drag_radius) {
                     consider_candidate(
                         &mut best,
                         HitResult {
-                            layer_index,
+                            menu_name: menu_name.clone(),
+                            layer_name: layer.name.clone(),
                             element: HitElement::Circle(circle_index),
                             z_index: circle.z_index,
                             layer_order: layer.order,
@@ -129,6 +130,7 @@ pub(crate) fn find_top_hit(
                 }
             }
 
+            // Handles (editor only)
             if editor_mode {
                 for (handle_index, handle) in layer.handles.iter().enumerate() {
                     if !handle.misc.active {
@@ -139,7 +141,8 @@ pub(crate) fn find_top_hit(
                         consider_candidate(
                             &mut best,
                             HitResult {
-                                layer_index,
+                                menu_name: menu_name.clone(),
+                                layer_name: layer.name.clone(),
                                 element: HitElement::Handle(handle_index),
                                 z_index: handle.z_index,
                                 layer_order: layer.order,
@@ -149,6 +152,7 @@ pub(crate) fn find_top_hit(
                 }
             }
 
+            // Polygons
             for (poly_index, poly) in layer.polygons.iter().enumerate() {
                 if !poly.misc.active {
                     continue;
@@ -158,9 +162,29 @@ pub(crate) fn find_top_hit(
                     consider_candidate(
                         &mut best,
                         HitResult {
-                            layer_index,
+                            menu_name: menu_name.clone(),
+                            layer_name: layer.name.clone(),
                             element: HitElement::Polygon(poly_index),
                             z_index: poly.z_index,
+                            layer_order: layer.order,
+                        },
+                    );
+                }
+            }
+
+            for (text_index, text) in layer.texts.iter().enumerate() {
+                if !text.misc.active {
+                    continue;
+                }
+                let hit = hit_text(mouse.mx, mouse.my, text);
+                if hit {
+                    consider_candidate(
+                        &mut best,
+                        HitResult {
+                            menu_name: menu_name.clone(),
+                            layer_name: layer.name.clone(),
+                            element: HitElement::Text(text_index),
+                            z_index: text.z_index,
                             layer_order: layer.order,
                         },
                     );
@@ -180,40 +204,48 @@ pub(crate) fn handle_editor_mode_interactions(
     let mut result = EditorInteractionResult::default();
 
     let ui_runtime = &mut loader.ui_runtime;
-    for (menu_name, mut menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
-        for (layer_index, layer) in menu.layers.iter_mut().enumerate() {
-            if !layer.active {
-                continue;
-            }
+    let top_hit_ref = top_hit.as_ref();
 
+    for (menu_name, mut menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active) {
             process_circles(
                 ui_runtime,
                 menu_name,
                 layer,
-                layer_index,
                 dt,
                 mouse,
-                top_hit,
+                top_hit_ref,
                 &mut result,
+                &mut loader.variables,
             );
             process_handles(
                 ui_runtime,
+                menu_name,
                 layer,
-                layer_index,
                 dt,
                 mouse,
-                top_hit,
+                top_hit_ref,
                 &mut result,
             );
             process_polygons(
                 ui_runtime,
                 menu_name,
                 layer,
-                layer_index,
                 dt,
                 mouse,
-                top_hit,
+                top_hit_ref,
                 &mut result,
+                &mut loader.variables,
+            );
+            process_text(
+                ui_runtime,
+                menu_name,
+                layer,
+                dt,
+                mouse,
+                top_hit_ref,
+                &mut result,
+                &mut loader.variables,
             );
         }
     }
@@ -244,7 +276,7 @@ pub(crate) fn apply_pending_circle_updates(
         }
 
         // 2. If not found, skip update
-        let Some(layer_name) = found_layer_name else {
+        let Some(_layer_name) = found_layer_name else {
             continue;
         };
 
@@ -256,7 +288,7 @@ pub(crate) fn apply_pending_circle_updates(
             .abs()
             .max(2.0);
 
-        // 4. Apply updated radius to ALL relevant objects
+        // 4. Apply updated radius to ALL relevant objects (same parent_id)
         for (_, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
             for layer in &mut menu.layers {
                 for circle in &mut layer.circles {
@@ -297,17 +329,23 @@ pub(crate) fn mark_editor_layers_dirty(menu: Option<&mut Menu>) {
 }
 
 pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> bool {
-    if !loader.ui_runtime.selected_ui_element.active || scroll.abs() <= 0.0 {
+    if !loader.ui_runtime.selected_ui_element.active || scroll == 0.0 {
         return false;
     }
 
-    let selected_id = loader.ui_runtime.selected_ui_element.element_id.clone();
+    let selected = loader.ui_runtime.selected_ui_element.clone();
     let mut selection_changed = false;
-    for (_, menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
+
+    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
         for layer in &mut menu.layers {
+            // Only affect the currently selected layer + menu
+            if selected.menu_name != *menu_name || selected.layer_name != layer.name {
+                continue;
+            }
+
             for circle in &mut layer.circles {
                 if let Some(id) = &circle.id {
-                    if *id == selected_id {
+                    if *id == selected.element_id {
                         circle.radius = (circle.radius + scroll * 3.0).max(2.0);
                         layer.dirty = true;
                         selection_changed = true;
@@ -317,6 +355,60 @@ pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> 
         }
     }
     selection_changed
+}
+
+fn hit_text(mx: f32, my: f32, text: &UiButtonText) -> bool {
+    // 1. compute the natural text bounds (you already have this somewhere in the text layout)
+    let w = text.natural_width;
+    let h = text.natural_height;
+
+    let x = text.x;
+    let y = text.y;
+
+    // 2. build warped quad from natural box + offsets
+    let quad = [
+        [x + text.top_left_offset[0], y + text.top_left_offset[1]],
+        [
+            x + w + text.top_right_offset[0],
+            y + text.top_right_offset[1],
+        ],
+        [
+            x + w + text.bottom_right_offset[0],
+            y + h + text.bottom_right_offset[1],
+        ],
+        [
+            x + text.bottom_left_offset[0],
+            y + h + text.bottom_left_offset[1],
+        ],
+    ];
+
+    point_in_quad(mx, my, &quad)
+}
+
+fn point_in_quad(px: f32, py: f32, quad: &[[f32; 2]; 4]) -> bool {
+    fn edge(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
+        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+    }
+
+    let p = [px, py];
+
+    let mut sign = 0.0;
+    for i in 0..4 {
+        let a = quad[i];
+        let b = quad[(i + 1) % 4];
+        let e = edge(a, b, p);
+
+        if e.abs() < 1e-6 {
+            continue; // on edge
+        }
+        let s = e.signum();
+        if sign == 0.0 {
+            sign = s;
+        } else if s != sign {
+            return false;
+        }
+    }
+    true
 }
 
 fn circle_hit(layer: &RuntimeLayer, mx: f32, my: f32) -> bool {
@@ -400,8 +492,9 @@ fn hit_polygon(mx: f32, my: f32, poly: &UiButtonPolygon) -> bool {
 
 fn consider_candidate(best: &mut Option<HitResult>, candidate: HitResult) {
     if let Some(current) = best {
-        let current_key = (current.z_index, current.layer_order);
-        let candidate_key = (candidate.z_index, candidate.layer_order);
+        // First compare layer_order (layer z), then element z_index inside the layer
+        let current_key = (current.layer_order, current.z_index);
+        let candidate_key = (candidate.layer_order, candidate.z_index);
         if candidate_key > current_key {
             *current = candidate;
         }
@@ -414,11 +507,11 @@ fn process_circles(
     ui_runtime: &mut UiRuntime,
     menu_name: &str,
     layer: &mut RuntimeLayer,
-    layer_index: usize,
     dt: f32,
     mouse: &MouseSnapshot,
-    top_hit: Option<HitResult>,
+    top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
+    variables: &mut UiVariableRegistry,
 ) {
     for (circle_index, circle) in layer.circles.iter_mut().enumerate() {
         if !circle.misc.active {
@@ -430,17 +523,32 @@ fn process_circles(
         };
 
         let runtime = ui_runtime.get(id);
+
         let is_hit = top_hit
-            .map(|hit| hit.matches(layer_index, HitElement::Circle(circle_index)))
+            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Circle(circle_index)))
             .unwrap_or(false);
 
+        // Only the selected element is allowed to keep receiving updates while held
+        let is_selected = ui_runtime.selected_ui_element.active
+            && ui_runtime.selected_ui_element.menu_name == menu_name
+            && ui_runtime.selected_ui_element.layer_name == layer.name
+            && ui_runtime.selected_ui_element.element_id == *id;
+
         if !runtime.is_down && !is_hit {
+            // Not currently down and not the top hit; ignore
+            continue;
+        }
+
+        if runtime.is_down && !is_selected {
+            // This id is being dragged, but in another layer/menu; ignore this duplicate
             continue;
         }
 
         let touched_now = if !runtime.is_down {
+            // Fresh press must be the top hit and mouse.just_pressed
             is_hit && mouse.just_pressed
         } else {
+            // While held, just follow the mouse button
             mouse.pressed
         };
 
@@ -449,6 +557,14 @@ fn process_circles(
         match state {
             TouchState::Pressed => {
                 ui_runtime.drag_offset = Some((mouse.mx - circle.x, mouse.my - circle.y));
+                select_ui_element(
+                    ui_runtime,
+                    variables,
+                    menu_name.to_string(),
+                    layer.name.clone(),
+                    id.to_string(),
+                );
+                result.trigger_selection = true;
             }
             TouchState::Held => {
                 if let Some((ox, oy)) = ui_runtime.drag_offset {
@@ -464,13 +580,7 @@ fn process_circles(
             }
             TouchState::Released => {
                 ui_runtime.drag_offset = None;
-                ui_runtime.selected_ui_element = SelectedUiElement {
-                    menu_name: menu_name.to_string(),
-                    layer_name: layer.name.clone(),
-                    element_id: id.clone(),
-                    active: true,
-                };
-                result.trigger_selection = true;
+                // selection already set on Pressed
             }
             TouchState::Idle => {}
         }
@@ -479,11 +589,11 @@ fn process_circles(
 
 fn process_handles(
     ui_runtime: &mut UiRuntime,
+    menu_name: &str,
     layer: &mut RuntimeLayer,
-    layer_index: usize,
     dt: f32,
     mouse: &MouseSnapshot,
-    top_hit: Option<HitResult>,
+    top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
 ) {
     for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
@@ -496,8 +606,9 @@ fn process_handles(
         };
 
         let runtime = ui_runtime.get(id);
+
         let is_hit = top_hit
-            .map(|hit| hit.matches(layer_index, HitElement::Handle(handle_index)))
+            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Handle(handle_index)))
             .unwrap_or(false);
 
         if !runtime.is_down && !is_hit {
@@ -512,6 +623,7 @@ fn process_handles(
 
         let state = ui_runtime.update_touch(id, touched_now, dt, &layer.name);
 
+        // Handle controls the radius of its parent circle; keep current behavior
         if let Some(parent_id) = &handle.parent_id {
             if matches!(state, TouchState::Held) {
                 result
@@ -526,11 +638,11 @@ fn process_polygons(
     ui_runtime: &mut UiRuntime,
     menu_name: &str,
     layer: &mut RuntimeLayer,
-    layer_index: usize,
     dt: f32,
     mouse: &MouseSnapshot,
-    top_hit: Option<HitResult>,
+    top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
+    variables: &mut UiVariableRegistry,
 ) {
     const VERTEX_RADIUS: f32 = 20.0;
 
@@ -548,16 +660,13 @@ fn process_polygons(
         };
 
         let runtime = ui_runtime.get(id);
+
         let is_hit = top_hit
-            .map(|hit| hit.matches(layer_index, HitElement::Polygon(poly_index)))
+            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Polygon(poly_index)))
             .unwrap_or(false);
 
-        if !runtime.is_down && !is_hit {
-            continue;
-        }
-
+        // centroid
         let verts = &mut poly.vertices;
-
         let mut cx = 0.0f32;
         let mut cy = 0.0f32;
         for v in verts.iter() {
@@ -581,7 +690,17 @@ fn process_polygons(
 
         let hit = vertex_hit.is_some() || poly_hit;
 
+        let is_selected = ui_runtime.selected_ui_element.active
+            && ui_runtime.selected_ui_element.menu_name == menu_name
+            && ui_runtime.selected_ui_element.layer_name == layer.name
+            && ui_runtime.selected_ui_element.element_id == *id;
+
         if !runtime.is_down && !(hit && is_hit) {
+            continue;
+        }
+
+        if runtime.is_down && !is_selected {
+            // Same id used in another layer/menu, ignore this one while dragging
             continue;
         }
 
@@ -604,6 +723,15 @@ fn process_polygons(
                     ui_runtime.drag_offset = Some((mouse.mx - cx, mouse.my - cy));
                     ui_runtime.active_vertex = None;
                 }
+
+                select_ui_element(
+                    ui_runtime,
+                    variables,
+                    menu_name.to_string(),
+                    layer.name.clone(),
+                    id.to_string(),
+                );
+                result.trigger_selection = true;
             }
             TouchState::Held => {
                 if let Some(active_id) = ui_runtime.active_vertex {
@@ -645,16 +773,149 @@ fn process_polygons(
             TouchState::Released => {
                 ui_runtime.drag_offset = None;
                 ui_runtime.active_vertex = None;
-                ui_runtime.selected_ui_element = SelectedUiElement {
-                    menu_name: menu_name.to_string(),
-                    layer_name: layer.name.clone(),
-                    element_id: id.clone(),
-                    active: true,
-                };
-
-                result.trigger_selection = true;
             }
             TouchState::Idle => {}
         }
     }
+}
+
+fn process_text(
+    ui_runtime: &mut UiRuntime,
+    menu_name: &str,
+    layer: &mut RuntimeLayer,
+    dt: f32,
+    mouse: &MouseSnapshot,
+    top_hit: Option<&HitResult>,
+    result: &mut EditorInteractionResult,
+    variables: &mut UiVariableRegistry,
+) {
+    for (text_index, text) in layer.texts.iter_mut().enumerate() {
+        if !text.misc.active {
+            continue;
+        }
+
+        let Some(id) = &text.id else { continue };
+
+        let runtime = ui_runtime.get(id);
+
+        let is_hit = top_hit
+            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Text(text_index)))
+            .unwrap_or(false);
+
+        let is_selected = ui_runtime.selected_ui_element.active
+            && ui_runtime.selected_ui_element.menu_name == menu_name
+            && ui_runtime.selected_ui_element.layer_name == layer.name
+            && ui_runtime.selected_ui_element.element_id == *id;
+
+        // ------- ENTER EDIT MODE -------
+        if mouse.just_pressed && is_hit && is_selected {
+            ui_runtime.editing_text = !ui_runtime.editing_text;
+
+            if ui_runtime.editing_text {
+                // Switch to editing the template
+                text.text = text.template.clone();
+                layer.dirty = true;
+            }
+
+            continue;
+        }
+
+        // ------- EXIT EDIT MODE WHEN CLICKING OUTSIDE -------
+        if mouse.just_pressed && !is_hit && ui_runtime.editing_text && is_selected {
+            ui_runtime.editing_text = false;
+            // 3. Text can be MORPHED! (IF you drag the 4 offset "vertices". Morbius reference.)
+            // On exit, keep template = edited text
+            text.template = text.text.clone();
+
+            // Force variable parser to handle it next frame
+            layer.dirty = true;
+
+            continue;
+        }
+
+        // If we're editing, NO dragging.
+        if ui_runtime.editing_text && is_selected {
+            continue;
+        }
+
+        // ------- DRAGGING / SELECTION LOGIC -------
+        if !runtime.is_down && !is_hit {
+            continue;
+        }
+
+        if runtime.is_down && !is_selected {
+            continue;
+        }
+
+        let touched_now = if !runtime.is_down {
+            mouse.just_pressed && is_hit
+        } else {
+            mouse.pressed
+        };
+
+        let state = ui_runtime.update_touch(id, touched_now, dt, &layer.name);
+
+        match state {
+            TouchState::Pressed => {
+                ui_runtime.drag_offset = Some((mouse.mx - text.x, mouse.my - text.y));
+
+                select_ui_element(
+                    ui_runtime,
+                    variables,
+                    menu_name.to_string(),
+                    layer.name.clone(),
+                    id.to_string(),
+                );
+                result.trigger_selection = true;
+            }
+
+            TouchState::Held => {
+                if let Some((ox, oy)) = ui_runtime.drag_offset {
+                    let new_x = mouse.mx - ox;
+                    let new_y = mouse.my - oy;
+
+                    if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
+                        text.x = new_x;
+                        text.y = new_y;
+
+                        layer.dirty = true;
+                        result.moved_any_selected_object = true;
+                    }
+                }
+            }
+
+            TouchState::Released => {
+                ui_runtime.drag_offset = None;
+            }
+
+            TouchState::Idle => {}
+        }
+    }
+}
+
+fn select_ui_element(
+    ui_runtime: &mut UiRuntime,
+    variables: &mut UiVariableRegistry,
+    menu_name: String,
+    layer_name: String,
+    element_id: String,
+) {
+    ui_runtime.selected_ui_element = SelectedUiElement {
+        menu_name,
+        layer_name,
+        element_id,
+        active: true,
+    };
+    variables.set(
+        "selected_menu",
+        format!("{}", ui_runtime.selected_ui_element.menu_name),
+    );
+    variables.set(
+        "selected_layer",
+        format!("{}", ui_runtime.selected_ui_element.layer_name),
+    );
+    variables.set(
+        "selected_ui_element_id",
+        format!("{}", ui_runtime.selected_ui_element.element_id),
+    );
 }

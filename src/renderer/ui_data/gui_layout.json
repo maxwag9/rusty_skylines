@@ -1,230 +1,248 @@
 {
   "menus": [
     {
+      "name": "Debug_Menu",
+      "layers": [
+        {
+          "name": "debug_texts",
+          "order": 2,
+          "texts": [
+            {
+              "id": "fps_text",
+              "z_index": 51,
+              "x": 65.532104,
+              "y": 26.819542,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        }
+      ]
+    },
+    {
       "name": "Editor_Menu",
       "layers": [
         {
-      "name": "base_gui",
-      "order": 1,
-      "texts": [
-        {
-          "id": null,
-          "z_index": 0,
-          "x": 200.0,
-          "y": 500.0,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "top_left_vertex": {
-            "pos": [
-              550.0,
-              500.0
-            ],
-            "color": [
-              1.0,
-              0.0,
-              0.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "bottom_left_vertex": {
-            "pos": [
-              500.0,
-              950.0
-            ],
-            "color": [
-              0.0,
-              1.0,
-              0.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "top_right_vertex": {
-            "pos": [
-              950.0,
-              500.0
-            ],
-            "color": [
-              0.0,
-              0.0,
-              1.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "bottom_right_vertex": {
-            "pos": [
-              900.0,
-              950.0
-            ],
-            "color": [
-              1.0,
-              1.0,
-              1.0,
-              1.0
-            ],
-            "roundness": 0.0
-          },
-          "px": 24,
-          "color": [
-            0.0,
-            1.0,
-            1.0,
-            0.7
+          "name": "base_gui",
+          "order": 1,
+          "texts": [
+            {
+              "id": "happy_string!",
+              "z_index": 0,
+              "x": 274.23517,
+              "y": 363.19342,
+              "stretch_x": 1.0,
+              "stretch_y": 1.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.0,
+                1.0,
+                1.0,
+                0.7
+              ],
+              "text": "String!!!",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              }
+            }
           ],
-          "text": "String!!!",
-          "misc": {
-            "active": true,
-            "pressable": false,
-            "editable": true
-          }
-        }
-      ],
-      "circles": [
-        {
-          "id": "toggle_simulation",
-          "z_index": 0,
-          "x": 1786.2706,
-          "y": 399.6372,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 71.589096,
-          "border_thickness": 13.0,
-          "fill_color": [
-            0.1,
-            0.3,
-            0.1,
-            1.0
+          "circles": [
+            {
+              "id": "toggle_simulation",
+              "z_index": 0,
+              "x": 1570.9586,
+              "y": 336.0219,
+              "stretch_x": 1.0,
+              "stretch_y": 1.0,
+              "radius": 95.12177,
+              "border_thickness": 13.0,
+              "fill_color": [
+                0.1,
+                0.3,
+                0.1,
+                1.0
+              ],
+              "border_color": [
+                0.1,
+                0.3,
+                0.3,
+                1.0
+              ],
+              "glow_color": [
+                0.15,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "glow_misc": {
+                "glow_size": 200.0,
+                "glow_speed": 2.0,
+                "glow_intensity": 1.0
+              },
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              }
+            },
+            {
+              "id": "toggle_simulation2",
+              "z_index": 1,
+              "x": 1419.3425,
+              "y": 298.01172,
+              "stretch_x": 1.0,
+              "stretch_y": 1.0,
+              "radius": 193.19151,
+              "border_thickness": 13.0,
+              "fill_color": [
+                0.1,
+                0.3,
+                0.1,
+                1.0
+              ],
+              "border_color": [
+                0.1,
+                0.3,
+                0.3,
+                1.0
+              ],
+              "glow_color": [
+                0.15,
+                0.0,
+                0.0,
+                1.0
+              ],
+              "glow_misc": {
+                "glow_size": 200.0,
+                "glow_speed": 2.0,
+                "glow_intensity": 1.0
+              },
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              }
+            }
           ],
-          "border_color": [
-            0.1,
-            0.3,
-            0.3,
-            1.0
-          ],
-          "glow_color": [
-            0.15,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_misc": {
-            "glow_size": 200.0,
-            "glow_speed": 2.0,
-            "glow_intensity": 1.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": true
-          }
-        },
-        {
-          "id": "toggle_simulation2",
-          "z_index": 1,
-          "x": 2213.6243,
-          "y": 335.69962,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-          "radius": 60.0,
-          "border_thickness": 13.0,
-          "fill_color": [
-            0.1,
-            0.3,
-            0.1,
-            1.0
-          ],
-          "border_color": [
-            0.1,
-            0.3,
-            0.3,
-            1.0
-          ],
-          "glow_color": [
-            0.15,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_misc": {
-            "glow_size": 200.0,
-            "glow_speed": 2.0,
-            "glow_intensity": 1.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": true
-          }
-        }
-      ],
           "outlines": [],
           "handles": [],
           "polygons": [
-        {
-          "id": "fard",
-          "z_index": 0,
-          "vertices": [
             {
-              "pos": [
-                2070.164,
-                284.28088
+              "id": "fard",
+              "z_index": 0,
+              "vertices": [
+                {
+                  "pos": [
+                    1458.3846,
+                    378.27393
+                  ],
+                  "color": [
+                    0.0,
+                    0.0,
+                    1.0,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                },
+                {
+                  "pos": [
+                    2592.213,
+                    412.25916
+                  ],
+                  "color": [
+                    0.0,
+                    1.0,
+                    0.0,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                },
+                {
+                  "pos": [
+                    1422.0487,
+                    1077.9784
+                  ],
+                  "color": [
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                },
+                {
+                  "pos": [
+                    1072.0487,
+                    627.9783
+                  ],
+                  "color": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                }
               ],
-              "color": [
-                0.0,
-                1.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                900.0,
-                950.0
-              ],
-              "color": [
-                1.0,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                950.0,
-                500.0
-              ],
-              "color": [
-                0.0,
-                0.0,
-                1.0,
-                1.0
-              ],
-              "roundness": 0.0
-            },
-            {
-              "pos": [
-                550.0,
-                500.0
-              ],
-              "color": [
-                1.0,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "roundness": 0.0
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              }
             }
-          ],
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": true
-          }
-        }
           ],
           "active": true,
           "opaque": false
@@ -233,122 +251,29 @@
           "name": "editor_information",
           "order": 2,
           "texts": [
-          ],
-          "circles": [
-            {
-              "id": "toggle_simulation3",
-              "z_index": 8,
-              "x": 110.2706,
-              "y": 399.6372,
-          "stretch_x": 1.0,
-          "stretch_y": 1.0,
-              "radius": 71.589096,
-              "border_thickness": 13.0,
-          "fill_color": [
-            0.1,
-            0.3,
-            0.1,
-            1.0
-          ],
-          "border_color": [
-            0.1,
-            0.3,
-            0.3,
-            1.0
-          ],
-          "glow_color": [
-            0.15,
-            0.0,
-            0.0,
-            1.0
-          ],
-          "glow_misc": {
-            "glow_size": 200.0,
-            "glow_speed": 2.0,
-            "glow_intensity": 1.0
-          },
-          "misc": {
-            "active": true,
-            "pressable": true,
-            "editable": true
-          }
-        }
-          ],
-          "outlines": [],
-          "handles": [],
-          "polygons": [],
-          "active": true,
-          "opaque": false
-        }
-      ]
-
-    },
-    {
-      "name": "Debug_Menu",
-      "layers": [
-        {
-          "name": "debug_texts",
-          "order": 2,
-          "texts": [
             {
               "id": "selected_menu_text",
               "z_index": 50,
-              "x": 150.0,
-              "y": 110.0,
+              "x": 191.35323,
+              "y": 109.60466,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
-              "top_left_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "bottom_left_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "top_right_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "bottom_right_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
               "px": 24,
               "color": [
                 0.6,
@@ -366,62 +291,26 @@
             {
               "id": "selected_layer_text",
               "z_index": 50,
-              "x": 150.0,
-              "y": 150.0,
+              "x": 169.28009,
+              "y": 183.6832,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
-              "top_left_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "bottom_left_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "top_right_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "bottom_right_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
               "px": 24,
               "color": [
                 0.6,
@@ -437,64 +326,28 @@
               }
             },
             {
-              "id": "fps_text",
-              "z_index": 51,
-              "x": 150.0,
-              "y": 60.0,
+              "id": "selected_element_text",
+              "z_index": 50,
+              "x": 191.76126,
+              "y": 238.39145,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
-              "top_left_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "bottom_left_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "top_right_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
-              "bottom_right_vertex": {
-                "pos": [
-                  0.0,
-                  0.0
-                ],
-                "color": [
-                  1.0,
-                  1.0,
-                  1.0,
-                  1.0
-                ],
-                "roundness": 0.0
-              },
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
               "px": 24,
               "color": [
                 0.6,
@@ -502,7 +355,7 @@
                 1.0,
                 1.0
               ],
-              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
+              "text": "Selected GUI element ID: {selected_ui_element_id}",
               "misc": {
                 "active": true,
                 "pressable": false,
@@ -514,11 +367,11 @@
             {
               "id": "toggle_simulation3",
               "z_index": 8,
-              "x": 110.2706,
-              "y": 399.6372,
+              "x": 1256.5608,
+              "y": 375.57056,
               "stretch_x": 1.0,
               "stretch_y": 1.0,
-              "radius": 71.589096,
+              "radius": 115.066284,
               "border_thickness": 13.0,
               "fill_color": [
                 0.1,
@@ -557,7 +410,6 @@
           "opaque": false
         }
       ]
-
     }
   ]
 }

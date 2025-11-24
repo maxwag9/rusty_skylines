@@ -153,6 +153,9 @@ pub struct TextParams {
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
+    pub natural_width: f32,
+    pub natural_height: f32,
+    pub id: Option<String>,
 }
 
 pub struct DrawCmd<'a> {
@@ -542,9 +545,15 @@ impl UiRenderer {
         // ---- text (VBO) : build glyphs for this layer only ----
         let mut text_vertices: Vec<UiVertexText> = Vec::new();
         if let Some(atlas) = &self.pipelines.text_atlas {
-            for tp in &layer.cache.texts {
+            for tp in &mut layer.cache.texts {
+                let mut min_x = f32::MAX;
+                let mut min_y = f32::MAX;
+                let mut max_x = f32::MIN;
+                let mut max_y = f32::MIN;
+
                 let mut pen_x = tp.pos[0];
                 let baseline_y = tp.pos[1] + atlas.line_height;
+
                 for ch in tp.text.chars() {
                     if let Some(g) = atlas.glyphs.get(&(ch, tp.px)) {
                         let x0 = (pen_x + g.bearing_x).round();
@@ -552,40 +561,61 @@ impl UiRenderer {
                         let x1 = x0 + g.w;
                         let y1 = y0 + g.h;
 
-                        let col = tp.color;
+                        // bounding box
+                        min_x = min_x.min(x0);
+                        min_y = min_y.min(y0);
+                        max_x = max_x.max(x1);
+                        max_y = max_y.max(y1);
+
+                        // push triangles
                         text_vertices.extend_from_slice(&[
                             UiVertexText {
                                 pos: [x0, y0],
                                 uv: [g.u0, g.v0],
-                                color: col,
+                                color: tp.color,
                             },
                             UiVertexText {
                                 pos: [x1, y0],
                                 uv: [g.u1, g.v0],
-                                color: col,
+                                color: tp.color,
                             },
                             UiVertexText {
                                 pos: [x1, y1],
                                 uv: [g.u1, g.v1],
-                                color: col,
+                                color: tp.color,
                             },
                             UiVertexText {
                                 pos: [x0, y0],
                                 uv: [g.u0, g.v0],
-                                color: col,
+                                color: tp.color,
                             },
                             UiVertexText {
                                 pos: [x1, y1],
                                 uv: [g.u1, g.v1],
-                                color: col,
+                                color: tp.color,
                             },
                             UiVertexText {
                                 pos: [x0, y1],
                                 uv: [g.u0, g.v1],
-                                color: col,
+                                color: tp.color,
                             },
                         ]);
+
                         pen_x += g.advance;
+                    }
+                }
+
+                tp.natural_width = (max_x - min_x).max(0.0);
+                tp.natural_height = (max_y - min_y).max(0.0);
+
+                // ---- write back into runtime UiButtonText ----
+                if let Some(ref text_id) = tp.id {
+                    for original_text in &mut layer.texts {
+                        if original_text.id.as_ref() == Some(text_id) {
+                            original_text.natural_width = tp.natural_width;
+                            original_text.natural_height = tp.natural_height;
+                            break;
+                        }
                     }
                 }
             }
