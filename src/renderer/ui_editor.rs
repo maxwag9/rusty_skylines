@@ -2,11 +2,11 @@ use crate::renderer::helper::triangulate_polygon;
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
-    handle_editor_mode_interactions, handle_scroll_resize, mark_editor_layers_dirty, near_handle,
-    press_began_on_ui,
+    handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing,
+    mark_editor_layers_dirty, near_handle, press_began_on_ui,
 };
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::resources::{InputState, MouseState};
+use crate::resources::{InputState, MouseState, TimeSystem};
 use crate::vertex::UiElement::*;
 pub(crate) use crate::vertex::*;
 use std::collections::HashMap;
@@ -77,6 +77,7 @@ impl Menu {
                 natural_width: t.natural_width,
                 natural_height: t.natural_height,
                 id: t.id.clone(),
+                caret: t.text.len(),
             });
         }
 
@@ -193,7 +194,7 @@ impl Menu {
         }
 
         // Common builder for vertex-emitting shapes
-        let mut push_with_misc = |v: &UiVertex, misc: [f32; 4], out: &mut Vec<UiVertexPoly>| {
+        let push_with_misc = |v: &UiVertex, misc: [f32; 4], out: &mut Vec<UiVertexPoly>| {
             out.push(UiVertexPoly {
                 pos: v.pos,
                 _pad: [1.0; 2],
@@ -325,6 +326,23 @@ impl UiRuntime {
         }
     }
 
+    pub fn current_text_mut<'a>(
+        &self,
+        menus: &'a mut HashMap<String, Menu>,
+    ) -> Option<&'a mut UiButtonText> {
+        if !self.selected_ui_element.active {
+            return None;
+        }
+        let sel = &self.selected_ui_element;
+
+        let menu = menus.get_mut(&sel.menu_name)?;
+        let layer = menu.layers.iter_mut().find(|l| l.name == sel.layer_name)?;
+        layer
+            .texts
+            .iter_mut()
+            .find(|t| t.id.as_ref() == Some(&sel.element_id))
+    }
+
     pub fn update_editor_mode(&mut self, editor_mode: bool) {
         self.editor_mode = editor_mode;
     }
@@ -337,7 +355,6 @@ impl UiRuntime {
 pub struct UiButtonLoader {
     pub menus: HashMap<String, Menu>,
 
-    pub id_lookup: HashMap<u32, String>,
     pub console_lines: VecDeque<String>,
     pub ui_runtime: UiRuntime,
     pub variables: UiVariableRegistry,
@@ -353,7 +370,6 @@ impl UiButtonLoader {
         let mut loader = Self {
             menus: Default::default(),
             ui_runtime: UiRuntime::new(editor_mode),
-            id_lookup: HashMap::new(),
             console_lines: VecDeque::new(),
             variables: UiVariableRegistry::new(),
         };
@@ -611,6 +627,8 @@ impl UiButtonLoader {
                 },
                 natural_width: 50.0,
                 natural_height: 20.0,
+                being_edited: false,
+                caret: line.len(),
             });
         }
 
@@ -632,13 +650,12 @@ impl UiButtonLoader {
 
                 for t in &mut layer.texts {
                     // Skip if no template braces exist!
-                    if !t.template.contains('{') {
+                    if !t.template.contains('{') || !t.template.contains('}') || t.being_edited {
                         continue;
                     }
 
                     // Resolve template
                     let new_text = resolve_template(&t.template, &self.variables);
-
                     if new_text != t.text {
                         t.text = new_text;
                         any_changed = true;
@@ -652,7 +669,14 @@ impl UiButtonLoader {
         }
     }
 
-    pub fn handle_touches(&mut self, mouse: &MouseState, dt: f32, input_state: &InputState) {
+    pub fn handle_touches(
+        &mut self,
+        mouse: &MouseState,
+        dt: f32,
+        input_state: &mut InputState,
+        time_system: &TimeSystem,
+    ) {
+        self.ui_runtime.selected_ui_element.just_deselected = false;
         let mut trigger_selection = false;
         let mouse_snapshot = MouseSnapshot::from_mouse(mouse);
         let editor_mode = self.ui_runtime.editor_mode;
@@ -666,6 +690,9 @@ impl UiButtonLoader {
         if mouse_snapshot.just_pressed && !press_started_on_ui && editor_mode {
             if !near_handle(&self.menus, &mouse_snapshot) {
                 self.ui_runtime.selected_ui_element.active = false;
+                println!("deselection");
+                self.ui_runtime.selected_ui_element.active = false;
+                self.ui_runtime.selected_ui_element.just_deselected = true;
                 self.update_selection();
             }
         }
@@ -676,10 +703,15 @@ impl UiButtonLoader {
                 trigger_selection: mut selection,
                 pending_circle_updates,
                 moved_any_selected_object,
-            } = handle_editor_mode_interactions(self, dt, &mouse_snapshot, top_hit);
-            if !pending_circle_updates.is_empty() {
-                println!("{:?}", pending_circle_updates);
-            }
+            } = handle_editor_mode_interactions(self, time_system, &mouse_snapshot, top_hit);
+            self.variables
+                .set("editing_text", format!("{}", self.ui_runtime.editing_text));
+            handle_text_editing(
+                &mut self.ui_runtime,
+                &mut self.menus,
+                input_state,
+                time_system,
+            );
 
             apply_pending_circle_updates(self, dt, pending_circle_updates);
 

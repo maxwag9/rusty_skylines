@@ -1,11 +1,12 @@
 use crate::renderer::helper::{dist, polygon_sdf};
 use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime, UiVariableRegistry};
-use crate::resources::MouseState;
+use crate::resources::{InputState, MouseState, TimeSystem};
 use crate::vertex::{
     RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle, UiButtonPolygon,
     UiButtonText,
 };
 use std::collections::HashMap;
+use winit::keyboard::NamedKey;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MouseSnapshot {
@@ -75,6 +76,12 @@ pub(crate) fn press_began_on_ui(
 
             if editor_mode && handle_hit(layer, mouse.mx, mouse.my) {
                 return true;
+            }
+
+            for text in layer.texts.iter().filter(|t| t.misc.active) {
+                if hit_text(text, mouse.mx, mouse.my) {
+                    return true;
+                }
             }
         }
     }
@@ -176,7 +183,7 @@ pub(crate) fn find_top_hit(
                 if !text.misc.active {
                     continue;
                 }
-                let hit = hit_text(mouse.mx, mouse.my, text);
+                let hit = hit_text(text, mouse.mx, mouse.my);
                 if hit {
                     consider_candidate(
                         &mut best,
@@ -197,13 +204,15 @@ pub(crate) fn find_top_hit(
 
 pub(crate) fn handle_editor_mode_interactions(
     loader: &mut UiButtonLoader,
-    dt: f32,
+    time_system: &TimeSystem,
     mouse: &MouseSnapshot,
     top_hit: Option<HitResult>,
 ) -> EditorInteractionResult {
     let mut result = EditorInteractionResult::default();
 
     let ui_runtime = &mut loader.ui_runtime;
+    // exit text editing everywhere
+
     let top_hit_ref = top_hit.as_ref();
 
     for (menu_name, mut menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
@@ -212,7 +221,7 @@ pub(crate) fn handle_editor_mode_interactions(
                 ui_runtime,
                 menu_name,
                 layer,
-                dt,
+                time_system.sim_dt,
                 mouse,
                 top_hit_ref,
                 &mut result,
@@ -222,7 +231,7 @@ pub(crate) fn handle_editor_mode_interactions(
                 ui_runtime,
                 menu_name,
                 layer,
-                dt,
+                time_system.sim_dt,
                 mouse,
                 top_hit_ref,
                 &mut result,
@@ -231,7 +240,7 @@ pub(crate) fn handle_editor_mode_interactions(
                 ui_runtime,
                 menu_name,
                 layer,
-                dt,
+                time_system.sim_dt,
                 mouse,
                 top_hit_ref,
                 &mut result,
@@ -241,7 +250,7 @@ pub(crate) fn handle_editor_mode_interactions(
                 ui_runtime,
                 menu_name,
                 layer,
-                dt,
+                time_system,
                 mouse,
                 top_hit_ref,
                 &mut result,
@@ -357,7 +366,7 @@ pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> 
     selection_changed
 }
 
-fn hit_text(mx: f32, my: f32, text: &UiButtonText) -> bool {
+fn hit_text(text: &UiButtonText, mx: f32, my: f32) -> bool {
     // 1. compute the natural text bounds (you already have this somewhere in the text layout)
     let w = text.natural_width;
     let h = text.natural_height;
@@ -783,77 +792,108 @@ fn process_text(
     ui_runtime: &mut UiRuntime,
     menu_name: &str,
     layer: &mut RuntimeLayer,
-    dt: f32,
+    time_system: &TimeSystem,
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
     variables: &mut UiVariableRegistry,
 ) {
-    for (text_index, text) in layer.texts.iter_mut().enumerate() {
+    // Instead of borrowing selected as a reference, COPY the values you need.
+    // This borrow lasts only for this single line.
+    let selected = {
+        let sel = &ui_runtime.selected_ui_element;
+        (
+            sel.active,
+            sel.menu_name.clone(),
+            sel.layer_name.clone(),
+            sel.element_id.to_string(),
+        )
+    };
+
+    for (index, text) in layer.texts.iter_mut().enumerate() {
         if !text.misc.active {
             continue;
         }
 
         let Some(id) = &text.id else { continue };
 
-        let runtime = ui_runtime.get(id);
+        // Copy what we need from ui_runtime.get(id)
+        let is_down = {
+            let t = ui_runtime.get(id);
+            t.is_down
+        };
 
         let is_hit = top_hit
-            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Text(text_index)))
+            .map(|h| h.matches(menu_name, &layer.name, HitElement::Text(index)))
             .unwrap_or(false);
 
-        let is_selected = ui_runtime.selected_ui_element.active
-            && ui_runtime.selected_ui_element.menu_name == menu_name
-            && ui_runtime.selected_ui_element.layer_name == layer.name
-            && ui_runtime.selected_ui_element.element_id == *id;
+        // Resolve selection from copied tuple
+        let is_selected = selected.0
+            && selected.1 == menu_name
+            && selected.2 == layer.name
+            && selected.3 == id.as_str();
 
-        // ------- ENTER EDIT MODE -------
-        if mouse.just_pressed && is_hit && is_selected {
-            ui_runtime.editing_text = !ui_runtime.editing_text;
+        // ---------------------------------------------------------
+        // ENTER EDIT MODE
+        // ---------------------------------------------------------
+        if is_selected {
+            variables.set("selected_text.being_edited", text.being_edited.to_string());
+        }
+        if !ui_runtime.editing_text {
+            text.being_edited = false;
+        }
+        if text.being_edited {
+            layer.dirty = true;
+        }
+        if mouse.just_pressed && is_hit && is_selected && !ui_runtime.editing_text {
+            ui_runtime.editing_text = true;
+            text.being_edited = true;
+            text.text = text.template.clone();
+            layer.dirty = true;
+            continue;
+        }
 
-            if ui_runtime.editing_text {
-                // Switch to editing the template
-                text.text = text.template.clone();
+        // ---------------------------------------------------------
+        // EXIT EDIT MODE
+        // ---------------------------------------------------------
+        if mouse.just_pressed
+            && ui_runtime.editing_text
+            && !is_hit
+            && ui_runtime.selected_ui_element.just_deselected
+        {
+            if is_selected {
+                text.template = text.text.clone();
                 layer.dirty = true;
             }
 
-            continue;
-        }
-
-        // ------- EXIT EDIT MODE WHEN CLICKING OUTSIDE -------
-        if mouse.just_pressed && !is_hit && ui_runtime.editing_text && is_selected {
             ui_runtime.editing_text = false;
-            // 3. Text can be MORPHED! (IF you drag the 4 offset "vertices". Morbius reference.)
-            // On exit, keep template = edited text
-            text.template = text.text.clone();
-
-            // Force variable parser to handle it next frame
-            layer.dirty = true;
-
+            text.being_edited = false;
+            ui_runtime.selected_ui_element.just_deselected = false;
             continue;
         }
 
-        // If we're editing, NO dragging.
-        if ui_runtime.editing_text && is_selected {
+        // ---------------------------------------------------------
+        // Edit mode: don't drag
+        // ---------------------------------------------------------
+        if is_selected && ui_runtime.editing_text {
             continue;
         }
 
-        // ------- DRAGGING / SELECTION LOGIC -------
-        if !runtime.is_down && !is_hit {
+        // ---------------------------------------------------------
+        // DRAG / SELECT logic
+        // ---------------------------------------------------------
+
+        if !is_down && !is_hit {
             continue;
         }
 
-        if runtime.is_down && !is_selected {
-            continue;
-        }
-
-        let touched_now = if !runtime.is_down {
+        let touched_now = if !is_down {
             mouse.just_pressed && is_hit
         } else {
             mouse.pressed
         };
 
-        let state = ui_runtime.update_touch(id, touched_now, dt, &layer.name);
+        let state = ui_runtime.update_touch(id, touched_now, time_system.sim_dt, &layer.name);
 
         match state {
             TouchState::Pressed => {
@@ -866,6 +906,7 @@ fn process_text(
                     layer.name.clone(),
                     id.to_string(),
                 );
+
                 result.trigger_selection = true;
             }
 
@@ -877,7 +918,6 @@ fn process_text(
                     if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
                         text.x = new_x;
                         text.y = new_y;
-
                         layer.dirty = true;
                         result.moved_any_selected_object = true;
                     }
@@ -905,6 +945,7 @@ fn select_ui_element(
         layer_name,
         element_id,
         active: true,
+        just_deselected: true,
     };
     variables.set(
         "selected_menu",
@@ -918,4 +959,90 @@ fn select_ui_element(
         "selected_ui_element_id",
         format!("{}", ui_runtime.selected_ui_element.element_id),
     );
+}
+
+pub fn handle_text_editing(
+    ui_runtime: &mut UiRuntime,
+    menus: &mut HashMap<String, Menu>,
+    input: &mut InputState,
+    time: &TimeSystem,
+) {
+    if !ui_runtime.editing_text {
+        return;
+    }
+
+    let sel = &ui_runtime.selected_ui_element;
+    if !sel.active {
+        return;
+    }
+
+    let now = time.total_time;
+
+    for (_, menu) in menus.iter_mut().filter(|(_, m)| m.active) {
+        for layer in &mut menu.layers {
+            if layer.name != sel.layer_name {
+                continue;
+            }
+
+            for text in &mut layer.texts {
+                if text.id.as_ref() != Some(&sel.element_id) {
+                    continue;
+                }
+
+                // ---------------------------------
+                // BACKSPACE with caret
+                // ---------------------------------
+                if input.backspace_tick(now) {
+                    if text.caret > 0 {
+                        text.template.remove(text.caret - 1);
+                        text.caret -= 1;
+                        text.text = text.template.clone();
+                        layer.dirty = true;
+                    }
+                    return;
+                }
+
+                // ---------------------------------
+                // PRINTABLE CHARACTERS including space
+                // ---------------------------------
+                if input.char_tick(now) {
+                    for ch in input.character.clone() {
+                        if ch.chars().count() == 1 {
+                            let c = ch.chars().next().unwrap();
+                            if !c.is_control() {
+                                text.template.insert(text.caret, c);
+                                text.caret += 1;
+                                text.text = text.template.clone();
+                                layer.dirty = true;
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // ---------------------------------
+                // ARROW KEYS
+                // ---------------------------------
+                if input.arrow_tick(now) {
+                    if input.pressed_logical(&NamedKey::ArrowLeft) {
+                        if text.caret > 0 {
+                            text.caret -= 1;
+                            layer.dirty = true;
+                        }
+                    }
+
+                    if input.pressed_logical(&NamedKey::ArrowRight) {
+                        if text.caret < text.template.len() {
+                            text.caret += 1;
+                            layer.dirty = true;
+                        }
+                    }
+
+                    return;
+                }
+
+                return;
+            }
+        }
+    }
 }

@@ -36,6 +36,11 @@ fn vs_main(v: VertexInput) -> VSOut {
 
 @fragment
 fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+    // caret hack: UV = vec2(-1, -1) means draw solid quad. Or else the carrot is gone
+    if (in.uv.x < 0.0) {
+        return in.color;
+    }
+
     let alpha = textureSample(font_tex, font_sampler, in.uv).r;
     return vec4<f32>(in.color.rgb, alpha * in.color.a);
 }

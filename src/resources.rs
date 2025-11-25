@@ -121,14 +121,29 @@ pub struct SerializableKeybind {
     pub action: String,
 }
 
+pub struct KeyRepeatState {
+    pub first_press_time: f32,
+    pub last_repeat_time: f32,
+    pub phase: u8, // 0 = fresh, 1 = warmup, 2 = fast
+}
+
 pub struct InputState {
     pub physical: HashMap<PhysicalKey, bool>,
     pub logical: HashMap<NamedKey, bool>,
     pub character: HashSet<String>, // for text keys only
 
-    pub keybinds: HashMap<PhysicalKey, String>, // <key, action>ccc
+    pub keybinds: HashMap<PhysicalKey, String>, // <key, action>
     pub shift_pressed: bool,
     pub ctrl_pressed: bool,
+
+    // timing for repeat
+    pub last_backspace_time: f32,
+    pub last_char_time: f32,
+    pub backspace_first_press: f32,
+    pub char_first_press: f32,
+
+    pub arrow_first_press: f32,
+    pub last_arrow_time: f32,
 }
 
 impl InputState {
@@ -140,19 +155,187 @@ impl InputState {
             keybinds: HashMap::new(),
             shift_pressed: false,
             ctrl_pressed: false,
+            last_backspace_time: -999.0,
+            last_char_time: -999.0,
+            backspace_first_press: -999.0,
+            char_first_press: -999.0,
+
+            arrow_first_press: -999.0,
+            last_arrow_time: -999.0,
         };
 
         s.load_keybinds("keybinds.toml");
-
         s
+    }
+
+    pub fn arrow_tick(&mut self, now: f32) -> bool {
+        let arrows = [
+            NamedKey::ArrowLeft,
+            NamedKey::ArrowRight,
+            NamedKey::ArrowUp,
+            NamedKey::ArrowDown,
+        ];
+
+        let any_pressed = arrows.iter().any(|k| self.pressed_logical(k));
+
+        if !any_pressed {
+            self.arrow_first_press = -999.0;
+            self.last_arrow_time = -999.0;
+            return false;
+        }
+
+        let initial_delay = 0.25;
+        let warmup_time = 0.15;
+        let warmup_interval = 0.07;
+        let fast_interval = 0.03;
+
+        let now_pressed = any_pressed;
+
+        if self.arrow_first_press < 0.0 {
+            self.arrow_first_press = now;
+            self.last_arrow_time = now;
+            return true;
+        }
+
+        let held_for = now - self.arrow_first_press;
+        let since_last = now - self.last_arrow_time;
+
+        if held_for < initial_delay {
+            return false;
+        }
+
+        if held_for < initial_delay + warmup_time {
+            if since_last >= warmup_interval {
+                self.last_arrow_time = now;
+                return true;
+            }
+            return false;
+        }
+
+        if since_last >= fast_interval {
+            self.last_arrow_time = now;
+            return true;
+        }
+
+        false
     }
 
     pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
         self.physical.insert(key, down);
     }
 
+    /// Returns true when we should perform one backspace action this frame.
+    pub fn backspace_tick(&mut self, now: f32) -> bool {
+        let pressed = self.pressed_logical(&NamedKey::Backspace);
+
+        // If not pressed, reset state.
+        if !pressed {
+            self.backspace_first_press = -999.0;
+            self.last_backspace_time = -999.0;
+            return false;
+        }
+
+        // Parameters for "satisfying" feel.
+        let initial_delay = 0.25; // no repeat for first 250 ms
+        let warmup_time = 0.15; // 150 ms warmup phase
+        let warmup_interval = 0.07; // 70 ms between repeats during warmup
+        let fast_interval = 0.03; // 30 ms between repeats in fast phase
+
+        // First frame we see it pressed.
+        if self.backspace_first_press < 0.0 {
+            self.backspace_first_press = now;
+            self.last_backspace_time = now;
+            return true; // first backspace happens instantly
+        }
+
+        let held_for = now - self.backspace_first_press;
+
+        // While key not held long enough: no repeat at all.
+        if held_for < initial_delay {
+            return false;
+        }
+
+        let since_last = now - self.last_backspace_time;
+
+        // Warmup phase
+        if held_for < initial_delay + warmup_time {
+            if since_last >= warmup_interval {
+                self.last_backspace_time = now;
+                return true;
+            }
+            return false;
+        }
+
+        // Fast phase
+        if since_last >= fast_interval {
+            self.last_backspace_time = now;
+            return true;
+        }
+
+        false
+    }
+
+    /// Returns true when we should insert characters for currently held text keys.
+    pub fn char_tick(&mut self, now: f32) -> bool {
+        let any_char_down = !self.character.is_empty();
+
+        // No char pressed → reset state.
+        if !any_char_down {
+            self.char_first_press = -999.0;
+            self.last_char_time = -999.0;
+            return false;
+        }
+
+        // Params: same feel as backspace. You can tweak separately if you want.
+        let initial_delay = 0.25;
+        let warmup_time = 0.15;
+        let warmup_interval = 0.07;
+        let fast_interval = 0.03;
+
+        // First time we see any char pressed.
+        if self.char_first_press < 0.0 {
+            self.char_first_press = now;
+            self.last_char_time = now;
+            return true; // first character immediately
+        }
+
+        let held_for = now - self.char_first_press;
+
+        // Short tap → only first char, no repeat.
+        if held_for < initial_delay {
+            return false;
+        }
+
+        let since_last = now - self.last_char_time;
+
+        // Warmup phase
+        if held_for < initial_delay + warmup_time {
+            if since_last >= warmup_interval {
+                self.last_char_time = now;
+                return true;
+            }
+            return false;
+        }
+
+        // Fast phase
+        if since_last >= fast_interval {
+            self.last_char_time = now;
+            return true;
+        }
+
+        false
+    }
+
     pub fn set_logical(&mut self, key: NamedKey, down: bool) {
-        self.logical.insert(key, down);
+        let prev = *self.logical.get(&key).unwrap_or(&false);
+        self.logical.insert(key.clone(), prev);
+        self.logical.insert(key.clone(), down);
+
+        if down && !prev {
+            self.logical.insert(key, true);
+        } else {
+            self.logical.insert(key, false);
+        }
     }
 
     pub fn set_character(&mut self, ch: &str, down: bool) {
@@ -161,6 +344,10 @@ impl InputState {
         } else {
             self.character.remove(ch);
         }
+    }
+
+    pub fn just_pressed(&self, key: &NamedKey) -> bool {
+        *self.logical.get(key).unwrap_or(&false)
     }
 
     pub fn pressed_physical(&self, key: &PhysicalKey) -> bool {

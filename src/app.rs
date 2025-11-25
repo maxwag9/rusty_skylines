@@ -131,6 +131,9 @@ impl ApplicationHandler for App {
                         if matches!(named, NamedKey::Control) {
                             input.ctrl_pressed = down;
                         }
+                        if matches!(named, NamedKey::Space) {
+                            input.set_character(" ", down);
+                        }
                     }
 
                     Key::Character(s) => {

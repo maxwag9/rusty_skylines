@@ -96,6 +96,7 @@ pub struct SelectedUiElement {
     pub layer_name: String,
     pub element_id: String,
     pub active: bool,
+    pub just_deselected: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -375,6 +376,8 @@ pub struct UiButtonText {
     pub misc: MiscButtonSettings,
     pub natural_width: f32,
     pub natural_height: f32,
+    pub being_edited: bool,
+    pub caret: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -443,6 +446,7 @@ pub struct UiButtonHandle {
 
 impl UiButtonText {
     pub(crate) fn from_json(t: UiButtonTextJson) -> Self {
+        let length = t.text.len();
         UiButtonText {
             id: t.id,
             z_index: t.z_index,
@@ -468,6 +472,8 @@ impl UiButtonText {
             },
             natural_width: 50.0,
             natural_height: 20.0,
+            being_edited: false,
+            caret: length,
         }
     }
 
@@ -694,6 +700,8 @@ impl Default for UiButtonText {
             misc: MiscButtonSettings::default(),
             natural_width: 50.0,
             natural_height: 20.0,
+            being_edited: false,
+            caret: 0,
         }
     }
 }

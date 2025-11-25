@@ -156,6 +156,7 @@ pub struct TextParams {
     pub natural_width: f32,
     pub natural_height: f32,
     pub id: Option<String>,
+    pub caret: usize,
 }
 
 pub struct DrawCmd<'a> {
@@ -232,7 +233,7 @@ impl UiRenderer {
             for idx in dirty_indices {
                 menu.rebuild_layer_cache_index(idx, &ui.ui_runtime);
                 let layer = &mut menu.layers[idx];
-                self.upload_layer(queue, layer);
+                self.upload_layer(queue, layer, time);
             }
 
             for layer in menu.layers.iter().filter(|l| l.active) {
@@ -404,7 +405,12 @@ impl UiRenderer {
         }
     }
 
-    fn upload_layer(&self, queue: &wgpu::Queue, layer: &mut RuntimeLayer) {
+    fn upload_layer(
+        &self,
+        queue: &wgpu::Queue,
+        layer: &mut RuntimeLayer,
+        time_system: &TimeSystem,
+    ) {
         // ---- circles (SSBO) ----
         let circle_len = layer.cache.circle_params.len() as u32;
         if circle_len > 0 {
@@ -544,82 +550,179 @@ impl UiRenderer {
 
         // ---- text (VBO) : build glyphs for this layer only ----
         let mut text_vertices: Vec<UiVertexText> = Vec::new();
+
         if let Some(atlas) = &self.pipelines.text_atlas {
             for tp in &mut layer.cache.texts {
+                // tp is TextParams (render-time)
+                // must find corresponding original UiButtonText to get caret
+                let mut maybe_caret = None;
+
+                if let Some(ref text_id) = tp.id {
+                    for original in &layer.texts {
+                        if original.id.as_ref() == Some(text_id) {
+                            maybe_caret = Some(original.caret);
+
+                            break;
+                        }
+                    }
+                }
+
+                let caret_index = maybe_caret.unwrap_or(tp.text.len());
+
+                // ---- measure + render glyphs ----
                 let mut min_x = f32::MAX;
                 let mut min_y = f32::MAX;
                 let mut max_x = f32::MIN;
                 let mut max_y = f32::MIN;
 
                 let mut pen_x = tp.pos[0];
-                let baseline_y = tp.pos[1] + atlas.line_height;
+                let base_y = tp.pos[1] + atlas.line_height;
+
+                // caret position tracker
+                let mut caret_x = pen_x;
+
+                let mut char_i = 0;
 
                 for ch in tp.text.chars() {
+                    // record caret X before rendering this character
+                    if char_i == caret_index {
+                        caret_x = pen_x;
+                    }
+
                     if let Some(g) = atlas.glyphs.get(&(ch, tp.px)) {
-                        let x0 = (pen_x + g.bearing_x).round();
-                        let y0 = (baseline_y - g.bearing_y).round();
-                        let x1 = x0 + g.w;
-                        let y1 = y0 + g.h;
+                        if g.w > 0.0 && g.h > 0.0 {
+                            let x0 = (pen_x + g.bearing_x).round();
+                            let y0 = (base_y - g.bearing_y).round();
+                            let x1 = x0 + g.w;
+                            let y1 = y0 + g.h;
 
-                        // bounding box
-                        min_x = min_x.min(x0);
-                        min_y = min_y.min(y0);
-                        max_x = max_x.max(x1);
-                        max_y = max_y.max(y1);
+                            // bounding box
+                            min_x = min_x.min(x0);
+                            min_y = min_y.min(y0);
+                            max_x = max_x.max(x1);
+                            max_y = max_y.max(y1);
 
-                        // push triangles
-                        text_vertices.extend_from_slice(&[
-                            UiVertexText {
-                                pos: [x0, y0],
-                                uv: [g.u0, g.v0],
-                                color: tp.color,
-                            },
-                            UiVertexText {
-                                pos: [x1, y0],
-                                uv: [g.u1, g.v0],
-                                color: tp.color,
-                            },
-                            UiVertexText {
-                                pos: [x1, y1],
-                                uv: [g.u1, g.v1],
-                                color: tp.color,
-                            },
-                            UiVertexText {
-                                pos: [x0, y0],
-                                uv: [g.u0, g.v0],
-                                color: tp.color,
-                            },
-                            UiVertexText {
-                                pos: [x1, y1],
-                                uv: [g.u1, g.v1],
-                                color: tp.color,
-                            },
-                            UiVertexText {
-                                pos: [x0, y1],
-                                uv: [g.u0, g.v1],
-                                color: tp.color,
-                            },
-                        ]);
+                            // triangles
+                            text_vertices.extend_from_slice(&[
+                                UiVertexText {
+                                    pos: [x0, y0],
+                                    uv: [g.u0, g.v0],
+                                    color: tp.color,
+                                },
+                                UiVertexText {
+                                    pos: [x1, y0],
+                                    uv: [g.u1, g.v0],
+                                    color: tp.color,
+                                },
+                                UiVertexText {
+                                    pos: [x1, y1],
+                                    uv: [g.u1, g.v1],
+                                    color: tp.color,
+                                },
+                                UiVertexText {
+                                    pos: [x0, y0],
+                                    uv: [g.u0, g.v0],
+                                    color: tp.color,
+                                },
+                                UiVertexText {
+                                    pos: [x1, y1],
+                                    uv: [g.u1, g.v1],
+                                    color: tp.color,
+                                },
+                                UiVertexText {
+                                    pos: [x0, y1],
+                                    uv: [g.u0, g.v1],
+                                    color: tp.color,
+                                },
+                            ]);
+                        }
 
                         pen_x += g.advance;
                     }
+
+                    char_i += 1;
                 }
 
-                tp.natural_width = (max_x - min_x).max(0.0);
-                tp.natural_height = (max_y - min_y).max(0.0);
+                // if caret is at end, we set caret_x now
+                if caret_index == tp.text.len() {
+                    caret_x = pen_x;
+                }
 
-                // ---- write back into runtime UiButtonText ----
+                // ---- bounding box for the whole text ----
+                if max_x < min_x {
+                    tp.natural_width = 0.0;
+                    tp.natural_height = atlas.line_height;
+                } else {
+                    tp.natural_width = max_x - min_x;
+                    tp.natural_height = max_y - min_y;
+                }
+                let mut being_edited = false;
+                // ---- write back natural_width/natural_height to UiButtonText ----
                 if let Some(ref text_id) = tp.id {
                     for original_text in &mut layer.texts {
                         if original_text.id.as_ref() == Some(text_id) {
                             original_text.natural_width = tp.natural_width;
                             original_text.natural_height = tp.natural_height;
+                            being_edited = original_text.being_edited;
+
                             break;
                         }
                     }
                 }
+
+                // ---- caret quad (blinking) ----
+                let blink_on = (time_system.total_time * 2.0).fract() > 0.5;
+                if blink_on && being_edited {
+                    let caret_width = 2.0;
+                    let x0 = caret_x;
+                    let y0 = tp.pos[1];
+                    let x1 = caret_x + caret_width;
+                    let y1 = tp.pos[1] + atlas.line_height;
+
+                    // UVs 0 so shader just uses color
+                    let caret_color = [1.0, 1.0, 1.0, 1.0];
+                    println!("rendering carrot lol {}", time_system.total_time);
+
+                    let uv = [-1.0, -1.0];
+
+                    text_vertices.extend_from_slice(&[
+                        UiVertexText {
+                            pos: [x0, y0],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x1, y0],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x1, y1],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x0, y0],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x1, y1],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x0, y1],
+                            uv,
+                            color: caret_color,
+                        },
+                    ]);
+                }
             }
         }
+
+        // upload text_vertices into the VBO...
+
         let text_bytes = bytemuck::cast_slice(&text_vertices);
         if !text_vertices.is_empty() {
             let need_new = layer
