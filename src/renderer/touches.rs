@@ -634,7 +634,7 @@ fn process_handles(
 
         // Handle controls the radius of its parent circle; keep current behavior
         if let Some(parent_id) = &handle.parent_id {
-            if matches!(state, TouchState::Held) {
+            if matches!(state, TouchState::Pressed | TouchState::Held) {
                 result
                     .pending_circle_updates
                     .push((parent_id.clone(), mouse.mx, mouse.my));
@@ -845,11 +845,21 @@ fn process_text(
         if text.being_edited {
             layer.dirty = true;
         }
-        if mouse.just_pressed && is_hit && is_selected && !ui_runtime.editing_text {
+        if mouse.just_pressed && is_hit && !ui_runtime.editing_text {
+            select_ui_element(
+                ui_runtime,
+                variables,
+                menu_name.to_string(),
+                layer.name.clone(),
+                id.to_string(),
+            );
+
             ui_runtime.editing_text = true;
             text.being_edited = true;
             text.text = text.template.clone();
+            text.caret = text.text.len();
             layer.dirty = true;
+            result.trigger_selection = true;
             continue;
         }
 
@@ -1045,4 +1055,142 @@ pub fn handle_text_editing(
             }
         }
     }
+}
+
+pub(crate) fn handle_shift_arrow_navigation(
+    loader: &mut UiButtonLoader,
+    input: &mut InputState,
+    time: &TimeSystem,
+) -> bool {
+    if !loader.ui_runtime.editor_mode
+        || !loader.ui_runtime.selected_ui_element.active
+        || loader.ui_runtime.editing_text
+        || !input.shift_pressed
+    {
+        return false;
+    }
+
+    let now = time.total_time;
+    if !input.arrow_tick(now) {
+        return false;
+    }
+
+    let selected = loader.ui_runtime.selected_ui_element.clone();
+
+    let mut current_pos: Option<(f32, f32)> = None;
+    let mut candidates: Vec<(String, String, String, (f32, f32))> = Vec::new();
+
+    for (menu_name, menu) in loader.menus.iter().filter(|(_, m)| m.active) {
+        for layer in menu.layers.iter().filter(|l| l.active) {
+            for c in layer.circles.iter().filter(|c| c.misc.active) {
+                if let Some(id) = &c.id {
+                    let pos = (c.x, c.y);
+                    if id == &selected.element_id
+                        && layer.name == selected.layer_name
+                        && *menu_name == selected.menu_name
+                    {
+                        current_pos = Some(pos);
+                    }
+                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
+                }
+            }
+
+            for h in layer.handles.iter().filter(|h| h.misc.active) {
+                if let Some(id) = &h.id {
+                    let pos = (h.x, h.y);
+                    if id == &selected.element_id
+                        && layer.name == selected.layer_name
+                        && *menu_name == selected.menu_name
+                    {
+                        current_pos = Some(pos);
+                    }
+                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
+                }
+            }
+
+            for p in layer.polygons.iter().filter(|p| p.misc.active) {
+                if let Some(id) = &p.id {
+                    let mut cx = 0.0f32;
+                    let mut cy = 0.0f32;
+                    let count = p.vertices.len() as f32;
+                    for v in &p.vertices {
+                        cx += v.pos[0];
+                        cy += v.pos[1];
+                    }
+                    let pos = (cx / count, cy / count);
+                    if id == &selected.element_id
+                        && layer.name == selected.layer_name
+                        && *menu_name == selected.menu_name
+                    {
+                        current_pos = Some(pos);
+                    }
+                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
+                }
+            }
+
+            for t in layer.texts.iter().filter(|t| t.misc.active) {
+                if let Some(id) = &t.id {
+                    let pos = (t.x, t.y);
+                    if id == &selected.element_id
+                        && layer.name == selected.layer_name
+                        && *menu_name == selected.menu_name
+                    {
+                        current_pos = Some(pos);
+                    }
+                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
+                }
+            }
+        }
+    }
+
+    let Some(current) = current_pos else {
+        return false;
+    };
+
+    let mut best: Option<(String, String, String)> = None;
+    let mut best_score = f32::MAX;
+
+    for (menu, layer, id, pos) in candidates {
+        if menu == selected.menu_name && layer == selected.layer_name && id == selected.element_id {
+            continue;
+        }
+
+        let dx = pos.0 - current.0;
+        let dy = pos.1 - current.1;
+
+        let (direction_pass, primary, secondary) = if input.pressed_logical(&NamedKey::ArrowLeft) {
+            (dx < -1.0, -dx, dy.abs())
+        } else if input.pressed_logical(&NamedKey::ArrowRight) {
+            (dx > 1.0, dx, dy.abs())
+        } else if input.pressed_logical(&NamedKey::ArrowUp) {
+            (dy < -1.0, -dy, dx.abs())
+        } else if input.pressed_logical(&NamedKey::ArrowDown) {
+            (dy > 1.0, dy, dx.abs())
+        } else {
+            (false, 0.0, 0.0)
+        };
+
+        if !direction_pass {
+            continue;
+        }
+
+        let score = primary * 10.0 + secondary;
+        if score < best_score {
+            best_score = score;
+            best = Some((menu, layer, id));
+        }
+    }
+
+    if let Some((menu, layer, id)) = best {
+        select_ui_element(
+            &mut loader.ui_runtime,
+            &mut loader.variables,
+            menu,
+            layer,
+            id,
+        );
+        return true;
+    }
+
+    false
 }
