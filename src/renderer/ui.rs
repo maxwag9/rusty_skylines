@@ -1,7 +1,7 @@
 use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::{MouseState, TimeSystem};
-use crate::vertex::{UiVertexPoly, UiVertexText};
+use crate::vertex::{UiButtonText, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
@@ -157,6 +157,7 @@ pub struct TextParams {
     pub natural_height: f32,
     pub id: Option<String>,
     pub caret: usize,
+    pub glyph_bounds: Vec<(f32, f32)>,
 }
 
 pub struct DrawCmd<'a> {
@@ -572,6 +573,7 @@ impl UiRenderer {
                 }
 
                 let caret_index = maybe_caret.unwrap_or(tp.text.len());
+                tp.glyph_bounds.clear();
 
                 // ---- measure + render glyphs ----
                 let mut min_x = f32::MAX;
@@ -587,69 +589,93 @@ impl UiRenderer {
 
                 let mut char_i = 0;
 
-                for ch in tp.text.chars() {
-                    // record caret X before rendering this character
-                    if char_i == caret_index {
-                        caret_x = pen_x;
+                let mut original_text: Option<&mut UiButtonText> = None;
+
+                if let Some(ref text_id) = tp.id {
+                    for o in &mut layer.texts {
+                        if o.id.as_ref() == Some(text_id) {
+                            original_text = Some(o);
+                            break;
+                        }
                     }
+                }
 
+                if let Some(orig) = &mut original_text {
+                    orig.glyph_bounds.clear();
+                }
+
+                for ch in tp.text.chars() {
                     if let Some(g) = atlas.glyphs.get(&(ch, tp.px)) {
-                        if g.w > 0.0 && g.h > 0.0 {
-                            let x0 = (pen_x + g.bearing_x).round();
-                            let y0 = (base_y - g.bearing_y).round();
-                            let x1 = x0 + g.w;
-                            let y1 = y0 + g.h;
+                        // compute rounded glyph quad first
+                        let x0 = (pen_x + g.bearing_x).round();
+                        let y0 = (base_y - g.bearing_y).round();
+                        let x1 = x0 + g.w;
+                        let y1 = y0 + g.h;
 
-                            // bounding box
-                            min_x = min_x.min(x0);
-                            min_y = min_y.min(y0);
-                            max_x = max_x.max(x1);
-                            max_y = max_y.max(y1);
-
-                            // triangles
-                            text_vertices.extend_from_slice(&[
-                                UiVertexText {
-                                    pos: [x0, y0],
-                                    uv: [g.u0, g.v0],
-                                    color: tp.color,
-                                },
-                                UiVertexText {
-                                    pos: [x1, y0],
-                                    uv: [g.u1, g.v0],
-                                    color: tp.color,
-                                },
-                                UiVertexText {
-                                    pos: [x1, y1],
-                                    uv: [g.u1, g.v1],
-                                    color: tp.color,
-                                },
-                                UiVertexText {
-                                    pos: [x0, y0],
-                                    uv: [g.u0, g.v0],
-                                    color: tp.color,
-                                },
-                                UiVertexText {
-                                    pos: [x1, y1],
-                                    uv: [g.u1, g.v1],
-                                    color: tp.color,
-                                },
-                                UiVertexText {
-                                    pos: [x0, y1],
-                                    uv: [g.u0, g.v1],
-                                    color: tp.color,
-                                },
-                            ]);
+                        // *** NEW CARET LOGIC ***
+                        // caret BEFORE this character uses x0, not pen_x
+                        if char_i == caret_index {
+                            caret_x = x0;
                         }
 
+                        if let Some(orig) = &mut original_text {
+                            orig.glyph_bounds.push((x0, x1));
+                        }
+
+                        tp.glyph_bounds.push((x0, x1));
+
+                        // bounding box
+                        min_x = min_x.min(x0);
+                        min_y = min_y.min(y0);
+                        max_x = max_x.max(x1);
+                        max_y = max_y.max(y1);
+
+                        // triangles
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y0],
+                                uv: [g.u1, g.v0],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x0, y1],
+                                uv: [g.u0, g.v1],
+                                color: tp.color,
+                            },
+                        ]);
                         pen_x += g.advance;
                     }
 
                     char_i += 1;
                 }
 
-                // if caret is at end, we set caret_x now
+                // caret at end → use last glyph’s right edge
                 if caret_index == tp.text.len() {
-                    caret_x = pen_x;
+                    if let Some((_, last_x1)) = tp.glyph_bounds.last() {
+                        caret_x = *last_x1;
+                    } else {
+                        caret_x = tp.pos[0];
+                    }
                 }
 
                 // ---- bounding box for the whole text ----
@@ -669,18 +695,13 @@ impl UiRenderer {
                 let mut being_edited = false;
                 let mut being_hovered = false;
                 // ---- write back natural_width/natural_height to UiButtonText ----
-                if let Some(ref text_id) = tp.id {
-                    for original_text in &mut layer.texts {
-                        if original_text.id.as_ref() == Some(text_id) {
-                            original_text.natural_width = tp.natural_width;
-                            original_text.natural_height = tp.natural_height;
-                            being_edited = original_text.being_edited;
-                            being_hovered = original_text.being_hovered;
-                            original_text.being_hovered = false;
-                            original_text.just_unhovered = true;
-                            break;
-                        }
-                    }
+                if let Some(orig) = &mut original_text {
+                    orig.natural_width = tp.natural_width;
+                    orig.natural_height = tp.natural_height;
+                    being_edited = orig.being_edited;
+                    being_hovered = orig.being_hovered;
+                    orig.being_hovered = false;
+                    orig.just_unhovered = true;
                 }
 
                 // ---- check if this text is selected ----
@@ -694,6 +715,127 @@ impl UiRenderer {
                     {
                         is_selected = true;
                     }
+                }
+
+                if let Some(orig) = &mut original_text {
+                    if orig.has_selection {
+                        let (l, r) = if orig.sel_start < orig.sel_end {
+                            (orig.sel_start, orig.sel_end)
+                        } else {
+                            (orig.sel_end, orig.sel_start)
+                        };
+
+                        if l < r && l < orig.glyph_bounds.len() {
+                            let x_start = orig.glyph_bounds[l].0;
+                            let x_end = if r == 0 {
+                                x_start
+                            } else if r - 1 < orig.glyph_bounds.len() {
+                                orig.glyph_bounds[r - 1].1
+                            } else {
+                                orig.glyph_bounds.last().unwrap().1
+                            };
+
+                            let y0 = min_y - 2.0;
+                            let y1 = max_y + 2.0;
+
+                            let col = [0.3, 0.5, 1.0, 0.35];
+                            let uv = [-1.0, -1.0];
+
+                            text_vertices.extend_from_slice(&[
+                                UiVertexText {
+                                    pos: [x_start, y0],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_end, y0],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_end, y1],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_start, y0],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_end, y1],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_start, y1],
+                                    uv,
+                                    color: col,
+                                },
+                            ]);
+                        }
+                    }
+                }
+
+                // ---- editor_mode outline (light rectangle) ----
+                if ui_runtime.editor_mode && !being_edited && !is_selected {
+                    // rectangle bounds from natural dimensions
+                    let x0 = min_x - pad;
+                    let y0 = min_y - pad;
+                    let x1 = max_x + pad;
+                    let y1 = max_y + pad;
+
+                    // very soft color, hover brightens it
+                    let base_alpha = if being_hovered { 0.30 } else { 0.01 };
+                    let col = [0.9, 0.9, 1.0, base_alpha];
+                    let uv = [-1.0, -1.0];
+
+                    // outline thickness
+                    let t = 1.5;
+
+                    let mut push_quad = |xa: f32, ya: f32, xb: f32, yb: f32| {
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xb, ya],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xa, yb],
+                                uv,
+                                color: col,
+                            },
+                        ]);
+                    };
+
+                    // top
+                    push_quad(x0, y0, x1, y0 + t);
+                    // bottom
+                    push_quad(x0, y1 - t, x1, y1);
+                    // left
+                    push_quad(x0, y0, x0 + t, y1);
+                    // right
+                    push_quad(x1 - t, y0, x1, y1);
                 }
 
                 // ---- corner brackets (NOT editing, but selected) ----
@@ -772,7 +914,7 @@ impl UiRenderer {
 
                 if being_edited {
                     let caret_width = 2.0;
-                    let caret_offset_y = 2.0;
+                    let caret_offset_y = 4.0;
 
                     let x0 = caret_x;
                     let y0 = tp.pos[1] + caret_offset_y;

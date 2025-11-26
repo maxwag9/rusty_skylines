@@ -6,7 +6,7 @@ use crate::vertex::{
     UiButtonText, UiElement, UiElementRef,
 };
 use std::collections::HashMap;
-use winit::keyboard::NamedKey;
+use winit::keyboard::{KeyCode, NamedKey};
 
 #[derive(Clone, Copy)]
 pub(crate) struct MouseSnapshot {
@@ -1235,6 +1235,7 @@ pub fn handle_text_editing(
     ui_runtime: &mut UiRuntime,
     menus: &mut HashMap<String, Menu>,
     input: &mut InputState,
+    mouse_snapshot: MouseSnapshot,
     time: &TimeSystem,
 ) {
     if !ui_runtime.editing_text {
@@ -1259,53 +1260,168 @@ pub fn handle_text_editing(
                     continue;
                 }
 
-                // ---------------------------------
-                // BACKSPACE with caret
-                // ---------------------------------
-                if input.backspace_tick(now) {
-                    if text.caret > 0 {
-                        text.template.remove(text.caret - 1);
-                        text.caret -= 1;
-                        text.text = text.template.clone();
-                        layer.dirty = true;
-                    }
+                let mx = mouse_snapshot.mx;
+                let my = mouse_snapshot.my;
+
+                let x0 = text.x;
+                let y0 = text.y;
+                let x1 = x0 + text.natural_width;
+                let y1 = y0 + text.natural_height;
+
+                // -------------------------------------
+                // MOUSE → CARET / SELECTION
+                // -------------------------------------
+
+                if mouse_snapshot.just_pressed && mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
+                    let new_caret = pick_caret(text, mx);
+                    text.caret = new_caret;
+                    text.sel_start = new_caret;
+                    text.sel_end = new_caret;
+                    text.has_selection = false;
+
+                    ui_runtime.dragging_text = true;
                     return;
                 }
 
-                // ---------------------------------
-                // PRINTABLE CHARACTERS including space
-                // ---------------------------------
-                if input.char_tick(now) {
-                    for ch in input.character.clone() {
-                        if ch.chars().count() == 1 {
-                            let c = ch.chars().next().unwrap();
-                            if !c.is_control() {
+                if ui_runtime.dragging_text && mouse_snapshot.pressed {
+                    let new_pos = pick_caret(text, mx);
+                    text.sel_end = new_pos;
+                    text.has_selection = text.sel_end != text.sel_start;
+                    text.caret = new_pos;
+                    return;
+                }
+
+                if ui_runtime.dragging_text && !mouse_snapshot.pressed {
+                    ui_runtime.dragging_text = false;
+                }
+
+                // -------------------------------------
+                // CTRL + X / C / V
+                // -------------------------------------
+
+                if input.ctrl_pressed {
+                    // paste
+                    if input.key_tick(KeyCode::KeyV) {
+                        if text.has_selection {
+                            let (l, r) = text.selection_range();
+                            text.template.replace_range(l..r, &ui_runtime.clipboard);
+                            text.caret = l + ui_runtime.clipboard.len();
+                            text.clear_selection();
+                        } else {
+                            for c in ui_runtime.clipboard.clone().chars() {
                                 text.template.insert(text.caret, c);
                                 text.caret += 1;
-                                text.text = text.template.clone();
-                                layer.dirty = true;
                             }
                         }
+
+                        text.text = text.template.clone();
+                        layer.dirty = true;
+                        return;
                     }
-                    return;
+
+                    // copy
+                    if input.key_tick(KeyCode::KeyC) {
+                        let (l, r) = text.selection_range();
+                        ui_runtime.clipboard = text.template.get(l..r).unwrap_or("").to_string();
+                        return;
+                    }
+
+                    // cut
+                    if input.key_tick(KeyCode::KeyX) {
+                        let (l, r) = text.selection_range();
+                        ui_runtime.clipboard = text.template.get(l..r).unwrap_or("").to_string();
+                        println!("{}", ui_runtime.clipboard);
+                        text.template.replace_range(l..r, "");
+                        text.caret = l;
+                        text.clear_selection();
+
+                        text.text = text.template.clone();
+                        layer.dirty = true;
+                        return;
+                    }
+                } else {
+                    // -------------------------------------
+                    // BACKSPACE
+                    // -------------------------------------
+
+                    if input.backspace_tick(now) {
+                        if text.has_selection {
+                            let (l, r) = text.selection_range();
+                            text.template.replace_range(l..r, "");
+                            text.caret = l;
+                            text.clear_selection();
+                            text.text = text.template.clone();
+                            layer.dirty = true;
+                            return;
+                        }
+
+                        if text.caret > 0 {
+                            text.template.remove(text.caret - 1);
+                            text.caret -= 1;
+                            text.text = text.template.clone();
+                            layer.dirty = true;
+                        }
+
+                        return;
+                    }
+
+                    // -------------------------------------
+                    // PRINTABLE CHARACTERS
+                    // -------------------------------------
+
+                    if input.char_tick(now) {
+                        if text.has_selection {
+                            let (l, r) = text.selection_range();
+                            let byte_l = caret_to_byte(&text.template, l);
+                            let byte_r = caret_to_byte(&text.template, r);
+                            text.template.replace_range(byte_l..byte_r, "");
+
+                            text.caret = l;
+                            text.clear_selection();
+                        }
+
+                        for s in input.character.clone() {
+                            if !s.is_empty() {
+                                let byte_i = caret_to_byte(&text.template, text.caret);
+                                text.template.insert_str(byte_i, &s);
+
+                                text.caret += s.chars().count();
+                            }
+                        }
+
+                        text.text = text.template.clone();
+                        layer.dirty = true;
+                        return;
+                    }
                 }
 
-                // ---------------------------------
+                // -------------------------------------
                 // ARROW KEYS
-                // ---------------------------------
+                // -------------------------------------
+
                 if input.arrow_tick(now) {
-                    if input.pressed_logical(&NamedKey::ArrowLeft) {
-                        if text.caret > 0 {
-                            text.caret -= 1;
-                            layer.dirty = true;
+                    if text.has_selection {
+                        let (l, r) = text.selection_range();
+                        if input.pressed_logical(&NamedKey::ArrowLeft) {
+                            text.caret = l;
+                        } else if input.pressed_logical(&NamedKey::ArrowRight) {
+                            text.caret = r;
                         }
+                        text.clear_selection();
+                        layer.dirty = true;
+                        return;
                     }
 
-                    if input.pressed_logical(&NamedKey::ArrowRight) {
-                        if text.caret < text.template.len() {
-                            text.caret += 1;
-                            layer.dirty = true;
-                        }
+                    if input.pressed_logical(&NamedKey::ArrowLeft) && text.caret > 0 {
+                        text.caret -= 1;
+                        layer.dirty = true;
+                    }
+
+                    if input.pressed_logical(&NamedKey::ArrowRight)
+                        && text.caret < text.template.len()
+                    {
+                        text.caret += 1;
+                        layer.dirty = true;
                     }
 
                     return;
@@ -1315,4 +1431,20 @@ pub fn handle_text_editing(
             }
         }
     }
+}
+
+fn pick_caret(text: &UiButtonText, mx: f32) -> usize {
+    for (i, (_, gx1)) in text.glyph_bounds.iter().enumerate() {
+        if mx < *gx1 {
+            return i;
+        }
+    }
+    text.glyph_bounds.len()
+}
+
+fn caret_to_byte(text: &str, caret: usize) -> usize {
+    text.char_indices()
+        .nth(caret)
+        .map(|(i, _)| i)
+        .unwrap_or_else(|| text.len())
 }

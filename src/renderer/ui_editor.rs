@@ -78,6 +78,7 @@ impl Menu {
                 natural_height: t.natural_height,
                 id: t.id.clone(),
                 caret: t.text.len(),
+                glyph_bounds: vec![],
             });
         }
 
@@ -277,6 +278,8 @@ pub struct UiRuntime {
     pub drag_offset: Option<(f32, f32)>,
     pub editor_mode: bool,
     pub editing_text: bool,
+    pub clipboard: String,
+    pub dragging_text: bool,
 }
 
 impl UiRuntime {
@@ -288,6 +291,8 @@ impl UiRuntime {
             drag_offset: None,
             editor_mode,
             editing_text: false,
+            clipboard: "".to_string(),
+            dragging_text: false,
         }
     }
 
@@ -614,6 +619,10 @@ impl UiButtonLoader {
                 caret: line.len(),
                 being_hovered: false,
                 just_unhovered: false,
+                sel_start: 0,
+                sel_end: 0,
+                has_selection: false,
+                glyph_bounds: vec![],
             });
         }
 
@@ -631,6 +640,7 @@ impl UiButtonLoader {
     pub fn update_dynamic_texts(&mut self) {
         for (_, menu) in &mut self.menus {
             for layer in &mut menu.layers {
+                layer.dirty = true;
                 let mut any_changed = false;
 
                 for t in &mut layer.texts {
@@ -680,7 +690,6 @@ impl UiButtonLoader {
                 self.ui_runtime.selected_ui_element.active = false;
                 self.ui_runtime.editing_text = false;
                 println!("deselection");
-                self.ui_runtime.selected_ui_element.active = false;
                 self.ui_runtime.selected_ui_element.just_deselected = true;
                 self.update_selection();
             }
@@ -705,6 +714,7 @@ impl UiButtonLoader {
                 &mut self.ui_runtime,
                 &mut self.menus,
                 input_state,
+                mouse_snapshot,
                 time_system,
             );
 
@@ -731,6 +741,7 @@ impl UiButtonLoader {
 
         if input_state.pressed_physical(&PhysicalKey::Code(KeyCode::KeyX))
             && self.ui_runtime.selected_ui_element.active
+            && !self.ui_runtime.editing_text
         {
             println!("deleting");
             let element_id = self.ui_runtime.selected_ui_element.element_id.clone();
@@ -822,6 +833,7 @@ impl UiButtonLoader {
     }
 
     pub fn update_selection(&mut self) {
+        self.ui_runtime.editing_text = false;
         if !self.ui_runtime.selected_ui_element.active {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu

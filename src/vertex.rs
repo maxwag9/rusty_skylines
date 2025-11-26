@@ -435,12 +435,37 @@ pub struct UiButtonText {
     pub text: String,
     pub template: String,
     pub misc: MiscButtonSettings,
+
     pub natural_width: f32,
     pub natural_height: f32,
     pub being_edited: bool,
     pub caret: usize,
     pub being_hovered: bool,
     pub just_unhovered: bool,
+
+    pub sel_start: usize, // selection start index
+    pub sel_end: usize,   // selection end index
+    pub has_selection: bool,
+    pub glyph_bounds: Vec<(f32, f32)>,
+}
+
+impl UiButtonText {
+    pub fn clear_selection(&mut self) {
+        self.sel_start = self.caret;
+        self.sel_end = self.caret;
+        self.has_selection = false;
+    }
+
+    pub fn selection_range(&self) -> (usize, usize) {
+        if !self.has_selection {
+            return (self.caret, self.caret);
+        }
+        if self.sel_start <= self.sel_end {
+            (self.sel_start, self.sel_end)
+        } else {
+            (self.sel_end, self.sel_start)
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -539,6 +564,10 @@ impl UiButtonText {
             caret: length,
             being_hovered: false,
             just_unhovered: false,
+            sel_start: 0,
+            sel_end: 0,
+            has_selection: false,
+            glyph_bounds: vec![],
         }
     }
 
@@ -769,6 +798,10 @@ impl Default for UiButtonText {
             caret: 0,
             being_hovered: false,
             just_unhovered: false,
+            sel_start: 0,
+            sel_end: 0,
+            has_selection: false,
+            glyph_bounds: vec![],
         }
     }
 }
