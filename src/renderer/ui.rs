@@ -1,4 +1,4 @@
-use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader};
+use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::{MouseState, TimeSystem};
 use crate::vertex::{UiVertexPoly, UiVertexText};
@@ -233,7 +233,7 @@ impl UiRenderer {
             for idx in dirty_indices {
                 menu.rebuild_layer_cache_index(idx, &ui.ui_runtime);
                 let layer = &mut menu.layers[idx];
-                self.upload_layer(queue, layer, time);
+                self.upload_layer(queue, layer, time, &ui.ui_runtime, menu_name);
             }
 
             for layer in menu.layers.iter().filter(|l| l.active) {
@@ -410,6 +410,8 @@ impl UiRenderer {
         queue: &wgpu::Queue,
         layer: &mut RuntimeLayer,
         time_system: &TimeSystem,
+        ui_runtime: &UiRuntime,
+        menu_name: &String,
     ) {
         // ---- circles (SSBO) ----
         let circle_len = layer.cache.circle_params.len() as u32;
@@ -656,7 +658,9 @@ impl UiRenderer {
                     tp.natural_width = max_x - min_x;
                     tp.natural_height = max_y - min_y;
                 }
+
                 let mut being_edited = false;
+                let mut being_hovered = false;
                 // ---- write back natural_width/natural_height to UiButtonText ----
                 if let Some(ref text_id) = tp.id {
                     for original_text in &mut layer.texts {
@@ -664,10 +668,99 @@ impl UiRenderer {
                             original_text.natural_width = tp.natural_width;
                             original_text.natural_height = tp.natural_height;
                             being_edited = original_text.being_edited;
-
+                            being_hovered = original_text.being_hovered;
+                            original_text.being_hovered = false;
+                            original_text.just_unhovered = true;
                             break;
                         }
                     }
+                }
+
+                // ---- check if this text is selected ----
+                let mut is_selected = false;
+                if let Some(ref text_id) = tp.id {
+                    let sel = &ui_runtime.selected_ui_element;
+                    if sel.active
+                        && sel.element_id == *text_id
+                        && sel.layer_name == layer.name
+                        && sel.menu_name == *menu_name
+                    {
+                        is_selected = true;
+                    }
+                }
+
+                // ---- corner brackets (NOT editing, but selected) ----
+                if is_selected && !being_edited {
+                    // base size / padding
+                    let base_len = 6.0;
+                    let base_pad = 4.0;
+                    let thick = 2.0;
+
+                    // hover → push brackets further out
+                    let hover_factor = if being_hovered { 1.6 } else { 1.0 };
+
+                    let br = base_len * hover_factor;
+                    let pad = base_pad * hover_factor;
+
+                    let x0 = min_x - pad;
+                    let y0 = min_y - pad;
+                    let x1 = max_x + pad;
+                    let y1 = max_y + pad;
+
+                    let c = [1.0, 0.85, 0.2, 1.0]; // gold-ish
+                    let uv = [-1.0, -1.0];
+
+                    // small helper to push a quad
+                    let mut push_quad = |xa: f32, ya: f32, xb: f32, yb: f32| {
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xb, ya],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xa, yb],
+                                uv,
+                                color: c,
+                            },
+                        ]);
+                    };
+
+                    // top-left
+                    push_quad(x0, y0, x0 + br, y0 + thick); // horizontal
+                    push_quad(x0, y0, x0 + thick, y0 + br); // vertical
+
+                    // top-right
+                    push_quad(x1 - br, y0, x1, y0 + thick);
+                    push_quad(x1 - thick, y0, x1, y0 + br);
+
+                    // bottom-left
+                    push_quad(x0, y1 - thick, x0 + br, y1);
+                    push_quad(x0, y1 - br, x0 + thick, y1);
+
+                    // bottom-right
+                    push_quad(x1 - br, y1 - thick, x1, y1);
+                    push_quad(x1 - thick, y1 - br, x1, y1);
                 }
 
                 // ---- caret quad (blinking) ----

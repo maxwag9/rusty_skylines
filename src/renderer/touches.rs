@@ -1,9 +1,9 @@
 use crate::renderer::helper::{dist, polygon_sdf};
-use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime, UiVariableRegistry};
+use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime};
 use crate::resources::{InputState, MouseState, TimeSystem};
 use crate::vertex::{
     RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle, UiButtonPolygon,
-    UiButtonText,
+    UiButtonText, UiElement, UiElementRef,
 };
 use std::collections::HashMap;
 use winit::keyboard::NamedKey;
@@ -109,13 +109,13 @@ pub(crate) fn near_handle(menus: &HashMap<String, Menu>, mouse: &MouseSnapshot) 
 }
 
 pub(crate) fn find_top_hit(
-    menus: &HashMap<String, Menu>,
+    menus: &mut HashMap<String, Menu>,
     mouse: &MouseSnapshot,
     editor_mode: bool,
 ) -> Option<HitResult> {
     let mut best: Option<HitResult> = None;
-    for (menu_name, menu) in menus.iter().filter(|(_, menu)| menu.active) {
-        for layer in menu.layers.iter().filter(|l| l.active) {
+    for (menu_name, menu) in menus.iter_mut().filter(|(_, menu)| menu.active) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active) {
             // Circles
             for (circle_index, circle) in layer.circles.iter().enumerate() {
                 if !circle.misc.active {
@@ -179,12 +179,15 @@ pub(crate) fn find_top_hit(
                 }
             }
 
-            for (text_index, text) in layer.texts.iter().enumerate() {
+            for (text_index, text) in layer.texts.iter_mut().enumerate() {
                 if !text.misc.active {
                     continue;
                 }
+                text.being_hovered = false;
                 let hit = hit_text(text, mouse.mx, mouse.my);
                 if hit {
+                    text.being_hovered = true;
+                    text.just_unhovered = false;
                     consider_candidate(
                         &mut best,
                         HitResult {
@@ -202,63 +205,244 @@ pub(crate) fn find_top_hit(
     best
 }
 
+#[derive(Copy, Clone, PartialEq)]
+enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 pub(crate) fn handle_editor_mode_interactions(
     loader: &mut UiButtonLoader,
     time_system: &TimeSystem,
     mouse: &MouseSnapshot,
     top_hit: Option<HitResult>,
+    input_state: &mut InputState,
 ) -> EditorInteractionResult {
     let mut result = EditorInteractionResult::default();
-
-    let ui_runtime = &mut loader.ui_runtime;
-    // exit text editing everywhere
-
     let top_hit_ref = top_hit.as_ref();
 
-    for (menu_name, mut menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
-        for layer in menu.layers.iter_mut().filter(|l| l.active) {
-            process_circles(
-                ui_runtime,
-                menu_name,
-                layer,
-                time_system.sim_dt,
-                mouse,
-                top_hit_ref,
-                &mut result,
-                &mut loader.variables,
-            );
-            process_handles(
-                ui_runtime,
-                menu_name,
-                layer,
-                time_system.sim_dt,
-                mouse,
-                top_hit_ref,
-                &mut result,
-            );
-            process_polygons(
-                ui_runtime,
-                menu_name,
-                layer,
-                time_system.sim_dt,
-                mouse,
-                top_hit_ref,
-                &mut result,
-                &mut loader.variables,
-            );
-            process_text(
-                ui_runtime,
-                menu_name,
-                layer,
-                time_system,
-                mouse,
-                top_hit_ref,
-                &mut result,
-                &mut loader.variables,
-            );
+    process_circles(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
+    process_handles(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
+    process_polygons(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
+    process_text(loader, time_system, mouse, top_hit_ref, &mut result);
+
+    process_keyboard_ui_navigation(loader, input_state, time_system.total_time);
+
+    result
+}
+
+fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut InputState, now: f32) {
+    // Must hold SHIFT
+    if !input.shift_pressed {
+        return;
+    }
+
+    // Trigger only when allowed by key repeat
+    if !input.arrow_tick(now) {
+        return;
+    }
+
+    // Determine which arrow is held
+    let dir = if input.pressed_logical(&NamedKey::ArrowLeft) {
+        Some(Direction::Left)
+    } else if input.pressed_logical(&NamedKey::ArrowRight) {
+        Some(Direction::Right)
+    } else if input.pressed_logical(&NamedKey::ArrowUp) {
+        Some(Direction::Up)
+    } else if input.pressed_logical(&NamedKey::ArrowDown) {
+        Some(Direction::Down)
+    } else {
+        None
+    };
+
+    let Some(dir) = dir else { return };
+
+    // Extract selection WITHOUT borrowing loader.menus
+    let sel = {
+        let s = &loader.ui_runtime.selected_ui_element;
+        s.clone()
+    };
+
+    // Resolve selected element center — borrow ends here
+    let sel_pos = match find_selected_center(loader, &sel) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // NEXT target element — another dead-end borrow
+    let next = find_best_element_in_direction(loader, &sel, sel_pos, dir);
+
+    let Some((next_layer, next_id)) = next else {
+        return;
+    };
+
+    select_ui_element(loader, sel.menu_name.clone(), next_layer, next_id);
+}
+
+fn find_best_element_in_direction(
+    loader: &mut UiButtonLoader,
+    selected: &SelectedUiElement,
+    sel_pos: (f32, f32),
+    dir: Direction,
+) -> Option<(String, String)> {
+    // Try normal directional navigation first
+    if let Some(result) = find_best_element_in_direction_inner(loader, selected, sel_pos, dir) {
+        return Some(result);
+    }
+
+    // No element found → wrap to opposite direction
+    let opposite = match dir {
+        Direction::Up => Direction::Down,
+        Direction::Down => Direction::Up,
+        Direction::Left => Direction::Right,
+        Direction::Right => Direction::Left,
+    };
+
+    // Wrapping should feel less strict (slightly wider cone)
+    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, opposite, 65.0)
+}
+
+fn find_best_element_in_direction_inner(
+    loader: &mut UiButtonLoader,
+    selected: &SelectedUiElement,
+    sel_pos: (f32, f32),
+    dir: Direction,
+) -> Option<(String, String)> {
+    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, dir, 40.0)
+}
+
+fn find_best_element_in_direction_inner_with_angle(
+    loader: &mut UiButtonLoader,
+    selected: &SelectedUiElement,
+    sel_pos: (f32, f32),
+    dir: Direction,
+    max_angle_deg: f32,
+) -> Option<(String, String)> {
+    let max_angle = max_angle_deg.to_radians();
+
+    let dir_vec = match dir {
+        Direction::Up => (0.0, -1.0),
+        Direction::Down => (0.0, 1.0),
+        Direction::Left => (-1.0, 0.0),
+        Direction::Right => (1.0, 0.0),
+    };
+
+    // Collect elements
+    let mut items = Vec::new();
+    if let Some(menu) = loader.menus.get(&selected.menu_name) {
+        for layer in &menu.layers {
+            if !layer.active || !layer.saveable {
+                continue;
+            }
+            for elem in layer.iter_all_elements() {
+                items.push((
+                    layer.name.clone(),
+                    elem.id().to_string(),
+                    element_center(elem),
+                ));
+            }
         }
     }
-    result
+
+    let mut best = None;
+    let mut best_score = f32::INFINITY;
+
+    for (layer_name, elem_id, pos) in items {
+        if elem_id == selected.element_id && layer_name == selected.layer_name {
+            continue;
+        }
+
+        let dx = pos.0 - sel_pos.0;
+        let dy = pos.1 - sel_pos.1;
+
+        // Direction gating
+        let valid_dir = match dir {
+            Direction::Up => dy < 0.0,
+            Direction::Down => dy > 0.0,
+            Direction::Left => dx < 0.0,
+            Direction::Right => dx > 0.0,
+        };
+        if !valid_dir {
+            continue;
+        }
+
+        // Angle gating
+        let vec = (dx, dy);
+        let mag_v = (dx * dx + dy * dy).sqrt();
+        if mag_v < 0.0001 {
+            continue;
+        }
+
+        let dot = vec.0 * dir_vec.0 + vec.1 * dir_vec.1;
+        let angle = (dot / mag_v).acos(); // dir_vec is normalized
+
+        if angle > max_angle {
+            continue;
+        }
+
+        // Score: align first, then distance
+        let alignment_score = match dir {
+            Direction::Up | Direction::Down => dx.abs(),
+            Direction::Left | Direction::Right => dy.abs(),
+        };
+
+        let primary_dist = match dir {
+            Direction::Up | Direction::Down => dy.abs(),
+            Direction::Left | Direction::Right => dx.abs(),
+        };
+
+        let score = alignment_score * 1000.0 + primary_dist;
+
+        if score < best_score {
+            best_score = score;
+            best = Some((layer_name, elem_id));
+        }
+    }
+
+    best
+}
+
+fn element_center(e: UiElementRef) -> (f32, f32) {
+    match e {
+        UiElementRef::Text(t) => (t.x, t.y),
+        UiElementRef::Circle(c) => (c.x, c.y),
+        UiElementRef::Handle(h) => (h.x, h.y),
+        UiElementRef::Outline(o) => (o.shape_data.x, o.shape_data.y),
+        UiElementRef::Polygon(p) => {
+            let count = p.vertices.len().max(1);
+            let sum = p
+                .vertices
+                .iter()
+                .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
+            (sum.0 / count as f32, sum.1 / count as f32)
+        }
+    }
+}
+
+fn find_selected_center(
+    loader: &mut UiButtonLoader,
+    sel: &SelectedUiElement,
+) -> Option<(f32, f32)> {
+    let elem = loader.find_element(&sel.menu_name, &sel.layer_name, &sel.element_id)?;
+
+    Some(match elem {
+        UiElement::Text(t) => (t.x, t.y),
+        UiElement::Circle(c) => (c.x, c.y),
+        UiElement::Handle(h) => (h.x, h.y),
+
+        UiElement::Outline(o) => (o.shape_data.x, o.shape_data.y),
+
+        UiElement::Polygon(p) => {
+            let count = p.vertices.len().max(1);
+            let sum = p
+                .vertices
+                .iter()
+                .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
+            (sum.0 / count as f32, sum.1 / count as f32)
+        }
+    })
 }
 
 pub(crate) fn apply_pending_circle_updates(
@@ -296,7 +480,6 @@ pub(crate) fn apply_pending_circle_updates(
         let new_radius = (current_radius + (target_radius - current_radius) * k)
             .abs()
             .max(2.0);
-
         // 4. Apply updated radius to ALL relevant objects (same parent_id)
         for (_, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
             for layer in &mut menu.layers {
@@ -326,7 +509,7 @@ pub(crate) fn apply_pending_circle_updates(
 }
 
 pub(crate) fn mark_editor_layers_dirty(menu: Option<&mut Menu>) {
-    const TARGETS: [&str; 2] = ["editor_selection", "editor_handles"];
+    const TARGETS: [&str; 3] = ["editor_selection", "editor_handles", "shader_console"];
 
     if let Some(menu) = menu {
         for layer in &mut menu.layers {
@@ -513,462 +696,467 @@ fn consider_candidate(best: &mut Option<HitResult>, candidate: HitResult) {
 }
 
 fn process_circles(
-    ui_runtime: &mut UiRuntime,
-    menu_name: &str,
-    layer: &mut RuntimeLayer,
+    loader: &mut UiButtonLoader,
     dt: f32,
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
-    variables: &mut UiVariableRegistry,
 ) {
-    for (circle_index, circle) in layer.circles.iter_mut().enumerate() {
-        if !circle.misc.active {
-            continue;
-        }
+    // Start with no selection pending
+    let mut pending_selection: Option<SelectedUiElement> = None;
 
-        let Some(id) = &circle.id else {
-            continue;
-        };
+    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
+            for (circle_index, circle) in layer.circles.iter_mut().enumerate() {
+                if !circle.misc.active {
+                    continue;
+                }
 
-        let runtime = ui_runtime.get(id);
+                let Some(id) = &circle.id else { continue };
+                let runtime = loader.ui_runtime.get(id);
 
-        let is_hit = top_hit
-            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Circle(circle_index)))
-            .unwrap_or(false);
+                let is_hit = top_hit
+                    .map(|hit| {
+                        hit.matches(menu_name, &layer.name, HitElement::Circle(circle_index))
+                    })
+                    .unwrap_or(false);
 
-        // Only the selected element is allowed to keep receiving updates while held
-        let is_selected = ui_runtime.selected_ui_element.active
-            && ui_runtime.selected_ui_element.menu_name == menu_name
-            && ui_runtime.selected_ui_element.layer_name == layer.name
-            && ui_runtime.selected_ui_element.element_id == *id;
+                let is_selected = loader.ui_runtime.selected_ui_element.active
+                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element.element_id == *id;
 
-        if !runtime.is_down && !is_hit {
-            // Not currently down and not the top hit; ignore
-            continue;
-        }
+                if !runtime.is_down && !is_hit {
+                    continue;
+                }
 
-        if runtime.is_down && !is_selected {
-            // This id is being dragged, but in another layer/menu; ignore this duplicate
-            continue;
-        }
+                if runtime.is_down && !is_selected {
+                    continue;
+                }
 
-        let touched_now = if !runtime.is_down {
-            // Fresh press must be the top hit and mouse.just_pressed
-            is_hit && mouse.just_pressed
-        } else {
-            // While held, just follow the mouse button
-            mouse.pressed
-        };
+                let touched_now = if !runtime.is_down {
+                    is_hit && mouse.just_pressed
+                } else {
+                    mouse.pressed
+                };
 
-        let state = ui_runtime.update_touch(id, touched_now, dt, &layer.name);
+                let state = loader
+                    .ui_runtime
+                    .update_touch(id, touched_now, dt, &layer.name);
 
-        match state {
-            TouchState::Pressed => {
-                ui_runtime.drag_offset = Some((mouse.mx - circle.x, mouse.my - circle.y));
-                select_ui_element(
-                    ui_runtime,
-                    variables,
-                    menu_name.to_string(),
-                    layer.name.clone(),
-                    id.to_string(),
-                );
-                result.trigger_selection = true;
-            }
-            TouchState::Held => {
-                if let Some((ox, oy)) = ui_runtime.drag_offset {
-                    let new_x = mouse.mx - ox;
-                    let new_y = mouse.my - oy;
-                    if (new_x - circle.x).abs() > 0.001 || (new_y - circle.y).abs() > 0.001 {
-                        circle.x = new_x;
-                        circle.y = new_y;
-                        layer.dirty = true;
-                        result.moved_any_selected_object = true;
+                match state {
+                    TouchState::Pressed => {
+                        loader.ui_runtime.drag_offset =
+                            Some((mouse.mx - circle.x, mouse.my - circle.y));
+
+                        // Store the element that should become selected
+                        pending_selection = Some(SelectedUiElement {
+                            active: true,
+                            menu_name: menu_name.to_string(),
+                            layer_name: layer.name.clone(),
+                            element_id: id.clone(),
+                            just_deselected: true,
+                        });
+
+                        result.trigger_selection = true;
                     }
+
+                    TouchState::Held => {
+                        if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
+                            let new_x = mouse.mx - ox;
+                            let new_y = mouse.my - oy;
+                            if (new_x - circle.x).abs() > 0.001 || (new_y - circle.y).abs() > 0.001
+                            {
+                                circle.x = new_x;
+                                circle.y = new_y;
+                                layer.dirty = true;
+                                result.moved_any_selected_object = true;
+                            }
+                        }
+                    }
+
+                    TouchState::Released => {
+                        loader.ui_runtime.drag_offset = None;
+                    }
+
+                    TouchState::Idle => {}
                 }
             }
-            TouchState::Released => {
-                ui_runtime.drag_offset = None;
-                // selection already set on Pressed
-            }
-            TouchState::Idle => {}
         }
+    }
+
+    // Apply the selection after processing all circles
+    if let Some(p) = pending_selection {
+        select_ui_element(loader, p.menu_name, p.layer_name, p.element_id);
     }
 }
 
 fn process_handles(
-    ui_runtime: &mut UiRuntime,
-    menu_name: &str,
-    layer: &mut RuntimeLayer,
+    loader: &mut UiButtonLoader,
     dt: f32,
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
 ) {
-    for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
-        if !handle.misc.active {
-            continue;
-        }
+    let mut pending_selection: Option<SelectedUiElement> = None;
 
-        let Some(id) = &handle.id else {
-            continue;
-        };
+    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
+            print!("{:?}", layer.handles);
+            for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
+                print!("Pushing");
+                if !handle.misc.active {
+                    continue;
+                }
 
-        let runtime = ui_runtime.get(id);
+                let Some(id) = &handle.id else { continue };
+                let runtime = loader.ui_runtime.get(id);
 
-        let is_hit = top_hit
-            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Handle(handle_index)))
-            .unwrap_or(false);
+                let is_hit = top_hit
+                    .map(|hit| {
+                        hit.matches(menu_name, &layer.name, HitElement::Handle(handle_index))
+                    })
+                    .unwrap_or(false);
 
-        if !runtime.is_down && !is_hit {
-            continue;
-        }
+                let is_selected = loader.ui_runtime.selected_ui_element.active
+                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element.element_id == *id;
 
-        let touched_now = if !runtime.is_down {
-            is_hit && mouse.just_pressed
-        } else {
-            mouse.pressed
-        };
+                if !runtime.is_down && !is_hit {
+                    continue;
+                }
 
-        let state = ui_runtime.update_touch(id, touched_now, dt, &layer.name);
+                if runtime.is_down && !is_selected {
+                    continue;
+                }
 
-        // Handle controls the radius of its parent circle; keep current behavior
-        if let Some(parent_id) = &handle.parent_id {
-            if matches!(state, TouchState::Pressed | TouchState::Held) {
-                result
-                    .pending_circle_updates
-                    .push((parent_id.clone(), mouse.mx, mouse.my));
+                let touched_now = if !runtime.is_down {
+                    is_hit && mouse.just_pressed
+                } else {
+                    mouse.pressed
+                };
+
+                let state = loader
+                    .ui_runtime
+                    .update_touch(id, touched_now, dt, &layer.name);
+
+                match state {
+                    TouchState::Pressed => {
+                        loader.ui_runtime.drag_offset =
+                            Some((mouse.mx - handle.x, mouse.my - handle.y));
+
+                        pending_selection = Some(SelectedUiElement {
+                            active: true,
+                            menu_name: menu_name.to_string(),
+                            layer_name: layer.name.clone(),
+                            element_id: id.clone(),
+                            just_deselected: true,
+                        });
+
+                        result.trigger_selection = true;
+                    }
+
+                    TouchState::Held => {
+                        if let Some(parent_id) = &handle.parent_id {
+                            result.pending_circle_updates.push((
+                                parent_id.clone(),
+                                mouse.mx,
+                                mouse.my,
+                            ));
+                        }
+                    }
+
+                    TouchState::Released => {
+                        loader.ui_runtime.drag_offset = None;
+                    }
+
+                    TouchState::Idle => {}
+                }
             }
         }
+    }
+
+    if let Some(p) = pending_selection {
+        select_ui_element(loader, p.menu_name, p.layer_name, p.element_id);
     }
 }
 
 fn process_polygons(
-    ui_runtime: &mut UiRuntime,
-    menu_name: &str,
-    layer: &mut RuntimeLayer,
+    loader: &mut UiButtonLoader,
     dt: f32,
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
-    variables: &mut UiVariableRegistry,
 ) {
     const VERTEX_RADIUS: f32 = 20.0;
 
-    for (poly_index, poly) in layer.polygons.iter_mut().enumerate() {
-        if !poly.misc.active {
-            continue;
-        }
+    let mut pending_selection: Option<SelectedUiElement> = None;
 
-        if poly.vertices.is_empty() {
-            continue;
-        }
+    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
+            for (poly_index, poly) in layer.polygons.iter_mut().enumerate() {
+                if !poly.misc.active || poly.vertices.is_empty() {
+                    continue;
+                }
 
-        let Some(id) = &poly.id else {
-            continue;
-        };
+                let Some(id) = &poly.id else { continue };
+                let runtime = loader.ui_runtime.get(id);
 
-        let runtime = ui_runtime.get(id);
+                let is_hit_top = top_hit
+                    .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Polygon(poly_index)))
+                    .unwrap_or(false);
 
-        let is_hit = top_hit
-            .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Polygon(poly_index)))
-            .unwrap_or(false);
+                // Compute centroid
+                let verts = &mut poly.vertices;
+                let inv_n = 1.0 / verts.len() as f32;
 
-        // centroid
-        let verts = &mut poly.vertices;
-        let mut cx = 0.0f32;
-        let mut cy = 0.0f32;
-        for v in verts.iter() {
-            cx += v.pos[0];
-            cy += v.pos[1];
-        }
-        let inv_n = 1.0 / verts.len() as f32;
-        cx *= inv_n;
-        cy *= inv_n;
+                let mut cx = 0.0;
+                let mut cy = 0.0;
+                for v in verts.iter() {
+                    cx += v.pos[0];
+                    cy += v.pos[1];
+                }
+                cx *= inv_n;
+                cy *= inv_n;
 
-        let vertex_hit = verts
-            .iter()
-            .enumerate()
-            .find(|(_, v)| dist(mouse.mx, mouse.my, v.pos[0], v.pos[1]) < VERTEX_RADIUS)
-            .map(|(i, _)| i);
+                // Per vertex hit
+                let vertex_hit = verts
+                    .iter()
+                    .enumerate()
+                    .find(|(_, v)| dist(mouse.mx, mouse.my, v.pos[0], v.pos[1]) < VERTEX_RADIUS)
+                    .map(|(i, _)| i);
 
-        let sdf = polygon_sdf(mouse.mx, mouse.my, verts);
-        let inside = sdf < 0.0;
-        let near_edge = sdf.abs() < 8.0;
-        let poly_hit = inside || near_edge;
+                // Polygon SDF
+                let sdf = polygon_sdf(mouse.mx, mouse.my, verts);
+                let inside = sdf < 0.0;
+                let near_edge = sdf.abs() < 8.0;
+                let poly_hit = inside || near_edge;
+                let hit = vertex_hit.is_some() || poly_hit;
 
-        let hit = vertex_hit.is_some() || poly_hit;
+                let is_selected = loader.ui_runtime.selected_ui_element.active
+                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element.element_id == *id;
 
-        let is_selected = ui_runtime.selected_ui_element.active
-            && ui_runtime.selected_ui_element.menu_name == menu_name
-            && ui_runtime.selected_ui_element.layer_name == layer.name
-            && ui_runtime.selected_ui_element.element_id == *id;
+                if !runtime.is_down && !(hit && is_hit_top) {
+                    continue;
+                }
 
-        if !runtime.is_down && !(hit && is_hit) {
-            continue;
-        }
+                if runtime.is_down && !is_selected {
+                    continue;
+                }
 
-        if runtime.is_down && !is_selected {
-            // Same id used in another layer/menu, ignore this one while dragging
-            continue;
-        }
-
-        let touched_now = if !runtime.is_down {
-            mouse.just_pressed
-        } else {
-            mouse.pressed
-        };
-
-        let state = ui_runtime.update_touch(id, touched_now, dt, &layer.name);
-
-        match state {
-            TouchState::Pressed => {
-                if let Some(vidx) = vertex_hit {
-                    let vx = verts[vidx].pos[0];
-                    let vy = verts[vidx].pos[1];
-                    ui_runtime.drag_offset = Some((mouse.mx - vx, mouse.my - vy));
-                    ui_runtime.active_vertex = Some(verts[vidx].id);
+                let touched_now = if !runtime.is_down {
+                    mouse.just_pressed
                 } else {
-                    ui_runtime.drag_offset = Some((mouse.mx - cx, mouse.my - cy));
-                    ui_runtime.active_vertex = None;
-                }
+                    mouse.pressed
+                };
 
-                select_ui_element(
-                    ui_runtime,
-                    variables,
-                    menu_name.to_string(),
-                    layer.name.clone(),
-                    id.to_string(),
-                );
-                result.trigger_selection = true;
-            }
-            TouchState::Held => {
-                if let Some(active_id) = ui_runtime.active_vertex {
-                    let (ox, oy) = ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
-                    let new_x = mouse.mx - ox;
-                    let new_y = mouse.my - oy;
-                    if let Some(v) = verts.iter_mut().find(|v| v.id == active_id) {
-                        v.pos = [new_x, new_y];
-                        layer.dirty = true;
-                        result.moved_any_selected_object = true;
-                    }
-                } else if let Some((ox, oy)) = ui_runtime.drag_offset {
-                    let mut ccx = 0.0;
-                    let mut ccy = 0.0;
-                    for v in verts.iter() {
-                        ccx += v.pos[0];
-                        ccy += v.pos[1];
-                    }
-                    let inv_n = 1.0 / verts.len() as f32;
-                    ccx *= inv_n;
-                    ccy *= inv_n;
+                let state = loader
+                    .ui_runtime
+                    .update_touch(id, touched_now, dt, &layer.name);
 
-                    let new_cx = mouse.mx - ox;
-                    let new_cy = mouse.my - oy;
-
-                    let dx = new_cx - ccx;
-                    let dy = new_cy - ccy;
-
-                    if dx.abs() > 0.001 || dy.abs() > 0.001 {
-                        for v in verts.iter_mut() {
-                            v.pos[0] += dx;
-                            v.pos[1] += dy;
+                match state {
+                    TouchState::Pressed => {
+                        if let Some(vidx) = vertex_hit {
+                            let vx = verts[vidx].pos[0];
+                            let vy = verts[vidx].pos[1];
+                            loader.ui_runtime.drag_offset = Some((mouse.mx - vx, mouse.my - vy));
+                            loader.ui_runtime.active_vertex = Some(verts[vidx].id);
+                        } else {
+                            loader.ui_runtime.drag_offset = Some((mouse.mx - cx, mouse.my - cy));
+                            loader.ui_runtime.active_vertex = None;
                         }
-                        layer.dirty = true;
-                        result.moved_any_selected_object = true;
+
+                        pending_selection = Some(SelectedUiElement {
+                            active: true,
+                            menu_name: menu_name.to_string(),
+                            layer_name: layer.name.clone(),
+                            element_id: id.clone(),
+                            just_deselected: true,
+                        });
+
+                        result.trigger_selection = true;
                     }
+
+                    TouchState::Held => {
+                        if let Some(active_id) = loader.ui_runtime.active_vertex {
+                            let (ox, oy) = loader.ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
+                            let new_x = mouse.mx - ox;
+                            let new_y = mouse.my - oy;
+
+                            if let Some(v) = verts.iter_mut().find(|v| v.id == active_id) {
+                                v.pos = [new_x, new_y];
+                                layer.dirty = true;
+                                result.moved_any_selected_object = true;
+                            }
+                        } else if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
+                            let mut ccx = 0.0;
+                            let mut ccy = 0.0;
+                            for v in verts.iter() {
+                                ccx += v.pos[0];
+                                ccy += v.pos[1];
+                            }
+                            ccx *= inv_n;
+                            ccy *= inv_n;
+
+                            let new_cx = mouse.mx - ox;
+                            let new_cy = mouse.my - oy;
+
+                            let dx = new_cx - ccx;
+                            let dy = new_cy - ccy;
+
+                            if dx.abs() > 0.001 || dy.abs() > 0.001 {
+                                for v in verts.iter_mut() {
+                                    v.pos[0] += dx;
+                                    v.pos[1] += dy;
+                                }
+                                layer.dirty = true;
+                                result.moved_any_selected_object = true;
+                            }
+                        }
+                    }
+
+                    TouchState::Released => {
+                        loader.ui_runtime.drag_offset = None;
+                        loader.ui_runtime.active_vertex = None;
+                    }
+
+                    TouchState::Idle => {}
                 }
             }
-            TouchState::Released => {
-                ui_runtime.drag_offset = None;
-                ui_runtime.active_vertex = None;
-            }
-            TouchState::Idle => {}
         }
+    }
+
+    if let Some(p) = pending_selection {
+        select_ui_element(loader, p.menu_name, p.layer_name, p.element_id);
     }
 }
 
 fn process_text(
-    ui_runtime: &mut UiRuntime,
-    menu_name: &str,
-    layer: &mut RuntimeLayer,
+    loader: &mut UiButtonLoader,
     time_system: &TimeSystem,
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
-    variables: &mut UiVariableRegistry,
 ) {
-    // Instead of borrowing selected as a reference, COPY the values you need.
-    // This borrow lasts only for this single line.
-    let selected = {
-        let sel = &ui_runtime.selected_ui_element;
-        (
-            sel.active,
-            sel.menu_name.clone(),
-            sel.layer_name.clone(),
-            sel.element_id.to_string(),
-        )
-    };
+    let mut pending_selection: Option<SelectedUiElement> = None;
 
-    for (index, text) in layer.texts.iter_mut().enumerate() {
-        if !text.misc.active {
-            continue;
-        }
+    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
+            for (text_index, text) in layer.texts.iter_mut().enumerate() {
+                if !text.misc.active {
+                    continue;
+                }
 
-        let Some(id) = &text.id else { continue };
+                let Some(id) = &text.id else { continue };
+                let runtime = loader.ui_runtime.get(id);
 
-        // Copy what we need from ui_runtime.get(id)
-        let is_down = {
-            let t = ui_runtime.get(id);
-            t.is_down
-        };
+                let is_hit = top_hit
+                    .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Text(text_index)))
+                    .unwrap_or(false);
 
-        let is_hit = top_hit
-            .map(|h| h.matches(menu_name, &layer.name, HitElement::Text(index)))
-            .unwrap_or(false);
+                let is_selected = loader.ui_runtime.selected_ui_element.active
+                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element.element_id == *id;
 
-        // Resolve selection from copied tuple
-        let is_selected = selected.0
-            && selected.1 == menu_name
-            && selected.2 == layer.name
-            && selected.3 == id.as_str();
+                if is_selected && loader.ui_runtime.editing_text {
+                    continue;
+                }
 
-        // ---------------------------------------------------------
-        // ENTER EDIT MODE
-        // ---------------------------------------------------------
-        if is_selected {
-            variables.set("selected_text.being_edited", text.being_edited.to_string());
-        }
-        if !ui_runtime.editing_text {
-            text.being_edited = false;
-        }
-        if text.being_edited {
-            layer.dirty = true;
-        }
-        if mouse.just_pressed && is_hit && !ui_runtime.editing_text {
-            select_ui_element(
-                ui_runtime,
-                variables,
-                menu_name.to_string(),
-                layer.name.clone(),
-                id.to_string(),
-            );
+                if !runtime.is_down && !is_hit {
+                    continue;
+                }
 
-            ui_runtime.editing_text = true;
-            text.being_edited = true;
-            text.text = text.template.clone();
-            text.caret = text.text.len();
-            layer.dirty = true;
-            result.trigger_selection = true;
-            continue;
-        }
+                if runtime.is_down && !is_selected {
+                    continue;
+                }
 
-        // ---------------------------------------------------------
-        // EXIT EDIT MODE
-        // ---------------------------------------------------------
-        if mouse.just_pressed
-            && ui_runtime.editing_text
-            && !is_hit
-            && ui_runtime.selected_ui_element.just_deselected
-        {
-            if is_selected {
-                text.template = text.text.clone();
-                layer.dirty = true;
-            }
+                let touched_now = if !runtime.is_down {
+                    is_hit && mouse.just_pressed
+                } else {
+                    mouse.pressed
+                };
 
-            ui_runtime.editing_text = false;
-            text.being_edited = false;
-            ui_runtime.selected_ui_element.just_deselected = false;
-            continue;
-        }
-
-        // ---------------------------------------------------------
-        // Edit mode: don't drag
-        // ---------------------------------------------------------
-        if is_selected && ui_runtime.editing_text {
-            continue;
-        }
-
-        // ---------------------------------------------------------
-        // DRAG / SELECT logic
-        // ---------------------------------------------------------
-
-        if !is_down && !is_hit {
-            continue;
-        }
-
-        let touched_now = if !is_down {
-            mouse.just_pressed && is_hit
-        } else {
-            mouse.pressed
-        };
-
-        let state = ui_runtime.update_touch(id, touched_now, time_system.sim_dt, &layer.name);
-
-        match state {
-            TouchState::Pressed => {
-                ui_runtime.drag_offset = Some((mouse.mx - text.x, mouse.my - text.y));
-
-                select_ui_element(
-                    ui_runtime,
-                    variables,
-                    menu_name.to_string(),
-                    layer.name.clone(),
-                    id.to_string(),
+                let state = loader.ui_runtime.update_touch(
+                    id,
+                    touched_now,
+                    time_system.sim_dt,
+                    &layer.name,
                 );
 
-                result.trigger_selection = true;
-            }
+                match state {
+                    TouchState::Pressed => {
+                        loader.ui_runtime.drag_offset =
+                            Some((mouse.mx - text.x, mouse.my - text.y));
 
-            TouchState::Held => {
-                if let Some((ox, oy)) = ui_runtime.drag_offset {
-                    let new_x = mouse.mx - ox;
-                    let new_y = mouse.my - oy;
+                        pending_selection = Some(SelectedUiElement {
+                            active: true,
+                            menu_name: menu_name.to_string(),
+                            layer_name: layer.name.clone(),
+                            element_id: id.clone(),
+                            just_deselected: true,
+                        });
 
-                    if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
-                        text.x = new_x;
-                        text.y = new_y;
-                        layer.dirty = true;
-                        result.moved_any_selected_object = true;
+                        result.trigger_selection = true;
                     }
+
+                    TouchState::Held => {
+                        if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
+                            let new_x = mouse.mx - ox;
+                            let new_y = mouse.my - oy;
+                            if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
+                                text.x = new_x;
+                                text.y = new_y;
+                                layer.dirty = true;
+                                result.moved_any_selected_object = true;
+                            }
+                        }
+                    }
+
+                    TouchState::Released => {
+                        loader.ui_runtime.drag_offset = None;
+                    }
+
+                    TouchState::Idle => {}
                 }
             }
-
-            TouchState::Released => {
-                ui_runtime.drag_offset = None;
-            }
-
-            TouchState::Idle => {}
         }
+    }
+
+    if let Some(p) = pending_selection {
+        select_ui_element(loader, p.menu_name, p.layer_name, p.element_id);
     }
 }
 
 fn select_ui_element(
-    ui_runtime: &mut UiRuntime,
-    variables: &mut UiVariableRegistry,
+    loader: &mut UiButtonLoader,
     menu_name: String,
     layer_name: String,
     element_id: String,
 ) {
-    ui_runtime.selected_ui_element = SelectedUiElement {
+    loader.ui_runtime.selected_ui_element = SelectedUiElement {
         menu_name,
         layer_name,
         element_id,
         active: true,
         just_deselected: true,
     };
-    variables.set(
+    loader.variables.set(
         "selected_menu",
-        format!("{}", ui_runtime.selected_ui_element.menu_name),
+        format!("{}", loader.ui_runtime.selected_ui_element.menu_name),
     );
-    variables.set(
+    loader.variables.set(
         "selected_layer",
-        format!("{}", ui_runtime.selected_ui_element.layer_name),
+        format!("{}", loader.ui_runtime.selected_ui_element.layer_name),
     );
-    variables.set(
+    loader.variables.set(
         "selected_ui_element_id",
-        format!("{}", ui_runtime.selected_ui_element.element_id),
+        format!("{}", loader.ui_runtime.selected_ui_element.element_id),
     );
+    loader.update_selection()
 }
 
 pub fn handle_text_editing(
@@ -1055,142 +1243,4 @@ pub fn handle_text_editing(
             }
         }
     }
-}
-
-pub(crate) fn handle_shift_arrow_navigation(
-    loader: &mut UiButtonLoader,
-    input: &mut InputState,
-    time: &TimeSystem,
-) -> bool {
-    if !loader.ui_runtime.editor_mode
-        || !loader.ui_runtime.selected_ui_element.active
-        || loader.ui_runtime.editing_text
-        || !input.shift_pressed
-    {
-        return false;
-    }
-
-    let now = time.total_time;
-    if !input.arrow_tick(now) {
-        return false;
-    }
-
-    let selected = loader.ui_runtime.selected_ui_element.clone();
-
-    let mut current_pos: Option<(f32, f32)> = None;
-    let mut candidates: Vec<(String, String, String, (f32, f32))> = Vec::new();
-
-    for (menu_name, menu) in loader.menus.iter().filter(|(_, m)| m.active) {
-        for layer in menu.layers.iter().filter(|l| l.active) {
-            for c in layer.circles.iter().filter(|c| c.misc.active) {
-                if let Some(id) = &c.id {
-                    let pos = (c.x, c.y);
-                    if id == &selected.element_id
-                        && layer.name == selected.layer_name
-                        && *menu_name == selected.menu_name
-                    {
-                        current_pos = Some(pos);
-                    }
-                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
-                }
-            }
-
-            for h in layer.handles.iter().filter(|h| h.misc.active) {
-                if let Some(id) = &h.id {
-                    let pos = (h.x, h.y);
-                    if id == &selected.element_id
-                        && layer.name == selected.layer_name
-                        && *menu_name == selected.menu_name
-                    {
-                        current_pos = Some(pos);
-                    }
-                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
-                }
-            }
-
-            for p in layer.polygons.iter().filter(|p| p.misc.active) {
-                if let Some(id) = &p.id {
-                    let mut cx = 0.0f32;
-                    let mut cy = 0.0f32;
-                    let count = p.vertices.len() as f32;
-                    for v in &p.vertices {
-                        cx += v.pos[0];
-                        cy += v.pos[1];
-                    }
-                    let pos = (cx / count, cy / count);
-                    if id == &selected.element_id
-                        && layer.name == selected.layer_name
-                        && *menu_name == selected.menu_name
-                    {
-                        current_pos = Some(pos);
-                    }
-                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
-                }
-            }
-
-            for t in layer.texts.iter().filter(|t| t.misc.active) {
-                if let Some(id) = &t.id {
-                    let pos = (t.x, t.y);
-                    if id == &selected.element_id
-                        && layer.name == selected.layer_name
-                        && *menu_name == selected.menu_name
-                    {
-                        current_pos = Some(pos);
-                    }
-                    candidates.push((menu_name.clone(), layer.name.clone(), id.clone(), pos));
-                }
-            }
-        }
-    }
-
-    let Some(current) = current_pos else {
-        return false;
-    };
-
-    let mut best: Option<(String, String, String)> = None;
-    let mut best_score = f32::MAX;
-
-    for (menu, layer, id, pos) in candidates {
-        if menu == selected.menu_name && layer == selected.layer_name && id == selected.element_id {
-            continue;
-        }
-
-        let dx = pos.0 - current.0;
-        let dy = pos.1 - current.1;
-
-        let (direction_pass, primary, secondary) = if input.pressed_logical(&NamedKey::ArrowLeft) {
-            (dx < -1.0, -dx, dy.abs())
-        } else if input.pressed_logical(&NamedKey::ArrowRight) {
-            (dx > 1.0, dx, dy.abs())
-        } else if input.pressed_logical(&NamedKey::ArrowUp) {
-            (dy < -1.0, -dy, dx.abs())
-        } else if input.pressed_logical(&NamedKey::ArrowDown) {
-            (dy > 1.0, dy, dx.abs())
-        } else {
-            (false, 0.0, 0.0)
-        };
-
-        if !direction_pass {
-            continue;
-        }
-
-        let score = primary * 10.0 + secondary;
-        if score < best_score {
-            best_score = score;
-            best = Some((menu, layer, id));
-        }
-    }
-
-    if let Some((menu, layer, id)) = best {
-        select_ui_element(
-            &mut loader.ui_runtime,
-            &mut loader.variables,
-            menu,
-            layer,
-            id,
-        );
-        return true;
-    }
-
-    false
 }

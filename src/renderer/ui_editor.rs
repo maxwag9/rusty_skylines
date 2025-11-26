@@ -2,8 +2,8 @@ use crate::renderer::helper::triangulate_polygon;
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
-    handle_editor_mode_interactions, handle_scroll_resize, handle_shift_arrow_navigation,
-    handle_text_editing, mark_editor_layers_dirty, near_handle, press_began_on_ui,
+    handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing,
+    mark_editor_layers_dirty, near_handle, press_began_on_ui,
 };
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::resources::{InputState, MouseState, TimeSystem};
@@ -629,6 +629,8 @@ impl UiButtonLoader {
                 natural_height: 20.0,
                 being_edited: false,
                 caret: line.len(),
+                being_hovered: false,
+                just_unhovered: false,
             });
         }
 
@@ -658,6 +660,9 @@ impl UiButtonLoader {
                     let new_text = resolve_template(&t.template, &self.variables);
                     if new_text != t.text {
                         t.text = new_text;
+                        any_changed = true;
+                    }
+                    if t.being_hovered || t.just_unhovered {
                         any_changed = true;
                     }
                 }
@@ -698,12 +703,18 @@ impl UiButtonLoader {
         }
 
         if editor_mode {
-            let top_hit = find_top_hit(&self.menus, &mouse_snapshot, editor_mode);
+            let top_hit = find_top_hit(&mut self.menus, &mouse_snapshot, editor_mode);
             let EditorInteractionResult {
                 trigger_selection: mut selection,
                 pending_circle_updates,
                 moved_any_selected_object,
-            } = handle_editor_mode_interactions(self, time_system, &mouse_snapshot, top_hit);
+            } = handle_editor_mode_interactions(
+                self,
+                time_system,
+                &mouse_snapshot,
+                top_hit,
+                input_state,
+            );
             self.variables
                 .set("editing_text", format!("{}", self.ui_runtime.editing_text));
             handle_text_editing(
@@ -712,10 +723,6 @@ impl UiButtonLoader {
                 input_state,
                 time_system,
             );
-
-            if handle_shift_arrow_navigation(self, input_state, time_system) {
-                selection = true;
-            }
 
             apply_pending_circle_updates(self, dt, pending_circle_updates);
 
@@ -1020,12 +1027,15 @@ impl UiButtonLoader {
 
     pub fn find_element(
         &mut self,
-        menu_name: &str,
-        layer_name: &str,
-        element_id: &str,
+        menu_name: &String,
+        layer_name: &String,
+        element_id: &String,
     ) -> Option<UiElement> {
         if let Some(menu) = self.menus.get_mut(menu_name) {
-            let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
+            let layer = menu
+                .layers
+                .iter()
+                .find(|l| l.name == layer_name.to_string())?;
 
             // Circles
             for c in &layer.circles {

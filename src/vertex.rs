@@ -226,6 +226,67 @@ pub struct RuntimeLayer {
     pub saveable: bool,
 }
 
+pub enum UiElementRef<'a> {
+    Text(&'a UiButtonText),
+    Circle(&'a UiButtonCircle),
+    Outline(&'a UiButtonOutline),
+    Handle(&'a UiButtonHandle),
+    Polygon(&'a UiButtonPolygon),
+}
+
+impl<'a> UiElementRef<'a> {
+    pub fn id(&self) -> &str {
+        match self {
+            UiElementRef::Text(t) => t.id.as_deref().unwrap_or(""),
+            UiElementRef::Circle(c) => c.id.as_deref().unwrap_or(""),
+            UiElementRef::Outline(o) => o.id.as_deref().unwrap_or(""),
+            UiElementRef::Handle(h) => h.id.as_deref().unwrap_or(""),
+            UiElementRef::Polygon(p) => p.id.as_deref().unwrap_or(""),
+        }
+    }
+
+    pub fn center(&self) -> (f32, f32) {
+        match self {
+            UiElementRef::Text(t) => (t.x, t.y),
+            UiElementRef::Circle(c) => (c.x, c.y),
+            UiElementRef::Handle(h) => (h.x, h.y),
+            UiElementRef::Outline(o) => (o.shape_data.x, o.shape_data.y),
+            UiElementRef::Polygon(p) => {
+                let count = p.vertices.len().max(1);
+                let sum = p
+                    .vertices
+                    .iter()
+                    .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
+                (sum.0 / count as f32, sum.1 / count as f32)
+            }
+        }
+    }
+}
+
+impl RuntimeLayer {
+    pub fn iter_all_elements(&self) -> Vec<UiElementRef> {
+        let mut out = Vec::new();
+
+        for t in &self.texts {
+            out.push(UiElementRef::Text(t));
+        }
+        for c in &self.circles {
+            out.push(UiElementRef::Circle(c));
+        }
+        for o in &self.outlines {
+            out.push(UiElementRef::Outline(o));
+        }
+        for h in &self.handles {
+            out.push(UiElementRef::Handle(h));
+        }
+        for p in &self.polygons {
+            out.push(UiElementRef::Polygon(p));
+        }
+
+        out
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub struct UiLayer {
     pub name: String,
@@ -378,6 +439,8 @@ pub struct UiButtonText {
     pub natural_height: f32,
     pub being_edited: bool,
     pub caret: usize,
+    pub being_hovered: bool,
+    pub just_unhovered: bool,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -474,6 +537,8 @@ impl UiButtonText {
             natural_height: 20.0,
             being_edited: false,
             caret: length,
+            being_hovered: false,
+            just_unhovered: false,
         }
     }
 
@@ -702,6 +767,8 @@ impl Default for UiButtonText {
             natural_height: 20.0,
             being_edited: false,
             caret: 0,
+            being_hovered: false,
+            just_unhovered: false,
         }
     }
 }
