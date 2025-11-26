@@ -695,6 +695,7 @@ impl UiButtonLoader {
         if mouse_snapshot.just_pressed && !press_started_on_ui && editor_mode {
             if !near_handle(&self.menus, &mouse_snapshot) {
                 self.ui_runtime.selected_ui_element.active = false;
+                self.ui_runtime.editing_text = false;
                 println!("deselection");
                 self.ui_runtime.selected_ui_element.active = false;
                 self.ui_runtime.selected_ui_element.just_deselected = true;

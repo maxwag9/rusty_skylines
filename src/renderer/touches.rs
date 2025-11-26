@@ -301,7 +301,7 @@ fn find_best_element_in_direction(
     };
 
     // Wrapping should feel less strict (slightly wider cone)
-    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, opposite, 65.0)
+    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, opposite, 90.0)
 }
 
 fn find_best_element_in_direction_inner(
@@ -310,7 +310,7 @@ fn find_best_element_in_direction_inner(
     sel_pos: (f32, f32),
     dir: Direction,
 ) -> Option<(String, String)> {
-    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, dir, 40.0)
+    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, dir, 75.0)
 }
 
 fn find_best_element_in_direction_inner_with_angle(
@@ -393,7 +393,7 @@ fn find_best_element_in_direction_inner_with_angle(
             Direction::Left | Direction::Right => dx.abs(),
         };
 
-        let score = alignment_score * 1000.0 + primary_dist;
+        let score = alignment_score * 25.0 + primary_dist;
 
         if score < best_score {
             best_score = score;
@@ -682,11 +682,30 @@ fn hit_polygon(mx: f32, my: f32, poly: &UiButtonPolygon) -> bool {
     inside || near_edge
 }
 
+fn element_priority(element: &HitElement) -> i32 {
+    match element {
+        // Handles should win ties so resizing works even when overlapping a circle
+        HitElement::Handle(_) => 3,
+        // Polygons and circles sit above texts by default
+        HitElement::Polygon(_) => 2,
+        HitElement::Circle(_) => 1,
+        HitElement::Text(_) => 0,
+    }
+}
+
 fn consider_candidate(best: &mut Option<HitResult>, candidate: HitResult) {
     if let Some(current) = best {
         // First compare layer_order (layer z), then element z_index inside the layer
-        let current_key = (current.layer_order, current.z_index);
-        let candidate_key = (candidate.layer_order, candidate.z_index);
+        let current_key = (
+            current.layer_order,
+            current.z_index,
+            element_priority(&current.element),
+        );
+        let candidate_key = (
+            candidate.layer_order,
+            candidate.z_index,
+            element_priority(&candidate.element),
+        );
         if candidate_key > current_key {
             *current = candidate;
         }
@@ -802,9 +821,7 @@ fn process_handles(
 
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
-            print!("{:?}", layer.handles);
             for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
-                print!("Pushing");
                 if !handle.misc.active {
                     continue;
                 }
@@ -1137,6 +1154,11 @@ fn select_ui_element(
     layer_name: String,
     element_id: String,
 ) {
+    let editing_text = match loader.find_element(&menu_name, &layer_name, &element_id) {
+        Some(UiElement::Text(_)) => true,
+        _ => false,
+    };
+
     loader.ui_runtime.selected_ui_element = SelectedUiElement {
         menu_name,
         layer_name,
@@ -1144,6 +1166,7 @@ fn select_ui_element(
         active: true,
         just_deselected: true,
     };
+    loader.ui_runtime.editing_text = editing_text;
     loader.variables.set(
         "selected_menu",
         format!("{}", loader.ui_runtime.selected_ui_element.menu_name),
@@ -1165,82 +1188,100 @@ pub fn handle_text_editing(
     input: &mut InputState,
     time: &TimeSystem,
 ) {
+    let sel = &ui_runtime.selected_ui_element;
+    if !sel.active {
+        ui_runtime.editing_text = false;
+        return;
+    }
+
+    let Some(menu) = menus.get_mut(&sel.menu_name) else {
+        ui_runtime.editing_text = false;
+        return;
+    };
+    let Some(layer_idx) = menu.layers.iter().position(|l| l.name == sel.layer_name) else {
+        ui_runtime.editing_text = false;
+        return;
+    };
+
+    let layer = &mut menu.layers[layer_idx];
+    let Some(text_idx) = layer
+        .texts
+        .iter()
+        .position(|t| t.id.as_ref() == Some(&sel.element_id))
+    else {
+        ui_runtime.editing_text = false;
+        return;
+    };
+
+    let text = &mut layer.texts[text_idx];
+    let now = time.total_time;
+
+    // Toggle editing mode with Enter, and exit with Escape.
+    if input.pressed_logical(&NamedKey::Enter) && !ui_runtime.editing_text {
+        ui_runtime.editing_text = true;
+        text.caret = text.caret.min(text.template.len());
+        layer.dirty = true;
+    }
+
+    if input.pressed_logical(&NamedKey::Escape) && ui_runtime.editing_text {
+        ui_runtime.editing_text = false;
+        layer.dirty = true;
+        return;
+    }
+
     if !ui_runtime.editing_text {
         return;
     }
 
-    let sel = &ui_runtime.selected_ui_element;
-    if !sel.active {
+    // ---------------------------------
+    // BACKSPACE with caret
+    // ---------------------------------
+    if input.backspace_tick(now) {
+        if text.caret > 0 {
+            text.template.remove(text.caret - 1);
+            text.caret -= 1;
+            text.text = text.template.clone();
+            layer.dirty = true;
+        }
         return;
     }
 
-    let now = time.total_time;
-
-    for (_, menu) in menus.iter_mut().filter(|(_, m)| m.active) {
-        for layer in &mut menu.layers {
-            if layer.name != sel.layer_name {
-                continue;
-            }
-
-            for text in &mut layer.texts {
-                if text.id.as_ref() != Some(&sel.element_id) {
-                    continue;
+    // ---------------------------------
+    // PRINTABLE CHARACTERS including space
+    // ---------------------------------
+    if input.char_tick(now) {
+        for ch in input.character.clone() {
+            if ch.chars().count() == 1 {
+                let c = ch.chars().next().unwrap();
+                if !c.is_control() {
+                    text.template.insert(text.caret, c);
+                    text.caret += 1;
+                    text.text = text.template.clone();
+                    layer.dirty = true;
                 }
-
-                // ---------------------------------
-                // BACKSPACE with caret
-                // ---------------------------------
-                if input.backspace_tick(now) {
-                    if text.caret > 0 {
-                        text.template.remove(text.caret - 1);
-                        text.caret -= 1;
-                        text.text = text.template.clone();
-                        layer.dirty = true;
-                    }
-                    return;
-                }
-
-                // ---------------------------------
-                // PRINTABLE CHARACTERS including space
-                // ---------------------------------
-                if input.char_tick(now) {
-                    for ch in input.character.clone() {
-                        if ch.chars().count() == 1 {
-                            let c = ch.chars().next().unwrap();
-                            if !c.is_control() {
-                                text.template.insert(text.caret, c);
-                                text.caret += 1;
-                                text.text = text.template.clone();
-                                layer.dirty = true;
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                // ---------------------------------
-                // ARROW KEYS
-                // ---------------------------------
-                if input.arrow_tick(now) {
-                    if input.pressed_logical(&NamedKey::ArrowLeft) {
-                        if text.caret > 0 {
-                            text.caret -= 1;
-                            layer.dirty = true;
-                        }
-                    }
-
-                    if input.pressed_logical(&NamedKey::ArrowRight) {
-                        if text.caret < text.template.len() {
-                            text.caret += 1;
-                            layer.dirty = true;
-                        }
-                    }
-
-                    return;
-                }
-
-                return;
             }
         }
+        return;
+    }
+
+    // ---------------------------------
+    // ARROW KEYS
+    // ---------------------------------
+    if input.arrow_tick(now) {
+        if input.pressed_logical(&NamedKey::ArrowLeft) {
+            if text.caret > 0 {
+                text.caret -= 1;
+                layer.dirty = true;
+            }
+        }
+
+        if input.pressed_logical(&NamedKey::ArrowRight) {
+            if text.caret < text.template.len() {
+                text.caret += 1;
+                layer.dirty = true;
+            }
+        }
+
+        return;
     }
 }
