@@ -116,6 +116,8 @@ impl ApplicationHandler for App {
                 let down = event.state == ElementState::Pressed;
                 let input = &mut resources.input;
 
+                input.character.clear();
+
                 // Always track physical key
                 let phys = event.physical_key;
                 input.set_physical(phys, down);

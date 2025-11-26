@@ -326,23 +326,6 @@ impl UiRuntime {
         }
     }
 
-    pub fn current_text_mut<'a>(
-        &self,
-        menus: &'a mut HashMap<String, Menu>,
-    ) -> Option<&'a mut UiButtonText> {
-        if !self.selected_ui_element.active {
-            return None;
-        }
-        let sel = &self.selected_ui_element;
-
-        let menu = menus.get_mut(&sel.menu_name)?;
-        let layer = menu.layers.iter_mut().find(|l| l.name == sel.layer_name)?;
-        layer
-            .texts
-            .iter_mut()
-            .find(|t| t.id.as_ref() == Some(&sel.element_id))
-    }
-
     pub fn update_editor_mode(&mut self, editor_mode: bool) {
         self.editor_mode = editor_mode;
     }

@@ -327,15 +327,7 @@ impl InputState {
     }
 
     pub fn set_logical(&mut self, key: NamedKey, down: bool) {
-        let prev = *self.logical.get(&key).unwrap_or(&false);
-        self.logical.insert(key.clone(), prev);
-        self.logical.insert(key.clone(), down);
-
-        if down && !prev {
-            self.logical.insert(key, true);
-        } else {
-            self.logical.insert(key, false);
-        }
+        self.logical.insert(key, down);
     }
 
     pub fn set_character(&mut self, ch: &str, down: bool) {

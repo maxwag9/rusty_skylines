@@ -282,17 +282,18 @@ fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut Input
 }
 
 fn find_best_element_in_direction(
-    loader: &mut UiButtonLoader,
+    loader: &UiButtonLoader,
     selected: &SelectedUiElement,
     sel_pos: (f32, f32),
     dir: Direction,
 ) -> Option<(String, String)> {
-    // Try normal directional navigation first
-    if let Some(result) = find_best_element_in_direction_inner(loader, selected, sel_pos, dir) {
+    // First: normal directional navigation with a fairly tight cone
+    if let Some(result) = find_best_element_in_direction_inner(loader, selected, sel_pos, dir, 40.0)
+    {
         return Some(result);
     }
 
-    // No element found → wrap to opposite direction
+    // Nothing found, wrap in the opposite direction with a wider cone
     let opposite = match dir {
         Direction::Up => Direction::Down,
         Direction::Down => Direction::Up,
@@ -300,56 +301,57 @@ fn find_best_element_in_direction(
         Direction::Right => Direction::Left,
     };
 
-    // Wrapping should feel less strict (slightly wider cone)
-    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, opposite, 90.0)
+    find_best_element_in_direction_inner(loader, selected, sel_pos, opposite, 65.0)
 }
 
 fn find_best_element_in_direction_inner(
-    loader: &mut UiButtonLoader,
-    selected: &SelectedUiElement,
-    sel_pos: (f32, f32),
-    dir: Direction,
-) -> Option<(String, String)> {
-    find_best_element_in_direction_inner_with_angle(loader, selected, sel_pos, dir, 75.0)
-}
-
-fn find_best_element_in_direction_inner_with_angle(
-    loader: &mut UiButtonLoader,
+    loader: &UiButtonLoader,
     selected: &SelectedUiElement,
     sel_pos: (f32, f32),
     dir: Direction,
     max_angle_deg: f32,
 ) -> Option<(String, String)> {
-    let max_angle = max_angle_deg.to_radians();
+    let max_angle_rad = max_angle_deg.to_radians();
+    let cos_max = max_angle_rad.cos();
 
     let dir_vec = match dir {
-        Direction::Up => (0.0, -1.0),
-        Direction::Down => (0.0, 1.0),
-        Direction::Left => (-1.0, 0.0),
-        Direction::Right => (1.0, 0.0),
+        Direction::Up => (0.0_f32, -1.0_f32),
+        Direction::Down => (0.0_f32, 1.0_f32),
+        Direction::Left => (-1.0_f32, 0.0_f32),
+        Direction::Right => (1.0_f32, 0.0_f32),
     };
 
-    // Collect elements
-    let mut items = Vec::new();
-    if let Some(menu) = loader.menus.get(&selected.menu_name) {
-        for layer in &menu.layers {
-            if !layer.active || !layer.saveable {
-                continue;
-            }
-            for elem in layer.iter_all_elements() {
-                items.push((
-                    layer.name.clone(),
-                    elem.id().to_string(),
-                    element_center(elem),
-                ));
-            }
+    let menu = loader.menus.get(&selected.menu_name)?;
+
+    // Collect candidates: (layer_name, elem_id, center_pos)
+    let mut items = Vec::with_capacity(64);
+    for layer in &menu.layers {
+        if !layer.active || !layer.saveable {
+            continue;
+        }
+        for elem in layer.iter_all_elements() {
+            items.push((
+                layer.name.clone(),
+                elem.id().to_string(),
+                element_center(elem),
+            ));
         }
     }
 
-    let mut best = None;
-    let mut best_score = f32::INFINITY;
+    // Best candidate tracked lexicographically by:
+    // 1) forward distance (primary)
+    // 2) lateral distance (tie breaker)
+    // 3) angle (tie breaker, via cos(angle), higher is better)
+    let mut best: Option<(String, String)> = None;
+    let mut best_forward = f32::INFINITY;
+    let mut best_lateral = f32::INFINITY;
+    let mut best_cos = -1.0_f32;
+
+    // Small epsilon so tiny differences do not cause jitter
+    let dist_eps = 0.5_f32;
 
     for (layer_name, elem_id, pos) in items {
+        // Skip currently selected element
         if elem_id == selected.element_id && layer_name == selected.layer_name {
             continue;
         }
@@ -357,46 +359,72 @@ fn find_best_element_in_direction_inner_with_angle(
         let dx = pos.0 - sel_pos.0;
         let dy = pos.1 - sel_pos.1;
 
-        // Direction gating
-        let valid_dir = match dir {
-            Direction::Up => dy < 0.0,
-            Direction::Down => dy > 0.0,
-            Direction::Left => dx < 0.0,
-            Direction::Right => dx > 0.0,
+        // Compute forward and lateral distance based on direction
+        let (forward, lateral) = match dir {
+            Direction::Up => {
+                if dy >= 0.0 {
+                    continue;
+                }
+                (-dy, dx.abs())
+            }
+            Direction::Down => {
+                if dy <= 0.0 {
+                    continue;
+                }
+                (dy, dx.abs())
+            }
+            Direction::Left => {
+                if dx >= 0.0 {
+                    continue;
+                }
+                (-dx, dy.abs())
+            }
+            Direction::Right => {
+                if dx <= 0.0 {
+                    continue;
+                }
+                (dx, dy.abs())
+            }
         };
-        if !valid_dir {
+
+        // Ignore almost zero movement, avoids degenerate cases
+        if forward < 0.0001 {
             continue;
         }
 
-        // Angle gating
-        let vec = (dx, dy);
-        let mag_v = (dx * dx + dy * dy).sqrt();
-        if mag_v < 0.0001 {
+        let mag2 = dx * dx + dy * dy;
+        if mag2 < 1e-4 {
+            continue;
+        }
+        let mag = mag2.sqrt();
+
+        // Angle check via cos(theta)
+        let cos_theta_raw = (dx * dir_vec.0 + dy * dir_vec.1) / mag;
+        let cos_theta = cos_theta_raw.clamp(-1.0, 1.0);
+
+        if cos_theta < cos_max {
+            // Outside allowed cone
             continue;
         }
 
-        let dot = vec.0 * dir_vec.0 + vec.1 * dir_vec.1;
-        let angle = (dot / mag_v).acos(); // dir_vec is normalized
-
-        if angle > max_angle {
-            continue;
-        }
-
-        // Score: align first, then distance
-        let alignment_score = match dir {
-            Direction::Up | Direction::Down => dx.abs(),
-            Direction::Left | Direction::Right => dy.abs(),
+        // Lexicographic better check
+        let better = if forward + dist_eps < best_forward {
+            true
+        } else if (forward - best_forward).abs() <= dist_eps && lateral + dist_eps < best_lateral {
+            true
+        } else if (forward - best_forward).abs() <= dist_eps
+            && (lateral - best_lateral).abs() <= dist_eps
+            && cos_theta > best_cos
+        {
+            true
+        } else {
+            false
         };
 
-        let primary_dist = match dir {
-            Direction::Up | Direction::Down => dy.abs(),
-            Direction::Left | Direction::Right => dx.abs(),
-        };
-
-        let score = alignment_score * 25.0 + primary_dist;
-
-        if score < best_score {
-            best_score = score;
+        if better {
+            best_forward = forward;
+            best_lateral = lateral;
+            best_cos = cos_theta;
             best = Some((layer_name, elem_id));
         }
     }
@@ -682,30 +710,11 @@ fn hit_polygon(mx: f32, my: f32, poly: &UiButtonPolygon) -> bool {
     inside || near_edge
 }
 
-fn element_priority(element: &HitElement) -> i32 {
-    match element {
-        // Handles should win ties so resizing works even when overlapping a circle
-        HitElement::Handle(_) => 3,
-        // Polygons and circles sit above texts by default
-        HitElement::Polygon(_) => 2,
-        HitElement::Circle(_) => 1,
-        HitElement::Text(_) => 0,
-    }
-}
-
 fn consider_candidate(best: &mut Option<HitResult>, candidate: HitResult) {
     if let Some(current) = best {
         // First compare layer_order (layer z), then element z_index inside the layer
-        let current_key = (
-            current.layer_order,
-            current.z_index,
-            element_priority(&current.element),
-        );
-        let candidate_key = (
-            candidate.layer_order,
-            candidate.z_index,
-            element_priority(&candidate.element),
-        );
+        let current_key = (current.layer_order, current.z_index);
+        let candidate_key = (candidate.layer_order, candidate.z_index);
         if candidate_key > current_key {
             *current = candidate;
         }
@@ -820,7 +829,7 @@ fn process_handles(
     let mut pending_selection: Option<SelectedUiElement> = None;
 
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
-        for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
+        for layer in menu.layers.iter_mut().filter(|l| l.active) {
             for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
                 if !handle.misc.active {
                     continue;
@@ -875,6 +884,7 @@ fn process_handles(
                     }
 
                     TouchState::Held => {
+                        // live circle radius update
                         if let Some(parent_id) = &handle.parent_id {
                             result.pending_circle_updates.push((
                                 parent_id.clone(),
@@ -1079,10 +1089,54 @@ fn process_text(
                     && loader.ui_runtime.selected_ui_element.layer_name == layer.name
                     && loader.ui_runtime.selected_ui_element.element_id == *id;
 
+                // if not in global editing mode, no text should be flagged as being_edited
+                if !loader.ui_runtime.editing_text {
+                    loader
+                        .variables
+                        .set("selected_text.being_edited", text.being_edited.to_string());
+                    text.being_edited = false;
+                }
+
+                // if this text is being edited, make sure the layer is redrawn
+                if text.being_edited {
+                    layer.dirty = true;
+                }
+
+                // enter edit mode: second click on already selected text
+                if mouse.just_pressed && is_hit && is_selected && !loader.ui_runtime.editing_text {
+                    loader.ui_runtime.editing_text = true;
+                    text.being_edited = true;
+                    loader
+                        .variables
+                        .set("selected_text.being_edited", text.being_edited.to_string());
+                    text.text = text.template.clone();
+                    layer.dirty = true;
+                    continue;
+                }
+
+                // exit edit mode when clicking outside after deselection
+                if mouse.just_pressed
+                    && loader.ui_runtime.editing_text
+                    && !is_hit
+                    && loader.ui_runtime.selected_ui_element.just_deselected
+                {
+                    if is_selected {
+                        text.template = text.text.clone();
+                        layer.dirty = true;
+                    }
+
+                    loader.ui_runtime.editing_text = false;
+                    text.being_edited = false;
+                    loader.ui_runtime.selected_ui_element.just_deselected = false;
+                    continue;
+                }
+
+                // when editing this text, do not drag it
                 if is_selected && loader.ui_runtime.editing_text {
                     continue;
                 }
 
+                // drag / selection logic (your new version)
                 if !runtime.is_down && !is_hit {
                     continue;
                 }
@@ -1124,6 +1178,7 @@ fn process_text(
                         if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
                             let new_x = mouse.mx - ox;
                             let new_y = mouse.my - oy;
+
                             if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
                                 text.x = new_x;
                                 text.y = new_y;
@@ -1154,11 +1209,6 @@ fn select_ui_element(
     layer_name: String,
     element_id: String,
 ) {
-    let editing_text = match loader.find_element(&menu_name, &layer_name, &element_id) {
-        Some(UiElement::Text(_)) => true,
-        _ => false,
-    };
-
     loader.ui_runtime.selected_ui_element = SelectedUiElement {
         menu_name,
         layer_name,
@@ -1166,7 +1216,6 @@ fn select_ui_element(
         active: true,
         just_deselected: true,
     };
-    loader.ui_runtime.editing_text = editing_text;
     loader.variables.set(
         "selected_menu",
         format!("{}", loader.ui_runtime.selected_ui_element.menu_name),
@@ -1188,100 +1237,82 @@ pub fn handle_text_editing(
     input: &mut InputState,
     time: &TimeSystem,
 ) {
-    let sel = &ui_runtime.selected_ui_element;
-    if !sel.active {
-        ui_runtime.editing_text = false;
-        return;
-    }
-
-    let Some(menu) = menus.get_mut(&sel.menu_name) else {
-        ui_runtime.editing_text = false;
-        return;
-    };
-    let Some(layer_idx) = menu.layers.iter().position(|l| l.name == sel.layer_name) else {
-        ui_runtime.editing_text = false;
-        return;
-    };
-
-    let layer = &mut menu.layers[layer_idx];
-    let Some(text_idx) = layer
-        .texts
-        .iter()
-        .position(|t| t.id.as_ref() == Some(&sel.element_id))
-    else {
-        ui_runtime.editing_text = false;
-        return;
-    };
-
-    let text = &mut layer.texts[text_idx];
-    let now = time.total_time;
-
-    // Toggle editing mode with Enter, and exit with Escape.
-    if input.pressed_logical(&NamedKey::Enter) && !ui_runtime.editing_text {
-        ui_runtime.editing_text = true;
-        text.caret = text.caret.min(text.template.len());
-        layer.dirty = true;
-    }
-
-    if input.pressed_logical(&NamedKey::Escape) && ui_runtime.editing_text {
-        ui_runtime.editing_text = false;
-        layer.dirty = true;
-        return;
-    }
-
     if !ui_runtime.editing_text {
         return;
     }
 
-    // ---------------------------------
-    // BACKSPACE with caret
-    // ---------------------------------
-    if input.backspace_tick(now) {
-        if text.caret > 0 {
-            text.template.remove(text.caret - 1);
-            text.caret -= 1;
-            text.text = text.template.clone();
-            layer.dirty = true;
-        }
+    let sel = &ui_runtime.selected_ui_element;
+    if !sel.active {
         return;
     }
 
-    // ---------------------------------
-    // PRINTABLE CHARACTERS including space
-    // ---------------------------------
-    if input.char_tick(now) {
-        for ch in input.character.clone() {
-            if ch.chars().count() == 1 {
-                let c = ch.chars().next().unwrap();
-                if !c.is_control() {
-                    text.template.insert(text.caret, c);
-                    text.caret += 1;
-                    text.text = text.template.clone();
-                    layer.dirty = true;
+    let now = time.total_time;
+
+    for (_, menu) in menus.iter_mut().filter(|(_, m)| m.active) {
+        for layer in &mut menu.layers {
+            if layer.name != sel.layer_name {
+                continue;
+            }
+
+            for text in &mut layer.texts {
+                if text.id.as_ref() != Some(&sel.element_id) {
+                    continue;
                 }
+
+                // ---------------------------------
+                // BACKSPACE with caret
+                // ---------------------------------
+                if input.backspace_tick(now) {
+                    if text.caret > 0 {
+                        text.template.remove(text.caret - 1);
+                        text.caret -= 1;
+                        text.text = text.template.clone();
+                        layer.dirty = true;
+                    }
+                    return;
+                }
+
+                // ---------------------------------
+                // PRINTABLE CHARACTERS including space
+                // ---------------------------------
+                if input.char_tick(now) {
+                    for ch in input.character.clone() {
+                        if ch.chars().count() == 1 {
+                            let c = ch.chars().next().unwrap();
+                            if !c.is_control() {
+                                text.template.insert(text.caret, c);
+                                text.caret += 1;
+                                text.text = text.template.clone();
+                                layer.dirty = true;
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // ---------------------------------
+                // ARROW KEYS
+                // ---------------------------------
+                if input.arrow_tick(now) {
+                    if input.pressed_logical(&NamedKey::ArrowLeft) {
+                        if text.caret > 0 {
+                            text.caret -= 1;
+                            layer.dirty = true;
+                        }
+                    }
+
+                    if input.pressed_logical(&NamedKey::ArrowRight) {
+                        if text.caret < text.template.len() {
+                            text.caret += 1;
+                            layer.dirty = true;
+                        }
+                    }
+
+                    return;
+                }
+
+                return;
             }
         }
-        return;
-    }
-
-    // ---------------------------------
-    // ARROW KEYS
-    // ---------------------------------
-    if input.arrow_tick(now) {
-        if input.pressed_logical(&NamedKey::ArrowLeft) {
-            if text.caret > 0 {
-                text.caret -= 1;
-                layer.dirty = true;
-            }
-        }
-
-        if input.pressed_logical(&NamedKey::ArrowRight) {
-            if text.caret < text.template.len() {
-                text.caret += 1;
-                layer.dirty = true;
-            }
-        }
-
-        return;
     }
 }

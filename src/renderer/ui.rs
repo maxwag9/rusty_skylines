@@ -555,6 +555,8 @@ impl UiRenderer {
 
         if let Some(atlas) = &self.pipelines.text_atlas {
             for tp in &mut layer.cache.texts {
+                let pad = 4.0; // same as your selection outline pad
+
                 // tp is TextParams (render-time)
                 // must find corresponding original UiButtonText to get caret
                 let mut maybe_caret = None;
@@ -655,8 +657,13 @@ impl UiRenderer {
                     tp.natural_width = 0.0;
                     tp.natural_height = atlas.line_height;
                 } else {
-                    tp.natural_width = max_x - min_x;
-                    tp.natural_height = max_y - min_y;
+                    let padded_min_x = min_x - pad;
+                    let padded_min_y = min_y - pad;
+                    let padded_max_x = max_x + pad;
+                    let padded_max_y = max_y + pad;
+
+                    tp.natural_width = padded_max_x - padded_min_x;
+                    tp.natural_height = padded_max_y - padded_min_y;
                 }
 
                 let mut being_edited = false;
@@ -763,18 +770,20 @@ impl UiRenderer {
                     push_quad(x1 - thick, y1 - br, x1, y1);
                 }
 
-                // ---- caret quad (blinking) ----
-                let blink_on = (time_system.total_time * 2.0).fract() > 0.5;
-                if blink_on && being_edited {
+                if being_edited {
                     let caret_width = 2.0;
-                    let x0 = caret_x;
-                    let y0 = tp.pos[1];
-                    let x1 = caret_x + caret_width;
-                    let y1 = tp.pos[1] + atlas.line_height;
+                    let caret_offset_y = 2.0;
 
-                    // UVs 0 so shader just uses color
-                    let caret_color = [1.0, 1.0, 1.0, 1.0];
-                    println!("rendering carrot lol {}", time_system.total_time);
+                    let x0 = caret_x;
+                    let y0 = tp.pos[1] + caret_offset_y;
+                    let x1 = caret_x + caret_width;
+                    let y1 = tp.pos[1] + atlas.line_height + caret_offset_y;
+
+                    let t = time_system.total_time * 3.0; // adjust speed here
+                    let blink_alpha = 0.5 + 0.5 * t.cos(); // smooth
+                    let caret_alpha = blink_alpha.clamp(0.0, 1.0);
+
+                    let caret_color = [1.0, 1.0, 1.0, caret_alpha];
 
                     let uv = [-1.0, -1.0];
 
