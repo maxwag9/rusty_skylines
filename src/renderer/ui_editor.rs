@@ -2,8 +2,8 @@ use crate::renderer::helper::triangulate_polygon;
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
-    handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing,
-    mark_editor_layers_dirty, near_handle, press_began_on_ui,
+    handle_editor_mode_interactions, handle_scroll_resize, handle_shift_arrow_navigation,
+    handle_text_editing, mark_editor_layers_dirty, near_handle, press_began_on_ui,
 };
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::resources::{InputState, MouseState, TimeSystem};
@@ -712,6 +712,10 @@ impl UiButtonLoader {
                 input_state,
                 time_system,
             );
+
+            if handle_shift_arrow_navigation(self, input_state, time_system) {
+                selection = true;
+            }
 
             apply_pending_circle_updates(self, dt, pending_circle_updates);
 
