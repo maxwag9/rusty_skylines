@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use winit::keyboard::{KeyCode, PhysicalKey};
 
 pub struct UiVariableRegistry {
     pub(crate) vars: HashMap<String, String>,
@@ -738,8 +737,13 @@ impl UiButtonLoader {
         if trigger_selection {
             self.update_selection();
         }
+        // if let (_, menu) = self.menus.get_mut(&self.ui_runtime.selected_ui_element.menu_name) {
+        //     let layer = menu.layers.iter().filter(|l | l.name = self.ui_runtime.selected_ui_element.layer_name) {
+        //
+        //     }
+        // }
 
-        if input_state.pressed_physical(&PhysicalKey::Code(KeyCode::KeyX))
+        if input_state.action_pressed_once("Delete selected GUI Element")
             && self.ui_runtime.selected_ui_element.active
             && !self.ui_runtime.editing_text
         {

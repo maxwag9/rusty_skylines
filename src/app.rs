@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 pub struct App {
@@ -113,84 +113,83 @@ impl ApplicationHandler for App {
                     return;
                 };
 
-                let down = event.state == ElementState::Pressed;
                 let input = &mut resources.input;
+                let down = event.state == ElementState::Pressed;
 
-                input.character.clear();
+                // physical
+                input.set_physical(event.physical_key, down);
 
-                // Always track physical key
-                let phys = event.physical_key;
-                input.set_physical(phys, down);
+                // text chars refreshed each event
+                input.text_chars.clear();
 
-                // Track logical key (NamedKey or Character)
+                // logical + printable text
                 match &event.logical_key {
                     Key::Named(named) => {
                         input.set_logical(*named, down);
 
-                        if matches!(named, NamedKey::Shift) {
-                            input.shift_pressed = down;
+                        if *named == NamedKey::Shift {
+                            input.shift = down;
                         }
-                        if matches!(named, NamedKey::Control) {
-                            input.ctrl_pressed = down;
+                        if *named == NamedKey::Control {
+                            input.ctrl = down;
                         }
-                        if matches!(named, NamedKey::Space) {
+                        if *named == NamedKey::Alt {
+                            input.alt = down;
+                        }
+                        if *named == NamedKey::Space {
                             input.set_character(" ", down);
                         }
                     }
 
-                    Key::Character(s) => {
-                        // This is text meaning, not hardware key
-                        // Use only first char for keybindings
-                        if let Some(c) = s.chars().next() {
-                            let lower = c.to_ascii_lowercase().to_string();
-                            input.set_character(&lower, down);
+                    Key::Character(ch) => {
+                        if !ch.is_empty() {
+                            input.set_character(ch, down);
                         }
                     }
 
                     _ => {}
                 }
 
-                // -------- special logic --------
+                // ---------------------------------------------------------------------
+                // ENGINE ACTIONS (ALL action-based, no direct key checks)
+                // ---------------------------------------------------------------------
                 if down {
-                    if let Key::Named(NamedKey::F5) = &event.logical_key {
+                    // MSAA cycle
+                    if input.action_pressed_once("Cycle MSAA") {
                         resources.renderer.core.cycle_msaa();
                     }
 
-                    if let Key::Named(NamedKey::F6) = &event.logical_key {
-                        resources.settings.editor_mode = !resources.settings.editor_mode;
+                    // Toggle editor mode
+                    if input.action_pressed_once("Toggle editor mode") {
+                        resources.settings.editor_mode ^= true;
                         resources
                             .ui_loader
                             .ui_runtime
                             .update_editor_mode(resources.settings.editor_mode);
                     }
 
-                    if input.ctrl_pressed {
-                        if let Key::Character(ch) = &event.logical_key {
-                            if ch.eq_ignore_ascii_case("s") {
-                                if let Err(e) = resources
-                                    .ui_loader
-                                    .save_gui_to_file("ui_data/gui_layout.json")
-                                {
-                                    eprintln!("Failed to save GUI layout: {e}");
-                                } else {
-                                    println!("GUI layout saved");
-                                }
-                            }
+                    // Save GUI
+                    if input.action_pressed_once("Save GUI layout") {
+                        match resources
+                            .ui_loader
+                            .save_gui_to_file("ui_data/gui_layout.json")
+                        {
+                            Ok(_) => println!("GUI layout saved"),
+                            Err(e) => eprintln!("Failed to save GUI layout: {e}"),
                         }
                     }
-                    if input.pressed_physical(&PhysicalKey::Code(KeyCode::KeyP)) {
+
+                    // Add GUI element
+                    if input.action_pressed_once("Add GUI element") {
                         let result = resources.ui_loader.add_element(
                             "base_gui",
                             Polygon(UiButtonPolygon::default()),
                             &resources.mouse,
                         );
+
                         match result {
-                            Ok(r) => {
-                                println!("Added GUI element: {:?}", r);
-                            }
-                            Err(r) => {
-                                println!("Failed adding GUI element: {:?}", r);
-                            }
+                            Ok(r) => println!("Added GUI element: {:?}", r),
+                            Err(r) => println!("Failed adding GUI element: {:?}", r),
                         }
                     }
                 }

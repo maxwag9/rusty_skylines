@@ -301,7 +301,7 @@
                 1.0,
                 1.0
               ],
-              "text": "Selected GUI element ID: {selected_ui_element_id}",
+              "text": "Selected GUI element : {selected_ui_element_id}",
               "misc": {
                 "active": true,
                 "pressable": false,

@@ -1,0 +1,71 @@
+["Copy text"]
+keys = ["Ctrl+KeyC"]
+
+["Cut text"]
+keys = ["Ctrl+KeyX"]
+
+["Paste text"]
+keys = ["Ctrl+KeyV"]
+
+["Cycle MSAA"]
+keys = ["F5"]
+
+["Toggle editor mode"]
+keys = ["F6"]
+
+["Save GUI layout"]
+keys = ["Ctrl+KeyS"]
+
+["Add GUI element"]
+keys = ["KeyP"]
+
+
+["Delete selected GUI Element"]
+keys = ["KeyX"]
+
+["Fly Camera Forward"]
+keys = ["KeyW"]
+["Fly Camera Backward"]
+keys = ["KeyS"]
+["Fly Camera Left"]
+keys = ["KeyA"]
+["Fly Camera Right"]
+keys = ["KeyD"]
+["Fly Camera Up"]
+keys = ["KeyQ"]
+["Fly Camera Down"]
+keys = ["KeyE"]
+
+["Navigate UI Left"]
+keys = ["Shift+ArrowLeft"]
+
+["Navigate UI Right"]
+keys = ["Shift+ArrowRight"]
+
+["Navigate UI Up"]
+keys = ["Shift+ArrowUp"]
+
+["Navigate UI Down"]
+keys = ["Shift+ArrowDown"]
+
+["Move Cursor Left"]
+keys = ["ArrowLeft"]
+
+["Move Cursor Right"]
+keys = ["ArrowRight"]
+
+["Backspace"]
+keys = ["Backspace"]
+
+["Increase Z-Index Of Element"]
+keys = ["ArrowUp"]
+
+["Decrease Z-Index Of Element"]
+keys = ["ArrowDown"]
+
+
+["Increase Order Of Layer"]
+keys = ["ArrowUp"]
+
+["Decrease Order Of Layer"]
+keys = ["ArrowDown"]

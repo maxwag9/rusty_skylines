@@ -1,7 +1,6 @@
 use crate::resources::Resources;
 use crate::world::World;
 use glam::Vec3;
-use winit::keyboard::{KeyCode, PhysicalKey};
 
 pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let dt = resources.time.sim_dt;
@@ -30,40 +29,22 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let mut wish = Vec3::ZERO;
     if !resources.settings.editor_mode {
-        if resources
-            .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyW))
-        {
+        if resources.input.action_pressed_once("Fly Camera Forward") {
             wish += forward;
         }
-        if resources
-            .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyS))
-        {
+        if resources.input.action_pressed_once("Fly Camera Backward") {
             wish -= forward;
         }
-        if resources
-            .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyA))
-        {
+        if resources.input.action_pressed_once("Fly Camera Left") {
             wish -= right;
         }
-        if resources
-            .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyD))
-        {
+        if resources.input.action_pressed_once("Fly Camera Right") {
             wish += right;
         }
-        if resources
-            .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyQ))
-        {
+        if resources.input.action_pressed_once("Fly Camera Up") {
             wish += up;
         }
-        if resources
-            .input
-            .pressed_physical(&PhysicalKey::Code(KeyCode::KeyE))
-        {
+        if resources.input.action_pressed_once("Fly Camera Down") {
             wish -= up;
         }
     }
@@ -71,7 +52,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let base_speed = 8.0;
     let mut speed = base_speed;
 
-    match (resources.input.shift_pressed, resources.input.ctrl_pressed) {
+    match (resources.input.shift, resources.input.ctrl) {
         (true, false) => speed *= 3.0,
         (false, true) => speed *= 0.4,
         (true, true) => speed *= 0.1,

@@ -1,13 +1,14 @@
 pub mod core;
 pub mod helper;
-mod parser;
+pub(crate) mod input;
+pub(crate) mod parser;
 pub mod pipelines;
 pub mod render_passes;
-mod shader_watcher;
-mod touches;
+pub(crate) mod shader_watcher;
+pub(crate) mod touches;
 pub(crate) mod ui;
 pub mod ui_editor;
-mod ui_pipelines;
+pub(crate) mod ui_pipelines;
 
 use crate::components::camera::Camera;
 use crate::data::Settings;
