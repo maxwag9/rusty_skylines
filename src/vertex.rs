@@ -90,13 +90,25 @@ impl Default for LayerCache {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SelectedUiElement {
     pub menu_name: String,
     pub layer_name: String,
     pub element_id: String,
     pub active: bool,
     pub just_deselected: bool,
+}
+
+impl SelectedUiElement {
+    pub(crate) fn default() -> SelectedUiElement {
+        Self {
+            menu_name: "no menu".to_string(),
+            layer_name: "no layer".to_string(),
+            element_id: "no element".to_string(),
+            active: false,
+            just_deselected: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -263,6 +275,27 @@ impl<'a> UiElementRef<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum ElementRefMut {
+    Text(usize),
+    Polygon(usize),
+    Circle(usize),
+    Outline(usize),
+    Handle(usize),
+}
+
+impl ElementRefMut {
+    pub fn index(&self) -> usize {
+        match self {
+            ElementRefMut::Text(i)
+            | ElementRefMut::Polygon(i)
+            | ElementRefMut::Circle(i)
+            | ElementRefMut::Outline(i)
+            | ElementRefMut::Handle(i) => *i,
+        }
+    }
+}
+
 impl RuntimeLayer {
     pub fn iter_all_elements(&self) -> Vec<UiElementRef> {
         let mut out = Vec::new();
@@ -284,6 +317,59 @@ impl RuntimeLayer {
         }
 
         out
+    }
+    pub fn find_element(&mut self, id: &str) -> Option<ElementRefMut> {
+        if let Some(i) = self.texts.iter().position(|e| e.id.as_deref() == Some(id)) {
+            return Some(ElementRefMut::Text(i));
+        }
+        if let Some(i) = self
+            .polygons
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(ElementRefMut::Polygon(i));
+        }
+        if let Some(i) = self
+            .circles
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(ElementRefMut::Circle(i));
+        }
+        if let Some(i) = self
+            .outlines
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(ElementRefMut::Outline(i));
+        }
+        if let Some(i) = self
+            .handles
+            .iter()
+            .position(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(ElementRefMut::Handle(i));
+        }
+        None
+    }
+
+    pub fn swap_elements(&mut self, kind: &ElementRefMut, a: usize, b: usize) {
+        match kind {
+            ElementRefMut::Text(_) => self.texts.swap(a, b),
+            ElementRefMut::Polygon(_) => self.polygons.swap(a, b),
+            ElementRefMut::Circle(_) => self.circles.swap(a, b),
+            ElementRefMut::Outline(_) => self.outlines.swap(a, b),
+            ElementRefMut::Handle(_) => self.handles.swap(a, b),
+        }
+        self.dirty = true;
+    }
+
+    pub fn element_count(&self) -> usize {
+        self.texts.len()
+            + self.polygons.len()
+            + self.circles.len()
+            + self.outlines.len()
+            + self.handles.len()
     }
 }
 
@@ -530,6 +616,72 @@ pub struct UiButtonHandle {
     pub sub_handle_misc: HandleMisc,
     pub misc: MiscButtonSettings,
     pub parent_id: Option<String>,
+}
+
+pub trait UiElementCommon {
+    fn id(&self) -> Option<&str>;
+    fn z_index(&self) -> i32;
+    fn set_z_index(&mut self, z: i32);
+}
+
+impl UiElementCommon for UiButtonText {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+    fn z_index(&self) -> i32 {
+        self.z_index
+    }
+    fn set_z_index(&mut self, z: i32) {
+        self.z_index = z;
+    }
+}
+
+impl UiElementCommon for UiButtonPolygon {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+    fn z_index(&self) -> i32 {
+        self.z_index
+    }
+    fn set_z_index(&mut self, z: i32) {
+        self.z_index = z;
+    }
+}
+
+impl UiElementCommon for UiButtonCircle {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+    fn z_index(&self) -> i32 {
+        self.z_index
+    }
+    fn set_z_index(&mut self, z: i32) {
+        self.z_index = z;
+    }
+}
+
+impl UiElementCommon for UiButtonOutline {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+    fn z_index(&self) -> i32 {
+        self.z_index
+    }
+    fn set_z_index(&mut self, z: i32) {
+        self.z_index = z;
+    }
+}
+
+impl UiElementCommon for UiButtonHandle {
+    fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+    fn z_index(&self) -> i32 {
+        self.z_index
+    }
+    fn set_z_index(&mut self, z: i32) {
+        self.z_index = z;
+    }
 }
 
 impl UiButtonText {

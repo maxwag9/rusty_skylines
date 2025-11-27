@@ -329,7 +329,7 @@ fn find_best_element_in_direction_inner(
 
     // Best candidate tracked lexicographically by:
     // 1) forward distance (primary)
-    // 2) lateral distance (tie breaker)
+    // 2) lateral distance (tiebreaker)
     // 3) angle (tie breaker, via cos(angle), higher is better)
     let mut best: Option<(String, String)> = None;
     let mut best_forward = f32::INFINITY;

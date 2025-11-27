@@ -53,18 +53,3 @@ keys = ["ArrowLeft"]
 
 ["Move Cursor Right"]
 keys = ["ArrowRight"]
-
-["Backspace"]
-keys = ["Backspace"]
-
-["Move Element Up"]
-keys = ["ArrowUp"]
-
-["Move Element Down"]
-keys = ["ArrowDown"]
-
-["Move Layer Up"]
-keys = ["Ctrl+ArrowUp"]
-
-["Move Layer Down"]
-keys = ["Ctrl+ArrowDown"]

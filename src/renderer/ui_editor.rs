@@ -737,11 +737,66 @@ impl UiButtonLoader {
         if trigger_selection {
             self.update_selection();
         }
-        // if let (_, menu) = self.menus.get_mut(&self.ui_runtime.selected_ui_element.menu_name) {
-        //     let layer = menu.layers.iter().filter(|l | l.name = self.ui_runtime.selected_ui_element.layer_name) {
-        //
-        //     }
-        // }
+        // ----------------------------------------------------------
+        // MOVE ELEMENT UP/DOWN & MOVE LAYER UP/DOWN
+        // ----------------------------------------------------------
+        if self.ui_runtime.selected_ui_element.active {
+            let menu_name = self.ui_runtime.selected_ui_element.menu_name.clone();
+            let layer_name = self.ui_runtime.selected_ui_element.layer_name.clone();
+            let element_id = self.ui_runtime.selected_ui_element.element_id.clone();
+
+            if let Some(menu) = self.menus.get_mut(&menu_name) {
+                if let Some(layer_index) = menu.layers.iter().position(|l| l.name == layer_name) {
+                    let layer = &mut menu.layers[layer_index];
+
+                    // ------------------------------------------------------
+                    // ELEMENT MOVEMENT
+                    // ------------------------------------------------------
+                    if let Some(kind) = layer.find_element(&element_id) {
+                        let idx = kind.index();
+
+                        let len = match kind {
+                            ElementRefMut::Text(_) => layer.texts.len(),
+                            ElementRefMut::Polygon(_) => layer.polygons.len(),
+                            ElementRefMut::Circle(_) => layer.circles.len(),
+                            ElementRefMut::Outline(_) => layer.outlines.len(),
+                            ElementRefMut::Handle(_) => layer.handles.len(),
+                        };
+
+                        if input_state.action_pressed_once("Move Element Up") && idx > 0 {
+                            layer.swap_elements(&kind, idx, idx - 1);
+                            println!(
+                                "Moved element '{}' up in layer '{}'",
+                                element_id, layer_name
+                            );
+                        }
+
+                        if input_state.action_pressed_once("Move Element Down") && idx + 1 < len {
+                            layer.swap_elements(&kind, idx, idx + 1);
+                            println!(
+                                "Moved element '{}' down in layer '{}'",
+                                element_id, layer_name
+                            );
+                        }
+                    }
+
+                    // ------------------------------------------------------
+                    // LAYER MOVEMENT
+                    // ------------------------------------------------------
+                    if input_state.action_pressed_once("Move Layer Up") && layer_index > 0 {
+                        menu.layers.swap(layer_index, layer_index - 1);
+                        println!("Moved layer '{}' up", layer_name);
+                    }
+
+                    if input_state.action_pressed_once("Move Layer Down")
+                        && layer_index + 1 < menu.layers.len()
+                    {
+                        menu.layers.swap(layer_index, layer_index + 1);
+                        println!("Moved layer '{}' down", layer_name);
+                    }
+                }
+            }
+        }
 
         if input_state.action_pressed_once("Delete selected GUI Element")
             && self.ui_runtime.selected_ui_element.active
@@ -856,6 +911,16 @@ impl UiButtonLoader {
         }
         let sel = self.ui_runtime.selected_ui_element.clone();
 
+        if let Some(menu) = self.menus.get_mut(&sel.menu_name) {
+            if let Some(layer) = menu
+                .layers
+                .iter()
+                .find(|l| l.name == sel.layer_name.to_string())
+            {
+                self.variables
+                    .set("selected_layer.order", layer.order.to_string());
+            }
+        }
         if let Some(element) = self.find_element(&sel.menu_name, &sel.layer_name, &sel.element_id) {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu
@@ -933,6 +998,8 @@ impl UiButtonLoader {
                                 z_index: c.z_index,
                             };
                             editor_layer.handles.push(handle);
+                            self.variables
+                                .set("selected_element.z_index", c.z_index.to_string());
                         }
                         Handle(_h) => {}
                         Polygon(p) => {
@@ -1010,11 +1077,15 @@ impl UiButtonLoader {
                                 },
                             };
                             editor_layer.outlines.push(polygon_outline);
+                            self.variables
+                                .set("selected_element.z_index", p.z_index.to_string());
                         }
-                        Text(_tx) => {
+                        Text(tx) => {
                             //tx.color = [1.0, 1.0, 0.0, 1.0];
                             //tx.misc.active = true;
                             //editor_layer.texts.push(tx);
+                            self.variables
+                                .set("selected_element.z_index", tx.z_index.to_string());
                         }
                         Outline(_o) => {}
                     }

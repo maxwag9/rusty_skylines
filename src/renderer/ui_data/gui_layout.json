@@ -1,6 +1,60 @@
 {
   "menus": [
     {
+      "name": "Debug_Menu",
+      "layers": [
+        {
+          "name": "debug_texts",
+          "order": 2,
+          "texts": [
+            {
+              "id": "fps_text",
+              "z_index": 51,
+              "x": 65.532104,
+              "y": 26.819542,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        }
+      ]
+    },
+    {
       "name": "Editor_Menu",
       "layers": [
         {
@@ -237,8 +291,8 @@
             {
               "id": "selected_layer_text",
               "z_index": 50,
-              "x": 169.28009,
-              "y": 183.6832,
+              "x": 190.66995,
+              "y": 168.32187,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
               "top_left_offset": [
@@ -274,8 +328,8 @@
             {
               "id": "selected_element_text",
               "z_index": 50,
-              "x": 191.76126,
-              "y": 238.39145,
+              "x": 193.7421,
+              "y": 225.68129,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
               "top_left_offset": [
@@ -301,7 +355,7 @@
                 1.0,
                 1.0
               ],
-              "text": "Selected GUI element : {selected_ui_element_id}",
+              "text": "Selected GUI element ID: {selected_ui_element_id}",
               "misc": {
                 "active": true,
                 "pressable": false,
@@ -311,8 +365,8 @@
             {
               "id": "editing_text_text",
               "z_index": 50,
-              "x": 222.4755,
-              "y": 288.41055,
+              "x": 214.38449,
+              "y": 279.07776,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
               "top_left_offset": [
@@ -381,6 +435,80 @@
                 "pressable": false,
                 "editable": false
               }
+            },
+            {
+              "id": "selected_layer.order_text",
+              "z_index": 50,
+              "x": 225.20822,
+              "y": 414.00427,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Layer Order: {selected_layer.order}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            },
+            {
+              "id": "selected_element.z_index_text",
+              "z_index": 50,
+              "x": 183.76483,
+              "y": 470.18637,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected GUI element z_index: {selected_element.z_index}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
             }
           ],
           "circles": [
@@ -423,60 +551,6 @@
               }
             }
           ],
-          "outlines": [],
-          "handles": [],
-          "polygons": [],
-          "active": true,
-          "opaque": false
-        }
-      ]
-    },
-    {
-      "name": "Debug_Menu",
-      "layers": [
-        {
-          "name": "debug_texts",
-          "order": 2,
-          "texts": [
-            {
-              "id": "fps_text",
-              "z_index": 51,
-              "x": 65.532104,
-              "y": 26.819542,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                0.6,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
-              "misc": {
-                "active": true,
-                "pressable": false,
-                "editable": false
-              }
-            }
-          ],
-          "circles": [],
           "outlines": [],
           "handles": [],
           "polygons": [],
