@@ -98,31 +98,7 @@ pub fn ensure_ccw(verts: &mut [UiVertex]) {
     }
 }
 
-#[inline]
-fn is_convex(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
-    let cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-    cross > 0.0
-}
-
-fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool {
-    let v0 = [c[0] - a[0], c[1] - a[1]];
-    let v1 = [b[0] - a[0], b[1] - a[1]];
-    let v2 = [p[0] - a[0], p[1] - a[1]];
-
-    let dot00 = v0[0] * v0[0] + v0[1] * v0[1];
-    let dot01 = v0[0] * v1[0] + v0[1] * v1[1];
-    let dot02 = v0[0] * v2[0] + v0[1] * v2[1];
-    let dot11 = v1[0] * v1[0] + v1[1] * v1[1];
-    let dot12 = v1[0] * v2[0] + v1[1] * v2[1];
-
-    let inv_denom = 1.0 / (dot00 * dot11 - dot01 * dot01);
-    let u = (dot11 * dot02 - dot01 * dot12) * inv_denom;
-    let v = (dot00 * dot12 - dot01 * dot02) * inv_denom;
-
-    u >= 0.0 && v >= 0.0 && (u + v) < 1.0
-}
-
-pub(crate) fn triangulate_polygon(mut verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
+pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
     let n = verts.len();
     if n < 3 {
         return Vec::new();
@@ -314,6 +290,22 @@ pub fn make_uniform_layout(device: &Device, label: &str) -> BindGroupLayout {
             visibility: ShaderStages::VERTEX_FRAGMENT,
             ty: BindingType::Buffer {
                 ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
+pub fn make_storage_layout(device: &Device, label: &str) -> BindGroupLayout {
+    device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX_FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
                 has_dynamic_offset: false,
                 min_binding_size: None,
             },

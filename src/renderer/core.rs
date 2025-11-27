@@ -1,15 +1,17 @@
 use crate::components::camera::Camera;
 use crate::data::Settings;
+use crate::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::resources::{MouseState, TimeSystem, Uniforms};
 use crate::vertex::{LineVtx, Vertex};
-use std::path::PathBuf;
 use std::sync::Arc;
-use util::DeviceExt;
-use wgpu::*;
+use wgpu::{
+    util::{BufferInitDescriptor, DeviceExt},
+    *,
+};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
@@ -38,9 +40,8 @@ pub struct RenderCore {
 
 impl RenderCore {
     pub fn new(window: Arc<Window>, settings: &Settings) -> Self {
-        use wgpu::*;
         // --- Create instance and surface ---
-        let instance = wgpu::Instance::new(&InstanceDescriptor {
+        let instance = Instance::new(&InstanceDescriptor {
             backends: Backends::all(),
             flags: Default::default(),
             memory_budget_thresholds: Default::default(),
@@ -69,8 +70,8 @@ impl RenderCore {
             .alpha_modes
             .iter()
             .copied()
-            .find(|m| *m == wgpu::CompositeAlphaMode::PostMultiplied)
-            .unwrap_or(wgpu::CompositeAlphaMode::Opaque);
+            .find(|m| *m == CompositeAlphaMode::PostMultiplied)
+            .unwrap_or(CompositeAlphaMode::Opaque);
         let present_mode = settings.present_mode.clone().to_wgpu();
 
         let config = SurfaceConfiguration {
@@ -121,21 +122,7 @@ impl RenderCore {
         // Configure surface
         surface.configure(&device, &config);
 
-        let msaa_texture = device.create_texture(&TextureDescriptor {
-            label: Some("MSAA Color Texture"),
-            size: Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: msaa_samples,
-            dimension: TextureDimension::D2,
-            format: config.format,
-            usage: TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let msaa_view = msaa_texture.create_view(&TextureViewDescriptor::default());
+        let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
 
         // === Vertex data ===
 
@@ -168,7 +155,7 @@ impl RenderCore {
             },
         ];
 
-        let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
             usage: BufferUsages::VERTEX,
@@ -176,8 +163,7 @@ impl RenderCore {
 
         let num_vertices = vertices.len() as u32;
 
-        let shader_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/shaders");
-        let _ = std::fs::create_dir_all(&shader_dir);
+        let shader_dir = shader_dir();
         let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
 
         let pipelines = Pipelines::new(&device, config.format, msaa_samples, &shader_dir)
@@ -212,23 +198,8 @@ impl RenderCore {
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
 
-        self.msaa_texture = self.device.create_texture(&TextureDescriptor {
-            label: Some("MSAA Color Texture"),
-            size: Extent3d {
-                width: new_size.width,
-                height: new_size.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: self.msaa_samples,
-            dimension: TextureDimension::D2,
-            format: self.config.format,
-            usage: TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        self.msaa_view = self
-            .msaa_texture
-            .create_view(&TextureViewDescriptor::default());
+        (self.msaa_texture, self.msaa_view) =
+            create_msaa_targets(&self.device, &self.config, self.msaa_samples);
     }
 
     pub(crate) fn render(
@@ -385,26 +356,8 @@ impl RenderCore {
 
         println!("MSAA changed to {}x", self.msaa_samples);
 
-        // Recreate MSAA color texture if needed
-        if self.msaa_samples > 1 {
-            self.msaa_texture = self.device.create_texture(&TextureDescriptor {
-                label: Some("MSAA Color Texture"),
-                size: Extent3d {
-                    width: self.config.width,
-                    height: self.config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: self.msaa_samples,
-                dimension: TextureDimension::D2,
-                format: self.config.format,
-                usage: TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            self.msaa_view = self
-                .msaa_texture
-                .create_view(&TextureViewDescriptor::default());
-        }
+        (self.msaa_texture, self.msaa_view) =
+            create_msaa_targets(&self.device, &self.config, self.msaa_samples);
 
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
@@ -448,4 +401,28 @@ impl RenderCore {
             Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
         }
     }
+}
+
+fn create_msaa_targets(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    samples: u32,
+) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("MSAA Color Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: samples,
+        dimension: TextureDimension::D2,
+        format: config.format,
+        usage: TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
 }

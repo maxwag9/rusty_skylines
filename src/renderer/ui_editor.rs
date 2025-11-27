@@ -1,3 +1,4 @@
+use crate::paths::renderer_path;
 use crate::renderer::helper::triangulate_polygon;
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
@@ -12,7 +13,6 @@ pub(crate) use crate::vertex::*;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
-use std::path::PathBuf;
 
 pub struct UiVariableRegistry {
     pub(crate) vars: HashMap<String, String>,
@@ -47,70 +47,86 @@ impl Menu {
         let (layer, after) = rest.split_first_mut().unwrap();
         let l = layer;
 
-        l.cache = LayerCache::default();
+        let dirty = l.dirty;
+        if !dirty.any() {
+            return;
+        }
 
-        // ------- TEXTS -------
-        for t in &l.texts {
-            let id_str = t.id.as_deref().unwrap_or("");
-            let rt = runtime.get(id_str);
+        let outlines_dirty = dirty.outlines || dirty.polygons;
+        let mut rebuilt = LayerDirty::none();
 
+        let runtime_info = |id: &Option<String>| {
+            let id_str = id.as_deref().unwrap_or("");
+            let runtime = runtime.get(id_str);
             let hash = if id_str.is_empty() {
                 f32::MAX
             } else {
                 UiButtonLoader::hash_id(id_str)
             };
 
-            l.cache.texts.push(TextParams {
-                pos: [t.x, t.y],
-                px: t.px,
-                color: t.color,
-                id_hash: hash,
-                misc: [
-                    f32::from(t.misc.active),
-                    rt.touched_time,
-                    f32::from(rt.is_down),
-                    hash,
-                ],
-                text: t.text.clone(),
+            (runtime, hash)
+        };
 
-                natural_width: t.natural_width,
-                natural_height: t.natural_height,
-                id: t.id.clone(),
-                caret: t.text.len(),
-                glyph_bounds: vec![],
-            });
+        // ------- TEXTS -------
+        if dirty.texts {
+            l.cache.texts.clear();
+
+            for t in &l.texts {
+                let (rt, hash) = runtime_info(&t.id);
+
+                l.cache.texts.push(TextParams {
+                    pos: [t.x, t.y],
+                    px: t.px,
+                    color: t.color,
+                    id_hash: hash,
+                    misc: [
+                        f32::from(t.misc.active),
+                        rt.touched_time,
+                        f32::from(rt.is_down),
+                        hash,
+                    ],
+                    text: t.text.clone(),
+
+                    natural_width: t.natural_width,
+                    natural_height: t.natural_height,
+                    id: t.id.clone(),
+                    caret: t.text.len(),
+                    glyph_bounds: vec![],
+                });
+            }
+
+            rebuilt.mark_texts();
         }
 
         // ------- CIRCLES -------
-        for c in &l.circles {
-            let id_str = c.id.as_deref().unwrap_or("");
-            let rt = runtime.get(id_str);
+        if dirty.circles {
+            l.cache.circle_params.clear();
 
-            let hash = if id_str.is_empty() {
-                f32::MAX
-            } else {
-                UiButtonLoader::hash_id(id_str)
-            };
+            for c in &l.circles {
+                let (rt, hash) = runtime_info(&c.id);
 
-            l.cache.circle_params.push(CircleParams {
-                center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
-                fade: c.fade,
-                fill_color: c.fill_color,
-                border_color: c.border_color,
-                glow_color: c.glow_color,
-                glow_misc: [
-                    c.glow_misc.glow_size,
-                    c.glow_misc.glow_speed,
-                    c.glow_misc.glow_intensity,
-                    1.0,
-                ],
-                misc: [
-                    f32::from(c.misc.active),
-                    rt.touched_time,
-                    f32::from(rt.is_down),
-                    hash,
-                ],
-            });
+                l.cache.circle_params.push(CircleParams {
+                    center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
+                    fade: c.fade,
+                    fill_color: c.fill_color,
+                    border_color: c.border_color,
+                    glow_color: c.glow_color,
+                    glow_misc: [
+                        c.glow_misc.glow_size,
+                        c.glow_misc.glow_speed,
+                        c.glow_misc.glow_intensity,
+                        1.0,
+                    ],
+                    misc: [
+                        f32::from(c.misc.active),
+                        rt.touched_time,
+                        f32::from(rt.is_down),
+                        hash,
+                    ],
+                });
+            }
+
+            rebuilt.mark_circles();
         }
 
         // Local helper that searches ALL OTHER layers (before + after) for a polygon id
@@ -137,60 +153,60 @@ impl Menu {
         }
 
         // ------- OUTLINES -------
-        for o in &mut l.outlines {
-            if o.mode == 1.0 {
-                if let Some(poly) = find_polygon_by_id(&o.parent_id, before, after) {
-                    o.vertex_offset = l.cache.outline_poly_vertices.len() as u32;
+        if outlines_dirty {
+            l.cache.outline_params.clear();
+            l.cache.outline_poly_vertices.clear();
 
-                    for v in &poly.vertices {
-                        l.cache.outline_poly_vertices.push([v.pos[0], v.pos[1]]);
+            for o in &mut l.outlines {
+                if o.mode == 1.0 {
+                    if let Some(poly) = find_polygon_by_id(&o.parent_id, before, after) {
+                        o.vertex_offset = l.cache.outline_poly_vertices.len() as u32;
+
+                        for v in &poly.vertices {
+                            l.cache.outline_poly_vertices.push([v.pos[0], v.pos[1]]);
+                        }
+
+                        o.vertex_count = poly.vertices.len() as u32;
                     }
-
-                    o.vertex_count = poly.vertices.len() as u32;
                 }
+
+                let (rt, hash) = runtime_info(&o.id);
+
+                l.cache.outline_params.push(OutlineParams {
+                    mode: o.mode,
+                    vertex_offset: o.vertex_offset,
+                    vertex_count: o.vertex_count,
+                    _pad0: 0, // u32 padding, must be integer
+                    shape_data: [
+                        o.shape_data.x,
+                        o.shape_data.y,
+                        o.shape_data.radius,
+                        o.shape_data.border_thickness,
+                    ],
+                    dash_color: o.dash_color,
+                    dash_misc: [
+                        o.dash_misc.dash_len,
+                        o.dash_misc.dash_spacing,
+                        o.dash_misc.dash_roundness,
+                        o.dash_misc.dash_speed,
+                    ],
+                    sub_dash_color: o.sub_dash_color,
+                    sub_dash_misc: [
+                        o.sub_dash_misc.dash_len,
+                        o.sub_dash_misc.dash_spacing,
+                        o.sub_dash_misc.dash_roundness,
+                        o.sub_dash_misc.dash_speed,
+                    ],
+                    misc: [
+                        f32::from(o.misc.active),
+                        rt.touched_time,
+                        f32::from(rt.is_down),
+                        hash,
+                    ],
+                });
             }
 
-            let id_str = o.id.as_deref().unwrap_or("");
-            let rt = runtime.get(id_str);
-
-            let hash = if id_str.is_empty() {
-                f32::MAX
-            } else {
-                UiButtonLoader::hash_id(id_str)
-            };
-
-            l.cache.outline_params.push(OutlineParams {
-                mode: o.mode,
-                vertex_offset: o.vertex_offset,
-                vertex_count: o.vertex_count,
-                _pad0: 0, // u32 padding, must be integer
-                shape_data: [
-                    o.shape_data.x,
-                    o.shape_data.y,
-                    o.shape_data.radius,
-                    o.shape_data.border_thickness,
-                ],
-                dash_color: o.dash_color,
-                dash_misc: [
-                    o.dash_misc.dash_len,
-                    o.dash_misc.dash_spacing,
-                    o.dash_misc.dash_roundness,
-                    o.dash_misc.dash_speed,
-                ],
-                sub_dash_color: o.sub_dash_color,
-                sub_dash_misc: [
-                    o.sub_dash_misc.dash_len,
-                    o.sub_dash_misc.dash_spacing,
-                    o.sub_dash_misc.dash_roundness,
-                    o.sub_dash_misc.dash_speed,
-                ],
-                misc: [
-                    f32::from(o.misc.active),
-                    rt.touched_time,
-                    f32::from(rt.is_down),
-                    hash,
-                ],
-            });
+            rebuilt.mark_outlines();
         }
 
         // Common builder for vertex-emitting shapes
@@ -204,68 +220,66 @@ impl Menu {
         };
 
         // ------- HANDLES -------
-        for h in &l.handles {
-            let id_str = h.id.as_deref().unwrap_or("");
-            let rt = runtime.get(id_str);
+        if dirty.handles {
+            l.cache.handle_params.clear();
 
-            let hash = if id_str.is_empty() {
-                f32::MAX
-            } else {
-                UiButtonLoader::hash_id(id_str)
-            };
+            for h in &l.handles {
+                let (rt, hash) = runtime_info(&h.id);
 
-            l.cache.handle_params.push(HandleParams {
-                center_radius_mode: [h.x, h.y, h.radius, 1.0],
-                handle_color: h.handle_color,
-                handle_misc: [
-                    h.handle_misc.handle_len,
-                    h.handle_misc.handle_width,
-                    h.handle_misc.handle_roundness,
-                    h.handle_misc.handle_speed,
-                ],
-                sub_handle_color: h.sub_handle_color,
-                sub_handle_misc: [
-                    h.sub_handle_misc.handle_len,
-                    h.sub_handle_misc.handle_width,
-                    h.sub_handle_misc.handle_roundness,
-                    h.sub_handle_misc.handle_speed,
-                ],
-                misc: [
-                    f32::from(h.misc.active),
-                    rt.touched_time,
-                    f32::from(rt.is_down),
-                    hash,
-                ],
-            });
+                l.cache.handle_params.push(HandleParams {
+                    center_radius_mode: [h.x, h.y, h.radius, 1.0],
+                    handle_color: h.handle_color,
+                    handle_misc: [
+                        h.handle_misc.handle_len,
+                        h.handle_misc.handle_width,
+                        h.handle_misc.handle_roundness,
+                        h.handle_misc.handle_speed,
+                    ],
+                    sub_handle_color: h.sub_handle_color,
+                    sub_handle_misc: [
+                        h.sub_handle_misc.handle_len,
+                        h.sub_handle_misc.handle_width,
+                        h.sub_handle_misc.handle_roundness,
+                        h.sub_handle_misc.handle_speed,
+                    ],
+                    misc: [
+                        f32::from(h.misc.active),
+                        rt.touched_time,
+                        f32::from(rt.is_down),
+                        hash,
+                    ],
+                });
+            }
+
+            rebuilt.mark_handles();
         }
 
         // ------- POLYGONS (N verts) -------
-        for poly in &mut l.polygons {
-            let id_str = poly.id.as_deref().unwrap_or("");
-            let rt = runtime.get(id_str);
+        if dirty.polygons {
+            l.cache.polygon_vertices.clear();
 
-            let hash = if id_str.is_empty() {
-                f32::MAX
-            } else {
-                UiButtonLoader::hash_id(id_str)
-            };
+            for poly in &mut l.polygons {
+                let (rt, hash) = runtime_info(&poly.id);
 
-            let misc = [
-                f32::from(poly.misc.active),
-                rt.touched_time,
-                f32::from(rt.is_down),
-                hash,
-            ];
+                let misc = [
+                    f32::from(poly.misc.active),
+                    rt.touched_time,
+                    f32::from(rt.is_down),
+                    hash,
+                ];
 
-            let tris = triangulate_polygon(&mut poly.vertices);
-            poly.tri_count = tris.len() as u32 / 3;
+                let tris = triangulate_polygon(&mut poly.vertices);
+                poly.tri_count = tris.len() as u32 / 3;
 
-            for vertex in &tris {
-                push_with_misc(vertex, misc, &mut l.cache.polygon_vertices);
+                for vertex in &tris {
+                    push_with_misc(vertex, misc, &mut l.cache.polygon_vertices);
+                }
             }
+
+            rebuilt.mark_polygons();
         }
 
-        l.dirty = false;
+        l.dirty.clear(rebuilt);
     }
 }
 
@@ -414,7 +428,7 @@ impl UiButtonLoader {
                     polygons,
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
-                    dirty: true,
+                    dirty: LayerDirty::all(),
                     saveable: true,
                 });
             }
@@ -437,10 +451,7 @@ impl UiButtonLoader {
     }
 
     pub fn load_gui_from_file(path: &str) -> Result<GuiLayout, Box<dyn std::error::Error>> {
-        let mut full_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        full_path.push("src/renderer");
-        full_path.push(path);
-
+        let full_path = renderer_path(path);
         let data = fs::read_to_string(&full_path)?;
         let parsed: GuiLayout = serde_json::from_str(&data)?;
         Ok(parsed)
@@ -448,11 +459,11 @@ impl UiButtonLoader {
 
     pub fn save_gui_to_file(&self, path: &str) -> anyhow::Result<()> {
         use std::fs;
-        use std::path::PathBuf;
 
-        let mut full_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        full_path.push("src/renderer");
-        full_path.push(path);
+        let full_path = renderer_path(path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
         // Convert runtime → serializable JSON
         let layout = self.to_json_gui_layout();
@@ -515,7 +526,7 @@ impl UiButtonLoader {
             outlines: vec![],
             handles: vec![],
             polygons: vec![],
-            dirty: true,
+            dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: true,
             saveable: false,
@@ -531,7 +542,7 @@ impl UiButtonLoader {
             outlines: vec![],
             handles: vec![],
             polygons: vec![],
-            dirty: true,
+            dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: true,
             saveable: false,
@@ -564,7 +575,7 @@ impl UiButtonLoader {
             outlines: vec![],
             handles: vec![],
             polygons: vec![],
-            dirty: true,
+            dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: false,
             saveable: false,
@@ -625,7 +636,7 @@ impl UiButtonLoader {
             });
         }
 
-        layer.dirty = true;
+        layer.dirty.mark_texts();
     }
 
     pub fn log_console(&mut self, message: impl Into<String>) {
@@ -639,7 +650,6 @@ impl UiButtonLoader {
     pub fn update_dynamic_texts(&mut self) {
         for (_, menu) in &mut self.menus {
             for layer in &mut menu.layers {
-                layer.dirty = true;
                 let mut any_changed = false;
 
                 for t in &mut layer.texts {
@@ -660,7 +670,7 @@ impl UiButtonLoader {
                 }
 
                 if any_changed {
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                 }
             }
         }
@@ -869,15 +879,27 @@ impl UiButtonLoader {
 
         // 4. Insert element (NO ids needed)
         match element {
-            UiElement::Text(t) => layer.texts.push(t),
-            UiElement::Circle(c) => layer.circles.push(c),
-            UiElement::Outline(o) => layer.outlines.push(o),
-            UiElement::Handle(h) => layer.handles.push(h),
-            UiElement::Polygon(p) => layer.polygons.push(p),
+            UiElement::Text(t) => {
+                layer.texts.push(t);
+                layer.dirty.mark_texts();
+            }
+            UiElement::Circle(c) => {
+                layer.circles.push(c);
+                layer.dirty.mark_circles();
+            }
+            UiElement::Outline(o) => {
+                layer.outlines.push(o);
+                layer.dirty.mark_outlines();
+            }
+            UiElement::Handle(h) => {
+                layer.handles.push(h);
+                layer.dirty.mark_handles();
+            }
+            UiElement::Polygon(p) => {
+                layer.polygons.push(p);
+                layer.dirty.mark_polygons();
+            }
         }
-
-        // 5. Mark layer dirty
-        layer.dirty = true;
 
         Ok(())
     }
@@ -929,7 +951,7 @@ impl UiButtonLoader {
                     .find(|l| l.name == "editor_selection")
                 {
                     editor_layer.active = true;
-                    editor_layer.dirty = true;
+                    editor_layer.dirty.mark_all();
                     editor_layer.circles.clear();
                     editor_layer.outlines.clear();
                     editor_layer.handles.clear();

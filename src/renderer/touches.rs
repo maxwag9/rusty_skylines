@@ -88,23 +88,22 @@ pub(crate) fn press_began_on_ui(
 }
 
 pub(crate) fn near_handle(menus: &HashMap<String, Menu>, mouse: &MouseSnapshot) -> bool {
-    for (_, menu) in menus.iter().filter(|(_, menu)| menu.active) {
-        for layer in menu.layers.iter().filter(|l| l.active) {
-            for h in &layer.handles {
+    menus
+        .iter()
+        .filter(|(_, menu)| menu.active)
+        .flat_map(|(_, menu)| menu.layers.iter().filter(|l| l.active))
+        .any(|layer| {
+            layer.handles.iter().any(|h| {
                 if !h.misc.active {
-                    continue;
+                    return false;
                 }
                 let dx = mouse.mx - h.x;
                 let dy = mouse.my - h.y;
                 let dist = (dx * dx + dy * dy).sqrt();
                 let margin = (h.radius * 0.2).max(12.0);
-                if (dist - h.radius).abs() < margin {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+                (dist - h.radius).abs() < margin
+            })
+        })
 }
 
 pub(crate) fn find_top_hit(
@@ -503,21 +502,21 @@ pub(crate) fn apply_pending_circle_updates(
                 for circle in &mut layer.circles {
                     if circle.id.as_ref() == Some(&parent_id) {
                         circle.radius = new_radius;
-                        layer.dirty = true;
+                        layer.dirty.mark_circles();
                     }
                 }
 
                 for handle in &mut layer.handles {
                     if handle.parent_id.as_ref() == Some(&parent_id) {
                         handle.radius = new_radius;
-                        layer.dirty = true;
+                        layer.dirty.mark_handles();
                     }
                 }
 
                 for outline in &mut layer.outlines {
                     if outline.parent_id.as_ref() == Some(&parent_id) {
                         outline.shape_data.radius = new_radius;
-                        layer.dirty = true;
+                        layer.dirty.mark_outlines();
                     }
                 }
             }
@@ -531,7 +530,7 @@ pub(crate) fn mark_editor_layers_dirty(menu: Option<&mut Menu>) {
     if let Some(menu) = menu {
         for layer in &mut menu.layers {
             if TARGETS.contains(&layer.name.as_str()) {
-                layer.dirty = true;
+                layer.dirty.mark_all();
             }
         }
     }
@@ -556,7 +555,7 @@ pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> 
                 if let Some(id) = &circle.id {
                     if *id == selected.element_id {
                         circle.radius = (circle.radius + scroll * 3.0).max(2.0);
-                        layer.dirty = true;
+                        layer.dirty.mark_circles();
                         selection_changed = true;
                     }
                 }
@@ -786,7 +785,7 @@ fn process_circles(
                             {
                                 circle.x = new_x;
                                 circle.y = new_y;
-                                layer.dirty = true;
+                                layer.dirty.mark_circles();
                                 result.moved_any_selected_object = true;
                             }
                         }
@@ -1004,7 +1003,8 @@ fn process_polygons(
 
                             if let Some(v) = verts.iter_mut().find(|v| v.id == active_id) {
                                 v.pos = [new_x, new_y];
-                                layer.dirty = true;
+                                layer.dirty.mark_polygons();
+                                layer.dirty.mark_outlines();
                                 result.moved_any_selected_object = true;
                             }
                         } else if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
@@ -1028,7 +1028,8 @@ fn process_polygons(
                                     v.pos[0] += dx;
                                     v.pos[1] += dy;
                                 }
-                                layer.dirty = true;
+                                layer.dirty.mark_polygons();
+                                layer.dirty.mark_outlines();
                                 result.moved_any_selected_object = true;
                             }
                         }
@@ -1088,7 +1089,7 @@ fn process_text(
 
                 // if this text is being edited, make sure the layer is redrawn
                 if text.being_edited {
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                 }
 
                 // enter edit mode: second click on already selected text
@@ -1099,7 +1100,7 @@ fn process_text(
                         .variables
                         .set("selected_text.being_edited", text.being_edited.to_string());
                     text.text = text.template.clone();
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                     continue;
                 }
 
@@ -1111,7 +1112,7 @@ fn process_text(
                 {
                     if is_selected {
                         text.template = text.text.clone();
-                        layer.dirty = true;
+                        layer.dirty.mark_texts();
                     }
 
                     loader.ui_runtime.editing_text = false;
@@ -1171,7 +1172,7 @@ fn process_text(
                             if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
                                 text.x = new_x;
                                 text.y = new_y;
-                                layer.dirty = true;
+                                layer.dirty.mark_texts();
                                 result.moved_any_selected_object = true;
                             }
                         }
@@ -1305,7 +1306,7 @@ pub fn handle_text_editing(
                         }
 
                         text.text = text.template.clone();
-                        layer.dirty = true;
+                        layer.dirty.mark_texts();
                         return;
                     }
 
@@ -1330,7 +1331,7 @@ pub fn handle_text_editing(
                         text.clear_selection();
 
                         text.text = text.template.clone();
-                        layer.dirty = true;
+                        layer.dirty.mark_texts();
                         return;
                     }
 
@@ -1348,7 +1349,7 @@ pub fn handle_text_editing(
                         text.clear_selection();
 
                         text.text = text.template.clone();
-                        layer.dirty = true;
+                        layer.dirty.mark_texts();
                         return;
                     }
 
@@ -1357,7 +1358,7 @@ pub fn handle_text_editing(
                         text.caret -= 1;
 
                         text.text = text.template.clone();
-                        layer.dirty = true;
+                        layer.dirty.mark_texts();
                     }
 
                     return;
@@ -1385,7 +1386,7 @@ pub fn handle_text_editing(
                     }
 
                     text.text = text.template.clone();
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                     return;
                 }
 
@@ -1405,7 +1406,7 @@ pub fn handle_text_editing(
                     }
 
                     text.clear_selection();
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                     return;
                 }
 
@@ -1413,16 +1414,14 @@ pub fn handle_text_editing(
                 if input.action_repeat("Move Cursor Left", now) && text.caret > 0 {
                     println!("Left caret: {}", text.caret);
                     text.caret -= 1;
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                 }
 
                 if input.action_repeat("Move Cursor Right", now) && text.caret < text.template.len()
                 {
                     text.caret += 1;
-                    layer.dirty = true;
+                    layer.dirty.mark_texts();
                 }
-
-                return;
 
                 return;
             }

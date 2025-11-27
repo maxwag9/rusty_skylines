@@ -4,8 +4,10 @@ use std::borrow::Cow;
 use std::fs;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
-use util::DeviceExt;
-use wgpu::*;
+use wgpu::{
+    util::{BufferInitDescriptor, DeviceExt},
+    *,
+};
 
 pub struct Pipelines {
     pub device: Device,
@@ -39,7 +41,7 @@ impl Pipelines {
 
         let uniforms = Uniforms::new();
 
-        let uniform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+        let uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Uniform Buffer"),
             contents: bytemuck::bytes_of(&uniforms),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,

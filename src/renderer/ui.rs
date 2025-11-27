@@ -162,10 +162,10 @@ pub struct TextParams {
 
 pub struct DrawCmd<'a> {
     pub z: i32,
-    pub pipeline: &'a wgpu::RenderPipeline,
-    pub bind_group0: &'a wgpu::BindGroup,
-    pub bind_group1: Option<wgpu::BindGroup>,
-    pub vertex_buffer: Option<&'a wgpu::Buffer>,
+    pub pipeline: &'a RenderPipeline,
+    pub bind_group0: &'a BindGroup,
+    pub bind_group1: Option<BindGroup>,
+    pub vertex_buffer: Option<&'a Buffer>,
     pub vertex_range: Range<u32>,
     pub instance_range: Range<u32>,
 }
@@ -199,9 +199,9 @@ impl UiRenderer {
 
     pub fn render<'a>(
         &mut self,
-        pass: &mut wgpu::RenderPass<'a>,
+        pass: &mut RenderPass<'a>,
         ui: &mut UiButtonLoader,
-        queue: &wgpu::Queue,
+        queue: &Queue,
         time: &TimeSystem,
         size: (f32, f32),
         mouse: &MouseState,
@@ -227,7 +227,7 @@ impl UiRenderer {
                 .layers
                 .iter()
                 .enumerate()
-                .filter(|(_, l)| l.active && l.dirty)
+                .filter(|(_, l)| l.active && l.dirty.any())
                 .map(|(i, _)| i)
                 .collect();
 
@@ -240,23 +240,17 @@ impl UiRenderer {
             for layer in menu.layers.iter().filter(|l| l.active) {
                 let mut cmds: Vec<DrawCmd> = Vec::new();
                 if layer.gpu.circle_count > 0 {
-                    let circle_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    let circle_bg = self.device.create_bind_group(&BindGroupDescriptor {
                         label: None,
                         layout: &self.pipelines.circle_layout,
-                        entries: &[wgpu::BindGroupEntry {
+                        entries: &[BindGroupEntry {
                             binding: 0,
                             resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
                         }],
                     });
 
-                    let mut zlist: Vec<(i32, u32)> = Vec::new();
-                    for (i, c) in layer.circles.iter().enumerate() {
-                        zlist.push((c.z_index, i as u32));
-                    }
-                    zlist.sort_by_key(|v| v.0);
-
-                    for (_, idx) in zlist.iter() {
-                        let z = layer.circles[*idx as usize].z_index;
+                    for idx in self.sorted_indices_by_z(&layer.circles, |c| c.z_index) {
+                        let z = layer.circles[idx].z_index;
 
                         cmds.push(DrawCmd {
                             z,
@@ -265,7 +259,7 @@ impl UiRenderer {
                             bind_group1: Some(circle_bg.clone()),
                             vertex_buffer: Some(&self.pipelines.quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: *idx..*idx + 1,
+                            instance_range: idx as u32..idx as u32 + 1,
                         });
 
                         cmds.push(DrawCmd {
@@ -275,36 +269,30 @@ impl UiRenderer {
                             bind_group1: Some(circle_bg.clone()),
                             vertex_buffer: Some(&self.pipelines.quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: *idx..*idx + 1,
+                            instance_range: idx as u32..idx as u32 + 1,
                         });
                     }
                 }
 
                 if layer.gpu.handle_count > 0 {
-                    let handle_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    let handle_bg = self.device.create_bind_group(&BindGroupDescriptor {
                         label: None,
                         layout: &self.pipelines.handle_layout,
-                        entries: &[wgpu::BindGroupEntry {
+                        entries: &[BindGroupEntry {
                             binding: 0,
                             resource: layer.gpu.handle_ssbo.as_ref().unwrap().as_entire_binding(),
                         }],
                     });
 
-                    let mut zlist: Vec<(i32, u32)> = Vec::new();
-                    for (i, h) in layer.handles.iter().enumerate() {
-                        zlist.push((h.z_index, i as u32));
-                    }
-                    zlist.sort_by_key(|v| v.0);
-
-                    for (_, idx) in zlist.iter() {
+                    for idx in self.sorted_indices_by_z(&layer.handles, |h| h.z_index) {
                         cmds.push(DrawCmd {
-                            z: layer.handles[*idx as usize].z_index,
+                            z: layer.handles[idx].z_index,
                             pipeline: &self.pipelines.handle_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(handle_bg.clone()),
                             vertex_buffer: Some(&self.pipelines.handle_quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: *idx..*idx + 1,
+                            instance_range: idx as u32..idx as u32 + 1,
                         });
                     }
                 }
@@ -331,11 +319,11 @@ impl UiRenderer {
                 }
 
                 if layer.gpu.outline_count > 0 {
-                    let outline_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    let outline_bg = self.device.create_bind_group(&BindGroupDescriptor {
                         label: None,
                         layout: &self.pipelines.outline_layout,
                         entries: &[
-                            wgpu::BindGroupEntry {
+                            BindGroupEntry {
                                 binding: 0,
                                 resource: layer
                                     .gpu
@@ -344,7 +332,7 @@ impl UiRenderer {
                                     .unwrap()
                                     .as_entire_binding(),
                             },
-                            wgpu::BindGroupEntry {
+                            BindGroupEntry {
                                 binding: 1,
                                 resource: layer
                                     .gpu
@@ -406,9 +394,46 @@ impl UiRenderer {
         }
     }
 
+    fn write_storage_buffer(
+        &self,
+        queue: &Queue,
+        target: &mut Option<Buffer>,
+        label: &str,
+        usage: BufferUsages,
+        bytes: &[u8],
+    ) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        let needs_new = target
+            .as_ref()
+            .map(|b| b.size() < bytes.len() as u64)
+            .unwrap_or(true);
+
+        if needs_new {
+            *target = Some(self.device.create_buffer(&BufferDescriptor {
+                label: Some(label),
+                size: bytes.len() as u64,
+                usage: usage | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+
+        if let Some(buf) = target {
+            queue.write_buffer(buf, 0, bytes);
+        }
+    }
+
+    fn sorted_indices_by_z<T>(&self, items: &[T], z: impl Fn(&T) -> i32) -> Vec<usize> {
+        let mut indices: Vec<usize> = (0..items.len()).collect();
+        indices.sort_by_key(|&i| z(&items[i]));
+        indices
+    }
+
     fn upload_layer(
         &self,
-        queue: &wgpu::Queue,
+        queue: &Queue,
         layer: &mut RuntimeLayer,
         time_system: &TimeSystem,
         ui_runtime: &UiRuntime,
@@ -416,49 +441,26 @@ impl UiRenderer {
     ) {
         // ---- circles (SSBO) ----
         let circle_len = layer.cache.circle_params.len() as u32;
-        if circle_len > 0 {
-            let bytes = bytemuck::cast_slice(&layer.cache.circle_params);
-            let need_new = layer
-                .gpu
-                .circle_ssbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-            if need_new {
-                layer.gpu.circle_ssbo = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("{}_circle_ssbo", layer.name)),
-                    size: bytes.len() as u64,
-                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            queue.write_buffer(layer.gpu.circle_ssbo.as_ref().unwrap(), 0, bytes);
-        }
+        let circle_bytes = bytemuck::cast_slice(&layer.cache.circle_params);
+        self.write_storage_buffer(
+            queue,
+            &mut layer.gpu.circle_ssbo,
+            &format!("{}_circle_ssbo", layer.name),
+            BufferUsages::STORAGE,
+            circle_bytes,
+        );
         layer.gpu.circle_count = circle_len;
 
         // ---- 1. ShapeParams SSBO ----
         let outline_len = layer.cache.outline_params.len() as u32;
-        if outline_len > 0 {
-            let bytes = bytemuck::cast_slice(&layer.cache.outline_params);
-            let need_new = layer
-                .gpu
-                .outline_shapes_ssbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-
-            if need_new {
-                layer.gpu.outline_shapes_ssbo =
-                    Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some(&format!("{}_outline_shapes_ssbo", layer.name)),
-                        size: bytes.len() as u64,
-                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }));
-            }
-
-            queue.write_buffer(layer.gpu.outline_shapes_ssbo.as_ref().unwrap(), 0, bytes);
-        }
+        let outline_bytes = bytemuck::cast_slice(&layer.cache.outline_params);
+        self.write_storage_buffer(
+            queue,
+            &mut layer.gpu.outline_shapes_ssbo,
+            &format!("{}_outline_shapes_ssbo", layer.name),
+            BufferUsages::STORAGE,
+            outline_bytes,
+        );
         layer.gpu.outline_count = outline_len;
 
         // ---- 2. Polygon vertex buffer (vec2<f32>) ----
@@ -468,34 +470,18 @@ impl UiRenderer {
         if poly_vcount > 0 {
             // upload real polygon vertices
             let bytes = bytemuck::cast_slice(poly_verts);
-
-            let need_new = layer
-                .gpu
-                .outline_poly_vertices_ssbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-
-            if need_new {
-                layer.gpu.outline_poly_vertices_ssbo =
-                    Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some(&format!("{}_outline_poly_ssbo", layer.name)),
-                        size: bytes.len() as u64,
-                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }));
-            }
-
-            queue.write_buffer(
-                layer.gpu.outline_poly_vertices_ssbo.as_ref().unwrap(),
-                0,
+            self.write_storage_buffer(
+                queue,
+                &mut layer.gpu.outline_poly_vertices_ssbo,
+                &format!("{}_outline_poly_ssbo", layer.name),
+                BufferUsages::STORAGE,
                 bytes,
             );
         } else {
             // No polygon outlines → still must provide SOME buffer to satisfy wgpu layout
             if layer.gpu.outline_poly_vertices_ssbo.is_none() {
                 layer.gpu.outline_poly_vertices_ssbo =
-                    Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    Some(self.device.create_buffer(&BufferDescriptor {
                         label: Some(&format!("{}_outline_poly_dummy", layer.name)),
                         size: 16, // one vec2<f32> worth of space
                         usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
@@ -505,24 +491,14 @@ impl UiRenderer {
         }
 
         let handle_len = layer.cache.handle_params.len() as u32;
-        if handle_len > 0 {
-            let bytes = bytemuck::cast_slice(&layer.cache.handle_params);
-            let need_new = layer
-                .gpu
-                .handle_ssbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-            if need_new {
-                layer.gpu.handle_ssbo = Some(self.device.create_buffer(&BufferDescriptor {
-                    label: Some(&format!("{}_handle_ssbo", layer.name)),
-                    size: bytes.len() as u64,
-                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            queue.write_buffer(layer.gpu.handle_ssbo.as_ref().unwrap(), 0, bytes);
-        }
+        let handle_bytes = bytemuck::cast_slice(&layer.cache.handle_params);
+        self.write_storage_buffer(
+            queue,
+            &mut layer.gpu.handle_ssbo,
+            &format!("{}_handle_ssbo", layer.name),
+            BufferUsages::STORAGE,
+            handle_bytes,
+        );
         layer.gpu.handle_count = handle_len;
 
         // ---- polygons (VBO) : polys concatenated ----
@@ -540,7 +516,7 @@ impl UiRenderer {
                 .map(|b| b.size() < bytes.len() as u64)
                 .unwrap_or(true);
             if need_new {
-                layer.gpu.poly_vbo = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                layer.gpu.poly_vbo = Some(self.device.create_buffer(&BufferDescriptor {
                     label: Some(&format!("{}_poly_vbo", layer.name)),
                     size: bytes.len() as u64,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -976,7 +952,7 @@ impl UiRenderer {
                 .map(|b| b.size() < text_bytes.len() as u64)
                 .unwrap_or(true);
             if need_new {
-                layer.gpu.text_vbo = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                layer.gpu.text_vbo = Some(self.device.create_buffer(&BufferDescriptor {
                     label: Some(&format!("{}_text_vbo", layer.name)),
                     size: text_bytes.len() as u64,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -985,13 +961,13 @@ impl UiRenderer {
             }
             queue.write_buffer(layer.gpu.text_vbo.as_ref().unwrap(), 0, text_bytes);
         }
-        layer.gpu.text_count = (text_vertices.len() as u32);
+        layer.gpu.text_count = text_vertices.len() as u32;
     }
 
     pub fn build_text_atlas(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &Device,
+        queue: &Queue,
         ttf_bytes: &[u8],
         px_sizes: &[u16], // e.g. &[18, 24]
         atlas_w: u32,
@@ -1084,7 +1060,7 @@ impl UiRenderer {
         }
 
         // 4) Create GPU texture and upload
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
+        let tex = device.create_texture(&TextureDescriptor {
             label: Some("Text Atlas"),
             size: Extent3d {
                 width: atlas_w,
@@ -1093,22 +1069,22 @@ impl UiRenderer {
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
 
         // For your wgpu build, bytes_per_row expects a plain u32
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
+            TexelCopyTextureInfo {
                 texture: &tex,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &cpu_atlas,
-            wgpu::TexelCopyBufferLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(atlas_w), // R8 => 1 byte/px * atlas_w
                 rows_per_image: Some(atlas_h),
@@ -1120,26 +1096,26 @@ impl UiRenderer {
             },
         );
 
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&SamplerDescriptor {
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Nearest,
             ..Default::default()
         });
 
         // 5) Bind group for the text pipeline
-        let text_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let text_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Text Atlas Bind Group"),
             layout: &self.pipelines.text_layout,
             entries: &[
-                wgpu::BindGroupEntry {
+                BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
+                    resource: BindingResource::TextureView(&view),
                 },
-                wgpu::BindGroupEntry {
+                BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: BindingResource::Sampler(&sampler),
                 },
             ],
         });
