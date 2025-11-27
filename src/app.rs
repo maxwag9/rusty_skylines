@@ -184,7 +184,7 @@ impl ApplicationHandler for App {
                         let result = resources.ui_loader.add_element(
                             "base_gui",
                             Polygon(UiButtonPolygon::default()),
-                            &resources.mouse,
+                            &resources.input.mouse,
                         );
 
                         match result {
@@ -197,7 +197,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let mouse = &mut resources.mouse;
+                    let mouse = &mut resources.input.mouse;
                     match button {
                         winit::event::MouseButton::Left => {
                             let pressed = state == ElementState::Pressed;
@@ -229,11 +229,11 @@ impl ApplicationHandler for App {
             WindowEvent::CursorMoved { position, .. } => {
                 let delta = if let Some(resources) = self.resources.as_mut() {
                     let pos = glam::Vec2::new(position.x as f32, position.y as f32);
-                    resources.mouse.pos = pos;
+                    resources.input.mouse.pos = pos;
 
-                    if resources.mouse.middle_pressed {
-                        let delta = resources.mouse.last_pos.map(|last| pos - last);
-                        resources.mouse.last_pos = Some(pos);
+                    if resources.input.mouse.middle_pressed {
+                        let delta = resources.input.mouse.last_pos.map(|last| pos - last);
+                        resources.input.mouse.last_pos = Some(pos);
                         delta
                     } else {
                         None
@@ -260,7 +260,7 @@ impl ApplicationHandler for App {
                 let mut editor_mode = false;
                 if let Some(resources) = self.resources.as_mut() {
                     editor_mode = resources.settings.editor_mode;
-                    let mouse = &mut resources.mouse;
+                    let mouse = &mut resources.input.mouse;
                     match delta {
                         MouseScrollDelta::LineDelta(x, y) => {
                             mouse.scroll_delta.x += x;
@@ -340,7 +340,7 @@ impl ApplicationHandler for App {
                 }
 
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.mouse.update_just_states();
+                    resources.input.mouse.update_just_states();
                 }
             }
 

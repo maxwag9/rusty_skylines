@@ -89,7 +89,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     camera.yaw += (controller.target_yaw - camera.yaw) * t;
     camera.pitch += (controller.target_pitch - camera.pitch) * t;
 
-    if !resources.mouse.middle_pressed {
+    if !resources.input.action_down("Orbit") {
         controller.target_yaw += controller.yaw_velocity;
         controller.target_pitch += controller.pitch_velocity;
         controller.yaw_velocity *= (1.0 - controller.orbit_damping_release * dt).max(0.0);

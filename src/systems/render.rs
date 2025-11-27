@@ -8,7 +8,7 @@ pub fn render_system(world: &mut World, resources: &mut Resources) {
             camera,
             &mut resources.ui_loader,
             &resources.time,
-            &resources.mouse,
+            &resources.input.mouse,
             &resources.settings,
         );
     }

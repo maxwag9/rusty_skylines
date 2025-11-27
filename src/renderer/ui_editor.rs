@@ -1,10 +1,10 @@
 use crate::paths::renderer_path;
-use crate::renderer::helper::triangulate_polygon;
+use crate::renderer::helper::{calc_move_speed, triangulate_polygon};
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
-    handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing,
-    mark_editor_layers_dirty, near_handle, press_began_on_ui,
+    handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing, near_handle,
+    press_began_on_ui,
 };
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::resources::{InputState, MouseState, TimeSystem};
@@ -280,6 +280,26 @@ impl Menu {
         }
 
         l.dirty.clear(rebuilt);
+    }
+
+    pub fn sort_layers(&mut self) {
+        self.layers.sort_by_key(|l| l.order);
+    }
+
+    pub fn bump_layer_order(
+        &mut self,
+        layer_name: &str,
+        delta: i32,
+        variables: &mut UiVariableRegistry,
+    ) {
+        for layer in &mut self.layers {
+            if layer.name == layer_name {
+                let new = layer.order as i32 + delta;
+                layer.order = new.max(0) as u32;
+                variables.set("selected_layer.order", layer.order.to_string());
+                return;
+            }
+        }
     }
 }
 
@@ -639,6 +659,18 @@ impl UiButtonLoader {
         layer.dirty.mark_texts();
     }
 
+    pub(crate) fn mark_editor_layers_dirty(&mut self) {
+        const TARGETS: [&str; 3] = ["editor_selection", "editor_handles", "shader_console"];
+
+        let menu = self.menus.get_mut("Debug_Menu");
+        if let Some(menu) = menu {
+            for layer in &mut menu.layers {
+                if TARGETS.contains(&layer.name.as_str()) {
+                    layer.dirty.mark_all();
+                }
+            }
+        }
+    }
     pub fn log_console(&mut self, message: impl Into<String>) {
         self.console_lines.push_back(message.into());
 
@@ -678,14 +710,13 @@ impl UiButtonLoader {
 
     pub fn handle_touches(
         &mut self,
-        mouse: &MouseState,
         dt: f32,
         input_state: &mut InputState,
         time_system: &TimeSystem,
     ) {
         self.ui_runtime.selected_ui_element.just_deselected = false;
         let mut trigger_selection = false;
-        let mouse_snapshot = MouseSnapshot::from_mouse(mouse);
+        let mouse_snapshot = MouseSnapshot::from_mouse(&input_state.mouse);
         let editor_mode = self.ui_runtime.editor_mode;
 
         let press_started_on_ui = if mouse_snapshot.just_pressed {
@@ -724,13 +755,12 @@ impl UiButtonLoader {
                 &mut self.menus,
                 input_state,
                 mouse_snapshot,
-                time_system,
             );
 
             apply_pending_circle_updates(self, dt, pending_circle_updates);
 
             if moved_any_selected_object {
-                mark_editor_layers_dirty(self.menus.get_mut("Editor_Menu"));
+                self.mark_editor_layers_dirty();
                 selection = true;
             }
 
@@ -747,66 +777,8 @@ impl UiButtonLoader {
         if trigger_selection {
             self.update_selection();
         }
-        // ----------------------------------------------------------
-        // MOVE ELEMENT UP/DOWN & MOVE LAYER UP/DOWN
-        // ----------------------------------------------------------
-        if self.ui_runtime.selected_ui_element.active {
-            let menu_name = self.ui_runtime.selected_ui_element.menu_name.clone();
-            let layer_name = self.ui_runtime.selected_ui_element.layer_name.clone();
-            let element_id = self.ui_runtime.selected_ui_element.element_id.clone();
 
-            if let Some(menu) = self.menus.get_mut(&menu_name) {
-                if let Some(layer_index) = menu.layers.iter().position(|l| l.name == layer_name) {
-                    let layer = &mut menu.layers[layer_index];
-
-                    // ------------------------------------------------------
-                    // ELEMENT MOVEMENT
-                    // ------------------------------------------------------
-                    if let Some(kind) = layer.find_element(&element_id) {
-                        let idx = kind.index();
-
-                        let len = match kind {
-                            ElementRefMut::Text(_) => layer.texts.len(),
-                            ElementRefMut::Polygon(_) => layer.polygons.len(),
-                            ElementRefMut::Circle(_) => layer.circles.len(),
-                            ElementRefMut::Outline(_) => layer.outlines.len(),
-                            ElementRefMut::Handle(_) => layer.handles.len(),
-                        };
-
-                        if input_state.action_pressed_once("Move Element Up") && idx > 0 {
-                            layer.swap_elements(&kind, idx, idx - 1);
-                            println!(
-                                "Moved element '{}' up in layer '{}'",
-                                element_id, layer_name
-                            );
-                        }
-
-                        if input_state.action_pressed_once("Move Element Down") && idx + 1 < len {
-                            layer.swap_elements(&kind, idx, idx + 1);
-                            println!(
-                                "Moved element '{}' down in layer '{}'",
-                                element_id, layer_name
-                            );
-                        }
-                    }
-
-                    // ------------------------------------------------------
-                    // LAYER MOVEMENT
-                    // ------------------------------------------------------
-                    if input_state.action_pressed_once("Move Layer Up") && layer_index > 0 {
-                        menu.layers.swap(layer_index, layer_index - 1);
-                        println!("Moved layer '{}' up", layer_name);
-                    }
-
-                    if input_state.action_pressed_once("Move Layer Down")
-                        && layer_index + 1 < menu.layers.len()
-                    {
-                        menu.layers.swap(layer_index, layer_index + 1);
-                        println!("Moved layer '{}' down", layer_name);
-                    }
-                }
-            }
-        }
+        self.apply_ui_edit_movement(input_state);
 
         if input_state.action_pressed_once("Delete selected GUI Element")
             && self.ui_runtime.selected_ui_element.active
@@ -927,6 +899,7 @@ impl UiButtonLoader {
                     editor_layer.outlines.clear();
                     editor_layer.handles.clear();
                     editor_layer.polygons.clear();
+                    editor_layer.dirty.mark_all()
                 }
             }
             return;
@@ -1201,5 +1174,129 @@ impl UiButtonLoader {
             }
         }
         None
+    }
+    pub fn apply_ui_edit_movement(&mut self, input_state: &mut InputState) {
+        let sel = &self.ui_runtime.selected_ui_element;
+        if !sel.active {
+            return;
+        }
+
+        let mut changed = false;
+
+        // ============================================================
+        // BLOCK 1: Element XY movement, resizing, z-index movement
+        // ============================================================
+        {
+            let menu = match self.menus.get_mut(&sel.menu_name) {
+                Some(m) => m,
+                None => return,
+            };
+
+            let layer = match menu.layers.iter_mut().find(|l| l.name == sel.layer_name) {
+                Some(l) => l,
+                None => return,
+            };
+
+            // Movement (WASD)
+            let speed = calc_move_speed(input_state);
+            let mut dx = 0.0;
+            let mut dy = 0.0;
+
+            if input_state.action_repeat("Move Element Left") {
+                dx -= speed;
+            }
+            if input_state.action_repeat("Move Element Right") {
+                dx += speed;
+            }
+            if input_state.action_repeat("Move Element Up") {
+                dy -= speed;
+            }
+            if input_state.action_repeat("Move Element Down") {
+                dy += speed;
+            }
+
+            if dx != 0.0 || dy != 0.0 {
+                layer.bump_element_xy(&sel.element_id, dx, dy);
+                layer.dirty.mark_all();
+                changed = true;
+            }
+
+            // -----------------------------
+            // Resizing (+, -, scroll)
+            // -----------------------------
+            let mut scale = 1.0;
+
+            if input_state.action_repeat("Resize Element Bigger") {
+                scale = 1.05;
+            }
+            if input_state.action_repeat("Resize Element Smaller") {
+                scale = 0.95;
+            }
+            if input_state.action_repeat("Resize Element Bigger Scroll") {
+                scale = 1.05;
+            }
+            if input_state.action_repeat("Resize Element Smaller Scroll") {
+                scale = 0.95;
+            }
+
+            if scale != 1.0 {
+                layer.resize_element(&sel.element_id, scale);
+                layer.dirty.mark_all();
+                changed = true;
+            }
+
+            // -----------------------------
+            // Element Z movement
+            // -----------------------------
+            if !input_state.shift {
+                if input_state.action_repeat("Move Element Z Up") {
+                    layer.bump_element_z(&sel.element_id, 1, &mut self.variables);
+                    layer.sort_by_z();
+                    layer.dirty.mark_all();
+                    changed = true;
+                }
+
+                if input_state.action_repeat("Move Element Z Down") {
+                    layer.bump_element_z(&sel.element_id, -1, &mut self.variables);
+                    layer.sort_by_z();
+                    layer.dirty.mark_all();
+                    changed = true;
+                }
+            }
+        }
+        // ====== end block 1 (layer + menu borrow released) ======
+
+        // ============================================================
+        // BLOCK 2: LAYER ORDERING
+        // ============================================================
+        {
+            let menu = match self.menus.get_mut(&sel.menu_name) {
+                Some(m) => m,
+                None => return,
+            };
+
+            if !input_state.shift {
+                if input_state.action_repeat("Move Layer Up") {
+                    menu.bump_layer_order(&sel.layer_name, 1, &mut self.variables);
+                    menu.sort_layers();
+                    changed = true;
+                }
+
+                if input_state.action_repeat("Move Layer Down") {
+                    menu.bump_layer_order(&sel.layer_name, -1, &mut self.variables);
+                    menu.sort_layers();
+                    changed = true;
+                }
+            }
+        }
+        // ====== end block 2 ======
+
+        // ============================================================
+        // FINAL: only dirty if something changed
+        // ============================================================
+        if changed {
+            self.update_selection();
+            self.mark_editor_layers_dirty();
+        }
     }
 }

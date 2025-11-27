@@ -226,20 +226,24 @@ pub(crate) fn handle_editor_mode_interactions(
     process_polygons(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
     process_text(loader, time_system, mouse, top_hit_ref, &mut result);
 
-    process_keyboard_ui_navigation(loader, input_state, time_system.total_time);
+    process_keyboard_ui_navigation(loader, input_state);
 
     result
 }
 
-fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut InputState, now: f32) {
+fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut InputState) {
     // Determine which arrow is held
-    let dir = if input.action_repeat("Navigate UI Left", now) {
+    if input.ctrl {
+        return;
+    }
+
+    let dir = if input.action_repeat("Navigate UI Left") {
         Some(Direction::Left)
-    } else if input.action_repeat("Navigate UI Right", now) {
+    } else if input.action_repeat("Navigate UI Right") {
         Some(Direction::Right)
-    } else if input.action_repeat("Navigate UI Up", now) {
+    } else if input.action_repeat("Navigate UI Up") {
         Some(Direction::Up)
-    } else if input.action_repeat("Navigate UI Down", now) {
+    } else if input.action_repeat("Navigate UI Down") {
         Some(Direction::Down)
     } else {
         None
@@ -519,18 +523,6 @@ pub(crate) fn apply_pending_circle_updates(
                         layer.dirty.mark_outlines();
                     }
                 }
-            }
-        }
-    }
-}
-
-pub(crate) fn mark_editor_layers_dirty(menu: Option<&mut Menu>) {
-    const TARGETS: [&str; 3] = ["editor_selection", "editor_handles", "shader_console"];
-
-    if let Some(menu) = menu {
-        for layer in &mut menu.layers {
-            if TARGETS.contains(&layer.name.as_str()) {
-                layer.dirty.mark_all();
             }
         }
     }
@@ -1226,7 +1218,6 @@ pub fn handle_text_editing(
     menus: &mut HashMap<String, Menu>,
     input: &mut InputState,
     mouse_snapshot: MouseSnapshot,
-    time: &TimeSystem,
 ) {
     if !ui_runtime.editing_text {
         return;
@@ -1236,8 +1227,6 @@ pub fn handle_text_editing(
     if !sel.active {
         return;
     }
-
-    let now = time.total_time;
 
     for (_, menu) in menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in &mut menu.layers {
@@ -1292,7 +1281,7 @@ pub fn handle_text_editing(
                     // -------------------------------
                     // PASTE (repeating if held)
                     // -------------------------------
-                    if input.action_repeat("Paste text", now) {
+                    if input.action_repeat("Paste text") {
                         if text.has_selection {
                             let (l, r) = text.selection_range();
                             text.template.replace_range(l..r, &ui_runtime.clipboard);
@@ -1341,7 +1330,7 @@ pub fn handle_text_editing(
                 // ============================================================
                 // BACKSPACE (using new repeat)
                 // ============================================================
-                if input.action_repeat("Backspace", now) {
+                if input.action_repeat("Backspace") {
                     if text.has_selection {
                         let (l, r) = text.selection_range();
                         text.template.replace_range(l..r, "");
@@ -1367,7 +1356,7 @@ pub fn handle_text_editing(
                 // ============================================================
                 // CHARACTER INPUT (repeat for held printable chars)
                 // ============================================================
-                if input.repeat("char_repeat", now, !input.text_chars.is_empty()) {
+                if input.repeat("char_repeat", !input.text_chars.is_empty()) {
                     if text.has_selection {
                         let (l, r) = text.selection_range();
                         let bl = caret_to_byte(&text.template, l);
@@ -1411,14 +1400,13 @@ pub fn handle_text_editing(
                 }
 
                 // move caret
-                if input.action_repeat("Move Cursor Left", now) && text.caret > 0 {
+                if input.action_repeat("Move Cursor Left") && text.caret > 0 {
                     println!("Left caret: {}", text.caret);
                     text.caret -= 1;
                     layer.dirty.mark_texts();
                 }
 
-                if input.action_repeat("Move Cursor Right", now) && text.caret < text.template.len()
-                {
+                if input.action_repeat("Move Cursor Right") && text.caret < text.template.len() {
                     text.caret += 1;
                     layer.dirty.mark_texts();
                 }

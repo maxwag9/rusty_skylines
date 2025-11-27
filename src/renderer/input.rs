@@ -1,6 +1,9 @@
+use crate::resources::MouseState;
+use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use winit::event::MouseButton;
 use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 
 #[derive(Debug, Clone)]
@@ -66,6 +69,12 @@ impl RepeatTimer {
 enum BindingKey {
     Physical(PhysicalKey),
     Logical(NamedKey),
+    Mouse(MouseButton),
+    Character(String),
+    WheelUp,
+    WheelDown,
+    WheelLeft,
+    WheelRight,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +100,12 @@ impl ParsedKeyCombo {
         match &self.key {
             BindingKey::Physical(p) => input.physical.get(p).copied().unwrap_or(false),
             BindingKey::Logical(n) => input.logical.get(n).copied().unwrap_or(false),
+            BindingKey::Mouse(m) => input.mouse.is_button_down(*m),
+            BindingKey::Character(ch) => input.text_chars.contains(ch),
+            BindingKey::WheelUp => input.scroll_up_hit,
+            BindingKey::WheelDown => input.scroll_down_hit,
+            BindingKey::WheelLeft => input.scroll_left_hit,
+            BindingKey::WheelRight => input.scroll_right_hit,
         }
     }
 }
@@ -166,11 +181,18 @@ pub struct InputState {
     pub alt: bool,
 
     pub keybinds: Keybinds,
+    pub mouse: MouseState,
+    scroll_up_hit: bool,
+    scroll_down_hit: bool,
+    scroll_left_hit: bool,
+    scroll_right_hit: bool,
 
     parsed: HashMap<String, Vec<ParsedKeyCombo>>,
     warned_missing: HashSet<String>,
     repeat_timers: HashMap<String, RepeatTimer>,
     action_last_down: HashMap<String, bool>,
+
+    pub now: f32,
 }
 
 impl InputState {
@@ -186,10 +208,100 @@ impl InputState {
             ctrl: false,
             alt: false,
             keybinds,
+            mouse: MouseState::new(),
+            scroll_up_hit: false,
+            scroll_down_hit: false,
+            scroll_left_hit: false,
+            scroll_right_hit: false,
+
             parsed,
             warned_missing: HashSet::new(),
             repeat_timers: HashMap::new(),
             action_last_down: HashMap::new(),
+            now: 0.0,
+        }
+    }
+
+    pub fn begin_frame(&mut self, now: f32) {
+        self.now = now;
+        self.scroll_up_hit = false;
+        self.scroll_down_hit = false;
+        self.scroll_left_hit = false;
+        self.scroll_right_hit = false;
+
+        self.mouse.update_just_states();
+        self.text_chars.clear();
+    }
+
+    pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
+        self.physical.insert(key, down);
+    }
+
+    pub fn set_logical(&mut self, key: NamedKey, down: bool) {
+        self.logical.insert(key, down);
+    }
+
+    pub fn set_character(&mut self, ch: &str, down: bool) {
+        if down {
+            self.text_chars.insert(ch.to_string());
+        } else {
+            self.text_chars.remove(ch);
+        }
+    }
+
+    pub fn set_mouse_button(&mut self, button: MouseButton, down: bool) {
+        match button {
+            MouseButton::Left => {
+                if down && !self.mouse.left_pressed {
+                    self.mouse.left_just_pressed = true;
+                }
+                if !down && self.mouse.left_pressed {
+                    self.mouse.left_just_released = true;
+                }
+                self.mouse.left_pressed = down;
+            }
+            MouseButton::Right => {
+                if down && !self.mouse.right_pressed {
+                    self.mouse.right_just_pressed = true;
+                }
+                if !down && self.mouse.right_pressed {
+                    self.mouse.right_just_released = true;
+                }
+                self.mouse.right_pressed = down;
+            }
+            MouseButton::Middle => {
+                self.mouse.middle_pressed = down;
+            }
+            MouseButton::Back => {
+                self.mouse.back_pressed = down;
+            }
+            MouseButton::Forward => {
+                self.mouse.forward_pressed = down;
+            }
+            MouseButton::Other(_) => {}
+        }
+    }
+
+    pub fn set_mouse_pos(&mut self, pos: Vec2) {
+        self.mouse.last_pos = Some(self.mouse.pos);
+        self.mouse.pos = pos;
+    }
+
+    pub fn add_scroll_delta(&mut self, delta: Vec2) {
+        self.mouse.scroll_delta += delta;
+
+        // vertical
+        if delta.y > 0.0 {
+            self.scroll_up_hit = true;
+        } else if delta.y < 0.0 {
+            self.scroll_down_hit = true;
+        }
+
+        // horizontal
+        if delta.x > 0.0 {
+            self.scroll_right_hit = true;
+        } else if delta.x < 0.0 {
+            self.scroll_left_hit = true;
         }
     }
 
@@ -256,7 +368,7 @@ impl InputState {
         fired
     }
 
-    pub fn action_repeat(&mut self, action: &str, now_time: f32) -> bool {
+    pub fn action_repeat(&mut self, action: &str) -> bool {
         if !self.ensure_known_action(action) {
             return false;
         }
@@ -265,31 +377,15 @@ impl InputState {
             .repeat_timers
             .entry(action.to_string())
             .or_insert_with(RepeatTimer::new);
-        timer.tick(now_time, down)
+        timer.tick(self.now, down)
     }
 
-    pub fn repeat(&mut self, id: &str, now: f32, is_down: bool) -> bool {
+    pub fn repeat(&mut self, id: &str, is_down: bool) -> bool {
         let timer = self
             .repeat_timers
             .entry(id.to_string())
             .or_insert_with(RepeatTimer::new);
-        timer.tick(now, is_down)
-    }
-
-    pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
-        self.physical.insert(key, down);
-    }
-
-    pub fn set_logical(&mut self, key: NamedKey, down: bool) {
-        self.logical.insert(key, down);
-    }
-
-    pub fn set_character(&mut self, ch: &str, down: bool) {
-        if down {
-            self.text_chars.insert(ch.to_string());
-        } else {
-            self.text_chars.remove(ch);
-        }
+        timer.tick(self.now, is_down)
     }
 }
 
@@ -311,6 +407,18 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
             key_part = Some(BindingKey::Physical(PhysicalKey::Code(k)));
         } else if let Some(n) = map_to_named(t) {
             key_part = Some(BindingKey::Logical(n));
+        } else if let Some(m) = map_to_mouse(t) {
+            key_part = Some(BindingKey::Mouse(m));
+        } else if let Some(ch) = map_to_char(t) {
+            key_part = Some(BindingKey::Character(ch));
+        } else if t.eq_ignore_ascii_case("WheelUp") {
+            key_part = Some(BindingKey::WheelUp);
+        } else if t.eq_ignore_ascii_case("WheelDown") {
+            key_part = Some(BindingKey::WheelDown);
+        } else if t.eq_ignore_ascii_case("WheelLeft") {
+            key_part = Some(BindingKey::WheelLeft);
+        } else if t.eq_ignore_ascii_case("WheelRight") {
+            key_part = Some(BindingKey::WheelRight);
         }
     }
 
@@ -322,6 +430,34 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         require_alt,
         key,
     })
+}
+
+fn map_to_mouse(token: &str) -> Option<MouseButton> {
+    match token {
+        "MouseLeft" => Some(MouseButton::Left),
+        "MouseRight" => Some(MouseButton::Right),
+        "MouseMiddle" => Some(MouseButton::Middle),
+        "MouseBack" => Some(MouseButton::Back),
+        "MouseForward" => Some(MouseButton::Forward),
+        _ => None,
+    }
+}
+
+fn map_to_char(token: &str) -> Option<String> {
+    if let Some(stripped) = token
+        .strip_prefix("Char(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        if !stripped.is_empty() {
+            return Some(stripped.to_string());
+        }
+    }
+
+    if token.chars().count() == 1 {
+        return Some(token.to_string());
+    }
+
+    None
 }
 
 fn map_to_keycode(token: &str) -> Option<KeyCode> {
@@ -372,6 +508,11 @@ fn map_to_keycode(token: &str) -> Option<KeyCode> {
         "F10" => Some(KeyCode::F10),
         "F11" => Some(KeyCode::F11),
         "F12" => Some(KeyCode::F12),
+        "Plus" => Some(KeyCode::NumpadAdd),
+
+        // universal minus
+        "Minus" => Some(KeyCode::Minus),
+        "NumpadSubtract" => Some(KeyCode::NumpadSubtract),
         _ => None,
     }
 }
@@ -385,6 +526,7 @@ fn map_to_named(token: &str) -> Option<NamedKey> {
         "Space" => Some(NamedKey::Space),
         "Enter" => Some(NamedKey::Enter),
         "Backspace" => Some(NamedKey::Backspace),
+
         _ => None,
     }
 }

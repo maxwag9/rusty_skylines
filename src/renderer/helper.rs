@@ -1,6 +1,20 @@
+use crate::resources::InputState;
 use crate::vertex::UiVertex;
 use std::cmp::Ordering;
 use wgpu::*;
+
+pub fn calc_move_speed(input: &InputState) -> f32 {
+    let mut base = 2.0;
+
+    match (input.shift, input.ctrl) {
+        (true, false) => base *= 9.0, // fast
+        (false, true) => base *= 0.8, // slow
+        (true, true) => base *= 0.2,  // ultra-fine
+        _ => {}
+    }
+
+    base
+}
 
 pub fn polygon_sdf(px: f32, py: f32, verts: &[UiVertex]) -> f32 {
     let mut min_dist = f32::MAX;

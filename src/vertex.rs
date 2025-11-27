@@ -1,5 +1,6 @@
 use crate::renderer::helper::ensure_ccw;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::renderer::ui_editor::UiVariableRegistry;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
@@ -356,27 +357,6 @@ impl<'a> UiElementRef<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ElementRefMut {
-    Text(usize),
-    Polygon(usize),
-    Circle(usize),
-    Outline(usize),
-    Handle(usize),
-}
-
-impl ElementRefMut {
-    pub fn index(&self) -> usize {
-        match self {
-            ElementRefMut::Text(i)
-            | ElementRefMut::Polygon(i)
-            | ElementRefMut::Circle(i)
-            | ElementRefMut::Outline(i)
-            | ElementRefMut::Handle(i) => *i,
-        }
-    }
-}
-
 impl RuntimeLayer {
     pub fn iter_all_elements(&self) -> Vec<UiElementRef> {
         let mut out = Vec::new();
@@ -399,86 +379,180 @@ impl RuntimeLayer {
 
         out
     }
-    pub fn find_element(&mut self, id: &str) -> Option<ElementRefMut> {
-        if let Some(i) = self.texts.iter().position(|e| e.id.as_deref() == Some(id)) {
-            return Some(ElementRefMut::Text(i));
-        }
-        if let Some(i) = self
-            .polygons
-            .iter()
-            .position(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(ElementRefMut::Polygon(i));
-        }
-        if let Some(i) = self
-            .circles
-            .iter()
-            .position(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(ElementRefMut::Circle(i));
-        }
-        if let Some(i) = self
-            .outlines
-            .iter()
-            .position(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(ElementRefMut::Outline(i));
-        }
-        if let Some(i) = self
-            .handles
-            .iter()
-            .position(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(ElementRefMut::Handle(i));
-        }
-        None
+    pub fn sort_by_z(&mut self) {
+        self.texts.sort_by_key(|e| e.z_index);
+        self.circles.sort_by_key(|e| e.z_index);
+        self.outlines.sort_by_key(|e| e.z_index);
+        self.handles.sort_by_key(|e| e.z_index);
+        self.polygons.sort_by_key(|e| e.z_index);
     }
 
-    pub fn swap_elements(&mut self, kind: &ElementRefMut, a: usize, b: usize) {
-        match kind {
-            ElementRefMut::Text(_) => {
-                self.texts.swap(a, b);
-                self.dirty.mark_texts();
+    pub fn bump_element_z(&mut self, id: &str, delta: i32, variables: &mut UiVariableRegistry) {
+        // Texts
+        for e in &mut self.texts {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.z_index += delta;
+                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    return;
+                }
             }
-            ElementRefMut::Polygon(_) => {
-                self.polygons.swap(a, b);
-                self.dirty.mark_polygons();
+        }
+
+        // Circles
+        for e in &mut self.circles {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.z_index += delta;
+                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    return;
+                }
             }
-            ElementRefMut::Circle(_) => {
-                self.circles.swap(a, b);
-                self.dirty.mark_circles();
+        }
+
+        // Outlines
+        for e in &mut self.outlines {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.z_index += delta;
+                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    return;
+                }
             }
-            ElementRefMut::Outline(_) => {
-                self.outlines.swap(a, b);
-                self.dirty.mark_outlines();
+        }
+
+        // Handles
+        for e in &mut self.handles {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.z_index += delta;
+                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    return;
+                }
             }
-            ElementRefMut::Handle(_) => {
-                self.handles.swap(a, b);
-                self.dirty.mark_handles();
+        }
+
+        // Polygons
+        for e in &mut self.polygons {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.z_index += delta;
+                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    return;
+                }
             }
         }
     }
+    pub fn bump_element_xy(&mut self, id: &str, dx: f32, dy: f32) {
+        // Text
+        for e in &mut self.texts {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.x += dx;
+                    e.y += dy;
+                    return;
+                }
+            }
+        }
 
-    pub fn element_count(&self) -> usize {
-        self.texts.len()
-            + self.polygons.len()
-            + self.circles.len()
-            + self.outlines.len()
-            + self.handles.len()
+        // Circles
+        for e in &mut self.circles {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.x += dx;
+                    e.y += dy;
+                    return;
+                }
+            }
+        }
+
+        // Outlines
+        for e in &mut self.outlines {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.shape_data.x += dx;
+                    e.shape_data.y += dy;
+                    return;
+                }
+            }
+        }
+
+        // Handles
+        for e in &mut self.handles {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.x += dx;
+                    e.y += dy;
+                    return;
+                }
+            }
+        }
+
+        // Polygons
+        for e in &mut self.polygons {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    for v in &mut e.vertices {
+                        v.pos[0] += dx;
+                        v.pos[1] += dy;
+                    }
+                    return;
+                }
+            }
+        }
     }
-}
+    pub fn resize_element(&mut self, id: &str, scale: f32) {
+        // Text
+        for e in &mut self.texts {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.stretch_x *= scale;
+                    e.stretch_y *= scale;
+                    return;
+                }
+            }
+        }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct UiLayer {
-    pub name: String,
-    pub order: u32,
-    pub texts: Option<Vec<UiButtonText>>,
-    pub circles: Option<Vec<UiButtonCircle>>,
-    pub outlines: Option<Vec<UiButtonOutline>>,
-    pub handles: Option<Vec<UiButtonHandle>>,
-    pub polygons: Option<Vec<UiButtonPolygon>>,
-    pub active: Option<bool>,
-    pub opaque: Option<bool>,
+        // Circles
+        for e in &mut self.circles {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    e.radius *= scale;
+                    return;
+                }
+            }
+        }
+
+        // Polygons
+        for e in &mut self.polygons {
+            if let Some(eid) = &e.id {
+                if eid == id {
+                    // compute centroid
+                    let mut cx = 0.0;
+                    let mut cy = 0.0;
+                    let count = e.vertices.len() as f32;
+
+                    for v in &e.vertices {
+                        cx += v.pos[0];
+                        cy += v.pos[1];
+                    }
+
+                    if count > 0.0 {
+                        cx /= count;
+                        cy /= count;
+                    }
+
+                    // scale vertices around centroid
+                    for v in &mut e.vertices {
+                        v.pos[0] = cx + (v.pos[0] - cx) * scale;
+                        v.pos[1] = cy + (v.pos[1] - cy) * scale;
+                    }
+
+                    return;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
