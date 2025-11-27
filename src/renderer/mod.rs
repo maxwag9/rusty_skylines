@@ -12,8 +12,9 @@ pub(crate) mod ui_pipelines;
 
 use crate::components::camera::Camera;
 use crate::data::Settings;
+use crate::renderer::input::MouseState;
 use crate::renderer::ui_editor::UiButtonLoader;
-use crate::resources::{MouseState, TimeSystem};
+use crate::resources::TimeSystem;
 use core::RenderCore;
 use std::sync::Arc;
 

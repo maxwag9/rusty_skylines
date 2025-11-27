@@ -1,6 +1,7 @@
+use crate::renderer::input::MouseState;
 use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::renderer::ui_pipelines::UiPipelines;
-use crate::resources::{MouseState, TimeSystem};
+use crate::resources::TimeSystem;
 use crate::vertex::{UiButtonText, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;

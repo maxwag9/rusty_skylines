@@ -1,9 +1,8 @@
-use crate::resources::MouseState;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use winit::event::MouseButton;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 
 #[derive(Debug, Clone)]
@@ -22,7 +21,7 @@ impl RepeatTimer {
             first_press: -1.0,
             last_fire: -1.0,
             initial_delay: 0.25,
-            warmup_time: 0.15,
+            warmup_time: 0.08,
             warmup_interval: 0.07,
             fast_interval: 0.03,
         }
@@ -171,6 +170,68 @@ impl Keybinds {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MouseState {
+    pub last_pos: Option<Vec2>,
+    pub pos: Vec2,
+    pub delta: Vec2,
+    pub middle_pressed: bool,
+    pub left_pressed: bool,
+    pub right_pressed: bool,
+    pub back_pressed: bool,
+    pub forward_pressed: bool,
+
+    pub left_just_pressed: bool,
+    pub left_just_released: bool,
+    pub right_just_pressed: bool,
+    pub right_just_released: bool,
+
+    pub scroll_delta: Vec2,
+}
+
+impl MouseState {
+    pub fn new() -> Self {
+        Self {
+            last_pos: None,
+            pos: Vec2::ZERO,
+            delta: Vec2::ZERO,
+
+            middle_pressed: false,
+            left_pressed: false,
+            right_pressed: false,
+            back_pressed: false,
+            forward_pressed: false,
+
+            left_just_pressed: false,
+            left_just_released: false,
+            right_just_pressed: false,
+            right_just_released: false,
+
+            scroll_delta: Vec2::ZERO,
+        }
+    }
+
+    pub fn update_just_states(&mut self) {
+        // Reset per-frame flags
+        self.left_just_pressed = false;
+        self.left_just_released = false;
+        self.right_just_pressed = false;
+        self.right_just_released = false;
+        self.scroll_delta = Vec2::ZERO;
+    }
+
+    pub fn is_button_down(&self, button: MouseButton) -> bool {
+        match button {
+            MouseButton::Left => self.left_pressed,
+            MouseButton::Right => self.right_pressed,
+            MouseButton::Middle => self.middle_pressed,
+            MouseButton::Back => self.back_pressed,
+            MouseButton::Forward => self.forward_pressed,
+            MouseButton::Other(_) => false,
+        }
+    }
+}
+
 pub struct InputState {
     pub physical: HashMap<PhysicalKey, bool>,
     pub logical: HashMap<NamedKey, bool>,
@@ -230,7 +291,45 @@ impl InputState {
         self.scroll_right_hit = false;
 
         self.mouse.update_just_states();
+        self.mouse.delta = Vec2::ZERO;
         self.text_chars.clear();
+    }
+
+    pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
+        let down = state == ElementState::Pressed;
+        self.set_mouse_button(button, down);
+    }
+
+    pub fn handle_mouse_move(&mut self, x: f64, y: f64) {
+        let pos = Vec2::new(x as f32, y as f32);
+
+        let delta = if let Some(last) = self.mouse.last_pos {
+            pos - last
+        } else {
+            Vec2::ZERO
+        };
+
+        self.mouse.last_pos = Some(pos);
+        self.mouse.delta = delta;
+        self.mouse.pos = pos;
+    }
+
+    pub fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) -> Vec2 {
+        let mut out = Vec2::ZERO;
+
+        match delta {
+            MouseScrollDelta::LineDelta(x, y) => {
+                out.x = x;
+                out.y = y;
+            }
+            MouseScrollDelta::PixelDelta(p) => {
+                out.x = p.x as f32 * 0.1;
+                out.y = p.y as f32 * 0.1;
+            }
+        };
+
+        self.add_scroll_delta(out);
+        out
     }
 
     pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
@@ -280,11 +379,6 @@ impl InputState {
             }
             MouseButton::Other(_) => {}
         }
-    }
-
-    pub fn set_mouse_pos(&mut self, pos: Vec2) {
-        self.mouse.last_pos = Some(self.mouse.pos);
-        self.mouse.pos = pos;
     }
 
     pub fn add_scroll_delta(&mut self, delta: Vec2) {
@@ -390,6 +484,17 @@ impl InputState {
 }
 
 fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
+    // First: try to interpret the whole string as a character binding.
+    // This makes "+" / "-" / "=" etc. work with no modifiers.
+    if let Some(ch) = map_to_char(s) {
+        return Some(ParsedKeyCombo {
+            require_ctrl: false,
+            require_shift: false,
+            require_alt: false,
+            key: BindingKey::Character(ch),
+        });
+    }
+
     let mut require_ctrl = false;
     let mut require_shift = false;
     let mut require_alt = false;

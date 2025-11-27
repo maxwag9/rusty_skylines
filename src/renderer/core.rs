@@ -1,11 +1,12 @@
 use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::paths::shader_dir;
+use crate::renderer::input::MouseState;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::ui_editor::UiButtonLoader;
-use crate::resources::{MouseState, TimeSystem, Uniforms};
+use crate::resources::{TimeSystem, Uniforms};
 use crate::vertex::{LineVtx, Vertex};
 use std::sync::Arc;
 use wgpu::{

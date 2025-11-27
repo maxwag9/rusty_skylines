@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -82,7 +82,7 @@ impl ApplicationHandler for App {
             event_loop
                 .create_window(
                     Window::default_attributes()
-                        .with_title("Rusty City")
+                        .with_title("Rusty Skylines")
                         .with_inner_size(winit::dpi::PhysicalSize::new(2560, 1400)),
                 )
                 .expect("Failed to create window"),
@@ -118,9 +118,6 @@ impl ApplicationHandler for App {
 
                 // physical
                 input.set_physical(event.physical_key, down);
-
-                // text chars refreshed each event
-                input.text_chars.clear();
 
                 // logical + printable text
                 match &event.logical_key {
@@ -197,95 +194,68 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let mouse = &mut resources.input.mouse;
-                    match button {
-                        winit::event::MouseButton::Left => {
-                            let pressed = state == ElementState::Pressed;
-                            mouse.left_just_pressed = pressed && !mouse.left_pressed;
-                            mouse.left_just_released = !pressed && mouse.left_pressed;
-                            mouse.left_pressed = pressed;
-                        }
-                        winit::event::MouseButton::Right => {
-                            let pressed = state == ElementState::Pressed;
-                            mouse.right_just_pressed = pressed && !mouse.right_pressed;
-                            mouse.right_just_released = !pressed && mouse.right_pressed;
-                            mouse.right_pressed = pressed;
-                        }
-                        winit::event::MouseButton::Middle => {
-                            let pressed = state == ElementState::Pressed;
-                            mouse.middle_pressed = pressed;
-                            mouse.last_pos = None;
-                        }
-                        winit::event::MouseButton::Back => {
-                            mouse.back_pressed = state == ElementState::Pressed;
-                        }
-                        winit::event::MouseButton::Forward => {
-                            mouse.forward_pressed = state == ElementState::Pressed;
-                        }
-                        _ => {}
-                    }
+                    resources.input.handle_mouse_button(button, state);
                 }
             }
+
             WindowEvent::CursorMoved { position, .. } => {
-                let delta = if let Some(resources) = self.resources.as_mut() {
-                    let pos = glam::Vec2::new(position.x as f32, position.y as f32);
-                    resources.input.mouse.pos = pos;
+                if let Some(resources) = self.resources.as_mut() {
+                    resources.input.handle_mouse_move(position.x, position.y);
 
+                    let pos = resources.input.mouse.pos;
+                    let delta = resources.input.mouse.delta;
+
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos.x", pos.x.to_string());
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos_delta.x", delta.x.to_string());
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos.y", pos.y.to_string());
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos_delta.y", delta.y.to_string());
+                    // camera rotation ONLY if needed & dragging
                     if resources.input.mouse.middle_pressed {
-                        let delta = resources.input.mouse.last_pos.map(|last| pos - last);
-                        resources.input.mouse.last_pos = Some(pos);
-                        delta
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                        if let Some(world) = self.world.as_mut() {
+                            if let Some(controller) =
+                                world.camera_controller_mut(world.main_camera())
+                            {
+                                let pitch_s = 0.002;
+                                let yaw_s = 0.0016;
 
-                if let (Some(delta), Some(world)) = (delta, self.world.as_mut()) {
-                    if let Some(controller) = world.camera_controller_mut(world.main_camera()) {
-                        let pitch_sensitivity = 0.002;
-                        let yaw_sensitivity = 0.0016;
-                        controller.target_yaw += delta.x * yaw_sensitivity;
-                        controller.target_pitch += delta.y * pitch_sensitivity;
-                        controller.target_pitch = controller
-                            .target_pitch
-                            .clamp(10.0f32.to_radians(), 89.0f32.to_radians());
-                        controller.yaw_velocity = delta.x * yaw_sensitivity;
-                        controller.pitch_velocity = delta.y * pitch_sensitivity;
+                                controller.target_yaw += delta.x * yaw_s;
+                                controller.target_pitch += delta.y * pitch_s;
+
+                                controller.target_pitch = controller
+                                    .target_pitch
+                                    .clamp(10f32.to_radians(), 89f32.to_radians());
+
+                                controller.yaw_velocity = delta.x * yaw_s;
+                                controller.pitch_velocity = delta.y * pitch_s;
+                            }
+                        }
                     }
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let mut editor_mode = false;
-                if let Some(resources) = self.resources.as_mut() {
-                    editor_mode = resources.settings.editor_mode;
-                    let mouse = &mut resources.input.mouse;
-                    match delta {
-                        MouseScrollDelta::LineDelta(x, y) => {
-                            mouse.scroll_delta.x += x;
-                            mouse.scroll_delta.y += y;
-                        }
-                        MouseScrollDelta::PixelDelta(pos) => {
-                            mouse.scroll_delta.x += pos.x as f32 * 0.1;
-                            mouse.scroll_delta.y += pos.y as f32 * 0.1;
-                        }
-                    }
-                }
-                if !editor_mode {
-                    let Some(world) = self.world.as_mut() else {
-                        return;
-                    };
 
-                    let entity = world.main_camera();
-                    let radius = world.camera(entity).map(|c| c.radius).unwrap_or(1.0);
-                    if let Some(controller) = world.camera_controller_mut(entity) {
-                        match delta {
-                            MouseScrollDelta::LineDelta(_, y) => {
-                                controller.zoom_velocity -= y * 1.0 * radius;
-                            }
-                            MouseScrollDelta::PixelDelta(pos) => {
-                                controller.zoom_velocity -= pos.y as f32 * 0.04 * radius;
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(resources) = self.resources.as_mut() {
+                    let scroll = resources.input.handle_mouse_wheel(delta);
+
+                    if !resources.settings.editor_mode {
+                        if let Some(world) = self.world.as_mut() {
+                            let cam = world.main_camera();
+                            let radius = world.camera(cam).unwrap().radius;
+
+                            if let Some(controller) = world.camera_controller_mut(cam) {
+                                controller.zoom_velocity -= scroll.y * 1.0 * radius;
                             }
                         }
                     }
@@ -305,6 +275,9 @@ impl ApplicationHandler for App {
                     // update render time
                     resources.time.update_render();
 
+                    // input must be reset at the START of the frame
+
+                    // update UI global vars
                     let ui = &mut resources.ui_loader;
 
                     ui.variables
@@ -314,7 +287,7 @@ impl ApplicationHandler for App {
                     ui.variables
                         .set("sim_dt", format!("{}", resources.time.sim_dt));
 
-                    // simulate time independent of render fps
+                    // simulation timing
                     resources.time.update_sim();
                     resources.time.sim_accumulator += resources.time.sim_dt;
 
@@ -338,9 +311,8 @@ impl ApplicationHandler for App {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
-
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.input.mouse.update_just_states();
+                    resources.input.begin_frame(resources.time.total_time);
                 }
             }
 

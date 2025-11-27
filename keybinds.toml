@@ -79,6 +79,12 @@ keys = ["+"]
 ["Resize Element Smaller"]
 keys = ["-"]
 
+["Resize Element Bigger Scroll"]
+keys = ["WheelUp"]
+
+["Resize Element Smaller Scroll"]
+keys = ["WheelDown"]
+
 ["Move Element Z Up"]
 keys = ["ArrowUp"]
 

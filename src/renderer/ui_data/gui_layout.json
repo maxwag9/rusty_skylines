@@ -1,60 +1,6 @@
 {
   "menus": [
     {
-      "name": "Debug_Menu",
-      "layers": [
-        {
-          "name": "debug_texts",
-          "order": 2,
-          "texts": [
-            {
-              "id": "fps_text",
-              "z_index": 51,
-              "x": 65.532104,
-              "y": 26.819542,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                0.6,
-                1.0,
-                1.0,
-                1.0
-              ],
-              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
-              "misc": {
-                "active": true,
-                "pressable": false,
-                "editable": false
-              }
-            }
-          ],
-          "circles": [],
-          "outlines": [],
-          "handles": [],
-          "polygons": [],
-          "active": true,
-          "opaque": false
-        }
-      ]
-    },
-    {
       "name": "Editor_Menu",
       "layers": [
         {
@@ -439,8 +385,8 @@
             {
               "id": "selected_layer.order_text",
               "z_index": 50,
-              "x": 225.20822,
-              "y": 414.00427,
+              "x": 224.23718,
+              "y": 412.9601,
               "stretch_x": 0.0,
               "stretch_y": 0.0,
               "top_left_offset": [
@@ -509,6 +455,80 @@
                 "pressable": false,
                 "editable": false
               }
+            },
+            {
+              "id": "mouse_pos_text",
+              "z_index": 50,
+              "x": 205.84222,
+              "y": 544.53906,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Mouse Position: {mouse_pos.x:.1|fix, mouse_pos.y:.1|fix}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            },
+            {
+              "id": "mouse_pos_delta_text",
+              "z_index": 50,
+              "x": 180.74408,
+              "y": 590.87695,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Mouse Position change since last frame: {mouse_pos_delta.x, mouse_pos_delta.y}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
             }
           ],
           "circles": [
@@ -551,6 +571,60 @@
               }
             }
           ],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        }
+      ]
+    },
+    {
+      "name": "Debug_Menu",
+      "layers": [
+        {
+          "name": "debug_texts",
+          "order": 2,
+          "texts": [
+            {
+              "id": "fps_text",
+              "z_index": 51,
+              "x": 65.532104,
+              "y": 26.819542,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            }
+          ],
+          "circles": [],
           "outlines": [],
           "handles": [],
           "polygons": [],

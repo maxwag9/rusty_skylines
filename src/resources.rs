@@ -4,11 +4,10 @@ use crate::renderer::Renderer;
 pub(crate) use crate::renderer::input::InputState;
 use crate::renderer::ui_editor::UiButtonLoader;
 use crate::simulation::Simulation;
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use winit::event::MouseButton;
 use winit::keyboard::PhysicalKey;
 use winit::window::Window;
 
@@ -111,65 +110,6 @@ impl TimeSystem {
         self.render_dt = dt;
         self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
         self.sim_accumulator += dt;
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MouseState {
-    pub last_pos: Option<Vec2>,
-    pub pos: Vec2,
-    pub middle_pressed: bool,
-    pub left_pressed: bool,
-    pub right_pressed: bool,
-    pub back_pressed: bool,
-    pub forward_pressed: bool,
-
-    pub left_just_pressed: bool,
-    pub left_just_released: bool,
-    pub right_just_pressed: bool,
-    pub right_just_released: bool,
-
-    pub scroll_delta: Vec2,
-}
-
-impl MouseState {
-    pub fn new() -> Self {
-        Self {
-            last_pos: None,
-            pos: Vec2::ZERO,
-            middle_pressed: false,
-            left_pressed: false,
-            right_pressed: false,
-            back_pressed: false,
-            forward_pressed: false,
-
-            left_just_pressed: false,
-            left_just_released: false,
-            right_just_pressed: false,
-            right_just_released: false,
-
-            scroll_delta: Vec2::ZERO,
-        }
-    }
-
-    pub fn update_just_states(&mut self) {
-        // Reset per-frame flags
-        self.left_just_pressed = false;
-        self.left_just_released = false;
-        self.right_just_pressed = false;
-        self.right_just_released = false;
-        self.scroll_delta = Vec2::ZERO;
-    }
-
-    pub fn is_button_down(&self, button: MouseButton) -> bool {
-        match button {
-            MouseButton::Left => self.left_pressed,
-            MouseButton::Right => self.right_pressed,
-            MouseButton::Middle => self.middle_pressed,
-            MouseButton::Back => self.back_pressed,
-            MouseButton::Forward => self.forward_pressed,
-            MouseButton::Other(_) => false,
-        }
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::renderer::helper::{dist, polygon_sdf};
+use crate::renderer::input::MouseState;
 use crate::renderer::ui_editor::{Menu, UiButtonLoader, UiRuntime};
-use crate::resources::{InputState, MouseState, TimeSystem};
+use crate::resources::{InputState, TimeSystem};
 use crate::vertex::{
     RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle, UiButtonPolygon,
     UiButtonText, UiElement, UiElementRef,

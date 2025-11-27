@@ -1,5 +1,6 @@
 use crate::paths::renderer_path;
 use crate::renderer::helper::{calc_move_speed, triangulate_polygon};
+use crate::renderer::input::MouseState;
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
@@ -7,7 +8,7 @@ use crate::renderer::touches::{
     press_began_on_ui,
 };
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::resources::{InputState, MouseState, TimeSystem};
+use crate::resources::{InputState, TimeSystem};
 use crate::vertex::UiElement::*;
 pub(crate) use crate::vertex::*;
 use std::collections::HashMap;
@@ -1236,6 +1237,7 @@ impl UiButtonLoader {
                 scale = 1.05;
             }
             if input_state.action_repeat("Resize Element Smaller Scroll") {
+                print!("Scroleld down");
                 scale = 0.95;
             }
 
