@@ -2,6 +2,7 @@ mod app;
 mod components;
 mod data;
 mod events;
+mod paths;
 mod renderer;
 mod resources;
 mod simulation;

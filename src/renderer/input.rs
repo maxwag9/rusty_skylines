@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 
 #[derive(Debug, Clone)]
@@ -105,62 +106,53 @@ pub struct Keybinds {
 }
 
 impl Keybinds {
+    fn read_bindings(path: &str) -> Option<HashMap<String, ActionBind>> {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|data| toml::from_str(&data).ok())
+    }
+
+    fn write_bindings(path: &str, data: &HashMap<String, ActionBind>) {
+        if let Ok(serialized) = toml::to_string(data) {
+            let _ = fs::write(path, serialized);
+        }
+    }
+
     pub fn load(path: &str, default_path: &str) -> Self {
-        let default_map: HashMap<String, ActionBind> = match std::fs::read_to_string(default_path) {
-            Ok(d) => toml::from_str(&d).unwrap_or_else(|_| {
-                println!("default_keybinds.toml invalid, using empty defaults");
-                HashMap::new()
-            }),
-            Err(_) => {
+        let default_map: HashMap<String, ActionBind> = match Self::read_bindings(default_path) {
+            Some(map) => map,
+            None => {
                 println!("default_keybinds.toml missing");
-                match std::fs::read_to_string(path) {
+                match fs::read_to_string(path) {
                     Ok(user_data) => {
                         println!("copying keybinds.toml to default_keybinds.toml");
-                        let _ = std::fs::write(default_path, &user_data);
+                        let _ = fs::write(default_path, &user_data);
                         toml::from_str(&user_data).unwrap_or_else(|_| HashMap::new())
                     }
                     Err(_) => {
                         println!("no keybinds.toml either, creating empty defaults");
                         let empty: HashMap<String, ActionBind> = HashMap::new();
-                        if let Ok(s) = toml::to_string(&empty) {
-                            let _ = std::fs::write(default_path, s);
-                        }
+                        Self::write_bindings(default_path, &empty);
                         empty
                     }
                 }
             }
         };
 
-        let user_map: Option<HashMap<String, ActionBind>> = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|d| toml::from_str(&d).ok());
+        let mut merged = default_map.clone();
 
-        let final_map = match user_map {
-            Some(user) => {
-                let mut merged = default_map.clone();
-                for (k, v) in user {
-                    merged.insert(k, v);
-                }
-                merged
-            }
-            None => {
-                println!("keybinds.toml missing or invalid, rewriting from defaults");
-                let mut merged = default_map.clone();
-                let kb = Keybinds {
-                    binds: merged.clone(),
-                };
-                kb.save(path);
-                merged
-            }
-        };
+        if let Some(user) = Self::read_bindings(path) {
+            merged.extend(user);
+        } else {
+            println!("keybinds.toml missing or invalid, rewriting from defaults");
+            Self::write_bindings(path, &merged);
+        }
 
-        Keybinds { binds: final_map }
+        Keybinds { binds: merged }
     }
 
     pub fn save(&self, path: &str) {
-        if let Ok(data) = toml::to_string(&self.binds) {
-            let _ = std::fs::write(path, data);
-        }
+        Self::write_bindings(path, &self.binds);
     }
 }
 

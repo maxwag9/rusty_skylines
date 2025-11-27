@@ -1,9 +1,8 @@
 use crate::renderer::helper::ensure_ccw;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use serde::{Deserialize, Serialize};
-use wgpu::{
-    Buffer, BufferAddress, VertexAttribute, VertexBufferLayout, VertexStepMode, vertex_attr_array,
-};
+use std::mem::size_of;
+use wgpu::{vertex_attr_array, *};
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -90,6 +89,89 @@ impl Default for LayerCache {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LayerDirty {
+    pub texts: bool,
+    pub circles: bool,
+    pub outlines: bool,
+    pub handles: bool,
+    pub polygons: bool,
+}
+
+impl LayerDirty {
+    pub fn all() -> Self {
+        Self {
+            texts: true,
+            circles: true,
+            outlines: true,
+            handles: true,
+            polygons: true,
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            texts: false,
+            circles: false,
+            outlines: false,
+            handles: false,
+            polygons: false,
+        }
+    }
+
+    pub fn any(self) -> bool {
+        self.texts || self.circles || self.outlines || self.handles || self.polygons
+    }
+
+    pub fn mark_texts(&mut self) {
+        self.texts = true;
+    }
+
+    pub fn mark_circles(&mut self) {
+        self.circles = true;
+    }
+
+    pub fn mark_outlines(&mut self) {
+        self.outlines = true;
+    }
+
+    pub fn mark_handles(&mut self) {
+        self.handles = true;
+    }
+
+    pub fn mark_polygons(&mut self) {
+        self.polygons = true;
+    }
+
+    pub fn mark_all(&mut self) {
+        *self = Self::all();
+    }
+
+    pub fn clear(&mut self, done: LayerDirty) {
+        if done.texts {
+            self.texts = false;
+        }
+        if done.circles {
+            self.circles = false;
+        }
+        if done.outlines {
+            self.outlines = false;
+        }
+        if done.handles {
+            self.handles = false;
+        }
+        if done.polygons {
+            self.polygons = false;
+        }
+    }
+}
+
+impl Default for LayerDirty {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SelectedUiElement {
     pub menu_name: String,
@@ -159,25 +241,25 @@ pub struct UiVertexPoly {
     pub misc: [f32; 4],
 }
 impl UiVertexPoly {
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
+    pub fn desc() -> VertexBufferLayout<'static> {
+        VertexBufferLayout {
             array_stride: 48,
-            step_mode: wgpu::VertexStepMode::Vertex,
+            step_mode: VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: VertexFormat::Float32x2,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 16,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x4,
+                    format: VertexFormat::Float32x4,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 32,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x4,
+                    format: VertexFormat::Float32x4,
                 },
             ],
         }
@@ -193,26 +275,25 @@ pub struct UiVertexText {
     pub color: [f32; 4],
 }
 impl UiVertexText {
-    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem::size_of;
-        wgpu::VertexBufferLayout {
-            array_stride: size_of::<UiVertexText>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
+    pub fn desc() -> VertexBufferLayout<'static> {
+        VertexBufferLayout {
+            array_stride: size_of::<UiVertexText>() as BufferAddress,
+            step_mode: VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: VertexFormat::Float32x2,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: size_of::<[f32; 2]>() as _,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: VertexFormat::Float32x2,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: (size_of::<[f32; 2]>() * 2) as _,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x4,
+                    format: VertexFormat::Float32x4,
                 },
             ],
         }
@@ -232,7 +313,7 @@ pub struct RuntimeLayer {
     // NEW: cached GPU data!!!
     pub cache: LayerCache,
 
-    pub dirty: bool, // set true when anything changes or the screen will be dirty asf!
+    pub dirty: LayerDirty, // set true when anything changes or the screen will be dirty asf!
     pub gpu: LayerGpu,
     pub opaque: bool,
     pub saveable: bool,
@@ -355,13 +436,27 @@ impl RuntimeLayer {
 
     pub fn swap_elements(&mut self, kind: &ElementRefMut, a: usize, b: usize) {
         match kind {
-            ElementRefMut::Text(_) => self.texts.swap(a, b),
-            ElementRefMut::Polygon(_) => self.polygons.swap(a, b),
-            ElementRefMut::Circle(_) => self.circles.swap(a, b),
-            ElementRefMut::Outline(_) => self.outlines.swap(a, b),
-            ElementRefMut::Handle(_) => self.handles.swap(a, b),
+            ElementRefMut::Text(_) => {
+                self.texts.swap(a, b);
+                self.dirty.mark_texts();
+            }
+            ElementRefMut::Polygon(_) => {
+                self.polygons.swap(a, b);
+                self.dirty.mark_polygons();
+            }
+            ElementRefMut::Circle(_) => {
+                self.circles.swap(a, b);
+                self.dirty.mark_circles();
+            }
+            ElementRefMut::Outline(_) => {
+                self.outlines.swap(a, b);
+                self.dirty.mark_outlines();
+            }
+            ElementRefMut::Handle(_) => {
+                self.handles.swap(a, b);
+                self.dirty.mark_handles();
+            }
         }
-        self.dirty = true;
     }
 
     pub fn element_count(&self) -> usize {
