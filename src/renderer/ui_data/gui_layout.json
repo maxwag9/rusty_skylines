@@ -4,206 +4,14 @@
       "name": "Editor_Menu",
       "layers": [
         {
-          "name": "base_gui",
-          "order": 1,
-          "texts": [
-            {
-              "id": "happy_string!",
-              "z_index": 0,
-              "x": 274.23517,
-              "y": 363.19342,
-              "stretch_x": 1.0,
-              "stretch_y": 1.0,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                0.0,
-                1.0,
-                1.0,
-                0.7
-              ],
-              "text": "String!!",
-              "misc": {
-                "active": true,
-                "pressable": false,
-                "editable": true
-              }
-            }
-          ],
-          "circles": [
-            {
-              "id": "toggle_simulation",
-              "z_index": 0,
-              "x": 1570.9586,
-              "y": 336.0219,
-              "stretch_x": 1.0,
-              "stretch_y": 1.0,
-              "radius": 41.121773,
-              "border_thickness": 13.0,
-              "fill_color": [
-                0.1,
-                0.3,
-                0.1,
-                1.0
-              ],
-              "border_color": [
-                0.1,
-                0.3,
-                0.3,
-                1.0
-              ],
-              "glow_color": [
-                0.15,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "glow_misc": {
-                "glow_size": 200.0,
-                "glow_speed": 2.0,
-                "glow_intensity": 1.0
-              },
-              "misc": {
-                "active": true,
-                "pressable": true,
-                "editable": true
-              }
-            },
-            {
-              "id": "toggle_simulation2",
-              "z_index": 1,
-              "x": 1419.3425,
-              "y": 297.01053,
-              "stretch_x": 1.0,
-              "stretch_y": 1.0,
-              "radius": 76.19151,
-              "border_thickness": 13.0,
-              "fill_color": [
-                0.1,
-                0.3,
-                0.1,
-                1.0
-              ],
-              "border_color": [
-                0.1,
-                0.3,
-                0.3,
-                1.0
-              ],
-              "glow_color": [
-                0.15,
-                0.0,
-                0.0,
-                1.0
-              ],
-              "glow_misc": {
-                "glow_size": 200.0,
-                "glow_speed": 2.0,
-                "glow_intensity": 1.0
-              },
-              "misc": {
-                "active": true,
-                "pressable": true,
-                "editable": true
-              }
-            }
-          ],
-          "outlines": [],
-          "handles": [],
-          "polygons": [
-            {
-              "id": "fard",
-              "z_index": 0,
-              "vertices": [
-                {
-                  "pos": [
-                    1654.3846,
-                    350.27393
-                  ],
-                  "color": [
-                    0.0,
-                    0.0,
-                    1.0,
-                    1.0
-                  ],
-                  "roundness": 0.0
-                },
-                {
-                  "pos": [
-                    2788.213,
-                    384.25916
-                  ],
-                  "color": [
-                    0.0,
-                    1.0,
-                    0.0,
-                    1.0
-                  ],
-                  "roundness": 0.0
-                },
-                {
-                  "pos": [
-                    1618.0487,
-                    1049.9784
-                  ],
-                  "color": [
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0
-                  ],
-                  "roundness": 0.0
-                },
-                {
-                  "pos": [
-                    1268.0487,
-                    599.9783
-                  ],
-                  "color": [
-                    1.0,
-                    0.0,
-                    0.0,
-                    1.0
-                  ],
-                  "roundness": 0.0
-                }
-              ],
-              "misc": {
-                "active": true,
-                "pressable": true,
-                "editable": true
-              }
-            }
-          ],
-          "active": true,
-          "opaque": false
-        },
-        {
           "name": "editor_information",
           "order": 2,
           "texts": [
             {
               "id": "selected_menu_text",
               "z_index": 50,
-              "x": 191.35323,
-              "y": 109.60466,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
+              "x": 192.28563,
+              "y": 105.733185,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -231,7 +39,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -239,8 +47,6 @@
               "z_index": 50,
               "x": 190.66995,
               "y": 168.32187,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -268,7 +74,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -276,8 +82,6 @@
               "z_index": 50,
               "x": 193.7421,
               "y": 225.68129,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -305,7 +109,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -313,8 +117,6 @@
               "z_index": 50,
               "x": 214.38449,
               "y": 279.07776,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -342,7 +144,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -350,8 +152,6 @@
               "z_index": 50,
               "x": 212.83328,
               "y": 324.7707,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -379,7 +179,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -387,8 +187,6 @@
               "z_index": 50,
               "x": 224.23718,
               "y": 412.9601,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -416,7 +214,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -424,8 +222,6 @@
               "z_index": 50,
               "x": 183.76483,
               "y": 470.18637,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -453,7 +249,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -461,8 +257,6 @@
               "z_index": 50,
               "x": 205.84222,
               "y": 544.53906,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -490,7 +284,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -498,8 +292,6 @@
               "z_index": 50,
               "x": 180.74408,
               "y": 590.87695,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -527,7 +319,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -535,8 +327,6 @@
               "z_index": 50,
               "x": 197.46338,
               "y": 666.1362,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -564,7 +354,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             },
             {
@@ -572,8 +362,6 @@
               "z_index": 50,
               "x": 169.20703,
               "y": 714.1758,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -601,53 +389,200 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
+              }
+            },
+            {
+              "id": "editor_mode_text",
+              "z_index": 50,
+              "x": 193.56612,
+              "y": 759.4297,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Editor Mode: {editor_mode}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              }
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        },
+        {
+          "name": "Color Picker",
+          "order": 900,
+          "texts": [
+            {
+              "id": "Color Picker Title",
+              "z_index": 8,
+              "x": 1124.9305,
+              "y": 657.39185,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 18,
+              "color": [
+                0.7,
+                0.7,
+                0.7,
+                1.0
+              ],
+              "text": "Color Picker",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
               }
             }
           ],
           "circles": [
             {
-              "id": "toggle_simulation3",
-              "z_index": 8,
-              "x": 1256.5608,
-              "y": 373.81744,
-              "stretch_x": 1.0,
-              "stretch_y": 1.0,
-              "radius": 37.066284,
-              "border_thickness": 13.0,
+              "id": "Color Picker Color Circle",
+              "action": "Drag Hue Point",
+              "style": "Hue Circle",
+              "z_index": 1,
+              "x": 1183.8617,
+              "y": 769.7613,
+              "radius": 76.68755,
+              "border_thickness": 3.0,
+              "fade": 0.0,
               "fill_color": [
-                0.1,
-                0.3,
-                0.1,
+                0.15,
+                0.15,
+                0.15,
                 1.0
               ],
               "border_color": [
-                0.1,
-                0.3,
-                0.3,
+                0.0,
+                0.0,
+                0.0,
                 1.0
               ],
               "glow_color": [
-                0.15,
                 0.0,
                 0.0,
-                1.0
+                0.0,
+                0.0
               ],
               "glow_misc": {
-                "glow_size": 200.0,
-                "glow_speed": 2.0,
-                "glow_intensity": 1.0
+                "glow_size": 0.0,
+                "glow_speed": 0.0,
+                "glow_intensity": 0.0
               },
               "misc": {
                 "active": true,
-                "pressable": true,
+                "pressable": false,
                 "editable": true
               }
             }
           ],
           "outlines": [],
           "handles": [],
-          "polygons": [],
+          "polygons": [
+            {
+              "id": "Color Picker Body",
+              "z_index": 0,
+              "vertices": [
+                {
+                  "pos": [
+                    1077.39,
+                    661.1287
+                  ],
+                  "color": [
+                    0.1,
+                    0.1,
+                    0.1,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                },
+                {
+                  "pos": [
+                    1298.2451,
+                    661.22754
+                  ],
+                  "color": [
+                    0.1,
+                    0.1,
+                    0.1,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                },
+                {
+                  "pos": [
+                    1302.1863,
+                    930.77826
+                  ],
+                  "color": [
+                    0.1,
+                    0.1,
+                    0.1,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                },
+                {
+                  "pos": [
+                    1075.4607,
+                    932.39014
+                  ],
+                  "color": [
+                    0.1,
+                    0.1,
+                    0.1,
+                    1.0
+                  ],
+                  "roundness": 0.0
+                }
+              ],
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              }
+            }
+          ],
           "active": true,
           "opaque": false
         }
@@ -665,8 +600,6 @@
               "z_index": 51,
               "x": 65.532104,
               "y": 26.819542,
-              "stretch_x": 0.0,
-              "stretch_y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -694,7 +627,7 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": false
+                "editable": true
               }
             }
           ],

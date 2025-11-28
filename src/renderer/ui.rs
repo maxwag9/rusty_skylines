@@ -48,24 +48,30 @@ pub struct TextAtlas {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CircleParams {
     pub center_radius_border: [f32; 4], // cx, cy, radius, border
-    pub fade: [f32; 4],
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
-    pub glow_misc: [f32; 4], // glow_size, glow_pulse_speed, glow_pulse_intensity
+    pub glow_misc: [f32; 4], // glow_size, glow_speed, glow_intensity
     pub misc: [f32; 4],      // active, touched_time, is_touched, id_hash
+
+    pub fade: f32,      // 0..1 for fade effect
+    pub style: u32,     // 0 = normal, 1 = hue circle, 2 = SV, etc.
+    pub _pad: [u32; 2], // padding to maintain 16-byte alignment
 }
 
 impl Default for CircleParams {
     fn default() -> Self {
         Self {
             center_radius_border: [0.0, 0.0, 0.0, 0.0],
-            fade: [0.0; 4],
+
             fill_color: [0.0; 4],
             border_color: [0.0; 4],
             glow_color: [0.0; 4],
             glow_misc: [0.0; 4],
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
+            fade: 0.0,
+            style: 0,
+            _pad: [1; 2],
         }
     }
 }

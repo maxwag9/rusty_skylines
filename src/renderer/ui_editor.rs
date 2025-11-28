@@ -35,6 +35,13 @@ impl UiVariableRegistry {
     }
 }
 
+pub fn style_to_u32(style: &str) -> u32 {
+    match style {
+        "Hue Circle" => 1,
+        "None" => 0,
+        &_ => 0,
+    }
+}
 #[derive(Debug)]
 pub struct Menu {
     pub layers: Vec<RuntimeLayer>,
@@ -108,7 +115,6 @@ impl Menu {
 
                 l.cache.circle_params.push(CircleParams {
                     center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
-                    fade: c.fade,
                     fill_color: c.fill_color,
                     border_color: c.border_color,
                     glow_color: c.glow_color,
@@ -124,6 +130,9 @@ impl Menu {
                         f32::from(rt.is_down),
                         hash,
                     ],
+                    fade: c.fade,
+                    style: style_to_u32(&c.style),
+                    _pad: [1; 2],
                 });
             }
 
@@ -627,8 +636,6 @@ impl UiButtonLoader {
                 z_index: 980 + i as i32,
                 x: 20.0,
                 y: 20.0 + i as f32 * 22.0,
-                stretch_x: 0.0,
-                stretch_y: 0.0,
                 top_left_offset: [0.0, 0.0],
                 bottom_left_offset: [0.0, 0.0],
                 top_right_offset: [0.0, 0.0],
@@ -679,6 +686,8 @@ impl UiButtonLoader {
             self.console_lines.pop_front();
         }
     }
+
+    pub fn get_z_index() {}
 
     pub fn update_dynamic_texts(&mut self) {
         let mut being_hovered = false;
@@ -1038,14 +1047,14 @@ impl UiButtonLoader {
                                 radius = radius.max(distance);
                                 let vertex_outline = UiButtonCircle {
                                     id: Some(format!("vertex_outline_{}", i)),
+                                    action: "None".to_string(),
+                                    style: "None".to_string(),
                                     z_index: i as i32,
                                     x: v.pos[0],
                                     y: v.pos[1],
-                                    stretch_x: 0.0,
-                                    stretch_y: 0.0,
                                     radius: 15.0,
                                     border_thickness: 0.0,
-                                    fade: [1.0, 0.0, 0.0, 0.0],
+                                    fade: 1.0,
                                     fill_color: [0.0, 1.0, 0.0, 1.0],
                                     border_color: [0.5, 0.0, 0.0, 1.0],
                                     glow_color: [0.0, 0.0, 0.5, 0.0],

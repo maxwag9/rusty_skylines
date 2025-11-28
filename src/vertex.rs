@@ -506,8 +506,7 @@ impl RuntimeLayer {
         for e in &mut self.texts {
             if let Some(eid) = &e.id {
                 if eid == id {
-                    e.stretch_x *= scale;
-                    e.stretch_y *= scale;
+                    e.px *= scale as u16;
                     return;
                 }
             }
@@ -679,8 +678,6 @@ pub struct UiButtonText {
     pub z_index: i32,
     pub x: f32,
     pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
     pub top_left_offset: [f32; 2],
     pub bottom_left_offset: [f32; 2],
     pub top_right_offset: [f32; 2],
@@ -735,15 +732,15 @@ pub struct UiButtonPolygon {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircle {
     pub id: Option<String>,
+    pub action: String,
+    pub style: String,
     pub z_index: i32,
 
     pub x: f32,
     pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
     pub radius: f32,
     pub border_thickness: f32,
-    pub fade: [f32; 4],
+    pub fade: f32,
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
@@ -862,8 +859,6 @@ impl UiButtonText {
 
             x: t.x,
             y: t.y,
-            stretch_x: t.stretch_x,
-            stretch_y: t.stretch_y,
             top_left_offset: t.top_left_offset,
             bottom_left_offset: t.bottom_left_offset,
             top_right_offset: t.top_right_offset,
@@ -899,8 +894,6 @@ impl UiButtonText {
 
             x: self.x,
             y: self.y,
-            stretch_x: self.stretch_x,
-            stretch_y: self.stretch_y,
 
             top_left_offset: self.top_left_offset,
             bottom_left_offset: self.bottom_left_offset,
@@ -920,14 +913,14 @@ impl UiButtonCircle {
         UiButtonCircle {
             id: c.id,
 
+            action: c.action,
+            style: c.style,
             z_index: c.z_index,
             x: c.x,
             y: c.y,
-            stretch_x: c.stretch_x,
-            stretch_y: c.stretch_y,
             radius: c.radius,
             border_thickness: c.border_thickness,
-            fade: [0.0; 4],
+            fade: c.fade,
             fill_color: c.fill_color,
             border_color: c.border_color,
             glow_color: c.glow_color,
@@ -945,16 +938,17 @@ impl UiButtonCircle {
     pub fn to_json(&self) -> UiButtonCircleJson {
         UiButtonCircleJson {
             id: self.id.clone(),
+            action: self.action.clone(),
+            style: self.style.clone(),
             z_index: self.z_index,
 
             x: self.x,
             y: self.y,
-            stretch_x: self.stretch_x,
-            stretch_y: self.stretch_y,
 
             radius: self.radius,
             border_thickness: self.border_thickness,
 
+            fade: self.fade,
             fill_color: self.fill_color,
             border_color: self.border_color,
             glow_color: self.glow_color,
@@ -1102,8 +1096,6 @@ impl Default for UiButtonText {
             z_index: 0,
             x: 0.0,
             y: 0.0,
-            stretch_x: 1.0,
-            stretch_y: 1.0,
             top_left_offset: [0.0; 2],
             bottom_left_offset: [0.0; 2],
             top_right_offset: [0.0; 2],
@@ -1181,14 +1173,14 @@ impl Default for UiButtonCircle {
     fn default() -> Self {
         Self {
             id: None,
+            action: "None".to_string(),
+            style: "None".to_string(),
             z_index: 0,
             x: 0.0,
             y: 0.0,
-            stretch_x: 1.0,
-            stretch_y: 1.0,
             radius: 10.0,
             border_thickness: 1.0,
-            fade: [0.0; 4],
+            fade: 0.0,
             fill_color: [1.0, 1.0, 1.0, 1.0],
             border_color: [0.0, 0.0, 0.0, 1.0],
             glow_color: [1.0, 1.0, 1.0, 0.0],
@@ -1310,8 +1302,6 @@ pub struct UiButtonTextJson {
 
     pub x: f32,
     pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
     pub top_left_offset: [f32; 2],
     pub bottom_left_offset: [f32; 2],
     pub top_right_offset: [f32; 2],
@@ -1325,13 +1315,14 @@ pub struct UiButtonTextJson {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonCircleJson {
     pub id: Option<String>,
+    pub action: String,
+    pub style: String,
     pub z_index: i32,
     pub x: f32,
     pub y: f32,
-    pub stretch_x: f32,
-    pub stretch_y: f32,
     pub radius: f32,
     pub border_thickness: f32,
+    pub fade: f32,
     pub fill_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],

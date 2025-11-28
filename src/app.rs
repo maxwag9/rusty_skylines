@@ -150,44 +150,48 @@ impl ApplicationHandler for App {
                 // ---------------------------------------------------------------------
                 // ENGINE ACTIONS (ALL action-based, no direct key checks)
                 // ---------------------------------------------------------------------
-                if down {
-                    // MSAA cycle
-                    if input.action_pressed_once("Cycle MSAA") {
-                        resources.renderer.core.cycle_msaa();
+
+                // MSAA cycle
+                if input.action_pressed_once("Cycle MSAA") {
+                    resources.renderer.core.cycle_msaa();
+                }
+
+                // Toggle editor mode
+                if input.action_pressed_once("Toggle editor mode") {
+                    println!("{}", down);
+                    resources.settings.editor_mode = !resources.settings.editor_mode;
+                    resources
+                        .ui_loader
+                        .ui_runtime
+                        .update_editor_mode(resources.settings.editor_mode);
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("editor_mode", resources.settings.editor_mode.to_string())
+                }
+
+                // Save GUI
+                if input.action_pressed_once("Save GUI layout") {
+                    match resources
+                        .ui_loader
+                        .save_gui_to_file("ui_data/gui_layout.json")
+                    {
+                        Ok(_) => println!("GUI layout saved"),
+                        Err(e) => eprintln!("Failed to save GUI layout: {e}"),
                     }
+                }
 
-                    // Toggle editor mode
-                    if input.action_pressed_once("Toggle editor mode") {
-                        resources.settings.editor_mode ^= true;
-                        resources
-                            .ui_loader
-                            .ui_runtime
-                            .update_editor_mode(resources.settings.editor_mode);
-                    }
+                // Add GUI element
+                if input.action_pressed_once("Add GUI element") {
+                    let result = resources.ui_loader.add_element(
+                        "base_gui",
+                        Polygon(UiButtonPolygon::default()),
+                        &resources.input.mouse,
+                    );
 
-                    // Save GUI
-                    if input.action_pressed_once("Save GUI layout") {
-                        match resources
-                            .ui_loader
-                            .save_gui_to_file("ui_data/gui_layout.json")
-                        {
-                            Ok(_) => println!("GUI layout saved"),
-                            Err(e) => eprintln!("Failed to save GUI layout: {e}"),
-                        }
-                    }
-
-                    // Add GUI element
-                    if input.action_pressed_once("Add GUI element") {
-                        let result = resources.ui_loader.add_element(
-                            "base_gui",
-                            Polygon(UiButtonPolygon::default()),
-                            &resources.input.mouse,
-                        );
-
-                        match result {
-                            Ok(r) => println!("Added GUI element: {:?}", r),
-                            Err(r) => println!("Failed adding GUI element: {:?}", r),
-                        }
+                    match result {
+                        Ok(r) => println!("Added GUI element: {:?}", r),
+                        Err(r) => println!("Failed adding GUI element: {:?}", r),
                     }
                 }
             }

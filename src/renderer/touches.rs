@@ -717,7 +717,7 @@ fn process_circles(
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
             for (circle_index, circle) in layer.circles.iter_mut().enumerate() {
-                if !circle.misc.active {
+                if !(circle.misc.active && circle.misc.editable) {
                     continue;
                 }
 
@@ -730,14 +730,14 @@ fn process_circles(
                     })
                     .unwrap_or(false);
 
+                if !runtime.is_down && !is_hit {
+                    continue;
+                }
+
                 let is_selected = loader.ui_runtime.selected_ui_element.active
                     && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
                     && loader.ui_runtime.selected_ui_element.layer_name == layer.name
                     && loader.ui_runtime.selected_ui_element.element_id == *id;
-
-                if !runtime.is_down && !is_hit {
-                    continue;
-                }
 
                 if runtime.is_down && !is_selected {
                     continue;
@@ -812,7 +812,7 @@ fn process_handles(
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in menu.layers.iter_mut().filter(|l| l.active) {
             for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
-                if !handle.misc.active {
+                if !(handle.misc.active || handle.misc.pressable) {
                     continue;
                 }
 
@@ -904,7 +904,7 @@ fn process_polygons(
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
             for (poly_index, poly) in layer.polygons.iter_mut().enumerate() {
-                if !poly.misc.active || poly.vertices.is_empty() {
+                if !(poly.misc.active && poly.misc.editable & !poly.vertices.is_empty()) {
                     continue;
                 }
 
@@ -1056,7 +1056,7 @@ fn process_text(
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
             for (text_index, text) in layer.texts.iter_mut().enumerate() {
-                if !text.misc.active {
+                if !(text.misc.active && text.misc.editable) {
                     continue;
                 }
 

@@ -29,22 +29,22 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let mut wish = Vec3::ZERO;
     if !resources.settings.editor_mode {
-        if resources.input.action_pressed_once("Fly Camera Forward") {
+        if resources.input.action_down("Fly Camera Forward") {
             wish += forward;
         }
-        if resources.input.action_pressed_once("Fly Camera Backward") {
+        if resources.input.action_down("Fly Camera Backward") {
             wish -= forward;
         }
-        if resources.input.action_pressed_once("Fly Camera Left") {
+        if resources.input.action_down("Fly Camera Left") {
             wish -= right;
         }
-        if resources.input.action_pressed_once("Fly Camera Right") {
+        if resources.input.action_down("Fly Camera Right") {
             wish += right;
         }
-        if resources.input.action_pressed_once("Fly Camera Up") {
+        if resources.input.action_down("Fly Camera Up") {
             wish += up;
         }
-        if resources.input.action_pressed_once("Fly Camera Down") {
+        if resources.input.action_down("Fly Camera Down") {
             wish -= up;
         }
     }

@@ -27,13 +27,17 @@ impl Resources {
         let settings = Settings::load("src/settings.toml");
         let editor_mode = settings.editor_mode.clone();
         let renderer = Renderer::new(window.clone(), &settings);
+        let mut ui_loader = UiButtonLoader::new(editor_mode);
+        ui_loader
+            .variables
+            .set("editor_mode", settings.editor_mode.to_string());
         Self {
             settings,
             time: TimeSystem::new(),
             input: InputState::new(),
             renderer,
             simulation: Simulation::new(),
-            ui_loader: UiButtonLoader::new(editor_mode),
+            ui_loader,
             events: Events::new(),
             window,
         }
