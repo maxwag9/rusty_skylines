@@ -1390,13 +1390,14 @@ pub fn handle_text_editing(
 
                     if input.action_pressed_once("Move Cursor Left") {
                         text.caret = l;
+                        text.clear_selection();
+                        layer.dirty.mark_texts();
                     }
                     if input.action_pressed_once("Move Cursor Right") {
                         text.caret = r;
+                        text.clear_selection();
+                        layer.dirty.mark_texts();
                     }
-
-                    text.clear_selection();
-                    layer.dirty.mark_texts();
                     return;
                 }
 

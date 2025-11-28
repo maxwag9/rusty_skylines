@@ -486,7 +486,7 @@
                 1.0,
                 1.0
               ],
-              "text": "Mouse Position: {mouse_pos.x:.1|fix, mouse_pos.y:.1|fix}",
+              "text": "Mouse Position: {mouse_pos.x:.0|fix}, {mouse_pos.y:.0|fix}",
               "misc": {
                 "active": true,
                 "pressable": false,
@@ -523,7 +523,81 @@
                 1.0,
                 1.0
               ],
-              "text": "Mouse Position change since last frame: {mouse_pos_delta.x, mouse_pos_delta.y}",
+              "text": "Mouse Position change since last frame: {mouse_pos_delta.x:.2|fix|int=3}, {mouse_pos_delta.y:.2|fix|int=3}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            },
+            {
+              "id": "any_text.being_hovered_text",
+              "z_index": 50,
+              "x": 197.46338,
+              "y": 666.1362,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Any Text being hovered: {any_text.being_hovered}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            },
+            {
+              "id": "selected_text.being_hovered_text",
+              "z_index": 50,
+              "x": 169.20703,
+              "y": 714.1758,
+              "stretch_x": 0.0,
+              "stretch_y": 0.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Text being hovered: {selected_text.being_hovered}",
               "misc": {
                 "active": true,
                 "pressable": false,

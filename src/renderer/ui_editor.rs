@@ -681,11 +681,21 @@ impl UiButtonLoader {
     }
 
     pub fn update_dynamic_texts(&mut self) {
+        let mut being_hovered = false;
+        let mut selected_being_hovered = false;
         for (_, menu) in &mut self.menus {
             for layer in &mut menu.layers {
                 let mut any_changed = false;
 
                 for t in &mut layer.texts {
+                    if self.ui_runtime.selected_ui_element.just_deselected {
+                        t.clear_selection();
+                        layer.dirty.mark_texts();
+                    }
+                    if t.being_edited || t.being_hovered || t.just_unhovered {
+                        any_changed = true;
+                    }
+
                     // Skip if no template braces exist!
                     if !t.template.contains('{') || !t.template.contains('}') || t.being_edited {
                         continue;
@@ -697,8 +707,13 @@ impl UiButtonLoader {
                         t.text = new_text;
                         any_changed = true;
                     }
-                    if t.being_hovered || t.just_unhovered {
-                        any_changed = true;
+                    if !being_hovered && t.being_hovered {
+                        being_hovered = true;
+                        if t.id
+                            == Option::from(self.ui_runtime.selected_ui_element.element_id.clone())
+                        {
+                            selected_being_hovered = true;
+                        }
                     }
                 }
 
@@ -707,6 +722,12 @@ impl UiButtonLoader {
                 }
             }
         }
+        self.variables
+            .set("any_text.being_hovered", being_hovered.to_string());
+        self.variables.set(
+            "selected_text.being_hovered",
+            selected_being_hovered.to_string(),
+        );
     }
 
     pub fn handle_touches(

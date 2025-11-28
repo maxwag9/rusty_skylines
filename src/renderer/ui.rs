@@ -965,6 +965,428 @@ impl UiRenderer {
         layer.gpu.text_count = text_vertices.len() as u32;
     }
 
+    fn build_text_vertices(
+        &self,
+        layer: &mut RuntimeLayer,
+        time_system: &TimeSystem,
+        ui_runtime: &UiRuntime,
+        menu_name: &String,
+    ) -> Vec<UiVertexText> {
+        let mut text_vertices: Vec<UiVertexText> = Vec::new();
+
+        if let Some(atlas) = &self.pipelines.text_atlas {
+            for tp in &mut layer.cache.texts {
+                let pad = 4.0; // same as your selection outline pad
+
+                // tp is TextParams (render-time)
+                // must find corresponding original UiButtonText to get caret
+                let mut maybe_caret = None;
+
+                if let Some(ref text_id) = tp.id {
+                    for original in &layer.texts {
+                        if original.id.as_ref() == Some(text_id) {
+                            maybe_caret = Some(original.caret);
+
+                            break;
+                        }
+                    }
+                }
+
+                let caret_index = maybe_caret.unwrap_or(tp.text.len());
+                tp.glyph_bounds.clear();
+
+                // ---- measure + render glyphs ----
+                let mut min_x = f32::MAX;
+                let mut min_y = f32::MAX;
+                let mut max_x = f32::MIN;
+                let mut max_y = f32::MIN;
+
+                let mut pen_x = tp.pos[0];
+                let base_y = tp.pos[1] + atlas.line_height;
+
+                // caret position tracker
+                let mut caret_x = pen_x;
+
+                let mut char_i = 0;
+
+                let mut original_text: Option<&mut UiButtonText> = None;
+
+                if let Some(ref text_id) = tp.id {
+                    for o in &mut layer.texts {
+                        if o.id.as_ref() == Some(text_id) {
+                            original_text = Some(o);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(orig) = &mut original_text {
+                    orig.glyph_bounds.clear();
+                }
+
+                for ch in tp.text.chars() {
+                    if let Some(g) = atlas.glyphs.get(&(ch, tp.px)) {
+                        // compute rounded glyph quad first
+                        let x0 = (pen_x + g.bearing_x).round();
+                        let y0 = (base_y - g.bearing_y).round();
+                        let x1 = x0 + g.w;
+                        let y1 = y0 + g.h;
+
+                        // *** NEW CARET LOGIC ***
+                        // caret BEFORE this character uses x0, not pen_x
+                        if char_i == caret_index {
+                            caret_x = x0;
+                        }
+
+                        if let Some(orig) = &mut original_text {
+                            orig.glyph_bounds.push((x0, x1));
+                        }
+
+                        tp.glyph_bounds.push((x0, x1));
+
+                        // bounding box
+                        min_x = min_x.min(x0);
+                        min_y = min_y.min(y0);
+                        max_x = max_x.max(x1);
+                        max_y = max_y.max(y1);
+
+                        // triangles
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y0],
+                                uv: [g.u1, g.v0],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x0, y0],
+                                uv: [g.u0, g.v0],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x1, y1],
+                                uv: [g.u1, g.v1],
+                                color: tp.color,
+                            },
+                            UiVertexText {
+                                pos: [x0, y1],
+                                uv: [g.u0, g.v1],
+                                color: tp.color,
+                            },
+                        ]);
+                        pen_x += g.advance;
+                    }
+
+                    char_i += 1;
+                }
+
+                // caret at end → use last glyph’s right edge
+                if caret_index == tp.text.len() {
+                    if let Some((_, last_x1)) = tp.glyph_bounds.last() {
+                        caret_x = *last_x1;
+                    } else {
+                        caret_x = tp.pos[0];
+                    }
+                }
+
+                // ---- bounding box for the whole text ----
+                if max_x < min_x {
+                    tp.natural_width = 0.0;
+                    tp.natural_height = atlas.line_height;
+                } else {
+                    let padded_min_x = min_x - pad;
+                    let padded_min_y = min_y - pad;
+                    let padded_max_x = max_x + pad;
+                    let padded_max_y = max_y + pad;
+
+                    tp.natural_width = padded_max_x - padded_min_x;
+                    tp.natural_height = padded_max_y - padded_min_y;
+                }
+
+                let mut being_edited = false;
+                let mut being_hovered = false;
+                // ---- write back natural_width/natural_height to UiButtonText ----
+                if let Some(orig) = &mut original_text {
+                    orig.natural_width = tp.natural_width;
+                    orig.natural_height = tp.natural_height;
+                    being_edited = orig.being_edited;
+                    being_hovered = orig.being_hovered;
+                    orig.being_hovered = false;
+                    orig.just_unhovered = true;
+                }
+
+                // ---- check if this text is selected ----
+                let mut is_selected = false;
+                if let Some(ref text_id) = tp.id {
+                    let sel = &ui_runtime.selected_ui_element;
+                    if sel.active
+                        && sel.element_id == *text_id
+                        && sel.layer_name == layer.name
+                        && sel.menu_name == *menu_name
+                    {
+                        is_selected = true;
+                    }
+                }
+
+                if let Some(orig) = &mut original_text {
+                    if orig.has_selection {
+                        let (l, r) = if orig.sel_start < orig.sel_end {
+                            (orig.sel_start, orig.sel_end)
+                        } else {
+                            (orig.sel_end, orig.sel_start)
+                        };
+
+                        if l < r && l < orig.glyph_bounds.len() {
+                            let x_start = orig.glyph_bounds[l].0;
+                            let x_end = if r == 0 {
+                                x_start
+                            } else if r - 1 < orig.glyph_bounds.len() {
+                                orig.glyph_bounds[r - 1].1
+                            } else {
+                                orig.glyph_bounds.last().unwrap().1
+                            };
+
+                            let y0 = min_y - 2.0;
+                            let y1 = max_y + 2.0;
+
+                            let col = [0.3, 0.5, 1.0, 0.35];
+                            let uv = [-1.0, -1.0];
+
+                            text_vertices.extend_from_slice(&[
+                                UiVertexText {
+                                    pos: [x_start, y0],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_end, y0],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_end, y1],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_start, y0],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_end, y1],
+                                    uv,
+                                    color: col,
+                                },
+                                UiVertexText {
+                                    pos: [x_start, y1],
+                                    uv,
+                                    color: col,
+                                },
+                            ]);
+                        }
+                    }
+                }
+
+                // ---- editor_mode outline (light rectangle) ----
+                if ui_runtime.editor_mode && !being_edited && !is_selected {
+                    // rectangle bounds from natural dimensions
+                    let x0 = min_x - pad;
+                    let y0 = min_y - pad;
+                    let x1 = max_x + pad;
+                    let y1 = max_y + pad;
+
+                    // very soft color, hover brightens it
+                    let base_alpha = if being_hovered { 0.30 } else { 0.01 };
+                    let col = [0.9, 0.9, 1.0, base_alpha];
+                    let uv = [-1.0, -1.0];
+
+                    // outline thickness
+                    let t = 1.5;
+
+                    let mut push_quad = |xa: f32, ya: f32, xb: f32, yb: f32| {
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xb, ya],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: col,
+                            },
+                            UiVertexText {
+                                pos: [xa, yb],
+                                uv,
+                                color: col,
+                            },
+                        ]);
+                    };
+
+                    // top
+                    push_quad(x0, y0, x1, y0 + t);
+                    // bottom
+                    push_quad(x0, y1 - t, x1, y1);
+                    // left
+                    push_quad(x0, y0, x0 + t, y1);
+                    // right
+                    push_quad(x1 - t, y0, x1, y1);
+                }
+
+                // ---- corner brackets (NOT editing, but selected) ----
+                if is_selected && !being_edited {
+                    // base size / padding
+                    let base_len = 6.0;
+                    let base_pad = 4.0;
+                    let thick = 2.0;
+
+                    // hover → push brackets further out
+                    let hover_factor = if being_hovered { 1.6 } else { 1.0 };
+
+                    let br = base_len * hover_factor;
+                    let pad = base_pad * hover_factor;
+
+                    let x0 = min_x - pad;
+                    let y0 = min_y - pad;
+                    let x1 = max_x + pad;
+                    let y1 = max_y + pad;
+
+                    let c = [1.0, 0.85, 0.2, 1.0]; // gold-ish
+                    let uv = [-1.0, -1.0];
+
+                    // small helper to push a quad
+                    let mut push_quad = |xa: f32, ya: f32, xb: f32, yb: f32| {
+                        text_vertices.extend_from_slice(&[
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xb, ya],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xa, ya],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xb, yb],
+                                uv,
+                                color: c,
+                            },
+                            UiVertexText {
+                                pos: [xa, yb],
+                                uv,
+                                color: c,
+                            },
+                        ]);
+                    };
+
+                    // top-left
+                    push_quad(x0, y0, x0 + br, y0 + thick); // horizontal
+                    push_quad(x0, y0, x0 + thick, y0 + br); // vertical
+
+                    // top-right
+                    push_quad(x1 - br, y0, x1, y0 + thick);
+                    push_quad(x1 - thick, y0, x1, y0 + br);
+
+                    // bottom-left
+                    push_quad(x0, y1 - thick, x0 + br, y1);
+                    push_quad(x0, y1 - br, x0 + thick, y1);
+
+                    // bottom-right
+                    push_quad(x1 - br, y1 - thick, x1, y1);
+                    push_quad(x1 - thick, y1 - br, x1, y1);
+                }
+
+                if being_edited {
+                    let caret_width = 2.0;
+                    let caret_offset_y = 4.0;
+
+                    let x0 = caret_x;
+                    let y0 = tp.pos[1] + caret_offset_y;
+                    let x1 = caret_x + caret_width;
+                    let y1 = tp.pos[1] + atlas.line_height + caret_offset_y;
+
+                    let t = time_system.total_time * 3.0; // adjust speed here
+                    let blink_alpha = 0.5 + 0.5 * t.cos(); // smooth
+                    let caret_alpha = blink_alpha.clamp(0.0, 1.0);
+
+                    let caret_color = [1.0, 1.0, 1.0, caret_alpha];
+
+                    let uv = [-1.0, -1.0];
+
+                    text_vertices.extend_from_slice(&[
+                        UiVertexText {
+                            pos: [x0, y0],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x1, y0],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x1, y1],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x0, y0],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x1, y1],
+                            uv,
+                            color: caret_color,
+                        },
+                        UiVertexText {
+                            pos: [x0, y1],
+                            uv,
+                            color: caret_color,
+                        },
+                    ]);
+                }
+            }
+        }
+        text_vertices
+    }
+
     pub fn build_text_atlas(
         &mut self,
         device: &Device,

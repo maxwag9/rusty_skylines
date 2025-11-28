@@ -96,3 +96,6 @@ keys = ["Ctrl+ArrowUp"]
 
 ["Move Layer Down"]
 keys = ["Ctrl+ArrowDown"]
+
+["Backspace"]
+keys = ["Backspace"]

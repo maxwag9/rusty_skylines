@@ -476,37 +476,77 @@ fn add_values(a: Value, b: Value) -> Option<Value> {
 // ------------------------------------------------------------
 // Template formatting
 // -----------------------------------------------------------
-fn apply_full_format(value: Value, precision: Option<usize>, fmt_opts: Option<&str>) -> String {
-    let mut s = match (value.clone(), precision) {
-        (Value::Num(n), Some(p)) => format!("{:.*}", p, n),
-        _ => value.to_string_value(),
-    };
 
-    if let Some(opts) = fmt_opts {
-        let mut width = None;
-        let mut align = "left";
+fn apply_format(value: Value, precision: Option<usize>, opts: &str) -> String {
+    let mut use_fix = false;
+    let mut int_width = 4usize;
+    let mut dec_width = 4usize;
 
-        for part in opts.split(',') {
-            let p = part.trim();
-            if let Some(v) = p.strip_prefix("width=") {
-                width = v.parse::<usize>().ok();
-            } else if let Some(v) = p.strip_prefix("align=") {
-                align = v;
+    // parse flags: fix, int=, dec=
+    for part in opts.split('|') {
+        let p = part.trim();
+        if p.eq_ignore_ascii_case("fix") {
+            use_fix = true;
+        } else if let Some(v) = p.strip_prefix("int=") {
+            if let Ok(n) = v.parse() {
+                int_width = n;
             }
-        }
-
-        if let Some(w) = width {
-            if s.len() < w {
-                s = match align {
-                    "right" => format!("{:>width$}", s, width = w),
-                    "center" => format!("{:^width$}", s, width = w),
-                    _ => format!("{:<width$}", s, width = w),
-                };
+        } else if let Some(v) = p.strip_prefix("dec=") {
+            if let Ok(n) = v.parse() {
+                dec_width = n;
             }
         }
     }
 
-    s
+    // normal formatting path, int/dec ignored
+    if !use_fix {
+        if let (Value::Num(n), Some(p)) = (&value, precision) {
+            return format!("{:.*}", p, n);
+        }
+        return value.to_string_value();
+    }
+
+    // fix-mode: precision overrides dec_width
+    if let Some(p) = precision {
+        dec_width = p;
+    }
+
+    let n = match value.as_f64() {
+        Some(v) => v,
+        None => return value.to_string_value(),
+    };
+
+    let neg = n.is_sign_negative();
+    let abs = n.abs();
+
+    // integer magnitude and fractional part from |n|
+    let mut int_mag = abs.trunc() as i64;
+    let mut frac_scaled = if dec_width > 0 {
+        (abs.fract() * 10f64.powi(dec_width as i32)).round() as i64
+    } else {
+        0
+    };
+
+    // rounding overflow: 9.999 → 10.000
+    if dec_width > 0 {
+        let base = 10i64.pow(dec_width as u32);
+        if frac_scaled >= base {
+            frac_scaled -= base;
+            int_mag += 1;
+        }
+    }
+
+    // now reapply sign to the integer and let formatting handle the '-'
+    let signed_int = if neg { -int_mag } else { int_mag };
+
+    let int_str = format!("{:>iw$}", signed_int, iw = int_width);
+
+    if dec_width > 0 {
+        let frac_str = format!("{:0dw$}", frac_scaled, dw = dec_width);
+        format!("{int_str}.{frac_str}")
+    } else {
+        int_str
+    }
 }
 
 // ------------------------------------------------------------
@@ -519,221 +559,42 @@ fn is_plain_ident(s: &str) -> bool {
 }
 
 pub fn evaluate_placeholder(src: &str, vars: &UiVariableRegistry) -> String {
-    let inner = src.trim();
-
-    // no comma → single expression, simple path
-    if !inner.contains(',') {
-        return format_slot(inner, vars);
-    }
-
-    // ---------- multi-expression: {a, b, c} ----------
-    #[derive(Debug)]
-    struct FixSlot {
-        raw: String,  // full "part" including |fix etc
-        expr: String, // pure expression, no : or |
-        precision: Option<usize>,
-        is_fix: bool,
-        numeric: Option<f64>,
-    }
-
-    let mut slots: Vec<FixSlot> = Vec::new();
-    let mut any_fix = false;
-    let mut any_fix_numeric = false;
-
-    for part in inner.split(',') {
-        let raw = part.trim();
-        if raw.is_empty() {
-            continue;
-        }
-
-        // split |options
-        let mut expr = raw;
-        let mut fmt_opts_str: Option<String> = None;
-        if let Some(idx) = expr.find('|') {
-            fmt_opts_str = Some(expr[idx + 1..].trim().to_string());
-            expr = &expr[..idx];
-        }
-
-        // split :precision
-        let mut prec = None;
-        if let Some(idx) = expr.find(':') {
-            prec = expr[idx + 1..]
-                .trim()
-                .strip_prefix('.')
-                .and_then(|p| p.parse::<usize>().ok());
-            expr = &expr[..idx];
-        }
-
-        let expr = expr.trim().to_string();
-
-        // detect |fix inside options
-        let is_fix = fmt_opts_str
-            .as_ref()
-            .map(|s| s.split(',').any(|p| p.trim().eq_ignore_ascii_case("fix")))
-            .unwrap_or(false);
-
-        let mut numeric = None;
-        if is_fix {
-            if let Some(val) = eval_expr(&expr, vars) {
-                numeric = val.as_f64();
-                if numeric.is_some() {
-                    any_fix_numeric = true;
-                }
-            }
-        }
-
-        any_fix |= is_fix;
-
-        slots.push(FixSlot {
-            raw: raw.to_string(),
-            expr,
-            precision: prec,
-            is_fix,
-            numeric,
-        });
-    }
-
-    // no |fix at all → just format each slot individually
-    if !any_fix || !any_fix_numeric {
-        let mut out = String::new();
-        let mut first = true;
-        for slot in slots {
-            if !first {
-                out.push_str(", ");
-            }
-            first = false;
-            out.push_str(&format_slot(&slot.raw, vars));
-        }
-        return out;
-    }
-
-    // ---------- compute common integer/fraction widths for all |fix numeric slots ----------
-    let mut max_int = 0usize;
-    let mut max_frac = 0usize;
-    let mut max_specified_prec = 0usize;
-
-    for slot in &slots {
-        if !slot.is_fix {
-            continue;
-        }
-        let Some(n) = slot.numeric else { continue };
-
-        if let Some(p) = slot.precision {
-            if p > max_specified_prec {
-                max_specified_prec = p;
-            }
-        }
-
-        let abs = n.abs();
-        let s = if let Some(p) = slot.precision {
-            format!("{:.*}", p, abs)
-        } else {
-            abs.to_string()
-        };
-
-        let parts: Vec<&str> = s.split('.').collect();
-        let int_digits = parts
-            .get(0)
-            .map(|t| t.chars().filter(|c| c.is_ascii_digit()).count())
-            .unwrap_or(0);
-
-        let frac_digits = if parts.len() > 1 { parts[1].len() } else { 0 };
-
-        if int_digits > max_int {
-            max_int = int_digits;
-        }
-        if frac_digits > max_frac {
-            max_frac = frac_digits;
-        }
-    }
-
-    // if any precision explicitly given via :.N, use the max of those for all |fix entries
-    if max_specified_prec > 0 {
-        max_frac = max_specified_prec;
-    }
-
-    // ---------- format all slots ----------
-    let mut out = String::new();
-    let mut first = true;
-
-    for slot in slots {
-        if !first {
-            out.push_str(", ");
-        }
-        first = false;
-
-        // non-fix or non-numeric → fallback to normal formatting
-        if !slot.is_fix || slot.numeric.is_none() {
-            out.push_str(&format_slot(&slot.raw, vars));
-            continue;
-        }
-
-        let n = slot.numeric.unwrap();
-        let sign = if n < 0.0 { "-" } else { "" };
-        let abs = n.abs();
-
-        let mut int_part = abs.trunc() as i64;
-        let mut frac_scaled = if max_frac > 0 {
-            (abs.fract() * 10f64.powi(max_frac as i32)).round() as i64
-        } else {
-            0
-        };
-
-        // handle rounding overflow: 9.999 → 10.000
-        if max_frac > 0 {
-            let base = 10i64.pow(max_frac as u32);
-            if frac_scaled >= base {
-                frac_scaled -= base;
-                int_part += 1;
-            }
-        }
-
-        let int_str = format!("{:>width$}", int_part, width = max_int);
-
-        if max_frac > 0 {
-            let frac_str = format!("{:0width$}", frac_scaled, width = max_frac);
-            out.push_str(&format!("{sign}{int_str}.{frac_str}"));
-        } else {
-            out.push_str(&format!("{sign}{int_str}"));
-        }
-    }
-
-    out
+    format_slot(src.trim(), vars)
 }
 
 fn format_slot(src: &str, vars: &UiVariableRegistry) -> String {
+    // extract |options
     let mut expr = src;
-    let mut fmt_opts = None;
+    let mut opts = "";
 
-    // split |options
-    if let Some(idx) = expr.find('|') {
-        fmt_opts = Some(expr[idx + 1..].trim());
-        expr = &expr[..idx];
+    if let Some(i) = src.find('|') {
+        expr = &src[..i];
+        opts = &src[i + 1..];
     }
 
-    // split :precision  like  expr:.3
-    let mut prec = None;
-    if let Some(idx) = expr.find(':') {
-        prec = expr[idx + 1..]
+    // extract :precision
+    let mut precision = None;
+    if let Some(i) = expr.find(':') {
+        precision = expr[i + 1..]
             .trim()
             .strip_prefix('.')
-            .and_then(|p| p.parse::<usize>().ok());
-        expr = &expr[..idx];
+            .and_then(|p| p.parse().ok());
+        expr = &expr[..i];
     }
 
     expr = expr.trim();
 
-    // fast path for plain variable with no formatting
-    if prec.is_none() && fmt_opts.is_none() && is_plain_ident(expr) {
-        if let Some(raw) = vars.get(expr) {
-            return raw.to_string();
-        }
+    let val = match eval_expr(expr, vars) {
+        Some(v) => v,
+        None => return src.to_string(),
+    };
+
+    // no formatting and plain ident
+    if precision.is_none() && opts.is_empty() && is_plain_ident(expr) {
+        return val.to_string();
     }
 
-    match eval_expr(expr, vars) {
-        Some(val) => apply_full_format(val, prec, fmt_opts),
-        None => src.to_string(),
-    }
+    apply_format(val, precision, opts)
 }
 
 pub fn eval_expr(expr: &str, vars: &UiVariableRegistry) -> Option<Value> {
