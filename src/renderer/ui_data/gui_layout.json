@@ -9,6 +9,8 @@
           "texts": [
             {
               "id": "selected_menu_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 192.28563,
               "y": 105.733185,
@@ -44,6 +46,8 @@
             },
             {
               "id": "selected_layer_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 190.66995,
               "y": 168.32187,
@@ -79,6 +83,8 @@
             },
             {
               "id": "selected_element_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 193.7421,
               "y": 225.68129,
@@ -114,6 +120,8 @@
             },
             {
               "id": "editing_text_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 214.38449,
               "y": 279.07776,
@@ -149,6 +157,8 @@
             },
             {
               "id": "selected_text.being_edited_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 212.83328,
               "y": 324.7707,
@@ -184,6 +194,8 @@
             },
             {
               "id": "selected_layer.order_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 224.23718,
               "y": 412.9601,
@@ -219,6 +231,8 @@
             },
             {
               "id": "selected_element.z_index_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 183.76483,
               "y": 470.18637,
@@ -254,6 +268,8 @@
             },
             {
               "id": "mouse_pos_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 205.84222,
               "y": 544.53906,
@@ -289,6 +305,8 @@
             },
             {
               "id": "mouse_pos_delta_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 180.74408,
               "y": 590.87695,
@@ -324,6 +342,8 @@
             },
             {
               "id": "any_text.being_hovered_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 197.46338,
               "y": 666.1362,
@@ -359,6 +379,8 @@
             },
             {
               "id": "selected_text.being_hovered_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 169.20703,
               "y": 714.1758,
@@ -393,7 +415,46 @@
               }
             },
             {
+              "id": "color_picker.color_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 180.74408,
+              "y": 630.87695,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Color: , R={color_picker.r:.2|fix}, G={color_picker.g:.2|fix}, B={color_picker.b:.2|fix}, H={color_picker.h:.2|fix}, S={color_picker.s:.2|fix}, V={color_picker.v:.2|fix},",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              }
+            },
+            {
               "id": "editor_mode_text",
+              "action": "None",
+              "style": "None",
               "z_index": 50,
               "x": 193.56612,
               "y": 759.4297,
@@ -441,6 +502,8 @@
           "texts": [
             {
               "id": "Color Picker Title",
+              "action": "None",
+              "style": "None",
               "z_index": 8,
               "x": 1124.9305,
               "y": 657.39185,
@@ -483,20 +546,20 @@
               "z_index": 1,
               "x": 1183.8617,
               "y": 769.7613,
-              "radius": 76.68755,
-              "border_thickness": 3.0,
+              "radius": 83.57955,
+              "border_thickness": 0.0,
               "fade": 0.0,
               "fill_color": [
-                0.15,
-                0.15,
-                0.15,
-                1.0
+                0.2,
+                0.2,
+                0.2,
+                0.5
               ],
               "border_color": [
                 0.0,
                 0.0,
                 0.0,
-                1.0
+                0.0
               ],
               "glow_color": [
                 0.0,
@@ -511,7 +574,7 @@
               },
               "misc": {
                 "active": true,
-                "pressable": false,
+                "pressable": true,
                 "editable": true
               }
             }
@@ -521,6 +584,8 @@
           "polygons": [
             {
               "id": "Color Picker Body",
+              "action": "None",
+              "style": "None",
               "z_index": 0,
               "vertices": [
                 {
@@ -529,9 +594,9 @@
                     661.1287
                   ],
                   "color": [
-                    0.1,
-                    0.1,
-                    0.1,
+                    0.012,
+                    0.012,
+                    0.012,
                     1.0
                   ],
                   "roundness": 0.0
@@ -542,9 +607,9 @@
                     661.22754
                   ],
                   "color": [
-                    0.1,
-                    0.1,
-                    0.1,
+                    0.012,
+                    0.012,
+                    0.012,
                     1.0
                   ],
                   "roundness": 0.0
@@ -555,9 +620,9 @@
                     930.77826
                   ],
                   "color": [
-                    0.1,
-                    0.1,
-                    0.1,
+                    0.012,
+                    0.012,
+                    0.012,
                     1.0
                   ],
                   "roundness": 0.0
@@ -568,9 +633,9 @@
                     932.39014
                   ],
                   "color": [
-                    0.1,
-                    0.1,
-                    0.1,
+                    0.012,
+                    0.012,
+                    0.012,
                     1.0
                   ],
                   "roundness": 0.0
@@ -597,6 +662,8 @@
           "texts": [
             {
               "id": "fps_text",
+              "action": "None",
+              "style": "None",
               "z_index": 51,
               "x": 65.532104,
               "y": 26.819542,

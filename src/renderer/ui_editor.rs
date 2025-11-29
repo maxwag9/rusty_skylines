@@ -3,7 +3,7 @@ use crate::renderer::helper::{calc_move_speed, triangulate_polygon};
 use crate::renderer::input::MouseState;
 use crate::renderer::parser::resolve_template;
 use crate::renderer::touches::{
-    EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
+    EditorInteractionResult, HitResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
     handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing, near_handle,
     press_began_on_ui,
 };
@@ -11,8 +11,10 @@ use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams}
 use crate::resources::{InputState, TimeSystem};
 use crate::vertex::UiElement::*;
 pub(crate) use crate::vertex::*;
+use glam::Vec2;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::f32::consts::{FRAC_PI_2, PI};
 use std::fs;
 
 pub struct UiVariableRegistry {
@@ -42,6 +44,237 @@ pub fn style_to_u32(style: &str) -> u32 {
         &_ => 0,
     }
 }
+
+pub fn execute_action(
+    loader: &mut UiButtonLoader,
+    top_hit: &Option<HitResult>,
+    mouse_state: &MouseState,
+) {
+    let actions: Vec<String> = loader.ui_runtime.action_states.keys().cloned().collect();
+
+    for action in actions {
+        match action.as_str() {
+            "Drag Hue Point" => {
+                drag_hue_point(loader, mouse_state, top_hit);
+            }
+            "None" => {}
+            _ => {}
+        }
+    }
+}
+
+fn activate_action(loader: &mut UiButtonLoader, top_hit: &Option<HitResult>) {
+    if let Some(hit) = top_hit {
+        let action = hit.action.clone().unwrap_or("None".to_string());
+        match action.as_str() {
+            "Drag Hue Point" => {
+                if let Some(action_state) =
+                    loader.ui_runtime.action_states.get_mut("Drag Hue Point")
+                {
+                    action_state.active = true;
+                } else {
+                    let action_state = ActionState {
+                        action_name: "Drag Hue Point".to_string(),
+                        position: Default::default(),
+                        radius: 5.0,
+                        active: true,
+                    };
+                    loader
+                        .ui_runtime
+                        .action_states
+                        .insert("Drag Hue Point".to_string(), action_state);
+                }
+            }
+            "None" => {}
+            &_ => {}
+        }
+    }
+}
+
+fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
+    match action_name {
+        "Drag Hue Point" => {
+            if let Some(action_state) = loader.ui_runtime.action_states.get_mut("Drag Hue Point") {
+                action_state.active = false;
+            }
+        }
+        "None" => {}
+        &_ => {}
+    }
+}
+
+fn drag_hue_point(
+    loader: &mut UiButtonLoader,
+    mouse_state: &MouseState,
+    top_hit: &Option<HitResult>,
+) {
+    // if loader.ui_runtime.selected_ui_element.element_type != ElementKind::Circle {
+    //     return;
+    // }
+    let mut new_x = None;
+    let mut new_y = None;
+    let border_color = None;
+    let mut radius = None;
+
+    if loader.ui_runtime.selected_ui_element.dragging {
+        new_x = Some(lerp(loader.ui_runtime.last_pos.0, mouse_state.pos.x, 0.5));
+        new_y = Some(lerp(loader.ui_runtime.last_pos.1, mouse_state.pos.y, 0.5));
+
+        loader.ui_runtime.last_pos = (
+            new_x.unwrap_or(mouse_state.last_pos.x),
+            new_y.unwrap_or(mouse_state.last_pos.y),
+        );
+    }
+    if let Some(circle_layer) = loader
+        .menus
+        .get("Editor_Menu")
+        .and_then(|m| m.layers.iter().find(|l| l.name == "Color Picker"))
+    {
+        // Find hue wheel and handle circles
+        let hue_circle = circle_layer
+            .circles
+            .iter()
+            .find(|c| c.style == "Hue Circle");
+
+        let handle_circle = circle_layer
+            .circles
+            .iter()
+            .find(|c| c.id.as_deref() == Some("color picker handle circle"));
+
+        if let (Some(hue), Some(handle)) = (hue_circle, handle_circle) {
+            let dmx = handle.x - mouse_state.pos.x;
+            let dmy = handle.y - mouse_state.pos.y;
+            let dist_to_mouse = (dmx * dmx + dmy * dmy).sqrt();
+            if dist_to_mouse < loader.ui_runtime.original_radius + 4.0 {
+                radius = Some(loader.ui_runtime.original_radius + 4.0);
+            } else {
+                radius = Some(loader.ui_runtime.original_radius);
+            }
+            if loader.ui_runtime.selected_ui_element.dragging {
+                radius = Some(loader.ui_runtime.original_radius + 4.0);
+                // 1. Compute relative vector
+                let dx = handle.x - hue.x;
+                let dy = handle.y - hue.y;
+
+                // 2. Angle (same as WGSL atan2)
+                let angle = dy.atan2(dx);
+                // +90 degrees rotation
+                let angle_shifted = angle + FRAC_PI_2;
+
+                // wrap angle into [-PI, PI]
+                let angle_wrapped = angle_shifted.sin().atan2(angle_shifted.cos());
+
+                // hue 0..1
+                let h = angle_wrapped / (PI * 2.0) + 0.5;
+
+                // saturation (Blender)
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > hue.radius {}
+                let s_linear = (dist / hue.radius).clamp(0.0, 1.0);
+
+                // Blender exponent ~0.47
+                let s = s_linear.powf(0.47);
+
+                // Brightness todo*
+                let v = 1.0;
+
+                // 4. HSV→RGB (S=1, V=1 just like shader)
+                let rgb = hsv_to_rgb(h, s, v);
+
+                // border_color = Some([rgb[0], rgb[1], rgb[2], 1.0]);
+
+                loader.variables.set("color_picker.r", rgb[0].to_string());
+                loader.variables.set("color_picker.g", rgb[1].to_string());
+                loader.variables.set("color_picker.b", rgb[2].to_string());
+
+                loader.variables.set("color_picker.h", h.to_string());
+                loader.variables.set("color_picker.s", s.to_string());
+                loader.variables.set("color_picker.v", v.to_string());
+            }
+        }
+        loader.ui_runtime.action_states.get("Drag Hue Point");
+    }
+
+    let result = loader.edit_circle(
+        "Editor_Menu",
+        "Color Picker",
+        "color picker handle circle",
+        new_x,
+        new_y,
+        radius,
+        border_color,
+    );
+
+    if !result {
+        if loader.ui_runtime.selected_ui_element.just_deselected {
+            let handle_circle = UiButtonCircle {
+                id: Some("color picker handle circle".to_string()),
+                action: "None".to_string(),
+                style: "None".to_string(),
+                z_index: 990,
+                x: mouse_state.pos.x,
+                y: mouse_state.pos.y,
+                radius: 5.0,
+                border_thickness: 1.0,
+                fade: 0.0,
+                fill_color: [0.0; 4],
+                border_color: [0.2, 0.2, 0.2, 0.8],
+                glow_color: [0.0; 4],
+                glow_misc: Default::default(),
+                misc: MiscButtonSettings {
+                    active: true,
+                    touched_time: 0.0,
+                    is_touched: false,
+                    pressable: false,
+                    editable: false,
+                },
+            };
+            loader.ui_runtime.last_pos = (mouse_state.pos.x, mouse_state.pos.y);
+            loader.ui_runtime.original_radius = handle_circle.radius;
+            let _ = loader.add_element(
+                "Editor_Menu",
+                "Color Picker",
+                Circle(handle_circle),
+                mouse_state,
+                false,
+            );
+        }
+    }
+    if let Some(hit) = top_hit {
+        if hit.action != Some("Drag Hue Point".to_string()) {
+            deactivate_action(loader, "Drag Hue Point");
+        }
+    }
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let h6 = h * 6.0;
+    let i = h6.floor();
+    let f = h6 - i;
+
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+
+    if i == 0.0 {
+        [v, t, p]
+    } else if i == 1.0 {
+        [q, v, p]
+    } else if i == 2.0 {
+        [p, v, t]
+    } else if i == 3.0 {
+        [p, q, v]
+    } else if i == 4.0 {
+        [t, p, v]
+    } else {
+        [v, p, q]
+    }
+}
+
 #[derive(Debug)]
 pub struct Menu {
     pub layers: Vec<RuntimeLayer>,
@@ -314,6 +547,15 @@ impl Menu {
 }
 
 #[derive(Debug)]
+pub struct ActionState {
+    action_name: String,
+    position: Vec2,
+    radius: f32,
+
+    pub active: bool,
+}
+
+#[derive(Debug)]
 pub struct UiRuntime {
     pub elements: HashMap<String, ButtonRuntime>,
     pub selected_ui_element: SelectedUiElement,
@@ -323,6 +565,9 @@ pub struct UiRuntime {
     pub editing_text: bool,
     pub clipboard: String,
     pub dragging_text: bool,
+    pub last_pos: (f32, f32),
+    pub original_radius: f32,
+    pub action_states: HashMap<String, ActionState>,
 }
 
 impl UiRuntime {
@@ -336,6 +581,9 @@ impl UiRuntime {
             editing_text: false,
             clipboard: "".to_string(),
             dragging_text: false,
+            last_pos: (0.0, 0.0),
+            original_radius: 0.0,
+            action_states: HashMap::new(),
         }
     }
 
@@ -633,6 +881,8 @@ impl UiButtonLoader {
         for (i, line) in lines.into_iter().enumerate() {
             layer.texts.push(UiButtonText {
                 id: Some(format!("console_line_{}", i)),
+                action: "None".to_string(),
+                style: "None".to_string(),
                 z_index: 980 + i as i32,
                 x: 20.0,
                 y: 20.0 + i as f32 * 22.0,
@@ -686,8 +936,6 @@ impl UiButtonLoader {
             self.console_lines.pop_front();
         }
     }
-
-    pub fn get_z_index() {}
 
     pub fn update_dynamic_texts(&mut self) {
         let mut being_hovered = false;
@@ -746,17 +994,16 @@ impl UiButtonLoader {
         time_system: &TimeSystem,
     ) {
         self.ui_runtime.selected_ui_element.just_deselected = false;
-        let mut trigger_selection = false;
         let mouse_snapshot = MouseSnapshot::from_mouse(&input_state.mouse);
         let editor_mode = self.ui_runtime.editor_mode;
 
         let press_started_on_ui = if mouse_snapshot.just_pressed {
             press_began_on_ui(&self.menus, &mouse_snapshot, editor_mode)
         } else {
-            false
+            (false, "None".to_string())
         };
 
-        if mouse_snapshot.just_pressed && !press_started_on_ui && editor_mode {
+        if mouse_snapshot.just_pressed && !press_started_on_ui.0 {
             if !near_handle(&self.menus, &mouse_snapshot) {
                 self.ui_runtime.selected_ui_element.active = false;
                 self.ui_runtime.editing_text = false;
@@ -766,21 +1013,22 @@ impl UiButtonLoader {
             }
         }
 
+        let top_hit = find_top_hit(&mut self.menus, &mouse_snapshot, editor_mode);
+
+        let EditorInteractionResult {
+            trigger_selection: mut selection,
+            pending_circle_updates,
+            moved_any_selected_object,
+        } = handle_editor_mode_interactions(
+            self,
+            time_system,
+            &mouse_snapshot,
+            top_hit.clone(),
+            input_state,
+        );
+        self.variables
+            .set("editing_text", format!("{}", self.ui_runtime.editing_text));
         if editor_mode {
-            let top_hit = find_top_hit(&mut self.menus, &mouse_snapshot, editor_mode);
-            let EditorInteractionResult {
-                trigger_selection: mut selection,
-                pending_circle_updates,
-                moved_any_selected_object,
-            } = handle_editor_mode_interactions(
-                self,
-                time_system,
-                &mouse_snapshot,
-                top_hit,
-                input_state,
-            );
-            self.variables
-                .set("editing_text", format!("{}", self.ui_runtime.editing_text));
             handle_text_editing(
                 &mut self.ui_runtime,
                 &mut self.menus,
@@ -789,97 +1037,101 @@ impl UiButtonLoader {
             );
 
             apply_pending_circle_updates(self, dt, pending_circle_updates);
+        }
 
-            if moved_any_selected_object {
-                self.mark_editor_layers_dirty();
-                selection = true;
-            }
+        if moved_any_selected_object {
+            self.mark_editor_layers_dirty();
+            selection = true;
+        }
 
+        if editor_mode {
             if handle_scroll_resize(self, mouse_snapshot.scroll) {
                 selection = true;
             }
-
-            trigger_selection = selection;
-        } else if self.ui_runtime.selected_ui_element.active {
-            self.ui_runtime.selected_ui_element.active = false;
-            self.update_selection();
         }
+
+        let trigger_selection = selection;
+
+        // if self.ui_runtime.selected_ui_element.active {
+        //     self.ui_runtime.selected_ui_element.active = false;
+        //     self.update_selection();
+        //
+        // }
 
         if trigger_selection {
             self.update_selection();
         }
 
-        self.apply_ui_edit_movement(input_state);
+        activate_action(self, &top_hit);
 
-        if input_state.action_pressed_once("Delete selected GUI Element")
-            && self.ui_runtime.selected_ui_element.active
-            && !self.ui_runtime.editing_text
-        {
-            println!("deleting");
-            let element_id = self.ui_runtime.selected_ui_element.element_id.clone();
-            let layer_name = self.ui_runtime.selected_ui_element.layer_name.clone();
-            let menu_name = self.ui_runtime.selected_ui_element.menu_name.clone();
-            self.ui_runtime.selected_ui_element.active = false;
+        execute_action(self, &top_hit, &input_state.mouse);
 
-            let _ = self.delete_element(&menu_name, &layer_name, &element_id);
+        if editor_mode {
+            self.apply_ui_edit_movement(input_state);
+
+            if input_state.action_pressed_once("Delete selected GUI Element")
+                && self.ui_runtime.selected_ui_element.active
+                && !self.ui_runtime.editing_text
+            {
+                println!("deleting");
+                let element_id = self.ui_runtime.selected_ui_element.element_id.clone();
+                let layer_name = self.ui_runtime.selected_ui_element.layer_name.clone();
+                let menu_name = self.ui_runtime.selected_ui_element.menu_name.clone();
+                self.ui_runtime.selected_ui_element.active = false;
+
+                let _ = self.delete_element(&menu_name, &layer_name, &element_id);
+            }
         }
     }
 
     pub fn add_element(
         &mut self,
+        menu_name: &str,
         layer_name: &str,
         mut element: UiElement,
         mouse: &MouseState,
+        on_mouse_pos: bool,
     ) -> Result<(), String> {
         // 1. Get selected menu
         let menu = self
             .menus
-            .get_mut(&self.ui_runtime.selected_ui_element.menu_name)
-            .ok_or_else(|| {
-                format!(
-                    "Menu *{}* doesn't exist",
-                    self.ui_runtime.selected_ui_element.menu_name
-                )
-            })?;
+            .get_mut(menu_name)
+            .ok_or_else(|| format!("Menu *{}* doesn't exist", menu_name))?;
 
         // 2. Get selected layer
         let layer = menu
             .layers
             .iter_mut()
             .find(|l| l.name == layer_name)
-            .ok_or_else(|| {
-                format!(
-                    "Layer *{}* not found in *{}* menu",
-                    layer_name, self.ui_runtime.selected_ui_element.menu_name
-                )
-            })?;
+            .ok_or_else(|| format!("Layer *{}* not found in *{}* menu", layer_name, menu_name))?;
         let id = mouse.pos.x as u32 - mouse.pos.y as u32;
 
         // 3. Apply mouse positioning (editor placement)
-        match &mut element {
-            UiElement::Text(t) => {
-                t.x = mouse.pos.x;
-                t.y = mouse.pos.y;
-                t.id = Option::from(id.to_string());
-            }
-            UiElement::Circle(c) => {
-                c.x = mouse.pos.x;
-                c.y = mouse.pos.y;
-                c.id = Option::from(id.to_string());
-            }
-            UiElement::Outline(o) => {
-                o.id = Option::from(id.to_string());
-            }
-            UiElement::Handle(h) => {
-                h.x = mouse.pos.x;
-                h.y = mouse.pos.y;
-                h.id = Option::from(id.to_string());
-            }
-            UiElement::Polygon(p) => {
-                p.id = Option::from(id.to_string());
+        if on_mouse_pos {
+            match &mut element {
+                UiElement::Text(t) => {
+                    t.x = mouse.pos.x;
+                    t.y = mouse.pos.y;
+                    t.id = Option::from(id.to_string());
+                }
+                UiElement::Circle(c) => {
+                    c.x = mouse.pos.x;
+                    c.y = mouse.pos.y;
+                    c.id = Option::from(id.to_string());
+                }
+                UiElement::Outline(o) => {
+                    o.id = Option::from(id.to_string());
+                }
+                UiElement::Handle(h) => {
+                    h.x = mouse.pos.x;
+                    h.y = mouse.pos.y;
+                    h.id = Option::from(id.to_string());
+                }
+                UiElement::Polygon(p) => {
+                    p.id = Option::from(id.to_string());
+                }
             }
         }
-
         // 4. Insert element (NO ids needed)
         match element {
             UiElement::Text(t) => {
@@ -962,154 +1214,159 @@ impl UiButtonLoader {
                     editor_layer.polygons.clear();
                     match element {
                         Circle(c) => {
-                            let circle_outline = UiButtonOutline {
-                                id: Some("Circle Outline".to_string()),
-                                z_index: c.z_index,
-                                parent_id: c.id.clone(),
-                                mode: 0.0,
-                                vertex_offset: 0,
-                                vertex_count: 0,
-                                dash_color: [0.2, 0.0, 0.4, 0.8],
-                                dash_misc: DashMisc {
-                                    dash_len: 4.0,
-                                    dash_spacing: 1.5,
-                                    dash_roundness: 1.0,
-                                    dash_speed: 4.0,
-                                },
-                                sub_dash_color: [0.8, 1.0, 1.0, 0.5],
-                                sub_dash_misc: DashMisc {
-                                    dash_len: 1.0,
-                                    dash_spacing: 1.0,
-                                    dash_roundness: 0.0,
-                                    dash_speed: -2.0,
-                                },
-                                misc: c.misc,
-                                shape_data: ShapeData {
+                            if self.ui_runtime.editor_mode {
+                                let circle_outline = UiButtonOutline {
+                                    id: Some("Circle Outline".to_string()),
+                                    z_index: c.z_index,
+                                    parent_id: c.id.clone(),
+                                    mode: 0.0,
+                                    vertex_offset: 0,
+                                    vertex_count: 0,
+                                    dash_color: [0.2, 0.0, 0.4, 0.8],
+                                    dash_misc: DashMisc {
+                                        dash_len: 4.0,
+                                        dash_spacing: 1.5,
+                                        dash_roundness: 1.0,
+                                        dash_speed: 4.0,
+                                    },
+                                    sub_dash_color: [0.8, 1.0, 1.0, 0.5],
+                                    sub_dash_misc: DashMisc {
+                                        dash_len: 1.0,
+                                        dash_spacing: 1.0,
+                                        dash_roundness: 0.0,
+                                        dash_speed: -2.0,
+                                    },
+                                    misc: c.misc,
+                                    shape_data: ShapeData {
+                                        x: c.x,
+                                        y: c.y,
+                                        radius: c.radius,
+                                        border_thickness: c.border_thickness,
+                                    },
+                                };
+                                editor_layer.outlines.push(circle_outline);
+
+                                let handle = UiButtonHandle {
+                                    id: Some("Circle Handle".to_string()),
+                                    parent_id: c.id,
                                     x: c.x,
                                     y: c.y,
                                     radius: c.radius,
-                                    border_thickness: c.border_thickness,
-                                },
-                            };
-                            editor_layer.outlines.push(circle_outline);
-
-                            let handle = UiButtonHandle {
-                                id: Some("Circle Handle".to_string()),
-                                parent_id: c.id,
-                                x: c.x,
-                                y: c.y,
-                                radius: c.radius,
-                                handle_thickness: 10.0,
-                                handle_color: [0.65, 0.22, 0.05, 1.0],
-                                handle_misc: HandleMisc {
-                                    handle_len: 0.09,
-                                    handle_width: 0.2,
-                                    handle_roundness: 0.3,
-                                    handle_speed: 0.0,
-                                },
-                                sub_handle_color: [0.0, 0.0, 0.0, 0.7],
-                                sub_handle_misc: HandleMisc {
-                                    handle_len: 0.08,
-                                    handle_width: 0.05,
-                                    handle_roundness: 0.5,
-                                    handle_speed: 0.0,
-                                },
-                                misc: MiscButtonSettings {
-                                    active: true,
-                                    touched_time: 0.0,
-                                    is_touched: false,
-                                    pressable: true,
-                                    editable: false,
-                                },
-                                z_index: c.z_index,
-                            };
-                            editor_layer.handles.push(handle);
+                                    handle_thickness: 10.0,
+                                    handle_color: [0.65, 0.22, 0.05, 1.0],
+                                    handle_misc: HandleMisc {
+                                        handle_len: 0.09,
+                                        handle_width: 0.2,
+                                        handle_roundness: 0.3,
+                                        handle_speed: 0.0,
+                                    },
+                                    sub_handle_color: [0.0, 0.0, 0.0, 0.7],
+                                    sub_handle_misc: HandleMisc {
+                                        handle_len: 0.08,
+                                        handle_width: 0.05,
+                                        handle_roundness: 0.5,
+                                        handle_speed: 0.0,
+                                    },
+                                    misc: MiscButtonSettings {
+                                        active: true,
+                                        touched_time: 0.0,
+                                        is_touched: false,
+                                        pressable: true,
+                                        editable: false,
+                                    },
+                                    z_index: c.z_index,
+                                };
+                                editor_layer.handles.push(handle);
+                            }
                             self.variables
                                 .set("selected_element.z_index", c.z_index.to_string());
                         }
                         Handle(_h) => {}
                         Polygon(p) => {
-                            let mut cx = 0.0;
-                            let mut cy = 0.0;
-                            for v in &p.vertices {
-                                cx += v.pos[0];
-                                cy += v.pos[1];
-                            }
-                            cx /= p.vertices.len() as f32;
-                            cy /= p.vertices.len() as f32;
+                            if self.ui_runtime.editor_mode {
+                                let mut cx = 0.0;
+                                let mut cy = 0.0;
+                                for v in &p.vertices {
+                                    cx += v.pos[0];
+                                    cy += v.pos[1];
+                                }
+                                cx /= p.vertices.len() as f32;
+                                cy /= p.vertices.len() as f32;
 
-                            let mut radius: f32 = 0.0;
-                            for (i, v) in p.vertices.iter().enumerate() {
-                                let dx = v.pos[0] - cx;
-                                let dy = v.pos[1] - cy;
-                                let distance = (dx * dx + dy * dy).sqrt();
+                                let mut radius: f32 = 0.0;
+                                for (i, v) in p.vertices.iter().enumerate() {
+                                    let dx = v.pos[0] - cx;
+                                    let dy = v.pos[1] - cy;
+                                    let distance = (dx * dx + dy * dy).sqrt();
 
-                                radius = radius.max(distance);
-                                let vertex_outline = UiButtonCircle {
-                                    id: Some(format!("vertex_outline_{}", i)),
-                                    action: "None".to_string(),
-                                    style: "None".to_string(),
-                                    z_index: i as i32,
-                                    x: v.pos[0],
-                                    y: v.pos[1],
-                                    radius: 15.0,
-                                    border_thickness: 0.0,
-                                    fade: 1.0,
-                                    fill_color: [0.0, 1.0, 0.0, 1.0],
-                                    border_color: [0.5, 0.0, 0.0, 1.0],
-                                    glow_color: [0.0, 0.0, 0.5, 0.0],
-                                    glow_misc: GlowMisc {
-                                        glow_size: 0.0,
-                                        glow_speed: 0.0,
-                                        glow_intensity: 0.0,
+                                    radius = radius.max(distance);
+                                    let vertex_outline = UiButtonCircle {
+                                        id: Some(format!("vertex_outline_{}", i)),
+                                        action: "None".to_string(),
+                                        style: "None".to_string(),
+                                        z_index: i as i32,
+                                        x: v.pos[0],
+                                        y: v.pos[1],
+                                        radius: 15.0,
+                                        border_thickness: 0.0,
+                                        fade: 1.0,
+                                        fill_color: [0.0, 1.0, 0.0, 1.0],
+                                        border_color: [0.5, 0.0, 0.0, 1.0],
+                                        glow_color: [0.0, 0.0, 0.5, 0.0],
+                                        glow_misc: GlowMisc {
+                                            glow_size: 0.0,
+                                            glow_speed: 0.0,
+                                            glow_intensity: 0.0,
+                                        },
+                                        misc: MiscButtonSettings {
+                                            active: false,
+                                            touched_time: 0.0,
+                                            is_touched: false,
+                                            pressable: false,
+                                            editable: false,
+                                        },
+                                    };
+                                    editor_layer.circles.push(vertex_outline);
+                                }
+                                let polygon_outline = UiButtonOutline {
+                                    id: Some("Polygon Outline".to_string()),
+                                    z_index: p.z_index,
+                                    parent_id: p.id.clone(),
+                                    mode: 1.0,
+                                    vertex_offset: 0,
+                                    vertex_count: p.vertices.len() as u32,
+                                    dash_color: [0.2, 0.0, 0.4, 0.8],
+                                    dash_misc: DashMisc {
+                                        dash_len: 4.0,
+                                        dash_spacing: 1.5,
+                                        dash_roundness: 1.0,
+                                        dash_speed: 4.0,
                                     },
-                                    misc: MiscButtonSettings {
-                                        active: false,
-                                        touched_time: 0.0,
-                                        is_touched: false,
-                                        pressable: false,
-                                        editable: false,
+                                    sub_dash_color: [0.8, 1.0, 1.0, 0.5],
+                                    sub_dash_misc: DashMisc {
+                                        dash_len: 1.0,
+                                        dash_spacing: 1.0,
+                                        dash_roundness: 0.0,
+                                        dash_speed: -2.0,
+                                    },
+                                    misc: p.misc,
+                                    shape_data: ShapeData {
+                                        x: cx,
+                                        y: cy,
+                                        radius,
+                                        border_thickness: 2.0,
                                     },
                                 };
-                                editor_layer.circles.push(vertex_outline);
+                                editor_layer.outlines.push(polygon_outline);
                             }
-                            let polygon_outline = UiButtonOutline {
-                                id: Some("Polygon Outline".to_string()),
-                                z_index: p.z_index,
-                                parent_id: p.id.clone(),
-                                mode: 1.0,
-                                vertex_offset: 0,
-                                vertex_count: p.vertices.len() as u32,
-                                dash_color: [0.2, 0.0, 0.4, 0.8],
-                                dash_misc: DashMisc {
-                                    dash_len: 4.0,
-                                    dash_spacing: 1.5,
-                                    dash_roundness: 1.0,
-                                    dash_speed: 4.0,
-                                },
-                                sub_dash_color: [0.8, 1.0, 1.0, 0.5],
-                                sub_dash_misc: DashMisc {
-                                    dash_len: 1.0,
-                                    dash_spacing: 1.0,
-                                    dash_roundness: 0.0,
-                                    dash_speed: -2.0,
-                                },
-                                misc: p.misc,
-                                shape_data: ShapeData {
-                                    x: cx,
-                                    y: cy,
-                                    radius,
-                                    border_thickness: 2.0,
-                                },
-                            };
-                            editor_layer.outlines.push(polygon_outline);
                             self.variables
                                 .set("selected_element.z_index", p.z_index.to_string());
                         }
                         Text(tx) => {
-                            //tx.color = [1.0, 1.0, 0.0, 1.0];
-                            //tx.misc.active = true;
-                            //editor_layer.texts.push(tx);
+                            // if self.ui_runtime.editor_mode {
+                            //
+                            // }
+
                             self.variables
                                 .set("selected_element.z_index", tx.z_index.to_string());
                         }
@@ -1124,9 +1381,9 @@ impl UiButtonLoader {
 
     pub fn find_element(
         &mut self,
-        menu_name: &String,
-        layer_name: &String,
-        element_id: &String,
+        menu_name: &str,
+        layer_name: &str,
+        element_id: &str,
     ) -> Option<UiElement> {
         if let Some(menu) = self.menus.get_mut(menu_name) {
             let layer = menu
@@ -1138,7 +1395,7 @@ impl UiButtonLoader {
             for c in &layer.circles {
                 if let Some(id) = &c.id {
                     if id == element_id {
-                        return Some(UiElement::Circle(c.clone()));
+                        return Some(Circle(c.clone()));
                     }
                 }
             }
@@ -1164,6 +1421,40 @@ impl UiButtonLoader {
         None
     }
 
+    pub fn edit_circle(
+        &mut self,
+        menu_name: &str,
+        layer_name: &str,
+        element_id: &str,
+        x: Option<f32>,
+        y: Option<f32>,
+        radius: Option<f32>,
+        border_color: Option<[f32; 4]>,
+    ) -> bool {
+        if let Some(menu) = self.menus.get_mut(menu_name) {
+            let layer = menu.layers.iter_mut().find(|l| {
+                //println!("COMPARING [{}] with [{}]", l.name, layer_name);
+                l.name == layer_name
+            });
+
+            // Circles
+            if let Some(layer) = layer {
+                for c in &mut layer.circles {
+                    if let Some(id) = &c.id {
+                        if id.as_str() == element_id {
+                            c.x = x.unwrap_or(c.x);
+                            c.y = y.unwrap_or(c.y);
+                            c.radius = radius.unwrap_or(c.radius);
+                            c.border_color = border_color.unwrap_or(c.border_color);
+                            layer.dirty.mark_circles();
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
     pub fn delete_element(
         &mut self,
         menu_name: &str,

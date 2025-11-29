@@ -172,7 +172,7 @@ impl Keybinds {
 
 #[derive(Debug, Clone)]
 pub struct MouseState {
-    pub last_pos: Option<Vec2>,
+    pub last_pos: Vec2,
     pub pos: Vec2,
     pub delta: Vec2,
     pub middle_pressed: bool,
@@ -192,7 +192,7 @@ pub struct MouseState {
 impl MouseState {
     pub fn new() -> Self {
         Self {
-            last_pos: None,
+            last_pos: Vec2::ZERO,
             pos: Vec2::ZERO,
             delta: Vec2::ZERO,
 
@@ -301,15 +301,11 @@ impl InputState {
     }
 
     pub fn handle_mouse_move(&mut self, x: f64, y: f64) {
+        self.mouse.last_pos = self.mouse.pos;
         let pos = Vec2::new(x as f32, y as f32);
+        let last = self.mouse.last_pos;
+        let delta = { pos - last };
 
-        let delta = if let Some(last) = self.mouse.last_pos {
-            pos - last
-        } else {
-            Vec2::ZERO
-        };
-
-        self.mouse.last_pos = Some(pos);
         self.mouse.delta = delta;
         self.mouse.pos = pos;
     }

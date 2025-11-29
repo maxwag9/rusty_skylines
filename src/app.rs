@@ -152,12 +152,12 @@ impl ApplicationHandler for App {
                 // ---------------------------------------------------------------------
 
                 // MSAA cycle
-                if input.action_pressed_once("Cycle MSAA") {
+                if input.action_repeat("Cycle MSAA") {
                     resources.renderer.core.cycle_msaa();
                 }
 
                 // Toggle editor mode
-                if input.action_pressed_once("Toggle editor mode") {
+                if input.action_repeat("Toggle editor mode") {
                     println!("{}", down);
                     resources.settings.editor_mode = !resources.settings.editor_mode;
                     resources
@@ -171,7 +171,7 @@ impl ApplicationHandler for App {
                 }
 
                 // Save GUI
-                if input.action_pressed_once("Save GUI layout") {
+                if input.action_repeat("Save GUI layout") {
                     match resources
                         .ui_loader
                         .save_gui_to_file("ui_data/gui_layout.json")
@@ -182,11 +182,27 @@ impl ApplicationHandler for App {
                 }
 
                 // Add GUI element
-                if input.action_pressed_once("Add GUI element") {
+                if input.action_repeat("Add GUI element")
+                    && resources.ui_loader.ui_runtime.editor_mode
+                {
                     let result = resources.ui_loader.add_element(
-                        "base_gui",
+                        resources
+                            .ui_loader
+                            .ui_runtime
+                            .selected_ui_element
+                            .menu_name
+                            .clone()
+                            .as_str(),
+                        resources
+                            .ui_loader
+                            .ui_runtime
+                            .selected_ui_element
+                            .layer_name
+                            .clone()
+                            .as_str(),
                         Polygon(UiButtonPolygon::default()),
                         &resources.input.mouse,
+                        true,
                     );
 
                     match result {
@@ -317,6 +333,24 @@ impl ApplicationHandler for App {
                 }
                 if let Some(resources) = self.resources.as_mut() {
                     resources.input.begin_frame(resources.time.total_time);
+                    let pos = resources.input.mouse.pos;
+                    let delta = resources.input.mouse.delta;
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos.x", pos.x.to_string());
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos_delta.x", delta.x.to_string());
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos.y", pos.y.to_string());
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("mouse_pos_delta.y", delta.y.to_string());
                 }
             }
 

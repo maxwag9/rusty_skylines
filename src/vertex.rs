@@ -180,6 +180,8 @@ pub struct SelectedUiElement {
     pub element_id: String,
     pub active: bool,
     pub just_deselected: bool,
+    pub dragging: bool,
+    pub element_type: ElementKind,
 }
 
 impl SelectedUiElement {
@@ -190,6 +192,8 @@ impl SelectedUiElement {
             element_id: "no element".to_string(),
             active: false,
             just_deselected: false,
+            dragging: false,
+            element_type: ElementKind::None,
         }
     }
 }
@@ -357,24 +361,40 @@ impl<'a> UiElementRef<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementKind {
+    Text,
+    Circle,
+    Outline,
+    Handle,
+    Polygon,
+    None,
+}
+
+impl std::fmt::Display for ElementKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl RuntimeLayer {
-    pub fn iter_all_elements(&self) -> Vec<UiElementRef> {
+    pub fn iter_all_elements(&self) -> Vec<(UiElementRef, ElementKind)> {
         let mut out = Vec::new();
 
         for t in &self.texts {
-            out.push(UiElementRef::Text(t));
+            out.push((UiElementRef::Text(t), ElementKind::Text));
         }
         for c in &self.circles {
-            out.push(UiElementRef::Circle(c));
+            out.push((UiElementRef::Circle(c), ElementKind::Circle));
         }
         for o in &self.outlines {
-            out.push(UiElementRef::Outline(o));
+            out.push((UiElementRef::Outline(o), ElementKind::Outline));
         }
         for h in &self.handles {
-            out.push(UiElementRef::Handle(h));
+            out.push((UiElementRef::Handle(h), ElementKind::Handle));
         }
         for p in &self.polygons {
-            out.push(UiElementRef::Polygon(p));
+            out.push((UiElementRef::Polygon(p), ElementKind::Polygon));
         }
 
         out
@@ -675,6 +695,8 @@ pub struct MenuJson {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonText {
     pub id: Option<String>,
+    pub action: String,
+    pub style: String,
     pub z_index: i32,
     pub x: f32,
     pub y: f32,
@@ -723,6 +745,8 @@ impl UiButtonText {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: Option<String>,
+    pub action: String,
+    pub style: String,
     pub z_index: i32,
     pub vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
@@ -855,6 +879,8 @@ impl UiButtonText {
         let length = t.text.len();
         UiButtonText {
             id: t.id,
+            action: t.action.clone(),
+            style: t.style.clone(),
             z_index: t.z_index,
 
             x: t.x,
@@ -890,6 +916,8 @@ impl UiButtonText {
     pub fn to_json(&self) -> UiButtonTextJson {
         UiButtonTextJson {
             id: self.id.clone(),
+            action: self.action.clone(),
+            style: self.style.clone(),
             z_index: self.z_index,
 
             x: self.x,
@@ -1064,6 +1092,8 @@ impl UiButtonPolygon {
 
         UiButtonPolygon {
             id: p.id,
+            action: p.action,
+            style: p.style,
             z_index: p.z_index,
             vertices: verts,
             misc: MiscButtonSettings {
@@ -1080,6 +1110,8 @@ impl UiButtonPolygon {
     pub fn to_json(&self) -> UiButtonPolygonJson {
         UiButtonPolygonJson {
             id: self.id.clone(),
+            action: self.action.clone(),
+            style: self.style.clone(),
             z_index: self.z_index,
 
             vertices: self.vertices.iter().map(|v| v.to_json()).collect(),
@@ -1093,6 +1125,8 @@ impl Default for UiButtonText {
     fn default() -> Self {
         Self {
             id: None,
+            action: "None".to_string(),
+            style: "None".to_string(),
             z_index: 0,
             x: 0.0,
             y: 0.0,
@@ -1161,6 +1195,8 @@ impl Default for UiButtonPolygon {
 
         Self {
             id: None,
+            action: "None".to_string(),
+            style: "None".to_string(),
             z_index: 0,
             vertices: verts,
             misc: MiscButtonSettings::default(),
@@ -1278,7 +1314,7 @@ impl Default for MiscButtonSettings {
             touched_time: 0.0,
             is_touched: false,
             pressable: true,
-            editable: false,
+            editable: true,
         }
     }
 }
@@ -1298,6 +1334,8 @@ impl Default for UiVertex {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonTextJson {
     pub id: Option<String>,
+    pub action: String,
+    pub style: String,
     pub z_index: i32,
 
     pub x: f32,
@@ -1365,6 +1403,8 @@ pub struct UiButtonOutlineJson {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonPolygonJson {
     pub id: Option<String>,
+    pub action: String,
+    pub style: String,
     pub z_index: i32,
     pub vertices: Vec<UiVertexJson>,
     pub misc: MiscButtonSettingsJson,

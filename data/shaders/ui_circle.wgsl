@@ -90,30 +90,55 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist = distance(in.local_pos, center);
 
     // ---- Border with outward AA ----
-    let border_outer = smoothstep(radius + 1.0, radius, dist);
+    var border_outer: f32;
+
+    if (crb.z > 0.0) {
+        border_outer = smoothstep(radius + 1.0, radius, dist);
+    } else {
+        border_outer = smoothstep(radius, radius - 1.0, dist);
+    }
     let border_inner = smoothstep(radius - border, radius - border - 1.0, dist);
     let border_mask = border_outer - border_inner;
 
-    // Base color (fill or border)
+    // Base color
     var col = mix(p.fill_color, p.border_color, border_mask);
     col.a *= border_outer;
 
-    // ---- Hue Circle Style ----
+    // ---- Blender-Style Hue Wheel ----
     if p.style == 1u && dist < radius {
         let uv = (in.local_pos - center) / radius;
 
-        // Compute angle and hue
+        // Hue from angle
         let angle = atan2(uv.y, uv.x);
-        let h = (angle / (2.0 * PI)) + 0.5;
+        // shift angle by +90 deg
+        let angle_shifted = angle + (PI / 2.0);
 
-        let rgb = hsv_to_rgb(vec3<f32>(h, 1.0, 1.0));
+        // wrap to [-PI, PI]
+        let angle_wrapped = atan2(sin(angle_shifted), cos(angle_shifted));
 
-        // Replace fill area with hue (border stays)
+        // convert to hue 0..1
+        let h = (angle_wrapped / (2.0 * PI)) + 0.5;
+
+
+
+        // Saturation from radial distance
+        // Center = white (s=0)
+        // Edge = fully saturated (s=1)
+        let s_linear = clamp(length(uv), 0.0, 1.0);
+        let s = pow(s_linear, 0.47);
+
+
+        // Always bright in Blender's hue wheel
+        let v = 1.0;
+
+        let rgb = hsv_to_rgb(vec3<f32>(h, s, v));
+
+        // Keep border, replace interior
         col = mix(vec4<f32>(rgb, 1.0), p.border_color, border_mask);
         col.a *= border_outer;
     }
 
-    // ---- Fade Effect (Independent of Style!) ----
+    // ---- Fade (unchanged) ----
     if p.fade > 0.9 {
         let d = distance(in.local_pos, screen.mouse);
         let fade = clamp(1.0 - d / 300.0, 0.0, 1.0);

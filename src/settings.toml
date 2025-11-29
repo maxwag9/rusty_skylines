@@ -7,6 +7,6 @@ target_tps = 60.0
 # Available modes: "fifo", "mailbox" (<-best for everything!), "immediate"
 present_mode = "mailbox"
 
-editor_mode = true
+editor_mode = false
 
 background_color = [0.05, 0.05, 0.05, 1.0]
