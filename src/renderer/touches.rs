@@ -122,7 +122,10 @@ pub(crate) fn find_top_hit(
         for layer in menu.layers.iter_mut().filter(|l| l.active) {
             // Circles
             for (circle_index, circle) in layer.circles.iter().enumerate() {
-                if !circle.misc.active || !circle.misc.pressable {
+                if !circle.misc.active {
+                    continue;
+                }
+                if !circle.misc.pressable && !circle.misc.editable {
                     continue;
                 }
                 let mut drag_radius: f32 = circle.radius;
@@ -151,6 +154,9 @@ pub(crate) fn find_top_hit(
                     if !handle.misc.active {
                         continue;
                     }
+                    if !handle.misc.pressable && !handle.misc.editable {
+                        continue;
+                    }
 
                     if hit_handle(mouse.mx, mouse.my, handle) {
                         consider_candidate(
@@ -173,6 +179,9 @@ pub(crate) fn find_top_hit(
                 if !poly.misc.active {
                     continue;
                 }
+                if !poly.misc.pressable && !poly.misc.editable {
+                    continue;
+                }
 
                 if hit_polygon(mouse.mx, mouse.my, poly) {
                     consider_candidate(
@@ -191,6 +200,9 @@ pub(crate) fn find_top_hit(
 
             for (text_index, text) in layer.texts.iter_mut().enumerate() {
                 if !text.misc.active {
+                    continue;
+                }
+                if !text.misc.pressable && !text.misc.editable {
                     continue;
                 }
                 text.being_hovered = false;
@@ -786,9 +798,10 @@ fn process_circles(
                             menu_name: menu_name.to_string(),
                             layer_name: layer.name.clone(),
                             element_id: id.clone(),
-                            just_deselected: true,
+                            just_deselected: false,
                             dragging: false,
                             element_type: ElementKind::Circle,
+                            just_selected: true,
                         });
 
                         result.trigger_selection = true;
@@ -896,9 +909,10 @@ fn process_handles(
                             menu_name: menu_name.to_string(),
                             layer_name: layer.name.clone(),
                             element_id: id.clone(),
-                            just_deselected: true,
+                            just_deselected: false,
                             dragging: false,
                             element_type: ElementKind::Handle,
+                            just_selected: true,
                         });
 
                         result.trigger_selection = true;
@@ -1037,9 +1051,10 @@ fn process_polygons(
                             menu_name: menu_name.to_string(),
                             layer_name: layer.name.clone(),
                             element_id: id.clone(),
-                            just_deselected: true,
+                            just_deselected: false,
                             dragging: false,
                             element_type: ElementKind::Polygon,
+                            just_selected: true,
                         });
 
                         result.trigger_selection = true;
@@ -1226,9 +1241,10 @@ fn process_text(
                             menu_name: menu_name.to_string(),
                             layer_name: layer.name.clone(),
                             element_id: id.clone(),
-                            just_deselected: true,
+                            just_deselected: false,
                             dragging: false,
                             element_type: ElementKind::Text,
+                            just_selected: true,
                         });
 
                         result.trigger_selection = true;
@@ -1288,9 +1304,18 @@ fn select_ui_element(
         layer_name,
         element_id,
         active: true,
-        just_deselected: true,
+        just_deselected: if element_kind == ElementKind::None {
+            true
+        } else {
+            false
+        },
         dragging,
         element_type: element_kind,
+        just_selected: if element_kind == ElementKind::None {
+            false
+        } else {
+            true
+        },
     };
     loader.variables.set(
         "selected_menu",

@@ -291,7 +291,6 @@ impl InputState {
         self.scroll_right_hit = false;
 
         self.mouse.update_just_states();
-        self.mouse.delta = Vec2::ZERO;
         self.text_chars.clear();
     }
 
@@ -302,6 +301,7 @@ impl InputState {
 
     pub fn handle_mouse_move(&mut self, x: f64, y: f64) {
         self.mouse.last_pos = self.mouse.pos;
+
         let pos = Vec2::new(x as f32, y as f32);
         let last = self.mouse.last_pos;
         let delta = { pos - last };

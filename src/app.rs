@@ -7,11 +7,12 @@ use crate::systems::ui::ui_system;
 use crate::vertex::UiButtonPolygon;
 use crate::vertex::UiElement::Polygon;
 use crate::world::World;
+use glam::Vec2;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -309,17 +310,18 @@ impl ApplicationHandler for App {
 
                     // simulation timing
                     resources.time.update_sim();
+
                     resources.time.sim_accumulator += resources.time.sim_dt;
 
                     while resources.time.sim_accumulator >= resources.time.sim_target_step {
                         resources.time.sim_dt = resources.time.sim_target_step;
+
                         self.schedule.run_inputs(world, resources);
                         self.schedule.run_sim(world, resources);
                         resources.time.sim_accumulator -= resources.time.sim_target_step;
                     }
 
                     self.schedule.run_render(world, resources);
-
                     let elapsed = frame_start.elapsed();
                     if elapsed < Duration::from_secs_f32(resources.time.target_frametime) {
                         thread::sleep(
@@ -331,30 +333,35 @@ impl ApplicationHandler for App {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
-                if let Some(resources) = self.resources.as_mut() {
-                    resources.input.begin_frame(resources.time.total_time);
-                    let pos = resources.input.mouse.pos;
-                    let delta = resources.input.mouse.delta;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set("mouse_pos.x", pos.x.to_string());
-                    resources
-                        .ui_loader
-                        .variables
-                        .set("mouse_pos_delta.x", delta.x.to_string());
-                    resources
-                        .ui_loader
-                        .variables
-                        .set("mouse_pos.y", pos.y.to_string());
-                    resources
-                        .ui_loader
-                        .variables
-                        .set("mouse_pos_delta.y", delta.y.to_string());
-                }
             }
 
             _ => {}
+        }
+    }
+
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
+        if let Some(resources) = self.resources.as_mut() {
+            resources.input.mouse.delta = Vec2::ZERO;
+            resources.input.begin_frame(resources.time.total_time);
+            let pos = resources.input.mouse.pos;
+            let delta = resources.input.mouse.delta;
+
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos.x", pos.x.to_string());
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos_delta.x", delta.x.to_string());
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos.y", pos.y.to_string());
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos_delta.y", delta.y.to_string());
         }
     }
 }

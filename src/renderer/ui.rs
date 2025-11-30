@@ -49,14 +49,16 @@ pub struct TextAtlas {
 pub struct CircleParams {
     pub center_radius_border: [f32; 4], // cx, cy, radius, border
     pub fill_color: [f32; 4],
+    pub inside_border_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
     pub glow_misc: [f32; 4], // glow_size, glow_speed, glow_intensity
     pub misc: [f32; 4],      // active, touched_time, is_touched, id_hash
 
-    pub fade: f32,      // 0..1 for fade effect
-    pub style: u32,     // 0 = normal, 1 = hue circle, 2 = SV, etc.
-    pub _pad: [u32; 2], // padding to maintain 16-byte alignment
+    pub fade: f32,  // 0..1 for fade effect
+    pub style: u32, // 0 = normal, 1 = hue circle, 2 = SV, etc.
+    pub inside_border_thickness: f32,
+    pub _pad: u32, // padding to maintain 16-byte alignment
 }
 
 impl Default for CircleParams {
@@ -65,13 +67,15 @@ impl Default for CircleParams {
             center_radius_border: [0.0, 0.0, 0.0, 0.0],
 
             fill_color: [0.0; 4],
+            inside_border_color: [0.0; 4],
             border_color: [0.0; 4],
             glow_color: [0.0; 4],
             glow_misc: [0.0; 4],
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
             fade: 0.0,
             style: 0,
-            _pad: [1; 2],
+            inside_border_thickness: 0.0,
+            _pad: 1,
         }
     }
 }

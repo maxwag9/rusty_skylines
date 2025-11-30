@@ -547,6 +547,7 @@
               "x": 1183.8617,
               "y": 769.7613,
               "radius": 83.57955,
+              "inside_border_thickness": 0.0,
               "border_thickness": 0.0,
               "fade": 0.0,
               "fill_color": [
@@ -554,6 +555,12 @@
                 0.2,
                 0.2,
                 0.5
+              ],
+              "inside_border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
               ],
               "border_color": [
                 0.0,
@@ -575,7 +582,7 @@
               "misc": {
                 "active": true,
                 "pressable": true,
-                "editable": true
+                "editable": false
               }
             }
           ],

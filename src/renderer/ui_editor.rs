@@ -92,14 +92,8 @@ fn activate_action(loader: &mut UiButtonLoader, top_hit: &Option<HitResult>) {
 }
 
 fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
-    match action_name {
-        "Drag Hue Point" => {
-            if let Some(action_state) = loader.ui_runtime.action_states.get_mut("Drag Hue Point") {
-                action_state.active = false;
-            }
-        }
-        "None" => {}
-        &_ => {}
+    if let Some(action_state) = loader.ui_runtime.action_states.get_mut(action_name) {
+        action_state.active = false;
     }
 }
 
@@ -113,13 +107,19 @@ fn drag_hue_point(
     // }
     let mut new_x = None;
     let mut new_y = None;
+    let mut fill_color = None;
     let border_color = None;
     let mut radius = None;
 
     if loader.ui_runtime.selected_ui_element.dragging {
         new_x = Some(lerp(loader.ui_runtime.last_pos.0, mouse_state.pos.x, 0.5));
-        new_y = Some(lerp(loader.ui_runtime.last_pos.1, mouse_state.pos.y, 0.5));
-
+        new_y = Some(lerp(loader.ui_runtime.last_pos.1, mouse_state.pos.y, 0.4));
+        if loader.ui_runtime.last_pos.0 != mouse_state.pos.x {
+            println!(
+                "BEFORE: {}, CURRENT: {}",
+                loader.ui_runtime.last_pos.0, mouse_state.pos.x
+            )
+        }
         loader.ui_runtime.last_pos = (
             new_x.unwrap_or(mouse_state.last_pos.x),
             new_y.unwrap_or(mouse_state.last_pos.y),
@@ -130,7 +130,6 @@ fn drag_hue_point(
         .get("Editor_Menu")
         .and_then(|m| m.layers.iter().find(|l| l.name == "Color Picker"))
     {
-        // Find hue wheel and handle circles
         let hue_circle = circle_layer
             .circles
             .iter()
@@ -142,46 +141,58 @@ fn drag_hue_point(
             .find(|c| c.id.as_deref() == Some("color picker handle circle"));
 
         if let (Some(hue), Some(handle)) = (hue_circle, handle_circle) {
-            let dmx = handle.x - mouse_state.pos.x;
-            let dmy = handle.y - mouse_state.pos.y;
+            // Use smoothed position if available, otherwise raw mouse
+            let pointer_x = new_x.unwrap_or(mouse_state.pos.x);
+            let pointer_y = new_y.unwrap_or(mouse_state.pos.y);
+
+            // Hover radius stuff still uses pointer, not raw mouse
+            let dmx = handle.x - pointer_x;
+            let dmy = handle.y - pointer_y;
             let dist_to_mouse = (dmx * dmx + dmy * dmy).sqrt();
             if dist_to_mouse < loader.ui_runtime.original_radius + 4.0 {
                 radius = Some(loader.ui_runtime.original_radius + 4.0);
             } else {
                 radius = Some(loader.ui_runtime.original_radius);
             }
+
             if loader.ui_runtime.selected_ui_element.dragging {
-                radius = Some(loader.ui_runtime.original_radius + 4.0);
-                // 1. Compute relative vector
-                let dx = handle.x - hue.x;
-                let dy = handle.y - hue.y;
+                radius = Some(loader.ui_runtime.original_radius + 5.0);
 
-                // 2. Angle (same as WGSL atan2)
+                // 1. Vector from center to (smoothed) pointer
+                let mx = pointer_x - hue.x;
+                let my = pointer_y - hue.y;
+
+                let angle = my.atan2(mx);
+                let dist_mouse = (mx * mx + my * my).sqrt();
+
+                // Clamp to hue radius
+                let clamped_r = dist_mouse.min(hue.radius);
+
+                // New, clamped handle position
+                let hx = hue.x + angle.cos() * clamped_r;
+                let hy = hue.y + angle.sin() * clamped_r;
+
+                new_x = Some(hx);
+                new_y = Some(hy);
+
+                // 2. Now compute HSV from the *new* handle position
+                let dx = hx - hue.x;
+                let dy = hy - hue.y;
+
                 let angle = dy.atan2(dx);
-                // +90 degrees rotation
                 let angle_shifted = angle + FRAC_PI_2;
-
-                // wrap angle into [-PI, PI]
                 let angle_wrapped = angle_shifted.sin().atan2(angle_shifted.cos());
 
-                // hue 0..1
                 let h = angle_wrapped / (PI * 2.0) + 0.5;
 
-                // saturation (Blender)
                 let dist = (dx * dx + dy * dy).sqrt();
-                if dist > hue.radius {}
                 let s_linear = (dist / hue.radius).clamp(0.0, 1.0);
-
-                // Blender exponent ~0.47
                 let s = s_linear.powf(0.47);
 
-                // Brightness todo*
                 let v = 1.0;
-
-                // 4. HSV→RGB (S=1, V=1 just like shader)
                 let rgb = hsv_to_rgb(h, s, v);
 
-                // border_color = Some([rgb[0], rgb[1], rgb[2], 1.0]);
+                fill_color = Some([rgb[0], rgb[1], rgb[2], 1.0]);
 
                 loader.variables.set("color_picker.r", rgb[0].to_string());
                 loader.variables.set("color_picker.g", rgb[1].to_string());
@@ -192,6 +203,7 @@ fn drag_hue_point(
                 loader.variables.set("color_picker.v", v.to_string());
             }
         }
+
         loader.ui_runtime.action_states.get("Drag Hue Point");
     }
 
@@ -202,47 +214,69 @@ fn drag_hue_point(
         new_x,
         new_y,
         radius,
+        fill_color,
         border_color,
     );
 
-    if !result {
-        if loader.ui_runtime.selected_ui_element.just_deselected {
-            let handle_circle = UiButtonCircle {
-                id: Some("color picker handle circle".to_string()),
-                action: "None".to_string(),
-                style: "None".to_string(),
-                z_index: 990,
-                x: mouse_state.pos.x,
-                y: mouse_state.pos.y,
-                radius: 5.0,
-                border_thickness: 1.0,
-                fade: 0.0,
-                fill_color: [0.0; 4],
-                border_color: [0.2, 0.2, 0.2, 0.8],
-                glow_color: [0.0; 4],
-                glow_misc: Default::default(),
-                misc: MiscButtonSettings {
-                    active: true,
-                    touched_time: 0.0,
-                    is_touched: false,
-                    pressable: false,
-                    editable: false,
-                },
-            };
-            loader.ui_runtime.last_pos = (mouse_state.pos.x, mouse_state.pos.y);
-            loader.ui_runtime.original_radius = handle_circle.radius;
-            let _ = loader.add_element(
-                "Editor_Menu",
-                "Color Picker",
-                Circle(handle_circle),
-                mouse_state,
-                false,
-            );
-        }
-    }
     if let Some(hit) = top_hit {
         if hit.action != Some("Drag Hue Point".to_string()) {
-            deactivate_action(loader, "Drag Hue Point");
+            if loader.ui_runtime.selected_ui_element.just_selected {
+                deactivate_action(loader, "Drag Hue Point");
+                println!("Removed!");
+                let _ = loader.delete_element(
+                    "Editor_Menu",
+                    "Color Picker",
+                    "color picker handle circle",
+                );
+            }
+        }
+    }
+
+    // Handle delete on deselection
+    if loader.ui_runtime.selected_ui_element.just_deselected {
+        deactivate_action(loader, "Drag Hue Point");
+        println!("Removed!");
+        let _ = loader.delete_element("Editor_Menu", "Color Picker", "color picker handle circle");
+    }
+
+    if let Some(action) = loader.ui_runtime.action_states.get("Drag Hue Point") {
+        let active = action.active.clone();
+        if !result {
+            if loader.ui_runtime.selected_ui_element.just_selected && active {
+                let handle_circle = UiButtonCircle {
+                    id: Some("color picker handle circle".to_string()),
+                    action: "None".to_string(),
+                    style: "None".to_string(),
+                    z_index: 990,
+                    x: mouse_state.pos.x,
+                    y: mouse_state.pos.y,
+                    radius: 6.0,
+                    inside_border_thickness: 0.002,
+                    border_thickness: 1.0,
+                    fade: 0.0,
+                    fill_color: [0.2, 0.2, 0.2, 0.0],
+                    inside_border_color: [0.4; 4],
+                    border_color: [0.1, 0.1, 0.1, 0.8],
+                    glow_color: [0.0; 4],
+                    glow_misc: Default::default(),
+                    misc: MiscButtonSettings {
+                        active: true,
+                        touched_time: 0.0,
+                        is_touched: false,
+                        pressable: false,
+                        editable: false,
+                    },
+                };
+                loader.ui_runtime.last_pos = (mouse_state.pos.x, mouse_state.pos.y);
+                loader.ui_runtime.original_radius = handle_circle.radius;
+                let _ = loader.add_element(
+                    "Editor_Menu",
+                    "Color Picker",
+                    Circle(handle_circle),
+                    mouse_state,
+                    false,
+                );
+            }
         }
     }
 }
@@ -349,6 +383,7 @@ impl Menu {
                 l.cache.circle_params.push(CircleParams {
                     center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
                     fill_color: c.fill_color,
+                    inside_border_color: c.inside_border_color,
                     border_color: c.border_color,
                     glow_color: c.glow_color,
                     glow_misc: [
@@ -365,7 +400,8 @@ impl Menu {
                     ],
                     fade: c.fade,
                     style: style_to_u32(&c.style),
-                    _pad: [1; 2],
+                    inside_border_thickness: c.inside_border_thickness,
+                    _pad: 1,
                 });
             }
 
@@ -994,6 +1030,7 @@ impl UiButtonLoader {
         time_system: &TimeSystem,
     ) {
         self.ui_runtime.selected_ui_element.just_deselected = false;
+        self.ui_runtime.selected_ui_element.just_selected = false;
         let mouse_snapshot = MouseSnapshot::from_mouse(&input_state.mouse);
         let editor_mode = self.ui_runtime.editor_mode;
 
@@ -1008,7 +1045,9 @@ impl UiButtonLoader {
                 self.ui_runtime.selected_ui_element.active = false;
                 self.ui_runtime.editing_text = false;
                 println!("deselection");
+                self.ui_runtime.selected_ui_element.dragging = false;
                 self.ui_runtime.selected_ui_element.just_deselected = true;
+                self.ui_runtime.selected_ui_element.just_selected = false;
                 self.update_selection();
             }
         }
@@ -1214,7 +1253,7 @@ impl UiButtonLoader {
                     editor_layer.polygons.clear();
                     match element {
                         Circle(c) => {
-                            if self.ui_runtime.editor_mode {
+                            if self.ui_runtime.editor_mode && c.misc.editable {
                                 let circle_outline = UiButtonOutline {
                                     id: Some("Circle Outline".to_string()),
                                     z_index: c.z_index,
@@ -1283,7 +1322,7 @@ impl UiButtonLoader {
                         }
                         Handle(_h) => {}
                         Polygon(p) => {
-                            if self.ui_runtime.editor_mode {
+                            if self.ui_runtime.editor_mode && p.misc.editable {
                                 let mut cx = 0.0;
                                 let mut cy = 0.0;
                                 for v in &p.vertices {
@@ -1308,9 +1347,11 @@ impl UiButtonLoader {
                                         x: v.pos[0],
                                         y: v.pos[1],
                                         radius: 15.0,
+                                        inside_border_thickness: 0.0,
                                         border_thickness: 0.0,
                                         fade: 1.0,
                                         fill_color: [0.0, 1.0, 0.0, 1.0],
+                                        inside_border_color: [0.0; 4],
                                         border_color: [0.5, 0.0, 0.0, 1.0],
                                         glow_color: [0.0, 0.0, 0.5, 0.0],
                                         glow_misc: GlowMisc {
@@ -1377,6 +1418,9 @@ impl UiButtonLoader {
         }
 
         self.ui_runtime.selected_ui_element.active = true;
+        if !self.ui_runtime.selected_ui_element.just_deselected {
+            self.ui_runtime.selected_ui_element.just_selected = true;
+        }
     }
 
     pub fn find_element(
@@ -1429,6 +1473,7 @@ impl UiButtonLoader {
         x: Option<f32>,
         y: Option<f32>,
         radius: Option<f32>,
+        fill_color: Option<[f32; 4]>,
         border_color: Option<[f32; 4]>,
     ) -> bool {
         if let Some(menu) = self.menus.get_mut(menu_name) {
@@ -1445,6 +1490,7 @@ impl UiButtonLoader {
                             c.x = x.unwrap_or(c.x);
                             c.y = y.unwrap_or(c.y);
                             c.radius = radius.unwrap_or(c.radius);
+                            c.fill_color = fill_color.unwrap_or(c.fill_color);
                             c.border_color = border_color.unwrap_or(c.border_color);
                             layer.dirty.mark_circles();
                             return true;
