@@ -85,7 +85,7 @@ pub(crate) fn press_began_on_ui(
 
             for text in layer.texts.iter().filter(|t| t.misc.active) {
                 if hit_text(text, mouse.mx, mouse.my) {
-                    return (hit, text.action.clone());
+                    return (true, text.action.clone());
                 }
             }
         }
@@ -1188,9 +1188,11 @@ fn process_text(
                     // exit edit mode when clicking outside after deselection
                     if mouse.just_pressed
                         && loader.ui_runtime.editing_text
+                        && text.being_edited
                         && !is_hit
                         && loader.ui_runtime.selected_ui_element.just_deselected
                     {
+                        println!("Inside editing text mode EXIT");
                         if is_selected {
                             text.template = text.text.clone();
                             layer.dirty.mark_texts();

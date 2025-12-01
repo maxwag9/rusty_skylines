@@ -114,12 +114,7 @@ fn drag_hue_point(
     if loader.ui_runtime.selected_ui_element.dragging {
         new_x = Some(lerp(loader.ui_runtime.last_pos.0, mouse_state.pos.x, 0.5));
         new_y = Some(lerp(loader.ui_runtime.last_pos.1, mouse_state.pos.y, 0.4));
-        if loader.ui_runtime.last_pos.0 != mouse_state.pos.x {
-            println!(
-                "BEFORE: {}, CURRENT: {}",
-                loader.ui_runtime.last_pos.0, mouse_state.pos.x
-            )
-        }
+
         loader.ui_runtime.last_pos = (
             new_x.unwrap_or(mouse_state.last_pos.x),
             new_y.unwrap_or(mouse_state.last_pos.y),
