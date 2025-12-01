@@ -606,7 +606,7 @@
                     0.012,
                     1.0
                   ],
-                  "roundness": 0.0
+                  "roundness": 0.5
                 },
                 {
                   "pos": [
@@ -619,7 +619,7 @@
                     0.012,
                     1.0
                   ],
-                  "roundness": 0.0
+                  "roundness": 0.5
                 },
                 {
                   "pos": [
@@ -632,7 +632,7 @@
                     0.012,
                     1.0
                   ],
-                  "roundness": 0.0
+                  "roundness": 0.5
                 },
                 {
                   "pos": [
@@ -645,7 +645,7 @@
                     0.012,
                     1.0
                   ],
-                  "roundness": 0.0
+                  "roundness": 0.5
                 }
               ],
               "misc": {

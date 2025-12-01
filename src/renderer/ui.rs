@@ -2,7 +2,7 @@ use crate::renderer::input::MouseState;
 use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::TimeSystem;
-use crate::vertex::{UiButtonText, UiVertexPoly, UiVertexText};
+use crate::vertex::{PolygonEdgeGpu, PolygonInfoGpu, UiButtonText, UiVertexPoly, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;
@@ -310,6 +310,28 @@ impl UiRenderer {
 
                 if layer.gpu.poly_count > 0 {
                     let mut offset = 0u32;
+
+                    let poly_bg = if let (Some(info), Some(edges)) =
+                        (&layer.gpu.poly_info_ssbo, &layer.gpu.poly_edge_ssbo)
+                    {
+                        Some(self.device.create_bind_group(&BindGroupDescriptor {
+                            label: None,
+                            layout: &self.pipelines.polygon_layout,
+                            entries: &[
+                                BindGroupEntry {
+                                    binding: 0,
+                                    resource: info.as_entire_binding(),
+                                },
+                                BindGroupEntry {
+                                    binding: 1,
+                                    resource: edges.as_entire_binding(),
+                                },
+                            ],
+                        }))
+                    } else {
+                        None
+                    };
+
                     if let Some(poly_vbo) = &layer.gpu.poly_vbo {
                         for p in layer.polygons.iter() {
                             let count = (p.tri_count * 3) as u32;
@@ -318,7 +340,7 @@ impl UiRenderer {
                                 z: p.z_index,
                                 pipeline: &self.pipelines.polygon_pipeline,
                                 bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: None,
+                                bind_group1: poly_bg.clone(),
                                 vertex_buffer: Some(poly_vbo),
                                 vertex_range: offset..offset + count,
                                 instance_range: 0..1,
@@ -537,6 +559,73 @@ impl UiRenderer {
             queue.write_buffer(layer.gpu.poly_vbo.as_ref().unwrap(), 0, bytes);
         }
         layer.gpu.poly_count = poly_count;
+
+        // ---- polygon infos and edges (SSBOs) ----
+        let mut infos: Vec<PolygonInfoGpu> = Vec::with_capacity(layer.polygons.len());
+        let mut edges: Vec<PolygonEdgeGpu> = Vec::new();
+
+        for poly in &layer.polygons {
+            let edge_offset = edges.len() as u32;
+            let mut edge_count = 0u32;
+
+            let n = poly.vertices.len();
+            if n >= 2 {
+                for i in 0..n {
+                    let a = poly.vertices[i].pos;
+                    let b = poly.vertices[(i + 1) % n].pos;
+                    edges.push(PolygonEdgeGpu { p0: a, p1: b });
+                    edge_count += 1;
+                }
+            }
+
+            infos.push(PolygonInfoGpu {
+                edge_offset,
+                edge_count,
+                _pad0: [0, 0],
+            });
+        }
+
+        if !infos.is_empty() {
+            let bytes = bytemuck::cast_slice(&infos);
+            let need_new = layer
+                .gpu
+                .poly_info_ssbo
+                .as_ref()
+                .map(|b| b.size() < bytes.len() as u64)
+                .unwrap_or(true);
+            if need_new {
+                layer.gpu.poly_info_ssbo = Some(self.device.create_buffer(&BufferDescriptor {
+                    label: Some(&format!("{}_poly_info_ssbo", layer.name)),
+                    size: bytes.len() as u64,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            queue.write_buffer(layer.gpu.poly_info_ssbo.as_ref().unwrap(), 0, bytes);
+        } else {
+            layer.gpu.poly_info_ssbo = None;
+        }
+
+        if !edges.is_empty() {
+            let bytes = bytemuck::cast_slice(&edges);
+            let need_new = layer
+                .gpu
+                .poly_edge_ssbo
+                .as_ref()
+                .map(|b| b.size() < bytes.len() as u64)
+                .unwrap_or(true);
+            if need_new {
+                layer.gpu.poly_edge_ssbo = Some(self.device.create_buffer(&BufferDescriptor {
+                    label: Some(&format!("{}_poly_edge_ssbo", layer.name)),
+                    size: bytes.len() as u64,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            queue.write_buffer(layer.gpu.poly_edge_ssbo.as_ref().unwrap(), 0, bytes);
+        } else {
+            layer.gpu.poly_edge_ssbo = None;
+        }
 
         // ---- text (VBO) : build glyphs for this layer only ----
         let mut text_vertices: Vec<UiVertexText> = Vec::new();

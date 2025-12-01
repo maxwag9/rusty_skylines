@@ -217,7 +217,6 @@ fn drag_hue_point(
         if hit.action != Some("Drag Hue Point".to_string()) {
             if loader.ui_runtime.selected_ui_element.just_selected {
                 deactivate_action(loader, "Drag Hue Point");
-                println!("Removed!");
                 let _ = loader.delete_element(
                     "Editor_Menu",
                     "Color Picker",
@@ -230,7 +229,6 @@ fn drag_hue_point(
     // Handle delete on deselection
     if loader.ui_runtime.selected_ui_element.just_deselected {
         deactivate_action(loader, "Drag Hue Point");
-        println!("Removed!");
         let _ = loader.delete_element("Editor_Menu", "Color Picker", "color picker handle circle");
     }
 
@@ -483,16 +481,6 @@ impl Menu {
             rebuilt.mark_outlines();
         }
 
-        // Common builder for vertex-emitting shapes
-        let push_with_misc = |v: &UiVertex, misc: [f32; 4], out: &mut Vec<UiVertexPoly>| {
-            out.push(UiVertexPoly {
-                pos: v.pos,
-                _pad: [1.0; 2],
-                color: v.color,
-                misc,
-            });
-        };
-
         // ------- HANDLES -------
         if dirty.handles {
             l.cache.handle_params.clear();
@@ -528,11 +516,25 @@ impl Menu {
             rebuilt.mark_handles();
         }
 
+        // Common builder for vertex-emitting shapes
+        let push_with_misc = |v: &UiVertex,
+                              roundness_px: f32,
+                              poly_index_f: f32,
+                              misc: [f32; 4],
+                              out: &mut Vec<UiVertexPoly>| {
+            out.push(UiVertexPoly {
+                pos: v.pos,
+                data: [roundness_px, poly_index_f],
+                color: v.color,
+                misc,
+            });
+        };
+
         // ------- POLYGONS (N verts) -------
         if dirty.polygons {
             l.cache.polygon_vertices.clear();
 
-            for poly in &mut l.polygons {
+            for (poly_index, poly) in l.polygons.iter_mut().enumerate() {
                 let (rt, hash) = runtime_info(&poly.id);
 
                 let misc = [
@@ -542,11 +544,20 @@ impl Menu {
                     hash,
                 ];
 
+                let poly_index_f = poly_index as f32;
+
                 let tris = triangulate_polygon(&mut poly.vertices);
                 poly.tri_count = tris.len() as u32 / 3;
 
                 for vertex in &tris {
-                    push_with_misc(vertex, misc, &mut l.cache.polygon_vertices);
+                    let roundness_px = vertex.roundness;
+                    push_with_misc(
+                        vertex,
+                        roundness_px,
+                        poly_index_f,
+                        misc,
+                        &mut l.cache.polygon_vertices,
+                    );
                 }
             }
 

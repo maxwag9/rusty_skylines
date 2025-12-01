@@ -46,6 +46,7 @@ pub struct UiPipelines {
     pub circle_pipeline_layout: PipelineLayout,
     pub glow_pipeline_layout: PipelineLayout,
     pub handle_pipeline_layout: PipelineLayout,
+    pub polygon_layout: BindGroupLayout,
     pub polygon_pipeline_layout: PipelineLayout,
     pub outline_pipeline_layout: PipelineLayout,
     pub good_blend: Option<BlendState>,
@@ -65,25 +66,25 @@ impl UiPipelines {
         let handle_quad_vertices = [
             UiVertexPoly {
                 pos: [-3.0, -3.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
             },
             UiVertexPoly {
                 pos: [3.0, -3.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
             },
             UiVertexPoly {
                 pos: [-3.0, 3.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
             },
             UiVertexPoly {
                 pos: [3.0, 3.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0; 4],
             },
@@ -97,25 +98,25 @@ impl UiPipelines {
         let quad_vertices = [
             UiVertexPoly {
                 pos: [-1.0, -1.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
             },
             UiVertexPoly {
                 pos: [1.0, -1.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
             },
             UiVertexPoly {
                 pos: [-1.0, 1.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
             },
             UiVertexPoly {
                 pos: [1.0, 1.0],
-                _pad: [1.0; 2],
+                data: [0.0, 0.0],
                 color: [1.0; 4],
                 misc: [1.0, 0.0, 0.0, 0.0],
             },
@@ -132,7 +133,7 @@ impl UiPipelines {
             mapped_at_creation: false,
         });
 
-        let layout = make_uniform_layout(device, "UI Bind Layout");
+        let uniform_layout = make_uniform_layout(device, "UI Bind Layout");
 
         let screen_uniform = ScreenUniform {
             size: [size.width as f32, size.height as f32],
@@ -149,7 +150,7 @@ impl UiPipelines {
         });
         let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("UI Bind Group"),
-            layout: &layout,
+            layout: &uniform_layout,
             entries: &[BindGroupEntry {
                 binding: 0,
                 resource: uniform_buffer.as_entire_binding(),
@@ -180,7 +181,7 @@ impl UiPipelines {
         });
         let text_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Text Pipeline Layout"),
-            bind_group_layouts: &[&layout, &text_layout],
+            bind_group_layouts: &[&uniform_layout, &text_layout],
             push_constant_ranges: &[],
         });
         let text_pipeline = build_pipeline(
@@ -216,7 +217,7 @@ impl UiPipelines {
         let circle_layout = make_storage_layout(device, "Circle Layout");
         let circle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Circle Pipeline Layout"),
-            bind_group_layouts: &[&layout, &circle_layout],
+            bind_group_layouts: &[&uniform_layout, &circle_layout],
             push_constant_ranges: &[],
         });
 
@@ -273,7 +274,7 @@ impl UiPipelines {
         });
         let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Outline Pipeline Layout"),
-            bind_group_layouts: &[&layout, &outline_layout],
+            bind_group_layouts: &[&uniform_layout, &outline_layout],
             push_constant_ranges: &[],
         });
 
@@ -297,7 +298,7 @@ impl UiPipelines {
         let handle_layout = make_storage_layout(device, "Handle Layout");
         let handle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Handle Pipeline Layout"),
-            bind_group_layouts: &[&layout, &handle_layout],
+            bind_group_layouts: &[&uniform_layout, &handle_layout],
             push_constant_ranges: &[],
         });
 
@@ -314,11 +315,41 @@ impl UiPipelines {
         );
         let polygon_shader =
             load_shader_from_dir(device, shader_dir, "ui_polygon.wgsl", "UI Polygon Shader")?;
+        let polygon_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("polygon_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("UI Pipeline Layout"),
-            bind_group_layouts: &[&layout],
+            label: Some("UI Polygon Pipeline Layout"),
+            bind_group_layouts: &[
+                &uniform_layout, // group(0) -> ScreenUniform
+                &polygon_layout, // group(1) -> polygon_infos, polygon_edges
+            ],
             push_constant_ranges: &[],
         });
+
         let polygon_pipeline = build_pipeline(
             device,
             "UI Polygon Pipeline",
@@ -335,7 +366,7 @@ impl UiPipelines {
             load_shader_from_dir(device, shader_dir, "ui_circle_glow.wgsl", "UI Glow Shader")?;
         let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Glow Pipeline Layout"),
-            bind_group_layouts: &[&layout, &circle_layout],
+            bind_group_layouts: &[&uniform_layout, &circle_layout],
             push_constant_ranges: &[],
         });
         let additive_blend = BlendState {
@@ -384,6 +415,7 @@ impl UiPipelines {
             outline_pipeline,
 
             polygon_shader,
+            polygon_layout,
             polygon_pipeline_layout,
             polygon_pipeline,
 

@@ -37,6 +37,8 @@ pub struct LayerGpu {
 
     pub poly_vbo: Option<Buffer>, // polygons, I know, right??
     pub poly_count: u32,          // vertex count
+    pub poly_info_ssbo: Option<Buffer>,
+    pub poly_edge_ssbo: Option<Buffer>,
 
     pub text_vbo: Option<Buffer>, // UiVertexText stream
     pub text_count: u32,
@@ -54,6 +56,8 @@ impl Default for LayerGpu {
             handle_count: 0,
             poly_vbo: None,
             poly_count: 0,
+            poly_info_ssbo: None,
+            poly_edge_ssbo: None,
             text_vbo: None,
             text_count: 0,
         }
@@ -243,34 +247,55 @@ impl Vertex {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct UiVertexPoly {
     pub pos: [f32; 2],
-    pub _pad: [f32; 2], // pad to 16 bytes
+    pub data: [f32; 2], // [roundness_px, polygon_index]
     pub color: [f32; 4],
-    pub misc: [f32; 4],
+    pub misc: [f32; 4], // active, touched_time, is_touched, hash
 }
+
 impl UiVertexPoly {
     pub fn desc() -> VertexBufferLayout<'static> {
         VertexBufferLayout {
-            array_stride: 48,
+            array_stride: size_of::<UiVertexPoly>() as u64,
             step_mode: VertexStepMode::Vertex,
             attributes: &[
                 VertexAttribute {
-                    offset: 0,
                     shader_location: 0,
                     format: VertexFormat::Float32x2,
+                    offset: 0,
                 },
                 VertexAttribute {
-                    offset: 16,
                     shader_location: 1,
-                    format: VertexFormat::Float32x4,
+                    format: VertexFormat::Float32x2,
+                    offset: 8,
                 },
                 VertexAttribute {
-                    offset: 32,
                     shader_location: 2,
                     format: VertexFormat::Float32x4,
+                    offset: 16,
+                },
+                VertexAttribute {
+                    shader_location: 3,
+                    format: VertexFormat::Float32x4,
+                    offset: 32,
                 },
             ],
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PolygonInfoGpu {
+    pub edge_offset: u32,
+    pub edge_count: u32,
+    pub _pad0: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PolygonEdgeGpu {
+    pub p0: [f32; 2],
+    pub p1: [f32; 2],
 }
 
 // For text — pos + uv + color
@@ -380,7 +405,7 @@ impl std::fmt::Display for ElementKind {
 }
 
 impl RuntimeLayer {
-    pub fn iter_all_elements(&self) -> Vec<(UiElementRef, ElementKind)> {
+    pub fn iter_all_elements(&self) -> Vec<(UiElementRef<'_>, ElementKind)> {
         let mut out = Vec::new();
 
         for t in &self.texts {
