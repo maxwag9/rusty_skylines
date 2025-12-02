@@ -543,7 +543,54 @@
               }
             }
           ],
-          "circles": [],
+          "circles": [
+            {
+              "id": "fard circle",
+              "action": "Toggle Color Picker",
+              "style": "None",
+              "z_index": 1,
+              "x": 1000.8617,
+              "y": 769.7613,
+              "radius": 83.57955,
+              "inside_border_thickness": 0.0,
+              "border_thickness": 0.0,
+              "fade": 0.0,
+              "fill_color": [
+                0.2,
+                0.2,
+                0.2,
+                0.5
+              ],
+              "inside_border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "glow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "glow_misc": {
+                "glow_size": 0.0,
+                "glow_speed": 0.0,
+                "glow_intensity": 0.0
+              },
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              }
+            }
+          ],
           "outlines": [],
           "handles": [],
           "polygons": [],
@@ -638,52 +685,6 @@
                 "pressable": true,
                 "editable": false
               }
-            },
-            {
-              "id": "fard circle",
-              "action": "None",
-              "style": "None",
-              "z_index": 1,
-              "x": 1000.8617,
-              "y": 769.7613,
-              "radius": 83.57955,
-              "inside_border_thickness": 0.0,
-              "border_thickness": 0.0,
-              "fade": 0.0,
-              "fill_color": [
-                0.2,
-                0.2,
-                0.2,
-                0.5
-              ],
-              "inside_border_color": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ],
-              "border_color": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ],
-              "glow_color": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ],
-              "glow_misc": {
-                "glow_size": 0.0,
-                "glow_speed": 0.0,
-                "glow_intensity": 0.0
-              },
-              "misc": {
-                "active": true,
-                "pressable": false,
-                "editable": true
-              }
             }
           ],
           "outlines": [],
@@ -751,11 +752,11 @@
               "misc": {
                 "active": true,
                 "pressable": false,
-                "editable": true
+                "editable": false
               }
             }
           ],
-          "active": true,
+          "active": false,
           "opaque": false
         }
       ]

@@ -1,3 +1,4 @@
+use crate::resources::InputState;
 use crate::ui::input::MouseState;
 use crate::ui::special_actions::drag_hue_point;
 use crate::ui::touches::HitResult;
@@ -30,9 +31,14 @@ pub fn execute_action(
     }
 }
 
-pub fn activate_action(loader: &mut UiButtonLoader, top_hit: &Option<HitResult>) {
+pub fn activate_action(
+    loader: &mut UiButtonLoader,
+    top_hit: &Option<HitResult>,
+    input_state: &InputState,
+) {
     if let Some(hit) = top_hit {
         let action = hit.action.clone().unwrap_or("None".to_string());
+
         match action.as_str() {
             "Drag Hue Point" => {
                 if let Some(action_state) =
@@ -55,6 +61,16 @@ pub fn activate_action(loader: &mut UiButtonLoader, top_hit: &Option<HitResult>)
                         .insert("Drag Hue Point".to_string(), action_state);
                 }
             }
+            // "Toggle Color Picker" => {
+            //     if !input_state.mouse.right_just_pressed {
+            //         return;
+            //     }
+            //     if let Some(menu) = loader.menus.get_mut("Editor_Menu"){
+            //         if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") {
+            //             layer.active = !layer.active;
+            //         }
+            //     }
+            // }
             "None" => {}
             &_ => {}
         }

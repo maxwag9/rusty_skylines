@@ -128,14 +128,8 @@ pub fn select_move_primary_to_multi(
 }
 
 pub fn deselect_everything(loader: &mut UiButtonLoader) {
-    loader.ui_runtime.selected_ui_element_primary.active = false;
-    loader
-        .ui_runtime
-        .selected_ui_element_primary
-        .just_deselected = true;
-    loader.ui_runtime.selected_ui_element_primary.dragging = false;
+    loader.ui_runtime.selected_ui_element_primary = SelectedUiElement::default();
     loader.ui_runtime.editing_text = false;
     println!("deselection");
-    loader.ui_runtime.selected_ui_element_primary.just_selected = false;
     loader.ui_runtime.selected_ui_element_multi.clear();
 }

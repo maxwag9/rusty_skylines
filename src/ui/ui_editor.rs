@@ -451,7 +451,28 @@ impl UiButtonLoader {
             self.update_selection();
         }
 
-        activate_action(self, &top_hit);
+        if self.ui_runtime.selected_ui_element_primary.just_selected
+            || self.ui_runtime.selected_ui_element_primary.just_deselected
+        {
+            if self.ui_runtime.selected_ui_element_primary.action_name != "Drag Hue Point" {
+                if let Some(menu) = self.menus.get_mut("Editor_Menu") {
+                    if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") {
+                        layer.active = false;
+                    }
+                }
+            }
+        }
+        if input_state.mouse.right_just_pressed
+            && self.ui_runtime.selected_ui_element_primary.element_type != ElementKind::None
+        {
+            if let Some(menu) = self.menus.get_mut("Editor_Menu") {
+                if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") {
+                    layer.active = true;
+                }
+            }
+        }
+
+        activate_action(self, &top_hit, input_state);
 
         execute_action(self, &top_hit, &input_state.mouse);
 
