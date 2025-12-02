@@ -1,9 +1,9 @@
 use crate::data::Settings;
 use crate::events::Events;
 use crate::renderer::Renderer;
-pub(crate) use crate::renderer::input::InputState;
-use crate::renderer::ui_editor::UiButtonLoader;
 use crate::simulation::Simulation;
+pub(crate) use crate::ui::input::InputState;
+use crate::ui::ui_editor::UiButtonLoader;
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ pub struct Resources {
 
 impl Resources {
     pub fn new(window: Arc<Window>) -> Self {
-        let settings = Settings::load("src/settings.toml");
+        let settings = Settings::load("data/settings.toml");
         let editor_mode = settings.editor_mode.clone();
         let renderer = Renderer::new(window.clone(), &settings);
         let mut ui_loader = UiButtonLoader::new(editor_mode);

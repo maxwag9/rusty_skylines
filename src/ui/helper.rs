@@ -1,5 +1,5 @@
 use crate::resources::InputState;
-use crate::vertex::UiVertex;
+use crate::ui::vertex::UiVertex;
 use std::cmp::Ordering;
 use wgpu::*;
 

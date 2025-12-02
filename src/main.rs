@@ -7,7 +7,7 @@ mod renderer;
 mod resources;
 mod simulation;
 mod systems;
-mod vertex;
+mod ui;
 mod world;
 
 use app::App;

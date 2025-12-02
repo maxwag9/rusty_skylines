@@ -1,21 +1,22 @@
-use crate::paths::renderer_path;
-use crate::renderer::helper::{calc_move_speed, triangulate_polygon};
-use crate::renderer::input::MouseState;
-use crate::renderer::parser::resolve_template;
-use crate::renderer::touches::{
+use crate::paths::project_path;
+use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::resources::{InputState, TimeSystem};
+use crate::ui::helper::{calc_move_speed, triangulate_polygon};
+use crate::ui::input::MouseState;
+use crate::ui::parser::resolve_template;
+use crate::ui::touches::{
     EditorInteractionResult, HitResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
     handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing, near_handle,
     press_began_on_ui,
 };
-use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::resources::{InputState, TimeSystem};
-use crate::vertex::UiElement::*;
-pub(crate) use crate::vertex::*;
+use crate::ui::vertex::UiElement::*;
+pub(crate) use crate::ui::vertex::*;
 use glam::Vec2;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::f32::consts::{FRAC_PI_2, PI};
 use std::fs;
+use std::path::PathBuf;
 
 pub struct UiVariableRegistry {
     pub(crate) vars: HashMap<String, String>,
@@ -76,7 +77,9 @@ fn activate_action(loader: &mut UiButtonLoader, top_hit: &Option<HitResult>) {
                     let action_state = ActionState {
                         action_name: "Drag Hue Point".to_string(),
                         position: Default::default(),
+                        last_pos: Default::default(),
                         radius: 5.0,
+                        original_radius: 5.0,
                         active: true,
                     };
                     loader
@@ -105,6 +108,7 @@ fn drag_hue_point(
     // if loader.ui_runtime.selected_ui_element.element_type != ElementKind::Circle {
     //     return;
     // }
+
     let mut new_x = None;
     let mut new_y = None;
     let mut fill_color = None;
@@ -112,13 +116,20 @@ fn drag_hue_point(
     let mut radius = None;
 
     if loader.ui_runtime.selected_ui_element.dragging {
-        new_x = Some(lerp(loader.ui_runtime.last_pos.0, mouse_state.pos.x, 0.5));
-        new_y = Some(lerp(loader.ui_runtime.last_pos.1, mouse_state.pos.y, 0.4));
+        if let Some(action_state) = loader.ui_runtime.action_states.get_mut("Drag Hue Point") {
+            if action_state.last_pos.x == 0.0 {
+                new_x = Some(lerp(mouse_state.last_pos.x, mouse_state.pos.x, 0.5));
+                new_y = Some(lerp(mouse_state.last_pos.y, mouse_state.pos.y, 0.4));
+            } else {
+                new_x = Some(lerp(action_state.last_pos.x, mouse_state.pos.x, 0.5));
+                new_y = Some(lerp(action_state.last_pos.y, mouse_state.pos.y, 0.4));
+            }
 
-        loader.ui_runtime.last_pos = (
-            new_x.unwrap_or(mouse_state.last_pos.x),
-            new_y.unwrap_or(mouse_state.last_pos.y),
-        );
+            action_state.last_pos = Vec2::from((
+                new_x.unwrap_or(mouse_state.last_pos.x),
+                new_y.unwrap_or(mouse_state.last_pos.y),
+            ));
+        }
     }
     if let Some(circle_layer) = loader
         .menus
@@ -144,12 +155,13 @@ fn drag_hue_point(
             let dmx = handle.x - pointer_x;
             let dmy = handle.y - pointer_y;
             let dist_to_mouse = (dmx * dmx + dmy * dmy).sqrt();
-            if dist_to_mouse < loader.ui_runtime.original_radius + 4.0 {
-                radius = Some(loader.ui_runtime.original_radius + 4.0);
-            } else {
-                radius = Some(loader.ui_runtime.original_radius);
+            if let Some(action_state) = loader.ui_runtime.action_states.get_mut("Drag Hue Point") {
+                if dist_to_mouse < action_state.original_radius + 4.0 {
+                    radius = Some(action_state.original_radius + 4.0);
+                } else {
+                    radius = Some(action_state.original_radius);
+                }
             }
-
             if loader.ui_runtime.selected_ui_element.dragging {
                 radius = Some(loader.ui_runtime.original_radius + 5.0);
 
@@ -592,7 +604,9 @@ impl Menu {
 pub struct ActionState {
     action_name: String,
     position: Vec2,
+    last_pos: Vec2,
     radius: f32,
+    original_radius: f32,
 
     pub active: bool,
 }
@@ -683,7 +697,8 @@ pub struct UiButtonLoader {
 
 impl UiButtonLoader {
     pub fn new(editor_mode: bool) -> Self {
-        let layout = Self::load_gui_from_file("ui_data/gui_layout.json").unwrap_or_else(|e| {
+        let layout_path = project_path("data/ui_data/gui_layout.json");
+        let layout = Self::load_gui_from_file(layout_path).unwrap_or_else(|e| {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
         });
@@ -770,18 +785,14 @@ impl UiButtonLoader {
         loader
     }
 
-    pub fn load_gui_from_file(path: &str) -> Result<GuiLayout, Box<dyn std::error::Error>> {
-        let full_path = renderer_path(path);
-        let data = fs::read_to_string(&full_path)?;
+    pub fn load_gui_from_file(path: PathBuf) -> Result<GuiLayout, Box<dyn std::error::Error>> {
+        let data = fs::read_to_string(&path)?;
         let parsed: GuiLayout = serde_json::from_str(&data)?;
         Ok(parsed)
     }
 
-    pub fn save_gui_to_file(&self, path: &str) -> anyhow::Result<()> {
-        use std::fs;
-
-        let full_path = renderer_path(path);
-        if let Some(parent) = full_path.parent() {
+    pub fn save_gui_to_file(&self, path: PathBuf) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
@@ -789,9 +800,9 @@ impl UiButtonLoader {
         let layout = self.to_json_gui_layout();
 
         let json = serde_json::to_string_pretty(&layout)?;
-        fs::write(&full_path, json)?;
+        fs::write(&path, json)?;
 
-        println!("GUI saved to {}", full_path.display());
+        println!("GUI saved to {}", path.display());
         Ok(())
     }
 
@@ -1352,13 +1363,13 @@ impl UiButtonLoader {
                                         z_index: i as i32,
                                         x: v.pos[0],
                                         y: v.pos[1],
-                                        radius: 15.0,
-                                        inside_border_thickness: 0.0,
+                                        radius: 10.0,
+                                        inside_border_thickness: 2.0,
                                         border_thickness: 0.0,
                                         fade: 1.0,
-                                        fill_color: [0.0, 1.0, 0.0, 1.0],
+                                        fill_color: [0.0, 0.8, 0.0, 0.6],
                                         inside_border_color: [0.0; 4],
-                                        border_color: [0.5, 0.0, 0.0, 1.0],
+                                        border_color: [0.0, 0.0, 0.0, 0.0],
                                         glow_color: [0.0, 0.0, 0.5, 0.0],
                                         glow_misc: GlowMisc {
                                             glow_size: 0.0,

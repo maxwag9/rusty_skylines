@@ -12,8 +12,3 @@ pub fn shader_dir() -> PathBuf {
     let _ = fs::create_dir_all(&dir);
     dir
 }
-
-/// Returns an absolute path to a file in the renderer folder.
-pub fn renderer_path(path: impl AsRef<Path>) -> PathBuf {
-    project_path(Path::new("src/renderer").join(path))
-}

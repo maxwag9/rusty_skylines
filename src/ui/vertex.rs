@@ -1,6 +1,6 @@
-use crate::renderer::helper::ensure_ccw;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::renderer::ui_editor::UiVariableRegistry;
+use crate::ui::helper::ensure_ccw;
+use crate::ui::ui_editor::UiVariableRegistry;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};

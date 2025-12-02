@@ -1,20 +1,15 @@
 pub mod core;
-pub mod helper;
-pub(crate) mod input;
-pub(crate) mod parser;
 pub mod pipelines;
 pub mod render_passes;
 pub(crate) mod shader_watcher;
-pub(crate) mod touches;
 pub(crate) mod ui;
-pub mod ui_editor;
 pub(crate) mod ui_pipelines;
 
 use crate::components::camera::Camera;
 use crate::data::Settings;
-use crate::renderer::input::MouseState;
-use crate::renderer::ui_editor::UiButtonLoader;
 use crate::resources::TimeSystem;
+use crate::ui::input::MouseState;
+use crate::ui::ui_editor::UiButtonLoader;
 use core::RenderCore;
 use std::sync::Arc;
 

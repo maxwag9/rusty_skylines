@@ -1,8 +1,10 @@
-use crate::renderer::input::MouseState;
-use crate::renderer::ui_editor::{RuntimeLayer, UiButtonLoader, UiRuntime};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::TimeSystem;
-use crate::vertex::{PolygonEdgeGpu, PolygonInfoGpu, UiButtonText, UiVertexPoly, UiVertexText};
+use crate::ui::input::MouseState;
+use crate::ui::ui_editor::{UiButtonLoader, UiRuntime};
+use crate::ui::vertex::{
+    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonText, UiVertexPoly, UiVertexText,
+};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use std::collections::HashMap;

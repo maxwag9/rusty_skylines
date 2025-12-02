@@ -1,7 +1,9 @@
+use crate::paths::project_path;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::path::Path;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 
@@ -120,33 +122,34 @@ pub struct Keybinds {
 }
 
 impl Keybinds {
-    fn read_bindings(path: &str) -> Option<HashMap<String, ActionBind>> {
+    fn read_bindings(path: impl AsRef<Path>) -> Option<HashMap<String, ActionBind>> {
         fs::read_to_string(path)
             .ok()
             .and_then(|data| toml::from_str(&data).ok())
     }
 
-    fn write_bindings(path: &str, data: &HashMap<String, ActionBind>) {
+    fn write_bindings(path: impl AsRef<Path>, data: &HashMap<String, ActionBind>) {
         if let Ok(serialized) = toml::to_string(data) {
             let _ = fs::write(path, serialized);
         }
     }
 
-    pub fn load(path: &str, default_path: &str) -> Self {
-        let default_map: HashMap<String, ActionBind> = match Self::read_bindings(default_path) {
+    pub fn load(path: impl AsRef<Path>, default_path: impl AsRef<Path>) -> Self {
+        let default_map: HashMap<String, ActionBind> = match Self::read_bindings(&default_path) {
             Some(map) => map,
             None => {
                 println!("default_keybinds.toml missing");
-                match fs::read_to_string(path) {
+
+                match fs::read_to_string(&path) {
                     Ok(user_data) => {
                         println!("copying keybinds.toml to default_keybinds.toml");
-                        let _ = fs::write(default_path, &user_data);
+                        let _ = fs::write(&default_path, &user_data);
                         toml::from_str(&user_data).unwrap_or_else(|_| HashMap::new())
                     }
                     Err(_) => {
                         println!("no keybinds.toml either, creating empty defaults");
                         let empty: HashMap<String, ActionBind> = HashMap::new();
-                        Self::write_bindings(default_path, &empty);
+                        Self::write_bindings(&default_path, &empty);
                         empty
                     }
                 }
@@ -155,17 +158,17 @@ impl Keybinds {
 
         let mut merged = default_map.clone();
 
-        if let Some(user) = Self::read_bindings(path) {
+        if let Some(user) = Self::read_bindings(&path) {
             merged.extend(user);
         } else {
             println!("keybinds.toml missing or invalid, rewriting from defaults");
-            Self::write_bindings(path, &merged);
+            Self::write_bindings(&path, &merged);
         }
 
         Keybinds { binds: merged }
     }
 
-    pub fn save(&self, path: &str) {
+    pub fn save(&self, path: impl AsRef<Path>) {
         Self::write_bindings(path, &self.binds);
     }
 }
@@ -258,7 +261,10 @@ pub struct InputState {
 
 impl InputState {
     pub fn new() -> Self {
-        let keybinds = Keybinds::load("keybinds.toml", "default_keybinds.toml");
+        let keybinds = Keybinds::load(
+            project_path("data/keybinds.toml"),
+            project_path("data/default_keybinds.toml"),
+        );
         let parsed = Self::parse_all(&keybinds);
 
         Self {

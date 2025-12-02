@@ -1,11 +1,12 @@
+use crate::paths::project_path;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
 use crate::systems::input::camera_input_system;
 use crate::systems::physics::simulation_system;
 use crate::systems::render::render_system;
 use crate::systems::ui::ui_system;
-use crate::vertex::UiButtonPolygon;
-use crate::vertex::UiElement::Polygon;
+use crate::ui::vertex::UiButtonPolygon;
+use crate::ui::vertex::UiElement::Polygon;
 use crate::world::World;
 use glam::Vec2;
 use std::sync::Arc;
@@ -78,6 +79,32 @@ impl Schedule {
 }
 
 impl ApplicationHandler for App {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
+        if let Some(resources) = self.resources.as_mut() {
+            resources.input.mouse.delta = Vec2::ZERO;
+            resources.input.begin_frame(resources.time.total_time);
+            let pos = resources.input.mouse.pos;
+            let delta = resources.input.mouse.delta;
+
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos.x", pos.x.to_string());
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos_delta.x", delta.x.to_string());
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos.y", pos.y.to_string());
+            resources
+                .ui_loader
+                .variables
+                .set("mouse_pos_delta.y", delta.y.to_string());
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(
             event_loop
@@ -172,10 +199,10 @@ impl ApplicationHandler for App {
                 }
 
                 // Save GUI
-                if input.action_repeat("Save GUI layout") {
+                if input.action_pressed_once("Save GUI layout") {
                     match resources
                         .ui_loader
-                        .save_gui_to_file("ui_data/gui_layout.json")
+                        .save_gui_to_file(project_path("data/ui_data/gui_layout.json"))
                     {
                         Ok(_) => println!("GUI layout saved"),
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
@@ -336,32 +363,6 @@ impl ApplicationHandler for App {
             }
 
             _ => {}
-        }
-    }
-
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
-        if let Some(resources) = self.resources.as_mut() {
-            resources.input.mouse.delta = Vec2::ZERO;
-            resources.input.begin_frame(resources.time.total_time);
-            let pos = resources.input.mouse.pos;
-            let delta = resources.input.mouse.delta;
-
-            resources
-                .ui_loader
-                .variables
-                .set("mouse_pos.x", pos.x.to_string());
-            resources
-                .ui_loader
-                .variables
-                .set("mouse_pos_delta.x", delta.x.to_string());
-            resources
-                .ui_loader
-                .variables
-                .set("mouse_pos.y", pos.y.to_string());
-            resources
-                .ui_loader
-                .variables
-                .set("mouse_pos_delta.y", delta.y.to_string());
         }
     }
 }

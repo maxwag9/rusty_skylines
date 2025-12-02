@@ -1,4 +1,4 @@
-use crate::renderer::ui_editor::UiVariableRegistry;
+use crate::ui::ui_editor::UiVariableRegistry;
 use std::fmt;
 
 // ------------------------------------------------------------

@@ -1,13 +1,13 @@
 use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::paths::shader_dir;
-use crate::renderer::input::MouseState;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
-use crate::renderer::ui_editor::UiButtonLoader;
 use crate::resources::{TimeSystem, Uniforms};
-use crate::vertex::{LineVtx, Vertex};
+use crate::ui::input::MouseState;
+use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::vertex::{LineVtx, Vertex};
 use std::sync::Arc;
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
@@ -17,7 +17,6 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 // top-level (once)
-pub const FONT_TTF: &[u8] = include_bytes!("ui_data/ttf/JetBrainsMono-Regular.ttf");
 
 pub struct RenderCore {
     pub surface: Surface<'static>,
@@ -172,7 +171,8 @@ impl RenderCore {
         let mut ui_renderer =
             UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
                 .expect("Failed to create UI pipelines");
-        let _ = ui_renderer.build_text_atlas(&device, &queue, &FONT_TTF, &[14, 18, 24], 1024, 1024);
+        let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
+        let _ = ui_renderer.build_text_atlas(&device, &queue, font_ttf, &[14, 18, 24], 1024, 1024);
 
         Self {
             surface,
