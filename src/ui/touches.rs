@@ -1,6 +1,8 @@
 use crate::resources::{InputState, TimeSystem};
+use crate::ui::actions::selected_needed;
 use crate::ui::helper::{dist, polygon_sdf};
 use crate::ui::input::MouseState;
+use crate::ui::selections::{select_move_primary_to_multi, select_to_multi, select_ui_element};
 use crate::ui::ui_editor::{Menu, UiButtonLoader, UiRuntime};
 use crate::ui::vertex::{
     ElementKind, RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle,
@@ -246,10 +248,38 @@ pub(crate) fn handle_editor_mode_interactions(
     let mut result = EditorInteractionResult::default();
     let top_hit_ref = top_hit.as_ref();
 
-    process_circles(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
-    process_handles(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
-    process_polygons(loader, time_system.sim_dt, mouse, top_hit_ref, &mut result);
-    process_text(loader, time_system, mouse, top_hit_ref, &mut result);
+    process_circles(
+        loader,
+        time_system.sim_dt,
+        mouse,
+        top_hit_ref,
+        &mut result,
+        input_state,
+    );
+    process_handles(
+        loader,
+        time_system.sim_dt,
+        mouse,
+        top_hit_ref,
+        &mut result,
+        input_state,
+    );
+    process_polygons(
+        loader,
+        time_system.sim_dt,
+        mouse,
+        top_hit_ref,
+        &mut result,
+        input_state,
+    );
+    process_text(
+        loader,
+        time_system,
+        mouse,
+        top_hit_ref,
+        &mut result,
+        input_state,
+    );
 
     if loader.ui_runtime.editor_mode {
         process_keyboard_ui_navigation(loader, input_state);
@@ -279,7 +309,7 @@ fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut Input
 
     // Extract selection WITHOUT borrowing loader.menus
     let sel = {
-        let s = &loader.ui_runtime.selected_ui_element;
+        let s = &loader.ui_runtime.selected_ui_element_primary;
         s.clone()
     };
 
@@ -303,6 +333,7 @@ fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut Input
         next_id,
         false,
         element_type,
+        "None".to_string(),
     );
 }
 
@@ -563,11 +594,11 @@ pub(crate) fn apply_pending_circle_updates(
 }
 
 pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> bool {
-    if !loader.ui_runtime.selected_ui_element.active || scroll == 0.0 {
+    if !loader.ui_runtime.selected_ui_element_primary.active || scroll == 0.0 {
         return false;
     }
 
-    let selected = loader.ui_runtime.selected_ui_element.clone();
+    let selected = loader.ui_runtime.selected_ui_element_primary.clone();
     let mut selection_changed = false;
 
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
@@ -743,6 +774,7 @@ fn process_circles(
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
+    input_state: &InputState,
 ) {
     // Start with no selection pending
     let mut pending_selection: Option<SelectedUiElement> = None;
@@ -767,10 +799,10 @@ fn process_circles(
                     continue;
                 }
 
-                let is_selected = loader.ui_runtime.selected_ui_element.active
-                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
-                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
-                    && loader.ui_runtime.selected_ui_element.element_id == *id;
+                let is_selected = loader.ui_runtime.selected_ui_element_primary.active
+                    && loader.ui_runtime.selected_ui_element_primary.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element_primary.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element_primary.element_id == *id;
 
                 if runtime.is_down && !is_selected {
                     continue;
@@ -802,13 +834,14 @@ fn process_circles(
                             dragging: false,
                             element_type: ElementKind::Circle,
                             just_selected: true,
+                            action_name: circle.action.clone(),
                         });
 
                         result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
-                        loader.ui_runtime.selected_ui_element.dragging = true;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = true;
                         if loader.ui_runtime.editor_mode && circle.misc.editable {
                             if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
                                 let new_x = mouse.mx - ox;
@@ -826,7 +859,7 @@ fn process_circles(
                     }
 
                     TouchState::Released => {
-                        loader.ui_runtime.selected_ui_element.dragging = false;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
                     }
 
@@ -838,14 +871,37 @@ fn process_circles(
 
     // Apply the selection after processing all circles
     if let Some(p) = pending_selection {
-        select_ui_element(
-            loader,
-            p.menu_name,
-            p.layer_name,
-            p.element_id,
-            p.dragging,
-            p.element_type,
-        );
+        if selected_needed(loader, p.action_name.as_str()) {
+            select_move_primary_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            )
+        } else if input_state.ctrl {
+            select_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        } else {
+            select_ui_element(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        }
     }
 }
 
@@ -855,6 +911,7 @@ fn process_handles(
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
+    input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
 
@@ -874,10 +931,10 @@ fn process_handles(
                     })
                     .unwrap_or(false);
 
-                let is_selected = loader.ui_runtime.selected_ui_element.active
-                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
-                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
-                    && loader.ui_runtime.selected_ui_element.element_id == *id;
+                let is_selected = loader.ui_runtime.selected_ui_element_primary.active
+                    && loader.ui_runtime.selected_ui_element_primary.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element_primary.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element_primary.element_id == *id;
 
                 if !runtime.is_down && !is_hit {
                     continue;
@@ -913,13 +970,14 @@ fn process_handles(
                             dragging: false,
                             element_type: ElementKind::Handle,
                             just_selected: true,
+                            action_name: "None".to_string(),
                         });
 
                         result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
-                        loader.ui_runtime.selected_ui_element.dragging = true;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = true;
                         // live circle radius update
                         if let Some(parent_id) = &handle.parent_id {
                             if loader.ui_runtime.editor_mode {
@@ -933,7 +991,7 @@ fn process_handles(
                     }
 
                     TouchState::Released => {
-                        loader.ui_runtime.selected_ui_element.dragging = false;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
                     }
 
@@ -944,14 +1002,37 @@ fn process_handles(
     }
 
     if let Some(p) = pending_selection {
-        select_ui_element(
-            loader,
-            p.menu_name,
-            p.layer_name,
-            p.element_id,
-            p.dragging,
-            p.element_type,
-        );
+        if selected_needed(loader, p.action_name.as_str()) {
+            select_move_primary_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            )
+        } else if input_state.ctrl {
+            select_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        } else {
+            select_ui_element(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        }
     }
 }
 
@@ -961,6 +1042,7 @@ fn process_polygons(
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
+    input_state: &InputState,
 ) {
     const VERTEX_RADIUS: f32 = 20.0;
 
@@ -1007,10 +1089,10 @@ fn process_polygons(
                 let poly_hit = inside || near_edge;
                 let hit = vertex_hit.is_some() || poly_hit;
 
-                let is_selected = loader.ui_runtime.selected_ui_element.active
-                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
-                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
-                    && loader.ui_runtime.selected_ui_element.element_id == *id;
+                let is_selected = loader.ui_runtime.selected_ui_element_primary.active
+                    && loader.ui_runtime.selected_ui_element_primary.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element_primary.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element_primary.element_id == *id;
 
                 if !runtime.is_down && !(hit && is_hit_top) {
                     continue;
@@ -1055,13 +1137,14 @@ fn process_polygons(
                             dragging: false,
                             element_type: ElementKind::Polygon,
                             just_selected: true,
+                            action_name: poly.action.clone(),
                         });
 
                         result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
-                        loader.ui_runtime.selected_ui_element.dragging = true;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = true;
                         if loader.ui_runtime.editor_mode && poly.misc.editable {
                             if let Some(active_id) = loader.ui_runtime.active_vertex {
                                 let (ox, oy) = loader.ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
@@ -1104,7 +1187,7 @@ fn process_polygons(
                     }
 
                     TouchState::Released => {
-                        loader.ui_runtime.selected_ui_element.dragging = false;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
                         loader.ui_runtime.active_vertex = None;
                     }
@@ -1116,14 +1199,37 @@ fn process_polygons(
     }
 
     if let Some(p) = pending_selection {
-        select_ui_element(
-            loader,
-            p.menu_name,
-            p.layer_name,
-            p.element_id,
-            p.dragging,
-            p.element_type,
-        );
+        if selected_needed(loader, p.action_name.as_str()) {
+            select_move_primary_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            )
+        } else if input_state.ctrl {
+            select_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        } else {
+            select_ui_element(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        }
     }
 }
 
@@ -1133,9 +1239,9 @@ fn process_text(
     mouse: &MouseSnapshot,
     top_hit: Option<&HitResult>,
     result: &mut EditorInteractionResult,
+    input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
-
     for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
             for (text_index, text) in layer.texts.iter_mut().enumerate() {
@@ -1150,10 +1256,10 @@ fn process_text(
                     .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Text(text_index)))
                     .unwrap_or(false);
 
-                let is_selected = loader.ui_runtime.selected_ui_element.active
-                    && loader.ui_runtime.selected_ui_element.menu_name == *menu_name
-                    && loader.ui_runtime.selected_ui_element.layer_name == layer.name
-                    && loader.ui_runtime.selected_ui_element.element_id == *id;
+                let is_selected = loader.ui_runtime.selected_ui_element_primary.active
+                    && loader.ui_runtime.selected_ui_element_primary.menu_name == *menu_name
+                    && loader.ui_runtime.selected_ui_element_primary.layer_name == layer.name
+                    && loader.ui_runtime.selected_ui_element_primary.element_id == *id;
 
                 if loader.ui_runtime.editor_mode && text.misc.editable {
                     // if not in global editing mode, no text should be flagged as being_edited
@@ -1190,7 +1296,10 @@ fn process_text(
                         && loader.ui_runtime.editing_text
                         && text.being_edited
                         && !is_hit
-                        && loader.ui_runtime.selected_ui_element.just_deselected
+                        && loader
+                            .ui_runtime
+                            .selected_ui_element_primary
+                            .just_deselected
                     {
                         println!("Inside editing text mode EXIT");
                         if is_selected {
@@ -1200,7 +1309,10 @@ fn process_text(
 
                         loader.ui_runtime.editing_text = false;
                         text.being_edited = false;
-                        loader.ui_runtime.selected_ui_element.just_deselected = false;
+                        loader
+                            .ui_runtime
+                            .selected_ui_element_primary
+                            .just_deselected = false;
                         continue;
                     }
 
@@ -1247,13 +1359,14 @@ fn process_text(
                             dragging: false,
                             element_type: ElementKind::Text,
                             just_selected: true,
+                            action_name: text.action.clone(),
                         });
 
                         result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
-                        loader.ui_runtime.selected_ui_element.dragging = true;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = true;
                         if loader.ui_runtime.editor_mode && text.misc.editable {
                             if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
                                 let new_x = mouse.mx - ox;
@@ -1271,7 +1384,7 @@ fn process_text(
                     }
 
                     TouchState::Released => {
-                        loader.ui_runtime.selected_ui_element.dragging = false;
+                        loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
                     }
 
@@ -1282,56 +1395,38 @@ fn process_text(
     }
 
     if let Some(p) = pending_selection {
-        select_ui_element(
-            loader,
-            p.menu_name,
-            p.layer_name,
-            p.element_id,
-            p.dragging,
-            p.element_type,
-        );
+        if selected_needed(loader, p.action_name.as_str()) {
+            select_move_primary_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            )
+        } else if input_state.ctrl {
+            select_to_multi(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        } else {
+            select_ui_element(
+                loader,
+                p.menu_name,
+                p.layer_name,
+                p.element_id,
+                p.dragging,
+                p.element_type,
+                p.action_name,
+            );
+        }
     }
-}
-
-fn select_ui_element(
-    loader: &mut UiButtonLoader,
-    menu_name: String,
-    layer_name: String,
-    element_id: String,
-    dragging: bool,
-    element_kind: ElementKind,
-) {
-    loader.ui_runtime.selected_ui_element = SelectedUiElement {
-        menu_name,
-        layer_name,
-        element_id,
-        active: true,
-        just_deselected: if element_kind == ElementKind::None {
-            true
-        } else {
-            false
-        },
-        dragging,
-        element_type: element_kind,
-        just_selected: if element_kind == ElementKind::None {
-            false
-        } else {
-            true
-        },
-    };
-    loader.variables.set(
-        "selected_menu",
-        format!("{}", loader.ui_runtime.selected_ui_element.menu_name),
-    );
-    loader.variables.set(
-        "selected_layer",
-        format!("{}", loader.ui_runtime.selected_ui_element.layer_name),
-    );
-    loader.variables.set(
-        "selected_ui_element_id",
-        format!("{}", loader.ui_runtime.selected_ui_element.element_id),
-    );
-    loader.update_selection()
 }
 
 pub fn handle_text_editing(
@@ -1344,7 +1439,7 @@ pub fn handle_text_editing(
         return;
     }
 
-    let sel = &ui_runtime.selected_ui_element;
+    let sel = &ui_runtime.selected_ui_element_primary;
     if !sel.active {
         return;
     }

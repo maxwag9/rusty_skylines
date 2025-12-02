@@ -217,14 +217,14 @@ impl ApplicationHandler for App {
                         resources
                             .ui_loader
                             .ui_runtime
-                            .selected_ui_element
+                            .selected_ui_element_primary
                             .menu_name
                             .clone()
                             .as_str(),
                         resources
                             .ui_loader
                             .ui_runtime
-                            .selected_ui_element
+                            .selected_ui_element_primary
                             .layer_name
                             .clone()
                             .as_str(),

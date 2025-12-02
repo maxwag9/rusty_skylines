@@ -785,7 +785,7 @@ impl UiRenderer {
                 // ---- check if this text is selected ----
                 let mut is_selected = false;
                 if let Some(ref text_id) = tp.id {
-                    let sel = &ui_runtime.selected_ui_element;
+                    let sel = &ui_runtime.selected_ui_element_primary;
                     if sel.active
                         && sel.element_id == *text_id
                         && sel.layer_name == layer.name
@@ -1228,7 +1228,7 @@ impl UiRenderer {
                 // ---- check if this text is selected ----
                 let mut is_selected = false;
                 if let Some(ref text_id) = tp.id {
-                    let sel = &ui_runtime.selected_ui_element;
+                    let sel = &ui_runtime.selected_ui_element_primary;
                     if sel.active
                         && sel.element_id == *text_id
                         && sel.layer_name == layer.name

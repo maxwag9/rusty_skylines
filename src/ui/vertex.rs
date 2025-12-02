@@ -187,6 +187,7 @@ pub struct SelectedUiElement {
     pub dragging: bool,
     pub element_type: ElementKind,
     pub just_selected: bool,
+    pub action_name: String,
 }
 
 impl SelectedUiElement {
@@ -200,6 +201,7 @@ impl SelectedUiElement {
             dragging: false,
             element_type: ElementKind::None,
             just_selected: false,
+            action_name: "None".to_string(),
         }
     }
 }
