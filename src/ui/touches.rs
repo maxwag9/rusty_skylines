@@ -4,6 +4,7 @@ use crate::ui::helper::{dist, polygon_sdf};
 use crate::ui::input::MouseState;
 use crate::ui::selections::{select_move_primary_to_multi, select_to_multi, select_ui_element};
 use crate::ui::ui_editor::{Menu, UiButtonLoader, UiRuntime};
+use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::{
     ElementKind, RuntimeLayer, SelectedUiElement, TouchState, UiButtonCircle, UiButtonHandle,
     UiButtonPolygon, UiButtonText, UiElement, UiElementRef,
@@ -328,12 +329,17 @@ fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut Input
 
     select_ui_element(
         loader,
-        sel.menu_name.clone(),
-        next_layer,
-        next_id,
-        false,
-        element_type,
-        "None".to_string(),
+        SelectedUiElement {
+            menu_name: sel.menu_name.clone(),
+            layer_name: next_layer,
+            element_id: next_id,
+            active: false,
+            just_deselected: false,
+            dragging: false,
+            element_type,
+            just_selected: false,
+            action_name: "None".to_string(),
+        },
     );
 }
 
@@ -836,8 +842,6 @@ fn process_circles(
                             just_selected: true,
                             action_name: circle.action.clone(),
                         });
-
-                        result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
@@ -872,35 +876,11 @@ fn process_circles(
     // Apply the selection after processing all circles
     if let Some(p) = pending_selection {
         if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            )
+            select_move_primary_to_multi(loader, p)
         } else if input_state.ctrl {
-            select_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_to_multi(loader, p);
         } else {
-            select_ui_element(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_ui_element(loader, p);
         }
     }
 }
@@ -972,8 +952,6 @@ fn process_handles(
                             just_selected: true,
                             action_name: "None".to_string(),
                         });
-
-                        result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
@@ -1003,35 +981,11 @@ fn process_handles(
 
     if let Some(p) = pending_selection {
         if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            )
+            select_move_primary_to_multi(loader, p)
         } else if input_state.ctrl {
-            select_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_to_multi(loader, p);
         } else {
-            select_ui_element(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_ui_element(loader, p);
         }
     }
 }
@@ -1139,8 +1093,6 @@ fn process_polygons(
                             just_selected: true,
                             action_name: poly.action.clone(),
                         });
-
-                        result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
@@ -1200,35 +1152,11 @@ fn process_polygons(
 
     if let Some(p) = pending_selection {
         if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            )
+            select_move_primary_to_multi(loader, p)
         } else if input_state.ctrl {
-            select_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_to_multi(loader, p);
         } else {
-            select_ui_element(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_ui_element(loader, p);
         }
     }
 }
@@ -1249,7 +1177,7 @@ fn process_text(
                     continue;
                 }
 
-                let Some(id) = &text.id else { continue };
+                let Some(id) = &text.id.clone() else { continue };
                 let runtime = loader.ui_runtime.get(id);
 
                 let is_hit = top_hit
@@ -1264,10 +1192,10 @@ fn process_text(
                 if loader.ui_runtime.editor_mode && text.misc.editable {
                     // if not in global editing mode, no text should be flagged as being_edited
                     if !loader.ui_runtime.editing_text {
+                        text.being_edited = false;
                         loader
                             .variables
                             .set("selected_text.being_edited", text.being_edited.to_string());
-                        text.being_edited = false;
                     }
 
                     // if this text is being edited, make sure the layer is redrawn
@@ -1275,33 +1203,47 @@ fn process_text(
                         layer.dirty.mark_texts();
                     }
 
-                    // enter edit mode: second click on already selected text
-                    if mouse.just_pressed
-                        && is_hit
-                        && is_selected
-                        && !loader.ui_runtime.editing_text
-                    {
-                        loader.ui_runtime.editing_text = true;
-                        text.being_edited = true;
-                        loader
-                            .variables
-                            .set("selected_text.being_edited", text.being_edited.to_string());
-                        text.text = text.template.clone();
-                        layer.dirty.mark_texts();
+                    // when editing this text, do not drag it
+                    if is_selected && loader.ui_runtime.editing_text {
                         continue;
+                    }
+
+                    // enter edit mode:
+                    // - input_box: one click on hit
+                    // - normal text: second click on already selected text
+                    let want_enter_edit = (mouse.just_pressed
+                        && is_hit
+                        && !loader.ui_runtime.editing_text
+                        && is_selected)
+                        || (mouse.just_pressed
+                            && is_hit
+                            && !loader.ui_runtime.editing_text
+                            && !is_selected
+                            && text.input_box);
+
+                    if want_enter_edit {
+                        println!("Entered edit mode");
+                        enter_text_editing_mode(
+                            &mut loader.ui_runtime,
+                            &mut loader.variables,
+                            text,
+                        );
+
+                        layer.dirty.mark_texts();
                     }
 
                     // exit edit mode when clicking outside after deselection
                     if mouse.just_pressed
+                        && !want_enter_edit
                         && loader.ui_runtime.editing_text
                         && text.being_edited
                         && !is_hit
-                        && loader
+                        || loader
                             .ui_runtime
                             .selected_ui_element_primary
                             .just_deselected
                     {
-                        println!("Inside editing text mode EXIT");
+                        println!("Exit edit mode");
                         if is_selected {
                             text.template = text.text.clone();
                             layer.dirty.mark_texts();
@@ -1316,18 +1258,10 @@ fn process_text(
                         continue;
                     }
 
-                    // when editing this text, do not drag it
-                    if is_selected && loader.ui_runtime.editing_text {
-                        continue;
-                    }
-
-                    // drag / selection logic (your new version)
+                    // drag / selection logic
                     if !runtime.is_down && !is_hit {
                         continue;
                     }
-                }
-                if runtime.is_down && !is_selected {
-                    continue;
                 }
 
                 let touched_now = if !runtime.is_down {
@@ -1342,6 +1276,15 @@ fn process_text(
                     time_system.sim_dt,
                     &layer.name,
                 );
+
+                if runtime.is_down && !is_selected
+                    || loader
+                        .ui_runtime
+                        .selected_ui_element_primary
+                        .just_deselected
+                {
+                    continue;
+                }
 
                 match state {
                     TouchState::Pressed => {
@@ -1361,23 +1304,24 @@ fn process_text(
                             just_selected: true,
                             action_name: text.action.clone(),
                         });
-
-                        result.trigger_selection = true;
                     }
 
                     TouchState::Held => {
-                        loader.ui_runtime.selected_ui_element_primary.dragging = true;
-                        if loader.ui_runtime.editor_mode && text.misc.editable {
-                            if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
-                                let new_x = mouse.mx - ox;
-                                let new_y = mouse.my - oy;
+                        if !text.being_edited {
+                            loader.ui_runtime.selected_ui_element_primary.dragging = true;
+                            if loader.ui_runtime.editor_mode && text.misc.editable {
+                                if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
+                                    let new_x = mouse.mx - ox;
+                                    let new_y = mouse.my - oy;
 
-                                if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001
-                                {
-                                    text.x = new_x;
-                                    text.y = new_y;
-                                    layer.dirty.mark_texts();
-                                    result.moved_any_selected_object = true;
+                                    if (new_x - text.x).abs() > 0.001
+                                        || (new_y - text.y).abs() > 0.001
+                                    {
+                                        text.x = new_x;
+                                        text.y = new_y;
+                                        layer.dirty.mark_texts();
+                                        result.moved_any_selected_object = true;
+                                    }
                                 }
                             }
                         }
@@ -1396,37 +1340,25 @@ fn process_text(
 
     if let Some(p) = pending_selection {
         if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            )
+            select_move_primary_to_multi(loader, p)
         } else if input_state.ctrl {
-            select_to_multi(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            select_to_multi(loader, p);
         } else {
-            select_ui_element(
-                loader,
-                p.menu_name,
-                p.layer_name,
-                p.element_id,
-                p.dragging,
-                p.element_type,
-                p.action_name,
-            );
+            println!("Pressed keyboard enter");
+            select_ui_element(loader, p);
         }
     }
+}
+
+pub fn enter_text_editing_mode(
+    ui_runtime: &mut UiRuntime,
+    variables: &mut UiVariableRegistry,
+    text: &mut UiButtonText,
+) {
+    ui_runtime.editing_text = true;
+    text.being_edited = true;
+    variables.set("selected_text.being_edited", text.being_edited.to_string());
+    text.text = text.template.clone();
 }
 
 pub fn handle_text_editing(

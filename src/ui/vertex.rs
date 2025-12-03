@@ -750,6 +750,8 @@ pub struct UiButtonText {
     pub sel_end: usize,   // selection end index
     pub has_selection: bool,
     pub glyph_bounds: Vec<(f32, f32)>,
+
+    pub input_box: bool,
 }
 
 impl UiButtonText {
@@ -941,6 +943,7 @@ impl UiButtonText {
             sel_end: 0,
             has_selection: false,
             glyph_bounds: vec![],
+            input_box: t.input_box,
         }
     }
 
@@ -963,6 +966,7 @@ impl UiButtonText {
             color: self.color,
             text: self.template.clone(),
             misc: self.misc.to_json(),
+            input_box: self.input_box,
         }
     }
 }
@@ -1184,6 +1188,7 @@ impl Default for UiButtonText {
             sel_end: 0,
             has_selection: false,
             glyph_bounds: vec![],
+            input_box: false,
         }
     }
 }
@@ -1385,6 +1390,7 @@ pub struct UiButtonTextJson {
     pub color: [f32; 4],
     pub text: String,
     pub misc: MiscButtonSettingsJson,
+    pub input_box: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

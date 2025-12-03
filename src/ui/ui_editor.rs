@@ -297,6 +297,7 @@ impl UiButtonLoader {
                 sel_end: 0,
                 has_selection: false,
                 glyph_bounds: vec![],
+                input_box: false,
             });
         }
 
@@ -331,7 +332,9 @@ impl UiButtonLoader {
                 let mut any_changed = false;
 
                 for t in &mut layer.texts {
-                    if self.ui_runtime.selected_ui_element_primary.just_deselected {
+                    if self.ui_runtime.selected_ui_element_primary.just_deselected
+                        || self.ui_runtime.selected_ui_element_primary.just_selected
+                    {
                         t.clear_selection();
                         layer.dirty.mark_texts();
                     }
@@ -339,17 +342,6 @@ impl UiButtonLoader {
                         any_changed = true;
                     }
 
-                    // Skip if no template braces exist!
-                    if !t.template.contains('{') || !t.template.contains('}') || t.being_edited {
-                        continue;
-                    }
-
-                    // Resolve template
-                    let new_text = resolve_template(&t.template, &self.variables);
-                    if new_text != t.text {
-                        t.text = new_text;
-                        any_changed = true;
-                    }
                     if !being_hovered && t.being_hovered {
                         being_hovered = true;
                         if t.id
@@ -362,6 +354,18 @@ impl UiButtonLoader {
                         {
                             selected_being_hovered = true;
                         }
+                    }
+
+                    // Skip if no template braces exist!
+                    if !t.template.contains('{') || !t.template.contains('}') || t.being_edited {
+                        continue;
+                    }
+
+                    // Resolve template
+                    let new_text = resolve_template(&t.template, &self.variables);
+                    if new_text != t.text {
+                        t.text = new_text;
+                        any_changed = true;
                     }
                 }
 
@@ -398,7 +402,6 @@ impl UiButtonLoader {
         if mouse_snapshot.just_pressed && !press_started_on_ui.0 {
             if !near_handle(&self.menus, &mouse_snapshot) {
                 deselect_everything(self);
-                self.update_selection();
             }
         }
 
@@ -457,7 +460,7 @@ impl UiButtonLoader {
             if self.ui_runtime.selected_ui_element_primary.action_name != "Drag Hue Point" {
                 if let Some(menu) = self.menus.get_mut("Editor_Menu") {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") {
-                        layer.active = false;
+                        //layer.active = false;
                     }
                 }
             }
@@ -591,7 +594,14 @@ impl UiButtonLoader {
     }
 
     pub fn update_selection(&mut self) {
-        self.ui_runtime.editing_text = false;
+        println!(
+            "update selection: {:?}",
+            self.ui_runtime.selected_ui_element_primary
+        );
+        if self.ui_runtime.selected_ui_element_primary.just_deselected {
+            self.ui_runtime.editing_text = false;
+        }
+
         if !self.ui_runtime.selected_ui_element_primary.active {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu
