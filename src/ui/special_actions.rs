@@ -1,22 +1,29 @@
+use crate::resources::TimeSystem;
 use crate::ui::actions::deactivate_action;
 use crate::ui::input::MouseState;
 use crate::ui::touches::HitResult;
 use crate::ui::ui_editor::UiElement::Circle;
 use crate::ui::ui_editor::{MiscButtonSettings, UiButtonCircle, UiButtonLoader};
 use glam::Vec2;
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 pub fn drag_hue_point(
     loader: &mut UiButtonLoader,
     mouse_state: &MouseState,
     top_hit: &Option<HitResult>,
+    time: &TimeSystem,
 ) {
     let mut new_x = None;
     let mut new_y = None;
+    let r_handle = loader.variables.get_f32("color_picker.r").unwrap_or(1.0);
+    let g_handle = loader.variables.get_f32("color_picker.g").unwrap_or(1.0);
+    let b_handle = loader.variables.get_f32("color_picker.b").unwrap_or(1.0);
     let mut color = None;
+    let mut handle_color = Some([r_handle, g_handle, b_handle, 1.0]);
     let border_color = None;
     let mut radius = None;
     let mut hue_circle_radius = None;
+    let dt = time.sim_target_step;
 
     if loader.ui_runtime.selected_ui_element_primary.dragging {
         if let Some(action_state) = loader.ui_runtime.action_states.get_mut("Drag Hue Point") {
@@ -83,89 +90,97 @@ pub fn drag_hue_point(
             if loader.ui_runtime.selected_ui_element_primary.dragging {
                 radius = Some(loader.ui_runtime.original_radius + 5.0);
 
-                // 1. Vector from center to (smoothed) pointer
                 let mx = pointer_x - hue.x;
                 let my = pointer_y - hue.y;
-
                 let angle = my.atan2(mx);
                 let dist_mouse = (mx * mx + my * my).sqrt();
-
-                // Clamp to hue radius
                 let clamped_r = dist_mouse.min(hue.radius);
 
-                // New, clamped handle position
                 let hx = hue.x + angle.cos() * clamped_r;
                 let hy = hue.y + angle.sin() * clamped_r;
 
                 new_x = Some(hx);
                 new_y = Some(hy);
 
-                // 2. Now compute HSV from the *new* handle position
+                // update HSV in variables
                 let dx = hx - hue.x;
                 let dy = hy - hue.y;
 
-                let angle = dy.atan2(dx);
-                let angle_shifted = angle + FRAC_PI_2;
-                let angle_wrapped = angle_shifted.sin().atan2(angle_shifted.cos());
+                let ang = dy.atan2(dx);
+                let ang_shifted = ang + FRAC_PI_2;
+                let ang_wrapped = ang_shifted.sin().atan2(ang_shifted.cos());
 
-                let h = angle_wrapped / (PI * 2.0) + 0.5;
+                let h = ang_wrapped / (PI * 2.0) + 0.5;
 
                 let dist = (dx * dx + dy * dy).sqrt();
-                let s_linear = (dist / hue.radius).clamp(0.0, 1.0);
-                let s = s_linear.powf(0.47);
-
+                let s = (dist / hue.radius).clamp(0.0, 1.0).powf(0.47);
                 let v = 1.0;
+
                 let rgb = hsv_to_rgb(h, s, v);
 
                 color = Some([rgb[0], rgb[1], rgb[2], 1.0]);
-
                 loader.variables.set("color_picker.r", rgb[0].to_string());
                 loader.variables.set("color_picker.g", rgb[1].to_string());
                 loader.variables.set("color_picker.b", rgb[2].to_string());
-
                 loader.variables.set("color_picker.h", h.to_string());
                 loader.variables.set("color_picker.s", s.to_string());
                 loader.variables.set("color_picker.v", v.to_string());
             } else {
-                // === NEW: Snap handle back to hue circle on release (even for one frame) ===
-                if let Some(action_state) = loader.ui_runtime.action_states.get("Drag Hue Point") {
-                    if action_state.active {
-                        // Use last known handle position (or current if somehow missing)
-                        let current_x = handle.x;
-                        let current_y = handle.y;
+                // ---------------------------------------------
+                // NOT DRAGGING: HANDLE ANIMATES TO STORED COLOR
+                // ---------------------------------------------
+                if let Some(action_state) =
+                    loader.ui_runtime.action_states.get_mut("Drag Hue Point")
+                {
+                    let h = loader.variables.get_f32("color_picker.h").unwrap_or(0.0);
+                    let s = loader.variables.get_f32("color_picker.s").unwrap_or(1.0);
 
-                        let dx = current_x - hue.x;
-                        let dy = current_y - hue.y;
-                        let dist = (dx * dx + dy * dy).sqrt();
+                    // target angle and radius
+                    let target_angle = (h * TAU) - FRAC_PI_2;
+                    let target_r = s.powf(1.0 / 0.47).clamp(0.0, 1.0)
+                        * -action_state.original_radius_2.unwrap_or(hue.radius);
 
-                        if dist > 0.0 {
-                            let angle = dy.atan2(dx);
-                            let clamped_r = hue.radius; // Force exactly on ring
+                    let target_x = hue.x + target_angle.cos() * target_r;
+                    let target_y = hue.y + target_angle.sin() * target_r;
 
-                            let snapped_x = hue.x + angle.cos() * clamped_r;
-                            let snapped_y = hue.y + angle.sin() * clamped_r;
+                    // smooth 100 ms = 0.1 s
+                    let alpha = (dt / 0.2).clamp(0.0, 1.0);
 
-                            new_x = Some(snapped_x);
-                            new_y = Some(snapped_y);
-                        }
-                    }
+                    let smoothed_x = lerp(handle.x, target_x, alpha);
+                    let smoothed_y = lerp(handle.y, target_y, alpha);
+
+                    new_x = Some(smoothed_x);
+                    new_y = Some(smoothed_y);
                 }
             }
         }
 
         loader.ui_runtime.action_states.get("Drag Hue Point");
     }
-
-    let result = loader.edit_circle(
-        "Editor_Menu",
-        "Color Picker",
-        "color picker handle circle",
-        new_x,
-        new_y,
-        radius,
-        color,
-        border_color,
-    );
+    let mut result = None;
+    if color.is_some() {
+        result = Some(loader.edit_circle(
+            "Editor_Menu",
+            "Color Picker",
+            "color picker handle circle",
+            new_x,
+            new_y,
+            radius,
+            color,
+            border_color,
+        ));
+    } else {
+        result = Some(loader.edit_circle(
+            "Editor_Menu",
+            "Color Picker",
+            "color picker handle circle",
+            new_x,
+            new_y,
+            radius,
+            handle_color,
+            border_color,
+        ));
+    }
 
     let _ = loader.edit_circle(
         "Editor_Menu",
@@ -181,12 +196,12 @@ pub fn drag_hue_point(
     if let Some(hit) = top_hit {
         if hit.action != Some("Drag Hue Point".to_string()) {
             if loader.ui_runtime.selected_ui_element_primary.just_selected {
-                deactivate_action(loader, "Drag Hue Point");
-                let _ = loader.delete_element(
-                    "Editor_Menu",
-                    "Color Picker",
-                    "color picker handle circle",
-                );
+                // deactivate_action(loader, "Drag Hue Point");
+                // let _ = loader.delete_element(
+                //     "Editor_Menu",
+                //     "Color Picker",
+                //     "color picker handle circle",
+                // );
             }
         }
     }
@@ -198,46 +213,47 @@ pub fn drag_hue_point(
         .just_deselected
     {
         deactivate_action(loader, "Drag Hue Point");
+        println!("deleting handle circle picker");
         let _ = loader.delete_element("Editor_Menu", "Color Picker", "color picker handle circle");
     }
 
     if let Some(action) = loader.ui_runtime.action_states.get("Drag Hue Point") {
         let active = action.active.clone();
-        if !result {
-            if loader.ui_runtime.selected_ui_element_primary.just_selected && active {
-                let handle_circle = UiButtonCircle {
-                    id: Some("color picker handle circle".to_string()),
-                    action: "None".to_string(),
-                    style: "None".to_string(),
-                    z_index: 990,
-                    x: mouse_state.pos.x,
-                    y: mouse_state.pos.y,
-                    radius: 6.0,
-                    inside_border_thickness: 0.002,
-                    border_thickness: 1.0,
-                    fade: 0.0,
-                    fill_color: [0.2, 0.2, 0.2, 0.0],
-                    inside_border_color: [0.4; 4],
-                    border_color: [0.1, 0.1, 0.1, 0.8],
-                    glow_color: [0.0; 4],
-                    glow_misc: Default::default(),
-                    misc: MiscButtonSettings {
-                        active: true,
-                        touched_time: 0.0,
-                        is_touched: false,
-                        pressable: false,
-                        editable: false,
-                    },
-                };
-                loader.ui_runtime.last_pos = (mouse_state.pos.x, mouse_state.pos.y);
-                loader.ui_runtime.original_radius = handle_circle.radius;
-                let _ = loader.add_element(
-                    "Editor_Menu",
-                    "Color Picker",
-                    Circle(handle_circle),
-                    mouse_state,
-                    false,
-                );
+        if let Some(result) = result {
+            if !result {
+                if loader.ui_runtime.selected_ui_element_primary.just_selected && active {
+                    let handle_circle = UiButtonCircle {
+                        id: Some("color picker handle circle".to_string()),
+                        action: "None".to_string(),
+                        style: "None".to_string(),
+                        z_index: 990,
+                        x: mouse_state.pos.x,
+                        y: mouse_state.pos.y,
+                        radius: 6.0,
+                        inside_border_thickness: 0.002,
+                        border_thickness: 1.0,
+                        fade: 0.0,
+                        fill_color: [0.2, 0.2, 0.2, 0.0],
+                        inside_border_color: [0.4; 4],
+                        border_color: [0.1, 0.1, 0.1, 0.8],
+                        glow_color: [0.0; 4],
+                        glow_misc: Default::default(),
+                        misc: MiscButtonSettings {
+                            active: true,
+                            touched_time: 0.0,
+                            is_touched: false,
+                            pressable: false,
+                            editable: false,
+                        },
+                    };
+                    let _ = loader.add_element(
+                        "Editor_Menu",
+                        "Color Picker",
+                        Circle(handle_circle),
+                        mouse_state,
+                        false,
+                    );
+                }
             }
         }
     }
@@ -285,4 +301,31 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     } else {
         [v, p, q]
     }
+}
+
+pub fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    // Hue
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        ((g - b) / delta) % 6.0
+    } else if max == g {
+        ((b - r) / delta) + 2.0
+    } else {
+        ((r - g) / delta) + 4.0
+    };
+
+    let h_norm = (h / 6.0).rem_euclid(1.0);
+
+    // Saturation
+    let s = if max == 0.0 { 0.0 } else { delta / max };
+
+    // Value
+    let v = max;
+
+    (h_norm, s, v)
 }

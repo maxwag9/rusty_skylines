@@ -1,4 +1,4 @@
-use crate::paths::project_path;
+use crate::paths::data_dir;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
 use crate::systems::input::camera_input_system;
@@ -202,7 +202,7 @@ impl ApplicationHandler for App {
                 if input.action_pressed_once("Save GUI layout") {
                     match resources
                         .ui_loader
-                        .save_gui_to_file(project_path("data/ui_data/gui_layout.json"))
+                        .save_gui_to_file(data_dir("ui_data/gui_layout.json"))
                     {
                         Ok(_) => println!("GUI layout saved"),
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),

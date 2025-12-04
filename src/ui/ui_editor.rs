@@ -1,11 +1,13 @@
-use crate::paths::project_path;
+use crate::paths::data_dir;
 use crate::resources::{InputState, TimeSystem};
 pub(crate) use crate::ui::actions::{activate_action, execute_action};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::MouseState;
 pub(crate) use crate::ui::menu::Menu;
+use crate::ui::menu::get_selected_element_color;
 use crate::ui::parser::resolve_template;
 use crate::ui::selections::deselect_everything;
+use crate::ui::special_actions::rgb_to_hsv;
 use crate::ui::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
     handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing, near_handle,
@@ -30,7 +32,7 @@ pub struct UiButtonLoader {
 
 impl UiButtonLoader {
     pub fn new(editor_mode: bool) -> Self {
-        let layout_path = project_path("data/ui_data/gui_layout.json");
+        let layout_path = data_dir("ui_data/gui_layout.json");
         let layout = Self::load_gui_from_file(layout_path).unwrap_or_else(|e| {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
@@ -390,6 +392,22 @@ impl UiButtonLoader {
     ) {
         self.ui_runtime.selected_ui_element_primary.just_deselected = false;
         self.ui_runtime.selected_ui_element_primary.just_selected = false;
+
+        if let Some(color) = get_selected_element_color(self) {
+            let r = color[0];
+            let g = color[1];
+            let b = color[2];
+
+            let (h, s, v) = rgb_to_hsv(r, g, b);
+
+            self.variables.set("color_picker.r", r.to_string());
+            self.variables.set("color_picker.g", g.to_string());
+            self.variables.set("color_picker.b", b.to_string());
+            self.variables.set("color_picker.h", h.to_string());
+            self.variables.set("color_picker.s", s.to_string());
+            self.variables.set("color_picker.v", v.to_string());
+        }
+
         let mouse_snapshot = MouseSnapshot::from_mouse(&input_state.mouse);
         let editor_mode = self.ui_runtime.editor_mode;
 
@@ -477,7 +495,7 @@ impl UiButtonLoader {
 
         activate_action(self, &top_hit, input_state);
 
-        execute_action(self, &top_hit, &input_state.mouse);
+        execute_action(self, &top_hit, &input_state.mouse, time_system);
 
         if editor_mode {
             self.apply_ui_edit_movement(input_state);
@@ -594,10 +612,6 @@ impl UiButtonLoader {
     }
 
     pub fn update_selection(&mut self) {
-        println!(
-            "update selection: {:?}",
-            self.ui_runtime.selected_ui_element_primary
-        );
         if self.ui_runtime.selected_ui_element_primary.just_deselected {
             self.ui_runtime.editing_text = false;
         }

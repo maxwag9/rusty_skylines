@@ -1,4 +1,4 @@
-use crate::paths::project_path;
+use crate::paths::data_dir;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -261,10 +261,7 @@ pub struct InputState {
 
 impl InputState {
     pub fn new() -> Self {
-        let keybinds = Keybinds::load(
-            project_path("data/keybinds.toml"),
-            project_path("data/default_keybinds.toml"),
-        );
+        let keybinds = Keybinds::load(data_dir("keybinds.toml"), data_dir("default_keybinds.toml"));
         let parsed = Self::parse_all(&keybinds);
 
         Self {

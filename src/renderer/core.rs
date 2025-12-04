@@ -72,8 +72,8 @@ impl RenderCore {
             .copied()
             .find(|m| *m == CompositeAlphaMode::PostMultiplied)
             .unwrap_or(CompositeAlphaMode::Opaque);
-        let present_mode = settings.present_mode.clone().to_wgpu();
-
+        let user_mode = settings.present_mode.clone().to_wgpu();
+        let present_mode = pick_fail_safe_present_mode(&surface, &adapter, user_mode);
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -426,4 +426,29 @@ fn create_msaa_targets(
 
     let view = texture.create_view(&TextureViewDescriptor::default());
     (texture, view)
+}
+
+fn pick_fail_safe_present_mode(
+    surface: &wgpu::Surface,
+    adapter: &wgpu::Adapter,
+    user_mode: wgpu::PresentMode,
+) -> wgpu::PresentMode {
+    let caps = surface.get_capabilities(adapter);
+
+    // Fallback priority. Mailbox first, then Fifo (always supported), then Immediate.
+    let fallback_chain = [
+        user_mode,
+        wgpu::PresentMode::Mailbox,
+        wgpu::PresentMode::Fifo, // required by spec
+        wgpu::PresentMode::Immediate,
+    ];
+
+    for mode in fallback_chain {
+        if caps.present_modes.contains(&mode) {
+            return mode;
+        }
+    }
+
+    // Absolute guarantee
+    wgpu::PresentMode::Fifo
 }

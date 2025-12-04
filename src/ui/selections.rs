@@ -1,4 +1,33 @@
-use crate::ui::ui_editor::{ElementKind, SelectedUiElement, UiButtonLoader};
+use crate::ui::ui_editor::{ElementKind, UiButtonLoader};
+
+#[derive(Debug, Clone)]
+pub struct SelectedUiElement {
+    pub menu_name: String,
+    pub layer_name: String,
+    pub element_id: String,
+    pub active: bool,
+    pub just_deselected: bool,
+    pub dragging: bool,
+    pub element_type: ElementKind,
+    pub just_selected: bool,
+    pub action_name: String,
+}
+
+impl SelectedUiElement {
+    pub(crate) fn default() -> SelectedUiElement {
+        Self {
+            menu_name: "no menu".to_string(),
+            layer_name: "no layer".to_string(),
+            element_id: "no element".to_string(),
+            active: false,
+            just_deselected: true,
+            dragging: false,
+            element_type: ElementKind::None,
+            just_selected: false,
+            action_name: "None".to_string(),
+        }
+    }
+}
 
 pub fn select_ui_element(loader: &mut UiButtonLoader, s: SelectedUiElement) {
     loader.ui_runtime.selected_ui_element_multi.clear();

@@ -1,5 +1,6 @@
 use crate::data::Settings;
 use crate::events::Events;
+use crate::paths::data_dir;
 use crate::renderer::Renderer;
 use crate::simulation::Simulation;
 pub(crate) use crate::ui::input::InputState;
@@ -24,7 +25,7 @@ pub struct Resources {
 
 impl Resources {
     pub fn new(window: Arc<Window>) -> Self {
-        let settings = Settings::load("data/settings.toml");
+        let settings = Settings::load(data_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
         let renderer = Renderer::new(window.clone(), &settings);
         let mut ui_loader = UiButtonLoader::new(editor_mode);

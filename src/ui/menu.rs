@@ -356,3 +356,54 @@ impl Menu {
         false
     }
 }
+
+pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
+    let selected = &loader.ui_runtime.selected_ui_element_primary;
+
+    if !selected.active {
+        return None;
+    }
+
+    // Find the menu
+    let menu = loader.menus.get(&selected.menu_name)?;
+    // Find the layer
+    let layer = menu
+        .layers
+        .iter()
+        .find(|l| l.active && l.saveable && l.name == selected.layer_name)?;
+
+    // Match element type
+    match selected.element_type {
+        ElementKind::Polygon => {
+            let poly = layer
+                .polygons
+                .iter()
+                .find(|p| p.id.as_deref() == Some(&selected.element_id))?;
+
+            // take color from first vertex (they are all the same in your system)
+            poly.vertices.get(0).map(|v| v.color)
+        }
+
+        ElementKind::Circle => {
+            let circle = layer
+                .circles
+                .iter()
+                .find(|c| c.id.as_deref() == Some(&selected.element_id))?;
+
+            Some(circle.fill_color.into())
+        }
+
+        ElementKind::Text => {
+            let text = layer
+                .texts
+                .iter()
+                .find(|t| t.id.as_deref() == Some(&selected.element_id))?;
+
+            Some(text.color)
+        }
+
+        ElementKind::Outline => None,
+        ElementKind::Handle => None,
+        ElementKind::None => None,
+    }
+}

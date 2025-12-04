@@ -1,4 +1,4 @@
-use crate::resources::InputState;
+use crate::resources::{InputState, TimeSystem};
 use crate::ui::input::MouseState;
 use crate::ui::special_actions::drag_hue_point;
 use crate::ui::touches::HitResult;
@@ -17,13 +17,14 @@ pub fn execute_action(
     loader: &mut UiButtonLoader,
     top_hit: &Option<HitResult>,
     mouse_state: &MouseState,
+    time: &TimeSystem,
 ) {
     let actions: Vec<String> = loader.ui_runtime.action_states.keys().cloned().collect();
 
     for action in actions {
         match action.as_str() {
             "Drag Hue Point" => {
-                drag_hue_point(loader, mouse_state, top_hit);
+                drag_hue_point(loader, mouse_state, top_hit, time);
             }
             "None" => {}
             _ => {}
