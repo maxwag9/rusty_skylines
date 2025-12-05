@@ -101,7 +101,25 @@ pub fn make_selected_element(s: &SelectedUiElement) -> SelectedUiElement {
 }
 
 pub fn deselect_everything(loader: &mut UiButtonLoader) {
+    let menu_name = loader
+        .ui_runtime
+        .selected_ui_element_primary
+        .menu_name
+        .clone();
+    let layer_name = loader
+        .ui_runtime
+        .selected_ui_element_primary
+        .layer_name
+        .clone();
+    let element_id = loader
+        .ui_runtime
+        .selected_ui_element_primary
+        .element_id
+        .clone();
     loader.ui_runtime.selected_ui_element_primary = SelectedUiElement::default();
+    loader.ui_runtime.selected_ui_element_primary.menu_name = menu_name.clone();
+    loader.ui_runtime.selected_ui_element_primary.layer_name = layer_name.clone();
+    loader.ui_runtime.selected_ui_element_primary.element_id = element_id.clone();
     loader.ui_runtime.editing_text = false;
     for (_, menu) in loader.menus.iter_mut() {
         for layer in menu.layers.iter_mut() {

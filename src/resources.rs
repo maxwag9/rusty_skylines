@@ -28,7 +28,8 @@ impl Resources {
         let settings = Settings::load(data_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
         let renderer = Renderer::new(window.clone(), &settings);
-        let mut ui_loader = UiButtonLoader::new(editor_mode);
+        let mut ui_loader =
+            UiButtonLoader::new(editor_mode, settings.override_mode, settings.show_gui);
         ui_loader
             .variables
             .set("editor_mode", settings.editor_mode.to_string());

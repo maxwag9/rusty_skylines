@@ -103,3 +103,12 @@ pub struct ActionState {
 
     pub active: bool,
 }
+
+// input_box: true
+// template: "R: {color_picker.r}"
+
+// input box clicked
+// enter text
+// variable updated (UiVariableRegistry)
+
+//

@@ -360,7 +360,7 @@ impl Menu {
 pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
     let selected = &loader.ui_runtime.selected_ui_element_primary;
 
-    if !selected.active {
+    if !selected.active || selected.action_name == "Drag Hue Point" {
         return None;
     }
 

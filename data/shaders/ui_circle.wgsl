@@ -166,6 +166,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let fade = clamp(1.0 - d / 300.0, 0.0, 1.0);
         col.a *= fade * fade;
     }
+    if p.misc.z > 0.5 && p.style != 1u {
+        col.a *= 0.9;
+    }
 
     return col;
 }

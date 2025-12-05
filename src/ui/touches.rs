@@ -844,6 +844,7 @@ fn process_circles(
                             just_selected: true,
                             action_name: circle.action.clone(),
                         });
+                        layer.dirty.mark_circles();
                     }
 
                     TouchState::Held => {
@@ -867,6 +868,7 @@ fn process_circles(
                     TouchState::Released => {
                         loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
+                        layer.dirty.mark_circles()
                     }
 
                     TouchState::Idle => {}
@@ -954,6 +956,7 @@ fn process_handles(
                             just_selected: true,
                             action_name: "None".to_string(),
                         });
+                        layer.dirty.mark_handles();
                     }
 
                     TouchState::Held => {
@@ -973,6 +976,7 @@ fn process_handles(
                     TouchState::Released => {
                         loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
+                        layer.dirty.mark_handles();
                     }
 
                     TouchState::Idle => {}
@@ -1095,6 +1099,7 @@ fn process_polygons(
                             just_selected: true,
                             action_name: poly.action.clone(),
                         });
+                        layer.dirty.mark_polygons();
                     }
 
                     TouchState::Held => {
@@ -1144,6 +1149,7 @@ fn process_polygons(
                         loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
                         loader.ui_runtime.active_vertex = None;
+                        layer.dirty.mark_polygons();
                     }
 
                     TouchState::Idle => {}
@@ -1246,7 +1252,7 @@ fn process_text(
                             .just_deselected
                     {
                         println!("Exit edit mode");
-                        if is_selected {
+                        if is_selected && (!text.input_box || loader.ui_runtime.override_mode) {
                             text.template = text.text.clone();
                             layer.dirty.mark_texts();
                         }
@@ -1306,6 +1312,7 @@ fn process_text(
                             just_selected: true,
                             action_name: text.action.clone(),
                         });
+                        layer.dirty.mark_texts();
                     }
 
                     TouchState::Held => {
@@ -1332,6 +1339,7 @@ fn process_text(
                     TouchState::Released => {
                         loader.ui_runtime.selected_ui_element_primary.dragging = false;
                         loader.ui_runtime.drag_offset = None;
+                        layer.dirty.mark_texts();
                     }
 
                     TouchState::Idle => {}
@@ -1360,7 +1368,9 @@ pub fn enter_text_editing_mode(
     ui_runtime.editing_text = true;
     text.being_edited = true;
     variables.set("selected_text.being_edited", text.being_edited.to_string());
-    text.text = text.template.clone();
+    if !text.input_box || ui_runtime.override_mode {
+        text.text = text.template.clone();
+    }
 }
 
 pub fn handle_text_editing(
@@ -1434,12 +1444,21 @@ pub fn handle_text_editing(
                     if input.action_repeat("Paste text") {
                         if text.has_selection {
                             let (l, r) = text.selection_range();
-                            text.template.replace_range(l..r, &ui_runtime.clipboard);
+                            if !text.input_box || ui_runtime.override_mode {
+                                text.template.replace_range(l..r, &ui_runtime.clipboard);
+                            } else {
+                                text.text.replace_range(l..r, &ui_runtime.clipboard);
+                            }
+
                             text.caret = l + ui_runtime.clipboard.len();
                             text.clear_selection();
                         } else {
                             for c in ui_runtime.clipboard.clone().chars() {
-                                text.template.insert(text.caret, c);
+                                if !text.input_box || ui_runtime.override_mode {
+                                    text.template.insert(text.caret, c);
+                                } else {
+                                    text.text.insert(text.caret, c);
+                                }
                                 text.caret += 1;
                             }
                         }
@@ -1454,7 +1473,12 @@ pub fn handle_text_editing(
                     // -------------------------------
                     if input.action_pressed_once("Copy text") {
                         let (l, r) = text.selection_range();
-                        ui_runtime.clipboard = text.template.get(l..r).unwrap_or("").to_string();
+                        if !text.input_box || ui_runtime.override_mode {
+                            ui_runtime.clipboard =
+                                text.template.get(l..r).unwrap_or("").to_string();
+                        } else {
+                            ui_runtime.clipboard = text.text.get(l..r).unwrap_or("").to_string();
+                        }
                         return;
                     }
 
@@ -1463,13 +1487,17 @@ pub fn handle_text_editing(
                     // -------------------------------
                     if input.action_pressed_once("Cut text") {
                         let (l, r) = text.selection_range();
-                        ui_runtime.clipboard = text.template.get(l..r).unwrap_or("").to_string();
-
-                        text.template.replace_range(l..r, "");
+                        if !text.input_box || ui_runtime.override_mode {
+                            ui_runtime.clipboard =
+                                text.template.get(l..r).unwrap_or("").to_string();
+                            text.template.replace_range(l..r, "");
+                            text.text = text.template.clone();
+                        } else {
+                            ui_runtime.clipboard = text.text.get(l..r).unwrap_or("").to_string();
+                            text.text.replace_range(l..r, "");
+                        }
                         text.caret = l;
                         text.clear_selection();
-
-                        text.text = text.template.clone();
                         layer.dirty.mark_texts();
                         return;
                     }
@@ -1483,20 +1511,28 @@ pub fn handle_text_editing(
                 if input.action_repeat("Backspace") {
                     if text.has_selection {
                         let (l, r) = text.selection_range();
-                        text.template.replace_range(l..r, "");
-                        text.caret = l;
+                        if !text.input_box || ui_runtime.override_mode {
+                            text.template.replace_range(l..r, "");
+                            text.caret = l;
+                            text.text = text.template.clone();
+                        } else {
+                            text.text.replace_range(l..r, "");
+                            text.caret = l;
+                        }
                         text.clear_selection();
-
-                        text.text = text.template.clone();
                         layer.dirty.mark_texts();
                         return;
                     }
 
                     if text.caret > 0 {
-                        text.template.remove(text.caret - 1);
-                        text.caret -= 1;
-
-                        text.text = text.template.clone();
+                        if !text.input_box || ui_runtime.override_mode {
+                            text.template.remove(text.caret - 1);
+                            text.caret -= 1;
+                            text.text = text.template.clone();
+                        } else {
+                            text.text.remove(text.caret - 1);
+                            text.caret -= 1;
+                        }
                         layer.dirty.mark_texts();
                     }
 
@@ -1509,22 +1545,36 @@ pub fn handle_text_editing(
                 if input.repeat("char_repeat", !input.text_chars.is_empty()) {
                     if text.has_selection {
                         let (l, r) = text.selection_range();
-                        let bl = caret_to_byte(&text.template, l);
-                        let br = caret_to_byte(&text.template, r);
-                        text.template.replace_range(bl..br, "");
+                        if !text.input_box || ui_runtime.override_mode {
+                            let bl = caret_to_byte(&text.template, l);
+                            let br = caret_to_byte(&text.template, r);
+                            text.template.replace_range(bl..br, "");
+                            text.text = text.template.clone();
+                        } else {
+                            let bl = caret_to_byte(&text.text, l);
+                            let br = caret_to_byte(&text.text, r);
+                            text.text.replace_range(bl..br, "");
+                        }
                         text.caret = l;
                         text.clear_selection();
                     }
 
                     for s in input.text_chars.clone() {
                         if !s.is_empty() {
-                            let bi = caret_to_byte(&text.template, text.caret);
-                            text.template.insert_str(bi, &s);
+                            if !text.input_box || ui_runtime.override_mode {
+                                // normal mode edits template
+                                let bi = caret_to_byte(&text.template, text.caret);
+                                text.template.insert_str(bi, &s);
+                                text.text = text.template.clone();
+                            } else {
+                                // INPUT BOX: only edit text.text!
+                                let bi = caret_to_byte(&text.text, text.caret);
+                                text.text.insert_str(bi, &s);
+                            }
                             text.caret += s.chars().count();
                         }
                     }
 
-                    text.text = text.template.clone();
                     layer.dirty.mark_texts();
                     return;
                 }
@@ -1552,7 +1602,6 @@ pub fn handle_text_editing(
 
                 // move caret
                 if input.action_repeat("Move Cursor Left") && text.caret > 0 {
-                    println!("Left caret: {}", text.caret);
                     text.caret -= 1;
                     layer.dirty.mark_texts();
                 }

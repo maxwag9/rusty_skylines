@@ -33,6 +33,8 @@ pub struct Settings {
 
     pub present_mode: PresentModeSetting,
     pub editor_mode: bool,
+    pub override_mode: bool,
+    pub show_gui: bool,
     pub background_color: [f32; 4],
 }
 
@@ -43,6 +45,8 @@ impl Default for Settings {
             target_tps: 60.0,
             present_mode: PresentModeSetting::Mailbox,
             editor_mode: false,
+            override_mode: false,
+            show_gui: true,
             background_color: [0.0, 0.0, 0.0, 1.0],
         }
     }

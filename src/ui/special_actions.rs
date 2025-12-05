@@ -135,17 +135,30 @@ pub fn drag_hue_point(
                     let h = loader.variables.get_f32("color_picker.h").unwrap_or(0.0);
                     let s = loader.variables.get_f32("color_picker.s").unwrap_or(1.0);
 
-                    // target angle and radius
-                    let target_angle = (h * TAU) - FRAC_PI_2;
-                    let target_r = s.powf(1.0 / 0.47).clamp(0.0, 1.0)
-                        * -action_state.original_radius_2.unwrap_or(hue.radius);
+                    // 1. convert hue to radians, normalize
+                    let mut angle = h * TAU;
 
-                    let target_x = hue.x + target_angle.cos() * target_r;
-                    let target_y = hue.y + target_angle.sin() * target_r;
+                    // your UI wants 0° at the top instead of right
+                    angle -= FRAC_PI_2;
 
-                    // smooth 100 ms = 0.1 s
+                    // normalize
+                    if angle < 0.0 {
+                        angle += TAU;
+                    }
+                    if angle >= TAU {
+                        angle -= TAU;
+                    }
+
+                    // 2. radius: never negative
+                    let base_r = action_state.original_radius_2.unwrap_or(hue.radius);
+                    let r = (s.powf(1.0 / 0.47).clamp(0.0, 1.0)) * -base_r;
+
+                    // 3. compute target
+                    let target_x = hue.x + angle.cos() * r;
+                    let target_y = hue.y + angle.sin() * r;
+
+                    // 4. smooth
                     let alpha = (dt / 0.2).clamp(0.0, 1.0);
-
                     let smoothed_x = lerp(handle.x, target_x, alpha);
                     let smoothed_y = lerp(handle.y, target_y, alpha);
 
@@ -213,7 +226,6 @@ pub fn drag_hue_point(
         .just_deselected
     {
         deactivate_action(loader, "Drag Hue Point");
-        println!("deleting handle circle picker");
         let _ = loader.delete_element("Editor_Menu", "Color Picker", "color picker handle circle");
     }
 

@@ -5,8 +5,8 @@ use crate::ui::helper::calc_move_speed;
 use crate::ui::input::MouseState;
 pub(crate) use crate::ui::menu::Menu;
 use crate::ui::menu::get_selected_element_color;
-use crate::ui::parser::resolve_template;
-use crate::ui::selections::deselect_everything;
+use crate::ui::parser::{get_input_box, resolve_template, set_input_box};
+use crate::ui::selections::{SelectedUiElement, deselect_everything};
 use crate::ui::special_actions::rgb_to_hsv;
 use crate::ui::touches::{
     EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
@@ -31,7 +31,7 @@ pub struct UiButtonLoader {
 }
 
 impl UiButtonLoader {
-    pub fn new(editor_mode: bool) -> Self {
+    pub fn new(editor_mode: bool, override_mode: bool, show_gui: bool) -> Self {
         let layout_path = data_dir("ui_data/gui_layout.json");
         let layout = Self::load_gui_from_file(layout_path).unwrap_or_else(|e| {
             eprintln!("❌ Failed to load GUI layout: {e}");
@@ -40,7 +40,7 @@ impl UiButtonLoader {
 
         let mut loader = Self {
             menus: Default::default(),
-            ui_runtime: UiRuntime::new(editor_mode),
+            ui_runtime: UiRuntime::new(editor_mode, override_mode, show_gui),
             console_lines: VecDeque::new(),
             variables: UiVariableRegistry::new(),
         };
@@ -329,7 +329,7 @@ impl UiButtonLoader {
     pub fn update_dynamic_texts(&mut self) {
         let mut being_hovered = false;
         let mut selected_being_hovered = false;
-        for (_, menu) in &mut self.menus {
+        for (menu_name, menu) in &mut self.menus {
             for layer in &mut menu.layers {
                 let mut any_changed = false;
 
@@ -359,15 +359,58 @@ impl UiButtonLoader {
                     }
 
                     // Skip if no template braces exist!
-                    if !t.template.contains('{') || !t.template.contains('}') || t.being_edited {
+                    if !t.template.contains('{')
+                        || !t.template.contains('}')
+                        || (t.being_edited && !t.input_box)
+                    {
                         continue;
                     }
 
                     // Resolve template
-                    let new_text = resolve_template(&t.template, &self.variables);
-                    if new_text != t.text {
-                        t.text = new_text;
-                        any_changed = true;
+                    if !t.input_box || self.ui_runtime.override_mode {
+                        // Not an input box, always update!
+                        let new_text = resolve_template(&t.template, &self.variables);
+                        if new_text != t.text {
+                            t.text = new_text;
+                            any_changed = true;
+                        }
+                    } else {
+                        // input box stuff
+                        if this_text(
+                            &self.ui_runtime.selected_ui_element_primary,
+                            menu_name,
+                            layer.name.as_str(),
+                            t.id.clone(),
+                        ) {
+                            // Editing input box (selected) update the associated variable.
+                            let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
+                            if new_text != t.text {
+                                t.text = new_text;
+                                any_changed = true;
+                            }
+                        } else {
+                            // Not editing an input box, just update
+                            let new_text = get_input_box(&t.template, &self.variables);
+                            if new_text != t.text {
+                                t.text = new_text;
+                                any_changed = true;
+                            }
+                        }
+                    }
+                    if t.input_box && self.ui_runtime.selected_ui_element_primary.just_deselected {
+                        if this_text(
+                            &self.ui_runtime.selected_ui_element_primary,
+                            menu_name,
+                            layer.name.as_str(),
+                            t.id.clone(),
+                        ) {
+                            // Editing input box (selected) update the associated variable.
+                            let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
+                            if new_text != t.text {
+                                t.text = new_text;
+                                any_changed = true;
+                            }
+                        }
                     }
                 }
 
@@ -390,6 +433,9 @@ impl UiButtonLoader {
         input_state: &mut InputState,
         time_system: &TimeSystem,
     ) {
+        if !self.ui_runtime.show_gui {
+            return;
+        }
         self.ui_runtime.selected_ui_element_primary.just_deselected = false;
         self.ui_runtime.selected_ui_element_primary.just_selected = false;
 
@@ -687,7 +733,7 @@ impl UiButtonLoader {
                                         x: c.x,
                                         y: c.y,
                                         radius: c.radius,
-                                        border_thickness: c.border_thickness,
+                                        border_thickness: 0.1 * c.radius,
                                     },
                                 };
                                 editor_layer.outlines.push(circle_outline);
@@ -1075,4 +1121,24 @@ impl UiButtonLoader {
             self.mark_editor_layers_dirty();
         }
     }
+}
+
+fn this_text(
+    selected: &SelectedUiElement,
+    menu: &str,
+    layer: &str,
+    element_id: Option<String>,
+) -> bool {
+    if selected.menu_name != menu {
+        return false;
+    }
+    if selected.layer_name != layer {
+        return false;
+    }
+
+    if let Some(id) = element_id {
+        return selected.element_id == id;
+    }
+
+    false
 }

@@ -99,3 +99,9 @@ keys = ["Ctrl+ArrowDown"]
 
 ["Backspace"]
 keys = ["Backspace"]
+
+
+["Toggle override mode"]
+keys = ["F7"]
+["Toggle show gui"]
+keys = ["F1"]

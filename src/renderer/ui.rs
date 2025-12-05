@@ -219,6 +219,9 @@ impl UiRenderer {
         size: (f32, f32),
         mouse: &MouseState,
     ) {
+        if !ui.ui_runtime.show_gui {
+            return;
+        }
         let new_uniform = ScreenUniform {
             size: [size.0, size.1],
             time: time.total_time,

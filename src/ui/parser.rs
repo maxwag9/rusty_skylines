@@ -638,3 +638,113 @@ pub fn resolve_template(template: &str, vars: &UiVariableRegistry) -> String {
     }
     out
 }
+
+pub fn get_input_box(template: &str, vars: &UiVariableRegistry) -> String {
+    // Same logic as resolve_template, but isolated for input boxes.
+    // Replace occurrences of {var_name} with vars.get(var_name).
+    let mut out = String::with_capacity(template.len());
+
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            // Collect the variable name until '}'
+            let mut var_name = String::new();
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == '}' {
+                    break;
+                }
+                var_name.push(next);
+            }
+
+            // Lookup variable
+            if let Some(value) = vars.get(&var_name) {
+                out.push_str(&value.to_string());
+            } else {
+                // Unknown variable: keep literal
+                out.push('{');
+                out.push_str(&var_name);
+                out.push('}');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+
+    out
+}
+
+enum Segment {
+    Literal(String),
+    Var(String),
+}
+
+fn parse_template(template: &str) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut buf = String::new();
+    let mut chars = template.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            if !buf.is_empty() {
+                segments.push(Segment::Literal(buf.clone()));
+                buf.clear();
+            }
+
+            let mut name = String::new();
+            while let Some(ch2) = chars.next() {
+                if ch2 == '}' {
+                    break;
+                }
+                name.push(ch2);
+            }
+
+            if !name.is_empty() {
+                segments.push(Segment::Var(name));
+            }
+        } else {
+            buf.push(ch);
+        }
+    }
+
+    if !buf.is_empty() {
+        segments.push(Segment::Literal(buf));
+    }
+
+    segments
+}
+
+pub fn set_input_box(template: &str, current_text: &str, vars: &mut UiVariableRegistry) -> String {
+    let start = template.find('{');
+    let end = template.find('}');
+
+    if start.is_none() || end.is_none() || end.unwrap() <= start.unwrap() {
+        return current_text.to_string();
+    }
+
+    let start = start.unwrap();
+    let end = end.unwrap();
+    let var_name = &template[start + 1..end];
+
+    let prefix = &template[..start];
+    let suffix = &template[end + 1..];
+
+    if !current_text.starts_with(prefix) {
+        return current_text.to_string();
+    }
+
+    let after_prefix = &current_text[prefix.len()..];
+
+    let var_value = if suffix.is_empty() {
+        after_prefix
+    } else if let Some(pos) = after_prefix.find(suffix) {
+        &after_prefix[..pos]
+    } else {
+        after_prefix
+    };
+
+    vars.set(var_name, var_value.trim());
+
+    // Visible text keeps what the user typed, nothing blanked
+    current_text.to_string()
+}

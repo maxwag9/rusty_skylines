@@ -17,10 +17,12 @@ pub struct UiRuntime {
     pub last_pos: (f32, f32),
     pub original_radius: f32,
     pub action_states: HashMap<String, ActionState>,
+    pub override_mode: bool,
+    pub show_gui: bool,
 }
 
 impl UiRuntime {
-    pub fn new(editor_mode: bool) -> Self {
+    pub fn new(editor_mode: bool, override_mode: bool, show_gui: bool) -> Self {
         Self {
             elements: HashMap::new(),
             selected_ui_element_primary: SelectedUiElement::default(),
@@ -34,6 +36,8 @@ impl UiRuntime {
             last_pos: (0.0, 0.0),
             original_radius: 0.0,
             action_states: HashMap::new(),
+            override_mode,
+            show_gui,
         }
     }
 
@@ -74,6 +78,14 @@ impl UiRuntime {
 
     pub fn update_editor_mode(&mut self, editor_mode: bool) {
         self.editor_mode = editor_mode;
+    }
+
+    pub(crate) fn update_show_gui(&mut self, show_gui: bool) {
+        self.show_gui = show_gui;
+    }
+
+    pub(crate) fn update_override_mode(&mut self, override_mode: bool) {
+        self.override_mode = override_mode;
     }
 
     pub fn get(&self, id: &str) -> ButtonRuntime {

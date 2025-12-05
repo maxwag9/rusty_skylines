@@ -186,8 +186,49 @@ impl ApplicationHandler for App {
 
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
-                    println!("{}", down);
                     resources.settings.editor_mode = !resources.settings.editor_mode;
+                    resources
+                        .ui_loader
+                        .ui_runtime
+                        .update_editor_mode(resources.settings.editor_mode);
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("editor_mode", resources.settings.editor_mode.to_string())
+                }
+                // Toggle override_mode
+                if input.action_repeat("Toggle override mode") {
+                    resources.settings.override_mode = !resources.settings.override_mode;
+                    resources
+                        .ui_loader
+                        .ui_runtime
+                        .update_override_mode(resources.settings.override_mode);
+                    resources.ui_loader.variables.set(
+                        "override_mode",
+                        resources.settings.override_mode.to_string(),
+                    )
+                }
+                // Toggle show_gui
+                if input.action_repeat("Toggle show gui") {
+                    resources.settings.show_gui = !resources.settings.show_gui;
+                    resources
+                        .ui_loader
+                        .ui_runtime
+                        .update_show_gui(resources.settings.show_gui);
+                    resources
+                        .ui_loader
+                        .variables
+                        .set("show_gui", resources.settings.show_gui.to_string());
+                    resources.settings.override_mode = false;
+                    resources
+                        .ui_loader
+                        .ui_runtime
+                        .update_override_mode(resources.settings.override_mode);
+                    resources.ui_loader.variables.set(
+                        "override_mode",
+                        resources.settings.override_mode.to_string(),
+                    );
+                    resources.settings.editor_mode = false;
                     resources
                         .ui_loader
                         .ui_runtime
