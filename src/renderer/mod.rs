@@ -4,6 +4,7 @@ pub mod render_passes;
 pub(crate) mod shader_watcher;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;
+mod world_renderer;
 
 use crate::components::camera::Camera;
 use crate::data::Settings;

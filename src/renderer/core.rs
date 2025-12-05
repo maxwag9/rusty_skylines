@@ -4,6 +4,7 @@ use crate::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
+use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::{TimeSystem, Uniforms};
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
@@ -15,7 +16,6 @@ use wgpu::{
 };
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
-
 // top-level (once)
 
 pub struct RenderCore {
@@ -24,15 +24,13 @@ pub struct RenderCore {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
 
-    // --- new fields ---
-    pub msaa_texture: Texture,
-    pub msaa_view: TextureView,
     pub msaa_samples: u32,
 
-    pub vertex_buffer: Buffer,
     pub num_vertices: u32,
     pub pipelines: Pipelines,
     ui_renderer: UiRenderer,
+    pub world: WorldRenderer,
+
     size: PhysicalSize<u32>,
 
     shader_watcher: Option<ShaderWatcher>,
@@ -108,7 +106,6 @@ impl RenderCore {
         // Request device + queue
         let features = Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
         let limits = Limits::default();
-
         let (device, queue) = pollster::block_on(adapter.request_device(&DeviceDescriptor {
             label: Some("Device"),
             required_features: features,
@@ -122,10 +119,8 @@ impl RenderCore {
         // Configure surface
         surface.configure(&device, &config);
 
-        let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
-
         // === Vertex data ===
-
+        // The quad in the center
         let vertices = [
             // bottom left triangle
             Vertex {
@@ -142,7 +137,7 @@ impl RenderCore {
             },
             // top right triangle
             Vertex {
-                position: [1.0, 0.0, -1.0],
+                position: [1.0, 0.3, -1.0],
                 color: [0.8, 0.0, 0.8],
             },
             Vertex {
@@ -150,7 +145,7 @@ impl RenderCore {
                 color: [0.2, 0.9, 0.2],
             },
             Vertex {
-                position: [-1.0, 0.0, 1.0],
+                position: [-1.0, 1.0, 1.0],
                 color: [0.1, 0.0, 0.2],
             },
         ];
@@ -166,13 +161,14 @@ impl RenderCore {
         let shader_dir = shader_dir();
         let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
 
-        let pipelines = Pipelines::new(&device, config.format, msaa_samples, &shader_dir)
+        let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir)
             .expect("Failed to create render pipelines");
         let mut ui_renderer =
             UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
                 .expect("Failed to create UI pipelines");
         let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
         let _ = ui_renderer.build_text_atlas(&device, &queue, font_ttf, &[14, 18, 24], 1024, 1024);
+        let world = WorldRenderer::new(&device);
 
         Self {
             surface,
@@ -180,12 +176,10 @@ impl RenderCore {
             queue,
             config,
             pipelines,
-            msaa_texture,
-            msaa_view,
             msaa_samples,
-            vertex_buffer,
             num_vertices,
             ui_renderer,
+            world,
             size,
             shader_watcher,
         }
@@ -198,9 +192,7 @@ impl RenderCore {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
-
-        (self.msaa_texture, self.msaa_view) =
-            create_msaa_targets(&self.device, &self.config, self.msaa_samples);
+        self.pipelines.resize(self.msaa_samples);
     }
 
     pub(crate) fn render(
@@ -218,13 +210,16 @@ impl RenderCore {
         let new_uniforms = Uniforms {
             view_proj: camera.view_proj(aspect),
         };
+
+        let cam_pos = camera.target;
+        self.world.update(&self.device, cam_pos);
+
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
             0,
             bytemuck::bytes_of(&new_uniforms),
         );
 
-        // now the existing render code below...
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(_) => {
@@ -283,7 +278,7 @@ impl RenderCore {
         // --- Choose color attachment ---
         let color_attachment = Some(RenderPassColorAttachment {
             view: if self.msaa_samples > 1 {
-                &self.msaa_view
+                &self.pipelines.msaa_view
             } else {
                 &surface_view
             },
@@ -303,15 +298,21 @@ impl RenderCore {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Main Pass"),
                 color_attachments: &[color_attachment],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &self.pipelines.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
 
             pass.set_pipeline(&self.pipelines.pipeline);
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..self.num_vertices, 0..1);
+            self.world.render(&mut pass, &self.pipelines, cam_pos);
 
             pass.set_pipeline(&self.pipelines.gizmo_pipeline);
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
@@ -357,8 +358,7 @@ impl RenderCore {
 
         println!("MSAA changed to {}x", self.msaa_samples);
 
-        (self.msaa_texture, self.msaa_view) =
-            create_msaa_targets(&self.device, &self.config, self.msaa_samples);
+        self.pipelines.resize(self.msaa_samples);
 
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
@@ -402,30 +402,6 @@ impl RenderCore {
             Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
         }
     }
-}
-
-fn create_msaa_targets(
-    device: &Device,
-    config: &SurfaceConfiguration,
-    samples: u32,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("MSAA Color Texture"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: samples,
-        dimension: TextureDimension::D2,
-        format: config.format,
-        usage: TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
 }
 
 fn pick_fail_safe_present_mode(

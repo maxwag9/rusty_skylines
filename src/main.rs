@@ -1,4 +1,5 @@
 mod app;
+mod chunk_builder;
 mod components;
 mod data;
 mod events;
@@ -7,6 +8,7 @@ mod renderer;
 mod resources;
 mod simulation;
 mod systems;
+mod terrain;
 mod ui;
 mod world;
 

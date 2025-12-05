@@ -14,14 +14,21 @@ pub struct Pipelines {
     pub(crate) gizmo_vbuf: Buffer,
     pub(crate) uniform_buffer: Buffer,
     pub(crate) uniform_bind_group: BindGroup,
+
+    pub msaa_texture: Texture,
+    pub msaa_view: TextureView,
+
+    pub depth_texture: Texture,
+    pub depth_view: TextureView,
     pub(crate) pipeline: RenderPipeline,
+
     pub(crate) gizmo_pipeline: RenderPipeline,
     pub shader: ShaderModule,
     pipeline_layout: PipelineLayout,
     pub(crate) msaa_samples: u32,
     line_shader: ShaderModule,
 
-    format: TextureFormat,
+    config: SurfaceConfiguration,
 
     shader_path: PathBuf,
     line_shader_path: PathBuf,
@@ -30,13 +37,14 @@ pub struct Pipelines {
 impl Pipelines {
     pub fn new(
         device: &Device,
-        format: TextureFormat,
+        config: &SurfaceConfiguration,
         msaa_samples: u32,
         shader_dir: &Path,
     ) -> anyhow::Result<Self> {
         let shader_path = shader_dir.join("ground.wgsl");
         let line_shader_path = shader_dir.join("lines.wgsl");
-
+        let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
+        let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
         let shader = load_shader(device, &shader_path, "Ground Shader")?;
 
         let uniforms = Uniforms::new();
@@ -85,7 +93,7 @@ impl Pipelines {
         });
 
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
+            label: Some("3D Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: VertexState {
                 module: &shader,
@@ -97,17 +105,24 @@ impl Pipelines {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
-                    format,
+                    format: config.format,
                     blend: Some(BlendState::REPLACE),
                     write_mask: ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
             }),
             primitive: PrimitiveState {
+                cull_mode: Some(Face::Front),
                 topology: PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
             multisample: MultisampleState {
                 count: msaa_samples,
                 mask: !0,
@@ -132,7 +147,7 @@ impl Pipelines {
                 module: &line_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
-                    format,
+                    format: config.format,
                     blend: Some(BlendState::REPLACE),
                     write_mask: ColorWrites::ALL,
                 })],
@@ -142,7 +157,13 @@ impl Pipelines {
                 topology: PrimitiveTopology::LineList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
             multisample: MultisampleState {
                 count: msaa_samples,
                 mask: !0,
@@ -157,12 +178,18 @@ impl Pipelines {
             gizmo_vbuf,
             uniform_buffer,
             uniform_bind_group,
+
+            msaa_texture,
+            msaa_view,
+            depth_texture,
+            depth_view,
+
             pipeline,
             gizmo_pipeline,
             device: device.clone(),
             pipeline_layout,
             msaa_samples,
-            format,
+            config: config.clone(),
             line_shader,
             shader_path,
             line_shader_path,
@@ -186,7 +213,7 @@ impl Pipelines {
                     module: &self.shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
-                        format: self.format,
+                        format: self.config.format,
                         blend: Some(BlendState::REPLACE),
                         write_mask: ColorWrites::ALL,
                     })],
@@ -218,7 +245,7 @@ impl Pipelines {
                     module: &self.line_shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
-                        format: self.format,
+                        format: self.config.format,
                         blend: Some(BlendState::REPLACE),
                         write_mask: ColorWrites::ALL,
                     })],
@@ -246,13 +273,71 @@ impl Pipelines {
         self.recreate_pipelines();
         Ok(())
     }
+
+    pub(crate) fn resize(&mut self, msaa_samples: u32) {
+        (self.msaa_texture, self.msaa_view) =
+            create_msaa_targets(&self.device, &self.config, self.msaa_samples);
+        (self.depth_texture, self.depth_view) =
+            create_depth_texture(&self.device, &self.config, msaa_samples);
+    }
 }
 
-fn load_shader(device: &Device, path: &Path, label: &str) -> anyhow::Result<ShaderModule> {
+pub fn load_shader(device: &Device, path: &Path, label: &str) -> anyhow::Result<ShaderModule> {
     let src = fs::read_to_string(path)?;
     let module = device.create_shader_module(ShaderModuleDescriptor {
         label: Some(label),
         source: ShaderSource::Wgsl(Cow::Owned(src)),
     });
     Ok(module)
+}
+
+pub fn create_msaa_targets(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    samples: u32,
+) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("MSAA Color Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: samples,
+        dimension: TextureDimension::D2,
+        format: config.format,
+        usage: TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
+}
+
+const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32Float;
+
+fn create_depth_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    msaa_samples: u32,
+) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("Depth Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: msaa_samples,
+
+        dimension: TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
 }

@@ -1,8 +1,7 @@
+use crate::renderer::pipelines::load_shader;
 use crate::renderer::ui::{ScreenUniform, TextAtlas};
 use crate::ui::helper::{make_pipeline, make_storage_layout, make_uniform_layout};
 use crate::ui::vertex::{UiVertexPoly, UiVertexText};
-use std::borrow::Cow;
-use std::fs;
 use std::path::{Path, PathBuf};
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
@@ -559,15 +558,6 @@ impl UiPipelines {
         println!("rebuilt shaders");
         Ok(())
     }
-}
-
-fn load_shader(device: &Device, path: &Path, label: &str) -> anyhow::Result<ShaderModule> {
-    let src = fs::read_to_string(path)?;
-    let module = device.create_shader_module(ShaderModuleDescriptor {
-        label: Some(label),
-        source: ShaderSource::Wgsl(Cow::Owned(src)),
-    });
-    Ok(module)
 }
 
 fn load_shader_from_dir(

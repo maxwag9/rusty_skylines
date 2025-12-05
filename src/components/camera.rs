@@ -34,7 +34,7 @@ impl Camera {
     pub fn view_proj(&self, aspect: f32) -> [[f32; 4]; 4] {
         let eye = self.position();
         let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
-        let proj = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 1_000.0);
+        let proj = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 1_00000.0);
         (proj * view).to_cols_array_2d()
     }
 }
