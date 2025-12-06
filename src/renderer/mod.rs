@@ -19,8 +19,8 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(window: Arc<winit::window::Window>, settings: &Settings) -> Self {
-        let core = RenderCore::new(window, settings);
+    pub fn new(window: Arc<winit::window::Window>, settings: &Settings, camera: &Camera) -> Self {
+        let core = RenderCore::new(window, settings, camera);
         Self { core }
     }
 

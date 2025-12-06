@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 
 #[derive(Debug, Clone)]
 pub struct Camera {
@@ -31,11 +31,19 @@ impl Camera {
         self.target + offset
     }
 
-    pub fn view_proj(&self, aspect: f32) -> [[f32; 4]; 4] {
+    pub fn view_proj(&self, aspect: f32) -> glam::Mat4 {
         let eye = self.position();
-        let view = Mat4::look_at_rh(eye, self.target, Vec3::Y);
-        let proj = Mat4::perspective_rh_gl(45f32.to_radians(), aspect, 0.1, 1_00000.0);
-        (proj * view).to_cols_array_2d()
+
+        let view = glam::Mat4::look_at_rh(eye, self.target, glam::Vec3::Y);
+
+        let proj = glam::Mat4::perspective_rh_gl(
+            45f32.to_radians(),
+            aspect,
+            0.1,
+            100_000.0, // HUGE far plane so frustum works on terrain
+        );
+
+        proj * view
     }
 }
 

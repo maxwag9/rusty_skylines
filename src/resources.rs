@@ -5,7 +5,7 @@ use crate::renderer::Renderer;
 use crate::simulation::Simulation;
 pub(crate) use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
-use glam::{Mat4, Vec3};
+use crate::world::World;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -24,10 +24,12 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(window: Arc<Window>) -> Self {
+    pub fn new(window: Arc<Window>, world: &World) -> Self {
         let settings = Settings::load(data_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
-        let renderer = Renderer::new(window.clone(), &settings);
+        let camera_entity = world.main_camera();
+        let camera = world.camera(camera_entity).unwrap();
+        let renderer = Renderer::new(window.clone(), &settings, camera);
         let mut ui_loader =
             UiButtonLoader::new(editor_mode, settings.override_mode, settings.show_gui);
         ui_loader
@@ -120,23 +122,25 @@ impl TimeSystem {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
-    pub view_proj: [[f32; 4]; 4],
-}
+    pub view_proj: [[f32; 4]; 4], // 64
 
-impl Uniforms {
-    pub fn new() -> Self {
-        let eye = Vec3::new(5.0, 15.0, 0.0);
-        let target = Vec3::ZERO;
-        let up = Vec3::Y;
+    pub sun_direction: [f32; 3], // 12
+    pub _pad0: f32,              // pad 4 = 16
 
-        let view = Mat4::look_at_rh(eye, target, up);
-        let proj = Mat4::perspective_rh_gl(45f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
-        Self {
-            view_proj: (proj * view).to_cols_array_2d(),
-        }
-    }
+    pub _pad1: [f32; 4], // 16
+
+    pub camera_pos: [f32; 3], // 12
+    pub _pad2: f32,           // pad 4 = 16
+
+    pub fog_color: [f32; 3], // 12
+    pub fog_start: f32,      // 4  → total 16
+
+    pub fog_end: f32,    // 4
+    pub _pad3: [f32; 3], // 12 → total 16
+
+    pub _pad4: [f32; 4], // *** extra 16-byte padding block ***
 }
 
 fn default_keybinds() -> HashMap<PhysicalKey, String> {

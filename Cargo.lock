@@ -345,7 +345,7 @@ version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
-    "crossbeam-utils",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -957,9 +957,9 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6da45c8333f2e152fc665d78a380be060eb84fad8ca4c9f7ac8ca29216cff0cc"
 dependencies = [
-    "num-traits",
-    "rand",
-    "rand_xorshift",
+ "num-traits",
+ "rand",
+ "rand_xorshift",
 ]
 
 [[package]]
@@ -1002,8 +1002,8 @@ version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
-    "hermit-abi",
-    "libc",
+ "hermit-abi",
+ "libc",
 ]
 
 [[package]]
@@ -1474,7 +1474,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
 dependencies = [
-    "rand_core",
+ "rand_core",
 ]
 
 [[package]]
@@ -1563,13 +1563,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
-    "crossbeam-channel",
+ "crossbeam-channel",
  "fontdue",
  "glam",
  "nanoid",
-    "noise",
+ "noise",
  "notify",
-    "num_cpus",
+ "num_cpus",
  "pollster",
  "rect_packer",
  "serde",

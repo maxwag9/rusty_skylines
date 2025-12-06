@@ -198,6 +198,7 @@ pub struct ButtonRuntime {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Vertex {
     pub(crate) position: [f32; 3],
+    pub normal: [f32; 3],
     pub(crate) color: [f32; 3],
 }
 
@@ -207,11 +208,31 @@ impl Vertex {
         1 => Float32x3
     ];
 
-    pub(crate) fn desc<'a>() -> VertexBufferLayout<'a> {
+    pub fn desc() -> VertexBufferLayout<'static> {
+        use std::mem::size_of;
         VertexBufferLayout {
             array_stride: size_of::<Vertex>() as BufferAddress,
             step_mode: VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
+            attributes: &[
+                // @location(0) position
+                VertexAttribute {
+                    shader_location: 0,
+                    offset: 0,
+                    format: VertexFormat::Float32x3,
+                },
+                // @location(1) normal
+                VertexAttribute {
+                    shader_location: 1,
+                    offset: 12,
+                    format: VertexFormat::Float32x3,
+                },
+                // @location(2) color
+                VertexAttribute {
+                    shader_location: 2,
+                    offset: 24,
+                    format: VertexFormat::Float32x3,
+                },
+            ],
         }
     }
 }

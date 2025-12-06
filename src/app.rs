@@ -117,7 +117,7 @@ impl ApplicationHandler for App {
         );
 
         let world = World::new();
-        let mut resources = Resources::new(window.clone());
+        let mut resources = Resources::new(window.clone(), &world);
         resources
             .time
             .set_tps(resources.settings.target_tps.max(1.0));

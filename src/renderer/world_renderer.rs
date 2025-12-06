@@ -1,4 +1,7 @@
-use crate::chunk_builder::{ChunkBuilder, ChunkMeshLod, GpuChunkMesh, lod_step_for_distance};
+use crate::chunk_builder::{
+    ChunkBuilder, ChunkMeshLod, GpuChunkMesh, generate_spiral_offsets, lod_step_for_distance,
+};
+use crate::components::camera::Camera;
 use crate::renderer::pipelines::Pipelines;
 use crate::terrain::TerrainGenerator;
 use crate::threads::{ChunkJob, ChunkWorkerPool};
@@ -10,19 +13,24 @@ pub struct WorldRenderer {
     pub chunks: HashMap<(i32, i32), ChunkMeshLod>, // GPU-ready
     pub pending: HashSet<(i32, i32)>,              // requested but not uploaded yet
     pub terrain_gen: TerrainGenerator,
-    pub chunk_size: i32,
-    pub view_radius_generate: i32,
-    pub view_radius_render: i32,
+    pub chunk_size: u32,
+    pub view_radius_generate: u32,
+    pub view_radius_render: u32,
     pub workers: ChunkWorkerPool,
     pub max_jobs_per_frame: usize,
+    pub max_chunks_per_batch: usize,
+    pub max_far_batches_per_frame: usize,
+
+    pub spiral: Vec<(i32, i32)>,
+    pub lod_map: HashMap<(i32, i32), usize>,
 }
 
 impl WorldRenderer {
     pub fn new(device: &Device) -> Self {
         let terrain_gen = TerrainGenerator::new(0);
-        let chunk_size = 256;
-        let view_radius_render = 16;
-        let view_radius_generate = 16;
+        let chunk_size = 64;
+        let view_radius_render = 128;
+        let view_radius_generate = 32;
 
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
@@ -33,13 +41,9 @@ impl WorldRenderer {
         let pending = HashSet::new();
 
         // Build origin chunk immediately with the highest LOD
-        let cpu_origin = ChunkBuilder::build_chunk_cpu(
-            0,
-            0,
-            chunk_size as u32,
-            1, // highest detail
-            &terrain_gen,
-        );
+        let cpu_origin =
+            ChunkBuilder::build_chunk_cpu(0, 0, chunk_size, 1, 1, 1, 1, 1, &terrain_gen);
+
         let gpu_origin = GpuChunkMesh::from_cpu(device, &cpu_origin);
 
         chunks.insert(
@@ -58,7 +62,12 @@ impl WorldRenderer {
             view_radius_generate,
             view_radius_render,
             workers,
-            max_jobs_per_frame: 8,
+            max_jobs_per_frame: 4,
+            max_chunks_per_batch: 16,
+            max_far_batches_per_frame: 2,
+
+            spiral: generate_spiral_offsets(view_radius_generate as i32),
+            lod_map: HashMap::new(),
         }
     }
 
@@ -67,13 +76,14 @@ impl WorldRenderer {
         let cam_cx = (camera_pos.x / cs).floor() as i32;
         let cam_cz = (camera_pos.z / cs).floor() as i32;
 
-        // 1. Drain finished CPU meshes  (Step 6)
+        // 1. Drain finished CPU meshes
         while let Ok(cpu) = self.workers.result_rx.try_recv() {
             let coord = (cpu.cx, cpu.cz);
             self.pending.remove(&coord);
 
             let gpu = GpuChunkMesh::from_cpu(device, &cpu);
 
+            // Replace old LOD safely (upgrade or downgrade)
             self.chunks.insert(
                 coord,
                 ChunkMeshLod {
@@ -83,44 +93,148 @@ impl WorldRenderer {
             );
         }
 
-        // 2. Decide which chunks to generate
-        let mut jobs_sent = 0usize;
+        // 2. Compute desired LOD for all candidate chunks
+        self.lod_map.clear();
+        let r_gen = self.view_radius_generate as i32;
+        let r_gen2 = r_gen * r_gen;
 
-        for dx in -self.view_radius_generate..=self.view_radius_generate {
-            for dz in -self.view_radius_generate..=self.view_radius_generate {
-                let cx = cam_cx + dx;
-                let cz = cam_cz + dz;
-                let dist2 = dx * dx + dz * dz;
+        for (dx, dz) in &self.spiral {
+            let dx = *dx;
+            let dz = *dz;
+            let dist2 = dx * dx + dz * dz;
+            if dist2 > r_gen2 {
+                continue;
+            }
 
-                let desired_step = lod_step_for_distance(dist2);
-                let coord = (cx, cz);
+            let cx = cam_cx + dx;
+            let cz = cam_cz + dz;
+            let step = lod_step_for_distance(dist2);
 
-                // If chunk exists AND LOD is equal or better: skip
-                if let Some(existing) = self.chunks.get(&coord) {
-                    if existing.step <= desired_step {
-                        continue;
-                    }
-                }
+            self.lod_map.insert((cx, cz), step);
+        }
 
-                // If chunk is already being generated: skip
-                if self.pending.contains(&coord) {
-                    continue;
-                }
+        // 2b. Smooth LODs
+        for _iter in 0..2 {
+            let current = self.lod_map.clone();
+            for (&(cx, cz), step) in current.iter() {
+                let s = *step;
 
-                // Send job to worker
-                if jobs_sent < self.max_jobs_per_frame {
+                let n0 = current.get(&(cx - 1, cz)).copied().unwrap_or(s);
+                let n1 = current.get(&(cx + 1, cz)).copied().unwrap_or(s);
+                let n2 = current.get(&(cx, cz - 1)).copied().unwrap_or(s);
+                let n3 = current.get(&(cx, cz + 1)).copied().unwrap_or(s);
+
+                let min_step = s.min(n0).min(n1).min(n2).min(n3);
+                self.lod_map.insert((cx, cz), min_step);
+            }
+        }
+
+        // 3. Job creation: unified rebuild logic (upgrade + downgrade)
+        let mut batch: Vec<(i32, i32, usize, usize, usize, usize, usize)> = Vec::new();
+        let mut near_jobs_sent = 0usize;
+        let mut far_batches_sent = 0usize;
+
+        for (dx, dz) in &self.spiral {
+            if near_jobs_sent >= self.max_jobs_per_frame
+                && far_batches_sent >= self.max_far_batches_per_frame
+            {
+                break;
+            }
+
+            let dx = *dx;
+            let dz = *dz;
+            let cx = cam_cx + dx;
+            let cz = cam_cz + dz;
+            let coord = (cx, cz);
+
+            let r_render = self.view_radius_render as i32;
+            let r_render2 = r_render * r_render;
+
+            let dist2 = dx * dx + dz * dz;
+
+            // OUTSIDE GENERATION RADIUS but INSIDE RENDER RADIUS
+            if dist2 > r_gen2 && dist2 <= r_render2 {
+                // force coarse LOD for outer ring
+                // IMPORTANT: must be same LOD used for far terrain
+                let coarse = lod_step_for_distance(r_gen2 + 1);
+                self.lod_map.insert((cx, cz), coarse);
+                continue;
+            }
+
+            // OUTSIDE RENDER RADIUS: ignore
+            if dist2 > r_render2 {
+                continue;
+            }
+
+            // INSIDE GENERATION RADIUS: normal LOD
+            let step = lod_step_for_distance(dist2);
+            self.lod_map.insert((cx, cz), step);
+
+            // Skip if a job for this coordinate is already in flight
+            if self.pending.contains(&coord) {
+                continue;
+            }
+
+            // Determine desired step
+            let desired_step = *self.lod_map.get(&coord).unwrap_or(&1);
+            let existing_step = self.chunks.get(&coord).map(|c| c.step);
+
+            // Unified rebuild rule:
+            // Rebuild if:
+            // - chunk missing
+            // - desired LOD != current LOD (upgrade or downgrade)
+            let need_job = match existing_step {
+                None => true,
+                Some(cur) => desired_step != cur,
+            };
+
+            if !need_job {
+                continue;
+            }
+
+            // We must rebuild this chunk (upgrade or downgrade)
+            let step = desired_step;
+
+            // Neighbor LODs
+            let n_x_neg = *self.lod_map.get(&(cx - 1, cz)).unwrap_or(&step);
+            let n_x_pos = *self.lod_map.get(&(cx + 1, cz)).unwrap_or(&step);
+            let n_z_neg = *self.lod_map.get(&(cx, cz - 1)).unwrap_or(&step);
+            let n_z_pos = *self.lod_map.get(&(cx, cz + 1)).unwrap_or(&step);
+
+            // Enqueue job ONLY if we can send one
+            if step <= 2 {
+                // near, high priority
+                if near_jobs_sent < self.max_jobs_per_frame {
                     self.pending.insert(coord);
-                    self.workers
-                        .job_tx
-                        .send(ChunkJob {
-                            cx,
-                            cz,
-                            step: desired_step,
-                        })
-                        .ok();
-                    jobs_sent += 1;
+                    let job = ChunkJob {
+                        chunks: vec![(cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos)],
+                    };
+                    let _ = self.workers.job_tx.send(job);
+                    near_jobs_sent += 1;
+                }
+                continue;
+            }
+
+            // far, batched
+            if far_batches_sent < self.max_far_batches_per_frame {
+                batch.push((cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos));
+                self.pending.insert(coord);
+
+                if batch.len() >= self.max_chunks_per_batch {
+                    let job = ChunkJob {
+                        chunks: batch.clone(),
+                    };
+                    let _ = self.workers.job_tx.send(job);
+                    batch.clear();
+                    far_batches_sent += 1;
                 }
             }
+        }
+
+        // Flush leftover far batch
+        if !batch.is_empty() && far_batches_sent < self.max_far_batches_per_frame {
+            let job = ChunkJob { chunks: batch };
+            let _ = self.workers.job_tx.send(job);
         }
     }
 
@@ -128,26 +242,127 @@ impl WorldRenderer {
         &'a self,
         pass: &mut RenderPass<'a>,
         pipelines: &'a Pipelines,
-        camera_pos: Vec3,
+        camera: &'a Camera,
+        aspect: f32,
     ) {
         pass.set_pipeline(&pipelines.pipeline);
         pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
+        pass.set_bind_group(1, &pipelines.fog_bind_group, &[]);
+        // compute planes once per frame
+        let planes = extract_frustum_planes(camera.view_proj(aspect));
 
         let cs = self.chunk_size as f32;
-        let cam_cx = (camera_pos.x / cs).floor() as i32;
-        let cam_cz = (camera_pos.z / cs).floor() as i32;
+        let cam_pos = camera.position();
+        let cam_cx = (cam_pos.x / cs).floor() as i32;
+        let cam_cz = (cam_pos.z / cs).floor() as i32;
+
         let r2 = (self.view_radius_render * self.view_radius_render) as i32;
 
+        // fixed terrain height bounds (can be dynamic later)
+        let min_y = -50.0;
+        let max_y = 200.0;
+
         for (&(cx, cz), chunk) in self.chunks.iter() {
+            // distance radius culling (your old check)
             let dx = cx - cam_cx;
             let dz = cz - cam_cz;
             if dx * dx + dz * dz > r2 {
                 continue;
             }
 
-            pass.set_vertex_buffer(0, chunk.mesh.vertex_buf.slice(..));
-            pass.set_index_buffer(chunk.mesh.index_buf.slice(..), IndexFormat::Uint32);
-            pass.draw_indexed(0..chunk.mesh.index_count, 0, 0..1);
+            // world-space bounds
+            let world_x = cx as f32 * cs;
+            let world_z = cz as f32 * cs;
+
+            let min = glam::Vec3::new(world_x, min_y, world_z);
+            let max = glam::Vec3::new(world_x + cs, max_y, world_z + cs);
+
+            // frustum culling
+            if !aabb_in_frustum(&planes, min, max) {
+                continue;
+            }
+
+            // draw chunk
+            let mesh = &chunk.mesh;
+            pass.set_vertex_buffer(0, mesh.vertex_buf.slice(..));
+            pass.set_index_buffer(mesh.index_buf.slice(..), IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
         }
     }
+}
+#[derive(Clone, Copy)]
+pub struct Plane {
+    pub normal: glam::Vec3,
+    pub d: f32,
+}
+
+impl Plane {
+    pub fn distance(&self, p: glam::Vec3) -> f32 {
+        self.normal.dot(p) + self.d
+    }
+}
+
+pub fn extract_frustum_planes(view_proj: glam::Mat4) -> [Plane; 6] {
+    let m = view_proj.to_cols_array_2d();
+
+    let planes = [
+        (
+            m[0][3] + m[0][0],
+            m[1][3] + m[1][0],
+            m[2][3] + m[2][0],
+            m[3][3] + m[3][0],
+        ), // left
+        (
+            m[0][3] - m[0][0],
+            m[1][3] - m[1][0],
+            m[2][3] - m[2][0],
+            m[3][3] - m[3][0],
+        ), // right
+        (
+            m[0][3] + m[0][1],
+            m[1][3] + m[1][1],
+            m[2][3] + m[2][1],
+            m[3][3] + m[3][1],
+        ), // bottom
+        (
+            m[0][3] - m[0][1],
+            m[1][3] - m[1][1],
+            m[2][3] - m[2][1],
+            m[3][3] - m[3][1],
+        ), // top
+        (
+            m[0][3] + m[0][2],
+            m[1][3] + m[1][2],
+            m[2][3] + m[2][2],
+            m[3][3] + m[3][2],
+        ), // near
+        (
+            m[0][3] - m[0][2],
+            m[1][3] - m[1][2],
+            m[2][3] - m[2][2],
+            m[3][3] - m[3][2],
+        ), // far
+    ];
+
+    planes.map(|(a, b, c, d)| {
+        let n = glam::Vec3::new(a, b, c);
+        let inv_len = 1.0 / n.length();
+        Plane {
+            normal: n * inv_len,
+            d: d * inv_len,
+        }
+    })
+}
+
+pub fn aabb_in_frustum(planes: &[Plane; 6], min: glam::Vec3, max: glam::Vec3) -> bool {
+    for p in planes {
+        let vx = if p.normal.x >= 0.0 { max.x } else { min.x };
+        let vy = if p.normal.y >= 0.0 { max.y } else { min.y };
+        let vz = if p.normal.z >= 0.0 { max.z } else { min.z };
+
+        if p.distance(glam::Vec3::new(vx, vy, vz)) < 0.0 {
+            return false;
+        }
+    }
+    true
 }

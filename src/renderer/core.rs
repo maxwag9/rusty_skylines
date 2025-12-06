@@ -1,19 +1,16 @@
 use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::paths::shader_dir;
-use crate::renderer::pipelines::Pipelines;
+use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::world_renderer::WorldRenderer;
-use crate::resources::{TimeSystem, Uniforms};
+use crate::resources::TimeSystem;
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::vertex::{LineVtx, Vertex};
+use crate::ui::vertex::LineVtx;
 use std::sync::Arc;
-use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
-    *,
-};
+use wgpu::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 // top-level (once)
@@ -26,7 +23,6 @@ pub struct RenderCore {
 
     pub msaa_samples: u32,
 
-    pub num_vertices: u32,
     pub pipelines: Pipelines,
     ui_renderer: UiRenderer,
     pub world: WorldRenderer,
@@ -37,7 +33,7 @@ pub struct RenderCore {
 }
 
 impl RenderCore {
-    pub fn new(window: Arc<Window>, settings: &Settings) -> Self {
+    pub fn new(window: Arc<Window>, settings: &Settings, camera: &Camera) -> Self {
         // --- Create instance and surface ---
         let instance = Instance::new(&InstanceDescriptor {
             backends: Backends::all(),
@@ -119,49 +115,11 @@ impl RenderCore {
         // Configure surface
         surface.configure(&device, &config);
 
-        // === Vertex data ===
-        // The quad in the center
-        let vertices = [
-            // bottom left triangle
-            Vertex {
-                position: [-1.0, 0.0, -1.0],
-                color: [1.0, 1.0, 1.0],
-            },
-            Vertex {
-                position: [1.0, 0.0, -1.0],
-                color: [0.8, 0.0, 0.8],
-            },
-            Vertex {
-                position: [-1.0, 0.0, 1.0],
-                color: [0.1, 0.0, 0.2],
-            },
-            // top right triangle
-            Vertex {
-                position: [1.0, 0.3, -1.0],
-                color: [0.8, 0.0, 0.8],
-            },
-            Vertex {
-                position: [1.0, 0.0, 1.0],
-                color: [0.2, 0.9, 0.2],
-            },
-            Vertex {
-                position: [-1.0, 1.0, 1.0],
-                color: [0.1, 0.0, 0.2],
-            },
-        ];
-
-        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let num_vertices = vertices.len() as u32;
-
         let shader_dir = shader_dir();
         let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
 
-        let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir)
+        let aspect = config.width as f32 / config.height as f32;
+        let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir, camera, aspect)
             .expect("Failed to create render pipelines");
         let mut ui_renderer =
             UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
@@ -177,7 +135,6 @@ impl RenderCore {
             config,
             pipelines,
             msaa_samples,
-            num_vertices,
             ui_renderer,
             world,
             size,
@@ -205,21 +162,49 @@ impl RenderCore {
     ) {
         self.check_shader_changes(ui_loader);
 
-        // update camera uniforms
+        // camera + sun
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let new_uniforms = Uniforms {
-            view_proj: camera.view_proj(aspect),
-        };
+        let vp = camera.view_proj(aspect);
+        let cam_pos = camera.position();
+        let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
 
-        let cam_pos = camera.target;
-        self.world.update(&self.device, cam_pos);
-
+        let new_uniforms = make_new_uniforms(vp.to_cols_array_2d(), sun, cam_pos);
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
             0,
             bytemuck::bytes_of(&new_uniforms),
         );
 
+        // proj params for fog depth reconstruction
+        let proj_params = [
+            vp.col(2).z, // proj[2][2]
+            vp.col(3).z, // proj[3][2]
+        ];
+
+        let fog_uniforms = FogUniforms {
+            screen_size: [self.config.width as f32, self.config.height as f32],
+            proj_params,
+            fog_density: 0.0002,
+            fog_height: 0.0,
+            cam_height: camera.position().y,
+            _pad0: 0.0,
+            fog_color: [0.55, 0.55, 0.6],
+            _pad1: 0.0,
+            fog_sky_factor: 0.4,
+            fog_height_falloff: 0.12,
+            fog_start: 1000.0,
+            fog_end: 10000.0,
+        };
+
+        self.queue.write_buffer(
+            &self.pipelines.fog_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&fog_uniforms),
+        );
+
+        self.world.update(&self.device, camera.target);
+
+        // get frame
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(_) => {
@@ -228,17 +213,18 @@ impl RenderCore {
             }
         };
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
+
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
 
-        // Build gizmo vertices centered at target
+        // gizmo verts (unchanged)
         let t = camera.target;
-        let s = camera.radius * 0.2; // gizmo size scales with zoom
+        let s = camera.radius * 0.2;
         let axes = [
-            // X axis (red)
+            // X
             LineVtx {
                 pos: [t.x, t.y, t.z],
                 color: [1.0, 0.2, 0.2],
@@ -247,7 +233,7 @@ impl RenderCore {
                 pos: [t.x + s, t.y, t.z],
                 color: [1.0, 0.2, 0.2],
             },
-            // Y axis (green)
+            // Y
             LineVtx {
                 pos: [t.x, t.y, t.z],
                 color: [0.2, 1.0, 0.2],
@@ -256,7 +242,7 @@ impl RenderCore {
                 pos: [t.x, t.y + s, t.z],
                 color: [0.2, 1.0, 0.2],
             },
-            // Z axis (blue)
+            // Z
             LineVtx {
                 pos: [t.x, t.y, t.z],
                 color: [0.2, 0.6, 1.0],
@@ -266,40 +252,31 @@ impl RenderCore {
                 color: [0.2, 0.6, 1.0],
             },
         ];
-        // --- Update gizmo vertex buffer ---
         self.queue
             .write_buffer(&self.pipelines.gizmo_vbuf, 0, bytemuck::cast_slice(&axes));
+
         let background_color = Color {
             r: settings.background_color[0] as f64,
             g: settings.background_color[1] as f64,
             b: settings.background_color[2] as f64,
             a: settings.background_color[3] as f64,
         };
-        // --- Choose color attachment ---
-        let color_attachment = Some(RenderPassColorAttachment {
-            view: if self.msaa_samples > 1 {
-                &self.pipelines.msaa_view
-            } else {
-                &surface_view
-            },
-            resolve_target: if self.msaa_samples > 1 {
-                Some(&surface_view)
-            } else {
-                None
-            },
-            depth_slice: None,
-            ops: Operations {
-                load: LoadOp::Clear(background_color),
-                store: StoreOp::Store,
-            },
-        });
 
+        // 1) MAIN 3D + FOG pass (MSAA -> resolve into surface_view)
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Main Pass"),
-                color_attachments: &[color_attachment],
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &self.pipelines.msaa_view,
+                    resolve_target: Some(&surface_view), // resolve MSAA into swapchain
+                    depth_slice: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(background_color),
+                        store: StoreOp::Store,
+                    },
+                })],
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &self.pipelines.depth_view,
+                    view: &self.pipelines.depth_view, // same sample_count as msaa_view
                     depth_ops: Some(Operations {
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
@@ -310,25 +287,27 @@ impl RenderCore {
                 occlusion_query_set: None,
             });
 
+            // main terrain: bind camera + fog
             pass.set_pipeline(&self.pipelines.pipeline);
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
-            self.world.render(&mut pass, &self.pipelines, cam_pos);
+            pass.set_bind_group(1, &self.pipelines.fog_bind_group, &[]);
 
+            self.world
+                .render(&mut pass, &self.pipelines, camera, aspect);
+
+            // gizmo (can use fog too, or just camera)
             pass.set_pipeline(&self.pipelines.gizmo_pipeline);
             pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
+            pass.set_bind_group(1, &self.pipelines.fog_bind_group, &[]);
             pass.set_vertex_buffer(0, self.pipelines.gizmo_vbuf.slice(..));
             pass.draw(0..6, 0..1);
 
-            // --- UI pass ---
-
-            let elapsed = time.total_time;
-            let enable_dither = 1;
-            //if self.settings.dither_enabled { 1 } else { 0 };
+            // 2) UI pass on top of resolved image
 
             let screen_uniform = crate::renderer::ui::ScreenUniform {
                 size: [self.size.width as f32, self.size.height as f32],
-                time: elapsed,
-                enable_dither,
+                time: time.total_time,
+                enable_dither: 1,
                 mouse: mouse.pos.to_array(),
             };
 
@@ -337,12 +316,12 @@ impl RenderCore {
                 0,
                 bytemuck::bytes_of(&screen_uniform),
             );
+
             let size = (self.config.width as f32, self.config.height as f32);
             self.ui_renderer
-                .render(&mut pass, ui_loader, &self.queue, &time, size, mouse);
+                .render(&mut pass, ui_loader, &self.queue, time, size, mouse);
         }
 
-        // --- Submit and present ---
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }
