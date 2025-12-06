@@ -9,6 +9,7 @@ mod resources;
 mod simulation;
 mod systems;
 mod terrain;
+mod threads;
 mod ui;
 mod world;
 

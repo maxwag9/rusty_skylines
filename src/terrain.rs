@@ -1,5 +1,6 @@
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+#[derive(Clone)]
 pub struct TerrainGenerator {
     elevation: Fbm<Perlin>,
     continent: Fbm<Perlin>,
@@ -22,7 +23,7 @@ impl TerrainGenerator {
                 .set_persistence(0.8),
             moisture: Fbm::<Perlin>::new(seed + 2)
                 .set_octaves(4)
-                .set_frequency(0.02)
+                .set_frequency(0.005)
                 .set_persistence(0.6),
             height_scale: 40.0,
             sea_level: 0.0,
