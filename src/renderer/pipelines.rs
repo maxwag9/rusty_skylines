@@ -1,6 +1,7 @@
 use crate::components::camera::Camera;
 use crate::resources::Uniforms;
 use crate::ui::vertex::{LineVtx, Vertex};
+use crate::water::{SimpleVertex, WaterUniform};
 use glam::Vec3;
 use std::borrow::Cow;
 use std::fs;
@@ -57,6 +58,12 @@ pub struct Pipelines {
 
     shader_path: PathBuf,
     line_shader_path: PathBuf,
+    pub water_pipeline: RenderPipeline,
+    pub water_uniform_buffer: Buffer,
+    pub water_vbuf: Buffer,
+    pub water_ibuf: Buffer,
+    pub water_bind_group: BindGroup,
+    pub water_index_count: u32,
 }
 
 impl Pipelines {
@@ -72,18 +79,14 @@ impl Pipelines {
         let line_shader_path = shader_dir.join("lines.wgsl");
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
-        let (scene_color, scene_color_view) = create_color_texture(&device, &config, msaa_samples);
-        let (resolved_depth_texture, resolved_depth_view) =
-            create_depth_texture(&device, &config, msaa_samples);
-        let (resolved_scene_color, resolved_scene_color_view) =
-            create_color_texture(&device, &config, msaa_samples);
+
         let shader = load_shader(device, &shader_path, "Ground Shader")?;
 
         let aspect = config.width as f32 / config.height as f32;
         let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
         let cam_pos = camera.position();
         let vp = camera.view_proj(aspect).to_cols_array_2d();
-        let uniforms = make_new_uniforms(vp, sun, cam_pos);
+        let uniforms = make_new_uniforms(vp, sun, cam_pos, 0.0);
 
         let uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Uniform Buffer"),
@@ -244,6 +247,136 @@ impl Pipelines {
             cache: None,
         });
 
+        let water_shader_path = shader_dir.join("water.wgsl");
+        let water_shader = load_shader(device, &water_shader_path, "Water Shader")?;
+
+        let water_vertices = [
+            SimpleVertex {
+                pos: [-20000.0, 0.0, -20000.0],
+            },
+            SimpleVertex {
+                pos: [20000.0, 0.0, -20000.0],
+            },
+            SimpleVertex {
+                pos: [20000.0, 0.0, 20000.0],
+            },
+            SimpleVertex {
+                pos: [-20000.0, 0.0, 20000.0],
+            },
+        ];
+
+        let water_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
+        let water_vbuf = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Water VB"),
+            contents: bytemuck::cast_slice(&water_vertices),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let water_ibuf = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Water IB"),
+            contents: bytemuck::cast_slice(&water_indices),
+            usage: BufferUsages::INDEX,
+        });
+
+        let water_index_count = water_indices.len() as u32;
+
+        let wu = WaterUniform {
+            sea_level: 0.0,
+            _pad0: [0.0; 3],
+            color: [0.05, 0.25, 0.35, 0.55],
+            wave_tiling: 0.05,
+            wave_strength: 0.05,
+            _pad1: [0.0; 2],
+        };
+
+        let water_uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Water Uniform Buffer"),
+            contents: bytemuck::bytes_of(&wu),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+
+        let water_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Water BGL"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: BufferSize::new(size_of::<WaterUniform>() as u64),
+                },
+                count: None,
+            }],
+        });
+
+        let water_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Water BG"),
+            layout: &water_bgl,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: water_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let water_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Water Pipeline Layout"),
+            bind_group_layouts: &[&uniform_bind_group_layout, &water_bgl],
+            push_constant_ranges: &[],
+        });
+
+        let water_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Water Pipeline"),
+            layout: Some(&water_pipeline_layout),
+            vertex: VertexState {
+                module: &water_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[SimpleVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &water_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format: config.format,
+                    blend: Some(BlendState {
+                        color: BlendComponent {
+                            src_factor: BlendFactor::SrcAlpha,
+                            dst_factor: BlendFactor::OneMinusSrcAlpha,
+                            operation: BlendOperation::Add,
+                        },
+                        alpha: BlendComponent {
+                            src_factor: BlendFactor::One,
+                            dst_factor: BlendFactor::OneMinusSrcAlpha,
+                            operation: BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+
+            multisample: MultisampleState {
+                count: msaa_samples,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
         Ok(Self {
             shader,
             gizmo_vbuf,
@@ -266,6 +399,13 @@ impl Pipelines {
             line_shader,
             shader_path,
             line_shader_path,
+
+            water_pipeline,
+            water_uniform_buffer,
+            water_vbuf,
+            water_ibuf,
+            water_bind_group,
+            water_index_count,
         })
     }
 
@@ -485,23 +625,16 @@ fn create_resolved_color_texture(
     (texture, view)
 }
 
-pub fn make_new_uniforms(vp: [[f32; 4]; 4], sun: Vec3, cam_pos: Vec3) -> Uniforms {
+pub fn make_new_uniforms(vp: [[f32; 4]; 4], sun: Vec3, cam_pos: Vec3, total_time: f32) -> Uniforms {
     Uniforms {
         view_proj: vp,
 
         sun_direction: sun.to_array(),
-        _pad0: 0.0,
+        time: total_time,
 
         _pad1: [0.0; 4],
 
         camera_pos: cam_pos.to_array(),
         _pad2: 0.0,
-
-        fog_color: [0.65, 0.78, 0.90],
-        fog_start: 150.0,
-
-        fog_end: 600.0,
-        _pad3: [0.0; 3],
-        _pad4: [0.0; 4],
     }
 }

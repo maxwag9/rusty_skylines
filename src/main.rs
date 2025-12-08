@@ -11,6 +11,7 @@ mod systems;
 mod terrain;
 mod threads;
 mod ui;
+mod water;
 mod world;
 
 use app::App;

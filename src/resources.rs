@@ -127,20 +127,13 @@ pub struct Uniforms {
     pub view_proj: [[f32; 4]; 4], // 64
 
     pub sun_direction: [f32; 3], // 12
-    pub _pad0: f32,              // pad 4 = 16
+
+    pub time: f32,
 
     pub _pad1: [f32; 4], // 16
 
     pub camera_pos: [f32; 3], // 12
     pub _pad2: f32,           // pad 4 = 16
-
-    pub fog_color: [f32; 3], // 12
-    pub fog_start: f32,      // 4  → total 16
-
-    pub fog_end: f32,    // 4
-    pub _pad3: [f32; 3], // 12 → total 16
-
-    pub _pad4: [f32; 4], // *** extra 16-byte padding block ***
 }
 
 fn default_keybinds() -> HashMap<PhysicalKey, String> {

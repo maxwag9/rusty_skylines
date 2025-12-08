@@ -12,7 +12,7 @@ impl Camera {
     pub fn new() -> Self {
         Self {
             target: Vec3::ZERO,
-            radius: 5.0,
+            radius: 500.0,
             yaw: -45f32.to_radians(),
             pitch: 20f32.to_radians(),
         }
@@ -39,7 +39,7 @@ impl Camera {
         let proj = glam::Mat4::perspective_rh_gl(
             45f32.to_radians(),
             aspect,
-            0.1,
+            5.0,
             100_000.0, // HUGE far plane so frustum works on terrain
         );
 

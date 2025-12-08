@@ -5,10 +5,6 @@ struct Uniforms {
     _pad1: vec4<f32>,
     camera_pos: vec3<f32>,
     _pad2: f32,
-    fog_color: vec3<f32>,
-    fog_start: f32,
-    fog_end: f32,
-    _pad3: vec3<f32>,
 };
 
 struct FogUniforms {
@@ -70,8 +66,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     let l = normalize(uniforms.sun_direction);
 
-    let ambient = 0.30;
-    let diffuse = max(dot(n, l), 0.0) * 0.70;
+    let ambient = 0.20;
+    let diffuse = max(dot(n, l), 0.0) * 0.60;
 
     let base_color = in.color * (ambient + diffuse);
 

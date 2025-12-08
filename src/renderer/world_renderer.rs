@@ -1,5 +1,5 @@
 use crate::chunk_builder::{
-    ChunkBuilder, ChunkMeshLod, GpuChunkMesh, generate_spiral_offsets, lod_step_for_distance,
+    ChunkMeshLod, GpuChunkMesh, generate_spiral_offsets, lod_step_for_distance,
 };
 use crate::components::camera::Camera;
 use crate::renderer::pipelines::Pipelines;
@@ -28,9 +28,9 @@ pub struct WorldRenderer {
 impl WorldRenderer {
     pub fn new(device: &Device) -> Self {
         let terrain_gen = TerrainGenerator::new(0);
-        let chunk_size = 64;
-        let view_radius_render = 128;
-        let view_radius_generate = 32;
+        let chunk_size = 512;
+        let view_radius_render = 16;
+        let view_radius_generate = 8;
 
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
@@ -41,18 +41,18 @@ impl WorldRenderer {
         let pending = HashSet::new();
 
         // Build origin chunk immediately with the highest LOD
-        let cpu_origin =
-            ChunkBuilder::build_chunk_cpu(0, 0, chunk_size, 1, 1, 1, 1, 1, &terrain_gen);
+        // let cpu_origin =
+        //     ChunkBuilder::build_chunk_cpu(0, 0, chunk_size, 1, 1, 1, 1, 1, &terrain_gen);
+        //
+        // let gpu_origin = GpuChunkMesh::from_cpu(device, &cpu_origin);
 
-        let gpu_origin = GpuChunkMesh::from_cpu(device, &cpu_origin);
-
-        chunks.insert(
-            (0, 0),
-            ChunkMeshLod {
-                step: 1,
-                mesh: gpu_origin,
-            },
-        );
+        // chunks.insert(
+        //     (0, 0),
+        //     ChunkMeshLod {
+        //         step: 1,
+        //         mesh: gpu_origin,
+        //     },
+        // );
 
         Self {
             chunks,
@@ -62,8 +62,8 @@ impl WorldRenderer {
             view_radius_generate,
             view_radius_render,
             workers,
-            max_jobs_per_frame: 4,
-            max_chunks_per_batch: 16,
+            max_jobs_per_frame: 2,
+            max_chunks_per_batch: 8,
             max_far_batches_per_frame: 2,
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),

@@ -8,6 +8,7 @@ pub struct GpuChunkMesh {
     pub index_buf: Buffer,
     pub index_count: u32,
 }
+
 impl GpuChunkMesh {
     pub fn from_cpu(device: &Device, cpu: &CpuChunkMesh) -> Self {
         let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -87,7 +88,7 @@ impl ChunkBuilder {
                 } else {
                     terrain_gen.moisture(wx, wz)
                 };
-                let col = terrain_gen.color(h, m);
+                let col = terrain_gen.color(wx, wz, h, m);
 
                 heights[gx * verts_z + gz] = h;
 
@@ -129,7 +130,6 @@ impl ChunkBuilder {
                 let i1 = ((gx + 1) * verts_z + gz) as u32;
                 let i2 = (gx * verts_z + gz + 1) as u32;
                 let i3 = ((gx + 1) * verts_z + gz + 1) as u32;
-
                 indices.extend_from_slice(&[i0, i1, i2, i2, i1, i3]);
             }
         }
@@ -143,18 +143,19 @@ impl ChunkBuilder {
         }
     }
 }
-
 pub fn lod_step_for_distance(dist2: i32) -> usize {
-    if dist2 < 16 {
+    if dist2 < 4 {
         1
-    } else if dist2 < 32 {
+    } else if dist2 < 6 {
         2
-    } else if dist2 < 64 {
+    } else if dist2 < 8 {
         4
-    } else if dist2 < 128 {
+    } else if dist2 < 12 {
         8
-    } else {
+    } else if dist2 < 16 {
         16
+    } else {
+        32
     }
 }
 

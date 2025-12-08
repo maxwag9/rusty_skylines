@@ -48,8 +48,6 @@ impl ChunkWorkerPool {
                     }
                 }
             });
-
-            println!("Spawned chunk worker {}", worker_id);
         }
 
         Self { job_tx, result_rx }

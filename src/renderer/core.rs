@@ -9,6 +9,7 @@ use crate::resources::TimeSystem;
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::LineVtx;
+use crate::water::WaterUniform;
 use std::sync::Arc;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -168,7 +169,7 @@ impl RenderCore {
         let cam_pos = camera.position();
         let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
 
-        let new_uniforms = make_new_uniforms(vp.to_cols_array_2d(), sun, cam_pos);
+        let new_uniforms = make_new_uniforms(vp.to_cols_array_2d(), sun, cam_pos, time.total_time);
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
             0,
@@ -184,7 +185,7 @@ impl RenderCore {
         let fog_uniforms = FogUniforms {
             screen_size: [self.config.width as f32, self.config.height as f32],
             proj_params,
-            fog_density: 0.0002,
+            fog_density: 0.0000,
             fog_height: 0.0,
             cam_height: camera.position().y,
             _pad0: 0.0,
@@ -301,6 +302,35 @@ impl RenderCore {
             pass.set_bind_group(1, &self.pipelines.fog_bind_group, &[]);
             pass.set_vertex_buffer(0, self.pipelines.gizmo_vbuf.slice(..));
             pass.draw(0..6, 0..1);
+
+            // --- WATER PASS --------------------------------------------------------
+            {
+                pass.set_pipeline(&self.pipelines.water_pipeline);
+                pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
+
+                // update small water uniform
+                let wu = WaterUniform {
+                    sea_level: 0.0,
+                    _pad0: [0.0; 3],
+                    color: [0.05, 0.25, 0.35, 0.55],
+                    wave_tiling: 0.5,
+                    wave_strength: 0.1,
+                    _pad1: [0.0; 2],
+                };
+
+                self.queue.write_buffer(
+                    &self.pipelines.water_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&wu),
+                );
+
+                pass.set_vertex_buffer(0, self.pipelines.water_vbuf.slice(..));
+                pass.set_index_buffer(self.pipelines.water_ibuf.slice(..), IndexFormat::Uint32);
+
+                pass.set_bind_group(1, &self.pipelines.water_bind_group, &[]);
+                pass.draw_indexed(0..self.pipelines.water_index_count, 0, 0..1);
+            }
+            // -----------------------------------------------------------------------
 
             // 2) UI pass on top of resolved image
 
