@@ -71,11 +71,17 @@ fn fbm(p: vec2<f32>, t: f32, speed: f32) -> f32 {
     return v * 2.0 - 1.0;
 }
 
-fn layered_wave_normal(p: vec2<f32>, tiling: f32, strength: f32, t: f32) -> vec3<f32> {
+fn layered_wave_normal(
+    p: vec2<f32>,
+    tiling: f32,
+    strength: f32,
+    t: f32,
+    eps_scale: f32,
+) -> vec3<f32> {
     let wp = p * tiling;
 
-    let eps_large = 1.2;
-    let eps_small = 0.25;
+    let eps_large = 1.2 * eps_scale;
+    let eps_small = 0.25 * eps_scale;
 
     let hL  = fbm(wp * 0.35, t * 0.35, strength * 0.7);
     let hLx = fbm((wp + vec2<f32>(eps_large, 0.0)) * 0.35, t * 0.35, strength * 0.7);
@@ -96,6 +102,7 @@ fn layered_wave_normal(p: vec2<f32>, tiling: f32, strength: f32, t: f32) -> vec3
 
     return normalize(vec3<f32>(nxz.x, ny, nxz.y));
 }
+
 
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
@@ -130,13 +137,16 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     }
 
     let dist = length(cam_pos - in.world);
+
     let x = clamp((dist - 200.0) / 1800.0, 0.0, 1.0);
     let detail_lod = x * x * x;
 
+    let hf = clamp(dist / 1200.0, 0.0, 1.0);
+    let tile_lod = mix(tiling, tiling * 0.03, hf);
+    let eps_scale = mix(1.0, 0.25, hf);
 
-
-    let n_near = layered_wave_normal(in.world.xz, tiling, strength, t);
-    let n_far  = layered_wave_normal(in.world.xz, tiling * 0.3, strength * 0.6, t);
+    let n_near = layered_wave_normal(in.world.xz, tiling,    strength, t, 1.0);
+    let n_far  = layered_wave_normal(in.world.xz, tile_lod, strength * 0.6, t, eps_scale);
     let n = normalize(mix(n_near, n_far, detail_lod));
 
     let up = vec3<f32>(0.0, 1.0, 0.0);
@@ -151,13 +161,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let glossy = pow(max(dot(n, half_vec), 0.0), 100.0);
 
     let sun_ref = reflect(-sun_dir, n);
-    let sparkle_core = pow(max(dot(sun_ref, to_cam), 0.0), 250.0);
-    let glitter_mask = fbm(in.world.xz * tiling * 4.0, t * 1.7, strength * 0.5) * 0.5 + 0.5;
+    let glitter_fade = clamp(dist / 600.0, 0.0, 1.0);
+    let sparkle_core = pow(max(dot(sun_ref, to_cam), 0.0), 250.0) * (1.0 - glitter_fade);
+    let glitter_mask = fbm(in.world.xz * tile_lod * 4.0, t * 1.7, strength * 0.5) * 0.5 + 0.5;
     let spec = glossy * 0.7 + sparkle_core * glitter_mask * 0.6 * (1.0 - detail_lod);
 
     let base_water = water.color.rgb;
 
-    let depth_noise = fbm(in.world.xz * tiling * 0.6, t * 0.2, strength * 0.5) * 0.5 + 0.5;
+    let depth_noise = fbm(in.world.xz * tile_lod * 0.6, t * 0.2, strength * 0.5) * 0.5 + 0.5;
     let view_down = clamp(dot(n, up), 0.0, 1.0);
     let view_tint = smoothstep(0.2, 1.0, view_down);
 
@@ -174,7 +185,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let reflection = sky_reflection * fresnel;
 
     let slope = length(n.xz);
-    let foam_noise = fbm(in.world.xz * tiling * 1.3, t * 0.6, strength * 1.3);
+    let foam_noise = fbm(in.world.xz * tile_lod * 1.3, t * 0.6, strength * 1.3);
     let foam_edges = smoothstep(0.7, 1.0, slope + foam_noise * 0.4);
     let foam_dist_fade = 1.0 - clamp(dist / 2500.0, 0.0, 1.0);
     let foam = foam_edges * foam_dist_fade * (1.0 - detail_lod);

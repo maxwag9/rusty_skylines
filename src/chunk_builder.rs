@@ -31,15 +31,6 @@ impl GpuChunkMesh {
     }
 }
 
-#[derive(Clone)]
-pub struct CpuChunkMesh {
-    pub cx: i32,
-    pub cz: i32,
-    pub step: usize,
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-}
-
 pub struct ChunkMesh {
     pub x: i32,
     pub z: i32,
@@ -53,6 +44,16 @@ pub struct ChunkMeshLod {
 
 pub struct ChunkBuilder;
 
+#[derive(Clone)]
+pub struct CpuChunkMesh {
+    pub cx: i32,
+    pub cz: i32,
+    pub step: usize,
+    pub version: u64,
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+}
+
 impl ChunkBuilder {
     pub fn build_chunk_cpu(
         chunk_x: i32,
@@ -63,6 +64,7 @@ impl ChunkBuilder {
         _ns_x_pos: usize,
         _ns_z_neg: usize,
         _ns_z_pos: usize,
+        version: u64,
         terrain_gen: &TerrainGenerator,
     ) -> CpuChunkMesh {
         let size = size as usize;
@@ -76,7 +78,6 @@ impl ChunkBuilder {
         let mut vertices = Vec::with_capacity(verts_x * verts_z);
         let mut heights = vec![0.0; verts_x * verts_z];
 
-        // 1) sample heights + colors
         for gx in 0..verts_x {
             for gz in 0..verts_z {
                 let wx = base_x + (gx * step) as f32;
@@ -100,7 +101,6 @@ impl ChunkBuilder {
             }
         }
 
-        // 2) normals
         let inv = 1.0 / stepf;
         for gx in 0..verts_x {
             for gz in 0..verts_z {
@@ -122,7 +122,6 @@ impl ChunkBuilder {
             }
         }
 
-        // 3) indices
         let mut indices = Vec::new();
         for gx in 0..verts_x - 1 {
             for gz in 0..verts_z - 1 {
@@ -138,11 +137,13 @@ impl ChunkBuilder {
             cx: chunk_x,
             cz: chunk_z,
             step,
+            version,
             vertices,
             indices,
         }
     }
 }
+
 pub fn lod_step_for_distance(dist2: i32) -> usize {
     if dist2 < 4 {
         1

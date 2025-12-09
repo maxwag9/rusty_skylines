@@ -6,6 +6,7 @@ use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::TimeSystem;
+use crate::sky::{SkyRenderer, SkyUniform};
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::LineVtx;
@@ -31,6 +32,7 @@ pub struct RenderCore {
     size: PhysicalSize<u32>,
 
     shader_watcher: Option<ShaderWatcher>,
+    sky: SkyRenderer,
 }
 
 impl RenderCore {
@@ -127,7 +129,8 @@ impl RenderCore {
                 .expect("Failed to create UI pipelines");
         let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
         let _ = ui_renderer.build_text_atlas(&device, &queue, font_ttf, &[14, 18, 24], 1024, 1024);
-        let world = WorldRenderer::new(&device);
+        let world = WorldRenderer::new();
+        let sky = SkyRenderer::new();
 
         Self {
             surface,
@@ -140,6 +143,7 @@ impl RenderCore {
             world,
             size,
             shader_watcher,
+            sky,
         }
     }
 
@@ -167,9 +171,51 @@ impl RenderCore {
         let aspect = self.config.width as f32 / self.config.height as f32;
         let vp = camera.view_proj(aspect);
         let cam_pos = camera.position();
-        let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
+        let orbit_radius = camera.orbit_radius;
+        let day_length = 960.0 / 24.0; // your full day in seconds (16 min)
+        let day_phase = (time.total_time % day_length) / day_length; // 0..1
+        let ang = day_phase * std::f32::consts::TAU;
 
-        let new_uniforms = make_new_uniforms(vp.to_cols_array_2d(), sun, cam_pos, time.total_time);
+        // controls the height of the sun's arc.
+        // 0.0 = horizon, PI/2 = straight overhead.
+        // PI/4 looks realistic.
+        let axial_tilt = std::f32::consts::FRAC_PI_4;
+
+        // sun direction formula
+        let sun = glam::Vec3::new(
+            ang.cos() * axial_tilt.cos(),
+            ang.sin().sin() * axial_tilt.sin(), // this makes real rise/fall
+            ang.sin() * axial_tilt.cos(),
+        )
+        .normalize();
+
+        let moon_orbit_speed = 0.923; // slightly slower than sun → drifting phase
+        let moon_phase_offset = 1.17; // random offset so it’s not opposite
+
+        let moon_phase = (day_phase * moon_orbit_speed + moon_phase_offset) % 1.0;
+        let mang = moon_phase * std::f32::consts::TAU;
+
+        // moon has its own orbital tilt
+        let moon_tilt: f32 = 0.31;
+
+        let moon_dir = glam::Vec3::new(
+            mang.cos() * moon_tilt.cos(),
+            mang.sin() * moon_tilt.sin(),
+            mang.sin() * moon_tilt.cos(),
+        )
+        .normalize();
+
+        let phase_angle = (ang - mang).abs(); // difference between sun and moon
+        let moon_phase_factor = 0.5 * (1.0 + phase_angle.cos());
+
+        let new_uniforms = make_new_uniforms(
+            vp.to_cols_array_2d(),
+            sun,
+            moon_dir,
+            cam_pos,
+            orbit_radius,
+            time.total_time,
+        );
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
             0,
@@ -203,6 +249,23 @@ impl RenderCore {
             bytemuck::bytes_of(&fog_uniforms),
         );
 
+        let sky_uniform = SkyUniform {
+            day_time: time.total_time,
+            day_length,
+            sun_size: 0.1,
+            sun_intensity: 1.0,
+            exposure: 1.0,
+            moon_size: 0.04,
+            moon_intensity: 1.0,
+            moon_phase_factor,
+        };
+
+        self.queue.write_buffer(
+            &self.pipelines.sky_buffer,
+            0,
+            bytemuck::bytes_of(&sky_uniform),
+        );
+
         self.world.update(&self.device, camera.target);
 
         // get frame
@@ -223,7 +286,7 @@ impl RenderCore {
 
         // gizmo verts (unchanged)
         let t = camera.target;
-        let s = camera.radius * 0.2;
+        let s = camera.orbit_radius * 0.2;
         let axes = [
             // X
             LineVtx {
@@ -289,10 +352,8 @@ impl RenderCore {
             });
 
             // main terrain: bind camera + fog
-            pass.set_pipeline(&self.pipelines.pipeline);
-            pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
-            pass.set_bind_group(1, &self.pipelines.fog_bind_group, &[]);
 
+            self.sky.render(&mut pass, &self.pipelines);
             self.world
                 .render(&mut pass, &self.pipelines, camera, aspect);
 

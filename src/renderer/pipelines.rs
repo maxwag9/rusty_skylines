@@ -1,5 +1,6 @@
 use crate::components::camera::Camera;
 use crate::resources::Uniforms;
+use crate::sky::SkyUniform;
 use crate::ui::vertex::{LineVtx, Vertex};
 use crate::water::{SimpleVertex, WaterUniform};
 use glam::Vec3;
@@ -64,6 +65,9 @@ pub struct Pipelines {
     pub water_ibuf: Buffer,
     pub water_bind_group: BindGroup,
     pub water_index_count: u32,
+    pub sky_bind_group: BindGroup,
+    pub sky_pipeline: RenderPipeline,
+    pub sky_buffer: Buffer,
 }
 
 impl Pipelines {
@@ -86,7 +90,14 @@ impl Pipelines {
         let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
         let cam_pos = camera.position();
         let vp = camera.view_proj(aspect).to_cols_array_2d();
-        let uniforms = make_new_uniforms(vp, sun, cam_pos, 0.0);
+        let uniforms = make_new_uniforms(
+            vp,
+            sun,
+            Vec3::new(0.0, 0.0, 0.0),
+            cam_pos,
+            camera.orbit_radius,
+            0.0,
+        );
 
         let uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Uniform Buffer"),
@@ -377,6 +388,102 @@ impl Pipelines {
             cache: None,
         });
 
+        let sky_shader_path = shader_dir.join("sky.wgsl");
+        let sky_shader = load_shader(device, &sky_shader_path, "Sky Shader")?;
+
+        let sky_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Sky Uniforms BGL"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let sky_uniform = SkyUniform {
+            day_time: 0.0,
+            day_length: 960.0,
+            sun_size: 0.2,
+            sun_intensity: 1.0,
+            exposure: 1.0,
+            moon_size: 0.04,
+            moon_intensity: 1.0,
+            moon_phase_factor: 0.0,
+        };
+
+        let sky_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sky Buffer"),
+            contents: bytemuck::bytes_of(&sky_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let sky_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Sky BG"),
+            layout: &sky_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: sky_buffer.as_entire_binding(),
+            }],
+        });
+
+        let sky_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Sky Pipeline Layout"),
+            bind_group_layouts: &[
+                &uniform_bind_group_layout, // group 0
+                &sky_bgl,                   // group 1
+            ],
+            push_constant_ranges: &[],
+        });
+
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Sky Pipeline"),
+            layout: Some(&sky_pipeline_layout),
+
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[], // fullscreen triangle has no vertex buffers
+            },
+
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+
+            multisample: wgpu::MultisampleState {
+                count: msaa_samples,
+                ..Default::default()
+            },
+
+            multiview: None,
+            cache: None,
+        });
+
         Ok(Self {
             shader,
             gizmo_vbuf,
@@ -406,6 +513,9 @@ impl Pipelines {
             water_ibuf,
             water_bind_group,
             water_index_count,
+            sky_pipeline,
+            sky_bind_group,
+            sky_buffer,
         })
     }
 
@@ -625,7 +735,14 @@ fn create_resolved_color_texture(
     (texture, view)
 }
 
-pub fn make_new_uniforms(vp: [[f32; 4]; 4], sun: Vec3, cam_pos: Vec3, total_time: f32) -> Uniforms {
+pub fn make_new_uniforms(
+    vp: [[f32; 4]; 4],
+    sun: Vec3,
+    moon: Vec3,
+    cam_pos: Vec3,
+    orbit_radius: f32,
+    total_time: f32,
+) -> Uniforms {
     Uniforms {
         view_proj: vp,
 
@@ -635,6 +752,8 @@ pub fn make_new_uniforms(vp: [[f32; 4]; 4], sun: Vec3, cam_pos: Vec3, total_time
         _pad1: [0.0; 4],
 
         camera_pos: cam_pos.to_array(),
-        _pad2: 0.0,
+        orbit_radius,
+        moon_direction: moon.to_array(),
+        _pad0: 0.0,
     }
 }

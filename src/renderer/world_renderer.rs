@@ -6,12 +6,12 @@ use crate::renderer::pipelines::Pipelines;
 use crate::terrain::TerrainGenerator;
 use crate::threads::{ChunkJob, ChunkWorkerPool};
 use glam::Vec3;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use wgpu::{Device, IndexFormat, RenderPass};
 
 pub struct WorldRenderer {
-    pub chunks: HashMap<(i32, i32), ChunkMeshLod>, // GPU-ready
-    pub pending: HashSet<(i32, i32)>,              // requested but not uploaded yet
+    pub chunks: HashMap<(i32, i32), ChunkMeshLod>,
+    pub pending: HashMap<(i32, i32), (u64, usize)>, // coord -> (version, desired_step)
     pub terrain_gen: TerrainGenerator,
     pub chunk_size: u32,
     pub view_radius_generate: u32,
@@ -26,8 +26,8 @@ pub struct WorldRenderer {
 }
 
 impl WorldRenderer {
-    pub fn new(device: &Device) -> Self {
-        let terrain_gen = TerrainGenerator::new(0);
+    pub fn new() -> Self {
+        let terrain_gen = TerrainGenerator::new(201035458);
         let chunk_size = 512;
         let view_radius_render = 16;
         let view_radius_generate = 8;
@@ -38,7 +38,7 @@ impl WorldRenderer {
         let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size as u32);
 
         let mut chunks = HashMap::new();
-        let pending = HashSet::new();
+        let pending = HashMap::new();
 
         // Build origin chunk immediately with the highest LOD
         // let cpu_origin =
@@ -79,11 +79,17 @@ impl WorldRenderer {
         // 1. Drain finished CPU meshes
         while let Ok(cpu) = self.workers.result_rx.try_recv() {
             let coord = (cpu.cx, cpu.cz);
+
+            if !self.workers.is_current_version(coord, cpu.version) {
+                // obsolete result from an old job, ignore
+                continue;
+            }
+
+            // this job is now done
             self.pending.remove(&coord);
 
             let gpu = GpuChunkMesh::from_cpu(device, &cpu);
 
-            // Replace old LOD safely (upgrade or downgrade)
             self.chunks.insert(
                 coord,
                 ChunkMeshLod {
@@ -130,7 +136,7 @@ impl WorldRenderer {
         }
 
         // 3. Job creation: unified rebuild logic (upgrade + downgrade)
-        let mut batch: Vec<(i32, i32, usize, usize, usize, usize, usize)> = Vec::new();
+        let mut batch: Vec<(i32, i32, usize, usize, usize, usize, usize, u64)> = Vec::new();
         let mut near_jobs_sent = 0usize;
         let mut far_batches_sent = 0usize;
 
@@ -149,65 +155,58 @@ impl WorldRenderer {
 
             let r_render = self.view_radius_render as i32;
             let r_render2 = r_render * r_render;
-
             let dist2 = dx * dx + dz * dz;
 
-            // OUTSIDE GENERATION RADIUS but INSIDE RENDER RADIUS
-            if dist2 > r_gen2 && dist2 <= r_render2 {
-                // force coarse LOD for outer ring
-                // IMPORTANT: must be same LOD used for far terrain
-                let coarse = lod_step_for_distance(r_gen2 + 1);
-                self.lod_map.insert((cx, cz), coarse);
-                continue;
-            }
-
-            // OUTSIDE RENDER RADIUS: ignore
+            // outside render radius: ignore completely
             if dist2 > r_render2 {
                 continue;
             }
 
-            // INSIDE GENERATION RADIUS: normal LOD
-            let step = lod_step_for_distance(dist2);
-            self.lod_map.insert((cx, cz), step);
+            // inside outer ring: force coarse LOD
+            let step = if dist2 > r_gen2 {
+                let coarse = lod_step_for_distance(r_gen2 + 1);
+                self.lod_map.insert(coord, coarse);
+                coarse
+            } else {
+                let s = lod_step_for_distance(dist2);
+                self.lod_map.insert(coord, s);
+                s
+            };
 
-            // Skip if a job for this coordinate is already in flight
-            if self.pending.contains(&coord) {
-                continue;
-            }
-
-            // Determine desired step
             let desired_step = *self.lod_map.get(&coord).unwrap_or(&1);
             let existing_step = self.chunks.get(&coord).map(|c| c.step);
+            let pending_entry = self.pending.get(&coord).copied();
 
-            // Unified rebuild rule:
-            // Rebuild if:
-            // - chunk missing
-            // - desired LOD != current LOD (upgrade or downgrade)
-            let need_job = match existing_step {
-                None => true,
-                Some(cur) => desired_step != cur,
+            // decide whether to schedule a new job
+            let need_job = match (existing_step, pending_entry) {
+                // already have a chunk at desired LOD
+                (Some(cur), _) if cur == desired_step => false,
+                // already have a job in flight for this coord and LOD
+                (_, Some((_version, pending_step))) if pending_step == desired_step => false,
+                // otherwise we need a job
+                _ => true,
             };
 
             if !need_job {
                 continue;
             }
 
-            // We must rebuild this chunk (upgrade or downgrade)
             let step = desired_step;
 
-            // Neighbor LODs
+            // neighbor LODs
             let n_x_neg = *self.lod_map.get(&(cx - 1, cz)).unwrap_or(&step);
             let n_x_pos = *self.lod_map.get(&(cx + 1, cz)).unwrap_or(&step);
             let n_z_neg = *self.lod_map.get(&(cx, cz - 1)).unwrap_or(&step);
             let n_z_pos = *self.lod_map.get(&(cx, cz + 1)).unwrap_or(&step);
 
-            // Enqueue job ONLY if we can send one
             if step <= 2 {
-                // near, high priority
+                // near chunks: high priority, one per job
                 if near_jobs_sent < self.max_jobs_per_frame {
-                    self.pending.insert(coord);
+                    let version = self.workers.new_version_for(coord);
+                    self.pending.insert(coord, (version, step));
+
                     let job = ChunkJob {
-                        chunks: vec![(cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos)],
+                        chunks: vec![(cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos, version)],
                     };
                     let _ = self.workers.job_tx.send(job);
                     near_jobs_sent += 1;
@@ -215,10 +214,12 @@ impl WorldRenderer {
                 continue;
             }
 
-            // far, batched
+            // far chunks: batched
             if far_batches_sent < self.max_far_batches_per_frame {
-                batch.push((cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos));
-                self.pending.insert(coord);
+                let version = self.workers.new_version_for(coord);
+                self.pending.insert(coord, (version, step));
+
+                batch.push((cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos, version));
 
                 if batch.len() >= self.max_chunks_per_batch {
                     let job = ChunkJob {
@@ -231,7 +232,7 @@ impl WorldRenderer {
             }
         }
 
-        // Flush leftover far batch
+        // flush leftover far batch
         if !batch.is_empty() && far_batches_sent < self.max_far_batches_per_frame {
             let job = ChunkJob { chunks: batch };
             let _ = self.workers.job_tx.send(job);

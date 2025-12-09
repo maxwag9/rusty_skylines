@@ -7,6 +7,7 @@ mod paths;
 mod renderer;
 mod resources;
 mod simulation;
+mod sky;
 mod systems;
 mod terrain;
 mod threads;

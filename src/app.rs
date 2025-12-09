@@ -322,10 +322,6 @@ impl ApplicationHandler for App {
                                 controller.target_yaw += delta.x * yaw_s;
                                 controller.target_pitch += delta.y * pitch_s;
 
-                                controller.target_pitch = controller
-                                    .target_pitch
-                                    .clamp(10f32.to_radians(), 89f32.to_radians());
-
                                 controller.yaw_velocity = delta.x * yaw_s;
                                 controller.pitch_velocity = delta.y * pitch_s;
                             }
@@ -341,7 +337,7 @@ impl ApplicationHandler for App {
                     if !resources.settings.editor_mode {
                         if let Some(world) = self.world.as_mut() {
                             let cam = world.main_camera();
-                            let radius = world.camera(cam).unwrap().radius;
+                            let radius = world.camera(cam).unwrap().orbit_radius;
 
                             if let Some(controller) = world.camera_controller_mut(cam) {
                                 controller.zoom_velocity -= scroll.y * 1.0 * radius;

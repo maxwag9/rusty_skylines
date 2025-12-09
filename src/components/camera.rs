@@ -3,7 +3,7 @@ use glam::Vec3;
 #[derive(Debug, Clone)]
 pub struct Camera {
     pub target: Vec3,
-    pub radius: f32,
+    pub orbit_radius: f32,
     pub yaw: f32,
     pub pitch: f32,
 }
@@ -12,7 +12,7 @@ impl Camera {
     pub fn new() -> Self {
         Self {
             target: Vec3::ZERO,
-            radius: 500.0,
+            orbit_radius: 1000.0,
             yaw: -45f32.to_radians(),
             pitch: 20f32.to_radians(),
         }
@@ -24,9 +24,9 @@ impl Camera {
         let cy = self.yaw.cos();
         let sy = self.yaw.sin();
         let offset = Vec3::new(
-            self.radius * cp * cy,
-            self.radius * sp,
-            self.radius * cp * sy,
+            self.orbit_radius * cp * cy,
+            self.orbit_radius * sp,
+            self.orbit_radius * cp * sy,
         );
         self.target + offset
     }
@@ -37,7 +37,7 @@ impl Camera {
         let view = glam::Mat4::look_at_rh(eye, self.target, glam::Vec3::Y);
 
         let proj = glam::Mat4::perspective_rh_gl(
-            45f32.to_radians(),
+            90f32.to_radians(),
             aspect,
             5.0,
             100_000.0, // HUGE far plane so frustum works on terrain

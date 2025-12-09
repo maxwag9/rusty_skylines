@@ -133,7 +133,10 @@ pub struct Uniforms {
     pub _pad1: [f32; 4], // 16
 
     pub camera_pos: [f32; 3], // 12
-    pub _pad2: f32,           // pad 4 = 16
+    pub orbit_radius: f32,    // pad 4 = 16
+
+    pub moon_direction: [f32; 3],
+    pub _pad0: f32,
 }
 
 fn default_keybinds() -> HashMap<PhysicalKey, String> {
