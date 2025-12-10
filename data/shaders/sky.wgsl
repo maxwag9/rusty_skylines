@@ -1,13 +1,20 @@
-// ------------------------------------------------------------
-// Bind groups
-// ------------------------------------------------------------
-
+// ----------------------------------------
+// SKY UNIFORMS
+// ----------------------------------------
 struct Uniforms {
+    view: mat4x4<f32>,
+    inv_view: mat4x4<f32>,
+    proj: mat4x4<f32>,
+    inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
+
     sun_direction: vec3<f32>,
     time: f32,
+
     camera_pos: vec3<f32>,
     orbit_radius: f32,
+
     moon_direction: vec3<f32>,
     _pad0: f32,
 };
@@ -18,281 +25,259 @@ var<uniform> u: Uniforms;
 struct SkyUniform {
     day_time: f32,
     day_length: f32,
+
+    exposure: f32,
+    _pad0: f32,
+
     sun_size: f32,
     sun_intensity: f32,
 
-    exposure: f32,
     moon_size: f32,
     moon_intensity: f32,
+
     moon_phase: f32,
+    _pad1: f32,
 };
 
 @group(1) @binding(0)
 var<uniform> sky: SkyUniform;
 
 
-// ------------------------------------------------------------
-// Vertex output
-// ------------------------------------------------------------
+// ----------------------------------------
+// VERTEX
+// ----------------------------------------
+// fullscreen triangle
 struct VSOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) screen_uv: vec2<f32>,
+    @location(0) dir: vec3<f32>,
+    @location(1) ndc: vec2<f32>,
 };
 
-
-// ------------------------------------------------------------
-// Vertex shader: fullscreen triangle
-// ------------------------------------------------------------
 @vertex
-fn vs_main(@builtin(vertex_index) idx: u32) -> VSOut {
-    let positions = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 3.0, -1.0),
-        vec2<f32>(-1.0,  3.0),
-    );
+fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
+    var clip: vec4<f32>;
 
-    var out: VSOut;
-    out.clip = vec4<f32>(positions[idx], 0.0, 1.0);
-    out.screen_uv = positions[idx] * 0.5 + vec2<f32>(0.5);
-    return out;
-}
-
-
-// ------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------
-fn saturate(x: f32) -> f32 {
-    return clamp(x, 0.0, 1.0);
-}
-
-fn hash21(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7));
-    let s = sin(h) * 43758.5453;
-    return fract(s);
-}
-
-// Project a *direction* to screen UV using an orbiting camera.
-// Assumes the camera orbits a center that lies on the ray from
-// world origin through camera_pos at distance orbit_radius.
-fn project_direction_to_uv(dir: vec3<f32>) -> vec2<f32> {
-    let len2 = dot(dir, dir);
-    if len2 < 1e-5 {
-        return vec2<f32>(9999.0, 9999.0);
+    if vid == 0u {
+        clip = vec4<f32>(-1.0, -1.0, 1.0, 1.0);
+    } else if vid == 1u {
+        clip = vec4<f32>( 3.0, -1.0, 1.0, 1.0);
+    } else {
+        clip = vec4<f32>(-1.0,  3.0, 1.0, 1.0);
     }
 
-    let n = dir / sqrt(len2);
+    // world direction reconstruction
+    let inv_vp = u.inv_view_proj;
+    let world_pos = inv_vp * clip;
+    let dir = normalize(world_pos.xyz / world_pos.w - u.camera_pos);
 
-    // Reconstruct approximate orbit center from camera_pos and orbit_radius.
-    // If the camera really orbits around the world origin, then
-    // length(camera_pos) ≈ orbit_radius and this gives center ≈ (0,0,0).
-    let cam_off = u.camera_pos;
-    let cam_len2 = dot(cam_off, cam_off);
-    var orbit_center = vec3<f32>(0.0, 0.0, 0.0);
+    let ndc = clip.xy / clip.w;
 
-    if cam_len2 > 1e-5 && u.orbit_radius > 1e-4 {
-        let cam_len = sqrt(cam_len2);
-        let cam_dir = cam_off / cam_len;
-        orbit_center = u.camera_pos - cam_dir * u.orbit_radius;
-    }
-
-    // Place sun / moon on a big sphere around the orbit center so
-    // their apparent position doesn't wobble when you orbit.
-    let sky_radius = max(u.orbit_radius * 4.0, 1000.0);
-    let world_pos = orbit_center + n * sky_radius;
-
-    let clip = u.view_proj * vec4<f32>(world_pos, 1.0);
-
-    if clip.w <= 0.0 {
-        return vec2<f32>(9999.0, 9999.0);
-    }
-
-    let ndc = clip.xyz / clip.w;          // [-1, 1]
-    return ndc.xy * 0.5 + vec2<f32>(0.5); // [0, 1]
-}
-
-fn compute_day_phase() -> f32 {
-    let len = max(sky.day_length, 0.001);
-    let phase = sky.day_time / len;
-    return fract(phase);
-}
-
-// returns (day, twilight, night)
-fn compute_day_weights(day_phase: f32) -> vec3<f32> {
-    let noon_factor = 1.0 - saturate(abs(day_phase - 0.5) * 2.0);
-    let day_weight = saturate(noon_factor * 1.35);
-
-    let sunrise = exp(-pow((day_phase - 0.25) * 16.0, 2.0));
-    let sunset  = exp(-pow((day_phase - 0.75) * 16.0, 2.0));
-    let twilight_weight = saturate((sunrise + sunset) * 1.6);
-
-    let night_weight = saturate(1.0 - day_weight - twilight_weight);
-
-    return vec3<f32>(day_weight, twilight_weight, night_weight);
+    return VSOut(clip, dir, ndc);
 }
 
 
-// ------------------------------------------------------------
-// Sky color
-// ------------------------------------------------------------
-fn compute_sky_color(uv: vec2<f32>, day_phase: f32, weights: vec3<f32>) -> vec3<f32> {
-    let day_w = weights.x;
-    let twi_w = weights.y;
-    let night_w = weights.z;
 
-    let y = saturate(uv.y);
-    let t_vert = saturate((y - 0.05) / 0.95);
-
-    let zenith_day       = vec3<f32>(0.08, 0.45, 0.85);
-    let horizon_day      = vec3<f32>(0.62, 0.78, 0.93);
-    let zenith_twilight  = vec3<f32>(0.08, 0.18, 0.40);
-    let horizon_twilight = vec3<f32>(1.10, 0.45, 0.15);
-
-    let zenith_night     = vec3<f32>(0.02, 0.04, 0.10);
-    let horizon_night    = vec3<f32>(0.03, 0.06, 0.12);
-
-    let col_day      = mix(horizon_day,      zenith_day,      t_vert);
-    let col_twilight = mix(horizon_twilight, zenith_twilight, t_vert);
-    let col_night    = mix(horizon_night,    zenith_night,    t_vert);
-
-    var sky_col = col_day * day_w +
-                  col_twilight * twi_w +
-                  col_night * night_w;
-
-    let horizon_band = saturate(1.0 - y * 4.0);
-    let warm_boost = vec3<f32>(1.2, 0.6, 0.3) * horizon_band * twi_w * 0.6;
-    sky_col += warm_boost;
-
-    let zenith_boost = saturate((y - 0.4) * 1.8);
-    sky_col += vec3<f32>(0.02, 0.03, 0.05) * zenith_boost * day_w;
-
-    return sky_col;
+// ----------------------------------------
+// HELPERS
+// ----------------------------------------
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = clamp((x - a) / (b - a), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
 }
 
-
-// ------------------------------------------------------------
-// Sun
-// ------------------------------------------------------------
-fn compute_sun(day_phase: f32, uv: vec2<f32>, sun_uv: vec2<f32>, weights: vec3<f32>) -> vec3<f32> {
-    let day_w = weights.x;
-    let twi_w = weights.y;
-
-    let d = distance(uv, sun_uv);
-
-    let disk = 1.0 - smoothstep(sky.sun_size * 0.8, sky.sun_size * 1.2, d);
-    let inner_glow = exp(-d * 220.0);
-    let outer_glow = exp(-pow(d * 40.0, 2.0));
-
-    let noon_factor = 1.0 - saturate(abs(day_phase - 0.5) * 2.0);
-    let visibility = saturate(day_w + twi_w * 1.2);
-
-    let sun_white = vec3<f32>(1.0, 0.98, 0.95);
-    let sun_warm  = vec3<f32>(1.30, 0.75, 0.35);
-    let base_col = mix(sun_warm, sun_white, saturate(noon_factor * 1.5));
-
-    let intensity = sky.sun_intensity * visibility;
-
-    let sun = base_col * intensity * (
-        disk * 40.0 +
-        inner_glow * 4.0 +
-        outer_glow * 1.2
-    );
-
-    return sun;
+fn hash3(p: vec3<f32>) -> f32 {
+    let dotp = dot(p, vec3<f32>(127.1, 311.7, 74.7));
+    return fract(sin(dotp) * 43758.5453);
 }
 
-// ------------------------------------------------------------
-// Moon
-// ------------------------------------------------------------
-fn compute_moon(uv: vec2<f32>, moon_uv: vec2<f32>, weights: vec3<f32>) -> vec3<f32> {
-    let day_w = weights.x;
-    let twi_w = weights.y;
-    let night_w = weights.z;
-
-    if day_w > 0.9 {
-        return vec3<f32>(0.0);
-    }
-
-    let d = distance(uv, moon_uv);
-
-    let disk = 1.0 - smoothstep(sky.moon_size * 0.9, sky.moon_size * 1.1, d);
-
-    let phase = saturate(sky.moon_phase);
-
-    let base_col = vec3<f32>(0.8, 0.82, 0.9) * phase;
-
-    let glow = exp(-d * 60.0);
-
-    let visibility = saturate(twi_w * 0.6 + night_w * 1.0);
-
-    let moon = base_col * (disk * 4.0 + glow * 0.7) * sky.moon_intensity * visibility;
-
-    return moon;
-}
-
-
-// ------------------------------------------------------------
-// Stars
-// ------------------------------------------------------------
-fn compute_stars(uv: vec2<f32>, weights: vec3<f32>, sun_uv: vec2<f32>, moon_uv: vec2<f32>) -> vec3<f32> {
-    let night_w = weights.z;
-    if night_w <= 0.001 {
-        return vec3<f32>(0.0);
-    }
-
-    let p = floor(uv * 900.0);
-    let rnd = hash21(p);
-    let mask = step(0.9985, rnd);
-
-    let brightness = (rnd - 0.9985) * 300.0;
-
-    var star = vec3<f32>(0.9, 0.95, 1.0) * brightness * mask * night_w;
-
-    let height = saturate((uv.y - 0.1) * 2.5);
-    star *= height;
-
-    let ds = distance(uv, sun_uv);
-    let dm = distance(uv, moon_uv);
-
-    let sun_block = saturate(1.0 - exp(-ds * 20.0));
-    let moon_block = saturate(1.0 - exp(-dm * 12.0));
-
-    star *= sun_block * moon_block;
-
-    return star;
-}
-
-
-// ------------------------------------------------------------
-// Tone mapping
-// ------------------------------------------------------------
-fn tone_map(color: vec3<f32>) -> vec3<f32> {
-    let mapped = vec3<f32>(
-        1.0 - exp(-color.x * sky.exposure),
-        1.0 - exp(-color.y * sky.exposure),
-        1.0 - exp(-color.z * sky.exposure),
-    );
-    return mapped;
-}
-
-
-// ------------------------------------------------------------
-// Fragment shader
-// ------------------------------------------------------------
+// ----------------------------------------
+// FRAGMENT
+// ----------------------------------------
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
-    let day_phase = compute_day_phase();
-    let weights = compute_day_weights(day_phase);
+fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    var col = vec3<f32>(0.0);
 
-    let sun_uv = project_direction_to_uv(u.sun_direction);
-    let moon_uv = project_direction_to_uv(u.moon_direction);
+    // =========================================================
+    // SUN  (disc + corona + simple atmospheric extinction)
+    // =========================================================
+    let sun_dir = normalize(u.sun_direction);
+    let sun_pos_world = sun_dir * 1000000.0;
+    let sun_clip = u.view_proj * vec4<f32>(sun_pos_world, 1.0);
 
-    let base_sky = compute_sky_color(in.screen_uv, day_phase, weights);
-    let sun = compute_sun(day_phase, in.screen_uv, sun_uv, weights);
-    let moon = compute_moon(in.screen_uv, moon_uv, weights);
-    let stars = compute_stars(in.screen_uv, weights, sun_uv, moon_uv);
+    var sun_ndc = vec2<f32>(9999.0);
+    let sun_visible = sun_clip.w > 0.0;
 
-    let hdr = base_sky + sun + moon + stars;
-    let ldr = tone_map(hdr);
 
-    return vec4<f32>(ldr, 1.0);
+    var sun_color_final = vec3<f32>(1.0, 1.0, 1.0);
+
+    let alt = clamp(dot(sun_dir, up), -1.0, 1.0);
+    let h = clamp((alt + 0.05) / 1.05, 0.0, 1.0);
+
+    let sunrise_color = vec3<f32>(1.35, 0.55, 0.22);
+    let midday_color  = vec3<f32>(1.0, 0.97, 0.90);
+    let solar_color   = mix(sunrise_color, midday_color, h);
+
+    let air_mass = 1.0 / max(alt * 0.9 + 0.1, 0.02);
+    let extinction = exp(-vec3<f32>(0.45, 0.35, 0.20) * (air_mass - 1.0));
+    sun_color_final = solar_color * extinction;
+
+    if sun_visible {
+        sun_ndc = sun_clip.xy / sun_clip.w;
+
+        let d = distance(input.ndc, sun_ndc);
+        let radius = sky.sun_size;
+        let intensity = sky.sun_intensity;
+
+
+
+        let core_r = radius * 0.75;
+
+        if d < core_r {
+            let x = 1.0 - d / core_r;
+            let limb = 0.55 + 0.45 * pow(x, 0.35);
+            col += sun_color_final * limb * intensity;
+        } else if d < radius {
+            let t = 1.0 - (d - core_r) / (radius - core_r);
+            let glow = pow(t, 3.0);
+            col += sun_color_final * glow * intensity * 0.6;
+        }
+
+        let corona_r = radius * 4.0;
+        if d < corona_r {
+            let t = 1.0 - (d - radius) / (corona_r - radius);
+            let halo = pow(max(t, 0.0), 5.0) * intensity * 0.15;
+
+            let corona_low  = vec3<f32>(1.2, 0.7, 0.35);
+            let corona_high = vec3<f32>(0.7, 0.85, 1.1);
+            let corona_color = mix(corona_low, corona_high, h);
+
+            col += corona_color * halo;
+        }
+
+        if d < core_r {
+            let uv = (input.ndc - sun_ndc) / core_r;
+            let n = fract(sin(dot(uv, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            let spots = pow(n, 16.0) * 0.18;
+            col *= 1.0 - spots;
+        }
+    }
+
+    let moon_dir = normalize(u.moon_direction);
+    let moon_dist = 10000.0;
+    let moon_world_pos = moon_dir * moon_dist;
+    let moon_clip = u.view_proj * vec4<f32>(moon_world_pos, 1.0);
+
+    if moon_clip.w > 0.0 {
+        let moon_ndc = moon_clip.xy / moon_clip.w;
+        let m_radius = sky.moon_size;
+
+        let rel = (input.ndc - moon_ndc) / m_radius;
+        let r2 = dot(rel, rel);
+
+        if r2 <= 1.0 {
+            // unit sphere in "moon local space" (screen disc)
+            let z = sqrt(max(1.0 - r2, 0.0));
+            let N_local = normalize(vec3<f32>(rel.x, rel.y, z));
+
+            // ==========================================
+            // Camera facing billboard, using YOUR fix:
+            // view_ray points from camera to sky
+            // ==========================================
+            let view_ray = normalize(-input.dir);   // your fix, keep this
+            let forward  = view_ray;               // outward from camera
+
+            var ref_up = vec3<f32>(0.0, 1.0, 0.0);
+            if abs(dot(ref_up, forward)) > 0.95 {
+                ref_up = vec3<f32>(1.0, 0.0, 0.0);
+            }
+
+            // right-handed basis
+            let right    = normalize(cross(ref_up, forward));
+            let up_local = normalize(cross(forward, right));
+
+            // local sphere normal to world space
+            let N_world =
+                N_local.x * right +
+                N_local.y * up_local +
+                N_local.z * forward;
+
+            // ==========================================
+            // Lighting: Hapke-style lunar reflectance
+            // ==========================================
+            let L = normalize(u.sun_direction);    // sun direction in world
+            let V = normalize(-view_ray);          // from surface to camera
+            let N = normalize(N_world);
+
+            let cosNL = dot(N, L);
+            let mu0   = max(cosNL, 0.0);
+            let mu    = max(dot(N, V), 0.0);
+
+            // physically neutral lunar grey, not using sun_color_final
+            let albedo = vec3<f32>(0.85, 0.85, 0.90);
+
+            // "space" sunlight, mildly warm, scaled by moon intensity
+            let base_sun = vec3<f32>(1.05, 1.0, 0.97);
+            let light_color = base_sun * sky.moon_intensity;
+
+            // optional: very slight atmospheric extinction based on moon altitude
+            let alt_moon = clamp(dot(moon_dir, vec3<f32>(0.0, 1.0, 0.0)), -1.0, 1.0);
+            let air_mass_moon = 1.0 / max(alt_moon * 0.9 + 0.1, 0.02);
+            let extinction_moon = exp(-vec3<f32>(0.08, 0.06, 0.04) * (air_mass_moon - 1.0));
+
+            let illum_color = light_color * extinction_moon;
+
+            var moon_col = vec3<f32>(0.0);
+
+            if mu0 > 0.0 {
+                // Hapke parameters tuned for a nice but still realistic look
+                let w  = 0.85;
+                let g  = -0.4;
+                let B0 = 1.2;
+                let h  = 0.05;
+
+                let cos_phase = clamp(dot(L, V), -1.0, 1.0);
+                let phase = acos(cos_phase);
+
+                // opposition surge near full moon
+                let B = B0 / (1.0 + (1.0 / h) * tan(phase * 0.5));
+
+                // Henyey-Greenstein phase function
+                let P = (1.0 - g * g) /
+                        pow(1.0 + g * g - 2.0 * g * cos_phase, 1.5);
+
+                // multiple scattering approximation
+                let Hmu0 = 1.0 / (1.0 + 2.0 * mu0);
+                let Hmu  = 1.0 / (1.0 + 2.0 * mu);
+
+                var hapke = w * 0.25 * ((1.0 + B) * P + Hmu0 * Hmu);
+
+                // soften contrast a bit so the sphere feels smoother
+                hapke = pow(hapke, 1.2);
+
+                // soft geometric terminator instead of hard mu0 cut
+                let terminator = smoothstep(-0.4, 0.4, cosNL);
+
+                hapke *= terminator;
+
+
+                moon_col = albedo * illum_color * hapke;
+            }
+
+            // dark side: subtle earthshine-ish fill so it is not dead black
+            let dark_fill = 0.02;
+            moon_col += albedo * dark_fill;
+
+            // clean circular edge
+            let edge = smoothstep(1.0, 0.90, r2);
+            moon_col *= edge;
+
+            col += moon_col;
+        }
+    }
+
+
+
+
+    return vec4<f32>(col, 1.0);
 }

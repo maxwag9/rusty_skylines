@@ -28,7 +28,7 @@ pub struct WorldRenderer {
 impl WorldRenderer {
     pub fn new() -> Self {
         let terrain_gen = TerrainGenerator::new(201035458);
-        let chunk_size = 512;
+        let chunk_size = 128;
         let view_radius_render = 16;
         let view_radius_generate = 8;
 
@@ -250,7 +250,7 @@ impl WorldRenderer {
         pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
         pass.set_bind_group(1, &pipelines.fog_bind_group, &[]);
         // compute planes once per frame
-        let planes = extract_frustum_planes(camera.view_proj(aspect));
+        let planes = extract_frustum_planes(camera.matrices(aspect).1);
 
         let cs = self.chunk_size as f32;
         let cam_pos = camera.position();

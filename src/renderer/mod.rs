@@ -30,7 +30,7 @@ impl Renderer {
 
     pub fn render(
         &mut self,
-        camera: &Camera,
+        camera: &mut Camera,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         mouse: &MouseState,

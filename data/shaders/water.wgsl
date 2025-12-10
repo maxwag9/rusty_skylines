@@ -6,14 +6,22 @@ struct WaterUniform {
 };
 
 struct Uniforms {
+    view: mat4x4<f32>,
+    inv_view: mat4x4<f32>,
+    proj: mat4x4<f32>,
+    inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
+    inv_view_proj: mat4x4<f32>,
+
     sun_direction: vec3<f32>,
     time: f32,
-    _pad1: vec4<f32>,
-    camera_pos: vec3<f32>,
-    _pad2: f32,
-};
 
+    camera_pos: vec3<f32>,
+    orbit_radius: f32,
+
+    moon_direction: vec3<f32>,
+    _pad0: f32,
+};
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(0) var<uniform> water: WaterUniform;
 

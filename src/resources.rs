@@ -124,16 +124,18 @@ impl TimeSystem {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
-    pub view_proj: [[f32; 4]; 4], // 64
+    pub view: [[f32; 4]; 4],
+    pub inv_view: [[f32; 4]; 4],
+    pub proj: [[f32; 4]; 4],
+    pub inv_proj: [[f32; 4]; 4],
+    pub view_proj: [[f32; 4]; 4],
+    pub inv_view_proj: [[f32; 4]; 4],
 
-    pub sun_direction: [f32; 3], // 12
-
+    pub sun_direction: [f32; 3],
     pub time: f32,
 
-    pub _pad1: [f32; 4], // 16
-
-    pub camera_pos: [f32; 3], // 12
-    pub orbit_radius: f32,    // pad 4 = 16
+    pub camera_pos: [f32; 3],
+    pub orbit_radius: f32,
 
     pub moon_direction: [f32; 3],
     pub _pad0: f32,

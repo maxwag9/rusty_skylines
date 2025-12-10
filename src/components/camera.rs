@@ -11,7 +11,7 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Self {
         Self {
-            target: Vec3::ZERO,
+            target: Vec3::new(0.0, 1000.0, 0.0),
             orbit_radius: 1000.0,
             yaw: -45f32.to_radians(),
             pitch: 20f32.to_radians(),
@@ -31,19 +31,16 @@ impl Camera {
         self.target + offset
     }
 
-    pub fn view_proj(&self, aspect: f32) -> glam::Mat4 {
+    pub fn matrices(&self, aspect: f32) -> (glam::Mat4, glam::Mat4, glam::Mat4) {
         let eye = self.position();
 
         let view = glam::Mat4::look_at_rh(eye, self.target, glam::Vec3::Y);
 
-        let proj = glam::Mat4::perspective_rh_gl(
-            90f32.to_radians(),
-            aspect,
-            5.0,
-            100_000.0, // HUGE far plane so frustum works on terrain
-        );
+        let proj = glam::Mat4::perspective_rh(60f32.to_radians(), aspect, 0.1, 100_000.0);
 
-        proj * view
+        let view_proj = proj * view;
+
+        (view, proj, view_proj)
     }
 }
 

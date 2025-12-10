@@ -11,6 +11,7 @@ use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::LineVtx;
 use crate::water::WaterUniform;
+use std::f32::consts::TAU;
 use std::sync::Arc;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -159,7 +160,7 @@ impl RenderCore {
 
     pub(crate) fn render(
         &mut self,
-        camera: &Camera,
+        camera: &mut Camera,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         mouse: &MouseState,
@@ -169,47 +170,54 @@ impl RenderCore {
 
         // camera + sun
         let aspect = self.config.width as f32 / self.config.height as f32;
-        let vp = camera.view_proj(aspect);
         let cam_pos = camera.position();
         let orbit_radius = camera.orbit_radius;
-        let day_length = 960.0 / 24.0; // your full day in seconds (16 min)
-        let day_phase = (time.total_time % day_length) / day_length; // 0..1
-        let ang = day_phase * std::f32::consts::TAU;
 
-        // controls the height of the sun's arc.
-        // 0.0 = horizon, PI/2 = straight overhead.
-        // PI/4 looks realistic.
-        let axial_tilt = std::f32::consts::FRAC_PI_4;
+        let day_length = 960.0 / 86.0; // one game day duration, seconds  /36.0 for debug speedup
+        let day_phase = (time.total_time / day_length) % 1.0;
+        let ang = day_phase * TAU;
 
-        // sun direction formula
-        let sun = glam::Vec3::new(
-            ang.cos() * axial_tilt.cos(),
-            ang.sin().sin() * axial_tilt.sin(), // this makes real rise/fall
-            ang.sin() * axial_tilt.cos(),
-        )
-        .normalize();
+        let axial_tilt = 0.41; // ~ 23.5°
 
-        let moon_orbit_speed = 0.923; // slightly slower than sun → drifting phase
-        let moon_phase_offset = 1.17; // random offset so it’s not opposite
+        let mut sun = glam::Vec3::new(0.0, 0.0, -1.0);
+        sun = glam::Quat::from_rotation_x(ang) * sun;
+        sun = glam::Quat::from_rotation_z(axial_tilt) * sun;
+        let sun = sun.normalize();
 
-        let moon_phase = (day_phase * moon_orbit_speed + moon_phase_offset) % 1.0;
-        let mang = moon_phase * std::f32::consts::TAU;
+        // ---------------------------------------------
+        // MOON, simple realistic orbit
+        // - inclined 5.145° to "ecliptic"
+        // - about 29.5 day cycle
+        // ---------------------------------------------
 
-        // moon has its own orbital tilt
-        let moon_tilt: f32 = 0.31;
+        let ecl_x = glam::Vec3::X;
+        let ecl_y = glam::Vec3::Z;
 
-        let moon_dir = glam::Vec3::new(
-            mang.cos() * moon_tilt.cos(),
-            mang.sin() * moon_tilt.sin(),
-            mang.sin() * moon_tilt.cos(),
-        )
-        .normalize();
+        let t_days = time.total_time / day_length;
+        let moon_orbit_period = 29.53;
+        let moon_angle = (t_days / moon_orbit_period) * TAU;
 
-        let phase_angle = (ang - mang).abs(); // difference between sun and moon
+        let lunar_incl = 5.145_f32.to_radians();
+
+        // rotate the orbit plane around X, not Y
+        let incl_rot = glam::Quat::from_axis_angle(ecl_x, lunar_incl);
+
+        let base = ecl_x * moon_angle.cos() + ecl_y * moon_angle.sin() + 1.0;
+        let mut moon_dir = (incl_rot * base).normalize();
+
+        moon_dir = (incl_rot * moon_dir).normalize();
+        println!("{:?}", moon_dir);
+        let phase_angle = sun.dot(moon_dir).acos();
+
+        // fully lit when opposite sun
         let moon_phase_factor = 0.5 * (1.0 + phase_angle.cos());
 
+        let (view, proj, view_proj) = camera.matrices(aspect);
+
         let new_uniforms = make_new_uniforms(
-            vp.to_cols_array_2d(),
+            view,
+            proj,
+            view_proj,
             sun,
             moon_dir,
             cam_pos,
@@ -224,8 +232,8 @@ impl RenderCore {
 
         // proj params for fog depth reconstruction
         let proj_params = [
-            vp.col(2).z, // proj[2][2]
-            vp.col(3).z, // proj[3][2]
+            view.col(2).z, // proj[2][2]
+            view.col(3).z, // proj[3][2]
         ];
 
         let fog_uniforms = FogUniforms {
@@ -252,12 +260,18 @@ impl RenderCore {
         let sky_uniform = SkyUniform {
             day_time: time.total_time,
             day_length,
-            sun_size: 0.1,
-            sun_intensity: 1.0,
+
             exposure: 1.0,
+            _pad0: 1.0,
+
+            sun_size: 0.0465, // NDC radius for now (0.05 = big)
+            sun_intensity: 1.0,
+
             moon_size: 0.04,
             moon_intensity: 1.0,
-            moon_phase_factor,
+
+            moon_phase: moon_phase_factor,
+            _pad1: 1.0,
         };
 
         self.queue.write_buffer(

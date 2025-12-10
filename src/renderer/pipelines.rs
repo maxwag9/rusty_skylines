@@ -3,7 +3,7 @@ use crate::resources::Uniforms;
 use crate::sky::SkyUniform;
 use crate::ui::vertex::{LineVtx, Vertex};
 use crate::water::{SimpleVertex, WaterUniform};
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::fs;
 use std::mem::size_of;
@@ -89,9 +89,11 @@ impl Pipelines {
         let aspect = config.width as f32 / config.height as f32;
         let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
         let cam_pos = camera.position();
-        let vp = camera.view_proj(aspect).to_cols_array_2d();
+        let (view, proj, view_proj) = camera.matrices(aspect);
         let uniforms = make_new_uniforms(
-            vp,
+            view,
+            proj,
+            view_proj,
             sun,
             Vec3::new(0.0, 0.0, 0.0),
             cam_pos,
@@ -408,12 +410,18 @@ impl Pipelines {
         let sky_uniform = SkyUniform {
             day_time: 0.0,
             day_length: 960.0,
-            sun_size: 0.2,
-            sun_intensity: 1.0,
+
             exposure: 1.0,
+            _pad0: 0.0,
+
+            sun_size: 0.05, // NDC radius for now (0.05 = big)
+            sun_intensity: 510.0,
+
             moon_size: 0.04,
             moon_intensity: 1.0,
-            moon_phase_factor: 0.0,
+
+            moon_phase: 0.0,
+            _pad1: 0.0,
         };
 
         let sky_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -470,7 +478,7 @@ impl Pipelines {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: TextureFormat::Depth32Float,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare: wgpu::CompareFunction::Always,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -736,7 +744,9 @@ fn create_resolved_color_texture(
 }
 
 pub fn make_new_uniforms(
-    vp: [[f32; 4]; 4],
+    view: Mat4,
+    proj: Mat4,
+    view_proj: Mat4,
     sun: Vec3,
     moon: Vec3,
     cam_pos: Vec3,
@@ -744,15 +754,19 @@ pub fn make_new_uniforms(
     total_time: f32,
 ) -> Uniforms {
     Uniforms {
-        view_proj: vp,
+        view: view.to_cols_array_2d(),
+        inv_view: view.inverse().to_cols_array_2d(),
+        proj: proj.to_cols_array_2d(),
+        inv_proj: proj.inverse().to_cols_array_2d(),
+        view_proj: view_proj.to_cols_array_2d(),
+        inv_view_proj: view_proj.inverse().to_cols_array_2d(),
 
         sun_direction: sun.to_array(),
         time: total_time,
 
-        _pad1: [0.0; 4],
-
         camera_pos: cam_pos.to_array(),
         orbit_radius,
+
         moon_direction: moon.to_array(),
         _pad0: 0.0,
     }

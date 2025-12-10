@@ -1,5 +1,4 @@
 use crate::renderer::pipelines::Pipelines;
-use bytemuck::{Pod, Zeroable};
 use wgpu::RenderPass;
 
 pub struct SkyRenderer;
@@ -22,14 +21,20 @@ impl SkyRenderer {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SkyUniform {
     pub day_time: f32,
     pub day_length: f32,
+
+    pub exposure: f32,
+    pub _pad0: f32,
+
     pub sun_size: f32,
     pub sun_intensity: f32,
-    pub exposure: f32,
+
     pub moon_size: f32,
     pub moon_intensity: f32,
-    pub moon_phase_factor: f32,
+
+    pub moon_phase: f32,
+    pub _pad1: f32,
 }
