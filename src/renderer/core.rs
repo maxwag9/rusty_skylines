@@ -123,7 +123,7 @@ impl RenderCore {
         let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
 
         let aspect = config.width as f32 / config.height as f32;
-        let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir, camera, aspect)
+        let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir, camera)
             .expect("Failed to create render pipelines");
         let mut ui_renderer =
             UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
@@ -376,19 +376,35 @@ impl RenderCore {
             a: settings.background_color[3] as f64,
         };
 
+        let color_attachment = if self.pipelines.msaa_samples > 1 {
+            // MSAA enabled
+            Some(RenderPassColorAttachment {
+                view: &self.pipelines.msaa_view,     // multisampled
+                resolve_target: Some(&surface_view), // resolve into swapchain
+                depth_slice: None,
+                ops: Operations {
+                    load: LoadOp::Clear(background_color),
+                    store: StoreOp::Store,
+                },
+            })
+        } else {
+            // MSAA disabled
+            Some(RenderPassColorAttachment {
+                view: &surface_view,  // render directly to swapchain
+                resolve_target: None, // resolve target must be None
+                depth_slice: None,
+                ops: Operations {
+                    load: LoadOp::Clear(background_color),
+                    store: StoreOp::Store,
+                },
+            })
+        };
+
         // 1) MAIN 3D + FOG pass (MSAA -> resolve into surface_view)
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("Main Pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &self.pipelines.msaa_view,
-                    resolve_target: Some(&surface_view), // resolve MSAA into swapchain
-                    depth_slice: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(background_color),
-                        store: StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[color_attachment],
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                     view: &self.pipelines.depth_view, // same sample_count as msaa_view
                     depth_ops: Some(Operations {
@@ -478,10 +494,9 @@ impl RenderCore {
 
         println!("MSAA changed to {}x", self.msaa_samples);
 
-        self.pipelines.resize(self.msaa_samples);
-
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
+        self.pipelines.resize(self.msaa_samples);
         self.pipelines.recreate_pipelines();
 
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;

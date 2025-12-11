@@ -34,7 +34,7 @@ impl Camera {
     pub fn matrices(&self, aspect: f32) -> (glam::Mat4, glam::Mat4, glam::Mat4) {
         let eye = self.position();
 
-        let view = glam::Mat4::look_at_rh(eye, self.target, glam::Vec3::Y);
+        let view = glam::Mat4::look_at_rh(eye, self.target, Vec3::Y);
 
         let proj = glam::Mat4::perspective_rh(60f32.to_radians(), aspect, 0.1, 100_000.0);
 

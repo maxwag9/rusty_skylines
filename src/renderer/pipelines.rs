@@ -60,6 +60,10 @@ pub struct Pipelines {
 
     shader_path: PathBuf,
     line_shader_path: PathBuf,
+    water_shader_path: PathBuf,
+    sky_shader_path: PathBuf,
+    stars_shader_path: PathBuf,
+
     pub water_pipeline: RenderPipeline,
     pub water_uniform_buffer: Buffer,
     pub water_vbuf: Buffer,
@@ -73,6 +77,11 @@ pub struct Pipelines {
     pub stars_pipeline: RenderPipeline,
     pub stars_pipeline_layout: PipelineLayout,
     pub stars_vertex_buffer: Buffer,
+    sky_pipeline_layout: PipelineLayout,
+    water_shader: ShaderModule,
+    water_pipeline_layout: PipelineLayout,
+    sky_shader: ShaderModule,
+    stars_shader: ShaderModule,
 }
 
 impl Pipelines {
@@ -82,12 +91,13 @@ impl Pipelines {
         msaa_samples: u32,
         shader_dir: &Path,
         camera: &Camera,
-        aspect: f32,
     ) -> anyhow::Result<Self> {
         let shader_path = shader_dir.join("ground.wgsl");
         let line_shader_path = shader_dir.join("lines.wgsl");
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
+
+        let dummy_pipeline = make_dummy_pipeline(device, config.format);
 
         let shader = load_shader(device, &shader_path, "Ground Shader")?;
 
@@ -184,86 +194,7 @@ impl Pipelines {
             push_constant_ranges: &[],
         });
 
-        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("3D Render Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format: config.format,
-                    blend: Some(BlendState::REPLACE),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                cull_mode: Some(Face::Front),
-                topology: PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: MultisampleState {
-                count: msaa_samples,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
-
         let line_shader = load_shader(device, &line_shader_path, "Line Shader")?;
-
-        let gizmo_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Gizmo Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: VertexState {
-                module: &line_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[LineVtx::layout()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &line_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format: config.format,
-                    blend: Some(BlendState::REPLACE),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: MultisampleState {
-                count: msaa_samples,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
 
         let water_shader_path = shader_dir.join("water.wgsl");
         let water_shader = load_shader(device, &water_shader_path, "Water Shader")?;
@@ -343,58 +274,6 @@ impl Pipelines {
             push_constant_ranges: &[],
         });
 
-        let water_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Water Pipeline"),
-            layout: Some(&water_pipeline_layout),
-            vertex: VertexState {
-                module: &water_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[SimpleVertex::layout()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &water_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format: config.format,
-                    blend: Some(BlendState {
-                        color: BlendComponent {
-                            src_factor: BlendFactor::SrcAlpha,
-                            dst_factor: BlendFactor::OneMinusSrcAlpha,
-                            operation: BlendOperation::Add,
-                        },
-                        alpha: BlendComponent {
-                            src_factor: BlendFactor::One,
-                            dst_factor: BlendFactor::OneMinusSrcAlpha,
-                            operation: BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: CompareFunction::LessEqual,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-
-            multisample: MultisampleState {
-                count: msaa_samples,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
-
         let sky_shader_path = shader_dir.join("sky.wgsl");
         let sky_shader = load_shader(device, &sky_shader_path, "Sky Shader")?;
 
@@ -403,11 +282,11 @@ impl Pipelines {
 
         let sky_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Sky Uniforms BGL"),
-            entries: &[wgpu::BindGroupLayoutEntry {
+            entries: &[BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -432,24 +311,24 @@ impl Pipelines {
             _pad1: 0.0,
         };
 
-        let sky_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let sky_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Sky Buffer"),
             contents: bytemuck::bytes_of(&sky_uniform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
         let stars_bytes = fs::read(data_dir("stars.bin")).expect("stars.bin missing");
 
-        let stars_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let stars_vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Star Buffer"),
             contents: &stars_bytes,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
         });
 
-        let sky_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let sky_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Sky BG"),
             layout: &sky_bgl,
-            entries: &[wgpu::BindGroupEntry {
+            entries: &[BindGroupEntry {
                 binding: 0,
                 resource: sky_buffer.as_entire_binding(),
             }],
@@ -464,131 +343,17 @@ impl Pipelines {
             push_constant_ranges: &[],
         });
 
-        let stars_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Stars Pipeline Layout"),
-                bind_group_layouts: &[
-                    &uniform_bind_group_layout, // group 0
-                ],
-                push_constant_ranges: &[],
-            });
-        let stars_vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: 16,
-            step_mode: wgpu::VertexStepMode::Instance, // IMPORTANT
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32,
-                },
-                wgpu::VertexAttribute {
-                    offset: 4,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32,
-                },
-                wgpu::VertexAttribute {
-                    offset: 8,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32,
-                },
-                wgpu::VertexAttribute {
-                    offset: 12,
-                    shader_location: 3,
-                    format: wgpu::VertexFormat::Float32,
-                },
+        let stars_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Stars Pipeline Layout"),
+            bind_group_layouts: &[
+                &uniform_bind_group_layout, // group 0
             ],
-        };
-
-        let stars_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Stars Pipeline"),
-            layout: Some(&stars_pipeline_layout),
-
-            vertex: wgpu::VertexState {
-                module: &stars_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[stars_vertex_layout],
-                compilation_options: Default::default(),
-            },
-
-            fragment: Some(wgpu::FragmentState {
-                module: &stars_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-
-            multisample: wgpu::MultisampleState {
-                count: msaa_samples,
-                ..Default::default()
-            },
-
-            multiview: None,
-            cache: None,
+            push_constant_ranges: &[],
         });
 
-        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Sky Pipeline"),
-            layout: Some(&sky_pipeline_layout),
+        let mut this = Self {
+            device: device.clone(),
 
-            vertex: wgpu::VertexState {
-                module: &sky_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[], // fullscreen triangle has no vertex buffers
-            },
-
-            fragment: Some(wgpu::FragmentState {
-                module: &sky_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-
-            multisample: wgpu::MultisampleState {
-                count: msaa_samples,
-                ..Default::default()
-            },
-
-            multiview: None,
-            cache: None,
-        });
-
-        Ok(Self {
-            shader,
             gizmo_vbuf,
             uniform_buffer,
             uniform_bind_group,
@@ -598,38 +363,75 @@ impl Pipelines {
             depth_texture,
             depth_view,
 
-            pipeline,
-            gizmo_pipeline,
+            pipeline: dummy_pipeline.clone(),
+            gizmo_pipeline: dummy_pipeline.clone(),
+
             fog_uniform_buffer,
             fog_bind_group,
-            device: device.clone(),
+
+            shader,
             pipeline_layout,
             msaa_samples,
-            config: config.clone(),
             line_shader,
+            config: config.clone(),
             shader_path,
             line_shader_path,
+            water_shader_path,
+            sky_shader_path,
+            stars_shader_path,
 
-            water_pipeline,
+            water_pipeline: dummy_pipeline.clone(),
             water_uniform_buffer,
             water_vbuf,
             water_ibuf,
             water_bind_group,
             water_index_count,
-            sky_pipeline,
+
+            sky_pipeline: dummy_pipeline.clone(),
             sky_bind_group,
             sky_buffer,
 
-            stars_pipeline,
+            stars_pipeline: dummy_pipeline.clone(),
             stars_pipeline_layout,
             stars_vertex_buffer,
-        })
+            sky_pipeline_layout,
+            water_shader,
+            water_pipeline_layout,
+            sky_shader,
+            stars_shader,
+        };
+
+        this.recreate_pipelines();
+        Ok(this)
     }
 
     pub(crate) fn recreate_pipelines(&mut self) {
-        // Rebuild any pipelines that depend on sample count.
-        self.pipeline = self
-            .device
+        self.pipeline = self.build_main_pipeline();
+        self.gizmo_pipeline = self.build_gizmo_pipeline();
+        self.water_pipeline = self.build_water_pipeline();
+        self.sky_pipeline = self.build_sky_pipeline();
+        self.stars_pipeline = self.build_stars_pipeline();
+    }
+
+    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
+        self.shader = load_shader(&self.device, &self.shader_path, "Ground Shader")?;
+        self.line_shader = load_shader(&self.device, &self.line_shader_path, "Line Shader")?;
+        self.water_shader = load_shader(&self.device, &self.water_shader_path, "Water Shader")?;
+        self.sky_shader = load_shader(&self.device, &self.sky_shader_path, "Sky Shader")?;
+        self.stars_shader = load_shader(&self.device, &self.stars_shader_path, "Stars Shader")?;
+
+        self.recreate_pipelines();
+        Ok(())
+    }
+
+    pub(crate) fn resize(&mut self, msaa_samples: u32) {
+        (self.msaa_texture, self.msaa_view) =
+            create_msaa_targets(&self.device, &self.config, msaa_samples);
+        (self.depth_texture, self.depth_view) =
+            create_depth_texture(&self.device, &self.config, msaa_samples);
+    }
+    fn build_main_pipeline(&self) -> RenderPipeline {
+        self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Main Pipeline"),
                 layout: Some(&self.pipeline_layout),
@@ -649,8 +451,18 @@ impl Pipelines {
                     })],
                     compilation_options: Default::default(),
                 }),
-                primitive: PrimitiveState::default(),
-                depth_stencil: None,
+                primitive: PrimitiveState {
+                    cull_mode: Some(Face::Front),
+                    topology: PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::LessEqual,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
                 multisample: MultisampleState {
                     count: self.msaa_samples,
                     mask: !0,
@@ -658,10 +470,11 @@ impl Pipelines {
                 },
                 multiview: None,
                 cache: None,
-            });
+            })
+    }
 
-        self.gizmo_pipeline = self
-            .device
+    fn build_gizmo_pipeline(&self) -> RenderPipeline {
+        self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Gizmo Pipeline"),
                 layout: Some(&self.pipeline_layout),
@@ -685,7 +498,13 @@ impl Pipelines {
                     topology: PrimitiveTopology::LineList,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::LessEqual,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
                 multisample: MultisampleState {
                     count: self.msaa_samples,
                     mask: !0,
@@ -693,22 +512,155 @@ impl Pipelines {
                 },
                 multiview: None,
                 cache: None,
-            });
+            })
     }
 
-    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.shader = load_shader(&self.device, &self.shader_path, "Ground Shader")?;
-        self.line_shader = load_shader(&self.device, &self.line_shader_path, "Line Shader")?;
-
-        self.recreate_pipelines();
-        Ok(())
+    fn build_water_pipeline(&self) -> RenderPipeline {
+        self.device
+            .create_render_pipeline(&RenderPipelineDescriptor {
+                label: Some("Water Pipeline"),
+                layout: Some(&self.water_pipeline_layout),
+                vertex: VertexState {
+                    module: &self.water_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[SimpleVertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(FragmentState {
+                    module: &self.water_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(ColorTargetState {
+                        format: self.config.format,
+                        blend: Some(BlendState::ALPHA_BLENDING),
+                        write_mask: ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: CompareFunction::LessEqual,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: MultisampleState {
+                    count: self.msaa_samples,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            })
     }
 
-    pub(crate) fn resize(&mut self, msaa_samples: u32) {
-        (self.msaa_texture, self.msaa_view) =
-            create_msaa_targets(&self.device, &self.config, self.msaa_samples);
-        (self.depth_texture, self.depth_view) =
-            create_depth_texture(&self.device, &self.config, msaa_samples);
+    fn build_sky_pipeline(&self) -> RenderPipeline {
+        self.device
+            .create_render_pipeline(&RenderPipelineDescriptor {
+                label: Some("Sky Pipeline"),
+                layout: Some(&self.sky_pipeline_layout),
+                vertex: VertexState {
+                    module: &self.sky_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(FragmentState {
+                    module: &self.sky_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(ColorTargetState {
+                        format: self.config.format,
+                        blend: Some(BlendState::ALPHA_BLENDING),
+                        write_mask: ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: PrimitiveState::default(),
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: CompareFunction::Always,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: MultisampleState {
+                    count: self.msaa_samples,
+                    ..Default::default()
+                },
+                multiview: None,
+                cache: None,
+            })
+    }
+
+    fn build_stars_pipeline(&self) -> RenderPipeline {
+        let stars_vertex_layout = VertexBufferLayout {
+            array_stride: 16,
+            step_mode: VertexStepMode::Instance, // IMPORTANT
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 4,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 8,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        };
+        self.device
+            .create_render_pipeline(&RenderPipelineDescriptor {
+                label: Some("Stars Pipeline"),
+                layout: Some(&self.stars_pipeline_layout),
+                vertex: VertexState {
+                    module: &self.stars_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[stars_vertex_layout],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(FragmentState {
+                    module: &self.stars_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(ColorTargetState {
+                        format: self.config.format,
+                        blend: Some(BlendState::ALPHA_BLENDING),
+                        write_mask: ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: false,
+                    depth_compare: CompareFunction::Always,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: MultisampleState {
+                    count: self.msaa_samples,
+                    ..Default::default()
+                },
+                multiview: None,
+                cache: None,
+            })
     }
 }
 
@@ -772,76 +724,6 @@ fn create_depth_texture(
     (texture, view)
 }
 
-fn create_color_texture(
-    device: &Device,
-    config: &SurfaceConfiguration,
-    msaa_samples: u32,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("Scene Color Texture"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: msaa_samples,
-        dimension: TextureDimension::D2,
-        format: config.format,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
-}
-
-fn create_resolved_depth_texture(
-    device: &Device,
-    config: &SurfaceConfiguration,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("Scene Resolved Depth Texture"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: config.format,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
-}
-
-fn create_resolved_color_texture(
-    device: &Device,
-    config: &SurfaceConfiguration,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("Scene Resolved Color Texture"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: config.format,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
-}
-
 pub fn make_new_uniforms(
     view: Mat4,
     proj: Mat4,
@@ -869,4 +751,68 @@ pub fn make_new_uniforms(
         moon_direction: moon.to_array(),
         _pad0: 0.0,
     }
+}
+
+fn make_dummy_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
+    let shader = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some("dummy shader"),
+        source: ShaderSource::Wgsl(
+            "
+            @vertex
+            fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
+                // fullscreen triangle
+                let x = f32(idx == 1u) * 4.0 - 1.0;
+                let y = f32(idx == 2u) * 4.0 - 1.0;
+                return vec4<f32>(x, y, 0.0, 1.0);
+            }
+
+            @fragment
+            fn fs_main() -> @location(0) vec4<f32> {
+                return vec4<f32>(1.0, 0.0, 0.0, 1.0); // red
+            }
+        "
+            .into(),
+        ),
+    });
+
+    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some("dummy layout"),
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some("dummy pipeline"),
+        layout: Some(&layout),
+
+        vertex: VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+
+        fragment: Some(FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(ColorTargetState {
+                format,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+
+        primitive: PrimitiveState::default(),
+        depth_stencil: None,
+
+        multisample: MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+
+        multiview: None,
+        cache: None,
+    })
 }
