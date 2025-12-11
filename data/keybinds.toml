@@ -8,7 +8,7 @@ keys = ["ArrowLeft"]
 keys = ["Ctrl+KeyS"]
 
 ["Fly Camera Up"]
-keys = ["KeyQ"]
+keys = ["KeyE"]
 
 ["Add GUI element"]
 keys = ["KeyP"]
@@ -26,7 +26,7 @@ keys = ["Ctrl+KeyX"]
 keys = ["F6"]
 
 ["Fly Camera Down"]
-keys = ["KeyE"]
+keys = ["KeyQ"]
 
 ["Fly Camera Left"]
 keys = ["KeyA"]

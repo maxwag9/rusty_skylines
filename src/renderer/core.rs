@@ -168,45 +168,81 @@ impl RenderCore {
     ) {
         self.check_shader_changes(ui_loader);
 
-        // camera + sun
         let aspect = self.config.width as f32 / self.config.height as f32;
         let cam_pos = camera.position();
         let orbit_radius = camera.orbit_radius;
 
-        let day_length = 960.0 / 86.0; // one game day duration, seconds  /36.0 for debug speedup
-        let day_phase = (time.total_time / day_length) % 1.0;
-        let ang = day_phase * TAU;
-
-        let axial_tilt = 0.41; // ~ 23.5°
-
-        let mut sun = glam::Vec3::new(0.0, 0.0, -1.0);
-        sun = glam::Quat::from_rotation_x(ang) * sun;
-        sun = glam::Quat::from_rotation_z(axial_tilt) * sun;
-        let sun = sun.normalize();
-
         // ---------------------------------------------
-        // MOON, simple realistic orbit
-        // - inclined 5.145° to "ecliptic"
-        // - about 29.5 day cycle
+        // TIME SCALES
         // ---------------------------------------------
-
-        let ecl_x = glam::Vec3::X;
-        let ecl_y = glam::Vec3::Z;
-
+        let day_length = 10.0;
         let t_days = time.total_time / day_length;
+
+        ui_loader
+            .variables
+            .set("day_length", day_length.to_string());
+        ui_loader.variables.set("total_days", t_days.to_string());
+
+        let day_phase = t_days % 1.0;
+        let day_ang = day_phase * TAU;
+
+        // yearly phase
+        let year_phase = (t_days / 365.0) % 1.0;
+        let year_ang = year_phase * TAU;
+
+        // ---------------------------------------------
+        // EARTH SEASON MODEL
+        // ---------------------------------------------
+        let max_tilt = 23.439_f32.to_radians();
+        let seasonal_tilt = max_tilt * year_ang.sin(); // OK
+        let seasonal_tilt_deg = seasonal_tilt.to_degrees();
+        ui_loader
+            .variables
+            .set("earth_tilt", seasonal_tilt_deg.to_string());
+
+        // latitude
+        let latitude = 48.0_f32.to_radians();
+
+        // ---------------------------------------------
+        // SUN DIRECTION (CORRECTED)
+        // ---------------------------------------------
+        // The Sun direction in ecliptic space is fixed: we let it "rise" by spinning Earth.
+
+        let base_sun = glam::Vec3::new(0.0, 0.0, -1.0);
+
+        // 1. Earth's axial tilt relative to ecliptic
+        // Tilt is a rotation around the x-axis, NOT z.
+        let decl_rot = glam::Quat::from_rotation_x(seasonal_tilt);
+
+        // 2. Earth rotates daily around its axis
+        let daily_rot = glam::Quat::from_rotation_y(day_ang);
+
+        // 3. Apply latitude by rotating the horizon relative to Earth's axis
+        let lat_rot = glam::Quat::from_rotation_x(latitude);
+
+        // Order: latitude -> daily spin -> axial tilt -> base direction
+        let sun = (lat_rot * daily_rot * decl_rot * base_sun).normalize();
+
+        // ---------------------------------------------
+        // MOON
+        // ---------------------------------------------
         let moon_orbit_period = 29.53;
         let moon_angle = (t_days / moon_orbit_period) * TAU;
 
         let lunar_incl = 5.145_f32.to_radians();
 
-        // rotate the orbit plane around X, not Y
+        // moon orbit basis
+        let ecl_x = glam::Vec3::X;
+        let ecl_y = glam::Vec3::Z;
+
+        // inclination is around the x-axis
         let incl_rot = glam::Quat::from_axis_angle(ecl_x, lunar_incl);
 
-        let base = ecl_x * moon_angle.cos() + ecl_y * moon_angle.sin() + 1.0;
-        let mut moon_dir = (incl_rot * base).normalize();
+        // moon position in its orbital plane
+        let base = ecl_x * moon_angle.cos() + ecl_y * moon_angle.sin();
 
-        moon_dir = (incl_rot * moon_dir).normalize();
-        println!("{:?}", moon_dir);
+        let moon_dir = (incl_rot * base).normalize();
+
         let phase_angle = sun.dot(moon_dir).acos();
 
         // fully lit when opposite sun
@@ -489,18 +525,18 @@ impl RenderCore {
 }
 
 fn pick_fail_safe_present_mode(
-    surface: &wgpu::Surface,
-    adapter: &wgpu::Adapter,
-    user_mode: wgpu::PresentMode,
-) -> wgpu::PresentMode {
+    surface: &Surface,
+    adapter: &Adapter,
+    user_mode: PresentMode,
+) -> PresentMode {
     let caps = surface.get_capabilities(adapter);
 
     // Fallback priority. Mailbox first, then Fifo (always supported), then Immediate.
     let fallback_chain = [
         user_mode,
-        wgpu::PresentMode::Mailbox,
-        wgpu::PresentMode::Fifo, // required by spec
-        wgpu::PresentMode::Immediate,
+        PresentMode::Mailbox,
+        PresentMode::Immediate,
+        PresentMode::Fifo, // required by spec...
     ];
 
     for mode in fallback_chain {
@@ -510,5 +546,5 @@ fn pick_fail_safe_present_mode(
     }
 
     // Absolute guarantee
-    wgpu::PresentMode::Fifo
+    PresentMode::Fifo
 }

@@ -11,5 +11,5 @@ editor_mode = false
 override_mode = false
 show_gui = true
 
-background_color = [0.012, 0.012, 0.012, 1.0]
+background_color = [0.0, 0.0, 0.0, 1.0]
 

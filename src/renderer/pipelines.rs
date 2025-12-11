@@ -1,4 +1,5 @@
 use crate::components::camera::Camera;
+use crate::paths::data_dir;
 use crate::resources::Uniforms;
 use crate::sky::SkyUniform;
 use crate::ui::vertex::{LineVtx, Vertex};
@@ -68,6 +69,10 @@ pub struct Pipelines {
     pub sky_bind_group: BindGroup,
     pub sky_pipeline: RenderPipeline,
     pub sky_buffer: Buffer,
+
+    pub stars_pipeline: RenderPipeline,
+    pub stars_pipeline_layout: PipelineLayout,
+    pub stars_vertex_buffer: Buffer,
 }
 
 impl Pipelines {
@@ -393,6 +398,9 @@ impl Pipelines {
         let sky_shader_path = shader_dir.join("sky.wgsl");
         let sky_shader = load_shader(device, &sky_shader_path, "Sky Shader")?;
 
+        let stars_shader_path = shader_dir.join("stars.wgsl");
+        let stars_shader = load_shader(device, &stars_shader_path, "Stars Shader")?;
+
         let sky_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Sky Uniforms BGL"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -430,6 +438,14 @@ impl Pipelines {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let stars_bytes = fs::read(data_dir("stars.bin")).expect("stars.bin missing");
+
+        let stars_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Star Buffer"),
+            contents: &stars_bytes,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+        });
+
         let sky_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Sky BG"),
             layout: &sky_bgl,
@@ -446,6 +462,85 @@ impl Pipelines {
                 &sky_bgl,                   // group 1
             ],
             push_constant_ranges: &[],
+        });
+
+        let stars_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Stars Pipeline Layout"),
+                bind_group_layouts: &[
+                    &uniform_bind_group_layout, // group 0
+                ],
+                push_constant_ranges: &[],
+            });
+        let stars_vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance, // IMPORTANT
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 4,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 8,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        };
+
+        let stars_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Stars Pipeline"),
+            layout: Some(&stars_pipeline_layout),
+
+            vertex: wgpu::VertexState {
+                module: &stars_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[stars_vertex_layout],
+                compilation_options: Default::default(),
+            },
+
+            fragment: Some(wgpu::FragmentState {
+                module: &stars_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+
+            multisample: wgpu::MultisampleState {
+                count: msaa_samples,
+                ..Default::default()
+            },
+
+            multiview: None,
+            cache: None,
         });
 
         let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -465,7 +560,7 @@ impl Pipelines {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -524,6 +619,10 @@ impl Pipelines {
             sky_pipeline,
             sky_bind_group,
             sky_buffer,
+
+            stars_pipeline,
+            stars_pipeline_layout,
+            stars_vertex_buffer,
         })
     }
 

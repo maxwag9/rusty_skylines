@@ -85,20 +85,28 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         controller.zoom_velocity = 0.0;
     }
 
+    // DAMPING (exponential, smooth)
+    let dv = (-controller.orbit_damping_release * dt).exp();
+    controller.yaw_velocity *= dv;
+    controller.pitch_velocity *= dv;
+
     if !resources.input.action_down("Orbit") {
         controller.target_yaw += controller.yaw_velocity;
         controller.target_pitch += controller.pitch_velocity;
-        controller.yaw_velocity *= (1.0 - controller.orbit_damping_release * dt).max(0.0);
-        controller.pitch_velocity *= (1.0 - controller.orbit_damping_release * dt).max(0.0);
     }
 
-    if (controller.target_yaw - camera.yaw).abs() > 0.01
-        || (controller.target_pitch - camera.pitch).abs() > 0.01
-    {
-        let t = 1.0 - (-controller.orbit_smoothness * 60.0 * dt).exp();
+    // SMOOTH target → camera
+    let t = 1.0 - (-controller.orbit_smoothness * 60.0 * dt).exp();
 
-        camera.yaw += (controller.target_yaw - camera.yaw) * t;
-        camera.pitch += (controller.target_pitch - camera.pitch) * t;
+    camera.yaw += (controller.target_yaw - camera.yaw) * t;
+    camera.pitch += (controller.target_pitch - camera.pitch) * t;
+
+    // Micro-deadzone to avoid infinite interpolation
+    if (controller.target_yaw - camera.yaw).abs() < 0.0001 {
+        camera.yaw = controller.target_yaw;
+    }
+    if (controller.target_pitch - camera.pitch).abs() < 0.0001 {
+        camera.pitch = controller.target_pitch;
     }
 
     camera.pitch = camera
