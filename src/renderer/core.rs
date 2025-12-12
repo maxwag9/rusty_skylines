@@ -155,7 +155,7 @@ impl RenderCore {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
-        self.pipelines.resize(self.msaa_samples);
+        self.pipelines.resize(&self.config, self.msaa_samples);
     }
 
     pub(crate) fn render(
@@ -175,9 +175,8 @@ impl RenderCore {
         // ---------------------------------------------
         // TIME SCALES
         // ---------------------------------------------
-        let day_length = 10.0;
-        let t_days = time.total_time / day_length;
-
+        let day_length = 960.0;
+        let t_days = (time.total_time + day_length * 203.3) / day_length;
         ui_loader
             .variables
             .set("day_length", day_length.to_string());
@@ -186,64 +185,83 @@ impl RenderCore {
         let day_phase = t_days % 1.0;
         let day_ang = day_phase * TAU;
 
-        // yearly phase
         let year_phase = (t_days / 365.0) % 1.0;
         let year_ang = year_phase * TAU;
 
-        // ---------------------------------------------
-        // EARTH SEASON MODEL
-        // ---------------------------------------------
-        let max_tilt = 23.439_f32.to_radians();
-        let seasonal_tilt = max_tilt * year_ang.sin(); // OK
-        let seasonal_tilt_deg = seasonal_tilt.to_degrees();
+        let base_year = 2026.0;
+        let current_year = base_year + t_days / 365.0;
+        ui_loader.variables.set("base_year", base_year.to_string());
         ui_loader
             .variables
-            .set("earth_tilt", seasonal_tilt_deg.to_string());
+            .set("current_year", current_year.to_string());
 
-        // latitude
+        // ---------------------------------------------
+        // OBSERVER PARAMETERS
+        // ---------------------------------------------
         let latitude = 48.0_f32.to_radians();
-
-        // ---------------------------------------------
-        // SUN DIRECTION (CORRECTED)
-        // ---------------------------------------------
-        // The Sun direction in ecliptic space is fixed: we let it "rise" by spinning Earth.
-
-        let base_sun = glam::Vec3::new(0.0, 0.0, -1.0);
-
-        // 1. Earth's axial tilt relative to ecliptic
-        // Tilt is a rotation around the x-axis, NOT z.
-        let decl_rot = glam::Quat::from_rotation_x(seasonal_tilt);
-
-        // 2. Earth rotates daily around its axis
-        let daily_rot = glam::Quat::from_rotation_y(day_ang);
-
-        // 3. Apply latitude by rotating the horizon relative to Earth's axis
         let lat_rot = glam::Quat::from_rotation_x(latitude);
 
-        // Order: latitude -> daily spin -> axial tilt -> base direction
-        let sun = (lat_rot * daily_rot * decl_rot * base_sun).normalize();
+        let sidereal_factor = 1.0027379_f32;
+        let sidereal_ang = day_ang * sidereal_factor;
+        let earth_rot = glam::Quat::from_rotation_y(sidereal_ang);
+
+        let obliquity = 23.439_f32.to_radians();
+        ui_loader
+            .variables
+            .set("earth_obliquity", obliquity.to_string());
+        let obliq_rot = glam::Quat::from_rotation_x(-obliquity);
 
         // ---------------------------------------------
-        // MOON
+        // SUN (ECLIPTIC -> EQUATORIAL -> LOCAL SKY)
         // ---------------------------------------------
-        let moon_orbit_period = 29.53;
-        let moon_angle = (t_days / moon_orbit_period) * TAU;
+        let sun_ecliptic_lon = year_phase * TAU;
+        let sun_ecl = glam::Vec3::new(sun_ecliptic_lon.cos(), 0.0, sun_ecliptic_lon.sin());
+        let sun_eq = (obliq_rot * sun_ecl).normalize();
+        let sun_decl = sun_eq.y.asin().to_degrees();
+        ui_loader
+            .variables
+            .set("sun_declination", sun_decl.to_string());
 
-        let lunar_incl = 5.145_f32.to_radians();
+        let sun_dir = (lat_rot * earth_rot * sun_eq).normalize();
 
-        // moon orbit basis
-        let ecl_x = glam::Vec3::X;
-        let ecl_y = glam::Vec3::Z;
+        // ---------------------------------------------
+        // MOON ORBIT (LOW ACCURACY J2000 MODEL)
+        // ---------------------------------------------
+        let jd = 2451545.0 + t_days;
+        let t = (jd - 2451545.0) / 36525.0;
 
-        // inclination is around the x-axis
-        let incl_rot = glam::Quat::from_axis_angle(ecl_x, lunar_incl);
+        let n = (125.122 - 0.0529538083 * t).to_radians();
+        let i = 5.145_f32.to_radians();
+        let w = (318.063 + 0.1643573223 * t).to_radians();
 
-        // moon position in its orbital plane
-        let base = ecl_x * moon_angle.cos() + ecl_y * moon_angle.sin();
+        let a = 60.2666_f32;
+        let e = 0.054900_f32;
+        let m = (115.3654 + 13.06499295 * t_days).to_radians();
 
-        let moon_dir = (incl_rot * base).normalize();
+        let e_anom = m + e * m.sin() * (1.0 + e * m.cos());
+        let xv = a * (e_anom.cos() - e);
+        let yv = a * ((1.0 - e * e).sqrt() * e_anom.sin());
+        let v = yv.atan2(xv);
+        let r = (xv * xv + yv * yv).sqrt();
 
-        let phase_angle = sun.dot(moon_dir).acos();
+        let xh = r * (n.cos() * (v + w).cos() - n.sin() * (v + w).sin() * i.cos());
+        let zh = r * ((v + w).sin() * i.sin());
+        let yh = r * (n.sin() * (v + w).cos() + n.cos() * (v + w).sin() * i.cos());
+
+        let moon_ecl = glam::Vec3::new(xh as f32, zh as f32, yh as f32).normalize();
+        let moon_eq = (obliq_rot * moon_ecl).normalize();
+        let moon_dir = (lat_rot * earth_rot * moon_eq).normalize();
+
+        // ---------------------------------------------
+        // MOON PHASE (0 new, 1 full)
+        // ---------------------------------------------
+        let phase_angle = sun_eq.dot(moon_eq).clamp(-1.0, 1.0).acos();
+        let moon_phase = (1.0 - phase_angle.cos()) * 0.5;
+        ui_loader
+            .variables
+            .set("moon_phase", moon_phase.to_string());
+
+        let phase_angle = sun_dir.dot(moon_dir).acos();
 
         // fully lit when opposite sun
         let moon_phase_factor = 0.5 * (1.0 + phase_angle.cos());
@@ -254,7 +272,7 @@ impl RenderCore {
             view,
             proj,
             view_proj,
-            sun,
+            sun_dir,
             moon_dir,
             cam_pos,
             orbit_radius,
@@ -303,7 +321,7 @@ impl RenderCore {
             sun_size: 0.0465, // NDC radius for now (0.05 = big)
             sun_intensity: 1.0,
 
-            moon_size: 0.04,
+            moon_size: 0.03,
             moon_intensity: 1.0,
 
             moon_phase: moon_phase_factor,
@@ -321,11 +339,21 @@ impl RenderCore {
         // get frame
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
-            Err(_) => {
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
                 self.surface.configure(&self.device, &self.config);
-                self.surface.get_current_texture().unwrap()
+                let frame = self.surface.get_current_texture().unwrap();
+
+                // NOW recreate MSAA + depth using frame.texture.size()
+                let size = frame.texture.size();
+                self.config.width = size.width;
+                self.config.height = size.height;
+                self.pipelines.resize(&self.config, self.msaa_samples);
+
+                frame
             }
+            Err(e) => panic!("{e:?}"),
         };
+
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -496,7 +524,7 @@ impl RenderCore {
 
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
-        self.pipelines.resize(self.msaa_samples);
+        self.pipelines.resize(&self.config, self.msaa_samples);
         self.pipelines.recreate_pipelines();
 
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;

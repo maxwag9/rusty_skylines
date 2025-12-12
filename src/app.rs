@@ -351,6 +351,15 @@ impl ApplicationHandler for App {
                     resources.renderer.resize(size);
                 }
             }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(resources) = self.resources.as_mut() {
+                    let size = resources.window.inner_size(); // << get the real physical size
+                    if size.width > 0 && size.height > 0 {
+                        resources.renderer.resize(size);
+                    }
+                }
+            }
+
             WindowEvent::RedrawRequested => {
                 if let (Some(world), Some(resources)) =
                     (self.world.as_mut(), self.resources.as_mut())

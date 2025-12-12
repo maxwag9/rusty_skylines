@@ -75,7 +75,7 @@
                 1.0,
                 1.0
               ],
-              "text": "Day length: {day_length:.2|fix}s, Total_days: {total_days:.2|fix}d, Earth tilt: {earth_tilt:.2|fix} degrees",
+              "text": "Day length: {day_length:.2|fix}s, Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees",
               "misc": {
                 "active": true,
                 "pressable": false,

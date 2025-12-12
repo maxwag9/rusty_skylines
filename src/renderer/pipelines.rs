@@ -247,25 +247,66 @@ impl Pipelines {
 
         let water_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Water BGL"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: BufferSize::new(size_of::<WaterUniform>() as u64),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(size_of::<WaterUniform>() as u64),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(size_of::<SkyUniform>() as u64),
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let sky_uniform = SkyUniform {
+            day_time: 0.0,
+            day_length: 960.0,
+
+            exposure: 1.0,
+            _pad0: 0.0,
+
+            sun_size: 0.05, // NDC radius for now (0.05 = big)
+            sun_intensity: 510.0,
+
+            moon_size: 0.04,
+            moon_intensity: 1.0,
+
+            moon_phase: 0.0,
+            _pad1: 0.0,
+        };
+
+        let sky_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Sky Buffer"),
+            contents: bytemuck::bytes_of(&sky_uniform),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
         let water_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Water BG"),
             layout: &water_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: water_uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: water_uniform_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: sky_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         let water_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -292,29 +333,6 @@ impl Pipelines {
                 },
                 count: None,
             }],
-        });
-
-        let sky_uniform = SkyUniform {
-            day_time: 0.0,
-            day_length: 960.0,
-
-            exposure: 1.0,
-            _pad0: 0.0,
-
-            sun_size: 0.05, // NDC radius for now (0.05 = big)
-            sun_intensity: 510.0,
-
-            moon_size: 0.04,
-            moon_intensity: 1.0,
-
-            moon_phase: 0.0,
-            _pad1: 0.0,
-        };
-
-        let sky_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Sky Buffer"),
-            contents: bytemuck::bytes_of(&sky_uniform),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
         let stars_bytes = fs::read(data_dir("stars.bin")).expect("stars.bin missing");
@@ -424,7 +442,11 @@ impl Pipelines {
         Ok(())
     }
 
-    pub(crate) fn resize(&mut self, msaa_samples: u32) {
+    pub(crate) fn resize(&mut self, config: &SurfaceConfiguration, msaa_samples: u32) {
+        // Keep a fresh copy of the surface configuration so our MSAA and depth textures
+        // always match the swapchain size. Or ELSE, after a window resize we'd recreate
+        // attachments using the old dimensions, leading to mismatched resolve targets!!!
+        self.config = config.clone();
         (self.msaa_texture, self.msaa_view) =
             create_msaa_targets(&self.device, &self.config, msaa_samples);
         (self.depth_texture, self.depth_view) =

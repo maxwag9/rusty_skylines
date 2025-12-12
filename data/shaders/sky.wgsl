@@ -213,8 +213,6 @@ fn compute_atmosphere(
     night_col += airglow;
     let np = ndc * 50.0; // very soft
     let n = hash12(np);
-    let night_noise = (n - 0.5) * 0.01;
-    night_col += night_noise;
 
     var sky_col = mix(night_col, day_col, day_weight);
 
@@ -308,16 +306,23 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
     }
 
     let moon_dir = normalize(u.moon_direction);
-    let moon_dist = 10000.0;
-    let moon_world_pos = moon_dir * moon_dist;
-    let moon_clip = u.view_proj * vec4<f32>(moon_world_pos, 1.0);
+    let moon_view_dir = normalize((u.view * vec4<f32>(moon_dir, 0.0)).xyz);
 
+    // pick any distance, it no longer creates parallax because translation is ignored
+    let moon_view_pos = moon_view_dir * 1.0; // or any scale you like
+    let moon_clip = u.proj * vec4<f32>(moon_view_pos, 1.0);
+
+    var moon_mask = 0.0;
     if moon_clip.w > 0.0 {
         let moon_ndc = moon_clip.xy / moon_clip.w;
         let m_radius = sky.moon_size;
 
         let rel = (input.ndc - moon_ndc) / m_radius;
         let r2  = dot(rel, rel);
+
+        if r2 <= 1.0 {
+            moon_mask = 1.0;
+        }
 
         if r2 <= 1.0 {
             let z = sqrt(max(1.0 - r2, 0.0));
@@ -480,14 +485,23 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
     let atmosphere = compute_atmosphere(view_dir, sun_dir, moon_dir, input.ndc);
     col += atmosphere;
 
-    let sun_alt_for_alpha = clamp(dot(sun_dir, up), -1.0, 1.0);
-    let night_factor_alpha = 1.0 - smoothstep(-0.45, 0.10, sun_alt_for_alpha);
-    let hemi_fade_alpha = smoothstep(-0.60, 0.10, dot(view_dir, up));
-    let sky_alpha = clamp(1.0 - night_factor_alpha, 0.0, 1.0) * hemi_fade_alpha;
-
-
     let exposure = max(sky.exposure, 0.00001);
     let mapped = vec3<f32>(1.0) - exp(-col * exposure);
 
-    return vec4<f32>(mapped, sky_alpha);
+    let brightness = dot(mapped.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+
+    // How “blue” it is. Higher means more blue dominance.
+    let blue_factor = mapped.b - max(mapped.r, mapped.g);
+
+    // Map blue dominance into a positive boost.
+    let blue_boost = clamp(blue_factor * 4.0, 0.0, 1.0);
+
+    // Base alpha from brightness.
+    let base_alpha = clamp(brightness, 0.0, 1.0);
+
+    // Blend the boost so blue atmospheres stay near opaque.
+    let alpha = clamp(base_alpha + blue_boost * (1.0 - base_alpha), 0.0, 1.0);
+
+    return vec4<f32>(mapped.rgb, alpha);
+
 }
