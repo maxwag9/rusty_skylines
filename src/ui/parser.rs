@@ -1,11 +1,12 @@
 use crate::ui::ui_editor::UiVariableRegistry;
+use crate::ui::variables::UiValue;
 use std::fmt;
 
 // ------------------------------------------------------------
 // Value type
 // ------------------------------------------------------------
 #[derive(Clone, Debug)]
-enum Value {
+pub enum Value {
     Num(f64),
     Str(String),
     Bool(bool),
@@ -39,22 +40,13 @@ impl Value {
     }
 }
 
-// ------------------------------------------------------------
-// Registry lookup
-// ------------------------------------------------------------
 fn lookup_var(vars: &UiVariableRegistry, name: &str) -> Option<Value> {
-    let raw = vars.get(name)?;
-
-    if raw == "true" {
-        return Some(Value::Bool(true));
+    match vars.get(name)? {
+        UiValue::Bool(v) => Some(Value::Bool(*v)),
+        UiValue::I32(v) => Some(Value::Num(*v as f64)),
+        UiValue::F32(v) => Some(Value::Num(*v as f64)),
+        UiValue::String(v) => Some(Value::Str(v.clone())),
     }
-    if raw == "false" {
-        return Some(Value::Bool(false));
-    }
-    if let Ok(n) = raw.parse::<f64>() {
-        return Some(Value::Num(n));
-    }
-    Some(Value::Str(raw.to_string()))
 }
 
 // ------------------------------------------------------------
@@ -589,8 +581,7 @@ fn format_slot(src: &str, vars: &UiVariableRegistry) -> String {
         None => return src.to_string(),
     };
 
-    // no formatting and plain ident
-    if precision.is_none() && opts.is_empty() && is_plain_ident(expr) {
+    if is_plain_ident(expr) && precision.is_none() && opts.is_empty() {
         return val.to_string();
     }
 
@@ -674,46 +665,6 @@ pub fn get_input_box(template: &str, vars: &UiVariableRegistry) -> String {
     out
 }
 
-enum Segment {
-    Literal(String),
-    Var(String),
-}
-
-fn parse_template(template: &str) -> Vec<Segment> {
-    let mut segments = Vec::new();
-    let mut buf = String::new();
-    let mut chars = template.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '{' {
-            if !buf.is_empty() {
-                segments.push(Segment::Literal(buf.clone()));
-                buf.clear();
-            }
-
-            let mut name = String::new();
-            while let Some(ch2) = chars.next() {
-                if ch2 == '}' {
-                    break;
-                }
-                name.push(ch2);
-            }
-
-            if !name.is_empty() {
-                segments.push(Segment::Var(name));
-            }
-        } else {
-            buf.push(ch);
-        }
-    }
-
-    if !buf.is_empty() {
-        segments.push(Segment::Literal(buf));
-    }
-
-    segments
-}
-
 pub fn set_input_box(template: &str, current_text: &str, vars: &mut UiVariableRegistry) -> String {
     let start = template.find('{');
     let end = template.find('}');
@@ -743,7 +694,7 @@ pub fn set_input_box(template: &str, current_text: &str, vars: &mut UiVariableRe
         after_prefix
     };
 
-    vars.set(var_name, var_value.trim());
+    // vars.set(var_name, var_value.trim());
 
     // Visible text keeps what the user typed, nothing blanked
     current_text.to_string()

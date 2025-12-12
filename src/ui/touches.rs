@@ -1203,7 +1203,7 @@ fn process_text(
                         text.being_edited = false;
                         loader
                             .variables
-                            .set("selected_text.being_edited", text.being_edited.to_string());
+                            .set_bool("selected_text.being_edited", text.being_edited);
                     }
 
                     // if this text is being edited, make sure the layer is redrawn
@@ -1367,7 +1367,7 @@ pub fn enter_text_editing_mode(
 ) {
     ui_runtime.editing_text = true;
     text.being_edited = true;
-    variables.set("selected_text.being_edited", text.being_edited.to_string());
+    variables.set_bool("selected_text.being_edited", text.being_edited);
     if !text.input_box || ui_runtime.override_mode {
         text.text = text.template.clone();
     }

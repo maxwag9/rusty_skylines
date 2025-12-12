@@ -286,7 +286,7 @@ impl Menu {
             if layer.name == layer_name {
                 let new = layer.order as i32 + delta;
                 layer.order = new.max(0) as u32;
-                variables.set("selected_layer.order", layer.order.to_string());
+                variables.set_i32("selected_layer.order", layer.order as i32);
                 return;
             }
         }

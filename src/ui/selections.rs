@@ -32,26 +32,29 @@ impl SelectedUiElement {
 pub fn select_ui_element(loader: &mut UiButtonLoader, s: SelectedUiElement) {
     loader.ui_runtime.selected_ui_element_multi.clear();
     loader.ui_runtime.selected_ui_element_primary = make_selected_element(&s);
-    loader.variables.set(
+    loader.variables.set_string(
         "selected_menu",
-        format!(
-            "{}",
-            loader.ui_runtime.selected_ui_element_primary.menu_name
-        ),
+        loader
+            .ui_runtime
+            .selected_ui_element_primary
+            .menu_name
+            .to_string(),
     );
-    loader.variables.set(
+    loader.variables.set_string(
         "selected_layer",
-        format!(
-            "{}",
-            loader.ui_runtime.selected_ui_element_primary.layer_name
-        ),
+        loader
+            .ui_runtime
+            .selected_ui_element_primary
+            .layer_name
+            .to_string(),
     );
-    loader.variables.set(
+    loader.variables.set_string(
         "selected_ui_element_id",
-        format!(
-            "{}",
-            loader.ui_runtime.selected_ui_element_primary.element_id
-        ),
+        loader
+            .ui_runtime
+            .selected_ui_element_primary
+            .element_id
+            .to_string(),
     );
     loader.update_selection()
 }

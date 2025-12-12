@@ -434,7 +434,7 @@ impl RuntimeLayer {
             if let Some(eid) = &e.id {
                 if eid == id {
                     e.z_index += delta;
-                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    variables.set_i32("selected_element.z_index", e.z_index);
                     return;
                 }
             }
@@ -445,7 +445,7 @@ impl RuntimeLayer {
             if let Some(eid) = &e.id {
                 if eid == id {
                     e.z_index += delta;
-                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    variables.set_i32("selected_element.z_index", e.z_index);
                     return;
                 }
             }
@@ -456,7 +456,7 @@ impl RuntimeLayer {
             if let Some(eid) = &e.id {
                 if eid == id {
                     e.z_index += delta;
-                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    variables.set_i32("selected_element.z_index", e.z_index);
                     return;
                 }
             }
@@ -467,7 +467,7 @@ impl RuntimeLayer {
             if let Some(eid) = &e.id {
                 if eid == id {
                     e.z_index += delta;
-                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    variables.set_i32("selected_element.z_index", e.z_index);
                     return;
                 }
             }
@@ -478,7 +478,7 @@ impl RuntimeLayer {
             if let Some(eid) = &e.id {
                 if eid == id {
                     e.z_index += delta;
-                    variables.set("selected_element.z_index", e.z_index.to_string());
+                    variables.set_i32("selected_element.z_index", e.z_index);
                     return;
                 }
             }

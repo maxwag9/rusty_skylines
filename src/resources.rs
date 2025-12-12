@@ -34,7 +34,7 @@ impl Resources {
             UiButtonLoader::new(editor_mode, settings.override_mode, settings.show_gui);
         ui_loader
             .variables
-            .set("editor_mode", settings.editor_mode.to_string());
+            .set_bool("editor_mode", settings.editor_mode);
         Self {
             settings,
             time: TimeSystem::new(),

@@ -119,12 +119,12 @@ pub fn drag_hue_point(
                 let rgb = hsv_to_rgb(h, s, v);
 
                 color = Some([rgb[0], rgb[1], rgb[2], 1.0]);
-                loader.variables.set("color_picker.r", rgb[0].to_string());
-                loader.variables.set("color_picker.g", rgb[1].to_string());
-                loader.variables.set("color_picker.b", rgb[2].to_string());
-                loader.variables.set("color_picker.h", h.to_string());
-                loader.variables.set("color_picker.s", s.to_string());
-                loader.variables.set("color_picker.v", v.to_string());
+                loader.variables.set_f32("color_picker.r", rgb[0]);
+                loader.variables.set_f32("color_picker.g", rgb[1]);
+                loader.variables.set_f32("color_picker.b", rgb[2]);
+                loader.variables.set_f32("color_picker.h", h);
+                loader.variables.set_f32("color_picker.s", s);
+                loader.variables.set_f32("color_picker.v", v);
             } else {
                 // ---------------------------------------------
                 // NOT DRAGGING: HANDLE ANIMATES TO STORED COLOR

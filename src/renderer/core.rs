@@ -177,10 +177,8 @@ impl RenderCore {
         // ---------------------------------------------
         let day_length = 960.0;
         let t_days = (time.total_time + day_length * 203.3) / day_length;
-        ui_loader
-            .variables
-            .set("day_length", day_length.to_string());
-        ui_loader.variables.set("total_days", t_days.to_string());
+        ui_loader.variables.set_f32("day_length", day_length);
+        ui_loader.variables.set_f32("total_days", t_days);
 
         let day_phase = t_days % 1.0;
         let day_ang = day_phase * TAU;
@@ -190,10 +188,8 @@ impl RenderCore {
 
         let base_year = 2026.0;
         let current_year = base_year + t_days / 365.0;
-        ui_loader.variables.set("base_year", base_year.to_string());
-        ui_loader
-            .variables
-            .set("current_year", current_year.to_string());
+        ui_loader.variables.set_f32("base_year", base_year);
+        ui_loader.variables.set_f32("current_year", current_year);
 
         // ---------------------------------------------
         // OBSERVER PARAMETERS
@@ -206,9 +202,7 @@ impl RenderCore {
         let earth_rot = glam::Quat::from_rotation_y(sidereal_ang);
 
         let obliquity = 23.439_f32.to_radians();
-        ui_loader
-            .variables
-            .set("earth_obliquity", obliquity.to_string());
+        ui_loader.variables.set_f32("earth_obliquity", obliquity);
         let obliq_rot = glam::Quat::from_rotation_x(-obliquity);
 
         // ---------------------------------------------
@@ -218,9 +212,7 @@ impl RenderCore {
         let sun_ecl = glam::Vec3::new(sun_ecliptic_lon.cos(), 0.0, sun_ecliptic_lon.sin());
         let sun_eq = (obliq_rot * sun_ecl).normalize();
         let sun_decl = sun_eq.y.asin().to_degrees();
-        ui_loader
-            .variables
-            .set("sun_declination", sun_decl.to_string());
+        ui_loader.variables.set_f32("sun_declination", sun_decl);
 
         let sun_dir = (lat_rot * earth_rot * sun_eq).normalize();
 
@@ -257,9 +249,7 @@ impl RenderCore {
         // ---------------------------------------------
         let phase_angle = sun_eq.dot(moon_eq).clamp(-1.0, 1.0).acos();
         let moon_phase = (1.0 - phase_angle.cos()) * 0.5;
-        ui_loader
-            .variables
-            .set("moon_phase", moon_phase.to_string());
+        ui_loader.variables.set_f32("moon_phase", moon_phase);
 
         let phase_angle = sun_dir.dot(moon_dir).acos();
 

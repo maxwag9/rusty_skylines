@@ -86,22 +86,16 @@ impl ApplicationHandler for App {
             let pos = resources.input.mouse.pos;
             let delta = resources.input.mouse.delta;
 
+            resources.ui_loader.variables.set_f32("mouse_pos.x", pos.x);
             resources
                 .ui_loader
                 .variables
-                .set("mouse_pos.x", pos.x.to_string());
+                .set_f32("mouse_pos_delta.x", delta.x);
+            resources.ui_loader.variables.set_f32("mouse_pos.y", pos.y);
             resources
                 .ui_loader
                 .variables
-                .set("mouse_pos_delta.x", delta.x.to_string());
-            resources
-                .ui_loader
-                .variables
-                .set("mouse_pos.y", pos.y.to_string());
-            resources
-                .ui_loader
-                .variables
-                .set("mouse_pos_delta.y", delta.y.to_string());
+                .set_f32("mouse_pos_delta.y", delta.y);
         }
     }
 
@@ -194,7 +188,7 @@ impl ApplicationHandler for App {
                     resources
                         .ui_loader
                         .variables
-                        .set("editor_mode", resources.settings.editor_mode.to_string())
+                        .set_bool("editor_mode", resources.settings.editor_mode)
                 }
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
@@ -203,10 +197,10 @@ impl ApplicationHandler for App {
                         .ui_loader
                         .ui_runtime
                         .update_override_mode(resources.settings.override_mode);
-                    resources.ui_loader.variables.set(
-                        "override_mode",
-                        resources.settings.override_mode.to_string(),
-                    )
+                    resources
+                        .ui_loader
+                        .variables
+                        .set_bool("override_mode", resources.settings.override_mode)
                 }
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
@@ -218,16 +212,16 @@ impl ApplicationHandler for App {
                     resources
                         .ui_loader
                         .variables
-                        .set("show_gui", resources.settings.show_gui.to_string());
+                        .set_bool("show_gui", resources.settings.show_gui);
                     resources.settings.override_mode = false;
                     resources
                         .ui_loader
                         .ui_runtime
                         .update_override_mode(resources.settings.override_mode);
-                    resources.ui_loader.variables.set(
-                        "override_mode",
-                        resources.settings.override_mode.to_string(),
-                    );
+                    resources
+                        .ui_loader
+                        .variables
+                        .set_bool("override_mode", resources.settings.override_mode);
                     resources.settings.editor_mode = false;
                     resources
                         .ui_loader
@@ -236,7 +230,7 @@ impl ApplicationHandler for App {
                     resources
                         .ui_loader
                         .variables
-                        .set("editor_mode", resources.settings.editor_mode.to_string())
+                        .set_bool("editor_mode", resources.settings.editor_mode)
                 }
 
                 // Save GUI
@@ -294,22 +288,16 @@ impl ApplicationHandler for App {
                     let pos = resources.input.mouse.pos;
                     let delta = resources.input.mouse.delta;
 
+                    resources.ui_loader.variables.set_f32("mouse_pos.x", pos.x);
                     resources
                         .ui_loader
                         .variables
-                        .set("mouse_pos.x", pos.x.to_string());
+                        .set_f32("mouse_pos_delta.x", delta.x);
+                    resources.ui_loader.variables.set_f32("mouse_pos.y", pos.y);
                     resources
                         .ui_loader
                         .variables
-                        .set("mouse_pos_delta.x", delta.x.to_string());
-                    resources
-                        .ui_loader
-                        .variables
-                        .set("mouse_pos.y", pos.y.to_string());
-                    resources
-                        .ui_loader
-                        .variables
-                        .set("mouse_pos_delta.y", delta.y.to_string());
+                        .set_f32("mouse_pos_delta.y", delta.y);
                     // camera rotation ONLY if needed & dragging
                     if resources.input.mouse.middle_pressed {
                         if let Some(world) = self.world.as_mut() {
@@ -374,12 +362,9 @@ impl ApplicationHandler for App {
                     // update UI global vars
                     let ui = &mut resources.ui_loader;
 
-                    ui.variables
-                        .set("fps", format!("{}", resources.time.render_fps));
-                    ui.variables
-                        .set("render_dt", format!("{}", resources.time.render_dt));
-                    ui.variables
-                        .set("sim_dt", format!("{}", resources.time.sim_dt));
+                    ui.variables.set_f32("fps", resources.time.render_fps);
+                    ui.variables.set_f32("render_dt", resources.time.render_dt);
+                    ui.variables.set_f32("sim_dt", resources.time.sim_dt);
 
                     // simulation timing
                     resources.time.update_sim();

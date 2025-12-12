@@ -420,11 +420,9 @@ impl UiButtonLoader {
             }
         }
         self.variables
-            .set("any_text.being_hovered", being_hovered.to_string());
-        self.variables.set(
-            "selected_text.being_hovered",
-            selected_being_hovered.to_string(),
-        );
+            .set_bool("any_text.being_hovered", being_hovered);
+        self.variables
+            .set_bool("selected_text.being_hovered", selected_being_hovered);
     }
 
     pub fn handle_touches(
@@ -446,12 +444,12 @@ impl UiButtonLoader {
 
             let (h, s, v) = rgb_to_hsv(r, g, b);
 
-            self.variables.set("color_picker.r", r.to_string());
-            self.variables.set("color_picker.g", g.to_string());
-            self.variables.set("color_picker.b", b.to_string());
-            self.variables.set("color_picker.h", h.to_string());
-            self.variables.set("color_picker.s", s.to_string());
-            self.variables.set("color_picker.v", v.to_string());
+            self.variables.set_f32("color_picker.r", r);
+            self.variables.set_f32("color_picker.g", g);
+            self.variables.set_f32("color_picker.b", b);
+            self.variables.set_f32("color_picker.h", h);
+            self.variables.set_f32("color_picker.s", s);
+            self.variables.set_f32("color_picker.v", v);
         }
 
         let mouse_snapshot = MouseSnapshot::from_mouse(&input_state.mouse);
@@ -483,7 +481,7 @@ impl UiButtonLoader {
             input_state,
         );
         self.variables
-            .set("editing_text", format!("{}", self.ui_runtime.editing_text));
+            .set_bool("editing_text", self.ui_runtime.editing_text);
         if editor_mode {
             handle_text_editing(
                 &mut self.ui_runtime,
@@ -688,7 +686,7 @@ impl UiButtonLoader {
                 .find(|l| l.name == sel.layer_name.to_string())
             {
                 self.variables
-                    .set("selected_layer.order", layer.order.to_string());
+                    .set_i32("selected_layer.order", layer.order as i32);
             }
         }
         if let Some(element) = self.find_element(&sel.menu_name, &sel.layer_name, &sel.element_id) {
@@ -771,7 +769,7 @@ impl UiButtonLoader {
                                 editor_layer.handles.push(handle);
                             }
                             self.variables
-                                .set("selected_element.z_index", c.z_index.to_string());
+                                .set_i32("selected_element.z_index", c.z_index);
                         }
                         Handle(_h) => {}
                         Polygon(p) => {
@@ -854,7 +852,7 @@ impl UiButtonLoader {
                                 editor_layer.outlines.push(polygon_outline);
                             }
                             self.variables
-                                .set("selected_element.z_index", p.z_index.to_string());
+                                .set_i32("selected_element.z_index", p.z_index);
                         }
                         Text(tx) => {
                             // if self.ui_runtime.editor_mode {
@@ -862,7 +860,7 @@ impl UiButtonLoader {
                             // }
 
                             self.variables
-                                .set("selected_element.z_index", tx.z_index.to_string());
+                                .set_i32("selected_element.z_index", tx.z_index);
                         }
                         Outline(_o) => {}
                     }
