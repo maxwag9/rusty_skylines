@@ -203,11 +203,6 @@ pub(crate) struct Vertex {
 }
 
 impl Vertex {
-    const ATTRIBS: [VertexAttribute; 2] = vertex_attr_array![
-        0 => Float32x3, // now 3 floats for position
-        1 => Float32x3
-    ];
-
     pub fn desc() -> VertexBufferLayout<'static> {
         use std::mem::size_of;
         VertexBufferLayout {
@@ -833,72 +828,6 @@ pub struct UiButtonHandle {
     pub parent_id: Option<String>,
 }
 
-pub trait UiElementCommon {
-    fn id(&self) -> Option<&str>;
-    fn z_index(&self) -> i32;
-    fn set_z_index(&mut self, z: i32);
-}
-
-impl UiElementCommon for UiButtonText {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-    fn z_index(&self) -> i32 {
-        self.z_index
-    }
-    fn set_z_index(&mut self, z: i32) {
-        self.z_index = z;
-    }
-}
-
-impl UiElementCommon for UiButtonPolygon {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-    fn z_index(&self) -> i32 {
-        self.z_index
-    }
-    fn set_z_index(&mut self, z: i32) {
-        self.z_index = z;
-    }
-}
-
-impl UiElementCommon for UiButtonCircle {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-    fn z_index(&self) -> i32 {
-        self.z_index
-    }
-    fn set_z_index(&mut self, z: i32) {
-        self.z_index = z;
-    }
-}
-
-impl UiElementCommon for UiButtonOutline {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-    fn z_index(&self) -> i32 {
-        self.z_index
-    }
-    fn set_z_index(&mut self, z: i32) {
-        self.z_index = z;
-    }
-}
-
-impl UiElementCommon for UiButtonHandle {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-    fn z_index(&self) -> i32 {
-        self.z_index
-    }
-    fn set_z_index(&mut self, z: i32) {
-        self.z_index = z;
-    }
-}
-
 impl UiButtonText {
     pub(crate) fn from_json(t: UiButtonTextJson) -> Self {
         let length = t.text.len();
@@ -1445,65 +1374,4 @@ pub struct UiButtonPolygonJson {
     pub z_index: i32,
     pub vertices: Vec<UiVertexJson>,
     pub misc: MiscButtonSettingsJson,
-}
-
-pub fn ensure_id<T: UiElementId>(mut item: T) -> T {
-    if item.get_id().is_none() {
-        item.set_id(Some(gen_id()));
-    }
-    item
-}
-
-pub fn gen_id() -> String {
-    nanoid::nanoid!(8) // 8 chars is enough, change if you want longer
-}
-
-pub trait UiElementId {
-    fn get_id(&self) -> &Option<String>;
-    fn set_id(&mut self, id: Option<String>);
-}
-
-impl UiElementId for UiButtonCircle {
-    fn get_id(&self) -> &Option<String> {
-        &self.id
-    }
-    fn set_id(&mut self, id: Option<String>) {
-        self.id = id;
-    }
-}
-
-impl UiElementId for UiButtonPolygon {
-    fn get_id(&self) -> &Option<String> {
-        &self.id
-    }
-    fn set_id(&mut self, id: Option<String>) {
-        self.id = id;
-    }
-}
-
-impl UiElementId for UiButtonText {
-    fn get_id(&self) -> &Option<String> {
-        &self.id
-    }
-    fn set_id(&mut self, id: Option<String>) {
-        self.id = id;
-    }
-}
-
-impl UiElementId for UiButtonHandle {
-    fn get_id(&self) -> &Option<String> {
-        &self.id
-    }
-    fn set_id(&mut self, id: Option<String>) {
-        self.id = id;
-    }
-}
-
-impl UiElementId for UiButtonOutline {
-    fn get_id(&self) -> &Option<String> {
-        &self.id
-    }
-    fn set_id(&mut self, id: Option<String>) {
-        self.id = id;
-    }
 }

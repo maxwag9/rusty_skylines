@@ -75,10 +75,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
     let l = normalize(uniforms.sun_direction);
 
-    let ambient = 0.20;
-    let diffuse = max(dot(n, l), 0.0) * 0.60;
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    let hemi = clamp(dot(n, up) * 0.5 + 0.5, 0.0, 1.0);
+    let sky_ambient = vec3<f32>(0.25, 0.28, 0.32);
+    let ground_ambient = vec3<f32>(0.10, 0.09, 0.08);
+    let ambient = mix(ground_ambient, sky_ambient, hemi);
 
-    let base_color = in.color * (ambient + diffuse);
+    let ndotl = dot(n, l);
+    let wrap = 0.3;
+    let diffuse = clamp((ndotl + wrap) / (1.0 + wrap), 0.0, 1.0);
+
+
+    let base_color = in.color * (ambient + diffuse) + 0.05;
 
     let dist = distance(in.world_pos, uniforms.camera_pos);
 
@@ -86,7 +94,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // slight desaturation improves realism
     let gray = dot(base_color, vec3<f32>(0.3, 0.59, 0.11));
-    let desat = mix(base_color, vec3<f32>(gray), f * 0.2);
+    let desat = mix(base_color, vec3<f32>(gray), f * 0.05);
 
     let final_color = mix(desat, fog.fog_color, f);
 

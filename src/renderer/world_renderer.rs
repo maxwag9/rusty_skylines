@@ -7,6 +7,8 @@ use crate::terrain::TerrainGenerator;
 use crate::threads::{ChunkJob, ChunkWorkerPool};
 use glam::Vec3;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use wgpu::{Device, IndexFormat, RenderPass};
 
 pub struct WorldRenderer {
@@ -30,7 +32,7 @@ impl WorldRenderer {
         let terrain_gen = TerrainGenerator::new(201035458);
         let chunk_size = 128;
         let view_radius_render = 16;
-        let view_radius_generate = 8;
+        let view_radius_generate = 16;
 
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
@@ -136,7 +138,17 @@ impl WorldRenderer {
         }
 
         // 3. Job creation: unified rebuild logic (upgrade + downgrade)
-        let mut batch: Vec<(i32, i32, usize, usize, usize, usize, usize, u64)> = Vec::new();
+        let mut batch: Vec<(
+            i32,
+            i32,
+            usize,
+            usize,
+            usize,
+            usize,
+            usize,
+            u64,
+            Arc<AtomicU64>,
+        )> = Vec::new();
         let mut near_jobs_sent = 0usize;
         let mut far_batches_sent = 0usize;
 
@@ -202,12 +214,23 @@ impl WorldRenderer {
             if step <= 2 {
                 // near chunks: high priority, one per job
                 if near_jobs_sent < self.max_jobs_per_frame {
-                    let version = self.workers.new_version_for(coord);
+                    let (version, version_atomic) = self.workers.new_version_for(coord);
                     self.pending.insert(coord, (version, step));
 
                     let job = ChunkJob {
-                        chunks: vec![(cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos, version)],
+                        chunks: vec![(
+                            cx,
+                            cz,
+                            step,
+                            n_x_neg,
+                            n_x_pos,
+                            n_z_neg,
+                            n_z_pos,
+                            version,
+                            version_atomic,
+                        )],
                     };
+
                     let _ = self.workers.job_tx.send(job);
                     near_jobs_sent += 1;
                 }
@@ -216,10 +239,20 @@ impl WorldRenderer {
 
             // far chunks: batched
             if far_batches_sent < self.max_far_batches_per_frame {
-                let version = self.workers.new_version_for(coord);
+                let (version, version_atomic) = self.workers.new_version_for(coord);
                 self.pending.insert(coord, (version, step));
 
-                batch.push((cx, cz, step, n_x_neg, n_x_pos, n_z_neg, n_z_pos, version));
+                batch.push((
+                    cx,
+                    cz,
+                    step,
+                    n_x_neg,
+                    n_x_pos,
+                    n_z_neg,
+                    n_z_pos,
+                    version,
+                    version_atomic,
+                ));
 
                 if batch.len() >= self.max_chunks_per_batch {
                     let job = ChunkJob {
@@ -250,8 +283,8 @@ impl WorldRenderer {
         pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
         pass.set_bind_group(1, &pipelines.fog_bind_group, &[]);
         // compute planes once per frame
-        let planes = extract_frustum_planes(camera.matrices(aspect).1);
-
+        let (_, _, view_proj) = camera.matrices(aspect);
+        let planes = extract_frustum_planes(view_proj);
         let cs = self.chunk_size as f32;
         let cam_pos = camera.position();
         let cam_cx = (cam_pos.x / cs).floor() as i32;

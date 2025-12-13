@@ -8,15 +8,26 @@ use std::sync::{Arc, RwLock};
 // threads.rs
 #[derive(Clone, Debug)]
 pub struct ChunkJob {
-    /// (cx, cz, self_step, neg_x_step, pos_x_step, neg_z_step, pos_z_step, version)
-    pub chunks: Vec<(i32, i32, usize, usize, usize, usize, usize, u64)>,
+    /// (cx, cz, self_step, neg_x_step, pos_x_step, neg_z_step, pos_z_step, version, version again?)
+    pub chunks: Vec<(
+        i32,
+        i32,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        u64,
+        Arc<AtomicU64>,
+    )>,
 }
 
 pub struct ChunkWorkerPool {
     pub job_tx: Sender<ChunkJob>,
     pub result_rx: Receiver<CpuChunkMesh>,
 
-    versions: Arc<RwLock<HashMap<(i32, i32), u64>>>,
+    versions: Arc<RwLock<HashMap<(i32, i32), Arc<AtomicU64>>>>,
+
     next_version: AtomicU64,
 }
 
@@ -38,28 +49,39 @@ impl ChunkWorkerPool {
                 loop {
                     match job_rx.recv() {
                         Ok(job) => {
-                            for (cx, cz, self_step, nx_neg, nx_pos, nz_neg, nz_pos, version) in
-                                job.chunks.iter().copied()
+                            for (
+                                cx,
+                                cz,
+                                self_step,
+                                nx_neg,
+                                nx_pos,
+                                nz_neg,
+                                nz_pos,
+                                version,
+                                version_atomic,
+                            ) in job.chunks.iter().cloned()
                             {
-                                let keep = {
-                                    let guard = versions.read().unwrap();
-                                    match guard.get(&(cx, cz)) {
-                                        Some(&v) => v == version,
-                                        None => false,
-                                    }
-                                };
-
-                                if !keep {
+                                // fast pre-check before doing any work
+                                if version_atomic.load(Ordering::Relaxed) != version {
                                     continue;
                                 }
 
-                                let cpu = ChunkBuilder::build_chunk_cpu(
-                                    cx, cz, chunk_size, self_step, nx_neg, nx_pos, nz_neg, nz_pos,
-                                    version, &terrain,
-                                );
-
-                                if result_tx.send(cpu).is_err() {
-                                    break;
+                                if let Some(cpu) = ChunkBuilder::build_chunk_cpu(
+                                    cx,
+                                    cz,
+                                    chunk_size,
+                                    self_step,
+                                    nx_neg,
+                                    nx_pos,
+                                    nz_neg,
+                                    nz_pos,
+                                    version,
+                                    &version_atomic,
+                                    &terrain,
+                                ) {
+                                    if result_tx.send(cpu).is_err() {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -77,16 +99,29 @@ impl ChunkWorkerPool {
         }
     }
 
-    pub fn new_version_for(&self, coord: (i32, i32)) -> u64 {
-        let v = self.next_version.fetch_add(1, Ordering::Relaxed) + 1;
-        let mut guard = self.versions.write().unwrap();
-        guard.insert(coord, v);
-        v
-    }
-
     pub fn is_current_version(&self, coord: (i32, i32), version: u64) -> bool {
         let guard = self.versions.read().unwrap();
-        matches!(guard.get(&coord), Some(&v) if v == version)
+        match guard.get(&coord) {
+            Some(v_atomic) => v_atomic.load(Ordering::Relaxed) == version,
+            None => false,
+        }
+    }
+
+    #[inline(always)]
+    pub fn still_current(v: &AtomicU64, expected: u64) -> bool {
+        v.load(Ordering::Relaxed) == expected
+    }
+
+    pub fn new_version_for(&self, coord: (i32, i32)) -> (u64, Arc<AtomicU64>) {
+        let atomic = {
+            let mut g = self.versions.write().unwrap();
+            g.entry(coord)
+                .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+                .clone()
+        };
+
+        let v = atomic.fetch_add(1, Ordering::Relaxed) + 1;
+        (v, atomic)
     }
 
     pub fn forget_chunk(&self, coord: (i32, i32)) {

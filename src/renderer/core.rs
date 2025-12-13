@@ -176,7 +176,8 @@ impl RenderCore {
         // TIME SCALES
         // ---------------------------------------------
         let day_length = 960.0;
-        let t_days = (time.total_time + day_length * 203.3) / day_length;
+        // let t_days = (time.total_time + day_length * 203.3) / day_length; // night
+        let t_days = time.total_time / day_length;
         ui_loader.variables.set_f32("day_length", day_length);
         ui_loader.variables.set_f32("total_days", t_days);
 

@@ -62,30 +62,26 @@ impl UiVariableRegistry {
     }
 
     pub fn set_f32(&mut self, name: &str, value: f32) {
-        let valu = UiValue::F32(value);
-        println!("{name}: {valu:#?}");
-        self.vars.insert(name.to_string(), valu);
+        let value = UiValue::F32(value);
+        self.vars.insert(name.to_string(), value);
     }
 
     pub fn set_i32(&mut self, name: &str, value: i32) {
-        let valu = UiValue::I32(value);
-        println!("{name}: {valu:#?}");
-        self.vars.insert(name.to_string(), valu);
+        let value = UiValue::I32(value);
+        self.vars.insert(name.to_string(), value);
     }
 
     pub fn set_bool(&mut self, name: &str, value: bool) {
-        let valu = UiValue::Bool(value);
-        println!("{name}: {valu:#?}");
-        self.vars.insert(name.to_string(), valu);
+        let value = UiValue::Bool(value);
+        self.vars.insert(name.to_string(), value);
     }
 
     pub fn set_string<S>(&mut self, name: &str, value: S)
     where
         S: Into<String>,
     {
-        let valu = UiValue::String(value.into());
-        println!("{name}: {valu:#?}");
-        self.vars.insert(name.to_string(), valu);
+        let value = UiValue::String(value.into());
+        self.vars.insert(name.to_string(), value);
     }
 
     pub fn get(&self, name: &str) -> Option<&UiValue> {

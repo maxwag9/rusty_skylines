@@ -12,23 +12,6 @@ pub struct WaterUniform {
     pub _pad1: [f32; 2],
 }
 
-const WATER_VERTS: &[SimpleVertex] = &[
-    SimpleVertex {
-        pos: [-20000.0, 0.0, -20000.0],
-    },
-    SimpleVertex {
-        pos: [20000.0, 0.0, -20000.0],
-    },
-    SimpleVertex {
-        pos: [20000.0, 0.0, 20000.0],
-    },
-    SimpleVertex {
-        pos: [-20000.0, 0.0, 20000.0],
-    },
-];
-
-const WATER_INDICES: &[u32] = &[0, 1, 2, 0, 2, 3];
-
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct SimpleVertex {

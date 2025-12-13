@@ -1,5 +1,8 @@
 use crate::terrain::TerrainGenerator;
+use crate::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
+use glam::Vec3;
+use std::sync::atomic::AtomicU64;
 use wgpu::util::DeviceExt;
 use wgpu::{Buffer, Device};
 
@@ -31,12 +34,6 @@ impl GpuChunkMesh {
     }
 }
 
-pub struct ChunkMesh {
-    pub x: i32,
-    pub z: i32,
-    pub mesh: GpuChunkMesh,
-}
-
 pub struct ChunkMeshLod {
     pub step: usize,
     pub mesh: GpuChunkMesh,
@@ -65,8 +62,9 @@ impl ChunkBuilder {
         _ns_z_neg: usize,
         _ns_z_pos: usize,
         version: u64,
+        version_atomic: &AtomicU64,
         terrain_gen: &TerrainGenerator,
-    ) -> CpuChunkMesh {
+    ) -> Option<CpuChunkMesh> {
         let size = size as usize;
         let base_x = chunk_x as f32 * size as f32;
         let base_z = chunk_z as f32 * size as f32;
@@ -78,10 +76,24 @@ impl ChunkBuilder {
         let mut vertices = Vec::with_capacity(verts_x * verts_z);
         let mut heights = vec![0.0; verts_x * verts_z];
 
+        let check_mask = match step {
+            1 => 0b11,  // every 4 rows
+            2 => 0b111, // every 8
+            4 => 0b1111,
+            8 => 0b1_1111,
+            _ => 0b11_1111,
+        };
+
         for gx in 0..verts_x {
+            if gx & check_mask == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+                return None;
+            }
+
             for gz in 0..verts_z {
                 let wx = base_x + (gx * step) as f32;
                 let wz = base_z + (gz * step) as f32;
+                let cx = base_x + gx as f32;
+                let cz = base_z + gz as f32;
 
                 let h = terrain_gen.height(wx, wz);
                 let m = if step >= 8 {
@@ -93,9 +105,17 @@ impl ChunkBuilder {
 
                 heights[gx * verts_z + gz] = h;
 
+                let h = terrain_gen.height(wx, wz);
+
+                let hx = terrain_gen.height(wx + step as f32, wz);
+                let hz = terrain_gen.height(wx, wz + step as f32);
+                let dx = Vec3::new(step as f32, hx - h, 0.0);
+                let dz = Vec3::new(0.0, hz - h, step as f32);
+                let n = dx.cross(dz).normalize();
+
                 vertices.push(Vertex {
                     position: [wx, h, wz],
-                    normal: [0.0, 1.0, 0.0],
+                    normal: [n.x, n.y, n.z],
                     color: col,
                 });
             }
@@ -103,6 +123,10 @@ impl ChunkBuilder {
 
         let inv = 1.0 / stepf;
         for gx in 0..verts_x {
+            if gx & check_mask == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+                return None;
+            }
+
             for gz in 0..verts_z {
                 let xm = gx.saturating_sub(1);
                 let xp = (gx + 1).min(verts_x - 1);
@@ -124,6 +148,10 @@ impl ChunkBuilder {
 
         let mut indices = Vec::new();
         for gx in 0..verts_x - 1 {
+            if gx & check_mask == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+                return None;
+            }
+
             for gz in 0..verts_z - 1 {
                 let i0 = (gx * verts_z + gz) as u32;
                 let i1 = ((gx + 1) * verts_z + gz) as u32;
@@ -133,27 +161,27 @@ impl ChunkBuilder {
             }
         }
 
-        CpuChunkMesh {
+        Some(CpuChunkMesh {
             cx: chunk_x,
             cz: chunk_z,
             step,
             version,
             vertices,
             indices,
-        }
+        })
     }
 }
 
 pub fn lod_step_for_distance(dist2: i32) -> usize {
-    if dist2 < 4 {
+    if dist2 < 8 {
         1
-    } else if dist2 < 6 {
+    } else if dist2 < 14 {
         2
-    } else if dist2 < 8 {
+    } else if dist2 < 20 {
         4
-    } else if dist2 < 12 {
+    } else if dist2 < 28 {
         8
-    } else if dist2 < 16 {
+    } else if dist2 < 42 {
         16
     } else {
         32
