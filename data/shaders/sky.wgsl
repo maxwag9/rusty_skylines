@@ -23,11 +23,8 @@ struct Uniforms {
 var<uniform> u: Uniforms;
 
 struct SkyUniform {
-    day_time: f32,
-    day_length: f32,
-
     exposure: f32,
-    _pad0: f32,
+    moon_phase: f32,
 
     sun_size: f32,
     sun_intensity: f32,
@@ -35,8 +32,8 @@ struct SkyUniform {
     moon_size: f32,
     moon_intensity: f32,
 
-    moon_phase: f32,
     _pad1: f32,
+    _pad2: f32,
 };
 
 @group(1) @binding(0)
@@ -381,7 +378,7 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
             var bowl_acc = 0.0;
             var rim_acc  = 0.0;
 
-            let CRATERS = 32;
+            let CRATERS = 4;
 
             for (var i = 0; i < CRATERS; i = i + 1) {
                 let cr = crater_shape(N_face, i);
@@ -392,8 +389,8 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
                 rim_acc = max(rim_acc, rim);
             }
 
-            let bowl   = bowl_acc * 0.25;
-            let rim    = rim_acc  * 0.10;
+            let bowl   = bowl_acc * 0.35;
+            let rim    = rim_acc  * 0.20;
 
             var albedo_mod = maria;
 

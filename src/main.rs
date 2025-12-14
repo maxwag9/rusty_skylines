@@ -3,6 +3,7 @@ mod chunk_builder;
 mod components;
 mod data;
 mod events;
+mod hsv;
 mod paths;
 mod renderer;
 mod resources;

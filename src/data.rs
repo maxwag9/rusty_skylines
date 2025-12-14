@@ -36,6 +36,7 @@ pub struct Settings {
     pub override_mode: bool,
     pub show_gui: bool,
     pub background_color: [f32; 4],
+    pub total_game_time: f64,
 }
 
 impl Default for Settings {
@@ -48,6 +49,7 @@ impl Default for Settings {
             override_mode: false,
             show_gui: true,
             background_color: [0.0, 0.0, 0.0, 1.0],
+            total_game_time: 0.0,
         }
     }
 }
@@ -70,5 +72,18 @@ impl Settings {
                 default
             }
         }
+    }
+
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let path = path.as_ref();
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let toml_str = toml::to_string_pretty(self)?;
+        fs::write(path, toml_str)?;
+
+        Ok(())
     }
 }

@@ -175,9 +175,9 @@ impl RenderCore {
         // ---------------------------------------------
         // TIME SCALES
         // ---------------------------------------------
-        let day_length = 960.0;
+        let day_length: f32 = 960.0;
         // let t_days = (time.total_time + day_length * 203.3) / day_length; // night
-        let t_days = time.total_time / day_length;
+        let t_days: f32 = (time.total_game_time / day_length as f64) as f32;
         ui_loader.variables.set_f32("day_length", day_length);
         ui_loader.variables.set_f32("total_days", t_days);
 
@@ -252,11 +252,6 @@ impl RenderCore {
         let moon_phase = (1.0 - phase_angle.cos()) * 0.5;
         ui_loader.variables.set_f32("moon_phase", moon_phase);
 
-        let phase_angle = sun_dir.dot(moon_dir).acos();
-
-        // fully lit when opposite sun
-        let moon_phase_factor = 0.5 * (1.0 + phase_angle.cos());
-
         let (view, proj, view_proj) = camera.matrices(aspect);
 
         let new_uniforms = make_new_uniforms(
@@ -267,7 +262,7 @@ impl RenderCore {
             moon_dir,
             cam_pos,
             orbit_radius,
-            time.total_time,
+            time.total_time as f32,
         );
         self.queue.write_buffer(
             &self.pipelines.uniform_buffer,
@@ -303,20 +298,17 @@ impl RenderCore {
         );
 
         let sky_uniform = SkyUniform {
-            day_time: time.total_time,
-            day_length,
-
             exposure: 1.0,
-            _pad0: 1.0,
+            moon_phase,
 
-            sun_size: 0.0465, // NDC radius for now (0.05 = big)
+            sun_size: 0.0465, // NDC radius (0.05 = kinda big fella)
             sun_intensity: 1.0,
 
             moon_size: 0.03,
             moon_intensity: 1.0,
 
-            moon_phase: moon_phase_factor,
             _pad1: 1.0,
+            _pad2: 0.0,
         };
 
         self.queue.write_buffer(
@@ -482,7 +474,7 @@ impl RenderCore {
 
             let screen_uniform = crate::renderer::ui::ScreenUniform {
                 size: [self.size.width as f32, self.size.height as f32],
-                time: time.total_time,
+                time: time.total_time as f32,
                 enable_dither: 1,
                 mouse: mouse.pos.to_array(),
             };

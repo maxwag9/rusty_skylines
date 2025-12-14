@@ -92,8 +92,6 @@ impl ChunkBuilder {
             for gz in 0..verts_z {
                 let wx = base_x + (gx * step) as f32;
                 let wz = base_z + (gz * step) as f32;
-                let cx = base_x + gx as f32;
-                let cz = base_z + gz as f32;
 
                 let h = terrain_gen.height(wx, wz);
                 let m = if step >= 8 {

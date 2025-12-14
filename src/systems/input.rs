@@ -53,7 +53,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let mut speed = base_speed;
 
     match (resources.input.shift, resources.input.ctrl) {
-        (true, false) => speed *= 8.0,
+        (true, false) => speed *= 18.0,
         (false, true) => speed *= 0.4,
         (true, true) => speed *= 0.1,
         _ => {}

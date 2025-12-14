@@ -105,3 +105,6 @@ keys = ["Backspace"]
 keys = ["F7"]
 ["Toggle show gui"]
 keys = ["F1"]
+
+["Leave Game"]
+keys = ["ESC"]

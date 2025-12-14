@@ -224,7 +224,7 @@ impl UiRenderer {
         }
         let new_uniform = ScreenUniform {
             size: [size.0, size.1],
-            time: time.total_time,
+            time: time.total_time as f32,
             enable_dither: 1,
             mouse: mouse.pos.to_array(),
         };
@@ -1003,7 +1003,7 @@ impl UiRenderer {
                     let y1 = tp.pos[1] + atlas.line_height + caret_offset_y;
 
                     let t = time_system.total_time * 3.0; // adjust speed here
-                    let blink_alpha = 0.5 + 0.5 * t.cos(); // smooth
+                    let blink_alpha = (0.5 + 0.5 * t.cos()) as f32; // smooth
                     let caret_alpha = blink_alpha.clamp(0.0, 1.0);
 
                     let caret_color = [1.0, 1.0, 1.0, caret_alpha];
@@ -1446,7 +1446,7 @@ impl UiRenderer {
                     let y1 = tp.pos[1] + atlas.line_height + caret_offset_y;
 
                     let t = time_system.total_time * 3.0; // adjust speed here
-                    let blink_alpha = 0.5 + 0.5 * t.cos(); // smooth
+                    let blink_alpha = (0.5 + 0.5 * t.cos()) as f32; // smooth
                     let caret_alpha = blink_alpha.clamp(0.0, 1.0);
 
                     let caret_color = [1.0, 1.0, 1.0, caret_alpha];

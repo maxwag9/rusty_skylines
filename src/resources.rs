@@ -35,9 +35,11 @@ impl Resources {
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);
+        let mut time = TimeSystem::new();
+        time.total_game_time = settings.total_game_time;
         Self {
             settings,
-            time: TimeSystem::new(),
+            time,
             input: InputState::new(),
             renderer,
             simulation: Simulation::new(),
@@ -70,7 +72,8 @@ pub struct TimeSystem {
     pub render_fps: f32,
     pub target_fps: f32,
     pub target_frametime: f32,
-    pub total_time: f32,
+    pub total_time: f64,
+    pub total_game_time: f64,
 }
 
 impl TimeSystem {
@@ -90,6 +93,7 @@ impl TimeSystem {
             target_fps: 100.0,
             target_frametime: 0.0,
             total_time: 0.0,
+            total_game_time: 0.0,
         }
     }
 
@@ -108,15 +112,19 @@ impl TimeSystem {
         let dt = (now - self.last_sim).as_secs_f32();
         self.last_sim = now;
         self.sim_dt = dt;
-        self.total_time += dt;
     }
 
     pub fn update_render(&mut self) {
         let now = Instant::now();
         let dt = (now - self.last_render).as_secs_f32();
         self.last_render = now;
+
         self.render_dt = dt;
         self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+
+        self.total_time += dt as f64;
+        self.total_game_time += dt as f64; // later scaled
+
         self.sim_accumulator += dt;
     }
 }

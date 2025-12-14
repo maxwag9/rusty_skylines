@@ -27,11 +27,8 @@ struct Uniforms {
 @group(1) @binding(0) var<uniform> water: WaterUniform;
 
 struct SkyUniform {
-    day_time: f32,
-    day_length: f32,
-
     exposure: f32,
-    _pad0: f32,
+    moon_phase: f32,
 
     sun_size: f32,
     sun_intensity: f32,
@@ -39,8 +36,8 @@ struct SkyUniform {
     moon_size: f32,
     moon_intensity: f32,
 
-    moon_phase: f32,
     _pad1: f32,
+    _pad2: f32,
 };
 
 @group(1) @binding(1) var<uniform> sky: SkyUniform;

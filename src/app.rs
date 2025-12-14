@@ -244,6 +244,14 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                if input.action_pressed_once("Leave Game") {
+                    resources.settings.total_game_time = resources.time.total_game_time;
+                    match resources.settings.save(data_dir("settings.toml")) {
+                        Ok(_) => println!("Settings saved"),
+                        Err(e) => eprintln!("Failed to save Settings: {e}"),
+                    }
+                    event_loop.exit()
+                }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
                     && resources.ui_loader.ui_runtime.editor_mode

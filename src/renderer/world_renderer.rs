@@ -3,7 +3,7 @@ use crate::chunk_builder::{
 };
 use crate::components::camera::Camera;
 use crate::renderer::pipelines::Pipelines;
-use crate::terrain::TerrainGenerator;
+use crate::terrain::{TerrainGenerator, TerrainParams};
 use crate::threads::{ChunkJob, ChunkWorkerPool};
 use glam::Vec3;
 use std::collections::HashMap;
@@ -29,10 +29,12 @@ pub struct WorldRenderer {
 
 impl WorldRenderer {
     pub fn new() -> Self {
-        let terrain_gen = TerrainGenerator::new(201035458);
+        let mut terrain_params = TerrainParams::default();
+        terrain_params.seed = 201035458;
+        let terrain_gen = TerrainGenerator::new(terrain_params);
         let chunk_size = 128;
-        let view_radius_render = 16;
-        let view_radius_generate = 16;
+        let view_radius_render = 64;
+        let view_radius_generate = 64;
 
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
@@ -42,20 +44,6 @@ impl WorldRenderer {
         let mut chunks = HashMap::new();
         let pending = HashMap::new();
 
-        // Build origin chunk immediately with the highest LOD
-        // let cpu_origin =
-        //     ChunkBuilder::build_chunk_cpu(0, 0, chunk_size, 1, 1, 1, 1, 1, &terrain_gen);
-        //
-        // let gpu_origin = GpuChunkMesh::from_cpu(device, &cpu_origin);
-
-        // chunks.insert(
-        //     (0, 0),
-        //     ChunkMeshLod {
-        //         step: 1,
-        //         mesh: gpu_origin,
-        //     },
-        // );
-
         Self {
             chunks,
             pending,
@@ -64,9 +52,9 @@ impl WorldRenderer {
             view_radius_generate,
             view_radius_render,
             workers,
-            max_jobs_per_frame: 2,
-            max_chunks_per_batch: 8,
-            max_far_batches_per_frame: 2,
+            max_jobs_per_frame: 1,
+            max_chunks_per_batch: 48,
+            max_far_batches_per_frame: 1,
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),

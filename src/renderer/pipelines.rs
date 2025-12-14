@@ -272,11 +272,8 @@ impl Pipelines {
         });
 
         let sky_uniform = SkyUniform {
-            day_time: 0.0,
-            day_length: 960.0,
-
             exposure: 1.0,
-            _pad0: 0.0,
+            moon_phase: 0.0,
 
             sun_size: 0.05, // NDC radius for now (0.05 = big)
             sun_intensity: 510.0,
@@ -284,8 +281,8 @@ impl Pipelines {
             moon_size: 0.04,
             moon_intensity: 1.0,
 
-            moon_phase: 0.0,
             _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         let sky_buffer = device.create_buffer_init(&BufferInitDescriptor {

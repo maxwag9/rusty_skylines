@@ -1,4 +1,5 @@
-use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
+use crate::hsv::{HSV, hsv_to_rgb, lerp_hsv};
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use std::f32::consts::PI;
 
 const TAU: f32 = PI * 2.0;
@@ -12,6 +13,7 @@ fn hash01(mut x: u32) -> f32 {
 
 #[derive(Clone, Copy, Debug)]
 pub struct TerrainParams {
+    pub seed: u32,
     // Global scaling: >1 = larger features (zoomed out), <1 = smaller features (zoomed in)
     pub world_scale: f32,
 
@@ -53,19 +55,19 @@ pub struct TerrainParams {
 
     // Octaves/persistence
     pub macro_octaves: usize,
-    pub macro_persistence: f64,
+    pub macro_persistence: f32,
     pub hills_octaves: usize,
-    pub hills_persistence: f64,
+    pub hills_persistence: f32,
     pub mountains_octaves: usize,
-    pub mountains_persistence: f64,
+    pub mountains_persistence: f32,
     pub continent_octaves: usize,
-    pub continent_persistence: f64,
+    pub continent_persistence: f32,
     pub moisture_octaves: usize,
-    pub moisture_persistence: f64,
+    pub moisture_persistence: f32,
     pub warp_large_octaves: usize,
-    pub warp_large_persistence: f64,
+    pub warp_large_persistence: f32,
     pub warp_small_octaves: usize,
-    pub warp_small_persistence: f64,
+    pub warp_small_persistence: f32,
 
     // Amplitudes
     pub ocean_floor: f32,
@@ -89,14 +91,32 @@ pub struct TerrainParams {
     pub mountain_smooth: f32, // 0..1, reduces ridged harshness
     pub hills_detail: f32,    // 0..1
     pub micro_flatten: f32,   // 0..1
+
+    // Tectonics
+    pub plate_freq: f32,
+    pub plate_sharpness: f32,
+    pub plate_mountain_amp: f32,
+
+    // Erosion
+    pub erosion_strength: f32,
+    pub erosion_iters: usize,
+
+    // Rivers
+    pub river_freq: f32,
+    pub river_depth: f32,
+    pub river_width: f32,
+
+    // Slope effects
+    pub snow_slope_limit: f32,
 }
 
 impl Default for TerrainParams {
     fn default() -> Self {
         Self {
-            world_scale: 1.0,
+            seed: 201035458,
+            world_scale: 0.5,
 
-            height_scale: 120.0,
+            height_scale: 1200.0,
             sea_level: 0.0,
 
             lat_extent: 120_000.0,
@@ -162,32 +182,54 @@ impl Default for TerrainParams {
             mountain_smooth: 0.6,
 
             hills_detail: 0.18,
-            micro_flatten: 0.6,
+            micro_flatten: 0.0,
+
+            plate_freq: 0.00035,
+            plate_sharpness: 3.5,
+            plate_mountain_amp: 1.2,
+
+            erosion_strength: 0.35,
+            erosion_iters: 2,
+
+            river_freq: 0.0000,
+            river_depth: 0.85,
+            river_width: 0.085,
+
+            snow_slope_limit: 0.65,
         }
     }
 }
 
-#[derive(Clone)]
 pub struct TerrainGenerator {
     p: TerrainParams,
 
-    macro_elev: Fbm<Perlin>,
-    hills: Fbm<Perlin>,
-    mountains: Fbm<Perlin>,
-    continent_noise: Fbm<Perlin>,
-    moisture_noise: Fbm<Perlin>,
-    warp_large: Fbm<Perlin>,
-    warp_small: Fbm<Perlin>,
+    macro_elev: FastNoiseLite,
+    hills: FastNoiseLite,
+    mountains: FastNoiseLite,
+    plates: FastNoiseLite,
+    rivers: FastNoiseLite,
+
+    continent_noise: FastNoiseLite,
+    moisture_noise: FastNoiseLite,
+    warp_large: FastNoiseLite,
+    warp_small: FastNoiseLite,
 
     continent_centers: [(f32, f32); 6],
 }
 
+impl Clone for TerrainGenerator {
+    fn clone(&self) -> Self {
+        Self::new(self.p.clone())
+    }
+}
+
 impl TerrainGenerator {
-    pub fn new(seed: u32) -> Self {
-        Self::with_params(seed, TerrainParams::default())
+    pub fn new(terrain_params: TerrainParams) -> Self {
+        Self::with_params(terrain_params)
     }
 
-    pub fn with_params(seed: u32, mut p: TerrainParams) -> Self {
+    pub fn with_params(mut p: TerrainParams) -> Self {
+        let seed = p.seed;
         // Avoid weird stuff
         p.world_scale = p.world_scale.max(0.000001);
 
@@ -195,40 +237,77 @@ impl TerrainGenerator {
         // If you prefer inverse behaviour, flip to (1.0 / p.world_scale).
         let ws = p.world_scale;
 
-        let macro_elev = Fbm::<Perlin>::new(seed)
-            .set_octaves(p.macro_octaves)
-            .set_frequency((p.macro_freq * ws) as f64)
-            .set_persistence(p.macro_persistence);
+        let mut macro_elev = FastNoiseLite::new();
+        macro_elev.set_seed(Some(seed as i32));
+        macro_elev.set_noise_type(Some(NoiseType::Perlin));
+        macro_elev.set_fractal_type(Some(FractalType::FBm));
+        macro_elev.set_fractal_octaves(Some(p.macro_octaves as i32));
+        macro_elev.set_frequency(Some(p.macro_freq * ws));
+        macro_elev.set_fractal_gain(Some(p.macro_persistence));
 
-        let hills = Fbm::<Perlin>::new(seed.wrapping_add(10))
-            .set_octaves(p.hills_octaves)
-            .set_frequency((p.hills_freq * ws) as f64)
-            .set_persistence(p.hills_persistence);
+        let mut hills = FastNoiseLite::new();
+        hills.set_seed(Some(seed.wrapping_add(10) as i32));
+        hills.set_noise_type(Some(NoiseType::Perlin));
+        hills.set_fractal_type(Some(FractalType::FBm));
+        hills.set_fractal_octaves(Some(p.hills_octaves as i32));
+        hills.set_frequency(Some(p.hills_freq * ws));
+        hills.set_fractal_gain(Some(p.hills_persistence));
 
-        let mountains = Fbm::<Perlin>::new(seed.wrapping_add(1))
-            .set_octaves(p.mountains_octaves)
-            .set_frequency((p.mountains_freq * ws) as f64)
-            .set_persistence(p.mountains_persistence);
+        let mut mountains = FastNoiseLite::new();
+        mountains.set_seed(Some(seed.wrapping_add(1) as i32));
+        mountains.set_noise_type(Some(NoiseType::Perlin));
+        mountains.set_fractal_type(Some(FractalType::FBm));
+        mountains.set_fractal_octaves(Some(p.mountains_octaves as i32));
+        mountains.set_frequency(Some(p.mountains_freq * ws));
+        mountains.set_fractal_gain(Some(p.mountains_persistence));
 
-        let continent_noise = Fbm::<Perlin>::new(seed.wrapping_add(2))
-            .set_octaves(p.continent_octaves)
-            .set_frequency((0.0003 * ws) as f64)
-            .set_persistence(p.continent_persistence);
+        let mut plates = FastNoiseLite::new();
+        plates.set_seed(Some(seed.wrapping_add(42) as i32));
+        plates.set_noise_type(Some(NoiseType::Perlin));
+        plates.set_fractal_type(Some(FractalType::FBm));
+        plates.set_fractal_octaves(Some(3));
+        plates.set_frequency(Some(p.plate_freq * ws));
+        plates.set_fractal_gain(Some(0.5));
 
-        let moisture_noise = Fbm::<Perlin>::new(seed.wrapping_add(3))
-            .set_octaves(p.moisture_octaves)
-            .set_frequency((p.moisture_freq * ws) as f64)
-            .set_persistence(p.moisture_persistence);
+        let mut rivers = FastNoiseLite::new();
+        rivers.set_seed(Some(seed.wrapping_add(77) as i32));
+        rivers.set_noise_type(Some(NoiseType::Perlin));
+        rivers.set_fractal_type(Some(FractalType::FBm));
+        rivers.set_fractal_octaves(Some(4));
+        rivers.set_frequency(Some(p.river_freq * ws));
+        rivers.set_fractal_gain(Some(0.55));
 
-        let warp_large = Fbm::<Perlin>::new(seed.wrapping_add(4))
-            .set_octaves(p.warp_large_octaves)
-            .set_frequency((p.warp_large_scale * ws) as f64)
-            .set_persistence(p.warp_large_persistence);
+        let mut continent_noise = FastNoiseLite::new();
+        continent_noise.set_seed(Some(seed.wrapping_add(2) as i32));
+        continent_noise.set_noise_type(Some(NoiseType::Perlin));
+        continent_noise.set_fractal_type(Some(FractalType::FBm));
+        continent_noise.set_fractal_octaves(Some(p.continent_octaves as i32));
+        continent_noise.set_frequency(Some(0.0003 * ws));
+        continent_noise.set_fractal_gain(Some(p.continent_persistence));
 
-        let warp_small = Fbm::<Perlin>::new(seed.wrapping_add(5))
-            .set_octaves(p.warp_small_octaves)
-            .set_frequency((p.warp_small_scale * ws) as f64)
-            .set_persistence(p.warp_small_persistence);
+        let mut moisture_noise = FastNoiseLite::new();
+        moisture_noise.set_seed(Some(seed as i32));
+        moisture_noise.set_noise_type(Some(NoiseType::Perlin));
+        moisture_noise.set_fractal_type(Some(FractalType::FBm));
+        moisture_noise.set_fractal_octaves(Some(p.moisture_octaves as i32));
+        moisture_noise.set_frequency(Some(p.moisture_freq * ws));
+        moisture_noise.set_fractal_gain(Some(p.moisture_persistence));
+
+        let mut warp_large = FastNoiseLite::new();
+        warp_large.set_seed(Some(seed.wrapping_add(4) as i32));
+        warp_large.set_noise_type(Some(NoiseType::Perlin));
+        warp_large.set_fractal_type(Some(FractalType::FBm));
+        warp_large.set_fractal_octaves(Some(p.warp_large_octaves as i32));
+        warp_large.set_frequency(Some(p.warp_large_scale * ws));
+        warp_large.set_fractal_gain(Some(p.warp_large_persistence));
+
+        let mut warp_small = FastNoiseLite::new();
+        warp_small.set_seed(Some(seed.wrapping_add(5) as i32));
+        warp_small.set_noise_type(Some(NoiseType::Perlin));
+        warp_small.set_fractal_type(Some(FractalType::FBm));
+        warp_small.set_fractal_octaves(Some(p.warp_small_octaves as i32));
+        warp_small.set_frequency(Some(p.warp_small_scale * ws));
+        warp_small.set_fractal_gain(Some(p.warp_small_persistence));
 
         // Continent centers
         let mut centers = [(0.0f32, 0.0f32); 6];
@@ -272,6 +351,8 @@ impl TerrainGenerator {
             macro_elev,
             hills,
             mountains,
+            plates,
+            rivers,
             continent_noise,
             moisture_noise,
             warp_large,
@@ -288,24 +369,26 @@ impl TerrainGenerator {
         (wx * s, wz * s)
     }
 
-    fn warped_coords(&self, wx: f32, wz: f32) -> (f64, f64) {
+    fn warped_coords(&self, wx: f32, wz: f32) -> (f32, f32) {
         let (wx, wz) = self.scaled_coords(wx, wz);
 
-        let x = wx as f64;
-        let z = wz as f64;
+        let x = wx;
+        let z = wz;
 
-        let w1x = self.warp_large.get([x, z]) as f32;
-        let w1z = self.warp_large.get([x + 1234.0, z - 5678.0]) as f32;
+        let w1x = self.warp_large.get_noise_2d(x, z);
+        let w1z = self.warp_large.get_noise_2d(x + 1234.0, z - 5678.0);
 
-        let w2x = self.warp_small.get([x * 2.0, z * 2.0]) as f32;
-        let w2z = self.warp_small.get([x * 2.0 - 500.0, z * 2.0 + 500.0]) as f32;
+        let w2x = self.warp_small.get_noise_2d(x * 2.0, z * 2.0);
+        let w2z = self
+            .warp_small
+            .get_noise_2d(x * 2.0 - 500.0, z * 2.0 + 500.0);
 
         let dx =
             (w1x * self.p.warp_mix_large + w2x * self.p.warp_mix_small) * self.p.warp_large_amp;
         let dz =
             (w1z * self.p.warp_mix_large + w2z * self.p.warp_mix_small) * self.p.warp_small_amp;
 
-        (x + dx as f64, z + dz as f64)
+        (x + dx, z + dz)
     }
 
     // 6 supercontinents + noisy coasts + islands + optional forced origin land
@@ -324,14 +407,14 @@ impl TerrainGenerator {
             }
         }
 
-        let nx = wx as f64 * (self.p.coast_noise_scale as f64);
-        let nz = wz as f64 * (self.p.coast_noise_scale as f64);
-        let noise = self.continent_noise.get([nx, nz]) as f32 * self.p.coast_noise_amp;
+        let nx = wx * (self.p.coast_noise_scale);
+        let nz = wz * (self.p.coast_noise_scale);
+        let noise = self.continent_noise.get_noise_2d(nx, nz) * self.p.coast_noise_amp;
 
         let mut c = (best + noise).clamp(0.0, 1.0);
 
         // random island chains out in the ocean
-        let island_raw = self.continent_noise.get([nx * 3.0, nz * 3.0]) as f32;
+        let island_raw = self.continent_noise.get_noise_2d(nx * 3.0, nz * 3.0);
         let island_v = (island_raw + 1.0) * 0.5;
         let island =
             smoothstep(self.p.island_threshold0, self.p.island_threshold1, island_v) * (1.0 - c);
@@ -390,13 +473,13 @@ impl TerrainGenerator {
         let (wx2, wz2) = self.warped_coords(wx, wz);
 
         // Macro/hills/mountains
-        let macro_raw = self.macro_elev.get([wx2 * 0.6, wz2 * 0.6]) as f32;
+        let macro_raw = self.macro_elev.get_noise_2d(wx2 * 0.6, wz2 * 0.6);
         let macro_elev = macro_raw * self.p.macro_amp;
 
-        let hills_raw = self.hills.get([wx2 * 2.0, wz2 * 2.0]) as f32;
+        let hills_raw = self.hills.get_noise_2d(wx2 * 2.0, wz2 * 2.0);
         let hills = hills_raw * self.p.hills_amp * self.p.hills_detail;
 
-        let m_raw = self.mountains.get([wx2, wz2]) as f32;
+        let m_raw = self.mountains.get_noise_2d(wx2, wz2);
         let mut ridged = 1.0 - m_raw.abs();
         ridged = ridged.max(0.0);
         ridged = ridged * ridged * ridged;
@@ -411,7 +494,7 @@ impl TerrainGenerator {
 
         let belts_raw = self
             .mountains
-            .get([wx2 * 0.18 + 1234.0, wz2 * 0.18 - 5678.0]) as f32;
+            .get_noise_2d(wx2 * 0.18 + 1234.0, wz2 * 0.18 - 5678.0);
         let belt_n = (belts_raw + 1.0) * 0.5;
         let belt_mask = smoothstep(self.p.belt_lo, self.p.belt_hi, belt_n);
 
@@ -427,18 +510,43 @@ impl TerrainGenerator {
 
         rel += ridged * mountain_mask * self.p.mountains_amp * self.p.belt_amp;
 
+        let river_n = self.rivers.get_noise_2d(wx2, wz2);
+        let river = 1.0 - river_n.abs();
+        let river_mask = smoothstep(1.0 - self.p.river_width, 1.0, river);
+
+        let downhill = smoothstep(0.05, 0.6, -rel);
+        let river_cut = river_mask * downhill;
+
+        rel -= river_cut * self.p.river_depth;
+
+        let n1 = self.hills.get_noise_2d(wx2 + 1.0, wz2);
+        let n2 = self.hills.get_noise_2d(wx2, wz2 + 1.0);
+
+        let slope = (n1 - n2).abs();
+
+        rel = erode(rel, slope, self.p.erosion_strength * cont);
+
         // Coastline softening (knobs)
         let coast = (cont - 0.5).abs();
         let w = self.p.coast_soften_width.max(0.0001);
         let coast_t = ((w - coast) / w).clamp(0.0, 1.0);
         rel = rel * (1.0 - self.p.coast_soften_strength * coast_t);
 
+        let plate_raw = self.plates.get_noise_2d(wx2 * 0.7, wz2 * 0.7);
+        let plate_edges = (1.0 - plate_raw.abs()).powf(self.p.plate_sharpness);
+
+        rel += plate_edges * mountain_mask * self.p.plate_mountain_amp * 0.6;
+
         // Global flattening/smoothing (main request)
         rel = self.flatten_profile(rel, cont);
 
         rel = micro_flatten(rel, self.p.micro_flatten);
 
-        rel * hs + self.p.sea_level
+        rel *= hs + self.p.sea_level;
+        if rel > -0.3 && rel < 0.3 {
+            return 0.3;
+        }
+        rel
     }
 
     pub fn moisture(&self, wx: f32, wz: f32) -> f32 {
@@ -447,7 +555,7 @@ impl TerrainGenerator {
         let h_rel = (h - self.p.sea_level) / hs;
 
         let (wx2, wz2) = self.warped_coords(wx, wz);
-        let n = self.moisture_noise.get([wx2, wz2]) as f32;
+        let n = self.moisture_noise.get_noise_2d(wx2, wz2);
         let mut m = (n + 1.0) * 0.5;
 
         let cont = self.continental_mask(wx, wz);
@@ -467,138 +575,184 @@ impl TerrainGenerator {
         m.clamp(0.0, 1.0)
     }
 
-    // color() unchanged except swap self.height_scale/self.sea_level and latitude_factor uses params now.
     pub fn color(&self, wx: f32, wz: f32, h: f32, moisture: f32) -> [f32; 3] {
         let hs = self.p.height_scale;
         let h_rel = h - self.p.sea_level;
         let h_norm = (h_rel / hs).clamp(-1.0, 1.5);
-        let lat = self.latitude_factor(wz);
 
+        let lat = self.latitude_factor(wz).clamp(0.0, 1.0);
         let (wx2, wz2) = self.warped_coords(wx, wz);
 
-        let mut temp_lat = 1.0 - lat * lat;
-        let mut temp = temp_lat;
+        // ---------- TEMPERATURE ----------
+        let mut temp = (1.0 - lat).powf(1.8);
 
-        let alt_cool = (h_norm.max(0.0) * 0.7).clamp(0.0, 0.9);
+        let alt_cool = h_norm.max(0.0).powf(1.2) * 0.8;
         temp *= 1.0 - alt_cool;
 
-        let t_noise = self.macro_elev.get([wx2 * 0.02, wz2 * 0.02]) as f32;
-        temp += t_noise * 0.03;
-        temp = temp.clamp(0.0, 1.0);
+        let t_noise = self.macro_elev.get_noise_2d(wx2 * 0.02, wz2 * 0.02);
+        temp = (temp + t_noise * 0.04).clamp(0.0, 1.0);
 
         let dry = (1.0 - moisture).clamp(0.0, 1.0);
+        let wet = 1.0 - dry;
 
+        // ---------- OCEAN ----------
         if h_rel < 0.0 {
             let depth = (-h_rel / (0.7 * hs)).clamp(0.0, 1.0);
 
-            let warm_shallow = [0.06, 0.42, 0.60];
-            let warm_deep = [0.02, 0.10, 0.24];
-            let cold_shallow = [0.70, 0.80, 0.87];
-            let cold_deep = [0.03, 0.08, 0.20];
+            let warm = HSV {
+                h: 0.55,
+                s: 0.65,
+                v: 0.65,
+            };
+            let cold = HSV {
+                h: 0.58,
+                s: 0.25,
+                v: 0.85,
+            };
 
-            let cold = lat.clamp(0.0, 1.0);
+            let surface = lerp_hsv(warm, cold, lat);
+            let deep = HSV {
+                h: surface.h,
+                s: surface.s * 0.8,
+                v: surface.v * 0.35,
+            };
 
-            let shallow_col = lerp_color(warm_shallow, cold_shallow, cold);
-            let deep_col = lerp_color(warm_deep, cold_deep, cold);
-            let mut color = lerp_color(shallow_col, deep_col, depth);
+            let mut col = lerp_hsv(surface, deep, depth);
 
-            let ice_lat = smoothstep(0.78, 0.98, lat);
-            let ice_depth = smoothstep(-5.0, 3.0, h_rel);
-            let ice = (ice_lat * ice_depth).clamp(0.0, 1.0);
-            let ice_color = [0.94, 0.97, 1.0];
-            color = lerp_color(color, ice_color, ice);
+            let ice = smoothstep(0.75, 0.95, lat) * smoothstep(-6.0, 2.0, h_rel);
+            let ice_col = HSV {
+                h: 0.58,
+                s: 0.05,
+                v: 0.98,
+            };
+            col = lerp_hsv(col, ice_col, ice);
 
-            return color;
+            return hsv_to_rgb(col);
         }
 
-        let alt = h_norm.clamp(0.0, 1.4);
+        // ---------- BIOME PALETTES (HSV) ----------
+        let low_cold_dry = HSV {
+            h: 0.25,
+            s: 0.25,
+            v: 0.55,
+        };
+        let low_cold_wet = HSV {
+            h: 0.33,
+            s: 0.55,
+            v: 0.45,
+        };
+        let low_hot_dry = HSV {
+            h: 0.15,
+            s: 0.55,
+            v: 0.80,
+        };
+        let low_hot_wet = HSV {
+            h: 0.33,
+            s: 0.75,
+            v: 0.55,
+        };
 
-        let w_low = tri_weight(alt, 0.15, 0.35);
-        let w_mid = tri_weight(alt, 0.55, 0.40);
-        let w_high = tri_weight(alt, 1.05, 0.55);
-        let sum = (w_low + w_mid + w_high).max(0.0001);
-        let w_low = w_low / sum;
-        let w_mid = w_mid / sum;
-        let w_high = w_high / sum;
+        let mid_cold_dry = HSV {
+            h: 0.22,
+            s: 0.20,
+            v: 0.60,
+        };
+        let mid_cold_wet = HSV {
+            h: 0.30,
+            s: 0.40,
+            v: 0.50,
+        };
+        let mid_hot_dry = HSV {
+            h: 0.12,
+            s: 0.45,
+            v: 0.70,
+        };
+        let mid_hot_wet = HSV {
+            h: 0.30,
+            s: 0.65,
+            v: 0.55,
+        };
 
-        let low_cold_dry = [0.72, 0.76, 0.70];
-        let low_cold_wet = [0.16, 0.44, 0.26];
-        let low_hot_dry = [0.91, 0.83, 0.55];
-        let low_hot_wet = [0.07, 0.45, 0.18];
+        let high_cold = HSV {
+            h: 0.58,
+            s: 0.05,
+            v: 0.92,
+        };
+        let high_hot = HSV {
+            h: 0.00,
+            s: 0.00,
+            v: 0.65,
+        };
 
-        let mid_cold_dry = [0.62, 0.64, 0.62];
-        let mid_cold_wet = [0.15, 0.40, 0.27];
-        let mid_hot_dry = [0.80, 0.76, 0.52];
-        let mid_hot_wet = [0.18, 0.50, 0.26];
-
-        let high_cold_dry = [0.93, 0.95, 0.97];
-        let high_cold_wet = [0.96, 0.98, 1.0];
-        let high_hot_dry = [0.64, 0.64, 0.66];
-        let high_hot_wet = [0.58, 0.60, 0.64];
-
-        fn climate_color(
+        fn climate(
             temp: f32,
-            dry: f32,
-            cold_dry: [f32; 3],
-            cold_wet: [f32; 3],
-            hot_dry: [f32; 3],
-            hot_wet: [f32; 3],
-        ) -> [f32; 3] {
-            let wet = 1.0 - dry;
-            let cold_mix = lerp_color(cold_dry, cold_wet, wet);
-            let hot_mix = lerp_color(hot_dry, hot_wet, wet);
-            lerp_color(cold_mix, hot_mix, temp)
+            wet: f32,
+            cold_dry: HSV,
+            cold_wet: HSV,
+            hot_dry: HSV,
+            hot_wet: HSV,
+        ) -> HSV {
+            let cold = lerp_hsv(cold_dry, cold_wet, wet);
+            let hot = lerp_hsv(hot_dry, hot_wet, wet);
+            lerp_hsv(cold, hot, temp)
         }
 
-        let c_low = climate_color(
+        let c_low = climate(
             temp,
-            dry,
+            wet,
             low_cold_dry,
             low_cold_wet,
             low_hot_dry,
             low_hot_wet,
         );
-        let c_mid = climate_color(
+        let c_mid = climate(
             temp,
-            dry,
+            wet,
             mid_cold_dry,
             mid_cold_wet,
             mid_hot_dry,
             mid_hot_wet,
         );
-        let c_high = climate_color(
-            temp,
-            dry,
-            high_cold_dry,
-            high_cold_wet,
-            high_hot_dry,
-            high_hot_wet,
-        );
+        let c_high = lerp_hsv(high_cold, high_hot, temp);
 
-        let mut color = [
-            c_low[0] * w_low + c_mid[0] * w_mid + c_high[0] * w_high,
-            c_low[1] * w_low + c_mid[1] * w_mid + c_high[1] * w_high,
-            c_low[2] * w_low + c_mid[2] * w_mid + c_high[2] * w_high,
-        ];
+        // ---------- ALTITUDE BLEND ----------
+        let alt = h_norm.clamp(0.0, 1.3);
 
+        let w_low = tri_weight(alt, 0.20, 0.25);
+        let w_mid = tri_weight(alt, 0.60, 0.25);
+        let w_high = tri_weight(alt, 1.05, 0.30);
+        let sum = (w_low + w_mid + w_high).max(0.0001);
+
+        let mut col = HSV {
+            h: (c_low.h * w_low + c_mid.h * w_mid + c_high.h * w_high) / sum,
+            s: (c_low.s * w_low + c_mid.s * w_mid + c_high.s * w_high) / sum,
+            v: (c_low.v * w_low + c_mid.v * w_mid + c_high.v * w_high) / sum,
+        };
+
+        // ---------- DETAIL VARIATION ----------
+        let detail = self.hills.get_noise_2d(wx2 * 3.0, wz2 * 3.0);
+        col.v = (col.v * (1.0 + detail * 0.05)).clamp(0.0, 1.0);
+
+        // ---------- SNOW OVERLAY ----------
         let snow_lat = smoothstep(0.80, 0.98, lat);
-        let snow_alt = smoothstep(0.35, 1.2, alt);
-        let snow = (snow_lat * 0.8 + snow_alt * 0.6).clamp(0.0, 1.0);
-        let snow_color = [0.96, 0.97, 0.99];
-        color = lerp_color(color, snow_color, snow);
+        let snow_alt = smoothstep(0.40, 1.15, alt);
 
-        let light = 0.97 + alt * 0.08;
-        color[0] = (color[0] * light).min(1.0);
-        color[1] = (color[1] * light).min(1.0);
-        color[2] = (color[2] * light).min(1.0);
+        let nx = self.hills.get_noise_2d(wx2 + 0.5, wz2);
+        let nz = self.hills.get_noise_2d(wx2, wz2 + 0.5);
+        let slope = (nx - nz).abs();
 
-        let detail_noise = self.hills.get([wx2 * 3.0, wz2 * 3.0]) as f32;
-        let tint = 1.0 + detail_noise * 0.03;
-        color[0] = (color[0] * tint).clamp(0.0, 1.0);
-        color[1] = (color[1] * tint).clamp(0.0, 1.0);
-        color[2] = (color[2] * tint).clamp(0.0, 1.0);
+        let slope_mask = smoothstep(self.p.snow_slope_limit, 1.0, 1.0 - slope);
 
-        color
+        let snow = (snow_lat * 0.6 + snow_alt * 0.9) * slope_mask;
+        let snow_col = HSV {
+            h: 0.58,
+            s: 0.03,
+            v: 0.98,
+        };
+
+        col = lerp_hsv(col, snow_col, snow.clamp(0.0, 1.0));
+
+        hsv_to_rgb(col)
     }
 }
 
@@ -632,4 +786,9 @@ fn micro_flatten(rel: f32, strength: f32) -> f32 {
     let a = rel.abs();
     let t = smoothstep(0.0, 0.15, a);
     lerp(rel, rel * 0.4, strength * (1.0 - t))
+}
+
+fn erode(h: f32, n: f32, strength: f32) -> f32 {
+    let slope = (n.abs()).clamp(0.0, 1.0);
+    h - slope * strength
 }

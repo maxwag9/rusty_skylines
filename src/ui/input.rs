@@ -9,8 +9,8 @@ use winit::keyboard::{KeyCode, NamedKey, PhysicalKey};
 
 #[derive(Debug, Clone)]
 pub struct RepeatTimer {
-    first_press: f32,
-    last_fire: f32,
+    first_press: f64,
+    last_fire: f64,
     initial_delay: f32,
     warmup_time: f32,
     warmup_interval: f32,
@@ -29,7 +29,7 @@ impl RepeatTimer {
         }
     }
 
-    pub fn tick(&mut self, now: f32, is_down: bool) -> bool {
+    pub fn tick(&mut self, now: f64, is_down: bool) -> bool {
         if !is_down {
             self.first_press = -1.0;
             self.last_fire = -1.0;
@@ -45,19 +45,19 @@ impl RepeatTimer {
         let held = now - self.first_press;
         let since_last = now - self.last_fire;
 
-        if held < self.initial_delay {
+        if held < self.initial_delay as f64 {
             return false;
         }
 
-        if held < self.initial_delay + self.warmup_time {
-            if since_last >= self.warmup_interval {
+        if held < (self.initial_delay + self.warmup_time) as f64 {
+            if since_last >= self.warmup_interval as f64 {
                 self.last_fire = now;
                 return true;
             }
             return false;
         }
 
-        if since_last >= self.fast_interval {
+        if since_last >= self.fast_interval as f64 {
             self.last_fire = now;
             return true;
         }
@@ -256,7 +256,7 @@ pub struct InputState {
     repeat_timers: HashMap<String, RepeatTimer>,
     action_last_down: HashMap<String, bool>,
 
-    pub now: f32,
+    pub now: f64,
 }
 
 impl InputState {
@@ -286,7 +286,7 @@ impl InputState {
         }
     }
 
-    pub fn begin_frame(&mut self, now: f32) {
+    pub fn begin_frame(&mut self, now: f64) {
         self.now = now;
         self.scroll_up_hit = false;
         self.scroll_down_hit = false;
@@ -617,6 +617,8 @@ fn map_to_keycode(token: &str) -> Option<KeyCode> {
         // universal minus
         "Minus" => Some(KeyCode::Minus),
         "NumpadSubtract" => Some(KeyCode::NumpadSubtract),
+        "ESC" => Some(KeyCode::Escape),
+
         _ => None,
     }
 }
