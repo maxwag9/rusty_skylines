@@ -1,6 +1,6 @@
 use crate::components::camera::*;
 use crate::data::Settings;
-use crate::mouse_ray::ray_from_mouse_pixels;
+use crate::mouse_ray::*;
 use crate::paths::shader_dir;
 use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
 use crate::renderer::shader_watcher::ShaderWatcher;
@@ -170,7 +170,7 @@ impl RenderCore {
         self.check_shader_changes(ui_loader);
 
         ground_camera_target(camera, &self.world.terrain_gen, 0.5);
-        resolve_pitch_by_search(camera, &self.world.terrain_gen);
+        resolve_pitch_by_search(camera, &self.world);
         let aspect = self.config.width as f32 / self.config.height as f32;
         let cam_pos = camera.position();
         let orbit_radius = camera.orbit_radius;
@@ -265,8 +265,10 @@ impl RenderCore {
             proj,
         );
 
-        self.world.pick_vertex(ray, &self.queue);
+        self.world.pick_terrain_point(ray);
 
+        self.world
+            .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniform_buffer);
         let new_uniforms = make_new_uniforms(
             view,
             proj,

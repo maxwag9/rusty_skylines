@@ -1,4 +1,5 @@
 use crate::components::camera::Camera;
+use crate::mouse_ray::PickUniform;
 use crate::paths::data_dir;
 use crate::resources::Uniforms;
 use crate::sky::SkyUniform;
@@ -45,14 +46,14 @@ pub struct Pipelines {
     pub depth_texture: Texture,
     pub depth_view: TextureView,
 
-    pub(crate) pipeline: RenderPipeline,
+    pub(crate) terrain_pipeline: RenderPipeline,
     pub(crate) gizmo_pipeline: RenderPipeline,
 
     pub fog_uniform_buffer: Buffer,
     pub fog_bind_group: BindGroup,
 
     pub shader: ShaderModule,
-    pipeline_layout: PipelineLayout,
+    terrain_pipeline_layout: PipelineLayout,
     pub(crate) msaa_samples: u32,
     line_shader: ShaderModule,
 
@@ -82,6 +83,10 @@ pub struct Pipelines {
     water_pipeline_layout: PipelineLayout,
     sky_shader: ShaderModule,
     stars_shader: ShaderModule,
+
+    pub pick_uniform_buffer: Buffer,
+    pub pick_bgl: BindGroupLayout,
+    pub pick_bind_group: BindGroup,
 }
 
 impl Pipelines {
@@ -115,7 +120,39 @@ impl Pipelines {
             camera.orbit_radius,
             0.0,
         );
-
+        let pick_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Pick Uniform BGL"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let pick_uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Pick Uniform Buffer"),
+            contents: bytemuck::bytes_of(&PickUniform {
+                pos: [0.0; 3],
+                radius: 0.0,
+                enabled: 0,
+                _pad0: [0, 0, 0],
+                color: [1.0, 0.0, 0.0],
+                _pad1: 0.0,
+            }),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+        let pick_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Pick Uniform BG"),
+            layout: &pick_bgl,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: pick_uniform_buffer.as_entire_binding(),
+            }],
+        });
         let uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("Uniform Buffer"),
             contents: bytemuck::bytes_of(&uniforms),
@@ -185,11 +222,12 @@ impl Pipelines {
             }],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Pipeline Layout"),
+        let terrain_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Terrain Pipeline Layout"),
             bind_group_layouts: &[
                 &uniform_bind_group_layout, // group(0)
                 &fog_bgl,                   // group(1)
+                &pick_bgl,                  // group(2) :O
             ],
             push_constant_ranges: &[],
         });
@@ -286,7 +324,7 @@ impl Pipelines {
         };
 
         let sky_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Sky Buffer"),
+            label: Some("Sky Uniform Buffer"),
             contents: bytemuck::bytes_of(&sky_uniform),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
@@ -378,14 +416,14 @@ impl Pipelines {
             depth_texture,
             depth_view,
 
-            pipeline: dummy_pipeline.clone(),
+            terrain_pipeline: dummy_pipeline.clone(),
             gizmo_pipeline: dummy_pipeline.clone(),
 
             fog_uniform_buffer,
             fog_bind_group,
 
             shader,
-            pipeline_layout,
+            terrain_pipeline_layout,
             msaa_samples,
             line_shader,
             config: config.clone(),
@@ -414,6 +452,10 @@ impl Pipelines {
             water_pipeline_layout,
             sky_shader,
             stars_shader,
+
+            pick_uniform_buffer,
+            pick_bgl,
+            pick_bind_group,
         };
 
         this.recreate_pipelines();
@@ -421,7 +463,7 @@ impl Pipelines {
     }
 
     pub(crate) fn recreate_pipelines(&mut self) {
-        self.pipeline = self.build_main_pipeline();
+        self.terrain_pipeline = self.build_main_pipeline();
         self.gizmo_pipeline = self.build_gizmo_pipeline();
         self.water_pipeline = self.build_water_pipeline();
         self.sky_pipeline = self.build_sky_pipeline();
@@ -453,7 +495,7 @@ impl Pipelines {
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Main Pipeline"),
-                layout: Some(&self.pipeline_layout),
+                layout: Some(&self.terrain_pipeline_layout),
                 vertex: VertexState {
                     module: &self.shader,
                     entry_point: Some("vs_main"),
@@ -496,7 +538,7 @@ impl Pipelines {
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Gizmo Pipeline"),
-                layout: Some(&self.pipeline_layout),
+                layout: Some(&self.terrain_pipeline_layout),
                 vertex: VertexState {
                     module: &self.line_shader,
                     entry_point: Some("vs_main"),

@@ -34,11 +34,25 @@ struct FogUniforms {
     fog_end: f32,
 };
 
+struct PickUniform {
+    pos: vec3<f32>,   // offset 0, size 12, alignment 16
+    radius: f32,      // offset 16
+    enabled: u32,     // offset 20
+    // padding to 32
+    color: vec3<f32>, // offset 32
+    // padding to 48
+}
+
+
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
 @group(1) @binding(0)
 var<uniform> fog: FogUniforms;
+
+@group(2) @binding(0)
+var<uniform> pick: PickUniform;
+
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -98,7 +112,20 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     let final_color = mix(desat, fog.fog_color, f);
 
-    return vec4<f32>(final_color, 1.0);
+    var color = final_color;
+
+    if (pick.radius > 0.0) {
+        let d = distance(in.world_pos, pick.pos);
+
+        if (d < pick.radius) {
+            // smooth falloff looks better than a hard edge
+            let t = 1.0 - smoothstep(0.0, pick.radius, d);
+            color = mix(color, pick.color, t);
+        }
+    }
+
+    return vec4<f32>(color, 1.0);
+
 }
 
 fn height_factor_at(pos_y: f32) -> f32 {

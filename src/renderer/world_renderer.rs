@@ -2,7 +2,7 @@ use crate::chunk_builder::{
     ChunkMeshLod, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
 };
 use crate::components::camera::Camera;
-use crate::mouse_ray::{Ray, distance2_point_to_ray, raycast_heightfield};
+use crate::mouse_ray::*;
 use crate::renderer::mesh_arena::MeshArena;
 use crate::renderer::pipelines::Pipelines;
 use crate::terrain::{TerrainGenerator, TerrainParams};
@@ -11,12 +11,11 @@ use crate::ui::vertex::Vertex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use wgpu::{Device, IndexFormat, Queue, RenderPass};
+use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
-pub struct PickedVertex {
-    pub coord: (i32, i32),
-    pub idx: usize,
-    pub old_color: [f32; 3],
+pub struct PickedPoint {
+    pub pos: glam::Vec3,
+    pub radius: f32,
 }
 
 pub struct WorldRenderer {
@@ -37,8 +36,8 @@ pub struct WorldRenderer {
 
     pub spiral: Vec<(i32, i32)>,
     pub lod_map: HashMap<(i32, i32), usize>,
-    pub pick_radius_m: f32,         // controlled by UI slider
-    last_picked: Vec<PickedVertex>, // multiple vertices
+    pub pick_radius_m: f32, // controlled by UI slider
+    last_picked: Option<PickedPoint>,
 }
 
 #[derive(Clone, Copy)]
@@ -90,8 +89,8 @@ impl WorldRenderer {
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
-            pick_radius_m: 10.0,
-            last_picked: Vec::new(),
+            pick_radius_m: 100.0,
+            last_picked: None,
         }
     }
 
@@ -163,15 +162,13 @@ impl WorldRenderer {
                     step: cpu.step,
                     handle,
                     cpu_vertices: cpu.vertices.clone(),
+                    height_grid: cpu.height_grid,
                 },
             );
         }
     }
 
     fn remove_chunk(&mut self, coord: (i32, i32)) {
-        // invalidate picks
-        self.last_picked.retain(|p| p.coord != coord);
-
         // remove pending job
         self.pending.remove(&coord);
 
@@ -382,9 +379,10 @@ impl WorldRenderer {
         camera: &'a Camera,
         aspect: f32,
     ) {
-        pass.set_pipeline(&pipelines.pipeline);
+        pass.set_pipeline(&pipelines.terrain_pipeline);
         pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
         pass.set_bind_group(1, &pipelines.fog_bind_group, &[]);
+        pass.set_bind_group(2, &pipelines.pick_bind_group, &[]);
 
         let (_, _, view_proj) = camera.matrices(aspect);
 
@@ -437,108 +435,61 @@ impl WorldRenderer {
         }
     }
 
-    pub fn pick_vertex(&mut self, ray: Ray, queue: &Queue) {
-        // ---------- Step 1: approximate position to locate chunk ----------
-        let approx_pos =
-            raycast_heightfield(ray, |x, z| self.terrain_gen.height(x, z), 1, 0.0, 10000.0)
-                .map(|(_, p)| p)
-                .unwrap_or_else(|| {
-                    let t = -ray.origin.y / ray.dir.y;
-                    ray.origin + ray.dir * t
-                });
-
+    pub fn pick_terrain_point(&mut self, ray: Ray) -> Option<(i32, i32, glam::Vec3)> {
         let cs = self.chunk_size as f32;
-        let cx = (approx_pos.x / cs).floor() as i32;
-        let cz = (approx_pos.z / cs).floor() as i32;
 
-        // ---------- Step 2: find closest vertex to the ray (anchor) ----------
-        let mut best: Option<((i32, i32), usize, f32)> = None;
+        // Step 1: walk chunks along ray (chunk DDA)
+        let mut t = 0.0;
+        let t_max = 10_000.0;
 
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let coord = (cx + dx, cz + dz);
-                let Some(chunk) = self.chunks.get(&coord) else {
-                    continue;
-                };
+        while t < t_max {
+            let p = ray.origin + ray.dir * t;
+            let cx = (p.x / cs).floor() as i32;
+            let cz = (p.z / cs).floor() as i32;
 
-                for (i, v) in chunk.cpu_vertices.iter().enumerate() {
-                    let p = glam::Vec3::from_array(v.position);
-                    let d2 = distance2_point_to_ray(p, ray);
-
-                    if best.map_or(true, |(_, _, bd)| d2 < bd) {
-                        best = Some((coord, i, d2));
-                    }
-                }
-            }
-        }
-
-        let Some((anchor_coord, anchor_idx, _)) = best else {
-            return;
-        };
-
-        let anchor_pos = {
-            let chunk = self.chunks.get(&anchor_coord).unwrap();
-            glam::Vec3::from_array(chunk.cpu_vertices[anchor_idx].position)
-        };
-
-        // ---------- Step 3: highlight area around anchor ----------
-        let r2 = self.pick_radius_m * self.pick_radius_m;
-
-        self.restore_last_picked(queue);
-
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let coord = (anchor_coord.0 + dx, anchor_coord.1 + dz);
-                let Some(chunk) = self.chunks.get_mut(&coord) else {
-                    continue;
-                };
-
-                for (i, v) in chunk.cpu_vertices.iter_mut().enumerate() {
-                    let p = glam::Vec3::from_array(v.position);
-                    let d2 = p.distance_squared(anchor_pos);
-
-                    if d2 <= r2 {
-                        let old = v.color;
-                        v.color = [1.0, 0.0, 0.0]; // red → white fade
-
-                        let page = &self.arena.pages[chunk.handle.page as usize];
-                        let offset = (chunk.handle.base_vertex as u64 + i as u64)
-                            * std::mem::size_of::<Vertex>() as u64;
-
-                        queue.write_buffer(&page.vertex_buf, offset, bytemuck::bytes_of(v));
-
-                        self.last_picked.push(PickedVertex {
-                            coord,
-                            idx: i,
-                            old_color: old,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    fn restore_last_picked(&mut self, queue: &wgpu::Queue) {
-        for p in self.last_picked.drain(..) {
-            let Some(chunk) = self.chunks.get_mut(&p.coord) else {
+            let Some(chunk) = self.chunks.get(&(cx, cz)) else {
+                t += cs;
                 continue;
             };
-            if p.idx >= chunk.cpu_vertices.len() {
-                continue;
+
+            let grid = chunk.height_grid.as_ref();
+
+            if let Some((t_hit, hit_pos)) = raycast_chunk_heightgrid(ray, grid, t, t + cs) {
+                self.last_picked = Some(PickedPoint {
+                    pos: hit_pos,
+                    radius: self.pick_radius_m,
+                });
+
+                return Some((cx, cz, hit_pos));
             }
 
-            chunk.cpu_vertices[p.idx].color = p.old_color;
-
-            let page = &self.arena.pages[chunk.handle.page as usize];
-            let offset = (chunk.handle.base_vertex as u64 + p.idx as u64)
-                * std::mem::size_of::<Vertex>() as u64;
-
-            queue.write_buffer(
-                &page.vertex_buf,
-                offset,
-                bytemuck::bytes_of(&chunk.cpu_vertices[p.idx]),
-            );
+            t += cs;
         }
+        self.last_picked = None;
+        None
+    }
+    pub fn make_pick_uniforms(&self, queue: &Queue, pick_uniform_buffer: &Buffer) {
+        let u = if let Some(p) = &self.last_picked {
+            PickUniform {
+                pos: p.pos.into(),
+                radius: self.pick_radius_m,
+                enabled: 1,
+                _pad0: [0, 0, 0],
+                color: [1.0, 0.0, 0.0],
+                _pad1: 0.0,
+            }
+        } else {
+            PickUniform {
+                pos: [0.0; 3],
+                radius: 0.0,
+                enabled: 0,
+                _pad0: [0, 0, 0],
+                color: [1.0, 0.0, 0.0],
+                _pad1: 0.0,
+            }
+        };
+
+        queue.write_buffer(&pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
 }
 

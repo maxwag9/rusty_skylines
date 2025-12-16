@@ -1,4 +1,5 @@
-use crate::mouse_ray::{Ray, raycast_heightfield};
+use crate::mouse_ray::*;
+use crate::renderer::world_renderer::WorldRenderer;
 use crate::terrain::TerrainGenerator;
 use glam::Vec3;
 
@@ -86,7 +87,7 @@ pub fn ground_camera_target(camera: &mut Camera, terrain: &TerrainGenerator, min
         camera.target.y = ground_y + min_clearance;
     }
 }
-pub fn resolve_pitch_by_search(camera: &mut Camera, terrain: &TerrainGenerator) {
+pub fn resolve_pitch_by_search(camera: &mut Camera, terrain: &WorldRenderer) {
     let pitch_user = camera.pitch;
     let pitch_max = 85.0_f32.to_radians();
 
@@ -130,20 +131,45 @@ pub fn resolve_pitch_by_search(camera: &mut Camera, terrain: &TerrainGenerator) 
     camera.pitch_resolved = Some(solved);
 }
 
-fn is_clear(camera: &Camera, terrain: &TerrainGenerator, pitch: f32) -> bool {
+fn is_clear(camera: &Camera, world: &WorldRenderer, pitch: f32) -> bool {
     let mut tmp = camera.clone();
     tmp.pitch = pitch;
 
+    let origin = tmp.position();
     let target = tmp.target;
-    let cam_pos = tmp.position();
 
-    let dir = cam_pos - target;
-    let dist = dir.length();
+    let v = target - origin;
+    let dist = v.length();
+    if dist < 1e-4 {
+        return true;
+    }
 
     let ray = Ray {
-        origin: target,
-        dir: dir / dist,
+        origin,
+        dir: v / dist,
     };
 
-    raycast_heightfield(ray, |x, z| terrain.height(x, z), 1, 0.0, dist).is_none()
+    let cs = world.chunk_size as f32;
+    let mut t = 0.0;
+
+    while t < dist {
+        let p = ray.origin + ray.dir * t;
+        let cx = (p.x / cs).floor() as i32;
+        let cz = (p.z / cs).floor() as i32;
+
+        let Some(chunk) = world.chunks.get(&(cx, cz)) else {
+            t += cs;
+            continue;
+        };
+
+        let grid = chunk.height_grid.as_ref();
+
+        if let Some((t_hit, _)) = raycast_chunk_heightgrid(ray, grid, t, dist) {
+            return false;
+        }
+
+        t += cs;
+    }
+
+    true
 }

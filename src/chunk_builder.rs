@@ -1,8 +1,26 @@
 use crate::terrain::TerrainGenerator;
 use crate::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
-use glam::Vec3;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+
+#[derive(Clone)]
+pub struct ChunkHeightGrid {
+    pub base_x: f32,
+    pub base_z: f32,
+    pub cell: f32,
+    pub nx: usize,
+    pub nz: usize,
+    pub heights: Vec<f32>,             // x * nz + z
+    pub patch_minmax: Vec<(f32, f32)>, // 8x8 patches
+}
+
+pub struct ChunkMeshLod {
+    pub step: usize,
+    pub handle: GpuChunkHandle,
+    pub cpu_vertices: Vec<Vertex>,
+    pub height_grid: Arc<ChunkHeightGrid>,
+}
 
 #[derive(Clone, Copy)]
 pub struct GpuChunkHandle {
@@ -13,15 +31,8 @@ pub struct GpuChunkHandle {
     pub vertex_count: u32,
 }
 
-pub struct ChunkMeshLod {
-    pub step: usize,
-    pub handle: GpuChunkHandle,
-    pub cpu_vertices: Vec<Vertex>,
-}
-
 pub struct ChunkBuilder;
 
-#[derive(Clone)]
 pub struct CpuChunkMesh {
     pub cx: i32,
     pub cz: i32,
@@ -29,6 +40,7 @@ pub struct CpuChunkMesh {
     pub version: u64,
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    pub height_grid: Arc<ChunkHeightGrid>,
 }
 
 impl ChunkBuilder {
@@ -48,60 +60,37 @@ impl ChunkBuilder {
         let size = size as usize;
         let base_x = chunk_x as f32 * size as f32;
         let base_z = chunk_z as f32 * size as f32;
-        let stepf = step as f32;
 
         let verts_x = size / step + 1;
         let verts_z = size / step + 1;
 
+        let mut heights = vec![0.0f32; verts_x * verts_z];
         let mut vertices = Vec::with_capacity(verts_x * verts_z);
-        let mut heights = vec![0.0; verts_x * verts_z];
 
-        let check_mask = match step {
-            1 => 0b11,  // every 4 rows
-            2 => 0b111, // every 8
-            4 => 0b1111,
-            8 => 0b1_1111,
-            _ => 0b11_1111,
-        };
-
+        // -------- sample heightfield once --------
         for gx in 0..verts_x {
-            if gx & check_mask == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+            if gx & 0b1111 == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
                 return None;
             }
 
             for gz in 0..verts_z {
                 let wx = base_x + (gx * step) as f32;
                 let wz = base_z + (gz * step) as f32;
-
                 let h = terrain_gen.height(wx, wz);
-                let m = if step >= 8 {
-                    0.5
-                } else {
-                    terrain_gen.moisture(wx, wz)
-                };
-                let col = terrain_gen.color(wx, wz, h, m);
-
                 heights[gx * verts_z + gz] = h;
-
-                let h = terrain_gen.height(wx, wz);
-
-                let hx = terrain_gen.height(wx + step as f32, wz);
-                let hz = terrain_gen.height(wx, wz + step as f32);
-                let dx = Vec3::new(step as f32, hx - h, 0.0);
-                let dz = Vec3::new(0.0, hz - h, step as f32);
-                let n = dx.cross(dz).normalize();
 
                 vertices.push(Vertex {
                     position: [wx, h, wz],
-                    normal: [n.x, n.y, n.z],
-                    color: col,
+                    normal: [0.0, 1.0, 0.0],
+                    color: terrain_gen.color(wx, wz, h, terrain_gen.moisture(wx, wz)),
                 });
             }
         }
 
-        let inv = 1.0 / stepf;
+        // -------- normals from central differences --------
+        let inv = 1.0 / step as f32;
         for gx in 0..verts_x {
-            if gx & check_mask == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+            if gx & 0b1111 == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
                 return None;
             }
 
@@ -116,17 +105,17 @@ impl ChunkBuilder {
                 let h_d = heights[gx * verts_z + zm];
                 let h_u = heights[gx * verts_z + zp];
 
-                let dhdx = (h_r - h_l) * 0.5 * inv;
-                let dhdz = (h_u - h_d) * 0.5 * inv;
+                let n = glam::Vec3::new(-(h_r - h_l) * 0.5 * inv, 1.0, -(h_u - h_d) * 0.5 * inv)
+                    .normalize();
 
-                let n = glam::Vec3::new(-dhdx, 1.0, -dhdz).normalize();
                 vertices[gx * verts_z + gz].normal = [n.x, n.y, n.z];
             }
         }
 
-        let mut indices = Vec::new();
+        // -------- indices --------
+        let mut indices = Vec::with_capacity((verts_x - 1) * (verts_z - 1) * 6);
         for gx in 0..verts_x - 1 {
-            if gx & check_mask == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+            if gx & 0b1111 == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
                 return None;
             }
 
@@ -146,7 +135,76 @@ impl ChunkBuilder {
             version,
             vertices,
             indices,
+            height_grid: Arc::new(Self::build_height_grid(
+                chunk_x,
+                chunk_z,
+                size,
+                step,
+                terrain_gen,
+            )),
         })
+    }
+
+    pub fn build_height_grid(
+        chunk_x: i32,
+        chunk_z: i32,
+        size: usize,
+        cell_size: usize,
+        terrain_gen: &TerrainGenerator,
+    ) -> ChunkHeightGrid {
+        let size_f = size as f32;
+        let cell_size_f = cell_size as f32;
+        let nx = (size_f / cell_size_f) as usize + 1;
+        let nz = (size_f / cell_size_f) as usize + 1;
+
+        let base_x = chunk_x as f32 * size_f;
+        let base_z = chunk_z as f32 * size_f;
+
+        let mut heights = vec![0.0f32; nx * nz];
+
+        for x in 0..nx {
+            for z in 0..nz {
+                let wx = base_x + x as f32 * cell_size_f;
+                let wz = base_z + z as f32 * cell_size_f;
+                heights[x * nz + z] = terrain_gen.height(wx, wz);
+            }
+        }
+
+        // 8x8 logical cell patches
+        let patch_cells = 8usize;
+        let px = (nx - 1) / patch_cells;
+        let pz = (nz - 1) / patch_cells;
+
+        let mut patch_minmax = Vec::with_capacity(px * pz);
+
+        for px_i in 0..px {
+            for pz_i in 0..pz {
+                let mut min_y = f32::INFINITY;
+                let mut max_y = -f32::INFINITY;
+
+                for lx in 0..=patch_cells {
+                    for lz in 0..=patch_cells {
+                        let gx = px_i * patch_cells + lx;
+                        let gz = pz_i * patch_cells + lz;
+                        let h = heights[gx * nz + gz];
+                        min_y = min_y.min(h);
+                        max_y = max_y.max(h);
+                    }
+                }
+
+                patch_minmax.push((min_y, max_y));
+            }
+        }
+
+        ChunkHeightGrid {
+            base_x,
+            base_z,
+            cell: cell_size as f32,
+            nx,
+            nz,
+            heights,
+            patch_minmax,
+        }
     }
 }
 

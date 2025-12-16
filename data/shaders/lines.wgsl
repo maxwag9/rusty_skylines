@@ -17,6 +17,15 @@ struct Uniforms {
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
+struct PickUniform {
+    pos: vec3<f32>,
+    radius: f32,
+    enabled: u32,
+    color: vec3<f32>,
+}
+
+//@group(2) @binding(0)
+//var<uniform> pick: PickUniform;
 struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) color: vec3<f32>};
 
 @vertex
