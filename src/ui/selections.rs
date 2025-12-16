@@ -11,6 +11,7 @@ pub struct SelectedUiElement {
     pub element_type: ElementKind,
     pub just_selected: bool,
     pub action_name: String,
+    pub input_box: bool,
 }
 
 impl SelectedUiElement {
@@ -25,6 +26,7 @@ impl SelectedUiElement {
             element_type: ElementKind::None,
             just_selected: false,
             action_name: "None".to_string(),
+            input_box: false,
         }
     }
 }
@@ -100,6 +102,7 @@ pub fn make_selected_element(s: &SelectedUiElement) -> SelectedUiElement {
             true
         },
         action_name: s.action_name.clone(),
+        input_box: s.input_box,
     }
 }
 

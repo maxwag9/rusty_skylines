@@ -95,7 +95,838 @@
     },
     {
       "name": "Editor_Menu",
-      "layers": []
+      "layers": [
+        {
+          "name": "editor_information",
+          "order": 3,
+          "texts": [
+            {
+              "id": "mouse_pos_delta_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 24,
+              "x": 148.72296,
+              "y": 806.61365,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Mouse Position change since last frame: {mouse_pos_delta.x:.2|fix|int=3}, {mouse_pos_delta.y:.2|fix|int=3}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_menu_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 192.28563,
+              "y": 105.733185,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Menu: {selected_menu}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_layer_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 190.66995,
+              "y": 168.32187,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Layer: {selected_layer}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_element_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 193.7421,
+              "y": 225.68129,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected GUI element ID: {selected_ui_element_id}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "editing_text_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 214.38449,
+              "y": 279.07776,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Editing Text?: {editing_text}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_text.being_edited_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 212.83328,
+              "y": 324.7707,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Editing selected Text?: {selected_text.being_edited}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_layer.order_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 224.23718,
+              "y": 412.9601,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Layer Order: {selected_layer.order}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_element.z_index_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 183.76483,
+              "y": 470.18637,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected GUI element z_index: {selected_element.z_index}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "mouse_pos_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 205.84222,
+              "y": 544.53906,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Mouse Position: {mouse_pos.x:.0|fix}, {mouse_pos.y:.0|fix}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "any_text.being_hovered_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 197.46338,
+              "y": 666.1362,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Any Text being hovered: {any_text.being_hovered}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "selected_text.being_hovered_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 169.20703,
+              "y": 714.1758,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Selected Text being hovered: {selected_text.being_hovered}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "color_picker.color_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 180.74408,
+              "y": 630.87695,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Color: , R={color_picker.r:.2|fix}, G={color_picker.g:.2|fix}, B={color_picker.b:.2|fix}, H={color_picker.h:.2|fix}, S={color_picker.s:.2|fix}, V={color_picker.v:.2|fix},",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "editor_mode_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 50,
+              "x": 193.56612,
+              "y": 759.4297,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                0.6,
+                1.0,
+                1.0,
+                1.0
+              ],
+              "text": "Editor Mode: {editor_mode}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            }
+          ],
+          "circles": [
+            {
+              "id": "fard circle",
+              "action": "Toggle Color Picker",
+              "style": "None",
+              "z_index": 1,
+              "x": 1000.8617,
+              "y": 769.7613,
+              "radius": 83.57955,
+              "inside_border_thickness": 0.0,
+              "border_thickness": 0.0,
+              "fade": 0.0,
+              "fill_color": [
+                0.2,
+                0.2,
+                0.2,
+                0.5
+              ],
+              "inside_border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "glow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "glow_misc": {
+                "glow_size": 0.0,
+                "glow_speed": 0.0,
+                "glow_intensity": 0.0
+              },
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              }
+            }
+          ],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": false,
+          "opaque": false
+        },
+        {
+          "name": "Color Picker",
+          "order": 900,
+          "texts": [
+            {
+              "id": "Color Picker Title",
+              "action": "None",
+              "style": "None",
+              "z_index": 8,
+              "x": 1124.9305,
+              "y": 657.39185,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 18,
+              "color": [
+                0.7,
+                0.7,
+                0.7,
+                1.0
+              ],
+              "text": "ColorPicker",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false
+            },
+            {
+              "id": "Color Picker Red Input Box",
+              "action": "None",
+              "style": "None",
+              "z_index": 8,
+              "x": 1124.9305,
+              "y": 900.39185,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 18,
+              "color": [
+                0.7,
+                0.7,
+                0.7,
+                1.0
+              ],
+              "text": "Red: {color_picker.r:.2|fix}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": true
+            },
+            {
+              "id": "Color Picker Green Input Box",
+              "action": "None",
+              "style": "None",
+              "z_index": 8,
+              "x": 1124.9305,
+              "y": 930.39185,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 18,
+              "color": [
+                0.7,
+                0.7,
+                0.7,
+                1.0
+              ],
+              "text": "Green: {color_picker.g:.2|fix}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": true
+            },
+            {
+              "id": "Color Picker Blue Input Box",
+              "action": "None",
+              "style": "None",
+              "z_index": 8,
+              "x": 1124.9305,
+              "y": 960.39185,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 18,
+              "color": [
+                0.7,
+                0.7,
+                0.7,
+                1.0
+              ],
+              "text": "Blue: {color_picker.b:.2|fix}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": true
+            }
+          ],
+          "circles": [
+            {
+              "id": "Color Picker Color Circle",
+              "action": "Drag Hue Point",
+              "style": "Hue Circle",
+              "z_index": 1,
+              "x": 1183.8617,
+              "y": 769.7613,
+              "radius": 83.57955,
+              "inside_border_thickness": 0.0,
+              "border_thickness": 0.0,
+              "fade": 0.0,
+              "fill_color": [
+                0.2,
+                0.2,
+                0.2,
+                0.5
+              ],
+              "inside_border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "border_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "glow_color": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "glow_misc": {
+                "glow_size": 0.0,
+                "glow_speed": 0.0,
+                "glow_intensity": 0.0
+              },
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": false
+              }
+            }
+          ],
+          "outlines": [],
+          "handles": [],
+          "polygons": [
+            {
+              "id": "Color Picker Body",
+              "action": "None",
+              "style": "None",
+              "z_index": -4,
+              "vertices": [
+                {
+                  "pos": [
+                    1076.519,
+                    658.98987
+                  ],
+                  "color": [
+                    0.015,
+                    0.015,
+                    0.015,
+                    1.0
+                  ],
+                  "roundness": 0.5
+                },
+                {
+                  "pos": [
+                    1297.3741,
+                    659.0887
+                  ],
+                  "color": [
+                    0.015,
+                    0.015,
+                    0.015,
+                    1.0
+                  ],
+                  "roundness": 0.5
+                },
+                {
+                  "pos": [
+                    1301.3153,
+                    928.6394
+                  ],
+                  "color": [
+                    0.015,
+                    0.015,
+                    0.015,
+                    1.0
+                  ],
+                  "roundness": 0.5
+                },
+                {
+                  "pos": [
+                    1074.9893,
+                    928.5455
+                  ],
+                  "color": [
+                    0.015,
+                    0.015,
+                    0.015,
+                    1.0
+                  ],
+                  "roundness": 0.5
+                }
+              ],
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": false
+              }
+            }
+          ],
+          "active": false,
+          "opaque": false
+        }
+      ]
     }
   ]
 }

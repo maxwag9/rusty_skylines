@@ -5,7 +5,7 @@ use crate::ui::helper::calc_move_speed;
 use crate::ui::input::MouseState;
 pub(crate) use crate::ui::menu::Menu;
 use crate::ui::menu::get_selected_element_color;
-use crate::ui::parser::{get_input_box, resolve_template, set_input_box};
+use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::selections::{SelectedUiElement, deselect_everything};
 use crate::ui::special_actions::rgb_to_hsv;
 use crate::ui::touches::{
@@ -390,7 +390,7 @@ impl UiButtonLoader {
                             }
                         } else {
                             // Not editing an input box, just update
-                            let new_text = get_input_box(&t.template, &self.variables);
+                            let new_text = resolve_template(&t.template, &self.variables);
                             if new_text != t.text {
                                 t.text = new_text;
                                 any_changed = true;
@@ -1055,7 +1055,6 @@ impl UiButtonLoader {
                 scale = 1.05;
             }
             if input_state.action_repeat("Resize Element Smaller Scroll") {
-                print!("Scroleld down");
                 scale = 0.95;
             }
 

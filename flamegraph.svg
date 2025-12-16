@@ -1,0 +1,1250 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:fg="http://github.com/jonhoo/inferno" version="1.1" width="1200" height="438" onload="init(evt)" viewBox="0 0 1200 438"
+     xmlns="http://www.w3.org/2000/svg"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: -->
+    <defs>
+        <linearGradient id="background" y1="0" y2="1" x1="0" x2="0">
+            <stop stop-color="#eeeeee" offset="5%"/>
+            <stop stop-color="#eeeeb0" offset="95%"/>
+        </linearGradient>
+    </defs>
+    <style type="text/css">
+        text { font-family:monospace; font-size:12px }
+        #title { text-anchor:middle; font-size:17px; }
+        #matched { text-anchor:end; }
+        #search { text-anchor:end; opacity:0.1; cursor:pointer; }
+        #search:hover, #search.show { opacity:1; }
+        #subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+        #unzoom { cursor:pointer; }
+        #frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+        .hide { display:none; }
+        .parent { opacity:0.5; }
+    </style>
+    <script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script>
+    <rect x="0" y="0" width="100%" height="438" fill="url(#background)"/>
+    <text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Flame Graph</text>
+    <text id="details" fill="rgb(0,0,0)" x="10" y="421.00"></text>
+    <text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text>
+    <text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text>
+    <text id="matched" fill="rgb(0,0,0)" x="1190" y="421.00"></text>
+    <svg id="frames" x="10" width="1180" total_samples="164149874009">
+        <g>
+            <title>&lt;C as wgpu_hal::dynamic::command::DynCommandEncoder&gt;::reset_all (20,196,218 samples, 0.01%)</title>
+            <rect x="0.0024%" y="357" width="0.0123%" height="15" fill="rgb(227,0,7)" fg:x="3886081" fg:w="20196218"/>
+            <text x="0.2524%" y="367.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (20,196,218 samples, 0.01%)</title>
+            <rect x="0.0024%" y="341" width="0.0123%" height="15" fill="rgb(217,0,24)" fg:x="3886081" fg:w="20196218"/>
+            <text x="0.2524%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (16,617,657 samples, 0.01%)</title>
+            <rect x="0.0045%" y="325" width="0.0101%" height="15" fill="rgb(221,193,54)" fg:x="7464642" fg:w="16617657"/>
+            <text x="0.2545%" y="335.50"></text>
+        </g>
+        <g>
+            <title>&lt;C as wgpu_hal::dynamic::command::DynCommandEncoder&gt;::set_vertex_buffer (29,139,011 samples, 0.02%)</title>
+            <rect x="0.0190%" y="357" width="0.0178%" height="15" fill="rgb(248,212,6)" fg:x="31174309" fg:w="29139011"/>
+            <text x="0.2690%" y="367.50"></text>
+        </g>
+        <g>
+            <title>&lt;core::hash::sip::Hasher&lt;S&gt; as core::hash::Hasher&gt;::write (1,537,846,852 samples, 0.94%)</title>
+            <rect x="0.0610%" y="357" width="0.9369%" height="15" fill="rgb(208,68,35)" fg:x="100114786" fg:w="1537846852"/>
+            <text x="0.3110%" y="367.50"></text>
+        </g>
+        <g>
+            <title>&lt;noise::noise_fns::generators::perlin::Perlin as noise::noise_fns::NoiseFn&lt;f64,2_usize&gt;&gt;::get (11,695,980,541 samples, 7.13%)</title>
+            <rect x="1.0022%" y="357" width="7.1252%" height="15" fill="rgb(232,128,0)" fg:x="1645054353" fg:w="11695980541"/>
+            <text x="1.2522%" y="367.50">&lt;noise::no..</text>
+        </g>
+        <g>
+            <title>rustycity::renderer::ui::UiRenderer::render (31,949,457 samples, 0.02%)</title>
+            <rect x="8.1274%" y="325" width="0.0195%" height="15" fill="rgb(207,160,47)" fg:x="13341034894" fg:w="31949457"/>
+            <text x="8.3774%" y="335.50"></text>
+        </g>
+        <g>
+            <title>&lt;rustycity::app::App as winit::application::ApplicationHandler&gt;::window_event (1,217,821,913 samples, 0.74%)</title>
+            <rect x="8.1274%" y="357" width="0.7419%" height="15" fill="rgb(228,23,34)" fg:x="13341034894" fg:w="1217821913"/>
+            <text x="8.3774%" y="367.50"></text>
+        </g>
+        <g>
+            <title>rustycity::renderer::core::RenderCore::render (1,217,821,913 samples, 0.74%)</title>
+            <rect x="8.1274%" y="341" width="0.7419%" height="15" fill="rgb(218,30,26)" fg:x="13341034894" fg:w="1217821913"/>
+            <text x="8.3774%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::renderer::world_renderer::WorldRenderer::update (1,185,872,456 samples, 0.72%)</title>
+            <rect x="8.1468%" y="325" width="0.7224%" height="15" fill="rgb(220,122,19)" fg:x="13372984351" fg:w="1185872456"/>
+            <text x="8.3968%" y="335.50"></text>
+        </g>
+        <g>
+            <title>&lt;wgpu::api::buffer::BufferViewMut as core::ops::drop::Drop&gt;::drop (18,071,145 samples, 0.01%)</title>
+            <rect x="8.8693%" y="357" width="0.0110%" height="15" fill="rgb(250,228,42)" fg:x="14558915478" fg:w="18071145"/>
+            <text x="9.1193%" y="367.50"></text>
+        </g>
+        <g>
+            <title>&lt;wgpu::api::device::Device as wgpu::util::device::DeviceExt&gt;::create_buffer_init (74,051,816 samples, 0.05%)</title>
+            <rect x="8.8803%" y="357" width="0.0451%" height="15" fill="rgb(240,193,28)" fg:x="14576986623" fg:w="74051816"/>
+            <text x="9.1303%" y="367.50"></text>
+        </g>
+        <g>
+            <title>[libc.so.6] (74,051,816 samples, 0.05%)</title>
+            <rect x="8.8803%" y="341" width="0.0451%" height="15" fill="rgb(216,20,37)" fg:x="14576986623" fg:w="74051816"/>
+            <text x="9.1303%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (18,460,839 samples, 0.01%)</title>
+            <rect x="8.9466%" y="53" width="0.0112%" height="15" fill="rgb(206,188,39)" fg:x="14685788689" fg:w="18460839"/>
+            <text x="9.1966%" y="63.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (18,460,839 samples, 0.01%)</title>
+            <rect x="8.9466%" y="37" width="0.0112%" height="15" fill="rgb(217,207,13)" fg:x="14685788689" fg:w="18460839"/>
+            <text x="9.1966%" y="47.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (22,998,404 samples, 0.01%)</title>
+            <rect x="8.9451%" y="69" width="0.0140%" height="15" fill="rgb(231,73,38)" fg:x="14683377026" fg:w="22998404"/>
+            <text x="9.1951%" y="79.50"></text>
+        </g>
+        <g>
+            <title>&lt;wgpu_hal::gles::egl::Instance as wgpu_hal::Instance&gt;::init (37,463,001 samples, 0.02%)</title>
+            <rect x="8.9394%" y="341" width="0.0228%" height="15" fill="rgb(225,20,46)" fg:x="14673956931" fg:w="37463001"/>
+            <text x="9.1894%" y="351.50"></text>
+        </g>
+        <g>
+            <title>eglQueryString (37,463,001 samples, 0.02%)</title>
+            <rect x="8.9394%" y="325" width="0.0228%" height="15" fill="rgb(210,31,41)" fg:x="14673956931" fg:w="37463001"/>
+            <text x="9.1894%" y="335.50"></text>
+        </g>
+        <g>
+            <title>pthread_once (37,463,001 samples, 0.02%)</title>
+            <rect x="8.9394%" y="309" width="0.0228%" height="15" fill="rgb(221,200,47)" fg:x="14673956931" fg:w="37463001"/>
+            <text x="9.1894%" y="319.50"></text>
+        </g>
+        <g>
+            <title>[libc.so.6] (37,463,001 samples, 0.02%)</title>
+            <rect x="8.9394%" y="293" width="0.0228%" height="15" fill="rgb(226,26,5)" fg:x="14673956931" fg:w="37463001"/>
+            <text x="9.1894%" y="303.50"></text>
+        </g>
+        <g>
+            <title>[libEGL.so.1.1.0] (37,463,001 samples, 0.02%)</title>
+            <rect x="8.9394%" y="277" width="0.0228%" height="15" fill="rgb(249,33,26)" fg:x="14673956931" fg:w="37463001"/>
+            <text x="9.1894%" y="287.50"></text>
+        </g>
+        <g>
+            <title>[libEGL.so.1.1.0] (37,463,001 samples, 0.02%)</title>
+            <rect x="8.9394%" y="261" width="0.0228%" height="15" fill="rgb(235,183,28)" fg:x="14673956931" fg:w="37463001"/>
+            <text x="9.1894%" y="271.50"></text>
+        </g>
+        <g>
+            <title>dlopen (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="245" width="0.0171%" height="15" fill="rgb(221,5,38)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="255.50"></text>
+        </g>
+        <g>
+            <title>[libc.so.6] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="229" width="0.0171%" height="15" fill="rgb(247,18,42)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="239.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="213" width="0.0171%" height="15" fill="rgb(241,131,45)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="223.50"></text>
+        </g>
+        <g>
+            <title>_dl_catch_exception (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="197" width="0.0171%" height="15" fill="rgb(249,31,29)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="207.50"></text>
+        </g>
+        <g>
+            <title>[libc.so.6] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="181" width="0.0171%" height="15" fill="rgb(225,111,53)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="191.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="165" width="0.0171%" height="15" fill="rgb(238,160,17)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="175.50"></text>
+        </g>
+        <g>
+            <title>_dl_catch_exception (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="149" width="0.0171%" height="15" fill="rgb(214,148,48)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="159.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="133" width="0.0171%" height="15" fill="rgb(232,36,49)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="143.50"></text>
+        </g>
+        <g>
+            <title>_dl_catch_exception (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="117" width="0.0171%" height="15" fill="rgb(209,103,24)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="127.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="101" width="0.0171%" height="15" fill="rgb(229,88,8)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="111.50"></text>
+        </g>
+        <g>
+            <title>[ld-linux-x86-64.so.2] (28,042,906 samples, 0.02%)</title>
+            <rect x="8.9451%" y="85" width="0.0171%" height="15" fill="rgb(213,181,19)" fg:x="14683377026" fg:w="28042906"/>
+            <text x="9.1951%" y="95.50"></text>
+        </g>
+        <g>
+            <title>[libEGL.so.1.1.0] (37,485,153 samples, 0.02%)</title>
+            <rect x="8.9394%" y="357" width="0.0228%" height="15" fill="rgb(254,191,54)" fg:x="14673944649" fg:w="37485153"/>
+            <text x="9.1894%" y="367.50"></text>
+        </g>
+        <g>
+            <title>alloc::vec::Vec&lt;T,A&gt;::extend_trusted (22,313,793 samples, 0.01%)</title>
+            <rect x="8.9711%" y="341" width="0.0136%" height="15" fill="rgb(241,83,37)" fg:x="14725992180" fg:w="22313793"/>
+            <text x="9.2211%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libLLVM.so.21.1] (29,422,511 samples, 0.02%)</title>
+            <rect x="8.9690%" y="357" width="0.0179%" height="15" fill="rgb(233,36,39)" fg:x="14722544403" fg:w="29422511"/>
+            <text x="9.2190%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::resource::Buffer::check_usage (43,031,064 samples, 0.03%)</title>
+            <rect x="9.0014%" y="341" width="0.0262%" height="15" fill="rgb(226,3,54)" fg:x="14775792332" fg:w="43031064"/>
+            <text x="9.2514%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[rustycity] (61,184,535 samples, 0.04%)</title>
+            <rect x="8.9946%" y="357" width="0.0373%" height="15" fill="rgb(245,192,40)" fg:x="14764696815" fg:w="61184535"/>
+            <text x="9.2446%" y="367.50"></text>
+        </g>
+        <g>
+            <title>&lt;C as wgpu_hal::dynamic::command::DynCommandEncoder&gt;::begin_render_pass (23,334,867 samples, 0.01%)</title>
+            <rect x="9.0334%" y="341" width="0.0142%" height="15" fill="rgb(238,167,29)" fg:x="14828385953" fg:w="23334867"/>
+            <text x="9.2834%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::command::&lt;impl wgpu_hal::CommandEncoder for wgpu_hal::vulkan::CommandEncoder&gt;::begin_render_pass (23,334,867 samples, 0.01%)</title>
+            <rect x="9.0334%" y="325" width="0.0142%" height="15" fill="rgb(232,182,51)" fg:x="14828385953" fg:w="23334867"/>
+            <text x="9.2834%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (23,334,867 samples, 0.01%)</title>
+            <rect x="9.0334%" y="309" width="0.0142%" height="15" fill="rgb(231,60,39)" fg:x="14828385953" fg:w="23334867"/>
+            <text x="9.2834%" y="319.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (23,334,867 samples, 0.01%)</title>
+            <rect x="9.0334%" y="293" width="0.0142%" height="15" fill="rgb(208,69,12)" fg:x="14828385953" fg:w="23334867"/>
+            <text x="9.2834%" y="303.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (16,442,823 samples, 0.01%)</title>
+            <rect x="9.0376%" y="277" width="0.0100%" height="15" fill="rgb(235,93,37)" fg:x="14835277997" fg:w="16442823"/>
+            <text x="9.2876%" y="287.50"></text>
+        </g>
+        <g>
+            <title>&lt;C as wgpu_hal::dynamic::command::DynCommandEncoder&gt;::set_index_buffer (109,233,125 samples, 0.07%)</title>
+            <rect x="9.0565%" y="341" width="0.0665%" height="15" fill="rgb(213,116,39)" fg:x="14866160811" fg:w="109233125"/>
+            <text x="9.3065%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (73,898,272 samples, 0.05%)</title>
+            <rect x="9.0780%" y="325" width="0.0450%" height="15" fill="rgb(222,207,29)" fg:x="14901495664" fg:w="73898272"/>
+            <text x="9.3280%" y="335.50"></text>
+        </g>
+        <g>
+            <title>&lt;C as wgpu_hal::dynamic::command::DynCommandEncoder&gt;::transition_buffers (41,213,648 samples, 0.03%)</title>
+            <rect x="9.1230%" y="341" width="0.0251%" height="15" fill="rgb(206,96,30)" fg:x="14975395522" fg:w="41213648"/>
+            <text x="9.3730%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (38,881,530 samples, 0.02%)</title>
+            <rect x="9.1244%" y="325" width="0.0237%" height="15" fill="rgb(218,138,4)" fg:x="14977727640" fg:w="38881530"/>
+            <text x="9.3744%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (31,279,882 samples, 0.02%)</title>
+            <rect x="9.1291%" y="309" width="0.0191%" height="15" fill="rgb(250,191,14)" fg:x="14985329288" fg:w="31279882"/>
+            <text x="9.3791%" y="319.50"></text>
+        </g>
+        <g>
+            <title>&lt;core::hash::sip::Hasher&lt;S&gt; as core::hash::Hasher&gt;::write (816,310,215 samples, 0.50%)</title>
+            <rect x="9.1586%" y="341" width="0.4973%" height="15" fill="rgb(239,60,40)" fg:x="15033878643" fg:w="816310215"/>
+            <text x="9.4086%" y="351.50"></text>
+        </g>
+        <g>
+            <title>&lt;hashbrown::raw::RawTable&lt;T,A&gt; as core::clone::Clone&gt;::clone (29,042,304 samples, 0.02%)</title>
+            <rect x="9.6579%" y="341" width="0.0177%" height="15" fill="rgb(206,27,48)" fg:x="15853365348" fg:w="29042304"/>
+            <text x="9.9079%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libc.so.6] (29,042,304 samples, 0.02%)</title>
+            <rect x="9.6579%" y="325" width="0.0177%" height="15" fill="rgb(225,35,8)" fg:x="15853365348" fg:w="29042304"/>
+            <text x="9.9079%" y="335.50"></text>
+        </g>
+        <g>
+            <title>&lt;noise::noise_fns::generators::perlin::Perlin as noise::noise_fns::NoiseFn&lt;f64,2_usize&gt;&gt;::get (94,583,892,265 samples, 57.62%)</title>
+            <rect x="9.6765%" y="341" width="57.6204%" height="15" fill="rgb(250,213,24)" fg:x="15883884024" fg:w="94583892265"/>
+            <text x="9.9265%" y="351.50">&lt;noise::noise_fns::generators::perlin::Perlin as noise::noise_fns::NoiseFn&lt;f64,2_usize&gt;&gt;::get</text>
+        </g>
+        <g>
+            <title>[unknown] (122,080,592 samples, 0.07%)</title>
+            <rect x="67.2225%" y="325" width="0.0744%" height="15" fill="rgb(247,123,22)" fg:x="110345695697" fg:w="122080592"/>
+            <text x="67.4725%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (63,117,457 samples, 0.04%)</title>
+            <rect x="67.2584%" y="309" width="0.0385%" height="15" fill="rgb(231,138,38)" fg:x="110404658832" fg:w="63117457"/>
+            <text x="67.5084%" y="319.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (55,863,096 samples, 0.03%)</title>
+            <rect x="67.2629%" y="293" width="0.0340%" height="15" fill="rgb(231,145,46)" fg:x="110411913193" fg:w="55863096"/>
+            <text x="67.5129%" y="303.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (52,227,806 samples, 0.03%)</title>
+            <rect x="67.2651%" y="277" width="0.0318%" height="15" fill="rgb(251,118,11)" fg:x="110415548483" fg:w="52227806"/>
+            <text x="67.5151%" y="287.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (52,227,695 samples, 0.03%)</title>
+            <rect x="67.2651%" y="261" width="0.0318%" height="15" fill="rgb(217,147,25)" fg:x="110415548594" fg:w="52227695"/>
+            <text x="67.5151%" y="271.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (40,128,535 samples, 0.02%)</title>
+            <rect x="67.2725%" y="245" width="0.0244%" height="15" fill="rgb(247,81,37)" fg:x="110427647754" fg:w="40128535"/>
+            <text x="67.5225%" y="255.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (36,482,221 samples, 0.02%)</title>
+            <rect x="67.2747%" y="229" width="0.0222%" height="15" fill="rgb(209,12,38)" fg:x="110431294068" fg:w="36482221"/>
+            <text x="67.5247%" y="239.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (18,103,700 samples, 0.01%)</title>
+            <rect x="67.2859%" y="213" width="0.0110%" height="15" fill="rgb(227,1,9)" fg:x="110449672589" fg:w="18103700"/>
+            <text x="67.5359%" y="223.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (17,968,617 samples, 0.01%)</title>
+            <rect x="67.3154%" y="293" width="0.0109%" height="15" fill="rgb(248,47,43)" fg:x="110498141554" fg:w="17968617"/>
+            <text x="67.5654%" y="303.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (17,968,617 samples, 0.01%)</title>
+            <rect x="67.3154%" y="277" width="0.0109%" height="15" fill="rgb(221,10,30)" fg:x="110498141554" fg:w="17968617"/>
+            <text x="67.5654%" y="287.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (17,968,617 samples, 0.01%)</title>
+            <rect x="67.3154%" y="261" width="0.0109%" height="15" fill="rgb(210,229,1)" fg:x="110498141554" fg:w="17968617"/>
+            <text x="67.5654%" y="271.50"></text>
+        </g>
+        <g>
+            <title>&lt;wgpu_hal::vulkan::Queue as wgpu_hal::Queue&gt;::present (31,988,818 samples, 0.02%)</title>
+            <rect x="67.3134%" y="341" width="0.0195%" height="15" fill="rgb(222,148,37)" fg:x="110494781431" fg:w="31988818"/>
+            <text x="67.5634%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (31,988,818 samples, 0.02%)</title>
+            <rect x="67.3134%" y="325" width="0.0195%" height="15" fill="rgb(234,67,33)" fg:x="110494781431" fg:w="31988818"/>
+            <text x="67.5634%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (28,628,695 samples, 0.02%)</title>
+            <rect x="67.3154%" y="309" width="0.0174%" height="15" fill="rgb(247,98,35)" fg:x="110498141554" fg:w="28628695"/>
+            <text x="67.5654%" y="319.50"></text>
+        </g>
+        <g>
+            <title>&lt;wgpu_hal::vulkan::Queue as wgpu_hal::Queue&gt;::submit (18,275,188 samples, 0.01%)</title>
+            <rect x="67.3328%" y="341" width="0.0111%" height="15" fill="rgb(247,138,52)" fg:x="110526770249" fg:w="18275188"/>
+            <text x="67.5828%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (18,275,188 samples, 0.01%)</title>
+            <rect x="67.3328%" y="325" width="0.0111%" height="15" fill="rgb(213,79,30)" fg:x="110526770249" fg:w="18275188"/>
+            <text x="67.5828%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (18,275,188 samples, 0.01%)</title>
+            <rect x="67.3328%" y="309" width="0.0111%" height="15" fill="rgb(246,177,23)" fg:x="110526770249" fg:w="18275188"/>
+            <text x="67.5828%" y="319.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (18,275,188 samples, 0.01%)</title>
+            <rect x="67.3328%" y="293" width="0.0111%" height="15" fill="rgb(230,62,27)" fg:x="110526770249" fg:w="18275188"/>
+            <text x="67.5828%" y="303.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (18,275,188 samples, 0.01%)</title>
+            <rect x="67.3328%" y="277" width="0.0111%" height="15" fill="rgb(216,154,8)" fg:x="110526770249" fg:w="18275188"/>
+            <text x="67.5828%" y="287.50"></text>
+        </g>
+        <g>
+            <title>core::hash::BuildHasher::hash_one (3,182,218,789 samples, 1.94%)</title>
+            <rect x="67.3750%" y="341" width="1.9386%" height="15" fill="rgb(244,35,45)" fg:x="110596022434" fg:w="3182218789"/>
+            <text x="67.6250%" y="351.50">c..</text>
+        </g>
+        <g>
+            <title>fmodf (216,552,799 samples, 0.13%)</title>
+            <rect x="69.3313%" y="341" width="0.1319%" height="15" fill="rgb(251,115,12)" fg:x="113807314383" fg:w="216552799"/>
+            <text x="69.5813%" y="351.50"></text>
+        </g>
+        <g>
+            <title>hashbrown::map::HashMap&lt;K,V,S,A&gt;::insert (704,995,221 samples, 0.43%)</title>
+            <rect x="69.4677%" y="341" width="0.4295%" height="15" fill="rgb(240,54,50)" fg:x="114031118776" fg:w="704995221"/>
+            <text x="69.7177%" y="351.50"></text>
+        </g>
+        <g>
+            <title>alloc::raw_vec::RawVecInner&lt;A&gt;::reserve::do_reserve_and_handle (17,893,762 samples, 0.01%)</title>
+            <rect x="70.1033%" y="325" width="0.0109%" height="15" fill="rgb(233,84,52)" fg:x="115074449762" fg:w="17893762"/>
+            <text x="70.3533%" y="335.50"></text>
+        </g>
+        <g>
+            <title>alloc::raw_vec::finish_grow (17,893,762 samples, 0.01%)</title>
+            <rect x="70.1033%" y="309" width="0.0109%" height="15" fill="rgb(207,117,47)" fg:x="115074449762" fg:w="17893762"/>
+            <text x="70.3533%" y="319.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::color (614,629,106 samples, 0.37%)</title>
+            <rect x="70.1142%" y="325" width="0.3744%" height="15" fill="rgb(249,43,39)" fg:x="115092345555" fg:w="614629106"/>
+            <text x="70.3642%" y="335.50"></text>
+        </g>
+        <g>
+            <title>rustycity::chunk_builder::ChunkBuilder::build_chunk_cpu (2,430,422,335 samples, 1.48%)</title>
+            <rect x="69.9074%" y="341" width="1.4806%" height="15" fill="rgb(209,38,44)" fg:x="114752925268" fg:w="2430422335"/>
+            <text x="70.1574%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::height (1,476,372,942 samples, 0.90%)</title>
+            <rect x="70.4886%" y="325" width="0.8994%" height="15" fill="rgb(236,212,23)" fg:x="115706974661" fg:w="1476372942"/>
+            <text x="70.7386%" y="335.50"></text>
+        </g>
+        <g>
+            <title>rustycity::renderer::world_renderer::WorldRenderer::render (190,789,842 samples, 0.12%)</title>
+            <rect x="71.3888%" y="341" width="0.1162%" height="15" fill="rgb(242,79,21)" fg:x="117184611668" fg:w="190789842"/>
+            <text x="71.6388%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::render::&lt;impl wgpu_core::global::Global&gt;::render_pass_set_vertex_buffer (34,466,153 samples, 0.02%)</title>
+            <rect x="71.4840%" y="325" width="0.0210%" height="15" fill="rgb(211,96,35)" fg:x="117340935357" fg:w="34466153"/>
+            <text x="71.7340%" y="335.50"></text>
+        </g>
+        <g>
+            <title>rustycity::renderer::world_renderer::WorldRenderer::update (3,942,965,818 samples, 2.40%)</title>
+            <rect x="71.5050%" y="341" width="2.4021%" height="15" fill="rgb(253,215,40)" fg:x="117375401510" fg:w="3942965818"/>
+            <text x="71.7550%" y="351.50">ru..</text>
+        </g>
+        <g>
+            <title>[libm.so.6] (214,334,439 samples, 0.13%)</title>
+            <rect x="74.7127%" y="325" width="0.1306%" height="15" fill="rgb(211,81,21)" fg:x="122640841883" fg:w="214334439"/>
+            <text x="74.9627%" y="335.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::color (1,540,402,536 samples, 0.94%)</title>
+            <rect x="73.9071%" y="341" width="0.9384%" height="15" fill="rgb(208,190,38)" fg:x="121318367329" fg:w="1540402536"/>
+            <text x="74.1571%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::continental_mask (6,452,774,021 samples, 3.93%)</title>
+            <rect x="74.8455%" y="341" width="3.9310%" height="15" fill="rgb(235,213,38)" fg:x="122858769865" fg:w="6452774021"/>
+            <text x="75.0955%" y="351.50">rust..</text>
+        </g>
+        <g>
+            <title>[libm.so.6] (3,697,673,742 samples, 2.25%)</title>
+            <rect x="90.2485%" y="325" width="2.2526%" height="15" fill="rgb(237,122,38)" fg:x="148142803153" fg:w="3697673742"/>
+            <text x="90.4985%" y="335.50">[..</text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::height (22,548,165,146 samples, 13.74%)</title>
+            <rect x="78.7765%" y="341" width="13.7363%" height="15" fill="rgb(244,218,35)" fg:x="129311543886" fg:w="22548165146"/>
+            <text x="79.0265%" y="351.50">rustycity::terrain::T..</text>
+        </g>
+        <g>
+            <title>[unknown] (19,232,137 samples, 0.01%)</title>
+            <rect x="92.5011%" y="325" width="0.0117%" height="15" fill="rgb(240,68,47)" fg:x="151840476895" fg:w="19232137"/>
+            <text x="92.7511%" y="335.50"></text>
+        </g>
+        <g>
+            <title>rustycity::ui::ui_editor::UiButtonLoader::update_dynamic_texts (17,369,166 samples, 0.01%)</title>
+            <rect x="92.5150%" y="341" width="0.0106%" height="15" fill="rgb(210,16,53)" fg:x="151863189489" fg:w="17369166"/>
+            <text x="92.7650%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::bind::compat::BoundBindGroupLayouts::get_invalid (25,900,847 samples, 0.02%)</title>
+            <rect x="92.5471%" y="341" width="0.0158%" height="15" fill="rgb(235,124,12)" fg:x="151915871342" fg:w="25900847"/>
+            <text x="92.7971%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libc.so.6] (70,125,132 samples, 0.04%)</title>
+            <rect x="92.5973%" y="325" width="0.0427%" height="15" fill="rgb(224,169,11)" fg:x="151998332891" fg:w="70125132"/>
+            <text x="92.8473%" y="335.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::device::resource::Device::create_buffer (98,709,179 samples, 0.06%)</title>
+            <rect x="92.5821%" y="341" width="0.0601%" height="15" fill="rgb(250,166,2)" fg:x="151973417907" fg:w="98709179"/>
+            <text x="92.8321%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::lock::vanilla::RwLock&lt;T&gt;::read (32,028,163 samples, 0.02%)</title>
+            <rect x="92.6422%" y="341" width="0.0195%" height="15" fill="rgb(242,216,29)" fg:x="152072127086" fg:w="32028163"/>
+            <text x="92.8922%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::track::buffer::BufferUsageScope::merge_single (95,377,147 samples, 0.06%)</title>
+            <rect x="92.6810%" y="341" width="0.0581%" height="15" fill="rgb(230,116,27)" fg:x="152135702082" fg:w="95377147"/>
+            <text x="92.9310%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::command::&lt;impl wgpu_hal::CommandEncoder for wgpu_hal::vulkan::CommandEncoder&gt;::set_vertex_buffer (123,282,547 samples, 0.08%)</title>
+            <rect x="92.7581%" y="341" width="0.0751%" height="15" fill="rgb(228,99,48)" fg:x="152262330025" fg:w="123282547"/>
+            <text x="93.0081%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (92,050,243 samples, 0.06%)</title>
+            <rect x="92.7771%" y="325" width="0.0561%" height="15" fill="rgb(253,11,6)" fg:x="152293562329" fg:w="92050243"/>
+            <text x="93.0271%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (84,994,644 samples, 0.05%)</title>
+            <rect x="92.7814%" y="309" width="0.0518%" height="15" fill="rgb(247,143,39)" fg:x="152300617928" fg:w="84994644"/>
+            <text x="93.0314%" y="319.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::device::&lt;impl wgpu_hal::Device for wgpu_hal::vulkan::Device&gt;::create_buffer (17,103,100 samples, 0.01%)</title>
+            <rect x="92.8352%" y="341" width="0.0104%" height="15" fill="rgb(236,97,10)" fg:x="152388834647" fg:w="17103100"/>
+            <text x="93.0852%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::device::&lt;impl wgpu_hal::Device for wgpu_hal::vulkan::Device&gt;::destroy_buffer (24,663,128 samples, 0.02%)</title>
+            <rect x="92.8456%" y="341" width="0.0150%" height="15" fill="rgb(233,208,19)" fg:x="152405937747" fg:w="24663128"/>
+            <text x="93.0956%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (24,663,128 samples, 0.02%)</title>
+            <rect x="92.8456%" y="325" width="0.0150%" height="15" fill="rgb(216,164,2)" fg:x="152405937747" fg:w="24663128"/>
+            <text x="93.0956%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (137,611,144,062 samples, 83.83%)</title>
+            <rect x="9.0319%" y="357" width="83.8326%" height="15" fill="rgb(220,129,5)" fg:x="14825881350" fg:w="137611144062"/>
+            <text x="9.2819%" y="367.50">[unknown]</text>
+        </g>
+        <g>
+            <title>alloc::raw_vec::RawVec&lt;T,A&gt;::grow_one (18,930,079 samples, 0.01%)</title>
+            <rect x="92.8701%" y="357" width="0.0115%" height="15" fill="rgb(242,17,10)" fg:x="152446095675" fg:w="18930079"/>
+            <text x="93.1201%" y="367.50"></text>
+        </g>
+        <g>
+            <title>vkEnumerateInstanceExtensionProperties (38,687,265 samples, 0.02%)</title>
+            <rect x="92.9001%" y="341" width="0.0236%" height="15" fill="rgb(242,107,0)" fg:x="152495467059" fg:w="38687265"/>
+            <text x="93.1501%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libvulkan.so.1.4.328] (38,687,265 samples, 0.02%)</title>
+            <rect x="92.9001%" y="325" width="0.0236%" height="15" fill="rgb(251,28,31)" fg:x="152495467059" fg:w="38687265"/>
+            <text x="93.1501%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libvulkan.so.1.4.328] (38,687,265 samples, 0.02%)</title>
+            <rect x="92.9001%" y="309" width="0.0236%" height="15" fill="rgb(233,223,10)" fg:x="152495467059" fg:w="38687265"/>
+            <text x="93.1501%" y="319.50"></text>
+        </g>
+        <g>
+            <title>vk_icdNegotiateLoaderICDInterfaceVersion (22,089,810 samples, 0.01%)</title>
+            <rect x="92.9103%" y="293" width="0.0135%" height="15" fill="rgb(215,21,27)" fg:x="152512064514" fg:w="22089810"/>
+            <text x="93.1603%" y="303.50"></text>
+        </g>
+        <g>
+            <title>[libGLX_nvidia.so.580.105.08] (22,089,810 samples, 0.01%)</title>
+            <rect x="92.9103%" y="277" width="0.0135%" height="15" fill="rgb(232,23,21)" fg:x="152512064514" fg:w="22089810"/>
+            <text x="93.1603%" y="287.50"></text>
+        </g>
+        <g>
+            <title>[libGLX_nvidia.so.580.105.08] (22,089,810 samples, 0.01%)</title>
+            <rect x="92.9103%" y="261" width="0.0135%" height="15" fill="rgb(244,5,23)" fg:x="152512064514" fg:w="22089810"/>
+            <text x="93.1603%" y="271.50"></text>
+        </g>
+        <g>
+            <title>ash::prelude::read_into_uninitialized_vector (41,700,033 samples, 0.03%)</title>
+            <rect x="92.8992%" y="357" width="0.0254%" height="15" fill="rgb(226,81,46)" fg:x="152493992408" fg:w="41700033"/>
+            <text x="93.1492%" y="367.50"></text>
+        </g>
+        <g>
+            <title>core::hash::BuildHasher::hash_one (143,003,623 samples, 0.09%)</title>
+            <rect x="92.9276%" y="357" width="0.0871%" height="15" fill="rgb(247,70,30)" fg:x="152540564709" fg:w="143003623"/>
+            <text x="93.1776%" y="367.50"></text>
+        </g>
+        <g>
+            <title>&lt;core::hash::sip::Hasher&lt;S&gt; as core::hash::Hasher&gt;::write (24,194,844 samples, 0.01%)</title>
+            <rect x="93.0000%" y="341" width="0.0147%" height="15" fill="rgb(212,68,19)" fg:x="152659373488" fg:w="24194844"/>
+            <text x="93.2500%" y="351.50"></text>
+        </g>
+        <g>
+            <title>core::ptr::drop_in_place&lt;wgpu_core::track::Tracker&gt; (27,744,861 samples, 0.02%)</title>
+            <rect x="93.0267%" y="357" width="0.0169%" height="15" fill="rgb(240,187,13)" fg:x="152703255443" fg:w="27744861"/>
+            <text x="93.2767%" y="367.50"></text>
+        </g>
+        <g>
+            <title>fmodf (46,977,772 samples, 0.03%)</title>
+            <rect x="93.0565%" y="357" width="0.0286%" height="15" fill="rgb(223,113,26)" fg:x="152752099588" fg:w="46977772"/>
+            <text x="93.3065%" y="367.50"></text>
+        </g>
+        <g>
+            <title>hashbrown::map::HashMap&lt;K,V,S,A&gt;::insert (42,565,468 samples, 0.03%)</title>
+            <rect x="93.0956%" y="357" width="0.0259%" height="15" fill="rgb(206,192,2)" fg:x="152816253782" fg:w="42565468"/>
+            <text x="93.3456%" y="367.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::height (460,080,610 samples, 0.28%)</title>
+            <rect x="93.3925%" y="341" width="0.2803%" height="15" fill="rgb(241,108,4)" fg:x="153303679165" fg:w="460080610"/>
+            <text x="93.6425%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::chunk_builder::ChunkBuilder::build_chunk_cpu (2,980,199,593 samples, 1.82%)</title>
+            <rect x="93.1315%" y="357" width="1.8155%" height="15" fill="rgb(247,173,49)" fg:x="152875192790" fg:w="2980199593"/>
+            <text x="93.3815%" y="367.50">r..</text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::moisture (2,091,632,608 samples, 1.27%)</title>
+            <rect x="93.6728%" y="341" width="1.2742%" height="15" fill="rgb(224,114,35)" fg:x="153763759775" fg:w="2091632608"/>
+            <text x="93.9228%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::height (546,487,106 samples, 0.33%)</title>
+            <rect x="94.6141%" y="325" width="0.3329%" height="15" fill="rgb(245,159,27)" fg:x="155308905277" fg:w="546487106"/>
+            <text x="94.8641%" y="335.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::color (1,381,076,753 samples, 0.84%)</title>
+            <rect x="94.9470%" y="357" width="0.8414%" height="15" fill="rgb(245,172,44)" fg:x="155855392383" fg:w="1381076753"/>
+            <text x="95.1970%" y="367.50"></text>
+        </g>
+        <g>
+            <title>[libm.so.6] (181,841,008 samples, 0.11%)</title>
+            <rect x="95.6776%" y="341" width="0.1108%" height="15" fill="rgb(236,23,11)" fg:x="157054628128" fg:w="181841008"/>
+            <text x="95.9276%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::continental_mask (25,397,277 samples, 0.02%)</title>
+            <rect x="95.7884%" y="357" width="0.0155%" height="15" fill="rgb(205,117,38)" fg:x="157236469136" fg:w="25397277"/>
+            <text x="96.0384%" y="367.50"></text>
+        </g>
+        <g>
+            <title>[libm.so.6] (741,124,620 samples, 0.45%)</title>
+            <rect x="98.5382%" y="341" width="0.4515%" height="15" fill="rgb(237,72,25)" fg:x="161750400413" fg:w="741124620"/>
+            <text x="98.7882%" y="351.50"></text>
+        </g>
+        <g>
+            <title>rustycity::terrain::TerrainGenerator::height (5,229,658,621 samples, 3.19%)</title>
+            <rect x="95.8038%" y="357" width="3.1859%" height="15" fill="rgb(244,70,9)" fg:x="157261866413" fg:w="5229658621"/>
+            <text x="96.0538%" y="367.50">rus..</text>
+        </g>
+        <g>
+            <title>wgpu::api::render_pass::RenderPass::set_vertex_buffer (118,573,119 samples, 0.07%)</title>
+            <rect x="99.0713%" y="357" width="0.0722%" height="15" fill="rgb(217,125,39)" fg:x="162625368360" fg:w="118573119"/>
+            <text x="99.3213%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::&lt;impl wgpu_core::global::Global&gt;::command_encoder_finish (306,440,762 samples, 0.19%)</title>
+            <rect x="99.1435%" y="357" width="0.1867%" height="15" fill="rgb(235,36,10)" fg:x="162743941479" fg:w="306440762"/>
+            <text x="99.3935%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::render::encode_render_pass (306,440,762 samples, 0.19%)</title>
+            <rect x="99.1435%" y="341" width="0.1867%" height="15" fill="rgb(251,123,47)" fg:x="162743941479" fg:w="306440762"/>
+            <text x="99.3935%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (121,542,108 samples, 0.07%)</title>
+            <rect x="99.2561%" y="325" width="0.0740%" height="15" fill="rgb(221,13,13)" fg:x="162928840133" fg:w="121542108"/>
+            <text x="99.5061%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (17,360,884 samples, 0.01%)</title>
+            <rect x="99.3196%" y="309" width="0.0106%" height="15" fill="rgb(238,131,9)" fg:x="163033021357" fg:w="17360884"/>
+            <text x="99.5696%" y="319.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::render::&lt;impl wgpu_core::global::Global&gt;::render_pass_draw_indexed (35,577,514 samples, 0.02%)</title>
+            <rect x="99.3435%" y="357" width="0.0217%" height="15" fill="rgb(211,50,8)" fg:x="163072296880" fg:w="35577514"/>
+            <text x="99.5935%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::render::&lt;impl wgpu_core::global::Global&gt;::render_pass_set_index_buffer (24,581,174 samples, 0.01%)</title>
+            <rect x="99.3652%" y="357" width="0.0150%" height="15" fill="rgb(245,182,24)" fg:x="163107874394" fg:w="24581174"/>
+            <text x="99.6152%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::command::render::State::is_ready (42,025,195 samples, 0.03%)</title>
+            <rect x="99.3824%" y="357" width="0.0256%" height="15" fill="rgb(242,14,37)" fg:x="163136150545" fg:w="42025195"/>
+            <text x="99.6324%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::device::queue::Queue::submit (81,704,276 samples, 0.05%)</title>
+            <rect x="99.4211%" y="357" width="0.0498%" height="15" fill="rgb(246,228,12)" fg:x="163199682821" fg:w="81704276"/>
+            <text x="99.6711%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::registry::Registry&lt;T&gt;::get (152,463,952 samples, 0.09%)</title>
+            <rect x="99.4856%" y="357" width="0.0929%" height="15" fill="rgb(213,55,15)" fg:x="163305522761" fg:w="152463952"/>
+            <text x="99.7356%" y="367.50"></text>
+        </g>
+        <g>
+            <title>[unknown] (106,960,195 samples, 0.07%)</title>
+            <rect x="99.5133%" y="341" width="0.0652%" height="15" fill="rgb(209,9,3)" fg:x="163351026518" fg:w="106960195"/>
+            <text x="99.7633%" y="351.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::storage::Storage&lt;T&gt;::get (106,960,195 samples, 0.07%)</title>
+            <rect x="99.5133%" y="325" width="0.0652%" height="15" fill="rgb(230,59,30)" fg:x="163351026518" fg:w="106960195"/>
+            <text x="99.7633%" y="335.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::resource::Buffer::unmap (28,367,914 samples, 0.02%)</title>
+            <rect x="99.5956%" y="357" width="0.0173%" height="15" fill="rgb(209,121,21)" fg:x="163485982810" fg:w="28367914"/>
+            <text x="99.8456%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::instance::&lt;impl wgpu_hal::Surface for wgpu_hal::vulkan::Surface&gt;::acquire_texture (17,638,508 samples, 0.01%)</title>
+            <rect x="99.6021%" y="341" width="0.0107%" height="15" fill="rgb(220,109,13)" fg:x="163496712216" fg:w="17638508"/>
+            <text x="99.8521%" y="351.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (17,638,508 samples, 0.01%)</title>
+            <rect x="99.6021%" y="325" width="0.0107%" height="15" fill="rgb(232,18,1)" fg:x="163496712216" fg:w="17638508"/>
+            <text x="99.8521%" y="335.50"></text>
+        </g>
+        <g>
+            <title>[libnvidia-glcore.so.580.105.08] (17,638,508 samples, 0.01%)</title>
+            <rect x="99.6021%" y="309" width="0.0107%" height="15" fill="rgb(215,41,42)" fg:x="163496712216" fg:w="17638508"/>
+            <text x="99.8521%" y="319.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::storage::Storage&lt;T&gt;::get (161,947,102 samples, 0.10%)</title>
+            <rect x="99.6173%" y="357" width="0.0987%" height="15" fill="rgb(224,123,36)" fg:x="163521634517" fg:w="161947102"/>
+            <text x="99.8673%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::track::buffer::BufferTracker::set_from_usage_scope (78,193,696 samples, 0.05%)</title>
+            <rect x="99.7159%" y="357" width="0.0476%" height="15" fill="rgb(240,125,3)" fg:x="163683581619" fg:w="78193696"/>
+            <text x="99.9659%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::track::buffer::BufferUsageScope::clear (31,609,348 samples, 0.02%)</title>
+            <rect x="99.7636%" y="357" width="0.0193%" height="15" fill="rgb(205,98,50)" fg:x="163761775315" fg:w="31609348"/>
+            <text x="100.0136%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::track::buffer::BufferUsageScope::merge_single (170,161,564 samples, 0.10%)</title>
+            <rect x="99.7828%" y="357" width="0.1037%" height="15" fill="rgb(205,185,37)" fg:x="163793384663" fg:w="170161564"/>
+            <text x="100.0328%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_core::track::buffer::DeviceBufferTracker::set_from_tracker_and_drain_transitions (67,500,379 samples, 0.04%)</title>
+            <rect x="99.8865%" y="357" width="0.0411%" height="15" fill="rgb(238,207,15)" fg:x="163963546227" fg:w="67500379"/>
+            <text x="100.1365%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::command::&lt;impl wgpu_hal::CommandEncoder for wgpu_hal::vulkan::CommandEncoder&gt;::set_index_buffer (45,557,569 samples, 0.03%)</title>
+            <rect x="99.9456%" y="357" width="0.0278%" height="15" fill="rgb(213,199,42)" fg:x="164060528410" fg:w="45557569"/>
+            <text x="100.1956%" y="367.50"></text>
+        </g>
+        <g>
+            <title>wgpu_hal::vulkan::device::&lt;impl wgpu_hal::Device for wgpu_hal::vulkan::Device&gt;::create_buffer (18,055,910 samples, 0.01%)</title>
+            <rect x="99.9795%" y="357" width="0.0110%" height="15" fill="rgb(235,201,11)" fg:x="164116180211" fg:w="18055910"/>
+            <text x="100.2295%" y="367.50"></text>
+        </g>
+        <g>
+            <title>all (164,149,874,009 samples, 100%)</title>
+            <rect x="0.0000%" y="389" width="100.0000%" height="15" fill="rgb(207,46,11)" fg:x="0" fg:w="164149874009"/>
+            <text x="0.2500%" y="399.50"></text>
+        </g>
+        <g>
+            <title>rustycity (164,145,987,928 samples, 100.00%)</title>
+            <rect x="0.0024%" y="373" width="99.9976%" height="15" fill="rgb(241,35,35)" fg:x="3886081" fg:w="164145987928"/>
+            <text x="0.2524%" y="383.50">rustycity</text>
+        </g>
+    </svg>
+</svg>

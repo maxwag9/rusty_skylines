@@ -1,4 +1,5 @@
 pub mod core;
+mod mesh_arena;
 pub mod pipelines;
 pub mod render_passes;
 pub(crate) mod shader_watcher;

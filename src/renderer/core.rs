@@ -130,7 +130,7 @@ impl RenderCore {
                 .expect("Failed to create UI pipelines");
         let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
         let _ = ui_renderer.build_text_atlas(&device, &queue, font_ttf, &[14, 18, 24], 1024, 1024);
-        let world = WorldRenderer::new();
+        let world = WorldRenderer::new(&device);
         let sky = SkyRenderer::new();
 
         Self {
@@ -317,12 +317,12 @@ impl RenderCore {
             bytemuck::bytes_of(&sky_uniform),
         );
 
-        self.world.update(&self.device, camera.target);
+        self.world.update(&self.device, &self.queue, camera, aspect);
 
         // get frame
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            Err(SurfaceError::Outdated | SurfaceError::Lost) => {
                 self.surface.configure(&self.device, &self.config);
                 let frame = self.surface.get_current_texture().unwrap();
 

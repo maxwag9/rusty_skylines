@@ -341,6 +341,7 @@ fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut Input
             element_type,
             just_selected: false,
             action_name: "None".to_string(),
+            input_box: false,
         },
     );
 }
@@ -843,6 +844,7 @@ fn process_circles(
                             element_type: ElementKind::Circle,
                             just_selected: true,
                             action_name: circle.action.clone(),
+                            input_box: false,
                         });
                         layer.dirty.mark_circles();
                     }
@@ -955,6 +957,7 @@ fn process_handles(
                             element_type: ElementKind::Handle,
                             just_selected: true,
                             action_name: "None".to_string(),
+                            input_box: false,
                         });
                         layer.dirty.mark_handles();
                     }
@@ -1098,6 +1101,7 @@ fn process_polygons(
                             element_type: ElementKind::Polygon,
                             just_selected: true,
                             action_name: poly.action.clone(),
+                            input_box: false,
                         });
                         layer.dirty.mark_polygons();
                     }
@@ -1311,6 +1315,7 @@ fn process_text(
                             element_type: ElementKind::Text,
                             just_selected: true,
                             action_name: text.action.clone(),
+                            input_box: text.input_box,
                         });
                         layer.dirty.mark_texts();
                     }

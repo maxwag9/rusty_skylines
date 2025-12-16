@@ -3,40 +3,19 @@ use crate::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
 use glam::Vec3;
 use std::sync::atomic::AtomicU64;
-use wgpu::util::DeviceExt;
-use wgpu::{Buffer, Device};
 
-pub struct GpuChunkMesh {
-    pub vertex_buf: Buffer,
-    pub index_buf: Buffer,
+#[derive(Clone, Copy)]
+pub struct GpuChunkHandle {
+    pub page: u32,
+    pub base_vertex: i32,
+    pub first_index: u32,
     pub index_count: u32,
-}
-
-impl GpuChunkMesh {
-    pub fn from_cpu(device: &Device, cpu: &CpuChunkMesh) -> Self {
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk vertex buffer"),
-            contents: bytemuck::cast_slice(&cpu.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Chunk index buffer"),
-            contents: bytemuck::cast_slice(&cpu.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        Self {
-            vertex_buf,
-            index_buf,
-            index_count: cpu.indices.len() as u32,
-        }
-    }
+    pub vertex_count: u32,
 }
 
 pub struct ChunkMeshLod {
     pub step: usize,
-    pub mesh: GpuChunkMesh,
+    pub handle: GpuChunkHandle,
 }
 
 pub struct ChunkBuilder;
