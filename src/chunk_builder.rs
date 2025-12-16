@@ -16,6 +16,7 @@ pub struct GpuChunkHandle {
 pub struct ChunkMeshLod {
     pub step: usize,
     pub handle: GpuChunkHandle,
+    pub cpu_vertices: Vec<Vertex>,
 }
 
 pub struct ChunkBuilder;

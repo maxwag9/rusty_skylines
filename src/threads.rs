@@ -43,7 +43,7 @@ impl ChunkWorkerPool {
             let job_rx = job_rx.clone();
             let result_tx = result_tx.clone();
             let terrain = terrain_gen.clone();
-            let versions = versions.clone();
+            let _versions = versions.clone();
 
             std::thread::spawn(move || {
                 loop {

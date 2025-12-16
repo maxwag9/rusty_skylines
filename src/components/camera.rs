@@ -1,3 +1,5 @@
+use crate::mouse_ray::{Ray, raycast_heightfield};
+use crate::terrain::TerrainGenerator;
 use glam::Vec3;
 
 #[derive(Debug, Clone)]
@@ -6,6 +8,7 @@ pub struct Camera {
     pub orbit_radius: f32,
     pub yaw: f32,
     pub pitch: f32,
+    pub pitch_resolved: Option<f32>,
 }
 
 impl Camera {
@@ -15,6 +18,7 @@ impl Camera {
             orbit_radius: 1000.0,
             yaw: -45f32.to_radians(),
             pitch: 20f32.to_radians(),
+            pitch_resolved: None,
         }
     }
 
@@ -71,4 +75,75 @@ impl CameraController {
             zoom_damping: 12.0,
         }
     }
+}
+pub fn ground_camera_target(camera: &mut Camera, terrain: &TerrainGenerator, min_clearance: f32) {
+    let x = camera.target.x;
+    let z = camera.target.z;
+
+    let ground_y = terrain.height(x, z);
+
+    if camera.target.y < ground_y + min_clearance {
+        camera.target.y = ground_y + min_clearance;
+    }
+}
+pub fn resolve_pitch_by_search(camera: &mut Camera, terrain: &TerrainGenerator) {
+    let pitch_user = camera.pitch;
+    let pitch_max = 85.0_f32.to_radians();
+
+    let baseline = 4.0_f32.to_radians();
+    let release_margin = 1.5_f32.to_radians(); // hysteresis
+
+    // If we already have a _resolved pitch, try to release it
+    if camera.pitch_resolved.is_some() {
+        // Only release if user pitch is clearly safe
+        if is_clear(camera, terrain, pitch_user - release_margin) {
+            camera.pitch_resolved = None;
+            return;
+        }
+    }
+
+    // Try user pitch directly
+    if is_clear(camera, terrain, pitch_user - release_margin) {
+        return;
+    }
+
+    // Binary search upward
+    let mut lo = pitch_user;
+    let mut hi = pitch_max;
+
+    if !is_clear(camera, terrain, hi) {
+        return;
+    }
+
+    for _ in 0..12 {
+        let mid = 0.5 * (lo + hi);
+        if is_clear(camera, terrain, mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+
+    let solved = hi + baseline;
+
+    camera.pitch = solved;
+    camera.pitch_resolved = Some(solved);
+}
+
+fn is_clear(camera: &Camera, terrain: &TerrainGenerator, pitch: f32) -> bool {
+    let mut tmp = camera.clone();
+    tmp.pitch = pitch;
+
+    let target = tmp.target;
+    let cam_pos = tmp.position();
+
+    let dir = cam_pos - target;
+    let dist = dir.length();
+
+    let ray = Ray {
+        origin: target,
+        dir: dir / dist,
+    };
+
+    raycast_heightfield(ray, |x, z| terrain.height(x, z), 1, 0.0, dist).is_none()
 }

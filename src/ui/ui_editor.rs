@@ -521,7 +521,8 @@ impl UiButtonLoader {
         {
             if self.ui_runtime.selected_ui_element_primary.action_name != "Drag Hue Point" {
                 if let Some(menu) = self.menus.get_mut("Editor_Menu") {
-                    if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") {
+                    if let Some(_layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker")
+                    {
                         //layer.active = false;
                     }
                 }

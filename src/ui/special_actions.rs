@@ -19,7 +19,7 @@ pub fn drag_hue_point(
     let g_handle = loader.variables.get_f32("color_picker.g").unwrap_or(1.0);
     let b_handle = loader.variables.get_f32("color_picker.b").unwrap_or(1.0);
     let mut color = None;
-    let mut handle_color = Some([r_handle, g_handle, b_handle, 1.0]);
+    let handle_color = Some([r_handle, g_handle, b_handle, 1.0]);
     let border_color = None;
     let mut radius = None;
     let mut hue_circle_radius = None;
@@ -170,30 +170,16 @@ pub fn drag_hue_point(
 
         loader.ui_runtime.action_states.get("Drag Hue Point");
     }
-    let mut result = None;
-    if color.is_some() {
-        result = Some(loader.edit_circle(
-            "Editor_Menu",
-            "Color Picker",
-            "color picker handle circle",
-            new_x,
-            new_y,
-            radius,
-            color,
-            border_color,
-        ));
-    } else {
-        result = Some(loader.edit_circle(
-            "Editor_Menu",
-            "Color Picker",
-            "color picker handle circle",
-            new_x,
-            new_y,
-            radius,
-            handle_color,
-            border_color,
-        ));
-    }
+    let result = Some(loader.edit_circle(
+        "Editor_Menu",
+        "Color Picker",
+        "color picker handle circle",
+        new_x,
+        new_y,
+        radius,
+        color.or(handle_color),
+        border_color,
+    ));
 
     let _ = loader.edit_circle(
         "Editor_Menu",

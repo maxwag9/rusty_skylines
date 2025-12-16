@@ -120,7 +120,7 @@ impl MeshArena {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct FreeRange {
+pub struct FreeRange {
     start: u64, // bytes
     size: u64,  // bytes
 }

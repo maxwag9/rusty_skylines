@@ -1,5 +1,6 @@
-use crate::components::camera::Camera;
+use crate::components::camera::*;
 use crate::data::Settings;
+use crate::mouse_ray::ray_from_mouse_pixels;
 use crate::paths::shader_dir;
 use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
 use crate::renderer::shader_watcher::ShaderWatcher;
@@ -122,7 +123,7 @@ impl RenderCore {
         let shader_dir = shader_dir();
         let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
 
-        let aspect = config.width as f32 / config.height as f32;
+        let _aspect = config.width as f32 / config.height as f32;
         let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir, camera)
             .expect("Failed to create render pipelines");
         let mut ui_renderer =
@@ -168,6 +169,8 @@ impl RenderCore {
     ) {
         self.check_shader_changes(ui_loader);
 
+        ground_camera_target(camera, &self.world.terrain_gen, 0.5);
+        resolve_pitch_by_search(camera, &self.world.terrain_gen);
         let aspect = self.config.width as f32 / self.config.height as f32;
         let cam_pos = camera.position();
         let orbit_radius = camera.orbit_radius;
@@ -185,7 +188,7 @@ impl RenderCore {
         let day_ang = day_phase * TAU;
 
         let year_phase = (t_days / 365.0) % 1.0;
-        let year_ang = year_phase * TAU;
+        let _year_ang = year_phase * TAU;
 
         let base_year = 2026.0;
         let current_year = base_year + t_days / 365.0;
@@ -253,6 +256,16 @@ impl RenderCore {
         ui_loader.variables.set_f32("moon_phase", moon_phase);
 
         let (view, proj, view_proj) = camera.matrices(aspect);
+
+        let ray = ray_from_mouse_pixels(
+            glam::Vec2::new(mouse.pos.x, mouse.pos.y),
+            self.config.width as f32,
+            self.config.height as f32,
+            view,
+            proj,
+        );
+
+        self.world.pick_vertex(ray, &self.queue);
 
         let new_uniforms = make_new_uniforms(
             view,

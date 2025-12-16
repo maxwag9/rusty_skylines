@@ -630,7 +630,7 @@ pub fn resolve_template(template: &str, vars: &UiVariableRegistry) -> String {
     out
 }
 
-pub fn set_input_box(template: &str, current_text: &str, vars: &mut UiVariableRegistry) -> String {
+pub fn set_input_box(template: &str, current_text: &str, _vars: &mut UiVariableRegistry) -> String {
     let start = template.find('{');
     let end = template.find('}');
 
@@ -640,7 +640,7 @@ pub fn set_input_box(template: &str, current_text: &str, vars: &mut UiVariableRe
 
     let start = start.unwrap();
     let end = end.unwrap();
-    let var_name = &template[start + 1..end];
+    let _var_name = &template[start + 1..end];
 
     let prefix = &template[..start];
     let suffix = &template[end + 1..];
@@ -651,7 +651,7 @@ pub fn set_input_box(template: &str, current_text: &str, vars: &mut UiVariableRe
 
     let after_prefix = &current_text[prefix.len()..];
 
-    let var_value = if suffix.is_empty() {
+    let _var_value = if suffix.is_empty() {
         after_prefix
     } else if let Some(pos) = after_prefix.find(suffix) {
         &after_prefix[..pos]

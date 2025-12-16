@@ -35,7 +35,7 @@ pub fn execute_action(
 pub fn activate_action(
     loader: &mut UiButtonLoader,
     top_hit: &Option<HitResult>,
-    input_state: &InputState,
+    _input_state: &InputState,
 ) {
     if let Some(hit) = top_hit {
         let action = hit.action.clone().unwrap_or("None".to_string());
@@ -84,7 +84,7 @@ pub fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
     }
 }
 
-pub fn selected_needed(loader: &UiButtonLoader, action_name: &str) -> bool {
+pub fn selected_needed(_loader: &UiButtonLoader, action_name: &str) -> bool {
     match action_name {
         "Drag Hue Point" => true,
         "None" => false,

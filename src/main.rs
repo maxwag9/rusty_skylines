@@ -1,9 +1,12 @@
+#![allow(dead_code)]
+
 mod app;
 mod chunk_builder;
 mod components;
 mod data;
 mod events;
 mod hsv;
+mod mouse_ray;
 mod paths;
 mod renderer;
 mod resources;
