@@ -8,6 +8,7 @@ use crate::renderer::pipelines::Pipelines;
 use crate::terrain::{TerrainGenerator, TerrainParams};
 use crate::threads::{ChunkJob, ChunkWorkerPool};
 use crate::ui::vertex::Vertex;
+use glam::Vec3;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -57,8 +58,8 @@ impl WorldRenderer {
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
         let chunk_size = 128;
-        let view_radius_render = 128;
-        let view_radius_generate = 64;
+        let view_radius_render = 64;
+        let view_radius_generate = 32;
 
         // Paged arena: interpret these as "page sizes" if your MeshArena is paged.
         let arena = MeshArena::new(
@@ -205,9 +206,9 @@ impl WorldRenderer {
 
         for &(cx, cz, dist2) in visible {
             let step = if dist2 > r2_gen {
-                lod_step_for_distance(r2_gen + 1)
+                lod_step_for_distance(r2_gen + 1, self.chunk_size)
             } else {
-                lod_step_for_distance(dist2)
+                lod_step_for_distance(dist2, self.chunk_size)
             };
             self.lod_map.insert((cx, cz), step);
         }
@@ -331,8 +332,8 @@ impl WorldRenderer {
         }
     }
 
-    fn lod_step_for_distance_with_hysteresis(dist2: i32, current: usize) -> usize {
-        let desired = lod_step_for_distance(dist2);
+    fn lod_step_for_distance_with_hysteresis(&self, dist2: i32, current: usize) -> usize {
+        let desired = lod_step_for_distance(dist2, self.chunk_size);
 
         if desired > current {
             desired
@@ -435,39 +436,84 @@ impl WorldRenderer {
         }
     }
 
-    pub fn pick_terrain_point(&mut self, ray: Ray) -> Option<(i32, i32, glam::Vec3)> {
+    pub fn pick_terrain_point(&mut self, ray: Ray) -> Option<(i32, i32, Vec3)> {
         let cs = self.chunk_size as f32;
+        let eps = 1e-6 * cs;
 
-        // Step 1: walk chunks along ray (chunk DDA)
+        let mut cx = (ray.origin.x / cs).floor() as i32;
+        let mut cz = (ray.origin.z / cs).floor() as i32;
+
+        let step_x = ray.dir.x.signum() as i32;
+        let step_z = ray.dir.z.signum() as i32;
+
+        let next_x = (cx + if step_x > 0 { 1 } else { 0 }) as f32 * cs;
+        let next_z = (cz + if step_z > 0 { 1 } else { 0 }) as f32 * cs;
+
+        let mut t_max_x = if ray.dir.x.abs() < 1e-8 {
+            f32::INFINITY
+        } else {
+            (next_x - ray.origin.x) / ray.dir.x
+        };
+
+        let mut t_max_z = if ray.dir.z.abs() < 1e-8 {
+            f32::INFINITY
+        } else {
+            (next_z - ray.origin.z) / ray.dir.z
+        };
+
+        let t_delta_x = if ray.dir.x.abs() < 1e-8 {
+            f32::INFINITY
+        } else {
+            cs / ray.dir.x.abs()
+        };
+
+        let t_delta_z = if ray.dir.z.abs() < 1e-8 {
+            f32::INFINITY
+        } else {
+            cs / ray.dir.z.abs()
+        };
+
         let mut t = 0.0;
-        let t_max = 10_000.0;
+        let max_t = 10_000.0;
 
-        while t < t_max {
-            let p = ray.origin + ray.dir * t;
-            let cx = (p.x / cs).floor() as i32;
-            let cz = (p.z / cs).floor() as i32;
+        while t < max_t {
+            let next_t = t_max_x.min(t_max_z);
 
-            let Some(chunk) = self.chunks.get(&(cx, cz)) else {
-                t += cs;
-                continue;
-            };
-
-            let grid = chunk.height_grid.as_ref();
-
-            if let Some((t_hit, hit_pos)) = raycast_chunk_heightgrid(ray, grid, t, t + cs) {
-                self.last_picked = Some(PickedPoint {
-                    pos: hit_pos,
-                    radius: self.pick_radius_m,
-                });
-
-                return Some((cx, cz, hit_pos));
+            if let Some(chunk) = self.chunks.get(&(cx, cz)) {
+                if let Some((th, hit)) =
+                    raycast_chunk_heightgrid(ray, &chunk.height_grid, t, next_t + eps)
+                {
+                    self.last_picked = Some(PickedPoint {
+                        pos: hit,
+                        radius: self.pick_radius_m,
+                    });
+                    return Some((cx, cz, hit));
+                }
             }
 
-            t += cs;
+            let tie = (t_max_x - t_max_z).abs() < 1e-7;
+
+            if tie {
+                cx += step_x;
+                cz += step_z;
+                t = t_max_x;
+                t_max_x += t_delta_x;
+                t_max_z += t_delta_z;
+            } else if t_max_x < t_max_z {
+                cx += step_x;
+                t = t_max_x;
+                t_max_x += t_delta_x;
+            } else {
+                cz += step_z;
+                t = t_max_z;
+                t_max_z += t_delta_z;
+            }
         }
+
         self.last_picked = None;
         None
     }
+
     pub fn make_pick_uniforms(&self, queue: &Queue, pick_uniform_buffer: &Buffer) {
         let u = if let Some(p) = &self.last_picked {
             PickUniform {

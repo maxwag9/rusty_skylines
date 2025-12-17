@@ -20,142 +20,135 @@ pub struct PickUniform {
     pub _pad1: f32,      // pad to 48
 }
 
+#[inline(always)]
+fn height_bilinear(grid: &ChunkHeightGrid, x: f32, z: f32) -> f32 {
+    let eps = 1e-6 * grid.cell;
+
+    let min_x = grid.base_x;
+    let max_x = grid.base_x + (grid.nx as f32 - 1.0) * grid.cell;
+    let min_z = grid.base_z;
+    let max_z = grid.base_z + (grid.nz as f32 - 1.0) * grid.cell;
+
+    let x = x.clamp(min_x + eps, max_x - eps);
+    let z = z.clamp(min_z + eps, max_z - eps);
+
+    let fx = (x - grid.base_x) / grid.cell;
+    let fz = (z - grid.base_z) / grid.cell;
+
+    let mut ix = fx.floor() as i32;
+    let mut iz = fz.floor() as i32;
+
+    // CRITICAL: clamp cell indices, not floats
+    ix = ix.clamp(0, grid.nx as i32 - 2);
+    iz = iz.clamp(0, grid.nz as i32 - 2);
+
+    let ix = ix as usize;
+    let iz = iz as usize;
+
+    let tx = fx - ix as f32;
+    let tz = fz - iz as f32;
+
+    let i = ix * grid.nz + iz;
+
+    let h00 = grid.heights[i];
+    let h10 = grid.heights[i + grid.nz];
+    let h01 = grid.heights[i + 1];
+    let h11 = grid.heights[i + grid.nz + 1];
+
+    let hx0 = h00 + (h10 - h00) * tx;
+    let hx1 = h01 + (h11 - h01) * tx;
+    hx0 + (hx1 - hx0) * tz
+}
+
+#[inline(always)]
+fn ray_tri(ro: Vec3, rd: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let ab = b - a;
+    let ac = c - a;
+    let p = rd.cross(ac);
+    let det = ab.dot(p);
+
+    if det.abs() < 1e-8 {
+        return None;
+    }
+
+    let inv = 1.0 / det;
+    let tvec = ro - a;
+    let u = tvec.dot(p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+
+    let q = tvec.cross(ab);
+    let v = rd.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+
+    let t = ac.dot(q) * inv;
+    if t >= 0.0 { Some(t) } else { None }
+}
+
 pub fn raycast_chunk_heightgrid(
     ray: Ray,
     grid: &ChunkHeightGrid,
     t_min: f32,
     t_max: f32,
 ) -> Option<(f32, Vec3)> {
-    #[inline]
-    fn clamp_i(v: i32, lo: i32, hi: i32) -> i32 {
-        v.max(lo).min(hi)
-    }
+    let cell = grid.cell;
+    let eps = 1e-6 * cell;
 
-    #[inline]
-    fn height_bilinear(grid: &ChunkHeightGrid, x: f32, z: f32) -> f32 {
-        let fx = (x - grid.base_x) / grid.cell;
-        let fz = (z - grid.base_z) / grid.cell;
-
-        let mut ix0 = fx.floor() as i32;
-        let mut iz0 = fz.floor() as i32;
-
-        ix0 = clamp_i(ix0, 0, grid.nx as i32 - 2);
-        iz0 = clamp_i(iz0, 0, grid.nz as i32 - 2);
-
-        let tx = (fx - ix0 as f32).clamp(0.0, 1.0);
-        let tz = (fz - iz0 as f32).clamp(0.0, 1.0);
-
-        let i = ix0 as usize * grid.nz + iz0 as usize;
-
-        let h00 = grid.heights[i];
-        let h10 = grid.heights[i + grid.nz];
-        let h01 = grid.heights[i + 1];
-        let h11 = grid.heights[i + grid.nz + 1];
-
-        let hx0 = h00 + (h10 - h00) * tx;
-        let hx1 = h01 + (h11 - h01) * tx;
-        hx0 + (hx1 - hx0) * tz
-    }
-
-    #[inline]
-    fn cell_hmin_hmax(grid: &ChunkHeightGrid, ix: i32, iz: i32) -> (f32, f32) {
-        let ix = ix as usize;
-        let iz = iz as usize;
-        let i = ix * grid.nz + iz;
-
-        let h00 = grid.heights[i];
-        let h10 = grid.heights[i + grid.nz];
-        let h01 = grid.heights[i + 1];
-        let h11 = grid.heights[i + grid.nz + 1];
-
-        let mut hmin = h00.min(h10).min(h01).min(h11);
-        let mut hmax = h00.max(h10).max(h01).max(h11);
-
-        let sx = (h10 - h00).abs().max((h11 - h01).abs());
-        let sz = (h01 - h00).abs().max((h11 - h10).abs());
-        let inflate = 0.5 * (sx + sz);
-
-        hmin -= inflate;
-        hmax += inflate;
-
-        (hmin, hmax)
-    }
-
-    // ---------- slab in chunk-local XZ ----------
+    // ---------- XZ slab test ----------
     let ox = ray.origin.x - grid.base_x;
     let oz = ray.origin.z - grid.base_z;
+
+    let size_x = (grid.nx - 1) as f32 * cell;
+    let size_z = (grid.nz - 1) as f32 * cell;
 
     let mut t0 = t_min.max(0.0);
     let mut t1 = t_max;
 
-    let size_x = (grid.nx - 1) as f32 * grid.cell;
-    let size_z = (grid.nz - 1) as f32 * grid.cell;
-
-    // X slab
-    if ray.dir.x.abs() < 1e-8 {
-        if ox < 0.0 || ox > size_x {
-            return None;
-        }
-    } else {
-        let inv = 1.0 / ray.dir.x;
-        let mut a = (-ox) * inv;
-        let mut b = (size_x - ox) * inv;
-        if a > b {
-            std::mem::swap(&mut a, &mut b);
-        }
-        t0 = t0.max(a);
-        t1 = t1.min(b);
-        if t0 > t1 {
-            return None;
+    for (o, d, size) in [(ox, ray.dir.x, size_x), (oz, ray.dir.z, size_z)] {
+        if d.abs() < 1e-8 {
+            if o < 0.0 || o > size {
+                return None;
+            }
+        } else {
+            let inv = 1.0 / d;
+            let mut a = (-o) * inv;
+            let mut b = (size - o) * inv;
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            t0 = t0.max(a);
+            t1 = t1.min(b);
+            if t0 > t1 {
+                return None;
+            }
         }
     }
 
-    // Z slab
-    if ray.dir.z.abs() < 1e-8 {
-        if oz < 0.0 || oz > size_z {
-            return None;
-        }
-    } else {
-        let inv = 1.0 / ray.dir.z;
-        let mut a = (-oz) * inv;
-        let mut b = (size_z - oz) * inv;
-        if a > b {
-            std::mem::swap(&mut a, &mut b);
-        }
-        t0 = t0.max(a);
-        t1 = t1.min(b);
-        if t0 > t1 {
-            return None;
-        }
-    }
+    // ---------- DDA start (nudged) ----------
+    let mut t = t0 + eps;
+    let p = ray.origin + ray.dir * t;
 
-    // ---------- DDA setup ----------
-    let cell = grid.cell;
-    let mut t = t0;
+    let mut ix = ((p.x - grid.base_x) / cell).floor() as i32;
+    let mut iz = ((p.z - grid.base_z) / cell).floor() as i32;
 
-    let p0 = ray.origin + ray.dir * t;
-    let mut ix = ((p0.x - grid.base_x) / cell).floor() as i32;
-    let mut iz = ((p0.z - grid.base_z) / cell).floor() as i32;
+    ix = ix.clamp(0, grid.nx as i32 - 2);
+    iz = iz.clamp(0, grid.nz as i32 - 2);
 
-    let step_x = if ray.dir.x >= 0.0 { 1 } else { -1 };
-    let step_z = if ray.dir.z >= 0.0 { 1 } else { -1 };
+    let step_x = ray.dir.x.signum() as i32;
+    let step_z = ray.dir.z.signum() as i32;
 
-    let next_x = if step_x > 0 {
-        (ix + 1) as f32 * cell + grid.base_x
-    } else {
-        ix as f32 * cell + grid.base_x
-    };
-    let next_z = if step_z > 0 {
-        (iz + 1) as f32 * cell + grid.base_z
-    } else {
-        iz as f32 * cell + grid.base_z
-    };
+    let next_x = grid.base_x + (ix + if step_x > 0 { 1 } else { 0 }) as f32 * cell;
+    let next_z = grid.base_z + (iz + if step_z > 0 { 1 } else { 0 }) as f32 * cell;
 
     let mut t_max_x = if ray.dir.x.abs() < 1e-8 {
         f32::INFINITY
     } else {
         (next_x - ray.origin.x) / ray.dir.x
     };
+
     let mut t_max_z = if ray.dir.z.abs() < 1e-8 {
         f32::INFINITY
     } else {
@@ -167,118 +160,41 @@ pub fn raycast_chunk_heightgrid(
     } else {
         cell / ray.dir.x.abs()
     };
+
     let t_delta_z = if ray.dir.z.abs() < 1e-8 {
         f32::INFINITY
     } else {
         cell / ray.dir.z.abs()
     };
 
-    // ---------- helper: signed distance to surface ----------
-    #[inline]
-    fn signed_d(ray: &Ray, grid: &ChunkHeightGrid, t: f32) -> f32 {
-        let p = ray.origin + ray.dir * t;
-        let h = height_bilinear(grid, p.x, p.z);
-        p.y - h
-    }
-
-    // If we start below, we can treat it as an immediate hit at t0 (optional).
-    // Comment out if you only want front-face hits.
-    if signed_d(&ray, grid, t0) <= 0.0 {
-        let p = ray.origin + ray.dir * t0;
-        let h = height_bilinear(grid, p.x, p.z);
-        return Some((t0, Vec3::new(p.x, h, p.z)));
-    }
-
-    // ---------- robust per-cell segment test ----------
-    const BRACKET_SAMPLES: usize = 8; // more = less flicker, small cost
-    const REFINE_ITERS: usize = 16; // bisection iters
-
     let mut prev_t = t;
 
-    while t <= t1 + 1e-6 {
-        if ix < 0 || iz < 0 || ix as usize >= grid.nx - 1 || iz as usize >= grid.nz - 1 {
+    // ---------- DDA loop ----------
+    while t <= t1 {
+        if ix < 0 || iz < 0 || ix >= grid.nx as i32 - 1 || iz >= grid.nz as i32 - 1 {
             break;
         }
 
-        // This step's end time is the next cell boundary (or t1)
         let seg_end = t_max_x.min(t_max_z).min(t1);
 
-        // Conservative "could hit" check using corner min/max in this cell
-        let (hmin, hmax) = cell_hmin_hmax(grid, ix, iz);
-
-        let y0 = ray.origin.y + ray.dir.y * prev_t;
-        let y1 = ray.origin.y + ray.dir.y * seg_end;
-        let (ymin, ymax) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
-
-        if ymax >= hmin && ymin <= hmax {
-            // We might hit inside [prev_t, seg_end]. Actively bracket a sign change.
-            let mut a = prev_t;
-            let mut fa = signed_d(&ray, grid, a);
-
-            // sample forward to find a point with opposite sign
-            let mut b = seg_end;
-            let mut fb = signed_d(&ray, grid, b);
-
-            let mut bracket_found = (fa > 0.0 && fb < 0.0);
-
-            if !bracket_found {
-                // try a few interior samples to find a bracket
-                let mut last_t = a;
-                let mut last_f = fa;
-
-                for s in 1..=BRACKET_SAMPLES {
-                    let tt =
-                        prev_t + (seg_end - prev_t) * (s as f32 / (BRACKET_SAMPLES as f32 + 1.0));
-                    let ff = signed_d(&ray, grid, tt);
-
-                    if last_f > 0.0 && ff < 0.0 {
-                        a = last_t;
-                        fa = last_f;
-                        b = tt;
-                        fb = ff;
-                        bracket_found = true;
-                        break;
-                    }
-
-                    last_t = tt;
-                    last_f = ff;
-                }
-
-                // also allow the end point to complete a bracket
-                if !bracket_found && last_f > 0.0 && fb < 0.0 {
-                    a = last_t;
-                    fa = last_f;
-                    b = seg_end;
-                    fb = fb;
-                    bracket_found = true;
-                }
-            }
-
-            if bracket_found {
-                // bisection refine
-                for _ in 0..REFINE_ITERS {
-                    let m = 0.5 * (a + b);
-                    let fm = signed_d(&ray, grid, m);
-                    if fm > 0.0 {
-                        a = m;
-                        fa = fm;
-                    } else {
-                        b = m;
-                        fb = fm;
-                    }
-                }
-
-                let hit_t = 0.5 * (a + b);
-                let hit_p = ray.origin + ray.dir * hit_t;
-                let hit_h = height_bilinear(grid, hit_p.x, hit_p.z);
-                return Some((hit_t, Vec3::new(hit_p.x, hit_h, hit_p.z)));
-            }
+        // exact cell intersection
+        if let Some(hit_t) = ray_hit_cell(&ray, grid, ix, iz, prev_t, seg_end) {
+            let p = ray.origin + ray.dir * hit_t;
+            let h = height_bilinear(grid, p.x, p.z);
+            return Some((hit_t, Vec3::new(p.x, h, p.z)));
         }
 
-        // advance DDA to next cell
         prev_t = seg_end;
 
-        if t_max_x < t_max_z {
+        let tie = (t_max_x - t_max_z).abs() < 1e-7;
+
+        if tie {
+            ix += step_x;
+            iz += step_z;
+            t = t_max_x;
+            t_max_x += t_delta_x;
+            t_max_z += t_delta_z;
+        } else if t_max_x < t_max_z {
             ix += step_x;
             t = t_max_x;
             t_max_x += t_delta_x;
@@ -287,14 +203,51 @@ pub fn raycast_chunk_heightgrid(
             t = t_max_z;
             t_max_z += t_delta_z;
         }
-
-        // keep t in sync with segment start
-        if t < prev_t {
-            t = prev_t;
-        }
     }
 
     None
+}
+
+#[inline(always)]
+fn ray_hit_cell(
+    ray: &Ray,
+    grid: &ChunkHeightGrid,
+    ix: i32,
+    iz: i32,
+    t_min: f32,
+    t_max: f32,
+) -> Option<f32> {
+    let ix = ix as usize;
+    let iz = iz as usize;
+
+    let x0 = grid.base_x + ix as f32 * grid.cell;
+    let z0 = grid.base_z + iz as f32 * grid.cell;
+    let x1 = x0 + grid.cell;
+    let z1 = z0 + grid.cell;
+
+    let i = ix * grid.nz + iz;
+
+    let h00 = grid.heights[i];
+    let h10 = grid.heights[i + grid.nz];
+    let h01 = grid.heights[i + 1];
+    let h11 = grid.heights[i + grid.nz + 1];
+
+    let v00 = Vec3::new(x0, h00, z0);
+    let v10 = Vec3::new(x1, h10, z0);
+    let v01 = Vec3::new(x0, h01, z1);
+    let v11 = Vec3::new(x1, h11, z1);
+
+    let mut best = None;
+
+    for (a, b, c) in [(v00, v10, v01), (v01, v10, v11)] {
+        if let Some(t) = ray_tri(ray.origin, ray.dir, a, b, c) {
+            if t >= t_min && t <= t_max {
+                best = Some(best.map_or(t, |bt: f32| bt.min(t)));
+            }
+        }
+    }
+
+    best
 }
 
 pub fn ray_from_mouse_pixels(

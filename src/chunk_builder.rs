@@ -208,16 +208,20 @@ impl ChunkBuilder {
     }
 }
 
-pub fn lod_step_for_distance(dist2: i32) -> usize {
-    if dist2 < 8 {
+pub fn lod_step_for_distance(dist2: i32, chunk_size: u32) -> usize {
+    let cs = chunk_size as i64;
+    let cs2 = cs;
+    let d2 = dist2 as i64;
+
+    if d2 < cs2 / 4 {
         1
-    } else if dist2 < 14 {
+    } else if d2 < cs2 {
         2
-    } else if dist2 < 20 {
+    } else if d2 < cs2 * 4 {
         4
-    } else if dist2 < 28 {
+    } else if d2 < cs2 * 16 {
         8
-    } else if dist2 < 42 {
+    } else if d2 < cs2 * 64 {
         16
     } else {
         32
