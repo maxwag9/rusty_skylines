@@ -268,8 +268,6 @@ impl RenderCore {
 
         self.world.pick_terrain_point(ray);
 
-        self.world
-            .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
         let new_uniforms = make_new_uniforms(
             view,
             proj,
@@ -400,7 +398,7 @@ impl RenderCore {
             bytemuck::cast_slice(&axes),
         );
 
-        // update small water uniform
+        // Update Water Uniform
         let wu = WaterUniform {
             sea_level: 0.0,
             _pad0: [0.0; 3],
@@ -458,129 +456,52 @@ impl RenderCore {
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
                     }),
-                    stencil_ops: None,
+                    stencil_ops: Some(Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
 
-            // main terrain: bind camera + fog
-
+            // Sky, Stars and Terrain
             self.sky.render(&mut pass, &self.pipelines);
+            // Underwater Terrain
+            pass.set_stencil_reference(1);
+            self.world
+                .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
+            self.world
+                .render(&mut pass, &self.pipelines, camera, aspect, true);
+
+            // Above Water Terrain
+            pass.set_stencil_reference(0);
+            self.world
+                .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
             self.world
                 .render(&mut pass, &self.pipelines, camera, aspect, false);
 
-            // gizmo (can use fog too, or just camera)
+            // Gizmo
             pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
             pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
             pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
             pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
             pass.draw(0..6, 0..1);
-        }
-        // 2) DEPTH RESOLVE PASS (terrain again, no color)
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Depth Resolve Pass"),
-                color_attachments: &[], // depth-only
-                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &self.pipelines.depth_view_resolved,
-                    depth_ops: Some(Operations {
-                        load: LoadOp::Clear(1.0),
-                        store: StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            // SAME terrain draw call
-            self.world
-                .render(&mut pass, &self.pipelines, camera, aspect, true);
-        }
-        // 3) WATER PASS
-        {
-            let water_color_attachment = Some(RenderPassColorAttachment {
-                view: &self.pipelines.msaa_view, // MSAA target (same as terrain)
-                resolve_target: None,            // do not resolve yet
-                depth_slice: None,
-                ops: Operations {
-                    load: LoadOp::Load, // keep existing terrain + fog
-                    store: StoreOp::Store,
-                },
-            });
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Water Pass"),
-                color_attachments: &[water_color_attachment],
-                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &self.pipelines.depth_view, // still MSAA depth test
-                    depth_ops: Some(Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
 
             pass.set_pipeline(&self.pipelines.water_pipeline.pipeline);
-
             pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
-            pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
-            pass.set_bind_group(
-                2,
-                &self.pipelines.depth_texture_resolved_resources.bind_group,
-                &[],
-            ); // NEW
 
+            // Render Water
+            pass.set_stencil_reference(1); // Draw above underwater (1), not above water (0)
             pass.set_vertex_buffer(0, self.pipelines.water_mesh_buffers.vertex.slice(..));
             pass.set_index_buffer(
                 self.pipelines.water_mesh_buffers.index.slice(..),
                 IndexFormat::Uint32,
             );
+            pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
+            //pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
 
-            pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
-        }
-        {
-            // -----------------------------------------------------------------------
-            // 4) UI pass on top of resolved image
-            let ui_color_attachment = if self.pipelines.msaa_samples > 1 {
-                Some(RenderPassColorAttachment {
-                    view: &self.pipelines.msaa_view,     // MSAA target
-                    resolve_target: Some(&surface_view), // FINAL resolve
-                    depth_slice: None,
-                    ops: Operations {
-                        load: LoadOp::Load, // keep 3D + water
-                        store: StoreOp::Store,
-                    },
-                })
-            } else {
-                Some(RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    },
-                })
-            };
-
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("UI Pass"),
-                color_attachments: &[ui_color_attachment],
-                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &self.pipelines.depth_view, // same sample_count as msaa_view
-                    depth_ops: Some(Operations {
-                        load: LoadOp::Load,
-                        store: StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            // 2) UI pass on top of resolved image //
             let screen_uniform = crate::renderer::ui::ScreenUniform {
                 size: [self.size.width as f32, self.size.height as f32],
                 time: time.total_time as f32,

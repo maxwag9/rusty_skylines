@@ -13,7 +13,7 @@ pub struct PickUniform {
     pub pos: [f32; 3],
     pub radius: f32, // offset 16
 
-    pub enabled: u32,    // offset 20
+    pub underwater: u32, // offset 20
     pub _pad0: [u32; 3], // pad to 32
 
     pub color: [f32; 3], // offset 32

@@ -1,3 +1,4 @@
+use crate::renderer::pipelines::DEPTH_FORMAT;
 use crate::resources::InputState;
 use crate::ui::vertex::UiVertex;
 use std::cmp::Ordering;
@@ -290,7 +291,7 @@ pub(crate) fn make_pipeline(
             ..Default::default()
         },
         depth_stencil: Some(DepthStencilState {
-            format: TextureFormat::Depth32Float,
+            format: DEPTH_FORMAT,
             depth_write_enabled: false,
             depth_compare: CompareFunction::Always,
             stencil: Default::default(),

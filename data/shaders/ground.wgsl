@@ -37,7 +37,7 @@ struct FogUniforms {
 struct PickUniform {
     pos: vec3<f32>,   // offset 0, size 12, alignment 16
     radius: f32,      // offset 16
-    enabled: u32,     // offset 20
+    underwater: u32,     // offset 20
     // padding to 32
     color: vec3<f32>, // offset 32
     // padding to 48
@@ -86,7 +86,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    if (in.world_pos.y <= 0.1) && (in.world_pos.y >= -0.1) {
+    let is_underwater = in.world_pos.y < 0.0;
+    let underwater_bool = pick.underwater == 1u;
+    if (underwater_bool != is_underwater) {
         discard;
     }
 

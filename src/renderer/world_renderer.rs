@@ -312,12 +312,12 @@ impl WorldRenderer {
 
             self.chunks.insert(
                 coord,
-                ChunkMeshLod {
+                (ChunkMeshLod {
                     step: cpu.step,
                     handle,
                     cpu_vertices: cpu.vertices.clone(),
                     height_grid: cpu.height_grid,
-                },
+                }),
             );
         }
     }
@@ -533,12 +533,12 @@ impl WorldRenderer {
         pipelines: &'a Pipelines,
         camera: &'a Camera,
         aspect: f32,
-        depth_only: bool,
+        underwater: bool,
     ) {
-        if !depth_only {
-            pass.set_pipeline(&pipelines.terrain_pipeline.pipeline);
+        if !underwater {
+            pass.set_pipeline(&pipelines.terrain_pipeline_above_water.pipeline);
         } else {
-            pass.set_pipeline(&pipelines.terrain_pipeline_depth.pipeline);
+            pass.set_pipeline(&pipelines.terrain_pipeline_under_water.pipeline);
         }
 
         pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
@@ -679,7 +679,7 @@ impl WorldRenderer {
             PickUniform {
                 pos: p.pos.into(),
                 radius: self.pick_radius_m,
-                enabled: 1,
+                underwater: 1,
                 _pad0: [0, 0, 0],
                 color: [1.0, 0.0, 0.0],
                 _pad1: 0.0,
@@ -688,7 +688,7 @@ impl WorldRenderer {
             PickUniform {
                 pos: [0.0; 3],
                 radius: 0.0,
-                enabled: 0,
+                underwater: 0,
                 _pad0: [0, 0, 0],
                 color: [1.0, 0.0, 0.0],
                 _pad1: 0.0,
