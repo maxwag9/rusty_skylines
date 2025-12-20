@@ -1581,7 +1581,7 @@ dependencies = [
  "notify",
  "num_cpus",
  "pollster",
-    "rand",
+ "rand",
  "rect_packer",
  "serde",
  "serde_json",

@@ -86,6 +86,10 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    if (in.world_pos.y <= 0.1) && (in.world_pos.y >= -0.1) {
+        discard;
+    }
+
     let n = normalize(in.world_normal);
     let l = normalize(uniforms.sun_direction);
 

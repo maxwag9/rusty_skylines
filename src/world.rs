@@ -4,9 +4,9 @@ use std::collections::HashMap;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Entity(u32);
 
-struct CameraBundle {
-    camera: Camera,
-    controller: CameraController,
+pub struct CameraBundle {
+    pub camera: Camera,
+    pub controller: CameraController,
 }
 
 pub struct World {
@@ -61,12 +61,7 @@ impl World {
             .map(|bundle| &mut bundle.controller)
     }
 
-    pub fn camera_and_controller_mut(
-        &mut self,
-        entity: Entity,
-    ) -> Option<(&mut Camera, &mut CameraController)> {
-        self.cameras
-            .get_mut(&entity)
-            .map(|bundle| (&mut bundle.camera, &mut bundle.controller))
+    pub fn camera_and_controller_mut(&mut self, entity: Entity) -> Option<&mut CameraBundle> {
+        self.cameras.get_mut(&entity)
     }
 }

@@ -13,6 +13,7 @@ use crate::data::Settings;
 use crate::resources::TimeSystem;
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
+use crate::world::CameraBundle;
 use core::RenderCore;
 use std::sync::Arc;
 
@@ -32,12 +33,13 @@ impl Renderer {
 
     pub fn render(
         &mut self,
-        camera: &mut Camera,
+        camera_bundle: &mut CameraBundle,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         mouse: &MouseState,
         settings: &Settings,
     ) {
-        self.core.render(camera, ui_loader, time, mouse, settings);
+        self.core
+            .render(camera_bundle, ui_loader, time, mouse, settings);
     }
 }

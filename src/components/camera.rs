@@ -1,4 +1,3 @@
-use crate::mouse_ray::*;
 use crate::renderer::world_renderer::WorldRenderer;
 use crate::terrain::terrain::TerrainGenerator;
 use glam::Vec3;
@@ -9,17 +8,15 @@ pub struct Camera {
     pub orbit_radius: f32,
     pub yaw: f32,
     pub pitch: f32,
-    pub pitch_resolved: Option<f32>,
 }
 
 impl Camera {
     pub fn new() -> Self {
         Self {
-            target: Vec3::new(0.0, 800.0, 0.0),
-            orbit_radius: 1000.0,
+            target: Vec3::new(0.0, 200.0, 0.0),
+            orbit_radius: 200.0,
             yaw: -45f32.to_radians(),
             pitch: 20f32.to_radians(),
-            pitch_resolved: None,
         }
     }
 
@@ -41,7 +38,7 @@ impl Camera {
 
         let view = glam::Mat4::look_at_rh(eye, self.target, Vec3::Y);
 
-        let proj = glam::Mat4::perspective_rh(60f32.to_radians(), aspect, 5.0, 100_000.0);
+        let proj = glam::Mat4::perspective_rh(60f32.to_radians(), aspect, 10.0, 50_000.0);
 
         let view_proj = proj * view;
 
@@ -87,89 +84,55 @@ pub fn ground_camera_target(camera: &mut Camera, terrain: &TerrainGenerator, min
         camera.target.y = ground_y + min_clearance;
     }
 }
-pub fn resolve_pitch_by_search(camera: &mut Camera, terrain: &WorldRenderer) {
-    let pitch_user = camera.pitch;
-    let pitch_max = 85.0_f32.to_radians();
+pub fn resolve_pitch_by_search(
+    camera: &mut Camera,
+    camera_controller: &mut CameraController,
+    world_renderer: &WorldRenderer,
+) {
+    let target = camera.target;
+    let orbit_radius = camera.orbit_radius;
 
-    let baseline = 4.0_f32.to_radians();
-    let release_margin = 1.5_f32.to_radians(); // hysteresis
+    let samples = 1; // number of points along the orbit line
+    let mut max_terrain_y = f32::MIN;
 
-    // If we already have a _resolved pitch, try to release it
-    if camera.pitch_resolved.is_some() {
-        // Only release if user pitch is clearly safe
-        if is_clear(camera, terrain, pitch_user - release_margin) {
-            camera.pitch_resolved = None;
-            return;
-        }
+    for i in 0..=samples {
+        let t = i as f32 / samples as f32;
+        let cam_pos = camera.position() * t + target * (1.0 - t); // interpolate along line
+        let terrain_y = world_renderer.terrain_gen.height(cam_pos.x, cam_pos.z);
+        max_terrain_y = max_terrain_y.max(terrain_y);
     }
 
-    // Try user pitch directly
-    if is_clear(camera, terrain, pitch_user - release_margin) {
-        return;
+    let min_clearance = 100.0; // small extra buffer
+    let desired_y = max_terrain_y + min_clearance;
+
+    let dy = desired_y - target.y;
+    let horizontal_dist = orbit_radius;
+
+    let new_pitch = (dy / horizontal_dist)
+        .asin()
+        .clamp(-85.0_f32.to_radians(), 85.0_f32.to_radians());
+
+    if new_pitch > camera.pitch || new_pitch > camera_controller.target_pitch {
+        camera_controller.target_pitch = new_pitch;
+        camera.pitch = new_pitch;
+        camera_controller.pitch_velocity = 0.0;
     }
-
-    // Binary search upward
-    let mut lo = pitch_user;
-    let mut hi = pitch_max;
-
-    if !is_clear(camera, terrain, hi) {
-        return;
-    }
-
-    for _ in 0..12 {
-        let mid = 0.5 * (lo + hi);
-        if is_clear(camera, terrain, mid) {
-            hi = mid;
-        } else {
-            lo = mid;
-        }
-    }
-
-    let solved = hi + baseline;
-
-    camera.pitch = solved;
-    camera.pitch_resolved = Some(solved);
 }
 
-fn is_clear(camera: &Camera, world: &WorldRenderer, pitch: f32) -> bool {
+// Stricter version: checks multiple points along orbit for terrain collision
+fn is_clear_strict(camera: &Camera, world: &WorldRenderer, pitch: f32) -> bool {
     let mut tmp = camera.clone();
     tmp.pitch = pitch;
 
-    let origin = tmp.position();
-    let target = tmp.target;
-
-    let v = target - origin;
-    let dist = v.length();
-    if dist < 1e-4 {
-        return true;
-    }
-
-    let ray = Ray {
-        origin,
-        dir: v / dist,
-    };
-
-    let cs = world.chunk_size as f32;
-    let mut t = 0.0;
-
-    while t < dist {
-        let p = ray.origin + ray.dir * t;
-        let cx = (p.x / cs).floor() as i32;
-        let cz = (p.z / cs).floor() as i32;
-
-        let Some(chunk) = world.chunks.get(&(cx, cz)) else {
-            t += cs;
-            continue;
-        };
-
-        let grid = chunk.height_grid.as_ref();
-
-        if let Some(_) = raycast_chunk_heightgrid(ray, grid, t, dist) {
+    let orbit_samples = 16;
+    for i in 0..=orbit_samples {
+        let t = i as f32 / orbit_samples as f32;
+        let pos = tmp.position() * t + tmp.target * (1.0 - t);
+        let ground_y = world.terrain_gen.height(pos.x, pos.z);
+        if pos.y < ground_y + 2.0 {
+            // a small clearance buffer
             return false;
         }
-
-        t += cs;
     }
-
     true
 }

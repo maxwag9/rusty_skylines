@@ -1,3 +1,4 @@
+use crate::components::camera::{ground_camera_target, resolve_pitch_by_search};
 use crate::resources::Resources;
 use crate::world::World;
 use glam::Vec3;
@@ -9,10 +10,11 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     }
 
     let entity = world.main_camera();
-    let Some((camera, controller)) = world.camera_and_controller_mut(entity) else {
+    let Some(camera_bundle) = world.camera_and_controller_mut(entity) else {
         return;
     };
-
+    let camera = &mut camera_bundle.camera;
+    let cam_ctrl = &mut camera_bundle.controller;
     let eye = camera.position();
     let mut fwd3d = camera.target - eye;
     if fwd3d.length_squared() > 0.0 {
@@ -66,51 +68,50 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     if wish.length_squared() > 0.0 {
         wish = wish.normalize();
         let target_vel = wish * speed * speed_factor;
-        controller.velocity = controller
-            .velocity
-            .lerp(target_vel, 1.0 - (-10.0 * dt).exp());
+        cam_ctrl.velocity = cam_ctrl.velocity.lerp(target_vel, 1.0 - (-10.0 * dt).exp());
     } else {
         let k = (1.0 - decay_rate * dt).max(0.0);
-        controller.velocity *= k;
-        if controller.velocity.length_squared() < 1e-5 {
-            controller.velocity = Vec3::ZERO;
+        cam_ctrl.velocity *= k;
+        if cam_ctrl.velocity.length_squared() < 1e-5 {
+            cam_ctrl.velocity = Vec3::ZERO;
         }
     }
 
-    if controller.zoom_velocity.abs() > 0.0001 {
-        camera.orbit_radius += controller.zoom_velocity * dt * 1.5;
-        controller.zoom_velocity *= (1.0 - controller.zoom_damping * dt).max(0.0);
-        camera.orbit_radius = camera.orbit_radius.clamp(10.0, 100_000.0);
+    if cam_ctrl.zoom_velocity.abs() > 0.0001 {
+        camera.orbit_radius += cam_ctrl.zoom_velocity * dt * 1.5;
+        cam_ctrl.zoom_velocity *= (1.0 - cam_ctrl.zoom_damping * dt).max(0.0);
+        camera.orbit_radius = camera.orbit_radius.clamp(10.0, 10_000.0);
     } else {
-        controller.zoom_velocity = 0.0;
+        cam_ctrl.zoom_velocity = 0.0;
     }
 
     // DAMPING (exponential, smooth)
-    let dv = (-controller.orbit_damping_release * dt).exp();
-    controller.yaw_velocity *= dv;
-    controller.pitch_velocity *= dv;
+    let dv = (-cam_ctrl.orbit_damping_release * dt).exp();
+    cam_ctrl.yaw_velocity *= dv;
+    cam_ctrl.pitch_velocity *= dv;
 
     if !resources.input.action_down("Orbit") {
-        controller.target_yaw += controller.yaw_velocity;
-        controller.target_pitch += controller.pitch_velocity;
+        cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
+        cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
     }
-
+    ground_camera_target(camera, &resources.renderer.core.world.terrain_gen, 0.5);
+    resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.world);
     // SMOOTH target → camera
-    let t = 1.0 - (-controller.orbit_smoothness * 60.0 * dt).exp();
+    let t = 1.0 - (-cam_ctrl.orbit_smoothness * 60.0 * dt).exp();
 
-    camera.yaw += (controller.target_yaw - camera.yaw) * t;
-    camera.pitch += (controller.target_pitch - camera.pitch) * t;
+    camera.yaw += (cam_ctrl.target_yaw - camera.yaw) * t;
+    camera.pitch += (cam_ctrl.target_pitch - camera.pitch) * t;
 
     // Micro-deadzone to avoid infinite interpolation
-    if (controller.target_yaw - camera.yaw).abs() < 0.0001 {
-        camera.yaw = controller.target_yaw;
+    if (cam_ctrl.target_yaw - camera.yaw).abs() < 0.0001 {
+        camera.yaw = cam_ctrl.target_yaw;
     }
-    if (controller.target_pitch - camera.pitch).abs() < 0.0001 {
-        camera.pitch = controller.target_pitch;
+    if (cam_ctrl.target_pitch - camera.pitch).abs() < 0.0001 {
+        camera.pitch = cam_ctrl.target_pitch;
     }
 
     camera.pitch = camera
         .pitch
         .clamp(-50.0f32.to_radians(), 89.0f32.to_radians());
-    camera.target += controller.velocity * dt;
+    camera.target += cam_ctrl.velocity * dt;
 }

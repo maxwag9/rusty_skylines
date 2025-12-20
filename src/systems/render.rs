@@ -3,9 +3,9 @@ use crate::world::World;
 
 pub fn render_system(world: &mut World, resources: &mut Resources) {
     let camera_entity = world.main_camera();
-    if let Some(camera) = world.camera_mut(camera_entity) {
+    if let Some(camera_bundle) = world.camera_and_controller_mut(camera_entity) {
         resources.renderer.render(
-            camera,
+            camera_bundle,
             &mut resources.ui_loader,
             &resources.time,
             &resources.input.mouse,

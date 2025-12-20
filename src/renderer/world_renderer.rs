@@ -96,8 +96,8 @@ impl WorldRenderer {
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
         let chunk_size = 128;
-        let view_radius_render = 256;
-        let view_radius_generate = 128;
+        let view_radius_render = 128;
+        let view_radius_generate = 64;
 
         // Paged arena: interpret these as "page sizes" if your MeshArena is paged.
         let arena = MeshArena::new(
@@ -123,7 +123,7 @@ impl WorldRenderer {
 
             workers,
             max_close_jobs_per_frame: 1,
-            max_close_chunks_per_batch: 2,
+            max_close_chunks_per_batch: 1,
             max_far_chunks_per_batch: 50,
             max_far_jobs_per_frame: 1,
 
@@ -533,8 +533,14 @@ impl WorldRenderer {
         pipelines: &'a Pipelines,
         camera: &'a Camera,
         aspect: f32,
+        depth_only: bool,
     ) {
-        pass.set_pipeline(&pipelines.terrain_pipeline.pipeline);
+        if !depth_only {
+            pass.set_pipeline(&pipelines.terrain_pipeline.pipeline);
+        } else {
+            pass.set_pipeline(&pipelines.terrain_pipeline_depth.pipeline);
+        }
+
         pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
         pass.set_bind_group(1, &pipelines.fog_uniforms.bind_group, &[]);
         pass.set_bind_group(2, &pipelines.pick_uniforms.bind_group, &[]);

@@ -165,7 +165,7 @@ impl Default for TerrainParams {
     fn default() -> Self {
         Self {
             seed: 201035458,
-            world_scale: 0.1,
+            world_scale: 0.2,
 
             height_scale: 2000.0,
             sea_level: 0.0,

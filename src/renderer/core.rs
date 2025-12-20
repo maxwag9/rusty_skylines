@@ -12,6 +12,7 @@ use crate::terrain::water::WaterUniform;
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::LineVtx;
+use crate::world::CameraBundle;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 use wgpu::*;
@@ -161,16 +162,16 @@ impl RenderCore {
 
     pub(crate) fn render(
         &mut self,
-        camera: &mut Camera,
+        camera_bundle: &mut CameraBundle,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         mouse: &MouseState,
         settings: &Settings,
     ) {
+        let camera = &mut camera_bundle.camera;
+
         self.check_shader_changes(ui_loader);
 
-        ground_camera_target(camera, &self.world.terrain_gen, 0.5);
-        resolve_pitch_by_search(camera, &self.world);
         let aspect = self.config.width as f32 / self.config.height as f32;
         let cam_pos = camera.position();
         let orbit_radius = camera.orbit_radius;
@@ -399,6 +400,22 @@ impl RenderCore {
             bytemuck::cast_slice(&axes),
         );
 
+        // update small water uniform
+        let wu = WaterUniform {
+            sea_level: 0.0,
+            _pad0: [0.0; 3],
+            color: [0.05, 0.25, 0.35, 0.55],
+            wave_tiling: 0.5,
+            wave_strength: 0.1,
+            _pad1: [0.0; 2],
+        };
+
+        self.queue.write_buffer(
+            &self.pipelines.water_uniforms.buffer,
+            0,
+            bytemuck::bytes_of(&wu),
+        );
+
         let background_color = Color {
             r: settings.background_color[0] as f64,
             g: settings.background_color[1] as f64,
@@ -451,7 +468,7 @@ impl RenderCore {
 
             self.sky.render(&mut pass, &self.pipelines);
             self.world
-                .render(&mut pass, &self.pipelines, camera, aspect);
+                .render(&mut pass, &self.pipelines, camera, aspect, false);
 
             // gizmo (can use fog too, or just camera)
             pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
@@ -459,41 +476,111 @@ impl RenderCore {
             pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
             pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
             pass.draw(0..6, 0..1);
+        }
+        // 2) DEPTH RESOLVE PASS (terrain again, no color)
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Depth Resolve Pass"),
+                color_attachments: &[], // depth-only
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &self.pipelines.depth_view_resolved,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-            // --- WATER PASS --------------------------------------------------------
-            {
-                pass.set_pipeline(&self.pipelines.water_pipeline.pipeline);
-                pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
+            // SAME terrain draw call
+            self.world
+                .render(&mut pass, &self.pipelines, camera, aspect, true);
+        }
+        // 3) WATER PASS
+        {
+            let water_color_attachment = Some(RenderPassColorAttachment {
+                view: &self.pipelines.msaa_view, // MSAA target (same as terrain)
+                resolve_target: None,            // do not resolve yet
+                depth_slice: None,
+                ops: Operations {
+                    load: LoadOp::Load, // keep existing terrain + fog
+                    store: StoreOp::Store,
+                },
+            });
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Water Pass"),
+                color_attachments: &[water_color_attachment],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &self.pipelines.depth_view, // still MSAA depth test
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-                // update small water uniform
-                let wu = WaterUniform {
-                    sea_level: 0.0,
-                    _pad0: [0.0; 3],
-                    color: [0.05, 0.25, 0.35, 0.55],
-                    wave_tiling: 0.5,
-                    wave_strength: 0.1,
-                    _pad1: [0.0; 2],
-                };
+            pass.set_pipeline(&self.pipelines.water_pipeline.pipeline);
 
-                self.queue.write_buffer(
-                    &self.pipelines.water_uniforms.buffer,
-                    0,
-                    bytemuck::bytes_of(&wu),
-                );
+            pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
+            pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
+            pass.set_bind_group(
+                2,
+                &self.pipelines.depth_texture_resolved_resources.bind_group,
+                &[],
+            ); // NEW
 
-                pass.set_vertex_buffer(0, self.pipelines.water_mesh_buffers.vertex.slice(..));
-                pass.set_index_buffer(
-                    self.pipelines.water_mesh_buffers.index.slice(..),
-                    IndexFormat::Uint32,
-                );
+            pass.set_vertex_buffer(0, self.pipelines.water_mesh_buffers.vertex.slice(..));
+            pass.set_index_buffer(
+                self.pipelines.water_mesh_buffers.index.slice(..),
+                IndexFormat::Uint32,
+            );
 
-                pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
-                pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
-            }
+            pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
+        }
+        {
             // -----------------------------------------------------------------------
+            // 4) UI pass on top of resolved image
+            let ui_color_attachment = if self.pipelines.msaa_samples > 1 {
+                Some(RenderPassColorAttachment {
+                    view: &self.pipelines.msaa_view,     // MSAA target
+                    resolve_target: Some(&surface_view), // FINAL resolve
+                    depth_slice: None,
+                    ops: Operations {
+                        load: LoadOp::Load, // keep 3D + water
+                        store: StoreOp::Store,
+                    },
+                })
+            } else {
+                Some(RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                })
+            };
 
-            // 2) UI pass on top of resolved image
-
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("UI Pass"),
+                color_attachments: &[ui_color_attachment],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &self.pipelines.depth_view, // same sample_count as msaa_view
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
             let screen_uniform = crate::renderer::ui::ScreenUniform {
                 size: [self.size.width as f32, self.size.height as f32],
                 time: time.total_time as f32,

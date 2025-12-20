@@ -54,6 +54,7 @@ pub struct MeshBuffers {
     pub index_count: u32,
 }
 
+#[derive(Clone)]
 pub struct ShaderAsset {
     pub path: PathBuf,
     pub module: ShaderModule,
@@ -67,6 +68,10 @@ pub struct Pipelines {
 
     pub depth_texture: Texture,
     pub depth_view: TextureView,
+
+    pub depth_texture_resolved: Texture,
+    pub depth_view_resolved: TextureView,
+    pub depth_texture_resolved_resources: GpuResourceSet,
 
     pub(crate) msaa_samples: u32,
 
@@ -88,6 +93,7 @@ pub struct Pipelines {
     pub gizmo_mesh_buffers: MeshBuffers,
     pub grass_texture_pipeline: ComputePipelineState,
     pub grass_texture_resources: GpuResourceSet,
+    pub terrain_pipeline_depth: RenderPipelineState,
 }
 
 impl Pipelines {
@@ -102,6 +108,8 @@ impl Pipelines {
         let line_shader_path = shader_dir.join("lines.wgsl");
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
+        let (depth_texture_resolved, depth_view_resolved) =
+            create_depth_texture_resolved(&device, &config);
 
         let terrain_shader = load_shader(device, &terrain_shader_path, "Ground Shader")?;
 
@@ -244,6 +252,57 @@ impl Pipelines {
                 pos: [-20000.0, 0.0, 20000.0],
             },
         ];
+        let depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Depth Resolved Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: None,
+            anisotropy_clamp: 1,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 1.0,
+            border_color: None,
+        });
+
+        let depth_texture_resolved_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Depth Texture Resolved BGL"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                ],
+            });
+        let depth_resolved_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Depth Resolved BG"),
+            layout: &depth_texture_resolved_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&depth_view_resolved),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&depth_sampler),
+                },
+            ],
+        });
 
         let water_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
 
@@ -464,6 +523,13 @@ impl Pipelines {
             msaa_view,
             depth_texture,
             depth_view,
+            depth_texture_resolved,
+            depth_view_resolved,
+            depth_texture_resolved_resources: GpuResourceSet {
+                bind_group_layout: depth_texture_resolved_bind_group_layout,
+                bind_group: depth_resolved_bind_group,
+                buffer: make_dummy_buf(&device),
+            },
             msaa_samples,
             config: config.clone(),
 
@@ -496,7 +562,7 @@ impl Pipelines {
             terrain_pipeline: make_dummy_render_pipeline_state(
                 device,
                 config.format,
-                terrain_shader,
+                terrain_shader.clone(),
             ),
 
             water_pipeline: make_dummy_render_pipeline_state(device, config.format, water_shader),
@@ -511,14 +577,14 @@ impl Pipelines {
             gizmo_pipeline: make_dummy_render_pipeline_state(device, config.format, line_shader),
             gizmo_mesh_buffers: MeshBuffers {
                 vertex: gizmo_vbuf,
-                index: make_dummy_ibuf(&device),
+                index: make_dummy_buf(&device),
                 index_count: 0,
             },
 
             stars_pipeline: make_dummy_render_pipeline_state(device, config.format, stars_shader),
             stars_mesh_buffers: MeshBuffers {
                 vertex: stars_vertex_buffer,
-                index: make_dummy_ibuf(&device),
+                index: make_dummy_buf(&device),
                 index_count: 0,
             },
 
@@ -528,6 +594,11 @@ impl Pipelines {
                 bind_group: grass_texture_bind_group,
                 buffer: grass_params_buffer,
             },
+            terrain_pipeline_depth: make_dummy_render_pipeline_state(
+                device,
+                config.format,
+                terrain_shader,
+            ),
         };
 
         this.recreate_pipelines();
@@ -540,6 +611,7 @@ impl Pipelines {
         self.water_pipeline.pipeline = self.build_water_pipeline();
         self.sky_pipeline.pipeline = self.build_sky_pipeline();
         self.stars_pipeline.pipeline = self.build_stars_pipeline();
+        self.terrain_pipeline_depth.pipeline = self.build_terrain_pipeline_depth();
     }
 
     pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
@@ -595,7 +667,7 @@ impl Pipelines {
 
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Main Pipeline"),
+                label: Some("Terrain Pipeline"),
                 layout: Some(&terrain_pipeline_layout),
                 vertex: VertexState {
                     module: &self.terrain_pipeline.shader.module,
@@ -627,6 +699,51 @@ impl Pipelines {
                 }),
                 multisample: MultisampleState {
                     count: self.msaa_samples,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            })
+    }
+    fn build_terrain_pipeline_depth(&self) -> RenderPipeline {
+        let terrain_pipeline_layout =
+            self.device
+                .create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Terrain Pipeline Layout"),
+                    bind_group_layouts: &[
+                        &self.uniforms.bind_group_layout,      // group(0)
+                        &self.fog_uniforms.bind_group_layout,  // group(1)
+                        &self.pick_uniforms.bind_group_layout, // group(2) :O
+                    ],
+                    push_constant_ranges: &[],
+                });
+
+        self.device
+            .create_render_pipeline(&RenderPipelineDescriptor {
+                label: Some("Terrain Pipeline Depth Only"),
+                layout: Some(&terrain_pipeline_layout),
+                vertex: VertexState {
+                    module: &self.terrain_pipeline.shader.module,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Vertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                fragment: None,
+                primitive: PrimitiveState {
+                    cull_mode: Some(Face::Front),
+                    topology: PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::Less,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: MultisampleState {
+                    count: 1,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
@@ -696,6 +813,7 @@ impl Pipelines {
                 bind_group_layouts: &[
                     &self.uniforms.bind_group_layout,
                     &self.water_uniforms.bind_group_layout,
+                    &self.depth_texture_resolved_resources.bind_group_layout, // group 2  <-- NEW
                 ],
                 push_constant_ranges: &[],
             });
@@ -727,7 +845,7 @@ impl Pipelines {
                 depth_stencil: Some(DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: false,
-                    depth_compare: CompareFunction::LessEqual,
+                    depth_compare: CompareFunction::Less,
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -879,7 +997,7 @@ impl Pipelines {
     }
 }
 
-fn make_dummy_ibuf(device: &Device) -> Buffer {
+fn make_dummy_buf(device: &Device) -> Buffer {
     device.create_buffer(&BufferDescriptor {
         label: Some("dummy ibuf"),
         size: 0,
@@ -951,7 +1069,28 @@ fn create_depth_texture(
     let view = texture.create_view(&TextureViewDescriptor::default());
     (texture, view)
 }
+fn create_depth_texture_resolved(
+    device: &Device,
+    config: &SurfaceConfiguration,
+) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("Depth Texture Resolved"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: DEPTH_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
 
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
+}
 fn create_grass_texture(device: &Device, config: &SurfaceConfiguration) -> (Texture, TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Grass Texture"),

@@ -41,7 +41,8 @@ struct SkyUniform {
 };
 
 @group(1) @binding(1) var<uniform> sky: SkyUniform;
-
+@group(2) @binding(0) var terrain_depth: texture_2d<f32>;
+@group(2) @binding(1) var depth_sampler: sampler;
 fn get_orbit_target() -> vec3<f32> {
     // Camera forward in world space (-Z of inv_view)
     let forward = normalize(-uniforms.inv_view[2].xyz);
@@ -134,10 +135,15 @@ struct VSOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) world: vec3<f32>,
 };
+struct FSIn {
+    @builtin(position) frag_coord: vec4<f32>, // screen-space, includes x/y/pixel z
+    @location(0) world: vec3<f32>,
+};
 
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>) -> VSOut {
-    var wp = vec3<f32>(pos.x, water.sea_level, pos.z);
+    var wp = vec3<f32>(pos.x, water.sea_level + 0.0005, pos.z);
+
 
     var out: VSOut;
     let target_pos = get_orbit_target();
@@ -149,8 +155,28 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VSOut {
 }
 
 
+fn linearize_depth(z_ndc: f32, near: f32, far: f32) -> f32 {
+    return (2.0 * near) / (far + near - z_ndc * (far - near));
+}
+
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+fn fs_main(in: FSIn) -> @location(0) vec4<f32> {
+    // Screen-space UV
+    let dims = vec2<f32>(textureDimensions(terrain_depth));
+    let uv = in.frag_coord.xy / dims;
+
+    // Sample terrain depth
+    let terrain_depth_sample = textureSample(terrain_depth, depth_sampler, uv).r;
+
+    // Linearize depths (replace near/far with your camera planes)
+    let linear_terrain_z = linearize_depth(terrain_depth_sample, 10.0, 50000.0);
+    let linear_water_z   = linearize_depth(in.frag_coord.z, 10.0, 50000.0);
+
+    if (linear_water_z >= linear_terrain_z) {
+        discard;
+    }
+
+
     let sun_dir = normalize(uniforms.sun_direction);
     let moon_dir = normalize(uniforms.moon_direction);
 
