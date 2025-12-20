@@ -42,6 +42,13 @@ struct SkyUniform {
 
 @group(1) @binding(1) var<uniform> sky: SkyUniform;
 
+fn get_orbit_target() -> vec3<f32> {
+    // Camera forward in world space (-Z of inv_view)
+    let forward = normalize(-uniforms.inv_view[2].xyz);
+
+    return uniforms.camera_pos + forward * uniforms.orbit_radius;
+}
+
 fn hash2(p: vec2<i32>) -> f32 {
     let pf = vec2<f32>(f32(p.x), f32(p.y));
     return fract(sin(dot(pf, vec2<f32>(127.1, 311.7))) * 43758.5453);
@@ -133,8 +140,9 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VSOut {
     var wp = vec3<f32>(pos.x, water.sea_level, pos.z);
 
     var out: VSOut;
-    wp.x += uniforms.camera_pos.x;
-    wp.z += uniforms.camera_pos.z;
+    let target_pos = get_orbit_target();
+    wp.x += target_pos.x;
+    wp.z += target_pos.z;
     out.world = wp;
     out.pos = uniforms.view_proj * vec4<f32>(wp, 1.0);
     return out;

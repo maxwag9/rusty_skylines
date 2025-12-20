@@ -1,4 +1,4 @@
-use crate::chunk_builder::ChunkHeightGrid;
+use crate::terrain::chunk_builder::ChunkHeightGrid;
 use glam::Vec3;
 
 #[derive(Clone, Copy, Debug)]

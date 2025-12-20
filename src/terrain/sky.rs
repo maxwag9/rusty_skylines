@@ -15,14 +15,14 @@ impl SkyRenderer {
 impl SkyRenderer {
     pub fn render(&self, pass: &mut RenderPass, pipelines: &Pipelines) {
         // just render
-        pass.set_pipeline(&pipelines.stars_pipeline);
-        pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
-        pass.set_vertex_buffer(0, pipelines.stars_vertex_buffer.slice(..));
+        pass.set_pipeline(&pipelines.stars_pipeline.pipeline);
+        pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
+        pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
         pass.draw(0..4, 0..STAR_COUNT); // 4 verts, STAR_COUNT instances
 
-        pass.set_pipeline(&pipelines.sky_pipeline);
-        pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &pipelines.sky_bind_group, &[]);
+        pass.set_pipeline(&pipelines.sky_pipeline.pipeline);
+        pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
+        pass.set_bind_group(1, &pipelines.sky_uniforms.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }

@@ -1,6 +1,6 @@
 use crate::mouse_ray::*;
 use crate::renderer::world_renderer::WorldRenderer;
-use crate::terrain::TerrainGenerator;
+use crate::terrain::terrain::TerrainGenerator;
 use glam::Vec3;
 
 #[derive(Debug, Clone)]
@@ -164,7 +164,7 @@ fn is_clear(camera: &Camera, world: &WorldRenderer, pitch: f32) -> bool {
 
         let grid = chunk.height_grid.as_ref();
 
-        if let Some((t_hit, _)) = raycast_chunk_heightgrid(ray, grid, t, dist) {
+        if let Some(_) = raycast_chunk_heightgrid(ray, grid, t, dist) {
             return false;
         }
 

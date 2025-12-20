@@ -1,5 +1,5 @@
-use crate::chunk_builder::{ChunkBuilder, CpuChunkMesh};
-use crate::terrain::TerrainGenerator;
+use crate::terrain::chunk_builder::{ChunkBuilder, CpuChunkMesh};
+use crate::terrain::terrain::TerrainGenerator;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

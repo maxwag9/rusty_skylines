@@ -156,7 +156,8 @@ impl UiPipelines {
             }],
         });
 
-        let text_shader = load_shader_from_dir(device, shader_dir, "text.wgsl", "UI Text Shader")?;
+        let text_shader =
+            load_shader(&device, &shader_dir.join("text.wgsl"), "UI Text Shader")?.module;
         let text_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Text Layout"),
             entries: &[
@@ -203,16 +204,24 @@ impl UiPipelines {
         });
 
         // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
-        let circle_shader =
-            load_shader_from_dir(device, shader_dir, "ui_circle.wgsl", "UI Circle Shader")?;
-        let outline_shader = load_shader_from_dir(
-            device,
-            shader_dir,
-            "ui_shape_outline.wgsl",
+        let circle_shader = load_shader(
+            &device,
+            &shader_dir.join("ui_circle.wgsl"),
+            "UI Circle Shader",
+        )?
+        .module;
+        let outline_shader = load_shader(
+            &device,
+            &shader_dir.join("ui_shape_outline.wgsl"),
             "UI Outline Shader",
-        )?;
-        let handle_shader =
-            load_shader_from_dir(device, shader_dir, "ui_handle.wgsl", "UI Handle Shader")?;
+        )?
+        .module;
+        let handle_shader = load_shader(
+            &device,
+            &shader_dir.join("ui_handle.wgsl"),
+            "UI Handle Shader",
+        )?
+        .module;
         let circle_layout = make_storage_layout(device, "Circle Layout");
         let circle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Circle Pipeline Layout"),
@@ -312,8 +321,12 @@ impl UiPipelines {
             PrimitiveTopology::TriangleStrip,
             msaa_samples,
         );
-        let polygon_shader =
-            load_shader_from_dir(device, shader_dir, "ui_polygon.wgsl", "UI Polygon Shader")?;
+        let polygon_shader = load_shader(
+            &device,
+            &shader_dir.join("ui_polygon.wgsl"),
+            "UI Polygon Shader",
+        )?
+        .module;
         let polygon_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("polygon_layout"),
             entries: &[
@@ -361,8 +374,13 @@ impl UiPipelines {
             msaa_samples,
         );
 
-        let glow_shader =
-            load_shader_from_dir(device, shader_dir, "ui_circle_glow.wgsl", "UI Glow Shader")?;
+        let glow_shader = load_shader(
+            &device,
+            &shader_dir.join("ui_circle_glow.wgsl"),
+            "UI Glow Shader",
+        )?
+        .module;
+
         let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Glow Pipeline Layout"),
             bind_group_layouts: &[&uniform_layout, &circle_layout],
@@ -517,56 +535,47 @@ impl UiPipelines {
     }
 
     pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.text_shader = load_shader_from_dir(
+        self.text_shader = load_shader(
             &self.device,
-            &self.shader_dir,
-            "text.wgsl",
+            &self.shader_dir.join("text.wgsl"),
             "UI Text Shader",
-        )?;
-        self.circle_shader = load_shader_from_dir(
+        )?
+        .module;
+        self.circle_shader = load_shader(
             &self.device,
-            &self.shader_dir,
-            "ui_circle.wgsl",
+            &self.shader_dir.join("ui_circle.wgsl"),
             "UI Circle Shader",
-        )?;
-        self.outline_shader = load_shader_from_dir(
+        )?
+        .module;
+        self.outline_shader = load_shader(
             &self.device,
-            &self.shader_dir,
-            "ui_shape_outline.wgsl",
+            &self.shader_dir.join("ui_shape_outline.wgsl"),
             "UI Outline Shader",
-        )?;
-        self.handle_shader = load_shader_from_dir(
+        )?
+        .module;
+        self.handle_shader = load_shader(
             &self.device,
-            &self.shader_dir,
-            "ui_handle.wgsl",
+            &self.shader_dir.join("ui_handle.wgsl"),
             "UI Handle Shader",
-        )?;
-        self.polygon_shader = load_shader_from_dir(
+        )?
+        .module;
+        self.polygon_shader = load_shader(
             &self.device,
-            &self.shader_dir,
-            "ui_polygon.wgsl",
+            &self.shader_dir.join("ui_polygon.wgsl"),
             "UI Polygon Shader",
-        )?;
-        self.glow_shader = load_shader_from_dir(
+        )?
+        .module;
+        self.glow_shader = load_shader(
             &self.device,
-            &self.shader_dir,
-            "ui_circle_glow.wgsl",
+            &self.shader_dir.join("ui_circle_glow.wgsl"),
             "UI Glow Shader",
-        )?;
+        )?
+        .module;
 
         self.rebuild_pipelines();
         println!("rebuilt shaders");
         Ok(())
     }
-}
-
-fn load_shader_from_dir(
-    device: &Device,
-    shader_dir: &Path,
-    name: &str,
-    label: &str,
-) -> anyhow::Result<ShaderModule> {
-    load_shader(device, &shader_dir.join(name), label)
 }
 
 fn build_pipeline(

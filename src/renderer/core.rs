@@ -7,11 +7,11 @@ use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::TimeSystem;
-use crate::sky::{SkyRenderer, SkyUniform};
+use crate::terrain::sky::{SkyRenderer, SkyUniform};
+use crate::terrain::water::WaterUniform;
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::LineVtx;
-use crate::water::WaterUniform;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 use wgpu::*;
@@ -268,7 +268,7 @@ impl RenderCore {
         self.world.pick_terrain_point(ray);
 
         self.world
-            .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniform_buffer);
+            .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
         let new_uniforms = make_new_uniforms(
             view,
             proj,
@@ -280,7 +280,7 @@ impl RenderCore {
             time.total_time as f32,
         );
         self.queue.write_buffer(
-            &self.pipelines.uniform_buffer,
+            &self.pipelines.uniforms.buffer,
             0,
             bytemuck::bytes_of(&new_uniforms),
         );
@@ -307,7 +307,7 @@ impl RenderCore {
         };
 
         self.queue.write_buffer(
-            &self.pipelines.fog_uniform_buffer,
+            &self.pipelines.fog_uniforms.buffer,
             0,
             bytemuck::bytes_of(&fog_uniforms),
         );
@@ -327,12 +327,13 @@ impl RenderCore {
         };
 
         self.queue.write_buffer(
-            &self.pipelines.sky_buffer,
+            &self.pipelines.sky_uniforms.buffer,
             0,
             bytemuck::bytes_of(&sky_uniform),
         );
 
-        self.world.update(&self.device, &self.queue, camera, aspect);
+        self.world
+            .update(&self.device, &self.queue, camera, aspect, settings);
 
         // get frame
         let frame = match self.surface.get_current_texture() {
@@ -392,8 +393,11 @@ impl RenderCore {
                 color: [0.2, 0.6, 1.0],
             },
         ];
-        self.queue
-            .write_buffer(&self.pipelines.gizmo_vbuf, 0, bytemuck::cast_slice(&axes));
+        self.queue.write_buffer(
+            &self.pipelines.gizmo_mesh_buffers.vertex,
+            0,
+            bytemuck::cast_slice(&axes),
+        );
 
         let background_color = Color {
             r: settings.background_color[0] as f64,
@@ -450,16 +454,16 @@ impl RenderCore {
                 .render(&mut pass, &self.pipelines, camera, aspect);
 
             // gizmo (can use fog too, or just camera)
-            pass.set_pipeline(&self.pipelines.gizmo_pipeline);
-            pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
-            pass.set_bind_group(1, &self.pipelines.fog_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.pipelines.gizmo_vbuf.slice(..));
+            pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
+            pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
+            pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
             pass.draw(0..6, 0..1);
 
             // --- WATER PASS --------------------------------------------------------
             {
-                pass.set_pipeline(&self.pipelines.water_pipeline);
-                pass.set_bind_group(0, &self.pipelines.uniform_bind_group, &[]);
+                pass.set_pipeline(&self.pipelines.water_pipeline.pipeline);
+                pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
 
                 // update small water uniform
                 let wu = WaterUniform {
@@ -472,16 +476,19 @@ impl RenderCore {
                 };
 
                 self.queue.write_buffer(
-                    &self.pipelines.water_uniform_buffer,
+                    &self.pipelines.water_uniforms.buffer,
                     0,
                     bytemuck::bytes_of(&wu),
                 );
 
-                pass.set_vertex_buffer(0, self.pipelines.water_vbuf.slice(..));
-                pass.set_index_buffer(self.pipelines.water_ibuf.slice(..), IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, self.pipelines.water_mesh_buffers.vertex.slice(..));
+                pass.set_index_buffer(
+                    self.pipelines.water_mesh_buffers.index.slice(..),
+                    IndexFormat::Uint32,
+                );
 
-                pass.set_bind_group(1, &self.pipelines.water_bind_group, &[]);
-                pass.draw_indexed(0..self.pipelines.water_index_count, 0, 0..1);
+                pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
+                pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
             }
             // -----------------------------------------------------------------------
 

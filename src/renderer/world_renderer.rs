@@ -1,18 +1,53 @@
-use crate::chunk_builder::{
-    ChunkMeshLod, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
-};
 use crate::components::camera::Camera;
 use crate::mouse_ray::*;
 use crate::renderer::mesh_arena::MeshArena;
 use crate::renderer::pipelines::Pipelines;
-use crate::terrain::{TerrainGenerator, TerrainParams};
-use crate::threads::{ChunkJob, ChunkWorkerPool};
+use crate::terrain::chunk_builder::{
+    ChunkMeshLod, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
+};
+use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
+use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
 use crate::ui::vertex::Vertex;
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
+
+use crate::data::Settings;
+use std::time::Instant;
+
+#[derive(Clone, Copy)]
+enum BenchParam {
+    CloseJobs,
+    FarJobs,
+    CloseBatch,
+    FarBatch,
+}
+
+struct HillState {
+    param: BenchParam,
+    direction: i32,
+    step: usize,
+}
+
+#[derive(Clone, Copy)]
+struct BenchRange {
+    min: usize,
+    max: usize,
+}
+
+struct BenchmarkState {
+    active: bool,
+    start: Instant,
+    best_score: f32,
+
+    close_jobs: BenchRange,
+    far_jobs: BenchRange,
+    close_batch: BenchRange,
+    far_batch: BenchRange,
+
+    step: usize,
+    best_score_seconds: f32,
+}
 
 pub struct PickedPoint {
     pub pos: glam::Vec3,
@@ -31,14 +66,17 @@ pub struct WorldRenderer {
     pub view_radius_render: u32,
 
     pub workers: ChunkWorkerPool,
-    pub max_jobs_per_frame: usize,
-    pub max_chunks_per_batch: usize,
-    pub max_far_batches_per_frame: usize,
+    pub max_close_jobs_per_frame: usize,
+    pub max_close_chunks_per_batch: usize,
+    pub max_far_chunks_per_batch: usize,
+    pub max_far_jobs_per_frame: usize,
 
     pub spiral: Vec<(i32, i32)>,
     pub lod_map: HashMap<(i32, i32), usize>,
     pub pick_radius_m: f32, // controlled by UI slider
     last_picked: Option<PickedPoint>,
+
+    benchmark: Option<BenchmarkState>,
 }
 
 #[derive(Clone, Copy)]
@@ -58,8 +96,8 @@ impl WorldRenderer {
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
         let chunk_size = 128;
-        let view_radius_render = 64;
-        let view_radius_generate = 32;
+        let view_radius_render = 256;
+        let view_radius_generate = 128;
 
         // Paged arena: interpret these as "page sizes" if your MeshArena is paged.
         let arena = MeshArena::new(
@@ -84,18 +122,133 @@ impl WorldRenderer {
             view_radius_render,
 
             workers,
-            max_jobs_per_frame: 1,
-            max_chunks_per_batch: 48,
-            max_far_batches_per_frame: 1,
+            max_close_jobs_per_frame: 1,
+            max_close_chunks_per_batch: 2,
+            max_far_chunks_per_batch: 50,
+            max_far_jobs_per_frame: 1,
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
             pick_radius_m: 100.0,
             last_picked: None,
+
+            benchmark: None,
         }
     }
 
-    pub fn update(&mut self, device: &Device, queue: &Queue, camera: &Camera, aspect: f32) {
+    pub fn run_benchmark(&mut self, camera: &mut Camera) {
+        use rand::Rng;
+        camera.target.x += 220.0;
+        const MAX_CLOSE_JOBS: usize = 8;
+        const MAX_FAR_JOBS: usize = 8;
+        const MAX_BATCH: usize = 128;
+
+        if self.benchmark.is_none() {
+            self.benchmark = Some(BenchmarkState {
+                active: true,
+                start: Instant::now(),
+                best_score: 0.0,
+
+                close_jobs: BenchRange { min: 4, max: 4 },
+                far_jobs: BenchRange { min: 4, max: 16 },
+                close_batch: BenchRange { min: 16, max: 16 },
+                far_batch: BenchRange { min: 64, max: 64 },
+
+                step: 0,
+                best_score_seconds: 0.0,
+            });
+        }
+
+        let bench = self.benchmark.as_mut().unwrap();
+
+        // Start run
+        if bench.active {
+            let mut rng = rand::thread_rng();
+
+            let explore = rng.gen_bool(0.2);
+
+            if explore {
+                self.max_close_jobs_per_frame = rng.gen_range(1..=MAX_CLOSE_JOBS);
+                self.max_far_jobs_per_frame = rng.gen_range(1..=MAX_FAR_JOBS);
+                self.max_close_chunks_per_batch = rng.gen_range(4..=MAX_BATCH);
+                self.max_far_chunks_per_batch = rng.gen_range(8..=MAX_BATCH);
+            } else {
+                self.max_close_jobs_per_frame = bench.close_jobs.min;
+                self.max_far_jobs_per_frame = bench.far_jobs.min;
+                self.max_close_chunks_per_batch = bench.close_batch.min;
+                self.max_far_chunks_per_batch = bench.far_batch.min;
+            }
+
+            self.chunks.clear();
+            self.pending.clear();
+            self.lod_map.clear();
+
+            bench.start = Instant::now();
+            bench.active = false;
+
+            println!(
+                "Benchmark step {} | close jobs per frame {}, close batch chunk amount {} | far jobs per frame {} far batch chunk amount {}{}",
+                bench.step,
+                self.max_close_jobs_per_frame,
+                self.max_close_chunks_per_batch,
+                self.max_far_jobs_per_frame,
+                self.max_far_chunks_per_batch,
+                if explore { " (explore)" } else { "" }
+            );
+
+            return;
+        }
+
+        // Wait / skip if current run is already slower than best
+        let seconds = bench.start.elapsed().as_secs_f32();
+        let score = self.chunks.len() as f32 / seconds;
+        if bench.best_score > 0.0 && score < bench.best_score && seconds > 0.2 {
+            println!("Current run slower than best, skipping to next iteration");
+            bench.step += 1;
+            bench.active = true;
+            return;
+        }
+
+        if seconds < 2.0 {
+            return;
+        }
+
+        // Score
+        bench.best_score_seconds = seconds;
+        println!(
+            "Generated {} chunks in {:.2}s ({:.1} chunks/s)",
+            self.chunks.len(),
+            seconds,
+            score
+        );
+
+        if score > bench.best_score {
+            bench.best_score = score;
+
+            bench.close_jobs.min = self.max_close_jobs_per_frame;
+            bench.far_jobs.min = self.max_far_jobs_per_frame;
+            bench.close_batch.min = self.max_close_chunks_per_batch;
+            bench.far_batch.min = self.max_far_chunks_per_batch;
+
+            println!("New best configuration accepted");
+        }
+
+        bench.step += 1;
+        bench.active = true;
+    }
+
+    pub fn update(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        camera: &mut Camera,
+        aspect: f32,
+        settings: &Settings,
+    ) {
+        if settings.world_generation_benchmark_mode {
+            self.run_benchmark(camera)
+        }
+
         let frame = self.frame_state(camera, aspect);
 
         // 1) Drain results: upload, replace, free old allocations safely.
@@ -206,9 +359,9 @@ impl WorldRenderer {
 
         for &(cx, cz, dist2) in visible {
             let step = if dist2 > r2_gen {
-                lod_step_for_distance(r2_gen + 1, self.chunk_size)
+                lod_step_for_distance(r2_gen + 1)
             } else {
-                lod_step_for_distance(dist2, self.chunk_size)
+                lod_step_for_distance(dist2)
             };
             self.lod_map.insert((cx, cz), step);
         }
@@ -232,24 +385,15 @@ impl WorldRenderer {
     }
 
     fn dispatch_jobs_for_visible(&mut self, visible_sorted_near_to_far: &[(i32, i32, i32)]) {
-        let mut batch: Vec<(
-            i32,
-            i32,
-            usize,
-            usize,
-            usize,
-            usize,
-            usize,
-            u64,
-            Arc<AtomicU64>,
-        )> = Vec::new();
+        let mut close_batch = Vec::new();
+        let mut far_batch = Vec::new();
 
-        let mut near_jobs_sent = 0usize;
+        let mut close_jobs_sent = 0usize;
         let mut far_batches_sent = 0usize;
 
         for &(cx, cz, _dist2) in visible_sorted_near_to_far {
-            if near_jobs_sent >= self.max_jobs_per_frame
-                && far_batches_sent >= self.max_far_batches_per_frame
+            if close_jobs_sent >= self.max_close_jobs_per_frame
+                && far_batches_sent >= self.max_far_jobs_per_frame
             {
                 break;
             }
@@ -278,32 +422,11 @@ impl WorldRenderer {
             let n_z_pos = *self.lod_map.get(&(cx, cz + 1)).unwrap_or(&step);
 
             if step <= 2 {
-                if near_jobs_sent < self.max_jobs_per_frame {
+                if close_jobs_sent < self.max_close_jobs_per_frame {
                     let (version, version_atomic) = self.workers.new_version_for(coord);
                     self.pending.insert(coord, (version, step));
 
-                    let job = ChunkJob {
-                        chunks: vec![(
-                            cx,
-                            cz,
-                            step,
-                            n_x_neg,
-                            n_x_pos,
-                            n_z_neg,
-                            n_z_pos,
-                            version,
-                            version_atomic,
-                        )],
-                    };
-                    let _ = self.workers.job_tx.send(job);
-                    near_jobs_sent += 1;
-                }
-            } else {
-                if far_batches_sent < self.max_far_batches_per_frame {
-                    let (version, version_atomic) = self.workers.new_version_for(coord);
-                    self.pending.insert(coord, (version, step));
-
-                    batch.push((
+                    close_batch.push((
                         cx,
                         cz,
                         step,
@@ -315,9 +438,34 @@ impl WorldRenderer {
                         version_atomic,
                     ));
 
-                    if batch.len() >= self.max_chunks_per_batch {
+                    if close_batch.len() >= self.max_close_chunks_per_batch {
                         let job = ChunkJob {
-                            chunks: std::mem::take(&mut batch),
+                            chunks: std::mem::take(&mut close_batch),
+                        };
+                        let _ = self.workers.job_tx.send(job);
+                        close_jobs_sent += 1;
+                    }
+                }
+            } else {
+                if far_batches_sent < self.max_far_jobs_per_frame {
+                    let (version, version_atomic) = self.workers.new_version_for(coord);
+                    self.pending.insert(coord, (version, step));
+
+                    far_batch.push((
+                        cx,
+                        cz,
+                        step,
+                        n_x_neg,
+                        n_x_pos,
+                        n_z_neg,
+                        n_z_pos,
+                        version,
+                        version_atomic,
+                    ));
+
+                    if far_batch.len() >= self.max_far_chunks_per_batch {
+                        let job = ChunkJob {
+                            chunks: std::mem::take(&mut far_batch),
                         };
                         let _ = self.workers.job_tx.send(job);
                         far_batches_sent += 1;
@@ -325,15 +473,21 @@ impl WorldRenderer {
                 }
             }
         }
+        if !close_batch.is_empty() && close_jobs_sent < self.max_close_jobs_per_frame {
+            let job = ChunkJob {
+                chunks: close_batch,
+            };
+            let _ = self.workers.job_tx.send(job);
+        }
 
-        if !batch.is_empty() && far_batches_sent < self.max_far_batches_per_frame {
-            let job = ChunkJob { chunks: batch };
+        if !far_batch.is_empty() && far_batches_sent < self.max_far_jobs_per_frame {
+            let job = ChunkJob { chunks: far_batch };
             let _ = self.workers.job_tx.send(job);
         }
     }
 
     fn lod_step_for_distance_with_hysteresis(&self, dist2: i32, current: usize) -> usize {
-        let desired = lod_step_for_distance(dist2, self.chunk_size);
+        let desired = lod_step_for_distance(dist2);
 
         if desired > current {
             desired
@@ -380,10 +534,10 @@ impl WorldRenderer {
         camera: &'a Camera,
         aspect: f32,
     ) {
-        pass.set_pipeline(&pipelines.terrain_pipeline);
-        pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &pipelines.fog_bind_group, &[]);
-        pass.set_bind_group(2, &pipelines.pick_bind_group, &[]);
+        pass.set_pipeline(&pipelines.terrain_pipeline.pipeline);
+        pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
+        pass.set_bind_group(1, &pipelines.fog_uniforms.bind_group, &[]);
+        pass.set_bind_group(2, &pipelines.pick_uniforms.bind_group, &[]);
 
         let (_, _, view_proj) = camera.matrices(aspect);
 
@@ -480,14 +634,14 @@ impl WorldRenderer {
             let next_t = t_max_x.min(t_max_z);
 
             if let Some(chunk) = self.chunks.get(&(cx, cz)) {
-                if let Some((th, hit)) =
+                if let Some((_, pos)) =
                     raycast_chunk_heightgrid(ray, &chunk.height_grid, t, next_t + eps)
                 {
                     self.last_picked = Some(PickedPoint {
-                        pos: hit,
+                        pos,
                         radius: self.pick_radius_m,
                     });
-                    return Some((cx, cz, hit));
+                    return Some((cx, cz, pos));
                 }
             }
 

@@ -61,7 +61,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let decay_rate = 6.0;
     let dist = camera.orbit_radius;
-    let speed_factor = (dist / 10.0).clamp(10.0, 50.0);
+    let speed_factor = (dist / 10.0).clamp(50.0, 100.0);
 
     if wish.length_squared() > 0.0 {
         wish = wish.normalize();
@@ -80,7 +80,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     if controller.zoom_velocity.abs() > 0.0001 {
         camera.orbit_radius += controller.zoom_velocity * dt * 1.5;
         controller.zoom_velocity *= (1.0 - controller.zoom_damping * dt).max(0.0);
-        camera.orbit_radius = camera.orbit_radius.clamp(20.0, 10_000.0);
+        camera.orbit_radius = camera.orbit_radius.clamp(10.0, 100_000.0);
     } else {
         controller.zoom_velocity = 0.0;
     }

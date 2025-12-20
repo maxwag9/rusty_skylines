@@ -3,6 +3,7 @@ pub(crate) mod mesh_arena;
 pub mod pipelines;
 pub mod render_passes;
 pub(crate) mod shader_watcher;
+pub(crate) mod textures;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;
 pub(crate) mod world_renderer;

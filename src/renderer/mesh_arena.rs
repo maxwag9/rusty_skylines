@@ -1,4 +1,4 @@
-use crate::chunk_builder::GpuChunkHandle;
+use crate::terrain::chunk_builder::GpuChunkHandle;
 use wgpu::{Buffer, BufferUsages, Device, Queue};
 
 pub struct MeshPage {

@@ -27,6 +27,7 @@ impl Default for PresentModeSetting {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct Settings {
     pub target_fps: f32,
     pub target_tps: f32,
@@ -37,6 +38,7 @@ pub struct Settings {
     pub show_gui: bool,
     pub background_color: [f32; 4],
     pub total_game_time: f64,
+    pub world_generation_benchmark_mode: bool,
 }
 
 impl Default for Settings {
@@ -50,6 +52,7 @@ impl Default for Settings {
             show_gui: true,
             background_color: [0.0, 0.0, 0.0, 1.0],
             total_game_time: 0.0,
+            world_generation_benchmark_mode: false,
         }
     }
 }

@@ -1,5 +1,5 @@
-use crate::terrain::TerrainGenerator;
-use crate::threads::ChunkWorkerPool;
+use crate::terrain::terrain::TerrainGenerator;
+use crate::terrain::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -208,24 +208,29 @@ impl ChunkBuilder {
     }
 }
 
-pub fn lod_step_for_distance(dist2: i32, chunk_size: u32) -> usize {
-    let cs = chunk_size as i64;
-    let cs2 = cs;
-    let d2 = dist2 as i64;
+pub fn lod_step_for_distance(dist2_chunks: i32) -> usize {
+    // distance in chunks
+    // sqrt(dist2) gives number of chunks away
 
-    if d2 < cs2 / 4 {
-        1
-    } else if d2 < cs2 {
-        2
-    } else if d2 < cs2 * 4 {
-        4
-    } else if d2 < cs2 * 16 {
-        8
-    } else if d2 < cs2 * 64 {
-        16
+    if dist2_chunks < 1 {
+        1 // same chunk
+    } else if dist2_chunks < 4 {
+        2 // < 2 chunks
+    } else if dist2_chunks < 12 {
+        4 // < 4 chunks
+    } else if dist2_chunks < 48 {
+        8 // < 8 chunks
+    } else if dist2_chunks < 128 {
+        16 // < 16 chunks
     } else {
         32
     }
+}
+
+fn density_from_chunk_dist2(dist2_chunks: i32) -> f32 {
+    let d = (dist2_chunks as f32).sqrt(); // distance in chunks
+    let t = (d / 8.0).clamp(0.0, 1.0); // 8 chunks = full fade
+    1.0 - t * t * (3.0 - 2.0 * t)
 }
 
 pub fn generate_spiral_offsets(radius: i32) -> Vec<(i32, i32)> {

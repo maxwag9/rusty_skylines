@@ -1,15 +1,17 @@
 use crate::components::camera::Camera;
 use crate::mouse_ray::PickUniform;
 use crate::paths::data_dir;
+use crate::renderer::textures::grass::{GrassParams, generate_noise};
 use crate::resources::Uniforms;
-use crate::sky::SkyUniform;
+use crate::terrain::sky::SkyUniform;
+use crate::terrain::water::{SimpleVertex, WaterUniform};
 use crate::ui::vertex::{LineVtx, Vertex};
-use crate::water::{SimpleVertex, WaterUniform};
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::fs;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
+use wgpu::TextureFormat::Rgba8Unorm;
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
     *,
@@ -32,13 +34,33 @@ pub struct FogUniforms {
     pub fog_end: f32,
 }
 
+pub struct RenderPipelineState {
+    pub shader: ShaderAsset,
+    pub pipeline: RenderPipeline,
+}
+
+pub struct ComputePipelineState {
+    pub shader: ShaderAsset,
+    pub pipeline: ComputePipeline,
+}
+pub struct GpuResourceSet {
+    pub bind_group_layout: BindGroupLayout,
+    pub bind_group: BindGroup,
+    pub buffer: Buffer,
+}
+pub struct MeshBuffers {
+    pub vertex: Buffer,
+    pub index: Buffer,
+    pub index_count: u32,
+}
+
+pub struct ShaderAsset {
+    pub path: PathBuf,
+    pub module: ShaderModule,
+}
+
 pub struct Pipelines {
     pub device: Device,
-
-    pub(crate) gizmo_vbuf: Buffer,
-
-    pub(crate) uniform_buffer: Buffer,
-    pub(crate) uniform_bind_group: BindGroup,
 
     pub msaa_texture: Texture,
     pub msaa_view: TextureView,
@@ -46,47 +68,26 @@ pub struct Pipelines {
     pub depth_texture: Texture,
     pub depth_view: TextureView,
 
-    pub(crate) terrain_pipeline: RenderPipeline,
-    pub(crate) gizmo_pipeline: RenderPipeline,
-
-    pub fog_uniform_buffer: Buffer,
-    pub fog_bind_group: BindGroup,
-
-    pub shader: ShaderModule,
-    terrain_pipeline_layout: PipelineLayout,
     pub(crate) msaa_samples: u32,
-    line_shader: ShaderModule,
 
-    config: SurfaceConfiguration,
+    pub config: SurfaceConfiguration,
 
-    shader_path: PathBuf,
-    line_shader_path: PathBuf,
-    water_shader_path: PathBuf,
-    sky_shader_path: PathBuf,
-    stars_shader_path: PathBuf,
+    pub uniforms: GpuResourceSet,
+    pub sky_uniforms: GpuResourceSet,
+    pub water_uniforms: GpuResourceSet,
+    pub fog_uniforms: GpuResourceSet,
+    pub pick_uniforms: GpuResourceSet,
 
-    pub water_pipeline: RenderPipeline,
-    pub water_uniform_buffer: Buffer,
-    pub water_vbuf: Buffer,
-    pub water_ibuf: Buffer,
-    pub water_bind_group: BindGroup,
-    pub water_index_count: u32,
-    pub sky_bind_group: BindGroup,
-    pub sky_pipeline: RenderPipeline,
-    pub sky_buffer: Buffer,
-
-    pub stars_pipeline: RenderPipeline,
-    pub stars_pipeline_layout: PipelineLayout,
-    pub stars_vertex_buffer: Buffer,
-    sky_pipeline_layout: PipelineLayout,
-    water_shader: ShaderModule,
-    water_pipeline_layout: PipelineLayout,
-    sky_shader: ShaderModule,
-    stars_shader: ShaderModule,
-
-    pub pick_uniform_buffer: Buffer,
-    pub pick_bgl: BindGroupLayout,
-    pub pick_bind_group: BindGroup,
+    pub terrain_pipeline: RenderPipelineState,
+    pub water_pipeline: RenderPipelineState,
+    pub water_mesh_buffers: MeshBuffers,
+    pub sky_pipeline: RenderPipelineState,
+    pub stars_pipeline: RenderPipelineState,
+    pub stars_mesh_buffers: MeshBuffers,
+    pub gizmo_pipeline: RenderPipelineState,
+    pub gizmo_mesh_buffers: MeshBuffers,
+    pub grass_texture_pipeline: ComputePipelineState,
+    pub grass_texture_resources: GpuResourceSet,
 }
 
 impl Pipelines {
@@ -97,17 +98,19 @@ impl Pipelines {
         shader_dir: &Path,
         camera: &Camera,
     ) -> anyhow::Result<Self> {
-        let shader_path = shader_dir.join("ground.wgsl");
+        let terrain_shader_path = shader_dir.join("ground.wgsl");
         let line_shader_path = shader_dir.join("lines.wgsl");
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
 
-        let dummy_pipeline = make_dummy_pipeline(device, config.format);
+        let terrain_shader = load_shader(device, &terrain_shader_path, "Ground Shader")?;
 
-        let shader = load_shader(device, &shader_path, "Ground Shader")?;
+        let grass_texture_shader_path = shader_dir.join("textures/grass.wgsl");
+        let grass_texture_shader =
+            load_shader(device, &grass_texture_shader_path, "Grass Texture Shader")?;
 
         let aspect = config.width as f32 / config.height as f32;
-        let sun = glam::Vec3::new(0.3, 1.0, 0.6).normalize();
+        let sun = Vec3::new(0.3, 1.0, 0.6).normalize();
         let cam_pos = camera.position();
         let (view, proj, view_proj) = camera.matrices(aspect);
         let uniforms = make_new_uniforms(
@@ -222,16 +225,6 @@ impl Pipelines {
             }],
         });
 
-        let terrain_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Terrain Pipeline Layout"),
-            bind_group_layouts: &[
-                &uniform_bind_group_layout, // group(0)
-                &fog_bgl,                   // group(1)
-                &pick_bgl,                  // group(2) :O
-            ],
-            push_constant_ranges: &[],
-        });
-
         let line_shader = load_shader(device, &line_shader_path, "Line Shader")?;
 
         let water_shader_path = shader_dir.join("water.wgsl");
@@ -344,12 +337,6 @@ impl Pipelines {
             ],
         });
 
-        let water_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Water Pipeline Layout"),
-            bind_group_layouts: &[&uniform_bind_group_layout, &water_bgl],
-            push_constant_ranges: &[],
-        });
-
         let sky_shader_path = shader_dir.join("sky.wgsl");
         let sky_shader = load_shader(device, &sky_shader_path, "Sky Shader")?;
 
@@ -386,76 +373,161 @@ impl Pipelines {
                 resource: sky_buffer.as_entire_binding(),
             }],
         });
+        let grass_params = GrassParams {
+            grass_color: [0.2, 0.6, 0.2, 1.0],
+            blade_density: 120.0,
+            blade_height: 0.8,
+            wind_phase: 0.0,
+            time: 0.0,
+            noise_scale: 4.0,
+            _pad: [0.0; 3],
+        };
 
-        let sky_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Sky Pipeline Layout"),
-            bind_group_layouts: &[
-                &uniform_bind_group_layout, // group 0
-                &sky_bgl,                   // group 1
-            ],
-            push_constant_ranges: &[],
+        let grass_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grass_params_buffer"),
+            contents: bytemuck::bytes_of(&grass_params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let noise_data: Vec<f32> = generate_noise(512 * 512);
+
+        let noise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("grass_noise_buffer"),
+            contents: bytemuck::cast_slice(&noise_data),
+            usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let stars_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Stars Pipeline Layout"),
-            bind_group_layouts: &[
-                &uniform_bind_group_layout, // group 0
+        let grass_texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("grass_texture_bgl"),
+                entries: &[
+                    // storage texture output
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: Rgba8Unorm,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                    // uniform buffer
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // noise buffer
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let (_, grass_texture_view) = create_grass_texture(&device, &config);
+        let grass_texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Grass Texture Bind Group"),
+            layout: &grass_texture_bind_group_layout,
+            entries: &[
+                // storage texture
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&grass_texture_view),
+                },
+                // uniform params
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: grass_params_buffer.as_entire_binding(),
+                },
+                // noise buffer
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: noise_buffer.as_entire_binding(),
+                },
             ],
-            push_constant_ranges: &[],
         });
 
         let mut this = Self {
             device: device.clone(),
-
-            gizmo_vbuf,
-            uniform_buffer,
-            uniform_bind_group,
-
             msaa_texture,
             msaa_view,
             depth_texture,
             depth_view,
-
-            terrain_pipeline: dummy_pipeline.clone(),
-            gizmo_pipeline: dummy_pipeline.clone(),
-
-            fog_uniform_buffer,
-            fog_bind_group,
-
-            shader,
-            terrain_pipeline_layout,
             msaa_samples,
-            line_shader,
             config: config.clone(),
-            shader_path,
-            line_shader_path,
-            water_shader_path,
-            sky_shader_path,
-            stars_shader_path,
 
-            water_pipeline: dummy_pipeline.clone(),
-            water_uniform_buffer,
-            water_vbuf,
-            water_ibuf,
-            water_bind_group,
-            water_index_count,
+            uniforms: GpuResourceSet {
+                bind_group_layout: uniform_bind_group_layout,
+                bind_group: uniform_bind_group,
+                buffer: uniform_buffer,
+            },
+            sky_uniforms: GpuResourceSet {
+                bind_group_layout: sky_bgl,
+                bind_group: sky_bind_group,
+                buffer: sky_buffer,
+            },
+            water_uniforms: GpuResourceSet {
+                bind_group_layout: water_bgl,
+                bind_group: water_bind_group,
+                buffer: water_uniform_buffer,
+            },
+            fog_uniforms: GpuResourceSet {
+                bind_group_layout: fog_bgl,
+                bind_group: fog_bind_group,
+                buffer: fog_uniform_buffer,
+            },
+            pick_uniforms: GpuResourceSet {
+                bind_group_layout: pick_bgl,
+                bind_group: pick_bind_group,
+                buffer: pick_uniform_buffer,
+            },
 
-            sky_pipeline: dummy_pipeline.clone(),
-            sky_bind_group,
-            sky_buffer,
+            terrain_pipeline: make_dummy_render_pipeline_state(
+                device,
+                config.format,
+                terrain_shader,
+            ),
 
-            stars_pipeline: dummy_pipeline.clone(),
-            stars_pipeline_layout,
-            stars_vertex_buffer,
-            sky_pipeline_layout,
-            water_shader,
-            water_pipeline_layout,
-            sky_shader,
-            stars_shader,
+            water_pipeline: make_dummy_render_pipeline_state(device, config.format, water_shader),
+            water_mesh_buffers: MeshBuffers {
+                vertex: water_vbuf,
+                index: water_ibuf,
+                index_count: water_index_count,
+            },
 
-            pick_uniform_buffer,
-            pick_bgl,
-            pick_bind_group,
+            sky_pipeline: make_dummy_render_pipeline_state(device, config.format, sky_shader),
+
+            gizmo_pipeline: make_dummy_render_pipeline_state(device, config.format, line_shader),
+            gizmo_mesh_buffers: MeshBuffers {
+                vertex: gizmo_vbuf,
+                index: make_dummy_ibuf(&device),
+                index_count: 0,
+            },
+
+            stars_pipeline: make_dummy_render_pipeline_state(device, config.format, stars_shader),
+            stars_mesh_buffers: MeshBuffers {
+                vertex: stars_vertex_buffer,
+                index: make_dummy_ibuf(&device),
+                index_count: 0,
+            },
+
+            grass_texture_pipeline: make_dummy_compute_pipeline_state(device, grass_texture_shader),
+            grass_texture_resources: GpuResourceSet {
+                bind_group_layout: grass_texture_bind_group_layout,
+                bind_group: grass_texture_bind_group,
+                buffer: grass_params_buffer,
+            },
         };
 
         this.recreate_pipelines();
@@ -463,19 +535,36 @@ impl Pipelines {
     }
 
     pub(crate) fn recreate_pipelines(&mut self) {
-        self.terrain_pipeline = self.build_main_pipeline();
-        self.gizmo_pipeline = self.build_gizmo_pipeline();
-        self.water_pipeline = self.build_water_pipeline();
-        self.sky_pipeline = self.build_sky_pipeline();
-        self.stars_pipeline = self.build_stars_pipeline();
+        self.terrain_pipeline.pipeline = self.build_terrain_pipeline();
+        self.gizmo_pipeline.pipeline = self.build_gizmo_pipeline();
+        self.water_pipeline.pipeline = self.build_water_pipeline();
+        self.sky_pipeline.pipeline = self.build_sky_pipeline();
+        self.stars_pipeline.pipeline = self.build_stars_pipeline();
     }
 
     pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.shader = load_shader(&self.device, &self.shader_path, "Ground Shader")?;
-        self.line_shader = load_shader(&self.device, &self.line_shader_path, "Line Shader")?;
-        self.water_shader = load_shader(&self.device, &self.water_shader_path, "Water Shader")?;
-        self.sky_shader = load_shader(&self.device, &self.sky_shader_path, "Sky Shader")?;
-        self.stars_shader = load_shader(&self.device, &self.stars_shader_path, "Stars Shader")?;
+        self.terrain_pipeline.shader = load_shader(
+            &self.device,
+            &self.terrain_pipeline.shader.path,
+            "Ground Shader",
+        )?;
+        self.gizmo_pipeline.shader = load_shader(
+            &self.device,
+            &self.gizmo_pipeline.shader.path,
+            "Line Shader",
+        )?;
+        self.water_pipeline.shader = load_shader(
+            &self.device,
+            &self.water_pipeline.shader.path,
+            "Water Shader",
+        )?;
+        self.sky_pipeline.shader =
+            load_shader(&self.device, &self.sky_pipeline.shader.path, "Sky Shader")?;
+        self.stars_pipeline.shader = load_shader(
+            &self.device,
+            &self.stars_pipeline.shader.path,
+            "Stars Shader",
+        )?;
 
         self.recreate_pipelines();
         Ok(())
@@ -491,19 +580,31 @@ impl Pipelines {
         (self.depth_texture, self.depth_view) =
             create_depth_texture(&self.device, &self.config, msaa_samples);
     }
-    fn build_main_pipeline(&self) -> RenderPipeline {
+    fn build_terrain_pipeline(&self) -> RenderPipeline {
+        let terrain_pipeline_layout =
+            self.device
+                .create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some("Terrain Pipeline Layout"),
+                    bind_group_layouts: &[
+                        &self.uniforms.bind_group_layout,      // group(0)
+                        &self.fog_uniforms.bind_group_layout,  // group(1)
+                        &self.pick_uniforms.bind_group_layout, // group(2) :O
+                    ],
+                    push_constant_ranges: &[],
+                });
+
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Main Pipeline"),
-                layout: Some(&self.terrain_pipeline_layout),
+                layout: Some(&terrain_pipeline_layout),
                 vertex: VertexState {
-                    module: &self.shader,
+                    module: &self.terrain_pipeline.shader.module,
                     entry_point: Some("vs_main"),
                     buffers: &[Vertex::desc()],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(FragmentState {
-                    module: &self.shader,
+                    module: &self.terrain_pipeline.shader.module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
                         format: self.config.format,
@@ -535,18 +636,29 @@ impl Pipelines {
     }
 
     fn build_gizmo_pipeline(&self) -> RenderPipeline {
+        let gizmo_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Gizmo Pipeline Layout"),
+                bind_group_layouts: &[
+                    &self.uniforms.bind_group_layout,      // group(0)
+                    &self.fog_uniforms.bind_group_layout,  // group(1)
+                    &self.pick_uniforms.bind_group_layout, // group(2) :O
+                ],
+                push_constant_ranges: &[],
+            });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Gizmo Pipeline"),
-                layout: Some(&self.terrain_pipeline_layout),
+                layout: Some(&gizmo_pipeline_layout),
                 vertex: VertexState {
-                    module: &self.line_shader,
+                    module: &self.gizmo_pipeline.shader.module,
                     entry_point: Some("vs_main"),
                     buffers: &[LineVtx::layout()],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(FragmentState {
-                    module: &self.line_shader,
+                    module: &self.gizmo_pipeline.shader.module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
                         format: self.config.format,
@@ -577,18 +689,28 @@ impl Pipelines {
     }
 
     fn build_water_pipeline(&self) -> RenderPipeline {
+        let water_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Water Pipeline Layout"),
+                bind_group_layouts: &[
+                    &self.uniforms.bind_group_layout,
+                    &self.water_uniforms.bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Water Pipeline"),
-                layout: Some(&self.water_pipeline_layout),
+                layout: Some(&water_pipeline_layout),
                 vertex: VertexState {
-                    module: &self.water_shader,
+                    module: &self.water_pipeline.shader.module,
                     entry_point: Some("vs_main"),
                     buffers: &[SimpleVertex::layout()],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(FragmentState {
-                    module: &self.water_shader,
+                    module: &self.water_pipeline.shader.module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
                         format: self.config.format,
@@ -620,18 +742,28 @@ impl Pipelines {
     }
 
     fn build_sky_pipeline(&self) -> RenderPipeline {
+        let sky_pipeline_layout =
+            self.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Sky Pipeline Layout"),
+                    bind_group_layouts: &[
+                        &self.uniforms.bind_group_layout,     // group 0
+                        &self.sky_uniforms.bind_group_layout, // group 1
+                    ],
+                    push_constant_ranges: &[],
+                });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Sky Pipeline"),
-                layout: Some(&self.sky_pipeline_layout),
+                layout: Some(&sky_pipeline_layout),
                 vertex: VertexState {
-                    module: &self.sky_shader,
+                    module: &self.sky_pipeline.shader.module,
                     entry_point: Some("vs_main"),
                     buffers: &[],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(FragmentState {
-                    module: &self.sky_shader,
+                    module: &self.sky_pipeline.shader.module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
                         format: self.config.format,
@@ -684,18 +816,27 @@ impl Pipelines {
                 },
             ],
         };
+        let stars_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Stars Pipeline Layout"),
+                bind_group_layouts: &[
+                    &self.uniforms.bind_group_layout, // group 0
+                ],
+                push_constant_ranges: &[],
+            });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Stars Pipeline"),
-                layout: Some(&self.stars_pipeline_layout),
+                layout: Some(&stars_pipeline_layout),
                 vertex: VertexState {
-                    module: &self.stars_shader,
+                    module: &self.stars_pipeline.shader.module,
                     entry_point: Some("vs_main"),
                     buffers: &[stars_vertex_layout],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(FragmentState {
-                    module: &self.stars_shader,
+                    module: &self.stars_pipeline.shader.module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
                         format: self.config.format,
@@ -723,15 +864,41 @@ impl Pipelines {
                 cache: None,
             })
     }
+    fn build_grass_texture_pipeline(&mut self) {
+        let grass_texture_pipeline_layout = self.device.create_pipeline_layout(&Default::default());
+        self.grass_texture_pipeline.pipeline =
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Procedural Texture Compute Pipeline GRASS"),
+                    layout: Some(&grass_texture_pipeline_layout),
+                    module: &self.grass_texture_pipeline.shader.module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+    }
 }
 
-pub fn load_shader(device: &Device, path: &Path, label: &str) -> anyhow::Result<ShaderModule> {
+fn make_dummy_ibuf(device: &Device) -> Buffer {
+    device.create_buffer(&BufferDescriptor {
+        label: Some("dummy ibuf"),
+        size: 0,
+        usage: BufferUsages::INDEX,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn load_shader(device: &Device, path: &PathBuf, label: &str) -> anyhow::Result<ShaderAsset> {
     let src = fs::read_to_string(path)?;
     let module = device.create_shader_module(ShaderModuleDescriptor {
         label: Some(label),
         source: ShaderSource::Wgsl(Cow::Owned(src)),
     });
-    Ok(module)
+    let asset = ShaderAsset {
+        path: path.clone(),
+        module,
+    };
+    Ok(asset)
 }
 
 pub fn create_msaa_targets(
@@ -785,6 +952,26 @@ fn create_depth_texture(
     (texture, view)
 }
 
+fn create_grass_texture(device: &Device, config: &SurfaceConfiguration) -> (Texture, TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Grass Texture"),
+        size: wgpu::Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm, // NOT sRGB
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
 pub fn make_new_uniforms(
     view: Mat4,
     proj: Mat4,
@@ -814,7 +1001,7 @@ pub fn make_new_uniforms(
     }
 }
 
-fn make_dummy_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
+fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("dummy shader"),
         source: ShaderSource::Wgsl(
@@ -876,4 +1063,51 @@ fn make_dummy_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline
         multiview: None,
         cache: None,
     })
+}
+
+fn make_dummy_render_pipeline_state(
+    device: &Device,
+    format: TextureFormat,
+    shader: ShaderAsset,
+) -> RenderPipelineState {
+    RenderPipelineState {
+        shader,
+        pipeline: make_dummy_render_pipeline(device, format),
+    }
+}
+fn make_dummy_compute_pipeline(device: &Device) -> ComputePipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("dummy compute shader"),
+        source: wgpu::ShaderSource::Wgsl(
+            "
+            @compute @workgroup_size(1)
+            fn main() {
+                // do nothing
+            }
+            "
+            .into(),
+        ),
+    });
+
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("dummy compute layout"),
+        bind_group_layouts: &[],
+        push_constant_ranges: &[],
+    });
+
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("dummy compute pipeline"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
+fn make_dummy_compute_pipeline_state(device: &Device, shader: ShaderAsset) -> ComputePipelineState {
+    ComputePipelineState {
+        shader,
+        pipeline: make_dummy_compute_pipeline(device),
+    }
 }

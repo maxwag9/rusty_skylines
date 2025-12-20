@@ -880,15 +880,7 @@ fn process_circles(
     }
 
     // Apply the selection after processing all circles
-    if let Some(p) = pending_selection {
-        if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(loader, p)
-        } else if input_state.ctrl {
-            select_to_multi(loader, p);
-        } else {
-            select_ui_element(loader, p);
-        }
-    }
+    select_correctly(pending_selection, loader, input_state);
 }
 
 fn process_handles(
@@ -988,15 +980,7 @@ fn process_handles(
         }
     }
 
-    if let Some(p) = pending_selection {
-        if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(loader, p)
-        } else if input_state.ctrl {
-            select_to_multi(loader, p);
-        } else {
-            select_ui_element(loader, p);
-        }
-    }
+    select_correctly(pending_selection, loader, input_state);
 }
 
 fn process_polygons(
@@ -1162,15 +1146,7 @@ fn process_polygons(
         }
     }
 
-    if let Some(p) = pending_selection {
-        if selected_needed(loader, p.action_name.as_str()) {
-            select_move_primary_to_multi(loader, p)
-        } else if input_state.ctrl {
-            select_to_multi(loader, p);
-        } else {
-            select_ui_element(loader, p);
-        }
-    }
+    select_correctly(pending_selection, loader, input_state);
 }
 
 fn process_text(
@@ -1352,19 +1328,25 @@ fn process_text(
             }
         }
     }
+    select_correctly(pending_selection, loader, input_state);
+}
 
+pub fn select_correctly(
+    pending_selection: Option<SelectedUiElement>,
+    loader: &mut UiButtonLoader,
+    input_state: &InputState,
+) {
     if let Some(p) = pending_selection {
         if selected_needed(loader, p.action_name.as_str()) {
             select_move_primary_to_multi(loader, p)
         } else if input_state.ctrl {
             select_to_multi(loader, p);
         } else {
-            println!("Pressed keyboard enter");
+            //println!("Pressed keyboard enter");
             select_ui_element(loader, p);
         }
     }
 }
-
 pub fn enter_text_editing_mode(
     ui_runtime: &mut UiRuntime,
     variables: &mut UiVariableRegistry,

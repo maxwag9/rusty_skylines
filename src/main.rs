@@ -1,7 +1,6 @@
 #![allow(dead_code, unused_imports)]
 
 mod app;
-mod chunk_builder;
 mod components;
 mod data;
 mod events;
@@ -11,13 +10,11 @@ mod paths;
 mod renderer;
 mod resources;
 mod simulation;
-mod sky;
 mod systems;
-mod terrain;
-mod threads;
 mod ui;
-mod water;
 mod world;
+
+mod terrain;
 
 use app::App;
 use winit::event_loop::{ControlFlow, EventLoop};
