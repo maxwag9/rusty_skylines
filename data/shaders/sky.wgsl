@@ -243,13 +243,13 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
     let alt = clamp(dot(sun_dir, up), -1.0, 1.0);
     let h = clamp((alt + 0.05) / 1.05, 0.0, 1.0);
 
-    let sunrise_color = vec3<f32>(1.35, 0.55, 0.22);
+    let sunrise_color = vec3<f32>(1.35, 0.55, 0.62);
     let midday_color  = vec3<f32>(1.0, 0.97, 0.90);
     let solar_color   = mix(sunrise_color, midday_color, h);
 
     let air_mass = 1.0 / max(alt * 0.9 + 0.1, 0.02);
     let extinction = exp(-vec3<f32>(0.15, 0.10, 0.05) * (air_mass - 1.0));
-    let extinction_strength = 0.4;
+    let extinction_strength = 0.2;
     sun_color_final = mix(solar_color, solar_color * extinction, extinction_strength);
 
     if sun_visible {
@@ -259,20 +259,20 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
         let radius = sky.sun_size;
         let intensity = sky.sun_intensity;
 
-        let core_r = radius * 0.75;
+        let core_r = radius * 0.85;
 
         if d < core_r {
             let x = 1.0 - d / core_r;
-            let limb = 0.55 + 0.45 * pow(x, 0.35);
-            col += sun_color_final * limb * intensity;
+            let limb = 0.65 + 0.45 * pow(x, 0.35);
+            col += sun_color_final * limb * intensity * 2.5;
         } else if d < radius {
             let t = 1.0 - (d - core_r) / (radius - core_r);
-            let glow = pow(t, 3.0);
+            let glow = pow(t, 6.0);
             col += sun_color_final * glow * intensity;
         }
 
         {
-            let halo_radius = radius * 16.0;
+            let halo_radius = radius * 32.0;
             let halo_d = distance(input.ndc, sun_ndc);
 
             if (halo_d < halo_radius) {
@@ -281,7 +281,7 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
                 let tight = pow(t, 2.0);
                 let soft  = pow(t, 4.0);
 
-                let halo = tight * 0.9 + soft * 0.25;
+                let halo = tight * 0.9 + soft * 0.35;
 
                 let sun_alt = clamp(dot(sun_dir, vec3<f32>(0.0, 1.0, 0.0)), -1.0, 1.0);
                 let sun_lum = sky.sun_intensity * clamp(sun_alt + 0.05, 0.0, 1.0);

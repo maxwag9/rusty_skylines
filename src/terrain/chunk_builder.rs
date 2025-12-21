@@ -1,6 +1,7 @@
 use crate::terrain::terrain::TerrainGenerator;
 use crate::terrain::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
+use glam::Vec3;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -62,19 +63,17 @@ impl ChunkBuilder {
         let size = size as usize;
         let base_x = chunk_x as f32 * size as f32;
         let base_z = chunk_z as f32 * size as f32;
+        let stepf = step as f32;
 
         let verts_x = size / step + 1;
         let verts_z = size / step + 1;
 
-        let mut heights = vec![0.0f32; verts_x * verts_z];
+        // Compute normals after storing all heights
         let mut vertices = Vec::with_capacity(verts_x * verts_z);
+        let mut heights = vec![0.0; verts_x * verts_z];
 
-        // -------- sample heightfield once --------
+        // 1. Populate heights (Inner Chunk Data)
         for gx in 0..verts_x {
-            if gx & 0b1111 == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
-                return None;
-            }
-
             for gz in 0..verts_z {
                 let wx = base_x + (gx * step) as f32;
                 let wz = base_z + (gz * step) as f32;
@@ -83,32 +82,52 @@ impl ChunkBuilder {
 
                 vertices.push(Vertex {
                     position: [wx, h, wz],
-                    normal: [0.0, 1.0, 0.0],
+                    normal: [0.0, 1.0, 0.0], // Dummy normal
                     color: terrain_gen.color(wx, wz, h, terrain_gen.moisture(wx, wz)),
                 });
             }
         }
 
-        // -------- normals from central differences --------
-        let inv = 1.0 / step as f32;
+        // 2. Compute Normals (Using Neighbor Lookups for Edges for Normals!!)
+        let inv = 1.0 / stepf;
         for gx in 0..verts_x {
-            if gx & 0b1111 == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
-                return None;
-            }
-
             for gz in 0..verts_z {
-                let xm = gx.saturating_sub(1);
-                let xp = (gx + 1).min(verts_x - 1);
-                let zm = gz.saturating_sub(1);
-                let zp = (gz + 1).min(verts_z - 1);
+                // Recalculate World position for neighbor
+                let wx = base_x + (gx * step) as f32;
+                let wz = base_z + (gz * step) as f32;
 
-                let h_l = heights[xm * verts_z + gz];
-                let h_r = heights[xp * verts_z + gz];
-                let h_d = heights[gx * verts_z + zm];
-                let h_u = heights[gx * verts_z + zp];
+                // --- X Axis Gradient ---
+                let h_l = if gx > 0 {
+                    heights[(gx - 1) * verts_z + gz]
+                } else {
+                    // FIXED: Query generator for x - 1
+                    terrain_gen.height(wx - stepf, wz)
+                };
 
-                let n = glam::Vec3::new(-(h_r - h_l) * 0.5 * inv, 1.0, -(h_u - h_d) * 0.5 * inv)
-                    .normalize();
+                let h_r = if gx < verts_x - 1 {
+                    heights[(gx + 1) * verts_z + gz]
+                } else {
+                    terrain_gen.height(wx + stepf, wz)
+                };
+
+                // --- Z Axis Gradient ---
+                let h_d = if gz > 0 {
+                    heights[gx * verts_z + (gz - 1)]
+                } else {
+                    terrain_gen.height(wx, wz - stepf)
+                };
+
+                let h_u = if gz < verts_z - 1 {
+                    heights[gx * verts_z + (gz + 1)]
+                } else {
+                    terrain_gen.height(wx, wz + stepf)
+                };
+
+                // Central Difference
+                let dhdx = (h_r - h_l) * 0.5 * inv;
+                let dhdz = (h_u - h_d) * 0.5 * inv;
+
+                let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
 
                 vertices[gx * verts_z + gz].normal = [n.x, n.y, n.z];
             }
@@ -246,26 +265,4 @@ pub fn generate_spiral_offsets(radius: i32) -> Vec<(i32, i32)> {
     // sort by distance from center
     v.sort_by_key(|(dx, dz)| dx * dx + dz * dz);
     v
-}
-
-fn normalize_edge_order(edge: &mut Vec<usize>, vertices: &Vec<Vertex>, axis: char) {
-    match axis {
-        'x' => {
-            // sort by world X
-            edge.sort_by(|&a, &b| {
-                let ax = vertices[a].position[0];
-                let bx = vertices[b].position[0];
-                ax.partial_cmp(&bx).unwrap()
-            });
-        }
-        'z' => {
-            // sort by world Z
-            edge.sort_by(|&a, &b| {
-                let az = vertices[a].position[2];
-                let bz = vertices[b].position[2];
-                az.partial_cmp(&bz).unwrap()
-            });
-        }
-        _ => {}
-    }
 }

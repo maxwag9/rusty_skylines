@@ -80,7 +80,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     if cam_ctrl.zoom_velocity.abs() > 0.0001 {
         camera.orbit_radius += cam_ctrl.zoom_velocity * dt * 1.5;
         cam_ctrl.zoom_velocity *= (1.0 - cam_ctrl.zoom_damping * dt).max(0.0);
-        camera.orbit_radius = camera.orbit_radius.clamp(10.0, 10_000.0);
+        camera.orbit_radius = camera.orbit_radius.clamp(15.0, 10_000.0);
     } else {
         cam_ctrl.zoom_velocity = 0.0;
     }

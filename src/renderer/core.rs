@@ -402,7 +402,7 @@ impl RenderCore {
         let wu = WaterUniform {
             sea_level: 0.0,
             _pad0: [0.0; 3],
-            color: [0.05, 0.25, 0.35, 0.55],
+            color: [0.05, 0.25, 0.35, 0.95],
             wave_tiling: 0.5,
             wave_strength: 0.1,
             _pad1: [0.0; 2],

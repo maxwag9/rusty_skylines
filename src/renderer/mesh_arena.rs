@@ -143,7 +143,7 @@ impl MeshArena {
                 2 => {
                     // two vertices above, one below
                     // find which is below
-                    let (ib, ia, ic, yb_flag) = if !above_a {
+                    let (ib, ia, ic, _) = if !above_a {
                         (a, b, c, above_a)
                     } else if !above_b {
                         (b, c, a, above_b)

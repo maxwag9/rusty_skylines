@@ -93,11 +93,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let ambient = mix(ground_ambient, sky_ambient, hemi);
 
     let ndotl = dot(n, l);
-    let wrap = 0.3;
-    let diffuse = clamp((ndotl + wrap) / (1.0 + wrap), 0.0, 1.0);
+    let diffuse = max(ndotl, 0.0) * 0.60;
 
 
-    let base_color = in.color * (ambient + diffuse) + 0.05;
+    let base_color = in.color * (ambient + diffuse);
 
     let dist = distance(in.world_pos, uniforms.camera_pos);
 
