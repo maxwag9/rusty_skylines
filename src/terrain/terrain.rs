@@ -726,7 +726,7 @@ impl TerrainGenerator {
         let slope = (ddx * ddx + ddz * ddz).sqrt();
         let slope_n = smoothstep(0.08, 0.015, slope);
 
-        if h_rel < 0.0 {
+        if h_rel < 0.1 {
             let depth = (-h_rel / (0.75 * hs)).clamp(0.0, 1.0);
 
             let warm = HSV {

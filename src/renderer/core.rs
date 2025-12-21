@@ -457,7 +457,7 @@ impl RenderCore {
                         store: StoreOp::Store,
                     }),
                     stencil_ops: Some(Operations {
-                        load: LoadOp::Load,
+                        load: LoadOp::Clear(0),
                         store: StoreOp::Store,
                     }),
                 }),
@@ -467,20 +467,18 @@ impl RenderCore {
 
             // Sky, Stars and Terrain
             self.sky.render(&mut pass, &self.pipelines);
-            // Underwater Terrain
-            pass.set_stencil_reference(1);
-            self.world
-                .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
-            self.world
-                .render(&mut pass, &self.pipelines, camera, aspect, true);
 
             // Above Water Terrain
-            pass.set_stencil_reference(0);
             self.world
                 .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
+            pass.set_stencil_reference(0);
             self.world
                 .render(&mut pass, &self.pipelines, camera, aspect, false);
+            // Underwater Terrain
+            pass.set_stencil_reference(1);
 
+            self.world
+                .render(&mut pass, &self.pipelines, camera, aspect, true);
             // Gizmo
             pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
             pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
@@ -499,7 +497,7 @@ impl RenderCore {
                 IndexFormat::Uint32,
             );
             pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
-            //pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
+            pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
 
             // 2) UI pass on top of resolved image //
             let screen_uniform = crate::renderer::ui::ScreenUniform {

@@ -23,12 +23,14 @@ pub struct ChunkMeshLod {
 }
 
 #[derive(Clone, Copy)]
-pub struct GpuChunkHandle {
-    pub page: u32,
+pub(crate) struct GpuChunkHandle {
     pub base_vertex: i32,
-    pub first_index: u32,
-    pub index_count: u32,
-    pub vertex_count: u32,
+    pub(crate) first_index_above: u32,
+    pub(crate) index_count_above: u32,
+    pub(crate) first_index_under: u32,
+    pub(crate) index_count_under: u32,
+    pub(crate) page: u8,
+    pub(crate) vertex_count: u32,
 }
 
 pub struct ChunkBuilder;

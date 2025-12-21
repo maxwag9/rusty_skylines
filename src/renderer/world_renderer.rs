@@ -589,9 +589,12 @@ impl WorldRenderer {
             pass.set_index_buffer(page.index_buf.slice(..), IndexFormat::Uint32);
 
             for h in handles {
-                let start = h.first_index;
-                let end = h.first_index + h.index_count;
-                pass.draw_indexed(start..end, h.base_vertex, 0..1);
+                let (start, count) = if underwater {
+                    (h.first_index_under, h.index_count_under)
+                } else {
+                    (h.first_index_above, h.index_count_above)
+                };
+                pass.draw_indexed(start..start + count, h.base_vertex, 0..1);
             }
         }
     }

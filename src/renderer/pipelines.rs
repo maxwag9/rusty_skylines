@@ -810,7 +810,7 @@ impl Pipelines {
                 depth_stencil: Some(DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: false,
-                    depth_compare: CompareFunction::Less,
+                    depth_compare: CompareFunction::Always,
                     stencil: StencilState {
                         front: StencilFaceState {
                             compare: CompareFunction::Equal,

@@ -81,17 +81,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
     return out;
 }
 
-
-
-
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let is_underwater = in.world_pos.y < 0.0;
-    let underwater_bool = pick.underwater == 1u;
-    if (underwater_bool != is_underwater) {
-        discard;
-    }
-
     let n = normalize(in.world_normal);
     let l = normalize(uniforms.sun_direction);
 

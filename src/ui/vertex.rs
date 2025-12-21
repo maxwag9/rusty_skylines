@@ -231,7 +231,47 @@ impl Vertex {
         }
     }
 }
+pub trait VertexWithPosition {
+    fn position(&self) -> [f32; 3];
+    fn lerp(a: &Self, b: &Self, t: f32) -> Self;
+}
 
+impl VertexWithPosition for Vertex {
+    fn position(&self) -> [f32; 3] {
+        self.position
+    }
+
+    // produce a vertex that is a linear interpolation between a and b with factor t in [0,1]
+    // must interpolate all vertex attributes consistently (position, normal, color).
+    fn lerp(a: &Self, b: &Self, t: f32) -> Self {
+        // Linear interpolation helper
+        fn mix(x: [f32; 3], y: [f32; 3], t: f32) -> [f32; 3] {
+            [
+                x[0] + (y[0] - x[0]) * t,
+                x[1] + (y[1] - x[1]) * t,
+                x[2] + (y[2] - x[2]) * t,
+            ]
+        }
+
+        let position = mix(a.position, b.position, t);
+        let mut normal = mix(a.normal, b.normal, t);
+        let color = mix(a.color, b.color, t);
+
+        // Normalize normal
+        let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        if len > 0.0 {
+            normal[0] /= len;
+            normal[1] /= len;
+            normal[2] /= len;
+        }
+
+        Vertex {
+            position,
+            normal,
+            color,
+        }
+    }
+}
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct UiVertexPoly {
