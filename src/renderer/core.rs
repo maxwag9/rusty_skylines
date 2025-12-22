@@ -479,12 +479,6 @@ impl RenderCore {
 
             self.world
                 .render(&mut pass, &self.pipelines, camera, aspect, true);
-            // Gizmo
-            pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
-            pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
-            pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
-            pass.draw(0..6, 0..1);
 
             pass.set_pipeline(&self.pipelines.water_pipeline.pipeline);
             pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
@@ -499,6 +493,12 @@ impl RenderCore {
             pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
             pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
 
+            // Gizmo
+            pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
+            pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
+            pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
+            pass.draw(0..6, 0..1);
             // 2) UI pass on top of resolved image //
             let screen_uniform = crate::renderer::ui::ScreenUniform {
                 size: [self.size.width as f32, self.size.height as f32],

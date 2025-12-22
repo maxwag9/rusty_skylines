@@ -94,7 +94,13 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
         cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
     }
-    ground_camera_target(camera, &resources.renderer.core.world.terrain_gen, 0.5);
+    camera.target += cam_ctrl.velocity * dt;
+    ground_camera_target(
+        camera,
+        cam_ctrl,
+        &resources.renderer.core.world.terrain_gen,
+        1.0,
+    );
     resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.world);
     // SMOOTH target → camera
     let t = 1.0 - (-cam_ctrl.orbit_smoothness * 60.0 * dt).exp();
@@ -113,5 +119,4 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     camera.pitch = camera
         .pitch
         .clamp(-50.0f32.to_radians(), 89.0f32.to_radians());
-    camera.target += cam_ctrl.velocity * dt;
 }

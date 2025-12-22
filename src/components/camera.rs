@@ -74,14 +74,22 @@ impl CameraController {
         }
     }
 }
-pub fn ground_camera_target(camera: &mut Camera, terrain: &TerrainGenerator, min_clearance: f32) {
+pub fn ground_camera_target(
+    camera: &mut Camera,
+    camera_controller: &mut CameraController,
+    terrain: &TerrainGenerator,
+    min_clearance: f32,
+) {
     let x = camera.target.x;
     let z = camera.target.z;
 
     let ground_y = terrain.height(x, z);
 
-    if camera.target.y < ground_y + min_clearance {
-        camera.target.y = ground_y + min_clearance;
+    let penetration = (ground_y + min_clearance) - camera.target.y;
+
+    if penetration > 0.0 {
+        camera.target.y += penetration;
+        camera_controller.velocity.y = camera_controller.velocity.y.max(0.0);
     }
 }
 pub fn resolve_pitch_by_search(
@@ -102,7 +110,7 @@ pub fn resolve_pitch_by_search(
         max_terrain_y = max_terrain_y.max(terrain_y);
     }
 
-    let min_clearance = 100.0; // small extra buffer
+    let min_clearance = 20.0; // small extra buffer
     let desired_y = max_terrain_y + min_clearance;
 
     let dy = desired_y - target.y;
