@@ -20,10 +20,23 @@ pub struct ChunkMeshLod {
     pub step: usize,
     pub handle: GpuChunkHandle,
     pub cpu_vertices: Vec<Vertex>,
+    pub cpu_indices: Vec<u32>,
     pub height_grid: Arc<ChunkHeightGrid>,
 }
+pub(crate) struct EditedChunk {
+    pub(crate) vertices: Vec<Vertex>,
+    pub(crate) dirty: bool,
+}
+impl Default for EditedChunk {
+    fn default() -> Self {
+        EditedChunk {
+            vertices: Vec::new(),
+            dirty: true,
+        }
+    }
+}
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct GpuChunkHandle {
     pub base_vertex: i32,
     pub(crate) first_index_above: u32,
@@ -265,4 +278,52 @@ pub fn generate_spiral_offsets(radius: i32) -> Vec<(i32, i32)> {
     // sort by distance from center
     v.sort_by_key(|(dx, dz)| dx * dx + dz * dz);
     v
+}
+pub fn recompute_normals_and_color(verts: &mut [Vertex], step: usize, terrain: &TerrainGenerator) {
+    let stepf = step as f32;
+    let inv = 1.0 / stepf;
+
+    let verts_z = (verts.len() as f32).sqrt() as usize;
+
+    for x in 0..verts_z {
+        for z in 0..verts_z {
+            let i = x * verts_z + z;
+
+            let h = verts[i].position[1];
+
+            let h_l = if x > 0 {
+                verts[(x - 1) * verts_z + z].position[1]
+            } else {
+                h
+            };
+
+            let h_r = if x + 1 < verts_z {
+                verts[(x + 1) * verts_z + z].position[1]
+            } else {
+                h
+            };
+
+            let h_d = if z > 0 {
+                verts[x * verts_z + z - 1].position[1]
+            } else {
+                h
+            };
+
+            let h_u = if z + 1 < verts_z {
+                verts[x * verts_z + z + 1].position[1]
+            } else {
+                h
+            };
+
+            let dhdx = (h_r - h_l) * 0.5 * inv;
+            let dhdz = (h_u - h_d) * 0.5 * inv;
+
+            let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
+            verts[i].normal = [n.x, n.y, n.z];
+
+            let wx = verts[i].position[0];
+            let wz = verts[i].position[2];
+            verts[i].color = terrain.color(wx, wz, h, terrain.moisture(wx, wz));
+        }
+    }
 }

@@ -10,8 +10,7 @@ pub(crate) mod world_renderer;
 
 use crate::components::camera::Camera;
 use crate::data::Settings;
-use crate::resources::TimeSystem;
-use crate::ui::input::MouseState;
+use crate::resources::{InputState, TimeSystem};
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::CameraBundle;
 use core::RenderCore;
@@ -36,10 +35,10 @@ impl Renderer {
         camera_bundle: &mut CameraBundle,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
-        mouse: &MouseState,
+        input_state: &mut InputState,
         settings: &Settings,
     ) {
         self.core
-            .render(camera_bundle, ui_loader, time, mouse, settings);
+            .render(camera_bundle, ui_loader, time, input_state, settings);
     }
 }

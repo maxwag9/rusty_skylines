@@ -364,9 +364,23 @@ impl ApplicationHandler for App {
                     let frame_start = Instant::now();
 
                     // update render time
-                    resources.time.update_render();
-
-                    // input must be reset at the START of the frame
+                    let mut time_speed: f32 = 1.0f32; // f32 btw
+                    if resources.input.action_down("Speed up Time 20x") {
+                        time_speed = 20.0
+                    } else if resources.input.action_down("Speed up Time 8x") {
+                        time_speed = 8.0
+                    } else if resources.input.action_down("Speed up Time 2x") {
+                        time_speed = 2.0
+                    }
+                    resources
+                        .ui_loader
+                        .variables
+                        .set_f32("time_speed", time_speed);
+                    resources.time.update_render(time_speed);
+                    resources
+                        .ui_loader
+                        .variables
+                        .set_f32("total_game_time", resources.time.total_game_time as f32);
 
                     // update UI global vars
                     let ui = &mut resources.ui_loader;

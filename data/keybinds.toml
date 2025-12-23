@@ -108,3 +108,15 @@ keys = ["F1"]
 
 ["Leave Game"]
 keys = ["ESC"]
+
+["Edit Terrain +"]
+keys = ["MouseLeft"]
+["Edit Terrain -"]
+keys = ["MouseRight"]
+
+["Speed up Time 2x"]
+keys = ["ArrowRight"]
+["Speed up Time 8x"]
+keys = ["Ctrl+ArrowRight"]
+["Speed up Time 20x"]
+keys = ["Shift+ArrowRight"]

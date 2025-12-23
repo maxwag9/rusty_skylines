@@ -1,9 +1,10 @@
 use crate::components::camera::Camera;
 use crate::mouse_ray::*;
-use crate::renderer::mesh_arena::MeshArena;
+use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
 use crate::renderer::pipelines::Pipelines;
 use crate::terrain::chunk_builder::{
-    ChunkMeshLod, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
+    ChunkMeshLod, EditedChunk, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
+    recompute_normals_and_color,
 };
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
@@ -13,6 +14,9 @@ use std::collections::{HashMap, HashSet};
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 use crate::data::Settings;
+use crate::resources::InputState;
+use crate::terrain::terrain_editing::*;
+use rayon::prelude::*;
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
@@ -59,6 +63,7 @@ pub struct WorldRenderer {
 
     pub chunks: HashMap<(i32, i32), ChunkMeshLod>,
     pub pending: HashMap<(i32, i32), (u64, usize)>, // coord -> (version, desired_step)
+    pub edited_chunks: HashMap<(i32, i32), EditedChunk>,
 
     pub terrain_gen: TerrainGenerator,
     pub chunk_size: u32,
@@ -116,6 +121,7 @@ impl WorldRenderer {
             chunks: HashMap::new(),
             pending: HashMap::new(),
 
+            edited_chunks: HashMap::new(),
             terrain_gen,
             chunk_size,
             view_radius_generate,
@@ -129,7 +135,7 @@ impl WorldRenderer {
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
-            pick_radius_m: 100.0,
+            pick_radius_m: 10.0,
             last_picked: None,
 
             benchmark: None,
@@ -244,6 +250,7 @@ impl WorldRenderer {
         camera: &mut Camera,
         aspect: f32,
         settings: &Settings,
+        input_state: &mut InputState,
     ) {
         if settings.world_generation_benchmark_mode {
             self.run_benchmark(camera)
@@ -267,6 +274,30 @@ impl WorldRenderer {
         // 5) Unload chunks far outside render radius + margin (free GPU + cancel jobs),
         // but never unload something that is visible THIS frame.
         self.unload_out_of_range(&frame, &visible);
+
+        if input_state.action_down("Edit Terrain +") {
+            if let Some(last_picked) = &self.last_picked {
+                self.edit_terrain_with_brush::<SmoothFalloff, Raise>(
+                    device,
+                    queue,
+                    last_picked.pos,
+                    self.pick_radius_m,
+                    1.0,
+                    &mut GeometryScratch::default(),
+                )
+            }
+        } else if input_state.action_down("Edit Terrain -") {
+            if let Some(last_picked) = &self.last_picked {
+                self.edit_terrain_with_brush::<SmoothFalloff, Raise>(
+                    device,
+                    queue,
+                    last_picked.pos,
+                    self.pick_radius_m,
+                    -1.0,
+                    &mut GeometryScratch::default(),
+                )
+            }
+        }
     }
 
     fn frame_state(&self, camera: &Camera, aspect: f32) -> FrameState {
@@ -295,7 +326,7 @@ impl WorldRenderer {
     }
 
     fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
-        while let Ok(cpu) = self.workers.result_rx.try_recv() {
+        while let Ok(mut cpu) = self.workers.result_rx.try_recv() {
             let coord = (cpu.cx, cpu.cz);
             // Drop obsolete results
             if !self.workers.is_current_version(coord, cpu.version) {
@@ -305,20 +336,41 @@ impl WorldRenderer {
             // Replace old chunk
             self.remove_chunk(coord);
 
+            self.apply_persistent_edits(coord, &mut cpu.vertices);
             // Upload new chunk
-            let handle = self
-                .arena
-                .alloc_and_upload(device, queue, &cpu.vertices, &cpu.indices);
+            let handle = self.arena.alloc_and_upload(
+                device,
+                queue,
+                &cpu.vertices,
+                &cpu.indices,
+                &mut GeometryScratch::default(),
+            );
 
             self.chunks.insert(
                 coord,
-                (ChunkMeshLod {
+                ChunkMeshLod {
                     step: cpu.step,
                     handle,
                     cpu_vertices: cpu.vertices.clone(),
+                    cpu_indices: cpu.indices.clone(),
                     height_grid: cpu.height_grid,
-                }),
+                },
             );
+        }
+    }
+    fn apply_persistent_edits(&self, coord: (i32, i32), vertices: &mut [Vertex]) {
+        if let Some(edit) = self.edited_chunks.get(&coord) {
+            // Map edited vertices to the current LOD vertices
+            for v in vertices.iter_mut() {
+                // Find the closest edit vertex in world-space
+                if let Some(e_v) = edit.vertices.iter().min_by_key(|ev| {
+                    let dx = ev.position[0] - v.position[0];
+                    let dz = ev.position[2] - v.position[2];
+                    ((dx * dx + dz * dz) * 1000.0) as i32 // arbitrary scaling for comparison
+                }) {
+                    v.position[1] = e_v.position[1]; // apply height edit
+                }
+            }
         }
     }
 
@@ -700,8 +752,208 @@ impl WorldRenderer {
 
         queue.write_buffer(&pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
+    pub fn edit_terrain_with_brush<F, B>(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        center: Vec3,
+        radius: f32,
+        strength: f32,
+        scratch: &mut GeometryScratch<Vertex>, // Pass scratch from higher level
+    ) where
+        F: Falloff + Sync + Send,
+        B: BrushOp + Sync + Send,
+    {
+        let r2 = radius * radius;
+        let cs = self.chunk_size as f32;
+
+        let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, radius, cs);
+
+        // Collect mutable references to valid chunks first
+        // We filter by key to avoid borrowing the whole map immutably then mutably
+        let mut target_coords = Vec::new();
+        for cx in min_cx..=max_cx {
+            for cz in min_cz..=max_cz {
+                let coord = (cx, cz);
+
+                // Check if the base chunk exists
+                if let Some(base) = self.chunks.get(&coord) {
+                    if base.step == 1 {
+                        target_coords.push(coord);
+
+                        // CRITICAL: Ensure the edited entry exists.
+                        // If it doesn't, clone the vertices from the base chunk.
+                        self.edited_chunks
+                            .entry(coord)
+                            .or_insert_with(|| EditedChunk {
+                                vertices: base.cpu_vertices.clone(), // Start with a copy of the original
+                                dirty: true,
+                            });
+                    }
+                }
+            }
+        }
+
+        // Ensure entries exist sequentially (cannot be done in parallel easily due to HashMap)
+        // However, we collect the raw pointers or use unsafe to get disjoint mutable borrows,
+        // or we simply accept the sequential overhead here and parallelize the HEAVY computation.
+        // Here we choose to just iterate and mutate, but parallelize the inner vertex loop.
+        // For maximum speed on many chunks, we collect the data and use Rayon.
+
+        // 1. Parallel Computation Phase
+        // We extract the vertices to a Vec to process in parallel, then put them back.
+        // Note: In a real ECS or graph, we would have better parallel access.
+        // Here we iterate sequentially over chunks (usually < 9 chunks) but parallelize the vertices.
+
+        // Use par_iter_mut() directly on the HashMap values
+        self.edited_chunks
+            .par_iter_mut()
+            // Only process chunks that are within the brush area and need update
+            .filter(|(coord, _)| target_coords.contains(coord))
+            .for_each(|(_coord, edited)| {
+                println!("hi");
+                let mut chunk_changed = false;
+                for v in &mut edited.vertices {
+                    let dx = v.position[0] - center.x;
+                    let dz = v.position[2] - center.z;
+                    let d2 = dx * dx + dz * dz;
+
+                    if d2 >= r2 {
+                        continue;
+                    }
+
+                    let w = F::weight(d2, r2);
+                    if w > 0.001 {
+                        // Epsilon check to avoid tiny updates
+                        B::apply(&mut v.position[1], strength, w);
+                        chunk_changed = true;
+                    }
+                }
+
+                if chunk_changed {
+                    recompute_normals_and_color(&mut edited.vertices, 1, &self.terrain_gen);
+                    edited.dirty = true;
+                }
+            });
+
+        // 2. Upload Phase
+        self.upload_edited_chunks(device, queue, scratch);
+    }
+
+    fn upload_edited_chunks(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        scratch: &mut GeometryScratch<Vertex>,
+    ) {
+        let dirty_coords: Vec<(i32, i32)> = self
+            .edited_chunks
+            .iter()
+            .filter(|(_, e)| e.dirty)
+            .map(|(c, _)| *c)
+            .collect();
+
+        for coord in dirty_coords {
+            // 1. Get the vertices and mark as not dirty.
+            // We use a block to drop the borrow of `self.edited_chunks` immediately.
+            let vertices_to_upload = {
+                let edited = self.edited_chunks.get_mut(&coord).unwrap();
+                edited.dirty = false;
+                // We still have to clone here if we want to keep the data in 'edited_chunks'
+                // OR we move it out if 'edited_chunks' is just a temporary buffer.
+                edited.vertices.clone()
+            };
+
+            // 2. Get base info.
+            // We drop this borrow before calling self.remove_chunk.
+            let (indices, step, height_grid) = {
+                let base = self
+                    .chunks
+                    .get(&coord)
+                    .expect("Chunk must exist to be edited");
+                (
+                    base.cpu_indices.clone(),
+                    base.step,
+                    base.height_grid.clone(),
+                )
+            };
+
+            // 3. Now we can safely borrow self mutably because previous borrows are dropped.
+            self.remove_chunk(coord);
+
+            // 4. Upload using the scratch buffer.
+            let handle =
+                self.arena
+                    .alloc_and_upload(device, queue, &vertices_to_upload, &indices, scratch);
+
+            // 5. Re-insert into the mesh map.
+            self.chunks.insert(
+                coord,
+                ChunkMeshLod {
+                    step,
+                    handle,
+                    cpu_vertices: vertices_to_upload,
+                    cpu_indices: indices,
+                    height_grid,
+                },
+            );
+        }
+    }
+}
+fn chunk_intersects_circle(coord: (i32, i32), chunk_size: f32, center: Vec3, radius: f32) -> bool {
+    let (cx, cz) = coord;
+    let half = chunk_size * 0.5;
+    let chunk_center_x = (cx as f32) * chunk_size + half;
+    let chunk_center_z = (cz as f32) * chunk_size + half;
+
+    // AABB min/max
+    let minx = chunk_center_x - half;
+    let maxx = chunk_center_x + half;
+    let minz = chunk_center_z - half;
+    let maxz = chunk_center_z + half;
+
+    // find closest point on AABB to circle center
+    let closest_x = clamp(center.x, minx, maxx);
+    let closest_z = clamp(center.z, minz, maxz);
+
+    let dx = center.x - closest_x;
+    let dz = center.z - closest_z;
+    dx * dx + dz * dz <= radius * radius
 }
 
+#[inline]
+fn clamp(x: f32, a: f32, b: f32) -> f32 {
+    if x < a {
+        a
+    } else if x > b {
+        b
+    } else {
+        x
+    }
+}
+fn recompute_normals_partial(
+    vertices: &mut [Vertex],
+    min_i: usize,
+    max_i: usize,
+    step: usize,
+    terrain_gen: &TerrainGenerator,
+) {
+    let start = min_i.saturating_sub(1);
+    let end = std::cmp::min(max_i + 1, vertices.len().saturating_sub(1));
+
+    for i in start..=end {
+        recompute_normal_for_vertex(vertices, i, step, terrain_gen);
+    }
+}
+
+fn recompute_normal_for_vertex(
+    vertices: &mut [Vertex],
+    i: usize,
+    step: usize,
+    terrain_gen: &TerrainGenerator,
+) {
+    vertices[i].normal = [0.0, 1.0, 0.0];
+}
 #[derive(Clone, Copy)]
 pub struct Plane {
     pub normal: glam::Vec3,
@@ -742,7 +994,7 @@ pub fn extract_frustum_planes(view_proj: glam::Mat4) -> [Plane; 6] {
     })
 }
 
-pub fn aabb_in_frustum(planes: &[Plane; 6], min: glam::Vec3, max: glam::Vec3) -> bool {
+pub fn aabb_in_frustum(planes: &[Plane; 6], min: Vec3, max: Vec3) -> bool {
     // 0.5..2.0 meters is usually enough to remove micro-popping
     let margin = 1.0_f32;
 
@@ -762,7 +1014,7 @@ const TERRAIN_MIN_Y: f32 = -4096.0;
 const TERRAIN_MAX_Y: f32 = 4096.0;
 
 #[inline]
-fn chunk_aabb_world(cx: i32, cz: i32, chunk_size: f32) -> (glam::Vec3, glam::Vec3) {
+fn chunk_aabb_world(cx: i32, cz: i32, chunk_size: f32) -> (Vec3, Vec3) {
     let x0 = cx as f32 * chunk_size;
     let z0 = cz as f32 * chunk_size;
     let min = glam::Vec3::new(x0, TERRAIN_MIN_Y, z0);

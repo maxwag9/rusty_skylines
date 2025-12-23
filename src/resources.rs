@@ -48,14 +48,6 @@ impl Resources {
             window,
         }
     }
-
-    pub fn update_sim_time(&mut self) {
-        self.time.update_sim();
-    }
-
-    pub fn update_render_time(&mut self) {
-        self.time.update_render();
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -114,7 +106,7 @@ impl TimeSystem {
         self.sim_dt = dt;
     }
 
-    pub fn update_render(&mut self) {
+    pub fn update_render(&mut self, time_speed: f32) {
         let now = Instant::now();
         let dt = (now - self.last_render).as_secs_f32();
         self.last_render = now;
@@ -123,7 +115,7 @@ impl TimeSystem {
         self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
         self.total_time += dt as f64;
-        self.total_game_time += dt as f64; // later scaled
+        self.total_game_time += dt as f64 * time_speed as f64;
 
         self.sim_accumulator += dt;
     }

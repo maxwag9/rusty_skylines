@@ -6,10 +6,9 @@ use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::world_renderer::WorldRenderer;
-use crate::resources::TimeSystem;
+use crate::resources::{InputState, TimeSystem};
 use crate::terrain::sky::{SkyRenderer, SkyUniform};
 use crate::terrain::water::WaterUniform;
-use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::LineVtx;
 use crate::world::CameraBundle;
@@ -165,7 +164,7 @@ impl RenderCore {
         camera_bundle: &mut CameraBundle,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
-        mouse: &MouseState,
+        input_state: &mut InputState,
         settings: &Settings,
     ) {
         let camera = &mut camera_bundle.camera;
@@ -259,7 +258,7 @@ impl RenderCore {
         let (view, proj, view_proj) = camera.matrices(aspect);
 
         let ray = ray_from_mouse_pixels(
-            glam::Vec2::new(mouse.pos.x, mouse.pos.y),
+            glam::Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
             self.config.width as f32,
             self.config.height as f32,
             view,
@@ -331,8 +330,14 @@ impl RenderCore {
             bytemuck::bytes_of(&sky_uniform),
         );
 
-        self.world
-            .update(&self.device, &self.queue, camera, aspect, settings);
+        self.world.update(
+            &self.device,
+            &self.queue,
+            camera,
+            aspect,
+            settings,
+            input_state,
+        );
 
         // get frame
         let frame = match self.surface.get_current_texture() {
@@ -504,7 +509,7 @@ impl RenderCore {
                 size: [self.size.width as f32, self.size.height as f32],
                 time: time.total_time as f32,
                 enable_dither: 1,
-                mouse: mouse.pos.to_array(),
+                mouse: input_state.mouse.pos.to_array(),
             };
 
             self.queue.write_buffer(
@@ -514,8 +519,14 @@ impl RenderCore {
             );
 
             let size = (self.config.width as f32, self.config.height as f32);
-            self.ui_renderer
-                .render(&mut pass, ui_loader, &self.queue, time, size, mouse);
+            self.ui_renderer.render(
+                &mut pass,
+                ui_loader,
+                &self.queue,
+                time,
+                size,
+                &input_state.mouse,
+            );
         }
 
         self.queue.submit(Some(encoder.finish()));
