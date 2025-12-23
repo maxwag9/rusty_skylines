@@ -3,18 +3,19 @@ use crate::mouse_ray::*;
 use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
 use crate::renderer::pipelines::Pipelines;
 use crate::terrain::chunk_builder::{
-    ChunkMeshLod, EditedChunk, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
-    recompute_normals_and_color,
+    ChunkHeightGrid, ChunkMeshLod, EditedChunk, GpuChunkHandle, apply_sparse_deltas_to_height_grid,
+    generate_spiral_offsets, lod_step_for_distance, regenerate_vertices_from_height_grid,
 };
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
 use crate::ui::vertex::Vertex;
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 use crate::data::Settings;
-use crate::resources::InputState;
+use crate::resources::{InputState, TimeSystem};
 use crate::terrain::terrain_editing::*;
 use rayon::prelude::*;
 use std::time::Instant;
@@ -82,6 +83,7 @@ pub struct WorldRenderer {
     last_picked: Option<PickedPoint>,
 
     benchmark: Option<BenchmarkState>,
+    pub frame_timings: FrameTimings,
 }
 
 #[derive(Clone, Copy)]
@@ -129,8 +131,8 @@ impl WorldRenderer {
 
             workers,
             max_close_jobs_per_frame: 1,
-            max_close_chunks_per_batch: 1,
-            max_far_chunks_per_batch: 50,
+            max_close_chunks_per_batch: 2,
+            max_far_chunks_per_batch: 100,
             max_far_jobs_per_frame: 1,
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
@@ -139,6 +141,7 @@ impl WorldRenderer {
             last_picked: None,
 
             benchmark: None,
+            frame_timings: FrameTimings::default(),
         }
     }
 
@@ -251,30 +254,48 @@ impl WorldRenderer {
         aspect: f32,
         settings: &Settings,
         input_state: &mut InputState,
+        time_system: &TimeSystem,
     ) {
+        let t_frame = std::time::Instant::now();
+
         if settings.world_generation_benchmark_mode {
-            self.run_benchmark(camera)
+            self.run_benchmark(camera);
         }
 
         let frame = self.frame_state(camera, aspect);
 
-        // 1) Drain results: upload, replace, free old allocations safely.
+        // 1) Drain finished meshes (CPU → GPU uploads, allocations)
+        let t0 = std::time::Instant::now();
         self.drain_finished_meshes(device, queue);
+        self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
-        // 2) Visible set for this frame.
+        // 2) Visible set build (culling cost)
+        let t0 = std::time::Instant::now();
         let mut visible = self.collect_visible(&frame);
+        self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
+
+        // 2.5) Sorting visible (often non-trivial!)
+        let t0 = std::time::Instant::now();
         visible.sort_unstable_by_key(|&(_cx, _cz, dist2)| dist2);
+        self.frame_timings.sort_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
-        // 3) LOD map for visible.
+        // 3) LOD decisions (math + data access)
+        let t0 = std::time::Instant::now();
         self.compute_lod_for_visible(&visible, frame.r2_gen);
+        self.frame_timings.lod_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
-        // 4) Job dispatch based on visible + desired LOD.
+        // 4) Job dispatch (allocs, queues, atomics)
+        let t0 = std::time::Instant::now();
         self.dispatch_jobs_for_visible(&visible);
+        self.frame_timings.dispatch_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
-        // 5) Unload chunks far outside render radius + margin (free GPU + cancel jobs),
-        // but never unload something that is visible THIS frame.
+        // 5) Unload chunks (hashmaps + GPU frees)
+        let t0 = std::time::Instant::now();
         self.unload_out_of_range(&frame, &visible);
+        self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
+        // 6) Terrain editing (this is where spikes happen)
+        let t0 = std::time::Instant::now();
         if input_state.action_down("Edit Terrain +") {
             if let Some(last_picked) = &self.last_picked {
                 self.edit_terrain_with_brush::<SmoothFalloff, Raise>(
@@ -284,7 +305,9 @@ impl WorldRenderer {
                     self.pick_radius_m,
                     1.0,
                     &mut GeometryScratch::default(),
-                )
+                    time_system,
+                    false,
+                );
             }
         } else if input_state.action_down("Edit Terrain -") {
             if let Some(last_picked) = &self.last_picked {
@@ -295,8 +318,44 @@ impl WorldRenderer {
                     self.pick_radius_m,
                     -1.0,
                     &mut GeometryScratch::default(),
-                )
+                    time_system,
+                    false,
+                );
             }
+        }
+        if input_state.action_released("Edit Terrain -")
+            || input_state.action_released("Edit Terrain +")
+        {
+            if let Some(last_picked) = &self.last_picked {
+                println!("RUN");
+                self.edit_terrain_with_brush::<SmoothFalloff, Raise>(
+                    device,
+                    queue,
+                    last_picked.pos,
+                    self.pick_radius_m,
+                    -1.0,
+                    &mut GeometryScratch::default(),
+                    time_system,
+                    true,
+                );
+            }
+        }
+        self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
+
+        self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
+
+        if (time_system.total_time / time_system.target_frametime as f64) as u32 % 12 == 0 {
+            println!(
+                "frame {:.2} | drain {:.2} | vis {:.2}+{:.2} | lod {:.2} | disp {:.2} | unload {:.2} | edit {:.2}",
+                self.frame_timings.total_ms,
+                self.frame_timings.drain_ms,
+                self.frame_timings.collect_visible_ms,
+                self.frame_timings.sort_visible_ms,
+                self.frame_timings.lod_ms,
+                self.frame_timings.dispatch_ms,
+                self.frame_timings.unload_ms,
+                self.frame_timings.edit_ms,
+            );
         }
     }
 
@@ -325,8 +384,8 @@ impl WorldRenderer {
         }
     }
 
-    fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
-        while let Ok(mut cpu) = self.workers.result_rx.try_recv() {
+    pub fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
+        while let Ok(cpu) = self.workers.result_rx.try_recv() {
             let coord = (cpu.cx, cpu.cz);
             // Drop obsolete results
             if !self.workers.is_current_version(coord, cpu.version) {
@@ -336,41 +395,44 @@ impl WorldRenderer {
             // Replace old chunk
             self.remove_chunk(coord);
 
-            self.apply_persistent_edits(coord, &mut cpu.vertices);
-            // Upload new chunk
+            // Move out of cpu to avoid clone
+            let mut vertices = cpu.vertices;
+            let indices = cpu.indices;
+            // start with worker's height grid (base, generated from terrain_gen)
+            let mut height_grid = (*cpu.height_grid).clone();
+
+            // If we have edits for this chunk, apply them to a new height grid (copy-on-write).
+            if let Some(edit) = self.edited_chunks.get(&coord) {
+                if !edit.deltas.is_empty() {
+                    // apply sparse deltas to get a new grid
+                    let new_grid = apply_sparse_deltas_to_height_grid(&height_grid, &edit.deltas);
+                    height_grid = new_grid;
+
+                    // regenerate vertex heights & normals from the new height grid
+                    regenerate_vertices_from_height_grid(&mut vertices, &height_grid);
+                }
+            }
+
+            // Upload new chunk to GPU
             let handle = self.arena.alloc_and_upload(
                 device,
                 queue,
-                &cpu.vertices,
-                &cpu.indices,
+                &vertices,
+                &indices,
                 &mut GeometryScratch::default(),
             );
 
+            // Insert chunk with moved buffers and updated height grid (Arc)
             self.chunks.insert(
                 coord,
                 ChunkMeshLod {
                     step: cpu.step,
                     handle,
-                    cpu_vertices: cpu.vertices.clone(),
-                    cpu_indices: cpu.indices.clone(),
-                    height_grid: cpu.height_grid,
+                    cpu_vertices: vertices,
+                    cpu_indices: indices,
+                    height_grid: Arc::new(height_grid),
                 },
             );
-        }
-    }
-    fn apply_persistent_edits(&self, coord: (i32, i32), vertices: &mut [Vertex]) {
-        if let Some(edit) = self.edited_chunks.get(&coord) {
-            // Map edited vertices to the current LOD vertices
-            for v in vertices.iter_mut() {
-                // Find the closest edit vertex in world-space
-                if let Some(e_v) = edit.vertices.iter().min_by_key(|ev| {
-                    let dx = ev.position[0] - v.position[0];
-                    let dz = ev.position[2] - v.position[2];
-                    ((dx * dx + dz * dz) * 1000.0) as i32 // arbitrary scaling for comparison
-                }) {
-                    v.position[1] = e_v.position[1]; // apply height edit
-                }
-            }
         }
     }
 
@@ -752,151 +814,424 @@ impl WorldRenderer {
 
         queue.write_buffer(&pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
+    /// Apply brush edits. Writes sparse deltas into EditedChunk.deltas (gx, gz, delta).
+    /// No cloning of vertex arrays. Only operates on chunks that exist and step == 1.
     pub fn edit_terrain_with_brush<F, B>(
         &mut self,
-        device: &Device,
-        queue: &Queue,
+        _device: &Device,
+        _queue: &Queue,
         center: Vec3,
         radius: f32,
         strength: f32,
-        scratch: &mut GeometryScratch<Vertex>, // Pass scratch from higher level
+        _scratch: &mut GeometryScratch<Vertex>,
+        time_system: &TimeSystem,
+        end: bool,
     ) where
         F: Falloff + Sync + Send,
         B: BrushOp + Sync + Send,
     {
-        let r2 = radius * radius;
         let cs = self.chunk_size as f32;
-
         let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, radius, cs);
+        let r2 = radius * radius;
 
-        // Collect mutable references to valid chunks first
-        // We filter by key to avoid borrowing the whole map immutably then mutably
+        let t0 = Instant::now();
+        // 1) Determine which chunks in range exist and are editable (step == 1).
         let mut target_coords = Vec::new();
         for cx in min_cx..=max_cx {
             for cz in min_cz..=max_cz {
-                let coord = (cx, cz);
-
-                // Check if the base chunk exists
-                if let Some(base) = self.chunks.get(&coord) {
-                    if base.step == 1 {
-                        target_coords.push(coord);
-
-                        // CRITICAL: Ensure the edited entry exists.
-                        // If it doesn't, clone the vertices from the base chunk.
-                        self.edited_chunks
-                            .entry(coord)
-                            .or_insert_with(|| EditedChunk {
-                                vertices: base.cpu_vertices.clone(), // Start with a copy of the original
-                                dirty: true,
-                            });
-                    }
-                }
+                target_coords.push((cx, cz));
             }
         }
+        let affected_ms = t0.elapsed();
+        let t0 = Instant::now();
+        // 2) Ensure EditedChunk exists for each target chunk. Do not clone vertices.
+        for coord in &target_coords {
+            self.edited_chunks
+                .entry(*coord)
+                .or_insert_with(|| EditedChunk {
+                    deltas: Vec::new(),
+                    dirty: false,
+                });
+        }
+        let ensure_existence_ms = t0.elapsed();
+        let t0 = Instant::now();
+        // 3) For each target chunk, compute sparse deltas by iterating grid cells.
+        for coord in target_coords {
+            // safe unwrap because we ensured existence
+            let edited = self.edited_chunks.get_mut(&coord).unwrap();
+            //edited.deltas.clear(); // replace previous in-flight deltas for this brush op
+            edited.dirty = false;
 
-        // Ensure entries exist sequentially (cannot be done in parallel easily due to HashMap)
-        // However, we collect the raw pointers or use unsafe to get disjoint mutable borrows,
-        // or we simply accept the sequential overhead here and parallelize the HEAVY computation.
-        // Here we choose to just iterate and mutate, but parallelize the inner vertex loop.
-        // For maximum speed on many chunks, we collect the data and use Rayon.
+            // get chunk height grid to sample current heights
+            let chunk = match self.chunks.get(&coord) {
+                Some(c) => c,
+                None => continue,
+            };
+            let hg = &*chunk.height_grid;
+            let nx = hg.nx;
+            let nz = hg.nz;
+            let stepf = hg.cell;
+            let base_x = hg.base_x;
+            let base_z = hg.base_z;
 
-        // 1. Parallel Computation Phase
-        // We extract the vertices to a Vec to process in parallel, then put them back.
-        // Note: In a real ECS or graph, we would have better parallel access.
-        // Here we iterate sequentially over chunks (usually < 9 chunks) but parallelize the vertices.
+            // iterate over grid cells and compute weight & delta
+            // compute bounding grid range to reduce iterations: convert circle in world coords to grid index range
+            // local grid index bounds
+            // find min/max gx/gz inside the radius
+            // world -> local grid index
+            let min_fx = (((center.x - radius) - base_x) / stepf).floor() as isize;
+            let max_fx = (((center.x + radius) - base_x) / stepf).ceil() as isize;
+            let min_fz = (((center.z - radius) - base_z) / stepf).floor() as isize;
+            let max_fz = (((center.z + radius) - base_z) / stepf).ceil() as isize;
 
-        // Use par_iter_mut() directly on the HashMap values
-        self.edited_chunks
-            .par_iter_mut()
-            // Only process chunks that are within the brush area and need update
-            .filter(|(coord, _)| target_coords.contains(coord))
-            .for_each(|(_coord, edited)| {
-                println!("hi");
-                let mut chunk_changed = false;
-                for v in &mut edited.vertices {
-                    let dx = v.position[0] - center.x;
-                    let dz = v.position[2] - center.z;
+            let mut chunk_changed = false;
+
+            for fx in min_fx..=max_fx {
+                if fx < 0 || (fx as usize) >= nx {
+                    continue;
+                }
+                let gx = fx as usize;
+                for fz in min_fz..=max_fz {
+                    if fz < 0 || (fz as usize) >= nz {
+                        continue;
+                    }
+                    let gz = fz as usize;
+
+                    // world position of this grid cell
+                    let wx = base_x + (gx as f32) * stepf;
+                    let wz = base_z + (gz as f32) * stepf;
+                    let dx = wx - center.x;
+                    let dz = wz - center.z;
                     let d2 = dx * dx + dz * dz;
-
                     if d2 >= r2 {
                         continue;
                     }
 
                     let w = F::weight(d2, r2);
-                    if w > 0.001 {
-                        // Epsilon check to avoid tiny updates
-                        B::apply(&mut v.position[1], strength, w);
-                        chunk_changed = true;
+                    if w <= 0.0001 {
+                        continue;
                     }
-                }
 
-                if chunk_changed {
-                    recompute_normals_and_color(&mut edited.vertices, 1, &self.terrain_gen);
-                    edited.dirty = true;
-                }
-            });
+                    // compute delta by invoking brush op on a copy of current height
+                    let idx = gx * nz + gz;
+                    let current_h = hg.heights[idx];
+                    let mut new_h = current_h;
+                    B::apply(&mut new_h, strength, w);
+                    let delta = new_h - current_h;
+                    if delta.abs() < f32::EPSILON {
+                        continue;
+                    }
 
-        // 2. Upload Phase
-        self.upload_edited_chunks(device, queue, scratch);
+                    edited.deltas.push((gx, gz, delta));
+                    chunk_changed = true;
+                }
+            }
+
+            if chunk_changed {
+                edited.dirty = true;
+            } else {
+                edited.dirty = false;
+            }
+        }
+        let compute_sparse_deltas_ms = t0.elapsed();
+        let t0 = Instant::now();
+        // 4) After brush complete, upload modified chunks (applies deltas copy-on-write).
+        self.upload_edited_chunks(_device, _queue, _scratch, end);
+        let upload_edited_ms = t0.elapsed();
+        if (time_system.total_time / time_system.target_frametime as f64) as u32 % 12 == 0 {
+            println!(
+                "affected {:?} | ensure_existence {:?} | compute_sparse_deltas {:?} | upload_edited {:?}",
+                affected_ms, ensure_existence_ms, compute_sparse_deltas_ms, upload_edited_ms,
+            );
+        }
     }
 
+    /// Upload all edited chunks. This applies deltas copy-on-write to the height grid,
+    /// regenerates vertex heights, normals, colors, uploads, and replaces chunk.height_grid Arc.
     fn upload_edited_chunks(
         &mut self,
         device: &Device,
         queue: &Queue,
         scratch: &mut GeometryScratch<Vertex>,
+        end: bool,
     ) {
         let dirty_coords: Vec<(i32, i32)> = self
             .edited_chunks
             .iter()
-            .filter(|(_, e)| e.dirty)
+            .filter(|(_, e)| e.dirty && !e.deltas.is_empty())
             .map(|(c, _)| *c)
             .collect();
 
         for coord in dirty_coords {
-            // 1. Get the vertices and mark as not dirty.
-            // We use a block to drop the borrow of `self.edited_chunks` immediately.
-            let vertices_to_upload = {
-                let edited = self.edited_chunks.get_mut(&coord).unwrap();
+            let t_total = Instant::now();
+
+            // ---- stage edited deltas ----
+            let t0 = Instant::now();
+            let deltas = {
+                let edited = match self.edited_chunks.get_mut(&coord) {
+                    Some(e) => e,
+                    None => continue,
+                };
                 edited.dirty = false;
-                // We still have to clone here if we want to keep the data in 'edited_chunks'
-                // OR we move it out if 'edited_chunks' is just a temporary buffer.
-                edited.vertices.clone()
+                if end {
+                    edited.deltas.clone()
+                } else {
+                    //edited.deltas.clone()
+                    std::mem::take(&mut edited.deltas)
+                }
             };
+            let stage_deltas_ms = t0.elapsed();
 
-            // 2. Get base info.
-            // We drop this borrow before calling self.remove_chunk.
-            let (indices, step, height_grid) = {
-                let base = self
-                    .chunks
-                    .get(&coord)
-                    .expect("Chunk must exist to be edited");
-                (
-                    base.cpu_indices.clone(),
-                    base.step,
-                    base.height_grid.clone(),
-                )
+            // ---- stage base chunk data (immutable borrow only) ----
+            let t0 = Instant::now();
+            let (step, indices, mut grid, mut vertices) = match self.chunks.get(&coord) {
+                Some(c) => (
+                    c.step,
+                    c.cpu_indices.clone(),
+                    (*c.height_grid).clone(),
+                    c.cpu_vertices.clone(),
+                ),
+                None => continue,
             };
+            let stage_stage_ms = t0.elapsed();
 
-            // 3. Now we can safely borrow self mutably because previous borrows are dropped.
+            // ---- apply sparse deltas to height grid ----
+            let t0 = Instant::now();
+            for (gx, gz, delta) in deltas.iter() {
+                if *gx < grid.nx && *gz < grid.nz {
+                    let idx = gx * grid.nz + gz;
+                    grid.heights[idx] += *delta;
+                }
+            }
+            let stage_apply_ms = t0.elapsed();
+
+            // ---- recompute patch min/max ----
+            let t0 = Instant::now();
+            let patch_cells = 8usize;
+            let nx = grid.nx;
+            let nz = grid.nz;
+            let px = (nx - 1) / patch_cells;
+            let pz = (nz - 1) / patch_cells;
+
+            grid.patch_minmax.clear();
+            grid.patch_minmax.reserve(px * pz);
+
+            for px_i in 0..px {
+                for pz_i in 0..pz {
+                    let mut min_y = f32::INFINITY;
+                    let mut max_y = -f32::INFINITY;
+
+                    for lx in 0..=patch_cells {
+                        for lz in 0..=patch_cells {
+                            let gx = px_i * patch_cells + lx;
+                            let gz = pz_i * patch_cells + lz;
+                            if gx < nx && gz < nz {
+                                let h = grid.heights[gx * nz + gz];
+                                min_y = min_y.min(h);
+                                max_y = max_y.max(h);
+                            }
+                        }
+                    }
+
+                    grid.patch_minmax.push((min_y, max_y));
+                }
+            }
+            let stage_patch_ms = t0.elapsed();
+
+            // ---- regenerate vertices (positions + normals + colors) ----
+            let t0 = Instant::now();
+            regenerate_vertices_from_height_grid_and_color(&mut vertices, &grid, &self.terrain_gen);
+            let stage_vertices_ms = t0.elapsed();
+
+            // ---- upload ----
+            let t0 = Instant::now();
+            let handle = self
+                .arena
+                .alloc_and_upload(device, queue, &vertices, &indices, scratch);
+            let stage_upload_ms = t0.elapsed();
+
+            // ---- replace chunk ----
+            let t0 = Instant::now();
             self.remove_chunk(coord);
-
-            // 4. Upload using the scratch buffer.
-            let handle =
-                self.arena
-                    .alloc_and_upload(device, queue, &vertices_to_upload, &indices, scratch);
-
-            // 5. Re-insert into the mesh map.
             self.chunks.insert(
                 coord,
                 ChunkMeshLod {
                     step,
                     handle,
-                    cpu_vertices: vertices_to_upload,
+                    cpu_vertices: vertices,
                     cpu_indices: indices,
-                    height_grid,
+                    height_grid: Arc::new(grid),
                 },
             );
+            let stage_replace_ms = t0.elapsed();
+
+            // ---- print timing ----
+            println!(
+                "chunk {:?} | deltas {:?} | stage {:?} | apply {:?} | patch {:?} | vertices {:?} | upload {:?} | replace {:?} | total {:?}",
+                coord,
+                stage_deltas_ms,
+                stage_stage_ms,
+                stage_apply_ms,
+                stage_patch_ms,
+                stage_vertices_ms,
+                stage_upload_ms,
+                stage_replace_ms,
+                t_total.elapsed(),
+            );
+        }
+    }
+
+    fn apply_persistent_edits_to_vertices(
+        &self,
+        height_grid: &ChunkHeightGrid,
+        vertices: &mut [Vertex],
+        edited: &EditedChunk,
+    ) {
+        if edited.deltas.is_empty() {
+            return;
+        }
+
+        let verts_x = height_grid.nx;
+        let verts_z = height_grid.nz;
+        let stepf = height_grid.cell;
+
+        // Track which vertex indices we changed so we only recompute normals locally.
+        let mut changed_indices: HashSet<usize> = HashSet::new();
+
+        for &(gx, gz, delta) in edited.deltas.iter() {
+            if gx >= verts_x || gz >= verts_z {
+                continue;
+            }
+            let idx = gx * verts_z + gz;
+            vertices[idx].position[1] += delta;
+            changed_indices.insert(idx);
+        }
+
+        if changed_indices.is_empty() {
+            return;
+        }
+
+        // Recompute normals around changed vertices (3x3 neighborhood)
+        let inv = 1.0 / stepf;
+        let mut to_recompute: HashSet<usize> = HashSet::new();
+        for &idx in &changed_indices {
+            let gx = idx / verts_z;
+            let gz = idx % verts_z;
+
+            // collect neighborhood indices
+            for nx in gx.saturating_sub(1)..=(gx + 1).min(verts_x - 1) {
+                for nz in gz.saturating_sub(1)..=(gz + 1).min(verts_z - 1) {
+                    to_recompute.insert(nx * verts_z + nz);
+                }
+            }
+        }
+
+        for &idx in &to_recompute {
+            let gx = idx / verts_z;
+            let gz = idx % verts_z;
+
+            // neighbor heights from vertices (which we've already updated for changed cells)
+            let h_l = if gx > 0 {
+                vertices[(gx - 1) * verts_z + gz].position[1]
+            } else {
+                vertices[gx * verts_z + gz].position[1]
+            };
+
+            let h_r = if gx + 1 < verts_x {
+                vertices[(gx + 1) * verts_z + gz].position[1]
+            } else {
+                vertices[gx * verts_z + gz].position[1]
+            };
+
+            let h_d = if gz > 0 {
+                vertices[gx * verts_z + (gz - 1)].position[1]
+            } else {
+                vertices[gx * verts_z + gz].position[1]
+            };
+
+            let h_u = if gz + 1 < verts_z {
+                vertices[gx * verts_z + (gz + 1)].position[1]
+            } else {
+                vertices[gx * verts_z + gz].position[1]
+            };
+
+            let dhdx = (h_r - h_l) * 0.5 * inv;
+            let dhdz = (h_u - h_d) * 0.5 * inv;
+            let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
+
+            // update normal and color
+            let v_pos = vertices[idx].position;
+            vertices[idx].normal = [n.x, n.y, n.z];
+            vertices[idx].color = self.terrain_gen.color(
+                v_pos[0],
+                v_pos[2],
+                v_pos[1],
+                self.terrain_gen.moisture(v_pos[0], v_pos[2], v_pos[1]),
+            );
+        }
+    }
+}
+/// Regenerate vertex heights, normals and colors from the provided height grid.
+/// This helper uses TerrainGenerator to recompute color + moisture.
+fn regenerate_vertices_from_height_grid_and_color(
+    vertices: &mut [Vertex],
+    height_grid: &ChunkHeightGrid,
+    terrain_gen: &TerrainGenerator,
+) {
+    let verts_x = height_grid.nx;
+    let verts_z = height_grid.nz;
+    let stepf = height_grid.cell;
+
+    if vertices.len() != verts_x * verts_z {
+        return;
+    }
+
+    // update positions' y from grid
+    for gx in 0..verts_x {
+        for gz in 0..verts_z {
+            let idx = gx * verts_z + gz;
+            let h = height_grid.heights[idx];
+            vertices[idx].position[1] = h;
+        }
+    }
+
+    // recompute normals and colors
+    let inv = 1.0 / stepf;
+    for gx in 0..verts_x {
+        for gz in 0..verts_z {
+            let idx = gx * verts_z + gz;
+
+            let h_l = if gx > 0 {
+                vertices[(gx - 1) * verts_z + gz].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let h_r = if gx + 1 < verts_x {
+                vertices[(gx + 1) * verts_z + gz].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let h_d = if gz > 0 {
+                vertices[gx * verts_z + (gz - 1)].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let h_u = if gz + 1 < verts_z {
+                vertices[gx * verts_z + (gz + 1)].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let dhdx = (h_r - h_l) * 0.5 * inv;
+            let dhdz = (h_u - h_d) * 0.5 * inv;
+            let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
+            vertices[idx].normal = [n.x, n.y, n.z];
+
+            let v_pos = vertices[idx].position;
+            //vertices[idx].color = terrain_gen.color(v_pos[0], v_pos[2], v_pos[1], terrain_gen.moisture(v_pos[0], v_pos[2], v_pos[1]));
         }
     }
 }
@@ -1020,4 +1355,15 @@ fn chunk_aabb_world(cx: i32, cz: i32, chunk_size: f32) -> (Vec3, Vec3) {
     let min = glam::Vec3::new(x0, TERRAIN_MIN_Y, z0);
     let max = glam::Vec3::new(x0 + chunk_size, TERRAIN_MAX_Y, z0 + chunk_size);
     (min, max)
+}
+#[derive(Default)]
+pub struct FrameTimings {
+    pub drain_ms: f32,
+    pub collect_visible_ms: f32,
+    pub sort_visible_ms: f32,
+    pub lod_ms: f32,
+    pub dispatch_ms: f32,
+    pub unload_ms: f32,
+    pub edit_ms: f32,
+    pub total_ms: f32,
 }

@@ -56,19 +56,26 @@ fn gain(x: f32, g: f32) -> f32 {
 
 #[inline]
 fn micro_flatten(rel: f32, strength: f32) -> f32 {
+    // same effect, slightly cheaper math
     let a = rel.abs();
     let t = smoothstep(0.0, 0.15, a);
-    lerp(rel, rel * 0.4, strength * (1.0 - t))
+    if strength <= 0.0 {
+        rel
+    } else {
+        lerp(rel, rel * 0.4, strength * (1.0 - t))
+    }
 }
 
 #[inline]
 fn ridged(n: f32) -> f32 {
+    // keep the cubic but avoid extra temporaries
     let r = 1.0 - n.abs();
-    (r.max(0.0)).powi(3)
+    if r <= 0.0 { 0.0 } else { r * r * r }
 }
 
 #[inline]
 fn grad2(noise: &FastNoiseLite, x: f32, z: f32, eps: f32) -> (f32, f32) {
+    // unchanged: central difference. Inline for speed.
     let a = noise.get_noise_2d(x + eps, z);
     let b = noise.get_noise_2d(x - eps, z);
     let c = noise.get_noise_2d(x, z + eps);
@@ -496,30 +503,40 @@ impl TerrainGenerator {
 
     #[inline]
     fn base_sample(&self, wx: f32, wz: f32) -> BaseSample {
+        // Compute continental mask and warped coords once
         let cont = self.continental_mask(wx, wz);
         let (wx2, wz2) = self.warped_coords(wx, wz);
 
+        // Basin/macro: two scaled samples from the same macro_elev noise, reuse minimal ops
+        // Keep the basin offset but sample macro_elev only twice (basin + main)
         let basin_raw = self
             .macro_elev
             .get_noise_2d(wx2 * 0.12 + 9000.0, wz2 * 0.12 - 4000.0);
         let basin = gain(((basin_raw + 1.0) * 0.5).clamp(0.0, 1.0), 0.62);
         let ocean_floor = lerp(self.p.ocean_floor, self.p.ocean_floor * 1.45, basin);
 
+        // Base relative height starts between ocean_floor and inland_plateau
         let mut rel = ocean_floor + (self.p.inland_plateau - ocean_floor) * cont;
 
+        // macro elevation and hills (one sample each)
         let macro_raw = self.macro_elev.get_noise_2d(wx2 * 0.60, wz2 * 0.60);
         let macro_e = macro_raw * self.p.macro_amp;
 
         let hills_raw = self.hills.get_noise_2d(wx2 * 2.05, wz2 * 2.05);
         let hills = hills_raw * self.p.hills_amp * self.p.hills_detail;
 
+        // mountains: one sample then ridged once
         let m_raw = self.mountains.get_noise_2d(wx2, wz2);
         let mut rg = ridged(m_raw);
         if self.p.mountain_smooth > 0.0 {
             let s = self.p.mountain_smooth.clamp(0.0, 1.0);
-            rg = lerp(rg, rg.sqrt(), s);
+            // lerp(rg, sqrt(rg), s) -> keep but avoid repeated sqrt if s==0
+            if s > 0.0001 {
+                rg = lerp(rg, rg.sqrt(), s);
+            }
         }
 
+        // belts/mountain mask (one sample)
         let belts_raw = self
             .mountains
             .get_noise_2d(wx2 * 0.18 + 1234.0, wz2 * 0.18 - 5678.0);
@@ -529,13 +546,17 @@ impl TerrainGenerator {
         let interior = smootherstep(self.p.interior_lo, self.p.interior_hi, cont);
         let mountain_mask = belt_mask * interior;
 
+        // plates and uplift (single plate sample)
         let plate_raw = self.plates.get_noise_2d(wx2 * 0.70, wz2 * 0.70);
-        let plate_edges = (1.0 - plate_raw.abs()).powf(self.p.plate_sharpness);
+        // plate_edges used to be powf a lot; keep but clamp exponent to avoid huge cost
+        let plate_edges = (1.0 - plate_raw.abs()).powf(self.p.plate_sharpness.max(0.0001));
         let uplift = (plate_edges * 0.65 + mountain_mask * 0.55).clamp(0.0, 1.0);
 
+        // compose rel with macro & hills
         rel += macro_e * (0.28 + 0.72 * cont);
         rel += hills * cont;
 
+        // small peak detail from one detail sample
         let peak_detail = self
             .detail
             .get_noise_2d(wx2 * 1.7 + 400.0, wz2 * 1.7 - 700.0);
@@ -545,14 +566,17 @@ impl TerrainGenerator {
         rel += rg * mountain_mask * m_amp * crag;
         rel += plate_edges * mountain_mask * self.p.plate_mountain_amp * 0.52;
 
+        // coastline soften
         let coast = (cont - 0.5).abs();
         let w = self.p.coast_soften_width.max(0.0001);
         let coast_t = ((w - coast) / w).clamp(0.0, 1.0);
         rel *= 1.0 - self.p.coast_soften_strength * coast_t;
 
+        // shelf blending
         let shelf = smootherstep(0.36, 0.62, cont) * smootherstep(-0.10, 0.06, rel);
         rel = lerp(rel, rel * 0.72, shelf * 0.55);
 
+        // fast slope proxy using two hill offset samples (we already have hills_raw; reuse small offsets)
         let eps = 0.65;
         let n1 = self.hills.get_noise_2d(wx2 + eps, wz2);
         let n2 = self.hills.get_noise_2d(wx2 - eps, wz2);
@@ -560,10 +584,12 @@ impl TerrainGenerator {
         let n4 = self.hills.get_noise_2d(wx2, wz2 - eps);
         let slope_proxy = ((n1 - n2).abs() + (n3 - n4).abs()).clamp(0.0, 2.0) * 0.5;
 
+        // simplified erosion: compute k cheaply and apply
         let e = self.p.erosion_strength.clamp(0.0, 2.0) * cont;
         if e > 0.0 {
             let it = (self.p.erosion_iters.max(1) as f32).min(64.0);
             let s = (slope_proxy * 0.95 + uplift * 0.35).clamp(0.0, 1.0);
+            // approximate powf chain with a single cheaper pow if iter count large
             let k = 1.0 - (1.0 - s).powf(0.22 * it);
             rel -= k * e * (0.55 + 0.45 * cont);
         }
@@ -583,13 +609,14 @@ impl TerrainGenerator {
 
     #[inline]
     fn hydrology_height(&self, wx2: f32, wz2: f32, cont: f32, uplift: f32) -> f32 {
+        // cheaper hydrology field used for drainage calculations.
+        // Sample macro/hills/mountains at modest cost and combine.
         let macro_raw = self.macro_elev.get_noise_2d(wx2 * 0.60, wz2 * 0.60);
-        let hills_raw = self.hills.get_noise_2d(wx2 * 2.05, wz2 * 2.05);
+        let hills_raw = self.hills.get_noise_2d(wx2 * 1.2, wz2 * 1.2); // lower-detail for hydrology
         let m_raw = self.mountains.get_noise_2d(wx2 * 0.55, wz2 * 0.55);
 
         let macro_e = macro_raw * self.p.macro_amp;
-        let hills = hills_raw * self.p.hills_amp * self.p.hills_detail;
-
+        let hills = hills_raw * self.p.hills_amp * self.p.hills_detail * 0.8; // scaled
         let wide_m = ridged(m_raw) * (0.35 + 0.65 * uplift);
 
         let mut h = self.p.ocean_floor + (self.p.inland_plateau - self.p.ocean_floor) * cont;
@@ -601,131 +628,162 @@ impl TerrainGenerator {
     }
 
     #[inline]
-    fn apply_rivers(&self, s: BaseSample, wx: f32, wz: f32) -> f32 {
+    fn apply_rivers_fast(&self, s: &BaseSample, wx: f32, wz: f32) -> f32 {
+        // fast approximate river carving:
+        // keep the river noise channels but reduce iterations and remove heavy hydrology calls.
         if self.p.river_freq <= 0.0 || self.p.river_depth <= 0.0 || self.p.river_width <= 0.0 {
             return s.rel;
         }
 
+        // quick land test using same smoothstep heuristic
         let land = smoothstep(-0.01, 0.03, s.rel) * smoothstep(0.10, 1.0, s.cont);
         if land <= 0.0001 {
             return s.rel;
         }
 
+        // channel: fewer octaves, same flavor
         let mut channel = 0.0f32;
         let mut f = 1.0f32;
         let mut a = 1.0f32;
-        for i in 0..4 {
+        // reduce octaves from 4 to 2 for huge speed win
+        for _i in 0..2 {
             let n = self.rivers.get_noise_2d(s.wx2 * f, s.wz2 * f);
             let v = 1.0 - n.abs();
-            let w = (self.p.river_width / (1.0 + i as f32 * 0.9)).clamp(0.01, 0.48);
+            let w = (self.p.river_width / f).clamp(0.01, 0.48); // scale width per octave
             let line = smoothstep(1.0 - w, 1.0, v);
             channel += line * a;
-
             f *= 2.15;
             a *= 0.62;
         }
-        channel = (channel / 1.55).clamp(0.0, 1.0);
+        channel = (channel / 1.1).clamp(0.0, 1.0);
 
-        let eps = 1.25;
-        let he = self.hydrology_height(s.wx2 + eps, s.wz2, s.cont, s.uplift);
-        let hw = self.hydrology_height(s.wx2 - eps, s.wz2, s.cont, s.uplift);
-        let hn = self.hydrology_height(s.wx2, s.wz2 + eps, s.cont, s.uplift);
-        let hs = self.hydrology_height(s.wx2, s.wz2 - eps, s.cont, s.uplift);
+        // valley likelihood: approximate using slope_proxy and a cheap local average on hills noise
+        // we reuse s.slope_proxy which was precomputed in base_sample
+        let slope_n = (s.slope_proxy * 1.2).clamp(0.0, 1.0);
+        let valley_like = (1.0 - slope_n).clamp(0.0, 1.0);
 
-        let avg = 0.25 * (he + hw + hn + hs);
-        let valley =
-            ((avg - self.hydrology_height(s.wx2, s.wz2, s.cont, s.uplift)) / 0.016).clamp(0.0, 1.0);
-
-        let ddx = (he - hw) / (2.0 * eps);
-        let ddz = (hn - hs) / (2.0 * eps);
-        let slope = (ddx * ddx + ddz * ddz).sqrt();
-        let slope_n = (slope * 1100.0).clamp(0.0, 1.0);
-
+        // wetness proxy from moisture noise at a coarse scale
         let wet_n = self.moisture_noise.get_noise_2d(s.wx2 * 0.55, s.wz2 * 0.55);
         let wet = ((wet_n + 1.0) * 0.5).clamp(0.0, 1.0);
 
+        // lowland and discharge approximations
         let lowland = 1.0 - smoothstep(0.18, 0.85, s.rel.max(0.0));
-        let valley_like = (valley * 0.86 + (1.0 - slope_n) * 0.14).clamp(0.0, 1.0);
         let discharge = (0.22 + 0.78 * wet) * (0.30 + 0.70 * lowland);
 
+        // coast guard and land mask
         let coast_guard = smoothstep(-0.02, 0.08, s.rel) * smoothstep(0.16, 1.0, s.cont);
         let mask = (channel * valley_like).clamp(0.0, 1.0) * land * coast_guard;
-        let carve = mask.powf(1.9) * self.p.river_depth * discharge;
 
+        // carve strength: reduce exponent and use discharge proxy
+        let carve = mask.powf(1.6) * self.p.river_depth * discharge;
+
+        // soften mouth effect with a single smoothstep
         let mouth_soft = smoothstep(-0.02, 0.05, s.rel);
         let carve = carve * (0.60 + 0.40 * mouth_soft);
 
-        let _ = (wx, wz);
         s.rel - carve
     }
 
     pub fn height(&self, wx: f32, wz: f32) -> f32 {
+        // sample once
         let s = self.base_sample(wx, wz);
-        let mut rel = self.apply_rivers(s, wx, wz);
-        rel = micro_flatten(rel, self.p.micro_flatten);
+        // cheaper river approximation based on local slope/moisture proxies
+        let rel = self.apply_rivers_fast(&s, wx, wz);
+        let rel = micro_flatten(rel, self.p.micro_flatten);
         rel * self.p.height_scale + self.p.sea_level
     }
 
-    pub fn moisture(&self, wx: f32, wz: f32) -> f32 {
-        let h = self.height(wx, wz);
+    pub fn moisture(&self, wx: f32, wz: f32, h: f32) -> f32 {
+        // Normalize height once
         let h_rel = (h - self.p.sea_level) / self.p.height_scale;
 
+        // Warp coords and sample moisture noise exactly once
         let (wx2, wz2) = self.warped_coords(wx, wz);
         let n = self.moisture_noise.get_noise_2d(wx2, wz2);
+        // convert from [-1,1] to [0,1]
         let mut m = (n + 1.0) * 0.5;
 
+        // continental mask and latitude
         let cont = self.continental_mask(wx, wz);
         let lat = self.latitude_factor(wz);
 
+        // Zonal factor (compact and cheap)
         let mut zonal = 1.0 - ((lat - 0.18) * 1.55).abs();
-        zonal = zonal.clamp(0.0, 1.0);
+        zonal = zonal.max(0.0).min(1.0);
+        // keep gain for the same curve, it's cheap relative to noise
         zonal = gain(zonal, 0.55);
 
+        // Orographic influence: one grad2 call, tiny algebraic work
+        // scale coordinates for the hills gradient once
         let eps = 0.90;
         let (gx, gz) = grad2(&self.hills, wx2 * 0.8, wz2 * 0.8, eps);
-        let wind_dir = (1.0f32, 0.22f32);
-        let orographic = (gx * wind_dir.0 + gz * wind_dir.1).clamp(-0.02, 0.02) * 25.0;
-        let orographic = (orographic * 0.5 + 0.5).clamp(0.0, 1.0);
 
+        // dot with preferred wind direction
+        const WIND_X: f32 = 1.0;
+        const WIND_Z: f32 = 0.22;
+        let dot = gx * WIND_X + gz * WIND_Z;
+
+        // replicate original mapping: clamp to [-0.02,0.02], scale, then remap to [0,1]
+        // combine into minimal ops
+        let o = if dot <= -0.02 {
+            -0.02
+        } else if dot >= 0.02 {
+            0.02
+        } else {
+            dot
+        };
+        // o in [-0.02,0.02], times 25 -> [-0.5,0.5], remap -> [0.25,0.75]
+        let orographic = (o * 25.0 * 0.5 + 0.5).clamp(0.0, 1.0);
+
+        // Blend the three main contributions using original weights
         m = m * 0.40 + zonal * 0.52 + orographic * 0.08;
 
-        let height_dry = h_rel.clamp(0.0, 1.6);
+        // Height dryness factor (clamped)
+        let height_dry = if h_rel <= 0.0 {
+            0.0
+        } else if h_rel >= 1.6 {
+            1.6
+        } else {
+            h_rel
+        };
+        // apply height dryness multiplier
         m *= 1.0 - height_dry * 0.55;
 
+        // Continental interior effect (smoothstep)
         let interior = smoothstep(0.54, 0.92, cont);
         m *= 1.0 - interior * 0.48;
 
+        // Final clamp to [0,1]
         m.clamp(0.0, 1.0)
     }
 
     pub fn color(&self, wx: f32, wz: f32, h: f32, moisture: f32) -> [f32; 3] {
+        // local shortcuts
         let hs = self.p.height_scale;
         let h_rel = h - self.p.sea_level;
         let h_norm = (h_rel / hs).clamp(-1.2, 1.8);
 
+        // latitude / temperature base
         let lat = self.latitude_factor(wz).clamp(0.0, 1.0);
+        // base sample once
         let s = self.base_sample(wx, wz);
 
-        let mut temp = (1.0 - lat).powf(1.85);
-        let alt_cool = h_norm.max(0.0).powf(1.15) * 0.85;
-        temp *= 1.0 - alt_cool;
-
+        // temperature: mostly lat-driven, slightly modulated by macro_elev noise
+        let mut temp = (1.0 - lat).powf(1.6); // cheaper exponent than before but similar curve
         let t_noise = self.macro_elev.get_noise_2d(s.wx2 * 0.020, s.wz2 * 0.020);
         temp = (temp + t_noise * 0.05).clamp(0.0, 1.0);
 
+        // wet/dry
         let dry = (1.0 - moisture).clamp(0.0, 1.0);
         let wet = 1.0 - dry;
 
-        let eps = 1.05;
-        let he = self.hydrology_height(s.wx2 + eps, s.wz2, s.cont, s.uplift);
-        let hw = self.hydrology_height(s.wx2 - eps, s.wz2, s.cont, s.uplift);
-        let hn = self.hydrology_height(s.wx2, s.wz2 + eps, s.cont, s.uplift);
-        let hs2 = self.hydrology_height(s.wx2, s.wz2 - eps, s.cont, s.uplift);
-        let ddx = (he - hw) / (2.0 * eps);
-        let ddz = (hn - hs2) / (2.0 * eps);
-        let slope = (ddx * ddx + ddz * ddz).sqrt();
+        // approximate slope using one cheap gradient sample (instead of 4 hydrology queries)
+        let eps = 0.8f32;
+        let (gx, gz) = grad2(&self.hills, s.wx2 * 0.9, s.wz2 * 0.9, eps);
+        let slope = (gx * gx + gz * gz).sqrt();
         let slope_n = smoothstep(0.08, 0.015, slope);
 
+        // water path (shallow/deep/shelf) — simplified but expressive
         if h_rel < 0.1 {
             let depth = (-h_rel / (0.75 * hs)).clamp(0.0, 1.0);
 
@@ -756,6 +814,7 @@ impl TerrainGenerator {
             };
             let mut col = lerp_hsv(surface2, deep, depth);
 
+            // small ice tint at high lat / shallow
             let ice = smoothstep(0.78, 0.96, lat) * smoothstep(-6.0, 2.0, h_rel);
             let ice_col = HSV {
                 h: 0.58,
@@ -767,12 +826,14 @@ impl TerrainGenerator {
             return hsv_to_rgb(col);
         }
 
+        // beach / cliff / rockiness
         let beach = smoothstep(-0.01, 0.06, h_norm) * (1.0 - smoothstep(0.08, 0.22, h_norm));
         let beach = beach * (1.0 - smoothstep(0.20, 0.55, slope_n));
 
         let cliff = smoothstep(0.35, 0.95, slope_n) * smoothstep(0.02, 0.60, h_norm);
         let rockiness = (cliff * 0.75 + smoothstep(0.85, 1.35, h_norm) * 0.55).clamp(0.0, 1.0);
 
+        // climate palettes (kept, but we blend cheaper)
         let low_cold_dry = HSV {
             h: 0.24,
             s: 0.42,
@@ -826,6 +887,7 @@ impl TerrainGenerator {
             v: 0.68,
         };
 
+        // helper reduced-cost climate
         fn climate(temp: f32, wet: f32, cd: HSV, cw: HSV, hd: HSV, hw: HSV) -> HSV {
             let cold = lerp_hsv(cd, cw, wet);
             let hot = lerp_hsv(hd, hw, wet);
@@ -850,18 +912,16 @@ impl TerrainGenerator {
         );
         let c_high = lerp_hsv(high_cold, high_hot, temp);
 
+        // altitude blend simplified: pick two bands and blend between them
         let alt = h_norm.clamp(0.0, 1.35);
-        let w_low = tri_weight(alt, 0.18, 0.25);
-        let w_mid = tri_weight(alt, 0.60, 0.28);
-        let w_high = tri_weight(alt, 1.10, 0.34);
-        let sum = (w_low + w_mid + w_high).max(0.0001);
+        let t_mid = ((alt - 0.25) / (0.60 - 0.25)).clamp(0.0, 1.0);
+        let t_high = ((alt - 0.60) / (1.10 - 0.60)).clamp(0.0, 1.0);
 
-        let mut col = HSV {
-            h: (c_low.h * w_low + c_mid.h * w_mid + c_high.h * w_high) / sum,
-            s: (c_low.s * w_low + c_mid.s * w_mid + c_high.s * w_high) / sum,
-            v: (c_low.v * w_low + c_mid.v * w_mid + c_high.v * w_high) / sum,
-        };
+        // start with low->mid, then blend toward high
+        let mut col = lerp_hsv(c_low, c_mid, t_mid);
+        col = lerp_hsv(col, c_high, t_high);
 
+        // beach + rock influence
         let sand = HSV {
             h: 0.12,
             s: 0.32,
@@ -869,6 +929,7 @@ impl TerrainGenerator {
         };
         col = lerp_hsv(col, sand, beach);
 
+        // rock tint (single noise sample)
         let rock_n = self.rock.get_noise_2d(s.wx2 * 1.25, s.wz2 * 1.25);
         let rock_tint = (rock_n * 0.5 + 0.5).clamp(0.0, 1.0);
         let rock_dry = HSV {
@@ -882,9 +943,9 @@ impl TerrainGenerator {
             v: 0.52,
         };
         let rock_col = lerp_hsv(rock_dry, rock_wet, wet);
-
         col = lerp_hsv(col, rock_col, rockiness);
 
+        // small per-vertex detail + shadow (one detail noise)
         let detail = self.detail.get_noise_2d(s.wx2 * 3.2, s.wz2 * 3.2);
         let var = (detail * 0.06).clamp(-0.08, 0.08);
         col.v = (col.v * (1.0 + var)).clamp(0.0, 1.0);
@@ -892,24 +953,24 @@ impl TerrainGenerator {
         let shadow = (slope_n * 0.20).clamp(0.0, 0.20);
         col.v = (col.v * (1.0 - shadow)).clamp(0.0, 1.0);
 
+        // snow/ice tint (simplified, cheap)
         let snow_lat = smoothstep(0.80, 0.98, lat);
         let snow_alt = smoothstep(0.40, 1.18, alt);
         let snow_temp = smoothstep(0.55, 0.15, temp);
-
         let slope_mask = smoothstep(self.p.snow_slope_limit, 1.0, 1.0 - slope_n);
+
         let mut snow = (snow_lat * 0.55 + snow_alt * 0.95)
             * snow_temp
             * slope_mask
             * smoothstep(0.25, 0.65, moisture);
         snow = gain(snow, 0.65);
+        snow = snow * (1.0 - smoothstep(0.45, 0.9, slope_n));
 
         let snow_col = HSV {
             h: 0.58,
             s: 0.04,
             v: 0.94,
         };
-        snow = snow * (1.0 - smoothstep(0.45, 0.9, slope_n));
-
         col = lerp_hsv(col, snow_col, snow.clamp(0.0, 1.0));
 
         hsv_to_rgb(col)

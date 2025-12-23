@@ -461,6 +461,20 @@ impl InputState {
         fired
     }
 
+    pub fn action_released(&mut self, action: &str) -> bool {
+        if !self.ensure_known_action(action) {
+            return false;
+        }
+        let now_down = self.action_down_raw(action);
+        let last_down = self
+            .action_last_down
+            .entry(action.to_string())
+            .or_insert(false);
+        let released = *last_down && !now_down;
+        *last_down = now_down;
+        released
+    }
+
     pub fn action_repeat(&mut self, action: &str) -> bool {
         if !self.ensure_known_action(action) {
             return false;

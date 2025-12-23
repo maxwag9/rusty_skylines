@@ -337,6 +337,7 @@ impl RenderCore {
             aspect,
             settings,
             input_state,
+            time,
         );
 
         // get frame

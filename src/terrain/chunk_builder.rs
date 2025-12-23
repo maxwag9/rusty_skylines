@@ -4,7 +4,6 @@ use crate::ui::vertex::Vertex;
 use glam::Vec3;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-
 #[derive(Clone)]
 pub struct ChunkHeightGrid {
     pub base_x: f32,
@@ -24,14 +23,170 @@ pub struct ChunkMeshLod {
     pub height_grid: Arc<ChunkHeightGrid>,
 }
 pub(crate) struct EditedChunk {
-    pub(crate) vertices: Vec<Vertex>,
+    /// (gx, gz, delta)
+    pub(crate) deltas: Vec<(usize, usize, f32)>,
     pub(crate) dirty: bool,
 }
-impl Default for EditedChunk {
-    fn default() -> Self {
-        EditedChunk {
-            vertices: Vec::new(),
-            dirty: true,
+
+impl EditedChunk {
+    pub fn is_empty(&self) -> bool {
+        self.deltas.is_empty()
+    }
+}
+
+/// Apply sparse deltas to a clone of the provided height grid and return the new grid.
+/// This does not use locks. It clones the grid, applies the deltas, and recomputes only affected patch minmax entries.
+pub fn apply_sparse_deltas_to_height_grid(
+    src: &ChunkHeightGrid,
+    deltas: &[(usize, usize, f32)],
+) -> ChunkHeightGrid {
+    // Make an explicit clone (do not rely on ChunkHeightGrid: Clone impl presence).
+    let mut out = ChunkHeightGrid {
+        base_x: src.base_x,
+        base_z: src.base_z,
+        cell: src.cell,
+        nx: src.nx,
+        nz: src.nz,
+        heights: src.heights.clone(),
+        patch_minmax: src.patch_minmax.clone(),
+    };
+
+    if deltas.is_empty() {
+        return out;
+    }
+
+    let nx = out.nx;
+    let nz = out.nz;
+
+    // apply deltas (additively)
+    for &(gx, gz, delta) in deltas.iter() {
+        if gx >= nx || gz >= nz {
+            continue;
+        }
+        let idx = gx * nz + gz;
+        out.heights[idx] += delta;
+    }
+
+    // Recompute patch minmax only for patches that were affected.
+    let patch_cells = 8usize;
+    let px = (nx - 1) / patch_cells;
+    let pz = (nz - 1) / patch_cells;
+
+    // Collect unique affected patch indices
+    let mut affected = Vec::<(usize, usize)>::new();
+    affected.reserve(deltas.len());
+    for &(gx, gz, _) in deltas.iter() {
+        let px_i = gx / patch_cells;
+        let pz_i = gz / patch_cells;
+        if px_i < px && pz_i < pz {
+            affected.push((px_i, pz_i));
+        }
+    }
+    affected.sort_unstable();
+    affected.dedup();
+
+    for (px_i, pz_i) in affected {
+        // recompute this patch's min/max
+        let mut min_y = f32::INFINITY;
+        let mut max_y = -f32::INFINITY;
+
+        for lx in 0..=patch_cells {
+            for lz in 0..=patch_cells {
+                let gx = px_i * patch_cells + lx;
+                let gz = pz_i * patch_cells + lz;
+                if gx >= nx || gz >= nz {
+                    continue;
+                }
+                let h = out.heights[gx * nz + gz];
+                min_y = min_y.min(h);
+                max_y = max_y.max(h);
+            }
+        }
+
+        // patch_minmax ordering must match the original build: px major, pz minor
+        let patch_index = px_i * pz + pz_i;
+        if patch_index < out.patch_minmax.len() {
+            out.patch_minmax[patch_index] = (min_y, max_y);
+        } else {
+            // defensive: if ordering differs, fallback to push (should not happen)
+            if patch_index == out.patch_minmax.len() {
+                out.patch_minmax.push((min_y, max_y));
+            } else {
+                // keep safe: clamp
+                let pi = out.patch_minmax.len() - 1;
+                out.patch_minmax[pi] = (min_y, max_y);
+            }
+        }
+    }
+
+    out
+}
+
+/// Regenerate vertex positions (y) and normals from the provided height grid.
+/// We update `vertices` in-place; color is left untouched.
+/// Expects vertices.len() == nx * nz.
+pub fn regenerate_vertices_from_height_grid(
+    vertices: &mut [Vertex],
+    height_grid: &ChunkHeightGrid,
+) {
+    let verts_x = height_grid.nx;
+    let verts_z = height_grid.nz;
+    let stepf = height_grid.cell;
+    let base_x = height_grid.base_x;
+    let base_z = height_grid.base_z;
+
+    // sanity check
+    if vertices.len() != verts_x * verts_z {
+        // mismatch. Bail out silently to avoid panic.
+        // In your code consider logging an error.
+        return;
+    }
+
+    // update positions' y from grid
+    for gx in 0..verts_x {
+        for gz in 0..verts_z {
+            let idx = gx * verts_z + gz;
+            let h = height_grid.heights[idx];
+            vertices[idx].position[1] = h;
+            // position x/z remain unchanged (constructed from base+grid indices when initially built)
+        }
+    }
+
+    // recompute normals using central differences from vertex positions
+    let inv = 1.0 / stepf;
+    for gx in 0..verts_x {
+        for gz in 0..verts_z {
+            let idx = gx * verts_z + gz;
+
+            let h_l = if gx > 0 {
+                vertices[(gx - 1) * verts_z + gz].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let h_r = if gx + 1 < verts_x {
+                vertices[(gx + 1) * verts_z + gz].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let h_d = if gz > 0 {
+                vertices[gx * verts_z + (gz - 1)].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let h_u = if gz + 1 < verts_z {
+                vertices[gx * verts_z + (gz + 1)].position[1]
+            } else {
+                vertices[idx].position[1]
+            };
+
+            let dhdx = (h_r - h_l) * 0.5 * inv;
+            let dhdz = (h_u - h_d) * 0.5 * inv;
+
+            let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
+            vertices[idx].normal = [n.x, n.y, n.z];
         }
     }
 }
@@ -96,7 +251,7 @@ impl ChunkBuilder {
                 vertices.push(Vertex {
                     position: [wx, h, wz],
                     normal: [0.0, 1.0, 0.0], // Dummy normal
-                    color: terrain_gen.color(wx, wz, h, terrain_gen.moisture(wx, wz)),
+                    color: terrain_gen.color(wx, wz, h, terrain_gen.moisture(wx, wz, h)),
                 });
             }
         }
@@ -323,7 +478,7 @@ pub fn recompute_normals_and_color(verts: &mut [Vertex], step: usize, terrain: &
 
             let wx = verts[i].position[0];
             let wz = verts[i].position[2];
-            verts[i].color = terrain.color(wx, wz, h, terrain.moisture(wx, wz));
+            verts[i].color = terrain.color(wx, wz, h, terrain.moisture(wx, wz, h));
         }
     }
 }
