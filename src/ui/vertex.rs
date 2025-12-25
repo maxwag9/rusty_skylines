@@ -1,4 +1,5 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::renderer::ui_text::Anchor;
 use crate::ui::helper::ensure_ccw;
 use crate::ui::ui_editor::UiVariableRegistry;
 use serde::{Deserialize, Serialize};
@@ -432,28 +433,174 @@ impl std::fmt::Display for ElementKind {
         write!(f, "{:?}", self)
     }
 }
+pub enum UiElementMut<'a> {
+    Text(&'a mut UiButtonText),
+    Circle(&'a mut UiButtonCircle),
+    Outline(&'a mut UiButtonOutline),
+    Handle(&'a mut UiButtonHandle),
+    Polygon(&'a mut UiButtonPolygon),
+}
 
+impl<'a> UiElementMut<'a> {
+    pub fn id(&self) -> &str {
+        match self {
+            UiElementMut::Text(t) => t.id.as_deref().unwrap_or(""),
+            UiElementMut::Circle(c) => c.id.as_deref().unwrap_or(""),
+            UiElementMut::Outline(o) => o.id.as_deref().unwrap_or(""),
+            UiElementMut::Handle(h) => h.id.as_deref().unwrap_or(""),
+            UiElementMut::Polygon(p) => p.id.as_deref().unwrap_or(""),
+        }
+    }
+
+    pub fn center(&self) -> (f32, f32) {
+        match self {
+            UiElementMut::Text(t) => (t.x, t.y),
+            UiElementMut::Circle(c) => (c.x, c.y),
+            UiElementMut::Handle(h) => (h.x, h.y),
+            UiElementMut::Outline(o) => (o.shape_data.x, o.shape_data.y),
+            UiElementMut::Polygon(p) => {
+                let count = p.vertices.len().max(1);
+                let sum = p
+                    .vertices
+                    .iter()
+                    .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
+                (sum.0 / count as f32, sum.1 / count as f32)
+            }
+        }
+    }
+
+    pub fn bump_z(&mut self, delta: i32) {
+        match self {
+            UiElementMut::Text(t) => t.z_index += delta,
+            UiElementMut::Circle(c) => c.z_index += delta,
+            UiElementMut::Outline(o) => o.z_index += delta,
+            UiElementMut::Handle(h) => h.z_index += delta,
+            UiElementMut::Polygon(p) => p.z_index += delta,
+        }
+    }
+    pub fn z_index(&self) -> i32 {
+        match self {
+            UiElementMut::Text(t) => t.z_index,
+            UiElementMut::Circle(c) => c.z_index,
+            UiElementMut::Outline(o) => o.z_index,
+            UiElementMut::Handle(h) => h.z_index,
+            UiElementMut::Polygon(p) => p.z_index,
+        }
+    }
+    pub fn update_z(&mut self, delta: i32, variables: &mut UiVariableRegistry) {
+        self.bump_z(delta);
+        variables.set_i32("selected_element.z_index", self.z_index());
+    }
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        match self {
+            UiElementMut::Text(t) => {
+                t.x += dx;
+                t.y += dy;
+            }
+            UiElementMut::Circle(c) => {
+                c.x += dx;
+                c.y += dy;
+            }
+            UiElementMut::Handle(h) => {
+                h.x += dx;
+                h.y += dy;
+            }
+            UiElementMut::Outline(o) => {
+                o.shape_data.x += dx;
+                o.shape_data.y += dy;
+            }
+            UiElementMut::Polygon(p) => {
+                for v in &mut p.vertices {
+                    v.pos[0] += dx;
+                    v.pos[1] += dy;
+                }
+            }
+        }
+    }
+
+    pub fn resize(&mut self, scale: f32) {
+        match self {
+            UiElementMut::Text(t) => {
+                // preserve previous intent: px scaled as float then cast back to u16
+                t.px = ((t.px as f32) * scale).round() as u16;
+
+                println!("Text size: {}", t.px)
+            }
+            UiElementMut::Circle(c) => {
+                c.radius *= scale;
+            }
+            UiElementMut::Outline(_) | UiElementMut::Handle(_) => {
+                // outlines and handles have no generic resize behaviour here.
+                // If you want, implement per-field scaling.
+            }
+            UiElementMut::Polygon(p) => {
+                // compute centroid
+                let mut cx = 0.0f32;
+                let mut cy = 0.0f32;
+                let count = p.vertices.len() as f32;
+                if count > 0.0 {
+                    for v in &p.vertices {
+                        cx += v.pos[0];
+                        cy += v.pos[1];
+                    }
+                    cx /= count;
+                    cy /= count;
+
+                    for v in &mut p.vertices {
+                        v.pos[0] = cx + (v.pos[0] - cx) * scale;
+                        v.pos[1] = cy + (v.pos[1] - cy) * scale;
+                    }
+                }
+            }
+        }
+    }
+}
 impl RuntimeLayer {
-    pub fn iter_all_elements(&self) -> Vec<(UiElementRef<'_>, ElementKind)> {
-        let mut out = Vec::new();
+    pub fn iter_all_elements(&self) -> impl Iterator<Item = (UiElementRef<'_>, ElementKind)> {
+        self.texts
+            .iter()
+            .map(|t| (UiElementRef::Text(t), ElementKind::Text))
+            .chain(
+                self.circles
+                    .iter()
+                    .map(|c| (UiElementRef::Circle(c), ElementKind::Circle)),
+            )
+            .chain(
+                self.outlines
+                    .iter()
+                    .map(|o| (UiElementRef::Outline(o), ElementKind::Outline)),
+            )
+            .chain(
+                self.handles
+                    .iter()
+                    .map(|h| (UiElementRef::Handle(h), ElementKind::Handle)),
+            )
+            .chain(
+                self.polygons
+                    .iter()
+                    .map(|p| (UiElementRef::Polygon(p), ElementKind::Polygon)),
+            )
+    }
 
-        for t in &self.texts {
-            out.push((UiElementRef::Text(t), ElementKind::Text));
+    pub fn iter_all_elements_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(UiElementMut<'_>, ElementKind),
+    {
+        for t in &mut self.texts {
+            f(UiElementMut::Text(t), ElementKind::Text);
         }
-        for c in &self.circles {
-            out.push((UiElementRef::Circle(c), ElementKind::Circle));
+        for c in &mut self.circles {
+            f(UiElementMut::Circle(c), ElementKind::Circle);
         }
-        for o in &self.outlines {
-            out.push((UiElementRef::Outline(o), ElementKind::Outline));
+        for o in &mut self.outlines {
+            f(UiElementMut::Outline(o), ElementKind::Outline);
         }
-        for h in &self.handles {
-            out.push((UiElementRef::Handle(h), ElementKind::Handle));
+        for h in &mut self.handles {
+            f(UiElementMut::Handle(h), ElementKind::Handle);
         }
-        for p in &self.polygons {
-            out.push((UiElementRef::Polygon(p), ElementKind::Polygon));
+        for p in &mut self.polygons {
+            f(UiElementMut::Polygon(p), ElementKind::Polygon);
         }
-
-        out
     }
     pub fn sort_by_z(&mut self) {
         self.texts.sort_by_key(|e| e.z_index);
@@ -464,169 +611,59 @@ impl RuntimeLayer {
     }
 
     pub fn bump_element_z(&mut self, id: &str, delta: i32, variables: &mut UiVariableRegistry) {
-        // Texts
-        for e in &mut self.texts {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.z_index += delta;
-                    variables.set_i32("selected_element.z_index", e.z_index);
-                    return;
-                }
+        self.iter_all_elements_mut(|mut elem, _| {
+            if elem.id() == id {
+                elem.update_z(delta, variables);
             }
-        }
-
-        // Circles
-        for e in &mut self.circles {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.z_index += delta;
-                    variables.set_i32("selected_element.z_index", e.z_index);
-                    return;
-                }
-            }
-        }
-
-        // Outlines
-        for e in &mut self.outlines {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.z_index += delta;
-                    variables.set_i32("selected_element.z_index", e.z_index);
-                    return;
-                }
-            }
-        }
-
-        // Handles
-        for e in &mut self.handles {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.z_index += delta;
-                    variables.set_i32("selected_element.z_index", e.z_index);
-                    return;
-                }
-            }
-        }
-
-        // Polygons
-        for e in &mut self.polygons {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.z_index += delta;
-                    variables.set_i32("selected_element.z_index", e.z_index);
-                    return;
-                }
-            }
-        }
+        });
     }
+
+    // simplified bump_element_xy using the helper
     pub fn bump_element_xy(&mut self, id: &str, dx: f32, dy: f32) {
-        // Text
-        for e in &mut self.texts {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.x += dx;
-                    e.y += dy;
-                    return;
-                }
-            }
-        }
-
-        // Circles
-        for e in &mut self.circles {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.x += dx;
-                    e.y += dy;
-                    return;
-                }
-            }
-        }
-
-        // Outlines
-        for e in &mut self.outlines {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.shape_data.x += dx;
-                    e.shape_data.y += dy;
-                    return;
-                }
-            }
-        }
-
-        // Handles
-        for e in &mut self.handles {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.x += dx;
-                    e.y += dy;
-                    return;
-                }
-            }
-        }
-
-        // Polygons
-        for e in &mut self.polygons {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    for v in &mut e.vertices {
-                        v.pos[0] += dx;
-                        v.pos[1] += dy;
-                    }
-                    return;
-                }
-            }
+        if let Some(mut el) = self.find_element_mut(id) {
+            el.translate(dx, dy);
         }
     }
+
+    // simplified resize_element using the helper
     pub fn resize_element(&mut self, id: &str, scale: f32) {
-        // Text
-        for e in &mut self.texts {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.px *= scale as u16;
-                    return;
-                }
-            }
+        if let Some(mut el) = self.find_element_mut(id) {
+            el.resize(scale);
         }
-
-        // Circles
-        for e in &mut self.circles {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    e.radius *= scale;
-                    return;
-                }
-            }
+    }
+    pub fn find_element_mut(&mut self, id: &str) -> Option<UiElementMut<'_>> {
+        if let Some(e) = self.texts.iter_mut().find(|e| e.id.as_deref() == Some(id)) {
+            return Some(UiElementMut::Text(e));
         }
-
-        // Polygons
-        for e in &mut self.polygons {
-            if let Some(eid) = &e.id {
-                if eid == id {
-                    // compute centroid
-                    let mut cx = 0.0;
-                    let mut cy = 0.0;
-                    let count = e.vertices.len() as f32;
-
-                    for v in &e.vertices {
-                        cx += v.pos[0];
-                        cy += v.pos[1];
-                    }
-
-                    if count > 0.0 {
-                        cx /= count;
-                        cy /= count;
-                    }
-
-                    // scale vertices around centroid
-                    for v in &mut e.vertices {
-                        v.pos[0] = cx + (v.pos[0] - cx) * scale;
-                        v.pos[1] = cy + (v.pos[1] - cy) * scale;
-                    }
-
-                    return;
-                }
-            }
+        if let Some(e) = self
+            .circles
+            .iter_mut()
+            .find(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(UiElementMut::Circle(e));
         }
+        if let Some(e) = self
+            .outlines
+            .iter_mut()
+            .find(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(UiElementMut::Outline(e));
+        }
+        if let Some(e) = self
+            .handles
+            .iter_mut()
+            .find(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(UiElementMut::Handle(e));
+        }
+        if let Some(e) = self
+            .polygons
+            .iter_mut()
+            .find(|e| e.id.as_deref() == Some(id))
+        {
+            return Some(UiElementMut::Polygon(e));
+        }
+        None
     }
 }
 
@@ -768,6 +805,7 @@ pub struct UiButtonText {
 
     pub natural_width: f32,
     pub natural_height: f32,
+    pub ascent: f32,
     pub being_edited: bool,
     pub caret: usize,
     pub being_hovered: bool,
@@ -779,6 +817,7 @@ pub struct UiButtonText {
     pub glyph_bounds: Vec<(f32, f32)>,
 
     pub input_box: bool,
+    pub anchor: Option<Anchor>,
 }
 
 impl UiButtonText {
@@ -896,6 +935,7 @@ impl UiButtonText {
             },
             natural_width: 50.0,
             natural_height: 20.0,
+            ascent: 10.0,
             being_edited: false,
             caret: length,
             being_hovered: false,
@@ -905,6 +945,7 @@ impl UiButtonText {
             has_selection: false,
             glyph_bounds: vec![],
             input_box: t.input_box,
+            anchor: t.anchor,
         }
     }
 
@@ -928,6 +969,7 @@ impl UiButtonText {
             text: self.template.clone(),
             misc: self.misc.to_json(),
             input_box: self.input_box,
+            anchor: self.anchor,
         }
     }
 }
@@ -1141,6 +1183,7 @@ impl Default for UiButtonText {
             misc: MiscButtonSettings::default(),
             natural_width: 50.0,
             natural_height: 20.0,
+            ascent: 10.0,
             being_edited: false,
             caret: 0,
             being_hovered: false,
@@ -1150,6 +1193,7 @@ impl Default for UiButtonText {
             has_selection: false,
             glyph_bounds: vec![],
             input_box: false,
+            anchor: None,
         }
     }
 }
@@ -1352,6 +1396,7 @@ pub struct UiButtonTextJson {
     pub text: String,
     pub misc: MiscButtonSettingsJson,
     pub input_box: bool,
+    pub anchor: Option<Anchor>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

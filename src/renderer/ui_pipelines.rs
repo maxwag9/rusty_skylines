@@ -1,5 +1,6 @@
 use crate::renderer::pipelines::load_shader;
-use crate::renderer::ui::{ScreenUniform, TextAtlas};
+use crate::renderer::ui::ScreenUniform;
+use crate::renderer::ui_text::TextAtlas;
 use crate::ui::helper::{make_pipeline, make_storage_layout, make_uniform_layout};
 use crate::ui::vertex::{UiVertexPoly, UiVertexText};
 use std::path::{Path, PathBuf};
@@ -27,10 +28,10 @@ pub struct UiPipelines {
     pub glow_pipeline: RenderPipeline,
     pub handle_layout: BindGroupLayout,
     pub circle_layout: BindGroupLayout,
-    pub text_atlas: Option<TextAtlas>,
+    pub text_atlas: TextAtlas,
     pub text_pipeline: RenderPipeline,
     pub text_layout: BindGroupLayout,
-    pub text_bind_group: Option<BindGroup>,
+    pub text_bind_group: BindGroup,
     pub text_vertex_buffer: Buffer,
     pub outline_layout: BindGroupLayout,
     pub text_vertex_count: i32,
@@ -411,6 +412,44 @@ impl UiPipelines {
             msaa_samples,
         );
 
+        let dummy_tex = device.create_texture(&TextureDescriptor {
+            label: Some("Dummy Text Atlas"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let dummy_view = dummy_tex.create_view(&TextureViewDescriptor::default());
+
+        let dummy_sampler = device.create_sampler(&SamplerDescriptor {
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let text_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Text Atlas Bind Group"),
+            layout: &text_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&dummy_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(&dummy_sampler),
+                },
+            ],
+        });
+
         Ok(Self {
             device: device.clone(),
             uniform_buffer,
@@ -446,13 +485,13 @@ impl UiPipelines {
             glow_pipeline_layout,
             glow_pipeline,
 
-            text_atlas: None,
+            text_atlas: TextAtlas::new(device, (1024, 1024)),
             text_shader,
             text_layout,
             text_pipeline_layout,
             text_pipeline,
 
-            text_bind_group: None,
+            text_bind_group,
             text_vertex_buffer,
             text_vertex_count: 0,
 

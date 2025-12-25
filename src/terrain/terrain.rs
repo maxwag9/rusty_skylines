@@ -628,7 +628,7 @@ impl TerrainGenerator {
     }
 
     #[inline]
-    fn apply_rivers_fast(&self, s: &BaseSample, wx: f32, wz: f32) -> f32 {
+    fn apply_rivers_fast(&self, s: &BaseSample, _wx: f32, _wz: f32) -> f32 {
         // fast approximate river carving:
         // keep the river noise channels but reduce iterations and remove heavy hydrology calls.
         if self.p.river_freq <= 0.0 || self.p.river_depth <= 0.0 || self.p.river_width <= 0.0 {

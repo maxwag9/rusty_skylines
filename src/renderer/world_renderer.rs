@@ -344,7 +344,7 @@ impl WorldRenderer {
 
         self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
 
-        if (time_system.total_time / time_system.target_frametime as f64) as u32 % 12 == 0 {
+        if (time_system.total_time / time_system.target_frametime as f64) as u32 % 240 == 0 {
             println!(
                 "frame {:.2} | drain {:.2} | vis {:.2}+{:.2} | lod {:.2} | disp {:.2} | unload {:.2} | edit {:.2}",
                 self.frame_timings.total_ms,
@@ -1066,18 +1066,18 @@ impl WorldRenderer {
             let stage_replace_ms = t0.elapsed();
 
             // ---- print timing ----
-            println!(
-                "chunk {:?} | deltas {:?} | stage {:?} | apply {:?} | patch {:?} | vertices {:?} | upload {:?} | replace {:?} | total {:?}",
-                coord,
-                stage_deltas_ms,
-                stage_stage_ms,
-                stage_apply_ms,
-                stage_patch_ms,
-                stage_vertices_ms,
-                stage_upload_ms,
-                stage_replace_ms,
-                t_total.elapsed(),
-            );
+            // println!(
+            //     "chunk {:?} | deltas {:?} | stage {:?} | apply {:?} | patch {:?} | vertices {:?} | upload {:?} | replace {:?} | total {:?}",
+            //     coord,
+            //     stage_deltas_ms,
+            //     stage_stage_ms,
+            //     stage_apply_ms,
+            //     stage_patch_ms,
+            //     stage_vertices_ms,
+            //     stage_upload_ms,
+            //     stage_replace_ms,
+            //     t_total.elapsed(),
+            // );
         }
     }
 
@@ -1230,7 +1230,7 @@ fn regenerate_vertices_from_height_grid_and_color(
             let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
             vertices[idx].normal = [n.x, n.y, n.z];
 
-            let v_pos = vertices[idx].position;
+            //let v_pos = vertices[idx].position;
             //vertices[idx].color = terrain_gen.color(v_pos[0], v_pos[2], v_pos[1], terrain_gen.moisture(v_pos[0], v_pos[2], v_pos[1]));
         }
     }
@@ -1266,29 +1266,7 @@ fn clamp(x: f32, a: f32, b: f32) -> f32 {
         x
     }
 }
-fn recompute_normals_partial(
-    vertices: &mut [Vertex],
-    min_i: usize,
-    max_i: usize,
-    step: usize,
-    terrain_gen: &TerrainGenerator,
-) {
-    let start = min_i.saturating_sub(1);
-    let end = std::cmp::min(max_i + 1, vertices.len().saturating_sub(1));
 
-    for i in start..=end {
-        recompute_normal_for_vertex(vertices, i, step, terrain_gen);
-    }
-}
-
-fn recompute_normal_for_vertex(
-    vertices: &mut [Vertex],
-    i: usize,
-    step: usize,
-    terrain_gen: &TerrainGenerator,
-) {
-    vertices[i].normal = [0.0, 1.0, 0.0];
-}
 #[derive(Clone, Copy)]
 pub struct Plane {
     pub normal: glam::Vec3,

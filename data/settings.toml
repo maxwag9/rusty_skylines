@@ -1,7 +1,7 @@
 target_fps = 100.0
 target_tps = 60.0
 present_mode = "mailbox"
-editor_mode = false
+editor_mode = true
 override_mode = false
 show_gui = true
 background_color = [
@@ -10,5 +10,5 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 5435.726978007704
+total_game_time = 6872.411047957838
 world_generation_benchmark_mode = false

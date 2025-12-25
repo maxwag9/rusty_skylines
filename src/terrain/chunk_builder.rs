@@ -132,8 +132,8 @@ pub fn regenerate_vertices_from_height_grid(
     let verts_x = height_grid.nx;
     let verts_z = height_grid.nz;
     let stepf = height_grid.cell;
-    let base_x = height_grid.base_x;
-    let base_z = height_grid.base_z;
+    let _base_x = height_grid.base_x;
+    let _base_z = height_grid.base_z;
 
     // sanity check
     if vertices.len() != verts_x * verts_z {

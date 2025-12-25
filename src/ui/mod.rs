@@ -1,4 +1,5 @@
 mod actions;
+mod cache;
 pub mod helper;
 pub mod input;
 mod menu;

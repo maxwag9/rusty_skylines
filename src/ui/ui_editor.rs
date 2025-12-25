@@ -291,6 +291,7 @@ impl UiButtonLoader {
                 },
                 natural_width: 50.0,
                 natural_height: 20.0,
+                ascent: 10.0,
                 being_edited: false,
                 caret: line.len(),
                 being_hovered: false,
@@ -300,6 +301,7 @@ impl UiButtonLoader {
                 has_selection: false,
                 glyph_bounds: vec![],
                 input_box: false,
+                anchor: None,
             });
         }
 

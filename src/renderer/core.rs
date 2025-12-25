@@ -126,11 +126,8 @@ impl RenderCore {
         let _aspect = config.width as f32 / config.height as f32;
         let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir, camera)
             .expect("Failed to create render pipelines");
-        let mut ui_renderer =
-            UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
-                .expect("Failed to create UI pipelines");
-        let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
-        let _ = ui_renderer.build_text_atlas(&device, &queue, font_ttf, &[14, 18, 24], 1024, 1024);
+        let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
+            .expect("Failed to create UI pipelines");
         let world = WorldRenderer::new(&device);
         let sky = SkyRenderer::new();
 

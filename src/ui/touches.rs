@@ -394,12 +394,12 @@ fn find_best_element_in_direction_inner(
         if !layer.active || !layer.saveable {
             continue;
         }
-        for elem in layer.iter_all_elements() {
+        for (elem, kind) in layer.iter_all_elements() {
             items.push((
                 layer.name.clone(),
-                elem.0.id().to_string(),
-                element_center(elem.0),
-                elem.1,
+                elem.id().to_string(),
+                element_center(elem),
+                kind,
             ));
         }
     }
@@ -632,57 +632,13 @@ pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> 
 }
 
 fn hit_text(text: &UiButtonText, mx: f32, my: f32) -> bool {
-    // 1. compute the natural text bounds (you already have this somewhere in the text layout)
-    let w = text.natural_width;
-    let h = text.natural_height;
+    // tp.pos is top-left
+    let x0 = text.x + text.top_left_offset[0];
+    let y0 = text.y + text.top_left_offset[1];
+    let x1 = x0 + text.natural_width + text.top_right_offset[0];
+    let y1 = y0 + text.natural_height + text.bottom_left_offset[1];
 
-    let x = text.x;
-    let y = text.y;
-
-    // 2. build warped quad from natural box + offsets
-    let quad = [
-        [x + text.top_left_offset[0], y + text.top_left_offset[1]],
-        [
-            x + w + text.top_right_offset[0],
-            y + text.top_right_offset[1],
-        ],
-        [
-            x + w + text.bottom_right_offset[0],
-            y + h + text.bottom_right_offset[1],
-        ],
-        [
-            x + text.bottom_left_offset[0],
-            y + h + text.bottom_left_offset[1],
-        ],
-    ];
-
-    point_in_quad(mx, my, &quad)
-}
-
-fn point_in_quad(px: f32, py: f32, quad: &[[f32; 2]; 4]) -> bool {
-    fn edge(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
-        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
-    }
-
-    let p = [px, py];
-
-    let mut sign = 0.0;
-    for i in 0..4 {
-        let a = quad[i];
-        let b = quad[(i + 1) % 4];
-        let e = edge(a, b, p);
-
-        if e.abs() < 1e-6 {
-            continue; // on edge
-        }
-        let s = e.signum();
-        if sign == 0.0 {
-            sign = s;
-        } else if s != sign {
-            return false;
-        }
-    }
-    true
+    mx >= x0 && mx <= x1 && my >= y0 && my <= y1
 }
 
 fn circle_hit(layer: &RuntimeLayer, mx: f32, my: f32) -> (bool, String) {

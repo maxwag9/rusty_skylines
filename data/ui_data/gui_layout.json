@@ -13,7 +13,7 @@
               "style": "None",
               "z_index": 51,
               "x": 65.532104,
-              "y": 26.819542,
+              "y": 0.0,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -924,6 +924,61 @@
             }
           ],
           "active": false,
+          "opaque": false
+        }
+      ]
+    },
+    {
+      "name": "Main Menu",
+      "layers": [
+        {
+          "name": "main_menu_buttons",
+          "order": 2,
+          "texts": [
+            {
+              "id": "play_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 2,
+              "x": 1700,
+              "y": 700,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                1.0,
+                0.0,
+                1.0,
+                1.0
+              ],
+              "text": "Play",
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              },
+              "input_box": false
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
           "opaque": false
         }
       ]

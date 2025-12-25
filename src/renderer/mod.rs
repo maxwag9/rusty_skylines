@@ -6,6 +6,7 @@ pub(crate) mod shader_watcher;
 pub(crate) mod textures;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;
+pub(crate) mod ui_text;
 pub(crate) mod world_renderer;
 
 use crate::components::camera::Camera;
