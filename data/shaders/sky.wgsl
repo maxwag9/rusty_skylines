@@ -272,19 +272,19 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
         }
 
         {
-            let halo_radius = radius * 32.0;
+            let halo_radius = radius * 24.0;
             let halo_d = distance(input.ndc, sun_ndc);
 
             if (halo_d < halo_radius) {
                 let t = 1.0 - halo_d / halo_radius;
 
-                let tight = pow(t, 2.0);
-                let soft  = pow(t, 4.0);
+                let tight = pow(t, 6.0);
+                let soft  = pow(t, 8.0);
 
                 let halo = tight * 0.9 + soft * 0.35;
 
                 let sun_alt = clamp(dot(sun_dir, vec3<f32>(0.0, 1.0, 0.0)), -1.0, 1.0);
-                let sun_lum = sky.sun_intensity * clamp(sun_alt + 0.05, 0.0, 1.0);
+                let sun_lum = 2.45 * sky.sun_intensity * clamp(sun_alt + 0.05, 0.0, 1.0);
 
                 let corona_low  = vec3<f32>(1.2, 0.7, 0.35);
                 let corona_high = vec3<f32>(0.7, 0.85, 1.1);

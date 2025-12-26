@@ -255,13 +255,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let sky_reflection = mix(sky_color, horizon_color, horizon_factor);
 
     let night = 1.0 - smoothstep(-0.08, 0.10, sun_elev);
+    let moon_day_suppress = pow(night, 3.5);
 
     let phase = abs(sky.moon_phase * 2.0 - 1.0);
     let moon_phase_vis = clamp(1.0 - phase, 0.0, 1.0);
     let moon_visibility = moon_vis * moon_phase_vis;
 
     let moon_color = vec3<f32>(0.75, 0.78, 0.82);
-    let moon_glow = moon_color * moon_visibility * sky.moon_intensity * sky.exposure;
+    let moon_glow = moon_color * moon_visibility * sky.moon_intensity * sky.exposure * moon_day_suppress;
 
     let night_zenith = vec3<f32>(0.01, 0.02, 0.05);
     let night_horizon = vec3<f32>(0.02, 0.04, 0.08);
@@ -276,7 +277,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     // Diffuse lighting
     let sun_diffuse = 0.15 + 0.85 * n_dot_l;
     let moon_diffuse = (0.02 + 0.98 * n_dot_m) * moon_vis;
-    let moon_diffuse_lit = moon_diffuse * sky.moon_intensity * 0.15;
+    let moon_diffuse_lit = moon_diffuse * sky.moon_intensity * 0.15 * moon_day_suppress;
     let total_diffuse = mix(sun_diffuse * sun_vis, moon_diffuse_lit, night);
 
     var color = body_color * total_diffuse;
@@ -300,7 +301,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     // Specular + foam
     color += foam_color * night_ext;
     color += sun_spec * vec3<f32>(1.0, 0.98, 0.9) * sky.sun_intensity;
-    color += moon_spec * moon_color;
+    color += moon_spec * moon_color * moon_day_suppress;
 
     // Ambient
     let ambient_col_day = vec3<f32>(1.0, 1.0, 1.0);
@@ -331,7 +332,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let reflection_final = reflection * reflection_darkening;
 
     let refl_ext = mix(1.0, night_ext, 0.25);
-    let night_reflect_boost = mix(1.0, 1.6, night);
+    let night_reflect_boost = mix(0.0, 1.6, moon_day_suppress);
 
     color += reflection_final * 0.9 * refl_ext * night_reflect_boost;
 

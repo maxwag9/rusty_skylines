@@ -183,7 +183,7 @@ impl UiPipelines {
         let text_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Text Pipeline Layout"),
             bind_group_layouts: &[&uniform_layout, &text_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let text_pipeline = build_pipeline(
             device,
@@ -227,7 +227,7 @@ impl UiPipelines {
         let circle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Circle Pipeline Layout"),
             bind_group_layouts: &[&uniform_layout, &circle_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let circle_pipeline = build_pipeline(
@@ -284,7 +284,7 @@ impl UiPipelines {
         let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Outline Pipeline Layout"),
             bind_group_layouts: &[&uniform_layout, &outline_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let outline_pipeline = make_pipeline(
@@ -308,7 +308,7 @@ impl UiPipelines {
         let handle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Handle Pipeline Layout"),
             bind_group_layouts: &[&uniform_layout, &handle_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let handle_pipeline = build_pipeline(
@@ -360,7 +360,7 @@ impl UiPipelines {
                 &uniform_layout, // group(0) -> ScreenUniform
                 &polygon_layout, // group(1) -> polygon_infos, polygon_edges
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let polygon_pipeline = build_pipeline(
@@ -385,7 +385,7 @@ impl UiPipelines {
         let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("UI Glow Pipeline Layout"),
             bind_group_layouts: &[&uniform_layout, &circle_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let additive_blend = BlendState {
             color: BlendComponent {

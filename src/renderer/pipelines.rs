@@ -600,7 +600,7 @@ impl Pipelines {
                         &self.fog_uniforms.bind_group_layout,  // group(1)
                         &self.pick_uniforms.bind_group_layout, // group(2) :O
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
         let above_water = self
@@ -656,8 +656,8 @@ impl Pipelines {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
                 cache: None,
+                multiview_mask: None,
             });
         let under_water = self
             .device
@@ -712,8 +712,8 @@ impl Pipelines {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
                 cache: None,
+                multiview_mask: None,
             });
         (above_water, under_water)
     }
@@ -728,7 +728,7 @@ impl Pipelines {
                     &self.fog_uniforms.bind_group_layout,  // group(1)
                     &self.pick_uniforms.bind_group_layout, // group(2) :O
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
@@ -766,8 +766,8 @@ impl Pipelines {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
                 cache: None,
+                multiview_mask: None,
             })
     }
 
@@ -780,7 +780,7 @@ impl Pipelines {
                     &self.uniforms.bind_group_layout,
                     &self.water_uniforms.bind_group_layout,
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
@@ -834,8 +834,8 @@ impl Pipelines {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
                 cache: None,
+                multiview_mask: None,
             })
     }
 
@@ -848,7 +848,7 @@ impl Pipelines {
                         &self.uniforms.bind_group_layout,     // group 0
                         &self.sky_uniforms.bind_group_layout, // group 1
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
@@ -882,8 +882,8 @@ impl Pipelines {
                     count: self.msaa_samples,
                     ..Default::default()
                 },
-                multiview: None,
                 cache: None,
+                multiview_mask: None,
             })
     }
 
@@ -921,7 +921,7 @@ impl Pipelines {
                 bind_group_layouts: &[
                     &self.uniforms.bind_group_layout, // group 0
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
@@ -958,8 +958,8 @@ impl Pipelines {
                     count: self.msaa_samples,
                     ..Default::default()
                 },
-                multiview: None,
                 cache: None,
+                multiview_mask: None,
             })
     }
     fn build_grass_texture_pipeline(&mut self) {
@@ -1124,7 +1124,7 @@ fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderP
     let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("dummy layout"),
         bind_group_layouts: &[],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -1157,9 +1157,8 @@ fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderP
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-
-        multiview: None,
         cache: None,
+        multiview_mask: None,
     })
 }
 
@@ -1190,7 +1189,7 @@ fn make_dummy_compute_pipeline(device: &Device) -> ComputePipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("dummy compute layout"),
         bind_group_layouts: &[],
-        push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

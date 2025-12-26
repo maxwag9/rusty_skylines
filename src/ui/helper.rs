@@ -299,8 +299,8 @@ pub(crate) fn make_pipeline(
         }),
 
         multisample,
-        multiview: None,
         cache: None,
+        multiview_mask: None,
     })
 }
 

@@ -466,6 +466,7 @@ impl RenderCore {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             // Sky, Stars and Terrain
