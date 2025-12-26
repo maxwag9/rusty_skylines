@@ -8,6 +8,6 @@ mod selections;
 mod special_actions;
 pub mod touches;
 pub mod ui_editor;
-mod uiruntime;
-mod variables;
+pub mod ui_runtime;
+pub mod variables;
 pub mod vertex;

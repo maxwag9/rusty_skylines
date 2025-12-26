@@ -284,7 +284,7 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
                 let halo = tight * 0.9 + soft * 0.35;
 
                 let sun_alt = clamp(dot(sun_dir, vec3<f32>(0.0, 1.0, 0.0)), -1.0, 1.0);
-                let sun_lum = 2.45 * sky.sun_intensity * clamp(sun_alt + 0.05, 0.0, 1.0);
+                let sun_lum = 2.8 * sky.sun_intensity * clamp(sun_alt + 0.05, 0.0, 1.0);
 
                 let corona_low  = vec3<f32>(1.2, 0.7, 0.35);
                 let corona_high = vec3<f32>(0.7, 0.85, 1.1);

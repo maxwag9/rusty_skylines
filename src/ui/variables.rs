@@ -1,3 +1,5 @@
+use crate::renderer::astronomy::{AstronomyState, TimeScales};
+use crate::ui::ui_editor::UiButtonLoader;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -114,4 +116,31 @@ impl UiVariableRegistry {
             _ => None,
         }
     }
+}
+
+pub fn update_ui_variables(
+    ui_loader: &mut UiButtonLoader,
+    time_scales: &TimeScales,
+    astronomy: &AstronomyState,
+    obliquity: f32,
+) {
+    ui_loader
+        .variables
+        .set_f32("day_length", time_scales.day_length);
+    ui_loader
+        .variables
+        .set_f32("total_days", time_scales.total_days);
+    ui_loader
+        .variables
+        .set_f32("base_year", time_scales.base_year);
+    ui_loader
+        .variables
+        .set_f32("current_year", time_scales.current_year);
+    ui_loader.variables.set_f32("earth_obliquity", obliquity);
+    ui_loader
+        .variables
+        .set_f32("sun_declination", astronomy.sun_declination);
+    ui_loader
+        .variables
+        .set_f32("moon_phase", astronomy.moon_phase);
 }

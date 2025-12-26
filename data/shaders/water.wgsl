@@ -255,7 +255,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let sky_reflection = mix(sky_color, horizon_color, horizon_factor);
 
     let night = 1.0 - smoothstep(-0.08, 0.10, sun_elev);
-    let moon_day_suppress = pow(night, 3.5);
+    let moon_day_suppress = pow(night, 2.5);
 
     let phase = abs(sky.moon_phase * 2.0 - 1.0);
     let moon_phase_vis = clamp(1.0 - phase, 0.0, 1.0);

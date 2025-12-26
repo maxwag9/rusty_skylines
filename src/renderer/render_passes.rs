@@ -1,1 +1,64 @@
+use crate::data::Settings;
+use wgpu::*;
 
+pub struct RenderPassConfig {
+    pub background_color: Color,
+    pub msaa_samples: u32,
+}
+
+impl RenderPassConfig {
+    pub fn from_settings(settings: &Settings) -> Self {
+        Self {
+            background_color: Color {
+                r: settings.background_color[0] as f64,
+                g: settings.background_color[1] as f64,
+                b: settings.background_color[2] as f64,
+                a: settings.background_color[3] as f64,
+            },
+            msaa_samples: 1, // Set from pipelines
+        }
+    }
+}
+
+pub fn create_color_attachment<'a>(
+    msaa_view: &'a TextureView,
+    surface_view: &'a TextureView,
+    msaa_samples: u32,
+    background_color: Color,
+) -> RenderPassColorAttachment<'a> {
+    if msaa_samples > 1 {
+        RenderPassColorAttachment {
+            view: msaa_view,
+            resolve_target: Some(surface_view),
+            depth_slice: None,
+            ops: Operations {
+                load: LoadOp::Clear(background_color),
+                store: StoreOp::Store,
+            },
+        }
+    } else {
+        RenderPassColorAttachment {
+            view: surface_view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: Operations {
+                load: LoadOp::Clear(background_color),
+                store: StoreOp::Store,
+            },
+        }
+    }
+}
+
+pub fn create_depth_attachment(depth_view: &TextureView) -> RenderPassDepthStencilAttachment {
+    RenderPassDepthStencilAttachment {
+        view: depth_view,
+        depth_ops: Some(Operations {
+            load: LoadOp::Clear(1.0),
+            store: StoreOp::Store,
+        }),
+        stencil_ops: Some(Operations {
+            load: LoadOp::Clear(0),
+            store: StoreOp::Store,
+        }),
+    }
+}

@@ -1,12 +1,17 @@
-pub mod core;
+pub(crate) mod astronomy;
+mod benchmark;
+pub(crate) mod core;
 pub(crate) mod mesh_arena;
-pub mod pipelines;
-pub mod render_passes;
+pub(crate) mod pipelines;
+pub(crate) mod pipelines_outsource;
+pub(crate) mod render_passes;
 pub(crate) mod shader_watcher;
 pub(crate) mod textures;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;
 pub(crate) mod ui_text;
+pub(crate) mod ui_upload;
+pub(crate) mod uniform_updates;
 pub(crate) mod world_renderer;
 
 use crate::components::camera::Camera;

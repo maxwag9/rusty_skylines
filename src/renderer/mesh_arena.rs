@@ -2,6 +2,11 @@ use crate::terrain::chunk_builder::GpuChunkHandle;
 use crate::ui::vertex::VertexWithPosition;
 use wgpu::{Buffer, BufferUsages, Device, Queue};
 
+struct AllocationOffsets {
+    vertex: u64,
+    index_base: Option<u64>,
+}
+
 pub struct GeometryScratch<V> {
     pub new_vertices: Vec<V>,
     pub indices_above: Vec<u32>,
@@ -26,6 +31,28 @@ impl<V> GeometryScratch<V> {
     }
 }
 
+struct AllocationRequest {
+    vertex_bytes: u64,
+    vertex_align: u64,
+    index_bytes_above: u64,
+    index_bytes_under: u64,
+}
+
+impl AllocationRequest {
+    fn from_scratch<V>(scratch: &GeometryScratch<V>) -> Self {
+        Self {
+            vertex_bytes: scratch.new_vertices.len() as u64 * std::mem::size_of::<V>() as u64,
+            vertex_align: std::mem::size_of::<V>() as u64,
+            index_bytes_above: scratch.indices_above.len() as u64 * 4,
+            index_bytes_under: scratch.indices_under.len() as u64 * 4,
+        }
+    }
+
+    fn total_index_bytes(&self) -> u64 {
+        self.index_bytes_above + self.index_bytes_under
+    }
+}
+
 pub struct MeshPage {
     pub vertex_buf: Buffer,
     pub index_buf: Buffer,
@@ -33,6 +60,100 @@ pub struct MeshPage {
     pub icap: u64,
     pub free_v: Vec<FreeRange>,
     pub free_i: Vec<FreeRange>,
+}
+
+impl MeshPage {
+    fn try_allocate_and_upload<V: bytemuck::Pod>(
+        &mut self,
+        queue: &Queue,
+        scratch: &GeometryScratch<V>,
+        request: &AllocationRequest,
+        page_index: usize,
+    ) -> Option<GpuChunkHandle> {
+        let offsets = self.find_allocation_offsets(request)?;
+
+        self.commit_allocations(&offsets, request);
+        self.upload_buffers(queue, scratch, &offsets, request);
+
+        Some(self.create_handle(scratch, &offsets, request, page_index))
+    }
+
+    fn find_allocation_offsets(&self, request: &AllocationRequest) -> Option<AllocationOffsets> {
+        let vertex_offset = find_fit(&self.free_v, request.vertex_bytes, request.vertex_align)?;
+
+        let index_offset_base = if request.total_index_bytes() > 0 {
+            Some(find_fit(&self.free_i, request.total_index_bytes(), 4)?)
+        } else {
+            None
+        };
+
+        Some(AllocationOffsets {
+            vertex: vertex_offset,
+            index_base: index_offset_base,
+        })
+    }
+
+    fn commit_allocations(&mut self, offsets: &AllocationOffsets, request: &AllocationRequest) {
+        commit_alloc(&mut self.free_v, offsets.vertex, request.vertex_bytes);
+
+        if let Some(index_base) = offsets.index_base {
+            commit_alloc(&mut self.free_i, index_base, request.total_index_bytes());
+        }
+    }
+
+    fn upload_buffers<V: bytemuck::Pod>(
+        &self,
+        queue: &Queue,
+        scratch: &GeometryScratch<V>,
+        offsets: &AllocationOffsets,
+        request: &AllocationRequest,
+    ) {
+        queue.write_buffer(
+            &self.vertex_buf,
+            offsets.vertex,
+            bytemuck::cast_slice(&scratch.new_vertices),
+        );
+
+        let index_above_offset = offsets.index_base.unwrap_or(0);
+        let index_under_offset = index_above_offset + request.index_bytes_above;
+
+        if request.index_bytes_above > 0 {
+            queue.write_buffer(
+                &self.index_buf,
+                index_above_offset,
+                bytemuck::cast_slice(&scratch.indices_above),
+            );
+        }
+
+        if request.index_bytes_under > 0 {
+            queue.write_buffer(
+                &self.index_buf,
+                index_under_offset,
+                bytemuck::cast_slice(&scratch.indices_under),
+            );
+        }
+    }
+
+    fn create_handle<V>(
+        &self,
+        scratch: &GeometryScratch<V>,
+        offsets: &AllocationOffsets,
+        request: &AllocationRequest,
+        page_index: usize,
+    ) -> GpuChunkHandle {
+        let index_above_offset = offsets.index_base.unwrap_or(0);
+        let index_under_offset = index_above_offset + request.index_bytes_above;
+
+        GpuChunkHandle {
+            page: page_index as u8,
+            base_vertex: (offsets.vertex / request.vertex_align) as i32,
+            first_index_above: (index_above_offset / 4) as u32,
+            index_count_above: scratch.indices_above.len() as u32,
+            first_index_under: (index_under_offset / 4) as u32,
+            index_count_under: scratch.indices_under.len() as u32,
+            vertex_count: scratch.new_vertices.len() as u32,
+        }
+    }
 }
 
 pub struct MeshArena {
@@ -87,195 +208,37 @@ impl MeshArena {
         device: &Device,
         queue: &Queue,
         vertices: &[V],
-        indices: &[u32], // Changed to slice
+        indices: &[u32],
         scratch: &mut GeometryScratch<V>,
     ) -> GpuChunkHandle {
         scratch.clear();
-
-        // 1) Fast Copy: Copy base vertices to scratch
-        //    We avoid 'to_vec()' which does a raw allocator call.
-        //    'extend_from_slice' into a reserved capacity is much faster.
         scratch.new_vertices.extend_from_slice(vertices);
 
-        // 2) Optimized Clipping
-        // Define closure to capture scratch context
-        let make_intersection = |i: usize, j: usize, new_verts: &mut Vec<V>| -> u32 {
-            // Standard lerp logic...
-            let vi = new_verts[i]; // Copy, V is Pod+Copy
-            let vj = new_verts[j];
-            let yi = vi.position()[1];
-            let yj = vj.position()[1];
+        clip_triangles_by_plane(indices, scratch);
 
-            let t = if (yj - yi).abs() < f32::EPSILON {
-                0.5
-            } else {
-                (0.0 - yi) / (yj - yi)
-            };
-            let new_v = V::lerp(&vi, &vj, t);
-            new_verts.push(new_v);
-            (new_verts.len() - 1) as u32
-        };
+        let allocation = AllocationRequest::from_scratch::<V>(scratch);
 
-        // Process triangles
-        for tri in indices.chunks(3) {
-            let a = tri[0] as usize;
-            let b = tri[1] as usize;
-            let c = tri[2] as usize;
-
-            // read y positions first (no long-lived immutable borrow)
-            let ya = scratch.new_vertices[a].position()[1];
-            let yb = scratch.new_vertices[b].position()[1];
-            let yc = scratch.new_vertices[c].position()[1];
-
-            let above_a = ya >= 0.0;
-            let above_b = yb >= 0.0;
-            let above_c = yc >= 0.0;
-
-            let above_count = (above_a as u8 + above_b as u8 + above_c as u8) as usize;
-
-            match above_count {
-                0 => {
-                    // all under
-                    scratch.indices_under.extend_from_slice(tri);
-                }
-                3 => {
-                    // all above
-                    scratch.indices_above.extend_from_slice(tri);
-                }
-                1 => {
-                    // one vertex above, two below
-                    // ia is the single above vertex, ib & ic are below
-                    let (ia, ib, ic) = if above_a {
-                        (a, b, c)
-                    } else if above_b {
-                        (b, c, a)
-                    } else {
-                        (c, a, b)
-                    };
-
-                    // intersections on edges ia-ib and ia-ic
-                    let i_ab = make_intersection(ia, ib, &mut scratch.new_vertices);
-                    let i_ac = make_intersection(ia, ic, &mut scratch.new_vertices);
-
-                    // Above side: single triangle (ia, i_ab, i_ac)
-                    scratch.indices_above.push(ia as u32);
-                    scratch.indices_above.push(i_ab);
-                    scratch.indices_above.push(i_ac);
-
-                    // Under side: quad (ib, ic, i_ac, i_ab) -> two triangles
-                    scratch.indices_under.push(ib as u32);
-                    scratch.indices_under.push(ic as u32);
-                    scratch.indices_under.push(i_ac);
-
-                    scratch.indices_under.push(ib as u32);
-                    scratch.indices_under.push(i_ac);
-                    scratch.indices_under.push(i_ab);
-                }
-                2 => {
-                    // two vertices above, one below
-                    // ib is the single below vertex, ia & ic are above
-                    let (ib, ia, ic) = if !above_a {
-                        (a, b, c)
-                    } else if !above_b {
-                        (b, c, a)
-                    } else {
-                        (c, a, b)
-                    };
-
-                    // intersections on edges ib-ia and ib-ic
-                    let i_ba = make_intersection(ib, ia, &mut scratch.new_vertices);
-                    let i_bc = make_intersection(ib, ic, &mut scratch.new_vertices);
-
-                    // Under side: single triangle (ib, i_ba, i_bc)
-                    scratch.indices_under.push(ib as u32);
-                    scratch.indices_under.push(i_ba);
-                    scratch.indices_under.push(i_bc);
-
-                    // Above side: quad (ia, ic, i_bc, i_ba) -> two triangles
-                    scratch.indices_above.push(ia as u32);
-                    scratch.indices_above.push(ic as u32);
-                    scratch.indices_above.push(i_bc);
-
-                    scratch.indices_above.push(ia as u32);
-                    scratch.indices_above.push(i_bc);
-                    scratch.indices_above.push(i_ba);
-                }
-                _ => {
-                    // unreachable
-                }
-            }
-        }
-
-        // 3) Compute sizes
-        let v_bytes = scratch.new_vertices.len() as u64 * std::mem::size_of::<V>() as u64;
-        let i_bytes_above = scratch.indices_above.len() as u64 * 4;
-        let i_bytes_under = scratch.indices_under.len() as u64 * 4;
-        let v_align = std::mem::size_of::<V>() as u64;
-        let i_align = 4u64;
-
-        // 4) Allocation Loop (Same logic, just using scratch data)
         loop {
-            for (pi, page) in self.pages.iter_mut().enumerate() {
-                // 1. Find Vertex Fit
-                let v_off = match find_fit(&page.free_v, v_bytes, v_align) {
-                    Some(off) => off,
-                    None => continue,
-                };
-
-                // 2. Find Index Fit (Co-locating above and under indices to reduce fragmentation)
-                let total_i_bytes = i_bytes_above + i_bytes_under;
-                let i_off_base = if total_i_bytes > 0 {
-                    match find_fit(&page.free_i, total_i_bytes, i_align) {
-                        Some(off) => Some(off),
-                        None => continue,
-                    }
-                } else {
-                    None
-                };
-
-                // 3. Commit Allocations (No new Vec allocations inside)
-                commit_alloc(&mut page.free_v, v_off, v_bytes);
-                if let Some(off) = i_off_base {
-                    commit_alloc(&mut page.free_i, off, total_i_bytes);
-                }
-
-                // 4. Batch Upload to GPU
-                queue.write_buffer(
-                    &page.vertex_buf,
-                    v_off,
-                    bytemuck::cast_slice(&scratch.new_vertices),
-                );
-
-                let i_off_above = i_off_base.unwrap_or(0);
-                let i_off_under = i_off_above + i_bytes_above;
-
-                if i_bytes_above > 0 {
-                    queue.write_buffer(
-                        &page.index_buf,
-                        i_off_above,
-                        bytemuck::cast_slice(&scratch.indices_above),
-                    );
-                }
-                if i_bytes_under > 0 {
-                    queue.write_buffer(
-                        &page.index_buf,
-                        i_off_under,
-                        bytemuck::cast_slice(&scratch.indices_under),
-                    );
-                }
-
-                return GpuChunkHandle {
-                    page: pi as u8,
-                    base_vertex: (v_off / v_align) as i32,
-                    first_index_above: (i_off_above / 4) as u32,
-                    index_count_above: scratch.indices_above.len() as u32,
-                    first_index_under: (i_off_under / 4) as u32,
-                    index_count_under: scratch.indices_under.len() as u32,
-                    vertex_count: scratch.new_vertices.len() as u32,
-                };
+            if let Some(handle) = self.try_allocate_and_upload(queue, scratch, &allocation) {
+                return handle;
             }
             self.add_page(device);
         }
+    }
+
+    fn try_allocate_and_upload<V: bytemuck::Pod>(
+        &mut self,
+        queue: &Queue,
+        scratch: &GeometryScratch<V>,
+        request: &AllocationRequest,
+    ) -> Option<GpuChunkHandle> {
+        for (page_index, page) in self.pages.iter_mut().enumerate() {
+            if let Some(handle) = page.try_allocate_and_upload(queue, scratch, request, page_index)
+            {
+                return Some(handle);
+            }
+        }
+        None
     }
 
     pub fn free<V>(&mut self, handle: GpuChunkHandle) {
@@ -367,4 +330,127 @@ fn commit_alloc(free: &mut Vec<FreeRange>, start: u64, size: u64) {
     }
 
     unreachable!("commit_alloc called with invalid range");
+}
+
+// Triangle clipping logic - completely separate from allocation
+
+fn clip_triangles_by_plane<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    indices: &[u32],
+    scratch: &mut GeometryScratch<V>,
+) {
+    for tri in indices.chunks(3) {
+        clip_single_triangle(tri, scratch);
+    }
+}
+
+fn clip_single_triangle<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    tri: &[u32],
+    scratch: &mut GeometryScratch<V>,
+) {
+    let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+
+    let ya = scratch.new_vertices[a].position()[1];
+    let yb = scratch.new_vertices[b].position()[1];
+    let yc = scratch.new_vertices[c].position()[1];
+
+    let above = [ya >= 0.0, yb >= 0.0, yc >= 0.0];
+    let above_count = above.iter().filter(|&&x| x).count();
+
+    match above_count {
+        0 => scratch.indices_under.extend_from_slice(tri),
+        3 => scratch.indices_above.extend_from_slice(tri),
+        1 => clip_one_above(tri, above, scratch),
+        2 => clip_two_above(tri, above, scratch),
+        _ => unreachable!(),
+    }
+}
+
+fn clip_one_above<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    tri: &[u32],
+    above: [bool; 3],
+    scratch: &mut GeometryScratch<V>,
+) {
+    let (ia, ib, ic) = reorder_one_above(tri, above);
+
+    let i_ab = create_intersection_vertex(ia, ib, scratch);
+    let i_ac = create_intersection_vertex(ia, ic, scratch);
+
+    // Above: single triangle
+    scratch
+        .indices_above
+        .extend_from_slice(&[ia as u32, i_ab, i_ac]);
+
+    // Under: quad as two triangles
+    scratch
+        .indices_under
+        .extend_from_slice(&[ib as u32, ic as u32, i_ac]);
+    scratch
+        .indices_under
+        .extend_from_slice(&[ib as u32, i_ac, i_ab]);
+}
+
+fn clip_two_above<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    tri: &[u32],
+    above: [bool; 3],
+    scratch: &mut GeometryScratch<V>,
+) {
+    let (ib, ia, ic) = reorder_one_below(tri, above);
+
+    let i_ba = create_intersection_vertex(ib, ia, scratch);
+    let i_bc = create_intersection_vertex(ib, ic, scratch);
+
+    // Under: single triangle
+    scratch
+        .indices_under
+        .extend_from_slice(&[ib as u32, i_ba, i_bc]);
+
+    // Above: quad as two triangles
+    scratch
+        .indices_above
+        .extend_from_slice(&[ia as u32, ic as u32, i_bc]);
+    scratch
+        .indices_above
+        .extend_from_slice(&[ia as u32, i_bc, i_ba]);
+}
+
+fn reorder_one_above(tri: &[u32], above: [bool; 3]) -> (usize, usize, usize) {
+    let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+    match above {
+        [true, false, false] => (a, b, c),
+        [false, true, false] => (b, c, a),
+        [false, false, true] => (c, a, b),
+        _ => unreachable!(),
+    }
+}
+
+fn reorder_one_below(tri: &[u32], above: [bool; 3]) -> (usize, usize, usize) {
+    let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+    match above {
+        [false, true, true] => (a, b, c),
+        [true, false, true] => (b, c, a),
+        [true, true, false] => (c, a, b),
+        _ => unreachable!(),
+    }
+}
+
+fn create_intersection_vertex<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    i: usize,
+    j: usize,
+    scratch: &mut GeometryScratch<V>,
+) -> u32 {
+    let vi = scratch.new_vertices[i];
+    let vj = scratch.new_vertices[j];
+
+    let yi = vi.position()[1];
+    let yj = vj.position()[1];
+
+    let t = if (yj - yi).abs() < f32::EPSILON {
+        0.5
+    } else {
+        (0.0 - yi) / (yj - yi)
+    };
+
+    let new_vertex = V::lerp(&vi, &vj, t);
+    scratch.new_vertices.push(new_vertex);
+    (scratch.new_vertices.len() - 1) as u32
 }

@@ -1,13 +1,10 @@
 use crate::renderer::ui_pipelines::UiPipelines;
-use crate::renderer::ui_text::{
-    Anchor, anchor_to_top_left, glyphs_to_vertices, render_corner_brackets, render_editor_caret,
-    render_editor_outline, render_selection,
-};
-use crate::resources::TimeSystem;
-use crate::ui::input::MouseState;
+use crate::renderer::ui_text::Anchor;
+use crate::renderer::ui_upload::*;
+use crate::resources::{InputState, TimeSystem};
 use crate::ui::ui_editor::{UiButtonLoader, UiRuntime};
 use crate::ui::vertex::{
-    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonText, UiVertexPoly, UiVertexText,
+    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiVertexPoly,
 };
 use std::ops::Range;
 use std::path::Path;
@@ -179,7 +176,7 @@ pub struct DrawCmd<'a> {
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
 
-    device: Device,
+    pub(crate) device: Device,
 }
 
 impl UiRenderer {
@@ -198,28 +195,19 @@ impl UiRenderer {
         })
     }
 
-    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.pipelines.reload_shaders()?;
-        Ok(())
-    }
-
-    pub fn render<'a>(
+    pub fn update(
         &mut self,
-        pass: &mut RenderPass<'a>,
-        ui: &mut UiButtonLoader,
-        queue: &Queue,
+        ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
-        size: (f32, f32),
-        mouse: &MouseState,
+        input_state: &InputState,
+        queue: &Queue,
+        size: &PhysicalSize<u32>,
     ) {
-        if !ui.ui_runtime.show_gui {
-            return;
-        }
         let new_uniform = ScreenUniform {
-            size: [size.0, size.1],
+            size: [size.width as f32, size.height as f32],
             time: time.total_time as f32,
             enable_dither: 1,
-            mouse: mouse.pos.to_array(),
+            mouse: input_state.mouse.pos.to_array(),
         };
 
         queue.write_buffer(
@@ -227,11 +215,7 @@ impl UiRenderer {
             0,
             bytemuck::bytes_of(&new_uniform),
         );
-        ui.update_dynamic_texts();
-
-        ui.sync_console_ui();
-
-        for (menu_name, menu) in ui.menus.iter_mut().filter(|(_, menu)| menu.active) {
+        for (menu_name, menu) in ui_loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
             let dirty_indices: Vec<usize> = menu
                 .layers
                 .iter()
@@ -241,11 +225,28 @@ impl UiRenderer {
                 .collect();
 
             for idx in dirty_indices {
-                menu.rebuild_layer_cache_index(idx, &ui.ui_runtime);
+                menu.rebuild_layer_cache_index(idx, &ui_loader.ui_runtime);
                 let layer = &mut menu.layers[idx];
-                self.upload_layer(queue, layer, time, &ui.ui_runtime, menu_name);
+                self.upload_layer(queue, layer, time, &ui_loader.ui_runtime, menu_name);
             }
+        }
+    }
 
+    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
+        self.pipelines.reload_shaders()?;
+        Ok(())
+    }
+
+    pub fn render<'a>(&self, pass: &mut RenderPass<'a>, ui: &mut UiButtonLoader) {
+        if !ui.ui_runtime.show_gui {
+            return;
+        }
+
+        ui.update_dynamic_texts();
+
+        ui.sync_console_ui();
+
+        for (_, menu) in ui.menus.iter().filter(|(_, menu)| menu.active) {
             for layer in menu.layers.iter().filter(|l| l.active) {
                 let mut cmds: Vec<DrawCmd> = Vec::new();
                 if layer.gpu.circle_count > 0 {
@@ -332,7 +333,7 @@ impl UiRenderer {
 
                     if let Some(poly_vbo) = &layer.gpu.poly_vbo {
                         for p in layer.polygons.iter() {
-                            let count = (p.tri_count * 3) as u32;
+                            let count = p.tri_count * 3;
 
                             cmds.push(DrawCmd {
                                 z: p.z_index,
@@ -421,7 +422,7 @@ impl UiRenderer {
         }
     }
 
-    fn write_storage_buffer(
+    pub(crate) fn write_storage_buffer(
         &self,
         queue: &Queue,
         target: &mut Option<Buffer>,
@@ -466,384 +467,80 @@ impl UiRenderer {
         ui_runtime: &UiRuntime,
         menu_name: &String,
     ) {
-        // ---- circles (SSBO) ----
-        let circle_len = layer.cache.circle_params.len() as u32;
-        let circle_bytes = bytemuck::cast_slice(&layer.cache.circle_params);
-        self.write_storage_buffer(
-            queue,
-            &mut layer.gpu.circle_ssbo,
-            &format!("{}_circle_ssbo", layer.name),
-            BufferUsages::STORAGE,
-            circle_bytes,
-        );
-        layer.gpu.circle_count = circle_len;
-
-        // ---- 1. ShapeParams SSBO ----
-        let outline_len = layer.cache.outline_params.len() as u32;
-        let outline_bytes = bytemuck::cast_slice(&layer.cache.outline_params);
-        self.write_storage_buffer(
-            queue,
-            &mut layer.gpu.outline_shapes_ssbo,
-            &format!("{}_outline_shapes_ssbo", layer.name),
-            BufferUsages::STORAGE,
-            outline_bytes,
-        );
-        layer.gpu.outline_count = outline_len;
-
-        // ---- 2. Polygon vertex buffer (vec2<f32>) ----
-        let poly_verts = &layer.cache.outline_poly_vertices;
-        let poly_vcount = poly_verts.len() as u32;
-
-        if poly_vcount > 0 {
-            // upload real polygon vertices
-            let bytes = bytemuck::cast_slice(poly_verts);
-            self.write_storage_buffer(
-                queue,
-                &mut layer.gpu.outline_poly_vertices_ssbo,
-                &format!("{}_outline_poly_ssbo", layer.name),
-                BufferUsages::STORAGE,
-                bytes,
-            );
-        } else {
-            // No polygon outlines → still must provide SOME buffer to satisfy wgpu layout
-            if layer.gpu.outline_poly_vertices_ssbo.is_none() {
-                layer.gpu.outline_poly_vertices_ssbo =
-                    Some(self.device.create_buffer(&BufferDescriptor {
-                        label: Some(&format!("{}_outline_poly_dummy", layer.name)),
-                        size: 16, // one vec2<f32> worth of space
-                        usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    }));
-            }
-        }
-
-        let handle_len = layer.cache.handle_params.len() as u32;
-        let handle_bytes = bytemuck::cast_slice(&layer.cache.handle_params);
-        self.write_storage_buffer(
-            queue,
-            &mut layer.gpu.handle_ssbo,
-            &format!("{}_handle_ssbo", layer.name),
-            BufferUsages::STORAGE,
-            handle_bytes,
-        );
-        layer.gpu.handle_count = handle_len;
-
-        // ---- polygons (VBO) : polys concatenated ----
-        let mut poly_vertices: Vec<UiVertexPoly> =
-            Vec::with_capacity(layer.cache.polygon_vertices.len());
-        poly_vertices.extend_from_slice(&layer.cache.polygon_vertices);
-
-        let poly_count = poly_vertices.len() as u32;
-        if poly_count > 0 {
-            let bytes = bytemuck::cast_slice(&poly_vertices);
-            let need_new = layer
-                .gpu
-                .poly_vbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-            if need_new {
-                layer.gpu.poly_vbo = Some(self.device.create_buffer(&BufferDescriptor {
-                    label: Some(&format!("{}_poly_vbo", layer.name)),
-                    size: bytes.len() as u64,
-                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            queue.write_buffer(layer.gpu.poly_vbo.as_ref().unwrap(), 0, bytes);
-        }
-        layer.gpu.poly_count = poly_count;
-
-        // ---- polygon infos and edges (SSBOs) ----
-        let mut infos: Vec<PolygonInfoGpu> = Vec::with_capacity(layer.polygons.len());
-        let mut edges: Vec<PolygonEdgeGpu> = Vec::new();
-
-        for poly in &layer.polygons {
-            let edge_offset = edges.len() as u32;
-            let mut edge_count = 0u32;
-
-            let n = poly.vertices.len();
-            if n >= 2 {
-                for i in 0..n {
-                    let a = poly.vertices[i].pos;
-                    let b = poly.vertices[(i + 1) % n].pos;
-                    edges.push(PolygonEdgeGpu { p0: a, p1: b });
-                    edge_count += 1;
-                }
-            }
-
-            infos.push(PolygonInfoGpu {
-                edge_offset,
-                edge_count,
-                _pad0: [0, 0],
-            });
-        }
-
-        if !infos.is_empty() {
-            let bytes = bytemuck::cast_slice(&infos);
-            let need_new = layer
-                .gpu
-                .poly_info_ssbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-            if need_new {
-                layer.gpu.poly_info_ssbo = Some(self.device.create_buffer(&BufferDescriptor {
-                    label: Some(&format!("{}_poly_info_ssbo", layer.name)),
-                    size: bytes.len() as u64,
-                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            queue.write_buffer(layer.gpu.poly_info_ssbo.as_ref().unwrap(), 0, bytes);
-        } else {
-            layer.gpu.poly_info_ssbo = None;
-        }
-
-        if !edges.is_empty() {
-            let bytes = bytemuck::cast_slice(&edges);
-            let need_new = layer
-                .gpu
-                .poly_edge_ssbo
-                .as_ref()
-                .map(|b| b.size() < bytes.len() as u64)
-                .unwrap_or(true);
-            if need_new {
-                layer.gpu.poly_edge_ssbo = Some(self.device.create_buffer(&BufferDescriptor {
-                    label: Some(&format!("{}_poly_edge_ssbo", layer.name)),
-                    size: bytes.len() as u64,
-                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            queue.write_buffer(layer.gpu.poly_edge_ssbo.as_ref().unwrap(), 0, bytes);
-        } else {
-            layer.gpu.poly_edge_ssbo = None;
-        }
-
-        // ---- text (VBO) : build glyphs for this layer only ----
-        let text_vertices =
-            self.build_text_vertices(layer, time_system, ui_runtime, menu_name, queue);
-
-        // upload text_vertices into the VBO...
-        let text_bytes = bytemuck::cast_slice(&text_vertices);
-        if !text_vertices.is_empty() {
-            let need_new = layer
-                .gpu
-                .text_vbo
-                .as_ref()
-                .map(|b| b.size() < text_bytes.len() as u64)
-                .unwrap_or(true);
-            if need_new {
-                layer.gpu.text_vbo = Some(self.device.create_buffer(&BufferDescriptor {
-                    label: Some(&format!("{}_text_vbo", layer.name)),
-                    size: text_bytes.len() as u64,
-                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            queue.write_buffer(layer.gpu.text_vbo.as_ref().unwrap(), 0, text_bytes);
-        }
-        layer.gpu.text_count = text_vertices.len() as u32;
-    }
-
-    pub fn build_text_vertices(
-        &mut self,
-        layer: &mut RuntimeLayer,
-        time_system: &TimeSystem,
-        ui_runtime: &UiRuntime,
-        menu_name: &String,
-        queue: &Queue,
-    ) -> Vec<UiVertexText> {
-        let mut text_vertices: Vec<UiVertexText> = Vec::new();
-
-        for tp in &mut layer.cache.texts {
-            // ensure atlas has this size
-            if !self.pipelines.text_atlas.metrics.contains_key(&tp.px) {
-                self.pipelines
-                    .text_atlas
-                    .ensure_px_size(&self.device, queue, tp.px)
-                    .expect("failed to ensure text atlas size");
-                // quick sanity: atlas must have some pixels
-                debug_assert!(
-                    self.pipelines.text_atlas.cpu_atlas.iter().any(|&b| b != 0),
-                    "text atlas empty after rasterize"
-                );
-                self.rebuild_text_bind_group()
-            }
-
-            let pad = 4.0; // same as your selection outline pad
-
-            // find caret from original UiButtonText if present
-            let mut maybe_caret = None;
-            if let Some(ref text_id) = tp.id {
-                for original in &layer.texts {
-                    if original.id.as_ref() == Some(text_id) {
-                        maybe_caret = Some(original.caret);
-                        break;
-                    }
-                }
-            }
-            let caret_index = maybe_caret.unwrap_or(tp.text.len());
-            tp.glyph_bounds.clear();
-
-            // ---- measure + render glyphs ----
-            let mut min_x = f32::MAX;
-            let mut min_y = f32::MAX;
-            let mut max_x = f32::MIN;
-            let mut max_y = f32::MIN;
-
-            let metrics = &self.pipelines.text_atlas.metrics[&tp.px];
-            let used_pos = anchor_to_top_left(
-                tp.anchor.unwrap_or(Anchor::TopLeft),
-                tp.pos,
-                0.0,
-                tp.natural_height,
-            );
-
-            let text_top = used_pos[1] + (tp.natural_height * 0.5);
-            let baseline_y = text_top + metrics.ascent;
-            let mut pen_x = used_pos[0];
-
-            // find mutable original text if needed (for writing glyph bounds back)
-            let mut original_text: Option<&mut UiButtonText> = None;
-            if let Some(ref text_id) = tp.id {
-                for o in &mut layer.texts {
-                    if o.id.as_ref() == Some(text_id) {
-                        original_text = Some(o);
-                        break;
-                    }
-                }
-            }
-            if let Some(orig) = &mut original_text {
-                orig.glyph_bounds.clear();
-            }
-
-            // caret position tracker
-            let mut caret_x = pen_x;
-            let mut char_i = 0;
-
-            glyphs_to_vertices(
-                &self.pipelines,
-                &mut text_vertices,
-                tp, // TextParams mutable ref
-                &mut char_i,
-                caret_index,
-                baseline_y,
-                &mut pen_x,
-                &mut caret_x,
-                &mut original_text,
-                &mut min_x,
-                &mut min_y,
-                &mut max_x,
-                &mut max_y,
-            );
-
-            // caret at end → last glyph right edge or pen_x
-            if caret_index == tp.text.len() {
-                if let Some((_, last_x1)) = tp.glyph_bounds.last() {
-                    caret_x = *last_x1;
-                } else {
-                    caret_x = tp.pos[0];
-                }
-            }
-
-            // ---- bounding box for the whole text ----
-            if max_x < min_x {
-                tp.natural_width = 0.0;
-                tp.natural_height = metrics.line_height + 2.0 * pad;
-            } else {
-                let padded_min_x = min_x - pad;
-                let padded_max_x = max_x + pad;
-
-                tp.natural_width = padded_max_x - padded_min_x;
-                tp.natural_height = metrics.line_height + 2.0 * pad;
-            }
-
-            // ---- write back natural_width/natural_height to UiButtonText ----
-            let mut being_edited = false;
-            let mut being_hovered = false;
-            let mut is_input_box = false;
-            if let Some(orig) = &mut original_text {
-                orig.natural_width = tp.natural_width;
-                orig.natural_height = tp.natural_height;
-                orig.ascent = metrics.ascent; // <-- use per-size ascent
-                being_edited = orig.being_edited;
-                being_hovered = orig.being_hovered;
-                orig.being_hovered = false;
-                orig.just_unhovered = true;
-                is_input_box = orig.input_box
-            }
-
-            // ---- selection / editor outlines / brackets etc ----
-            let mut is_selected = false;
-            if let Some(ref text_id) = tp.id {
-                let sel = &ui_runtime.selected_ui_element_primary;
-                if sel.active
-                    && sel.element_id == *text_id
-                    && sel.layer_name == layer.name
-                    && sel.menu_name == *menu_name
-                {
-                    is_selected = true;
-                }
-            }
-
-            if let Some(orig) = original_text {
-                render_selection(orig, min_y, max_y, &mut text_vertices);
-            }
-
-            // editor outline
-            if ui_runtime.editor_mode && !being_edited && !is_selected {
-                render_editor_outline(
-                    min_x,
-                    min_y,
-                    max_x,
-                    max_y,
-                    &mut text_vertices,
-                    pad,
-                    being_hovered,
-                );
-            }
-
-            // corner brackets
-            if is_selected && !being_edited {
-                render_corner_brackets(
-                    min_x,
-                    min_y,
-                    max_x,
-                    max_y,
-                    &mut text_vertices,
-                    being_hovered,
-                );
-            }
-
-            // caret rendering when editing
-            if being_edited || (is_input_box && is_selected) {
-                render_editor_caret(tp, caret_x, &mut text_vertices, metrics, time_system);
-            }
-        } // for tp
-
-        text_vertices
+        upload_circles(self, queue, layer);
+        upload_outlines(self, queue, layer);
+        upload_handles(self, queue, layer);
+        upload_polygons(self, queue, layer);
+        upload_text(self, queue, layer, time_system, ui_runtime, menu_name);
     }
 
     pub fn rebuild_text_bind_group(&mut self) {
         let atlas = &self.pipelines.text_atlas;
 
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("Text Atlas Bind Group"),
             layout: &self.pipelines.text_layout,
             entries: &[
-                wgpu::BindGroupEntry {
+                BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&atlas.view),
+                    resource: BindingResource::TextureView(&atlas.view),
                 },
-                wgpu::BindGroupEntry {
+                BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&atlas.sampler),
+                    resource: BindingResource::Sampler(&atlas.sampler),
                 },
             ],
         });
 
         self.pipelines.text_bind_group = bind_group;
     }
+}
+
+pub(crate) fn make_poly_ssbo(
+    edges: &mut Vec<PolygonEdgeGpu>,
+    poly: &UiButtonPolygon,
+    infos: &mut Vec<PolygonInfoGpu>,
+) {
+    let edge_offset = edges.len() as u32;
+    let mut edge_count = 0u32;
+
+    let n = poly.vertices.len();
+    if n >= 2 {
+        for i in 0..n {
+            let a = poly.vertices[i].pos;
+            let b = poly.vertices[(i + 1) % n].pos;
+            edges.push(PolygonEdgeGpu { p0: a, p1: b });
+            edge_count += 1;
+        }
+    }
+
+    infos.push(PolygonInfoGpu {
+        edge_offset,
+        edge_count,
+        _pad0: [0, 0],
+    });
+}
+
+pub(crate) fn upload_poly_vbo(
+    ui_renderer: &mut UiRenderer,
+    poly_vertices: Vec<UiVertexPoly>,
+    layer: &mut RuntimeLayer,
+    queue: &Queue,
+) {
+    let bytes = bytemuck::cast_slice(&poly_vertices);
+    let need_new = layer
+        .gpu
+        .poly_vbo
+        .as_ref()
+        .map(|b| b.size() < bytes.len() as u64)
+        .unwrap_or(true);
+    if need_new {
+        layer.gpu.poly_vbo = Some(ui_renderer.device.create_buffer(&BufferDescriptor {
+            label: Some(&format!("{}_poly_vbo", layer.name)),
+            size: bytes.len() as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+    }
+    queue.write_buffer(layer.gpu.poly_vbo.as_ref().unwrap(), 0, bytes);
 }

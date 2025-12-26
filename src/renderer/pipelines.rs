@@ -1,21 +1,24 @@
 use crate::components::camera::Camera;
-use crate::mouse_ray::PickUniform;
-use crate::paths::data_dir;
-use crate::renderer::textures::grass::{GrassParams, generate_noise};
+use crate::renderer::pipelines_outsource::*;
 use crate::resources::Uniforms;
-use crate::terrain::sky::SkyUniform;
-use crate::terrain::water::{SimpleVertex, WaterUniform};
+use crate::terrain::water::SimpleVertex;
 use crate::ui::vertex::{LineVtx, Vertex};
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::fs;
-use std::mem::size_of;
 use std::path::{Path, PathBuf};
-use wgpu::TextureFormat::Rgba8Unorm;
-use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
-    *,
-};
+use wgpu::*;
+
+#[macro_export]
+macro_rules! time_call {
+    ($label:expr, $expr:expr) => {{
+        let start = Instant::now();
+        let result = $expr;
+        let elapsed = start.elapsed();
+        println!("{:<40} {:>8.3} ms", $label, elapsed.as_secs_f64() * 1000.0);
+        result
+    }};
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -100,365 +103,21 @@ impl Pipelines {
         shader_dir: &Path,
         camera: &Camera,
     ) -> anyhow::Result<Self> {
-        let terrain_shader_path = shader_dir.join("ground.wgsl");
-        let line_shader_path = shader_dir.join("lines.wgsl");
+        // Create render targets
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
+        // Load all shaders
+        let shaders = load_all_shaders(device, shader_dir)?;
 
-        let terrain_shader = load_shader(device, &terrain_shader_path, "Ground Shader")?;
-
-        let grass_texture_shader_path = shader_dir.join("textures/grass.wgsl");
-        let grass_texture_shader =
-            load_shader(device, &grass_texture_shader_path, "Grass Texture Shader")?;
-
-        let aspect = config.width as f32 / config.height as f32;
-        let sun = Vec3::new(0.3, 1.0, 0.6).normalize();
-        let cam_pos = camera.position();
-        let (view, proj, view_proj) = camera.matrices(aspect);
-        let uniforms = make_new_uniforms(
-            view,
-            proj,
-            view_proj,
-            sun,
-            Vec3::new(0.0, 0.0, 0.0),
-            cam_pos,
-            camera.orbit_radius,
-            0.0,
-        );
-        let pick_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Pick Uniform BGL"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let pick_uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Pick Uniform Buffer"),
-            contents: bytemuck::bytes_of(&PickUniform {
-                pos: [0.0; 3],
-                radius: 0.0,
-                underwater: 0,
-                _pad0: [0, 0, 0],
-                color: [1.0, 0.0, 0.0],
-                _pad1: 0.0,
-            }),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-        let pick_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Pick Uniform BG"),
-            layout: &pick_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: pick_uniform_buffer.as_entire_binding(),
-            }],
-        });
-        let uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-
-        let uniform_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Uniform Bind Group Layout"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(size_of::<Uniforms>() as u64),
-                    },
-                    count: None,
-                }],
-            });
-
-        let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Uniform Bind Group"),
-            layout: &uniform_bind_group_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        let gizmo_vbuf = device.create_buffer(&BufferDescriptor {
-            label: Some("Gizmo VB"),
-            size: (size_of::<LineVtx>() * 6) as u64, // 3 axes = 6 vertices
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let fog_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Fog BGL"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: BufferSize::new(size_of::<FogUniforms>() as u64),
-                },
-                count: None,
-            }],
-        });
-
-        // Fog uniform buffer
-        let fog_uniform_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Fog Uniform Buffer"),
-            size: size_of::<FogUniforms>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Fog bind group
-        let fog_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Fog Bind Group"),
-            layout: &fog_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: fog_uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        let line_shader = load_shader(device, &line_shader_path, "Line Shader")?;
-
-        let water_shader_path = shader_dir.join("water.wgsl");
-        let water_shader = load_shader(device, &water_shader_path, "Water Shader")?;
-
-        let water_vertices = [
-            SimpleVertex {
-                pos: [-20000.0, 0.0, -20000.0],
-            },
-            SimpleVertex {
-                pos: [20000.0, 0.0, -20000.0],
-            },
-            SimpleVertex {
-                pos: [20000.0, 0.0, 20000.0],
-            },
-            SimpleVertex {
-                pos: [-20000.0, 0.0, 20000.0],
-            },
-        ];
-
-        let water_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
-
-        let water_vbuf = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Water VB"),
-            contents: bytemuck::cast_slice(&water_vertices),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let water_ibuf = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Water IB"),
-            contents: bytemuck::cast_slice(&water_indices),
-            usage: BufferUsages::INDEX,
-        });
-
-        let water_index_count = water_indices.len() as u32;
-
-        let wu = WaterUniform {
-            sea_level: 0.0,
-            _pad0: [0.0; 3],
-            color: [0.05, 0.25, 0.35, 0.55],
-            wave_tiling: 0.05,
-            wave_strength: 0.05,
-            _pad1: [0.0; 2],
-        };
-
-        let water_uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Water Uniform Buffer"),
-            contents: bytemuck::bytes_of(&wu),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-
-        let water_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Water BGL"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(size_of::<WaterUniform>() as u64),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(size_of::<SkyUniform>() as u64),
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let sky_uniform = SkyUniform {
-            exposure: 1.0,
-            moon_phase: 0.0,
-
-            sun_size: 0.05, // NDC radius for now (0.05 = big)
-            sun_intensity: 510.0,
-
-            moon_size: 0.04,
-            moon_intensity: 1.0,
-
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-
-        let sky_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Sky Uniform Buffer"),
-            contents: bytemuck::bytes_of(&sky_uniform),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-
-        let water_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Water BG"),
-            layout: &water_bgl,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: water_uniform_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: sky_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let sky_shader_path = shader_dir.join("sky.wgsl");
-        let sky_shader = load_shader(device, &sky_shader_path, "Sky Shader")?;
-
-        let stars_shader_path = shader_dir.join("stars.wgsl");
-        let stars_shader = load_shader(device, &stars_shader_path, "Stars Shader")?;
-
-        let sky_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Sky Uniforms BGL"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let stars_bytes = fs::read(data_dir("stars.bin")).expect("stars.bin missing");
-
-        let stars_vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Star Buffer"),
-            contents: &stars_bytes,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-        });
-
-        let sky_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Sky BG"),
-            layout: &sky_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: sky_buffer.as_entire_binding(),
-            }],
-        });
-        let grass_params = GrassParams {
-            grass_color: [0.2, 0.6, 0.2, 1.0],
-            blade_density: 120.0,
-            blade_height: 0.8,
-            wind_phase: 0.0,
-            time: 0.0,
-            noise_scale: 4.0,
-            _pad: [0.0; 3],
-        };
-
-        let grass_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("grass_params_buffer"),
-            contents: bytemuck::bytes_of(&grass_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let noise_data: Vec<f32> = generate_noise(512);
-
-        let noise_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("grass_noise_buffer"),
-            contents: bytemuck::cast_slice(&noise_data),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let grass_texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("grass_texture_bgl"),
-                entries: &[
-                    // storage texture output
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: Rgba8Unorm,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                    // uniform buffer
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // noise buffer
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-        let (_, grass_texture_view) = create_grass_texture(&device, &config);
-        let grass_texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Grass Texture Bind Group"),
-            layout: &grass_texture_bind_group_layout,
-            entries: &[
-                // storage texture
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&grass_texture_view),
-                },
-                // uniform params
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: grass_params_buffer.as_entire_binding(),
-                },
-                // noise buffer
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: noise_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let uniforms = create_camera_uniforms(device, camera, config);
+        let sky_uniforms = create_sky_uniforms(device);
+        let fog_uniforms = create_fog_uniforms(device);
+        let pick_uniforms = create_pick_uniforms(device);
+        let water_uniforms = create_water_uniforms(device, &sky_uniforms.buffer);
+        let water_mesh = create_water_mesh(device);
+        let gizmo_mesh = create_gizmo_mesh(device);
+        let stars_mesh = create_stars_mesh(device);
+        let grass_texture_resources = create_grass_texture_resources(device, config);
 
         let mut this = Self {
             device: device.clone(),
@@ -469,72 +128,38 @@ impl Pipelines {
             msaa_samples,
             config: config.clone(),
 
-            uniforms: GpuResourceSet {
-                bind_group_layout: uniform_bind_group_layout,
-                bind_group: uniform_bind_group,
-                buffer: uniform_buffer,
-            },
-            sky_uniforms: GpuResourceSet {
-                bind_group_layout: sky_bgl,
-                bind_group: sky_bind_group,
-                buffer: sky_buffer,
-            },
-            water_uniforms: GpuResourceSet {
-                bind_group_layout: water_bgl,
-                bind_group: water_bind_group,
-                buffer: water_uniform_buffer,
-            },
-            fog_uniforms: GpuResourceSet {
-                bind_group_layout: fog_bgl,
-                bind_group: fog_bind_group,
-                buffer: fog_uniform_buffer,
-            },
-            pick_uniforms: GpuResourceSet {
-                bind_group_layout: pick_bgl,
-                bind_group: pick_bind_group,
-                buffer: pick_uniform_buffer,
-            },
+            uniforms,
+            sky_uniforms,
+            water_uniforms,
+            fog_uniforms,
+            pick_uniforms,
 
             terrain_pipeline_above_water: make_dummy_render_pipeline_state(
                 device,
                 config.format,
-                terrain_shader.clone(),
+                shaders.terrain.clone(),
             ),
-
             terrain_pipeline_under_water: make_dummy_render_pipeline_state(
                 device,
                 config.format,
-                terrain_shader,
+                shaders.terrain,
             ),
-            water_pipeline: make_dummy_render_pipeline_state(device, config.format, water_shader),
-            water_mesh_buffers: MeshBuffers {
-                vertex: water_vbuf,
-                index: water_ibuf,
-                index_count: water_index_count,
-            },
+            water_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.water),
+            water_mesh_buffers: water_mesh,
 
-            sky_pipeline: make_dummy_render_pipeline_state(device, config.format, sky_shader),
+            sky_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.sky),
 
-            gizmo_pipeline: make_dummy_render_pipeline_state(device, config.format, line_shader),
-            gizmo_mesh_buffers: MeshBuffers {
-                vertex: gizmo_vbuf,
-                index: make_dummy_buf(&device),
-                index_count: 0,
-            },
+            gizmo_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.line),
+            gizmo_mesh_buffers: gizmo_mesh,
 
-            stars_pipeline: make_dummy_render_pipeline_state(device, config.format, stars_shader),
-            stars_mesh_buffers: MeshBuffers {
-                vertex: stars_vertex_buffer,
-                index: make_dummy_buf(&device),
-                index_count: 0,
-            },
+            stars_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.stars),
+            stars_mesh_buffers: stars_mesh,
 
-            grass_texture_pipeline: make_dummy_compute_pipeline_state(device, grass_texture_shader),
-            grass_texture_resources: GpuResourceSet {
-                bind_group_layout: grass_texture_bind_group_layout,
-                bind_group: grass_texture_bind_group,
-                buffer: grass_params_buffer,
-            },
+            grass_texture_pipeline: make_dummy_compute_pipeline_state(
+                device,
+                shaders.grass_texture,
+            ),
+            grass_texture_resources,
         };
 
         this.recreate_pipelines();
@@ -977,7 +602,7 @@ impl Pipelines {
     }
 }
 
-fn make_dummy_buf(device: &Device) -> Buffer {
+pub fn make_dummy_buf(device: &Device) -> Buffer {
     device.create_buffer(&BufferDescriptor {
         label: Some("dummy ibuf"),
         size: 0,
@@ -1050,7 +675,10 @@ fn create_depth_texture(
     (texture, view)
 }
 
-fn create_grass_texture(device: &Device, config: &SurfaceConfiguration) -> (Texture, TextureView) {
+pub fn create_grass_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+) -> (Texture, TextureView) {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Grass Texture"),
         size: wgpu::Extent3d {
@@ -1099,7 +727,7 @@ pub fn make_new_uniforms(
     }
 }
 
-fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
+pub fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("dummy shader"),
         source: ShaderSource::Wgsl(

@@ -2,7 +2,7 @@ use crate::ui::cache::*;
 use crate::ui::ui_editor::{
     ElementKind, LayerDirty, RuntimeLayer, UiButtonLoader, UiVariableRegistry,
 };
-use crate::ui::uiruntime::UiRuntime;
+use crate::ui::ui_runtime::UiRuntime;
 
 #[derive(Debug)]
 pub struct Menu {
