@@ -30,8 +30,12 @@ impl Resources {
         let camera_entity = world.main_camera();
         let camera = world.camera(camera_entity).unwrap();
         let renderer = Renderer::new(window.clone(), &settings, camera);
-        let mut ui_loader =
-            UiButtonLoader::new(editor_mode, settings.override_mode, settings.show_gui);
+        let mut ui_loader = UiButtonLoader::new(
+            editor_mode,
+            settings.override_mode,
+            settings.show_gui,
+            settings.bend_mode.clone(),
+        );
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);

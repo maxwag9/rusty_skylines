@@ -1,3 +1,4 @@
+use crate::data::BendMode;
 use crate::paths::data_dir;
 use crate::resources::{InputState, TimeSystem};
 pub(crate) use crate::ui::actions::{activate_action, execute_action};
@@ -13,6 +14,7 @@ use crate::ui::touches::{
     handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing, near_handle,
     press_began_on_ui,
 };
+use crate::ui::ui_loader::load_gui_from_file;
 pub(crate) use crate::ui::ui_runtime::UiRuntime;
 pub(crate) use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::UiElement::*;
@@ -31,13 +33,18 @@ pub struct UiButtonLoader {
 }
 
 impl UiButtonLoader {
-    pub fn new(editor_mode: bool, override_mode: bool, show_gui: bool) -> Self {
+    pub fn new(
+        editor_mode: bool,
+        override_mode: bool,
+        show_gui: bool,
+        bend_mode: BendMode,
+    ) -> Self {
         let layout_path = data_dir("ui_data/gui_layout.json");
-        let layout = Self::load_gui_from_file(layout_path).unwrap_or_else(|e| {
+        let layout = load_gui_from_file(layout_path, bend_mode).unwrap_or_else(|e| {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
         });
-
+        println!("{:?}", layout);
         let mut loader = Self {
             menus: Default::default(),
             ui_runtime: UiRuntime::new(editor_mode, override_mode, show_gui),
@@ -118,12 +125,6 @@ impl UiButtonLoader {
         loader.ensure_console_layer();
 
         loader
-    }
-
-    pub fn load_gui_from_file(path: PathBuf) -> Result<GuiLayout, Box<dyn std::error::Error>> {
-        let data = fs::read_to_string(&path)?;
-        let parsed: GuiLayout = serde_json::from_str(&data)?;
-        Ok(parsed)
     }
 
     pub fn save_gui_to_file(&self, path: PathBuf) -> anyhow::Result<()> {

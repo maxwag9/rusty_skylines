@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
 
+/// Mode switch: Strict attempts to deserialize the file as normal JSON into GuiLayout.
+/// Bent ignores JSON structure and deterministically synthesizes a GuiLayout from the file bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BendMode {
+    Strict,
+    Bent,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")] // "fifo", "mailbox", ...
 pub enum PresentModeSetting {
@@ -26,6 +34,20 @@ impl Default for PresentModeSetting {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct PartialSettings {
+    target_fps: Option<f32>,
+    target_tps: Option<f32>,
+    present_mode: Option<PresentModeSetting>,
+    editor_mode: Option<bool>,
+    override_mode: Option<bool>,
+    show_gui: Option<bool>,
+    background_color: Option<[f32; 4]>,
+    total_game_time: Option<f64>,
+    world_generation_benchmark_mode: Option<bool>,
+    bend_mode: Option<BendMode>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -39,6 +61,7 @@ pub struct Settings {
     pub background_color: [f32; 4],
     pub total_game_time: f64,
     pub world_generation_benchmark_mode: bool,
+    pub bend_mode: BendMode,
 }
 
 impl Default for Settings {
@@ -53,6 +76,7 @@ impl Default for Settings {
             background_color: [0.0, 0.0, 0.0, 1.0],
             total_game_time: 0.0,
             world_generation_benchmark_mode: false,
+            bend_mode: BendMode::Strict,
         }
     }
 }
@@ -62,10 +86,13 @@ impl Settings {
         let path = path.as_ref();
 
         match fs::read_to_string(path) {
-            Ok(content) => toml::from_str::<Self>(&content).unwrap_or_else(|err| {
-                eprintln!("Error parsing {:?}: {err}", path);
-                Self::default()
-            }),
+            Ok(content) => match toml::from_str::<PartialSettings>(&content) {
+                Ok(partial) => Settings::from_partial(partial),
+                Err(err) => {
+                    eprintln!("Error parsing {:?}: {err}", path);
+                    Self::default()
+                }
+            },
             Err(_) => {
                 eprintln!("No settings file found, creating default {:?}", path);
                 let default = Self::default();
@@ -88,5 +115,41 @@ impl Settings {
         fs::write(path, toml_str)?;
 
         Ok(())
+    }
+    fn from_partial(p: PartialSettings) -> Self {
+        let mut s = Self::default();
+
+        if let Some(v) = p.target_fps {
+            s.target_fps = v;
+        }
+        if let Some(v) = p.target_tps {
+            s.target_tps = v;
+        }
+        if let Some(v) = p.present_mode {
+            s.present_mode = v;
+        }
+        if let Some(v) = p.editor_mode {
+            s.editor_mode = v;
+        }
+        if let Some(v) = p.override_mode {
+            s.override_mode = v;
+        }
+        if let Some(v) = p.show_gui {
+            s.show_gui = v;
+        }
+        if let Some(v) = p.background_color {
+            s.background_color = v;
+        }
+        if let Some(v) = p.total_game_time {
+            s.total_game_time = v;
+        }
+        if let Some(v) = p.world_generation_benchmark_mode {
+            s.world_generation_benchmark_mode = v;
+        }
+        if let Some(v) = p.bend_mode {
+            s.bend_mode = v;
+        }
+
+        s
     }
 }

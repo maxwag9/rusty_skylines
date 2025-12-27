@@ -8,6 +8,7 @@ mod selections;
 mod special_actions;
 pub mod touches;
 pub mod ui_editor;
+mod ui_loader;
 pub mod ui_runtime;
 pub mod variables;
 pub mod vertex;
