@@ -49,7 +49,7 @@ pub fn create_color_attachment<'a>(
     }
 }
 
-pub fn create_depth_attachment(depth_view: &TextureView) -> RenderPassDepthStencilAttachment {
+pub fn create_depth_attachment(depth_view: &TextureView) -> RenderPassDepthStencilAttachment<'_> {
     RenderPassDepthStencilAttachment {
         view: depth_view,
         depth_ops: Some(Operations {

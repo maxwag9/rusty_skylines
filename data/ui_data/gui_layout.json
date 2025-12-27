@@ -43,7 +43,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "sky_info_text",
@@ -81,7 +82,64 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        }
+      ]
+    },
+    {
+      "name": "Main Menu",
+      "layers": [
+        {
+          "name": "main_menu_buttons",
+          "order": 2,
+          "texts": [
+            {
+              "id": "play_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 2,
+              "x": 1700.0,
+              "y": 700.0,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 24,
+              "color": [
+                1.0,
+                0.0,
+                1.0,
+                1.0
+              ],
+              "text": "Play",
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              },
+              "input_box": false,
+              "anchor": null
             }
           ],
           "circles": [],
@@ -136,7 +194,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_menu_text",
@@ -174,7 +233,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_layer_text",
@@ -212,7 +272,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_element_text",
@@ -250,7 +311,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "editing_text_text",
@@ -288,7 +350,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_text.being_edited_text",
@@ -326,7 +389,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_layer.order_text",
@@ -364,7 +428,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_element.z_index_text",
@@ -402,7 +467,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "mouse_pos_text",
@@ -440,7 +506,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "any_text.being_hovered_text",
@@ -478,7 +545,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "selected_text.being_hovered_text",
@@ -516,7 +584,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "color_picker.color_text",
@@ -554,7 +623,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "editor_mode_text",
@@ -592,7 +662,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             }
           ],
           "circles": [
@@ -689,7 +760,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": false
+              "input_box": false,
+              "anchor": null
             },
             {
               "id": "Color Picker Red Input Box",
@@ -727,7 +799,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": true
+              "input_box": true,
+              "anchor": null
             },
             {
               "id": "Color Picker Green Input Box",
@@ -765,7 +838,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": true
+              "input_box": true,
+              "anchor": null
             },
             {
               "id": "Color Picker Blue Input Box",
@@ -803,7 +877,8 @@
                 "pressable": false,
                 "editable": true
               },
-              "input_box": true
+              "input_box": true,
+              "anchor": null
             }
           ],
           "circles": [
@@ -924,61 +999,6 @@
             }
           ],
           "active": false,
-          "opaque": false
-        }
-      ]
-    },
-    {
-      "name": "Main Menu",
-      "layers": [
-        {
-          "name": "main_menu_buttons",
-          "order": 2,
-          "texts": [
-            {
-              "id": "play_text",
-              "action": "None",
-              "style": "None",
-              "z_index": 2,
-              "x": 1700,
-              "y": 700,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                1.0,
-                0.0,
-                1.0,
-                1.0
-              ],
-              "text": "Play",
-              "misc": {
-                "active": true,
-                "pressable": true,
-                "editable": true
-              },
-              "input_box": false
-            }
-          ],
-          "circles": [],
-          "outlines": [],
-          "handles": [],
-          "polygons": [],
-          "active": true,
           "opaque": false
         }
       ]

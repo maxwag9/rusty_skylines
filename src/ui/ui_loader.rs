@@ -339,7 +339,7 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineJson {
 fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonJson {
     let verts_n = 3 + rng.next_usize(6); // 3..8 vertices
     let mut verts = Vec::with_capacity(verts_n);
-    for vi in 0..verts_n {
+    for _ in 0..verts_n {
         verts.push(UiVertexJson {
             pos: [
                 rng.next_f32_range(0.0, 1_000.0),

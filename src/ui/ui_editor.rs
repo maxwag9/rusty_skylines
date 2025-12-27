@@ -44,7 +44,6 @@ impl UiButtonLoader {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
         });
-        println!("{:?}", layout);
         let mut loader = Self {
             menus: Default::default(),
             ui_runtime: UiRuntime::new(editor_mode, override_mode, show_gui),

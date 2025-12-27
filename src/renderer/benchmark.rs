@@ -86,14 +86,14 @@ impl Benchmark {
 
     fn start_run(&mut self, config: &mut ChunkJobConfig, clear_state: impl FnOnce()) {
         let bench = self.state.as_mut().unwrap();
-        let mut rng = rand::thread_rng();
-        let explore = rng.gen_bool(0.2);
+        let mut rng = rand::rng();
+        let explore = rng.random_bool(0.2);
 
         if explore {
-            config.max_close_jobs_per_frame = rng.gen_range(1..=MAX_CLOSE_JOBS);
-            config.max_far_jobs_per_frame = rng.gen_range(1..=MAX_FAR_JOBS);
-            config.max_close_chunks_per_batch = rng.gen_range(4..=MAX_BATCH);
-            config.max_far_chunks_per_batch = rng.gen_range(8..=MAX_BATCH);
+            config.max_close_jobs_per_frame = rng.random_range(1..=MAX_CLOSE_JOBS);
+            config.max_far_jobs_per_frame = rng.random_range(1..=MAX_FAR_JOBS);
+            config.max_close_chunks_per_batch = rng.random_range(4..=MAX_BATCH);
+            config.max_far_chunks_per_batch = rng.random_range(8..=MAX_BATCH);
         } else {
             config.max_close_jobs_per_frame = bench.close_jobs.min;
             config.max_far_jobs_per_frame = bench.far_jobs.min;

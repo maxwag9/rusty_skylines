@@ -168,7 +168,6 @@ impl TextAtlas {
                         }
                     }
                 };
-                let ascent = metrics.ascent;
                 try_metrics.insert(size, metrics);
 
                 for &ch in &charset {

@@ -250,6 +250,16 @@ impl ApplicationHandler for App {
                         Ok(_) => println!("Settings saved"),
                         Err(e) => eprintln!("Failed to save Settings: {e}"),
                     }
+                    match resources
+                        .renderer
+                        .core
+                        .world
+                        .terrain_editor
+                        .save_edits(data_dir("edited_chunks"))
+                    {
+                        Ok(_) => println!("World saved"),
+                        Err(e) => eprintln!("Failed to save World: {e}"),
+                    }
                     event_loop.exit()
                 }
                 // Add GUI element

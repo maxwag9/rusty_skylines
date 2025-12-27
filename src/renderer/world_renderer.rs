@@ -3,8 +3,7 @@ use crate::mouse_ray::*;
 use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
 use crate::renderer::pipelines::Pipelines;
 use crate::terrain::chunk_builder::{
-    ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, apply_sparse_deltas_to_height_grid,
-    generate_spiral_offsets, lod_step_for_distance, regenerate_vertices_from_height_grid,
+    ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
 };
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
@@ -15,6 +14,7 @@ use std::sync::Arc;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 use crate::data::Settings;
+use crate::paths::data_dir;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::terrain_editing::*;
@@ -41,7 +41,7 @@ pub struct WorldRenderer {
 
     pub chunks: HashMap<(i32, i32), ChunkMeshLod>,
     pub pending: HashMap<(i32, i32), (u64, usize)>,
-    terrain_editor: TerrainEditor,
+    pub terrain_editor: TerrainEditor,
 
     pub terrain_gen: TerrainGenerator,
     pub chunk_size: usize,
@@ -60,9 +60,9 @@ pub struct WorldRenderer {
     pub pick_radius_m: f32,
     pub last_picked: Option<PickedPoint>,
 
-    benchmark: Benchmark,
+    pub benchmark: Benchmark,
     pub frame_timings: FrameTimings,
-    job_config: ChunkJobConfig,
+    pub job_config: ChunkJobConfig,
 }
 
 impl WorldRenderer {
@@ -85,12 +85,22 @@ impl WorldRenderer {
         println!("Using {} chunk workers", threads);
 
         let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size as u32);
+        let terrain_editor = match TerrainEditor::load_edits(data_dir("edited_chunks")) {
+            Ok(te) => {
+                println!("World loaded");
+                te
+            }
+            Err(e) => {
+                eprintln!("Failed to load World: {e}");
+                TerrainEditor::default()
+            }
+        };
 
         Self {
             arena,
             chunks: HashMap::new(),
             pending: HashMap::new(),
-            terrain_editor: TerrainEditor::default(),
+            terrain_editor,
 
             terrain_gen,
             chunk_size,
@@ -106,7 +116,7 @@ impl WorldRenderer {
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
-            pick_radius_m: 10.0,
+            pick_radius_m: 100.0,
             last_picked: None,
 
             benchmark: Benchmark::default(),
@@ -122,7 +132,7 @@ impl WorldRenderer {
         aspect: f32,
         settings: &Settings,
         input_state: &mut InputState,
-        time_system: &TimeSystem,
+        _time_system: &TimeSystem,
     ) {
         let t_frame = Instant::now();
 
@@ -254,33 +264,46 @@ impl WorldRenderer {
     pub fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
         while let Ok(cpu) = self.workers.result_rx.try_recv() {
             let coord = (cpu.cx, cpu.cz);
-            // Drop obsolete results
+
             if !self.workers.is_current_version(coord, cpu.version) {
                 continue;
             }
 
-            // Replace old chunk
             self.remove_chunk(coord);
 
-            // Move out of cpu to avoid clone
             let mut vertices = cpu.vertices;
             let indices = cpu.indices;
-            // start with worker's height grid (base, generated from terrain_gen)
             let mut height_grid = (*cpu.height_grid).clone();
+            let step = cpu.step;
 
-            // If we have edits for this chunk, apply them to a new height grid (copy-on-write).
-            if let Some(edit) = self.terrain_editor.get_edits(&coord) {
-                if !edit.deltas.is_empty() {
-                    // apply sparse deltas to get a new grid
-                    let new_grid = apply_sparse_deltas_to_height_grid(&height_grid, &edit.deltas);
-                    height_grid = new_grid;
+            // Check if this chunk has accumulated edits
+            let has_edits = self
+                .terrain_editor
+                .edited_chunks
+                .get(&coord)
+                .map_or(false, |e| !e.accumulated_deltas.is_empty());
 
-                    // regenerate vertex heights & normals from the new height grid
-                    regenerate_vertices_from_height_grid(&mut vertices, &height_grid);
-                }
+            // Check if any neighbor is STRICTLY coarser (higher step = needs stitching on that edge)
+            let has_coarser_neighbor = false;
+
+            // Only apply delta/stitching logic if there are edits OR coarser neighbors exist
+            if has_edits || has_coarser_neighbor {
+                height_grid = apply_accumulated_deltas_with_stitching(
+                    &height_grid,
+                    coord,
+                    &self.terrain_editor.edited_chunks,
+                    &self.chunks,
+                    step,
+                );
+
+                recompute_patch_minmax(&mut height_grid);
+                regenerate_vertices_from_height_grid_and_color(
+                    &mut vertices,
+                    &height_grid,
+                    &self.terrain_gen,
+                );
             }
 
-            // Upload new chunk to GPU
             let handle = self.arena.alloc_and_upload(
                 device,
                 queue,
@@ -289,11 +312,10 @@ impl WorldRenderer {
                 &mut GeometryScratch::default(),
             );
 
-            // Insert chunk with moved buffers and updated height grid (Arc)
             self.chunks.insert(
                 coord,
                 ChunkMeshLod {
-                    step: cpu.step,
+                    step,
                     handle,
                     cpu_vertices: vertices,
                     cpu_indices: indices,

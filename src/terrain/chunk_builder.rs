@@ -22,17 +22,6 @@ pub struct ChunkMeshLod {
     pub cpu_indices: Vec<u32>,
     pub height_grid: Arc<ChunkHeightGrid>,
 }
-pub(crate) struct EditedChunk {
-    /// (gx, gz, delta)
-    pub(crate) deltas: Vec<(usize, usize, f32)>,
-    pub(crate) dirty: bool,
-}
-
-impl EditedChunk {
-    pub fn is_empty(&self) -> bool {
-        self.deltas.is_empty()
-    }
-}
 
 /// Apply sparse deltas to a clone of the provided height grid and return the new grid.
 /// This does not use locks. It clones the grid, applies the deltas, and recomputes only affected patch minmax entries.
@@ -128,12 +117,13 @@ pub fn apply_sparse_deltas_to_height_grid(
 pub fn regenerate_vertices_from_height_grid(
     vertices: &mut [Vertex],
     height_grid: &ChunkHeightGrid,
+    terrain_gen: &TerrainGenerator,
 ) {
     let verts_x = height_grid.nx;
     let verts_z = height_grid.nz;
     let stepf = height_grid.cell;
-    let _base_x = height_grid.base_x;
-    let _base_z = height_grid.base_z;
+    let base_x = height_grid.base_x;
+    let base_z = height_grid.base_z;
 
     // sanity check
     if vertices.len() != verts_x * verts_z {
@@ -158,30 +148,41 @@ pub fn regenerate_vertices_from_height_grid(
         for gz in 0..verts_z {
             let idx = gx * verts_z + gz;
 
+            // Recalculate world position for neighbor queries
+            let wx = base_x + (gx as f32 * stepf);
+            let wz = base_z + (gz as f32 * stepf);
+
+            // --- X Axis Gradient ---
             let h_l = if gx > 0 {
-                vertices[(gx - 1) * verts_z + gz].position[1]
+                height_grid.heights[(gx - 1) * verts_z + gz]
             } else {
-                vertices[idx].position[1]
+                // Query generator for x - 1
+                terrain_gen.height(wx - stepf, wz)
             };
 
-            let h_r = if gx + 1 < verts_x {
-                vertices[(gx + 1) * verts_z + gz].position[1]
+            let h_r = if gx < verts_x - 1 {
+                height_grid.heights[(gx + 1) * verts_z + gz]
             } else {
-                vertices[idx].position[1]
+                // Query generator for x + 1
+                terrain_gen.height(wx + stepf, wz)
             };
 
+            // --- Z Axis Gradient ---
             let h_d = if gz > 0 {
-                vertices[gx * verts_z + (gz - 1)].position[1]
+                height_grid.heights[gx * verts_z + (gz - 1)]
             } else {
-                vertices[idx].position[1]
+                // Query generator for z - 1
+                terrain_gen.height(wx, wz - stepf)
             };
 
-            let h_u = if gz + 1 < verts_z {
-                vertices[gx * verts_z + (gz + 1)].position[1]
+            let h_u = if gz < verts_z - 1 {
+                height_grid.heights[gx * verts_z + (gz + 1)]
             } else {
-                vertices[idx].position[1]
+                // Query generator for z + 1
+                terrain_gen.height(wx, wz + stepf)
             };
 
+            // Central Difference
             let dhdx = (h_r - h_l) * 0.5 * inv;
             let dhdz = (h_u - h_d) * 0.5 * inv;
 
@@ -433,52 +434,4 @@ pub fn generate_spiral_offsets(radius: i32) -> Vec<(i32, i32)> {
     // sort by distance from center
     v.sort_by_key(|(dx, dz)| dx * dx + dz * dz);
     v
-}
-pub fn recompute_normals_and_color(verts: &mut [Vertex], step: usize, terrain: &TerrainGenerator) {
-    let stepf = step as f32;
-    let inv = 1.0 / stepf;
-
-    let verts_z = (verts.len() as f32).sqrt() as usize;
-
-    for x in 0..verts_z {
-        for z in 0..verts_z {
-            let i = x * verts_z + z;
-
-            let h = verts[i].position[1];
-
-            let h_l = if x > 0 {
-                verts[(x - 1) * verts_z + z].position[1]
-            } else {
-                h
-            };
-
-            let h_r = if x + 1 < verts_z {
-                verts[(x + 1) * verts_z + z].position[1]
-            } else {
-                h
-            };
-
-            let h_d = if z > 0 {
-                verts[x * verts_z + z - 1].position[1]
-            } else {
-                h
-            };
-
-            let h_u = if z + 1 < verts_z {
-                verts[x * verts_z + z + 1].position[1]
-            } else {
-                h
-            };
-
-            let dhdx = (h_r - h_l) * 0.5 * inv;
-            let dhdz = (h_u - h_d) * 0.5 * inv;
-
-            let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
-            verts[i].normal = [n.x, n.y, n.z];
-
-            let wx = verts[i].position[0];
-            let wz = verts[i].position[2];
-            verts[i].color = terrain.color(wx, wz, h, terrain.moisture(wx, wz, h));
-        }
-    }
 }
