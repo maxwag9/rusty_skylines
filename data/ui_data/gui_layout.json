@@ -37,7 +37,7 @@
                 1.0,
                 1.0
               ],
-              "text": "FPS: {fps:.1} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms",
+              "text": "FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? 'Smooth' : 'laggy'}",
               "misc": {
                 "active": true,
                 "pressable": false,
