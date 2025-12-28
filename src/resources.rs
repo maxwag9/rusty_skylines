@@ -35,6 +35,7 @@ impl Resources {
             settings.override_mode,
             settings.show_gui,
             settings.bend_mode.clone(),
+            window.inner_size(),
         );
         ui_loader
             .variables

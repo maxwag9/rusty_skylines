@@ -1,29 +1,24 @@
 use crate::components::camera::Camera;
+use crate::data::Settings;
 use crate::mouse_ray::*;
+use crate::paths::data_dir;
+use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
 use crate::renderer::pipelines::Pipelines;
-use crate::terrain::chunk_builder::{
-    ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, generate_spiral_offsets, lod_step_for_distance,
-};
+use crate::resources::{InputState, TimeSystem};
+use crate::terrain::chunk_builder::*;
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
+use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
 use crate::ui::vertex::Vertex;
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
-use crate::data::Settings;
-use crate::paths::data_dir;
-use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
-use crate::resources::{InputState, TimeSystem};
-use crate::terrain::terrain_editing::*;
-use rayon::prelude::*;
-use std::time::Instant;
-
 pub struct PickedPoint {
-    pub pos: glam::Vec3,
-    pub radius: f32,
+    pub pos: Vec3,
 }
 
 #[derive(Clone, Copy)]
@@ -228,14 +223,6 @@ impl WorldRenderer {
         }
     }
 
-    fn remove_chunk_internal(&mut self, coord: (i32, i32)) {
-        self.pending.remove(&coord);
-        if let Some(old) = self.chunks.remove(&coord) {
-            self.arena.free::<Vertex>(old.handle);
-        }
-        self.workers.forget_chunk(coord);
-    }
-
     fn frame_state(&self, camera: &Camera, aspect: f32) -> FrameState {
         let cs = self.chunk_size as f32;
 
@@ -297,10 +284,20 @@ impl WorldRenderer {
                 );
 
                 recompute_patch_minmax(&mut height_grid);
-                regenerate_vertices_from_height_grid_and_color(
+
+                // Gather neighbor edge heights for proper normal calculation at boundaries
+                let neighbor_edges = gather_neighbor_edge_heights(
+                    coord,
+                    &height_grid,
+                    &self.chunks,
+                    &self.terrain_editor.edited_chunks,
+                );
+                regenerate_vertices_from_height_grid(
                     &mut vertices,
                     &height_grid,
                     &self.terrain_gen,
+                    Some(&neighbor_edges),
+                    false,
                 );
             }
 
@@ -324,16 +321,13 @@ impl WorldRenderer {
             );
         }
     }
-
     fn remove_chunk(&mut self, coord: (i32, i32)) {
         // remove pending job
         self.pending.remove(&coord);
-
         // remove GPU chunk
         if let Some(old) = self.chunks.remove(&coord) {
             self.arena.free::<Vertex>(old.handle);
         }
-
         // tell workers to forget it
         self.workers.forget_chunk(coord);
     }
@@ -489,18 +483,6 @@ impl WorldRenderer {
         }
     }
 
-    fn lod_step_for_distance_with_hysteresis(&self, dist2: i32, current: usize) -> usize {
-        let desired = lod_step_for_distance(dist2);
-
-        if desired > current {
-            desired
-        } else if desired < current.saturating_sub(1) {
-            desired
-        } else {
-            current
-        }
-    }
-
     fn unload_out_of_range(&mut self, frame: &FrameState, visible: &[(i32, i32, i32)]) {
         // Avoid thrash: unload outside render radius + generous margin.
         let margin = 12;
@@ -646,31 +628,22 @@ impl WorldRenderer {
                 if let Some((_, pos)) =
                     raycast_chunk_heightgrid(ray, &chunk.height_grid, t, next_t + eps)
                 {
-                    self.last_picked = Some(PickedPoint {
-                        pos,
-                        radius: self.pick_radius_m,
-                    });
+                    self.last_picked = Some(PickedPoint { pos });
                     return Some((cx, cz, pos));
                 }
             }
 
-            let tie = (t_max_x - t_max_z).abs() < 1e-7;
-
-            if tie {
-                cx += step_x;
-                cz += step_z;
-                t = t_max_x;
-                t_max_x += t_delta_x;
-                t_max_z += t_delta_z;
-            } else if t_max_x < t_max_z {
-                cx += step_x;
-                t = t_max_x;
-                t_max_x += t_delta_x;
-            } else {
-                cz += step_z;
-                t = t_max_z;
-                t_max_z += t_delta_z;
-            }
+            dda_advance(
+                &mut cx,
+                &mut cz,
+                step_x,
+                step_z,
+                &mut t,
+                &mut t_max_x,
+                &mut t_max_z,
+                t_delta_x,
+                t_delta_z,
+            );
         }
 
         self.last_picked = None;
@@ -702,108 +675,14 @@ impl WorldRenderer {
     }
 }
 
-pub fn regenerate_vertices_from_height_grid_and_color(
-    vertices: &mut [Vertex],
-    height_grid: &ChunkHeightGrid,
-    _terrain_gen: &TerrainGenerator,
-) {
-    let verts_x = height_grid.nx;
-    let verts_z = height_grid.nz;
-    let stepf = height_grid.cell;
-
-    if vertices.len() != verts_x * verts_z {
-        return;
-    }
-
-    // update positions' y from grid
-    for gx in 0..verts_x {
-        for gz in 0..verts_z {
-            let idx = gx * verts_z + gz;
-            let h = height_grid.heights[idx];
-            vertices[idx].position[1] = h;
-        }
-    }
-
-    // recompute normals and colors
-    let inv = 1.0 / stepf;
-    for gx in 0..verts_x {
-        for gz in 0..verts_z {
-            let idx = gx * verts_z + gz;
-
-            let h_l = if gx > 0 {
-                vertices[(gx - 1) * verts_z + gz].position[1]
-            } else {
-                vertices[idx].position[1]
-            };
-
-            let h_r = if gx + 1 < verts_x {
-                vertices[(gx + 1) * verts_z + gz].position[1]
-            } else {
-                vertices[idx].position[1]
-            };
-
-            let h_d = if gz > 0 {
-                vertices[gx * verts_z + (gz - 1)].position[1]
-            } else {
-                vertices[idx].position[1]
-            };
-
-            let h_u = if gz + 1 < verts_z {
-                vertices[gx * verts_z + (gz + 1)].position[1]
-            } else {
-                vertices[idx].position[1]
-            };
-
-            let dhdx = (h_r - h_l) * 0.5 * inv;
-            let dhdz = (h_u - h_d) * 0.5 * inv;
-            let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
-            vertices[idx].normal = [n.x, n.y, n.z];
-
-            //let v_pos = vertices[idx].position;
-            //vertices[idx].color = terrain_gen.color(v_pos[0], v_pos[2], v_pos[1], terrain_gen.moisture(v_pos[0], v_pos[2], v_pos[1]));
-        }
-    }
-}
-fn chunk_intersects_circle(coord: (i32, i32), chunk_size: f32, center: Vec3, radius: f32) -> bool {
-    let (cx, cz) = coord;
-    let half = chunk_size * 0.5;
-    let chunk_center_x = (cx as f32) * chunk_size + half;
-    let chunk_center_z = (cz as f32) * chunk_size + half;
-
-    // AABB min/max
-    let minx = chunk_center_x - half;
-    let maxx = chunk_center_x + half;
-    let minz = chunk_center_z - half;
-    let maxz = chunk_center_z + half;
-
-    // find closest point on AABB to circle center
-    let closest_x = clamp(center.x, minx, maxx);
-    let closest_z = clamp(center.z, minz, maxz);
-
-    let dx = center.x - closest_x;
-    let dz = center.z - closest_z;
-    dx * dx + dz * dz <= radius * radius
-}
-
-#[inline]
-fn clamp(x: f32, a: f32, b: f32) -> f32 {
-    if x < a {
-        a
-    } else if x > b {
-        b
-    } else {
-        x
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct Plane {
-    pub normal: glam::Vec3,
+    pub normal: Vec3,
     pub d: f32,
 }
 
 impl Plane {
-    pub fn distance(&self, p: glam::Vec3) -> f32 {
+    pub fn distance(&self, p: Vec3) -> f32 {
         self.normal.dot(p) + self.d
     }
 }
@@ -827,7 +706,7 @@ pub fn extract_frustum_planes(view_proj: glam::Mat4) -> [Plane; 6] {
     ];
 
     eqs.map(|v| {
-        let n = glam::Vec3::new(v.x, v.y, v.z);
+        let n = Vec3::new(v.x, v.y, v.z);
         let inv_len = 1.0 / n.length();
         Plane {
             normal: n * inv_len,
@@ -845,7 +724,7 @@ pub fn aabb_in_frustum(planes: &[Plane; 6], min: Vec3, max: Vec3) -> bool {
         let vy = if p.normal.y >= 0.0 { max.y } else { min.y };
         let vz = if p.normal.z >= 0.0 { max.z } else { min.z };
 
-        if p.distance(glam::Vec3::new(vx, vy, vz)) < -margin {
+        if p.distance(Vec3::new(vx, vy, vz)) < -margin {
             return false;
         }
     }
@@ -859,8 +738,8 @@ const TERRAIN_MAX_Y: f32 = 4096.0;
 fn chunk_aabb_world(cx: i32, cz: i32, chunk_size: f32) -> (Vec3, Vec3) {
     let x0 = cx as f32 * chunk_size;
     let z0 = cz as f32 * chunk_size;
-    let min = glam::Vec3::new(x0, TERRAIN_MIN_Y, z0);
-    let max = glam::Vec3::new(x0 + chunk_size, TERRAIN_MAX_Y, z0 + chunk_size);
+    let min = Vec3::new(x0, TERRAIN_MIN_Y, z0);
+    let max = Vec3::new(x0 + chunk_size, TERRAIN_MAX_Y, z0 + chunk_size);
     (min, max)
 }
 #[derive(Default)]

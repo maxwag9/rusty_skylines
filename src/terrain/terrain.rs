@@ -12,11 +12,6 @@ fn hash01(mut x: u32) -> f32 {
 }
 
 #[inline]
-fn saturate(x: f32) -> f32 {
-    x.clamp(0.0, 1.0)
-}
-
-#[inline]
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -31,12 +26,6 @@ fn smootherstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 #[inline]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
-}
-
-#[inline]
-fn tri_weight(x: f32, center: f32, width: f32) -> f32 {
-    let d = (x - center).abs();
-    if d >= width { 0.0 } else { 1.0 - d / width }
 }
 
 #[inline]
@@ -116,7 +105,7 @@ pub struct TerrainParams {
     pub macro_freq: f32,
     pub hills_freq: f32,
     pub mountains_freq: f32,
-    pub belts_freq: f32,
+    pub _belts_freq: f32,
     pub moisture_freq: f32,
 
     pub macro_octaves: usize,
@@ -202,7 +191,7 @@ impl Default for TerrainParams {
             macro_freq: 0.0006,
             hills_freq: 0.0045,
             mountains_freq: 0.0090,
-            belts_freq: 0.00162,
+            _belts_freq: 0.00162,
             moisture_freq: 0.0012,
 
             macro_octaves: 5,
@@ -273,8 +262,8 @@ struct BaseSample {
     wx2: f32,
     wz2: f32,
     rel: f32,
-    mountain_mask: f32,
-    uplift: f32,
+    _mountain_mask: f32,
+    _uplift: f32,
     slope_proxy: f32,
 }
 
@@ -601,30 +590,10 @@ impl TerrainGenerator {
             wx2,
             wz2,
             rel,
-            mountain_mask,
-            uplift,
+            _mountain_mask: mountain_mask,
+            _uplift: uplift,
             slope_proxy,
         }
-    }
-
-    #[inline]
-    fn hydrology_height(&self, wx2: f32, wz2: f32, cont: f32, uplift: f32) -> f32 {
-        // cheaper hydrology field used for drainage calculations.
-        // Sample macro/hills/mountains at modest cost and combine.
-        let macro_raw = self.macro_elev.get_noise_2d(wx2 * 0.60, wz2 * 0.60);
-        let hills_raw = self.hills.get_noise_2d(wx2 * 1.2, wz2 * 1.2); // lower-detail for hydrology
-        let m_raw = self.mountains.get_noise_2d(wx2 * 0.55, wz2 * 0.55);
-
-        let macro_e = macro_raw * self.p.macro_amp;
-        let hills = hills_raw * self.p.hills_amp * self.p.hills_detail * 0.8; // scaled
-        let wide_m = ridged(m_raw) * (0.35 + 0.65 * uplift);
-
-        let mut h = self.p.ocean_floor + (self.p.inland_plateau - self.p.ocean_floor) * cont;
-        h += macro_e * (0.28 + 0.72 * cont);
-        h += hills * cont;
-        h += wide_m * cont * 0.35;
-
-        h
     }
 
     #[inline]

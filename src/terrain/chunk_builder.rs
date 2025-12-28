@@ -1,9 +1,12 @@
 use crate::terrain::terrain::TerrainGenerator;
+use crate::terrain::terrain_editing::EditedChunk;
 use crate::terrain::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
 use glam::Vec3;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+
 #[derive(Clone)]
 pub struct ChunkHeightGrid {
     pub base_x: f32,
@@ -23,101 +26,151 @@ pub struct ChunkMeshLod {
     pub height_grid: Arc<ChunkHeightGrid>,
 }
 
-/// Apply sparse deltas to a clone of the provided height grid and return the new grid.
-/// This does not use locks. It clones the grid, applies the deltas, and recomputes only affected patch minmax entries.
-pub fn apply_sparse_deltas_to_height_grid(
-    src: &ChunkHeightGrid,
-    deltas: &[(usize, usize, f32)],
-) -> ChunkHeightGrid {
-    // Make an explicit clone (do not rely on ChunkHeightGrid: Clone impl presence).
-    let mut out = ChunkHeightGrid {
-        base_x: src.base_x,
-        base_z: src.base_z,
-        cell: src.cell,
-        nx: src.nx,
-        nz: src.nz,
-        heights: src.heights.clone(),
-        patch_minmax: src.patch_minmax.clone(),
-    };
-
-    if deltas.is_empty() {
-        return out;
-    }
-
-    let nx = out.nx;
-    let nz = out.nz;
-
-    // apply deltas (additively)
-    for &(gx, gz, delta) in deltas.iter() {
-        if gx >= nx || gz >= nz {
-            continue;
-        }
-        let idx = gx * nz + gz;
-        out.heights[idx] += delta;
-    }
-
-    // Recompute patch minmax only for patches that were affected.
-    let patch_cells = 8usize;
-    let px = (nx - 1) / patch_cells;
-    let pz = (nz - 1) / patch_cells;
-
-    // Collect unique affected patch indices
-    let mut affected = Vec::<(usize, usize)>::new();
-    affected.reserve(deltas.len());
-    for &(gx, gz, _) in deltas.iter() {
-        let px_i = gx / patch_cells;
-        let pz_i = gz / patch_cells;
-        if px_i < px && pz_i < pz {
-            affected.push((px_i, pz_i));
-        }
-    }
-    affected.sort_unstable();
-    affected.dedup();
-
-    for (px_i, pz_i) in affected {
-        // recompute this patch's min/max
-        let mut min_y = f32::INFINITY;
-        let mut max_y = -f32::INFINITY;
-
-        for lx in 0..=patch_cells {
-            for lz in 0..=patch_cells {
-                let gx = px_i * patch_cells + lx;
-                let gz = pz_i * patch_cells + lz;
-                if gx >= nx || gz >= nz {
-                    continue;
-                }
-                let h = out.heights[gx * nz + gz];
-                min_y = min_y.min(h);
-                max_y = max_y.max(h);
-            }
-        }
-
-        // patch_minmax ordering must match the original build: px major, pz minor
-        let patch_index = px_i * pz + pz_i;
-        if patch_index < out.patch_minmax.len() {
-            out.patch_minmax[patch_index] = (min_y, max_y);
-        } else {
-            // defensive: if ordering differs, fallback to push (should not happen)
-            if patch_index == out.patch_minmax.len() {
-                out.patch_minmax.push((min_y, max_y));
-            } else {
-                // keep safe: clamp
-                let pi = out.patch_minmax.len() - 1;
-                out.patch_minmax[pi] = (min_y, max_y);
-            }
-        }
-    }
-
-    out
+/// Holds edge heights from neighboring chunks for proper normal calculation at boundaries
+pub struct NeighborEdgeHeights {
+    /// Heights along the -X edge of the +X neighbor (indexed by gz)
+    pub pos_x: Option<Vec<f32>>,
+    /// Heights along the +X edge of the -X neighbor (indexed by gz)
+    pub neg_x: Option<Vec<f32>>,
+    /// Heights along the -Z edge of the +Z neighbor (indexed by gx)
+    pub pos_z: Option<Vec<f32>>,
+    /// Heights along the +Z edge of the -Z neighbor (indexed by gx)
+    pub neg_z: Option<Vec<f32>>,
 }
 
-/// Regenerate vertex positions (y) and normals from the provided height grid.
-/// We update `vertices` in-place; color is left untouched.
+impl NeighborEdgeHeights {
+    pub fn empty() -> Self {
+        Self {
+            pos_x: None,
+            neg_x: None,
+            pos_z: None,
+            neg_z: None,
+        }
+    }
+}
+
+/// Gather edge heights from neighboring chunks for proper normal calculation.
+/// Samples at positions one step past our edges (for central difference normals).
+/// Handles different LOD resolutions via bilinear interpolation.
+pub fn gather_neighbor_edge_heights(
+    coord: (i32, i32),
+    own_grid: &ChunkHeightGrid,
+    chunks: &HashMap<(i32, i32), ChunkMeshLod>,
+    edited_chunks: &HashMap<(i32, i32), EditedChunk>,
+) -> NeighborEdgeHeights {
+    let mut result = NeighborEdgeHeights::empty();
+
+    let own_nx = own_grid.nx;
+    let own_nz = own_grid.nz;
+    let own_cell = own_grid.cell;
+    let own_base_x = own_grid.base_x;
+    let own_base_z = own_grid.base_z;
+
+    // Sample height from neighbor grid at world position, including pending deltas only
+    // (accumulated deltas are already baked into height_grid.heights)
+    let sample_neighbor =
+        |neighbor_coord: (i32, i32), chunk: &ChunkMeshLod, wx: f32, wz: f32| -> f32 {
+            let grid = chunk.height_grid.as_ref();
+
+            let gx_f = (wx - grid.base_x) / grid.cell;
+            let gz_f = (wz - grid.base_z) / grid.cell;
+
+            let gx0 = (gx_f.floor() as usize).min(grid.nx.saturating_sub(1));
+            let gz0 = (gz_f.floor() as usize).min(grid.nz.saturating_sub(1));
+            let gx1 = (gx0 + 1).min(grid.nx - 1);
+            let gz1 = (gz0 + 1).min(grid.nz - 1);
+
+            let tx = (gx_f - gx0 as f32).clamp(0.0, 1.0);
+            let tz = (gz_f - gz0 as f32).clamp(0.0, 1.0);
+
+            // Get pending delta for a grid position (only pending, not accumulated)
+            let get_pending = |gx: usize, gz: usize| -> f32 {
+                edited_chunks
+                    .get(&neighbor_coord)
+                    .map(|e| {
+                        e.pending_deltas
+                            .iter()
+                            .filter(|&&(px, pz, _)| px as usize == gx && pz as usize == gz)
+                            .map(|&(_, _, d)| d)
+                            .sum::<f32>()
+                    })
+                    .unwrap_or(0.0)
+            };
+
+            let h00 = grid.heights[gx0 * grid.nz + gz0] + get_pending(gx0, gz0);
+            let h10 = grid.heights[gx1 * grid.nz + gz0] + get_pending(gx1, gz0);
+            let h01 = grid.heights[gx0 * grid.nz + gz1] + get_pending(gx0, gz1);
+            let h11 = grid.heights[gx1 * grid.nz + gz1] + get_pending(gx1, gz1);
+
+            // Bilinear interpolation
+            let h0 = h00 + tx * (h10 - h00);
+            let h1 = h01 + tx * (h11 - h01);
+            h0 + tz * (h1 - h0)
+        };
+
+    // +X neighbor: sample one step past our +X edge
+    let pos_x_coord = (coord.0 + 1, coord.1);
+    if let Some(chunk) = chunks.get(&pos_x_coord) {
+        let sample_x = own_base_x + (own_nx as f32) * own_cell;
+        let mut edge = Vec::with_capacity(own_nz);
+        for gz in 0..own_nz {
+            let wz = own_base_z + (gz as f32) * own_cell;
+            edge.push(sample_neighbor(pos_x_coord, chunk, sample_x, wz));
+        }
+        result.pos_x = Some(edge);
+    }
+
+    // -X neighbor: sample one step before our -X edge
+    let neg_x_coord = (coord.0 - 1, coord.1);
+    if let Some(chunk) = chunks.get(&neg_x_coord) {
+        let sample_x = own_base_x - own_cell;
+        let mut edge = Vec::with_capacity(own_nz);
+        for gz in 0..own_nz {
+            let wz = own_base_z + (gz as f32) * own_cell;
+            edge.push(sample_neighbor(neg_x_coord, chunk, sample_x, wz));
+        }
+        result.neg_x = Some(edge);
+    }
+
+    // +Z neighbor: sample one step past our +Z edge
+    let pos_z_coord = (coord.0, coord.1 + 1);
+    if let Some(chunk) = chunks.get(&pos_z_coord) {
+        let sample_z = own_base_z + (own_nz as f32) * own_cell;
+        let mut edge = Vec::with_capacity(own_nx);
+        for gx in 0..own_nx {
+            let wx = own_base_x + (gx as f32) * own_cell;
+            edge.push(sample_neighbor(pos_z_coord, chunk, wx, sample_z));
+        }
+        result.pos_z = Some(edge);
+    }
+
+    // -Z neighbor: sample one step before our -Z edge
+    let neg_z_coord = (coord.0, coord.1 - 1);
+    if let Some(chunk) = chunks.get(&neg_z_coord) {
+        let sample_z = own_base_z - own_cell;
+        let mut edge = Vec::with_capacity(own_nx);
+        for gx in 0..own_nx {
+            let wx = own_base_x + (gx as f32) * own_cell;
+            edge.push(sample_neighbor(neg_z_coord, chunk, wx, sample_z));
+        }
+        result.neg_z = Some(edge);
+    }
+
+    result
+}
+
+/// Regenerate vertex positions (y), normals, and optionally colors from the provided height grid.
+/// We update `vertices` in-place.
 /// Expects vertices.len() == nx * nz.
+///
+/// `neighbor_edges` provides heights from adjacent chunks for correct normal calculation at edges.
+/// If a neighbor edge is not available, falls back to terrain_gen.height().
 pub fn regenerate_vertices_from_height_grid(
     vertices: &mut [Vertex],
     height_grid: &ChunkHeightGrid,
     terrain_gen: &TerrainGenerator,
+    neighbor_edges: Option<&NeighborEdgeHeights>,
+    update_colors: bool,
 ) {
     let verts_x = height_grid.nx;
     let verts_z = height_grid.nz;
@@ -127,8 +180,6 @@ pub fn regenerate_vertices_from_height_grid(
 
     // sanity check
     if vertices.len() != verts_x * verts_z {
-        // mismatch. Bail out silently to avoid panic.
-        // In your code consider logging an error.
         return;
     }
 
@@ -138,17 +189,16 @@ pub fn regenerate_vertices_from_height_grid(
             let idx = gx * verts_z + gz;
             let h = height_grid.heights[idx];
             vertices[idx].position[1] = h;
-            // position x/z remain unchanged (constructed from base+grid indices when initially built)
         }
     }
 
-    // recompute normals using central differences from vertex positions
+    // recompute normals using central differences
     let inv = 1.0 / stepf;
     for gx in 0..verts_x {
         for gz in 0..verts_z {
             let idx = gx * verts_z + gz;
 
-            // Recalculate world position for neighbor queries
+            // Calculate world position for fallback neighbor queries
             let wx = base_x + (gx as f32 * stepf);
             let wz = base_z + (gz as f32 * stepf);
 
@@ -156,30 +206,42 @@ pub fn regenerate_vertices_from_height_grid(
             let h_l = if gx > 0 {
                 height_grid.heights[(gx - 1) * verts_z + gz]
             } else {
-                // Query generator for x - 1
-                terrain_gen.height(wx - stepf, wz)
+                // Need height from -X neighbor's +X edge
+                neighbor_edges
+                    .and_then(|n| n.neg_x.as_ref())
+                    .and_then(|edge| edge.get(gz).copied())
+                    .unwrap_or_else(|| terrain_gen.height(wx - stepf, wz))
             };
 
-            let h_r = if gx < verts_x - 1 {
+            let h_r = if gx + 1 < verts_x {
                 height_grid.heights[(gx + 1) * verts_z + gz]
             } else {
-                // Query generator for x + 1
-                terrain_gen.height(wx + stepf, wz)
+                // Need height from +X neighbor's -X edge
+                neighbor_edges
+                    .and_then(|n| n.pos_x.as_ref())
+                    .and_then(|edge| edge.get(gz).copied())
+                    .unwrap_or_else(|| terrain_gen.height(wx + stepf, wz))
             };
 
             // --- Z Axis Gradient ---
             let h_d = if gz > 0 {
                 height_grid.heights[gx * verts_z + (gz - 1)]
             } else {
-                // Query generator for z - 1
-                terrain_gen.height(wx, wz - stepf)
+                // Need height from -Z neighbor's +Z edge
+                neighbor_edges
+                    .and_then(|n| n.neg_z.as_ref())
+                    .and_then(|edge| edge.get(gx).copied())
+                    .unwrap_or_else(|| terrain_gen.height(wx, wz - stepf))
             };
 
-            let h_u = if gz < verts_z - 1 {
+            let h_u = if gz + 1 < verts_z {
                 height_grid.heights[gx * verts_z + (gz + 1)]
             } else {
-                // Query generator for z + 1
-                terrain_gen.height(wx, wz + stepf)
+                // Need height from +Z neighbor's -Z edge
+                neighbor_edges
+                    .and_then(|n| n.pos_z.as_ref())
+                    .and_then(|edge| edge.get(gx).copied())
+                    .unwrap_or_else(|| terrain_gen.height(wx, wz + stepf))
             };
 
             // Central Difference
@@ -188,6 +250,17 @@ pub fn regenerate_vertices_from_height_grid(
 
             let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
             vertices[idx].normal = [n.x, n.y, n.z];
+
+            // Optionally update colors
+            if update_colors {
+                let v_pos = vertices[idx].position;
+                vertices[idx].color = terrain_gen.color(
+                    v_pos[0],
+                    v_pos[2],
+                    v_pos[1],
+                    terrain_gen.moisture(v_pos[0], v_pos[2], v_pos[1]),
+                );
+            }
         }
     }
 }
@@ -417,7 +490,7 @@ pub fn lod_step_for_distance(dist2_chunks: i32) -> usize {
     }
 }
 
-fn density_from_chunk_dist2(dist2_chunks: i32) -> f32 {
+fn _density_from_chunk_dist2(dist2_chunks: i32) -> f32 {
     let d = (dist2_chunks as f32).sqrt(); // distance in chunks
     let t = (d / 8.0).clamp(0.0, 1.0); // 8 chunks = full fade
     1.0 - t * t * (3.0 - 2.0 * t)

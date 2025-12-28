@@ -1,6 +1,8 @@
 use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
-use crate::renderer::world_renderer::regenerate_vertices_from_height_grid_and_color;
-use crate::terrain::chunk_builder::{ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle};
+use crate::terrain::chunk_builder::{
+    ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, gather_neighbor_edge_heights,
+    regenerate_vertices_from_height_grid,
+};
 use crate::terrain::terrain::TerrainGenerator;
 use crate::ui::vertex::Vertex;
 use glam::Vec3;
@@ -148,9 +150,9 @@ impl TerrainEditor {
         let mut editor = TerrainEditor {
             edited_chunks: HashMap::new(),
         };
-        for (chunk_coord, pchunk) in meta.edits {
-            let mut acc = HashMap::with_capacity(pchunk.accumulated_deltas.len());
-            for ((x8, z8), h) in pchunk.accumulated_deltas {
+        for (chunk_coord, persisted_chunk) in meta.edits {
+            let mut acc = HashMap::with_capacity(persisted_chunk.accumulated_deltas.len());
+            for ((x8, z8), h) in persisted_chunk.accumulated_deltas {
                 acc.insert((x8, z8), h);
             }
             editor.edited_chunks.insert(
@@ -158,20 +160,12 @@ impl TerrainEditor {
                 EditedChunk {
                     pending_deltas: Vec::new(),
                     accumulated_deltas: acc,
-                    dirty: pchunk.dirty,
+                    dirty: persisted_chunk.dirty,
                 },
             );
         }
 
         Ok(editor)
-    }
-
-    pub fn get_edits(&self, coord: &(i32, i32)) -> Option<&EditedChunk> {
-        self.edited_chunks.get(coord)
-    }
-
-    pub fn get_all_edits(&self) -> &HashMap<(i32, i32), EditedChunk> {
-        &self.edited_chunks
     }
 
     pub fn apply_brush<F: Falloff, B: BrushOp>(
@@ -358,7 +352,17 @@ impl TerrainEditor {
         }
 
         recompute_patch_minmax(&mut grid);
-        regenerate_vertices_from_height_grid_and_color(&mut vertices, &grid, terrain_gen);
+
+        // Gather neighbor edge heights for proper normal calculation at boundaries
+        let neighbor_edges =
+            gather_neighbor_edge_heights(coord, &grid, chunks, &self.edited_chunks);
+        regenerate_vertices_from_height_grid(
+            &mut vertices,
+            &grid,
+            terrain_gen,
+            Some(&neighbor_edges),
+            false,
+        );
 
         let new_handle = arena.alloc_and_upload(device, queue, &vertices, &indices, scratch);
         let old_handle = chunks.remove(&coord).map(|c| c.handle);
@@ -400,49 +404,6 @@ fn sample_height_at_world(hg: &ChunkHeightGrid, wx: f32, wz: f32) -> f32 {
     let h1 = h01 + tx * (h11 - h01);
 
     h0 + tz * (h1 - h0)
-}
-fn grid_bounds(hg: &ChunkHeightGrid, center: Vec3, radius: f32) -> (isize, isize, isize, isize) {
-    let min_fx = (((center.x - radius) - hg.base_x) / hg.cell).floor() as isize;
-    let max_fx = (((center.x + radius) - hg.base_x) / hg.cell).ceil() as isize;
-    let min_fz = (((center.z - radius) - hg.base_z) / hg.cell).floor() as isize;
-    let max_fz = (((center.z + radius) - hg.base_z) / hg.cell).ceil() as isize;
-    (min_fx, max_fx, min_fz, max_fz)
-}
-
-fn compute_delta<F: Falloff, B: BrushOp>(
-    hg: &ChunkHeightGrid,
-    gx: usize,
-    gz: usize,
-    center: Vec3,
-    r2: f32,
-    strength: f32,
-) -> Option<f32> {
-    let wx = hg.base_x + (gx as f32) * hg.cell;
-    let wz = hg.base_z + (gz as f32) * hg.cell;
-    let dx = wx - center.x;
-    let dz = wz - center.z;
-    let d2 = dx * dx + dz * dz;
-
-    if d2 >= r2 {
-        return None;
-    }
-
-    let w = F::weight(d2, r2);
-    if w <= 0.0001 {
-        return None;
-    }
-
-    let idx = gx * hg.nz + gz;
-    let current_h = hg.heights[idx];
-    let mut new_h = current_h;
-    B::apply(&mut new_h, strength, w);
-    let delta = new_h - current_h;
-
-    if delta.abs() < f32::EPSILON {
-        None
-    } else {
-        Some(delta)
-    }
 }
 
 pub fn recompute_patch_minmax(grid: &mut ChunkHeightGrid) {

@@ -5,6 +5,7 @@ use crate::ui::ui_editor::UiVariableRegistry;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
+use winit::dpi::PhysicalSize;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -975,7 +976,7 @@ impl UiButtonText {
 }
 
 impl UiButtonCircle {
-    pub(crate) fn from_json(c: UiButtonCircleJson) -> Self {
+    pub(crate) fn from_json(c: UiButtonCircleJson, window_size: PhysicalSize<u32>) -> Self {
         UiButtonCircle {
             id: c.id,
 

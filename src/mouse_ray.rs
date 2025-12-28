@@ -186,23 +186,18 @@ pub fn raycast_chunk_heightgrid(
 
         prev_t = seg_end;
 
-        let tie = (t_max_x - t_max_z).abs() < 1e-7;
-
-        if tie {
-            ix += step_x;
-            iz += step_z;
-            t = t_max_x;
-            t_max_x += t_delta_x;
-            t_max_z += t_delta_z;
-        } else if t_max_x < t_max_z {
-            ix += step_x;
-            t = t_max_x;
-            t_max_x += t_delta_x;
-        } else {
-            iz += step_z;
-            t = t_max_z;
-            t_max_z += t_delta_z;
-        }
+        // instead of the manual tie block, call:
+        dda_advance(
+            &mut ix,
+            &mut iz,
+            step_x,
+            step_z,
+            &mut t,
+            &mut t_max_x,
+            &mut t_max_z,
+            t_delta_x,
+            t_delta_z,
+        );
     }
 
     None
@@ -267,11 +262,53 @@ pub fn ray_from_mouse_pixels(
     let p_far4 = inv_view_proj * glam::Vec4::new(x, y, 1.0, 1.0);
     let p_far = p_far4.truncate() / p_far4.w;
 
-    let cam_pos = inv_view.transform_point3(glam::Vec3::ZERO);
+    let cam_pos = inv_view.transform_point3(Vec3::ZERO);
     let dir = (p_far - cam_pos).normalize();
 
     Ray {
         origin: cam_pos,
         dir,
+    }
+}
+
+/// Advance the DDA grid traversal.
+///
+/// `cell_a` / `cell_b` are the two integer coordinates to advance (e.g. ix, iz or cx, cz).
+/// `step_a` / `step_b` are their step directions (signum results).
+/// `t` is the current t along the ray (updated).
+/// `t_max_a` / `t_max_b` are the next boundary t values for the corresponding axes
+/// (pass the X values first, Z second to preserve existing behavior).
+/// `t_delta_a` / `t_delta_b` are the respective delta times per cell.
+/// Behavior mirrors the original code: when the two t_max values are within 1e-7 they are considered tied.
+#[inline]
+pub fn dda_advance(
+    cell_a: &mut i32,
+    cell_b: &mut i32,
+    step_a: i32,
+    step_b: i32,
+    t: &mut f32,
+    t_max_a: &mut f32,
+    t_max_b: &mut f32,
+    t_delta_a: f32,
+    t_delta_b: f32,
+) {
+    const TIE_EPS: f32 = 1e-7;
+
+    let tie = (*t_max_a - *t_max_b).abs() < TIE_EPS;
+
+    if tie {
+        *cell_a += step_a;
+        *cell_b += step_b;
+        *t = *t_max_a;
+        *t_max_a += t_delta_a;
+        *t_max_b += t_delta_b;
+    } else if *t_max_a < *t_max_b {
+        *cell_a += step_a;
+        *t = *t_max_a;
+        *t_max_a += t_delta_a;
+    } else {
+        *cell_b += step_b;
+        *t = *t_max_b;
+        *t_max_b += t_delta_b;
     }
 }

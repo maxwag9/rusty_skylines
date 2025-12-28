@@ -27,8 +27,6 @@ pub struct ChunkWorkerPool {
     pub result_rx: Receiver<CpuChunkMesh>,
 
     versions: Arc<RwLock<HashMap<(i32, i32), Arc<AtomicU64>>>>,
-
-    next_version: AtomicU64,
 }
 
 impl ChunkWorkerPool {
@@ -37,13 +35,11 @@ impl ChunkWorkerPool {
         let (result_tx, result_rx) = unbounded::<CpuChunkMesh>();
 
         let versions = Arc::new(RwLock::new(HashMap::new()));
-        let next_version = AtomicU64::new(0);
 
         for _worker_id in 0..worker_count {
             let job_rx = job_rx.clone();
             let result_tx = result_tx.clone();
             let terrain = terrain_gen.clone();
-            let _versions = versions.clone();
 
             std::thread::spawn(move || {
                 loop {
@@ -95,7 +91,6 @@ impl ChunkWorkerPool {
             job_tx,
             result_rx,
             versions,
-            next_version,
         }
     }
 

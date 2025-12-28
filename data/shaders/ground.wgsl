@@ -35,14 +35,11 @@ struct FogUniforms {
 };
 
 struct PickUniform {
-    pos: vec3<f32>,   // offset 0, size 12, alignment 16
-    radius: f32,      // offset 16
-    underwater: u32,     // offset 20
-    // padding to 32
-    color: vec3<f32>, // offset 32
-    // padding to 48
+    pos: vec3<f32>,
+    radius: f32,
+    underwater: u32,
+    color: vec3<f32>,
 }
-
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
@@ -52,7 +49,6 @@ var<uniform> fog: FogUniforms;
 
 @group(2) @binding(0)
 var<uniform> pick: PickUniform;
-
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -81,6 +77,11 @@ fn vs_main(in: VertexIn) -> VertexOut {
     return out;
 }
 
+// Cheap hash for procedural patterns
+fn hash2(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
@@ -95,8 +96,28 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let ndotl = dot(n, l);
     let diffuse = max(ndotl, 0.0) * 0.60;
 
+    var base_color = in.color * (ambient + diffuse);
 
-    let base_color = in.color * (ambient + diffuse);
+    // ============ GRASS EFFECT ============
+    // Detect grassy areas: green-dominant + upward-facing
+    let greenness = in.color.g - max(in.color.r, in.color.b);
+    let up_facing = saturate(dot(n, up));
+    let grass_amount = saturate(greenness * 2.5) * up_facing * up_facing;
+
+    // Multi-scale procedural grass pattern (2 octaves)
+    let p_fine = floor(in.world_pos.xz * 20.0);
+    let p_coarse = floor(in.world_pos.xz * 5.0);
+    let h_fine = hash2(p_fine);
+    let h_coarse = hash2(p_coarse * 0.2 + 31.7);
+    let grass_pattern = h_fine * 0.55 + h_coarse * 1.85;
+
+    // Simulate light/shadow variation between grass blades
+    let shade = mix(0.78, 1.18, grass_pattern);
+    base_color *= mix(1.0, shade, grass_amount);
+
+    // Subtle green boost for lush grass look
+    base_color.g *= 1.0 + grass_amount * 0.06;
+    // ======================================
 
     let dist = distance(in.world_pos, uniforms.camera_pos);
 
@@ -114,14 +135,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let d = distance(in.world_pos, pick.pos);
 
         if (d < pick.radius) {
-            // smooth falloff looks better than a hard edge
             let t = 1.0 - smoothstep(0.0, pick.radius, d);
             color = mix(color, pick.color, t);
         }
     }
 
     return vec4<f32>(color, 1.0);
-
 }
 
 fn height_factor_at(pos_y: f32) -> f32 {

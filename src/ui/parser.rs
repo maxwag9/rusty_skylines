@@ -1314,10 +1314,6 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.pos).unwrap_or(&Token::End)
     }
 
-    fn peek_next(&self) -> &Token {
-        self.tokens.get(self.pos + 1).unwrap_or(&Token::End)
-    }
-
     fn next(&mut self) -> Token {
         let t = self.peek().clone();
         if !matches!(t, Token::End) {

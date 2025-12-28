@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
+use winit::dpi::PhysicalSize;
 
 pub struct UiButtonLoader {
     pub menus: HashMap<String, Menu>,
@@ -38,6 +39,7 @@ impl UiButtonLoader {
         override_mode: bool,
         show_gui: bool,
         bend_mode: BendMode,
+        window_size: PhysicalSize<u32>,
     ) -> Self {
         let layout_path = data_dir("ui_data/gui_layout.json");
         let layout = load_gui_from_file(layout_path, bend_mode).unwrap_or_else(|e| {
@@ -61,28 +63,28 @@ impl UiButtonLoader {
                     .texts
                     .unwrap_or_default()
                     .into_iter()
-                    .map(UiButtonText::from_json)
+                    .map(|t| UiButtonText::from_json(t))
                     .collect();
 
                 let circles = l
                     .circles
                     .unwrap_or_default()
                     .into_iter()
-                    .map(UiButtonCircle::from_json)
+                    .map(|c| UiButtonCircle::from_json(c, window_size))
                     .collect();
 
                 let outlines = l
                     .outlines
                     .unwrap_or_default()
                     .into_iter()
-                    .map(UiButtonOutline::from_json)
+                    .map(|o| UiButtonOutline::from_json(o))
                     .collect();
 
                 let handles = l
                     .handles
                     .unwrap_or_default()
                     .into_iter()
-                    .map(UiButtonHandle::from_json)
+                    .map(|h| UiButtonHandle::from_json(h))
                     .collect();
 
                 let polygons = l
