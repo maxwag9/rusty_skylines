@@ -1,157 +1,6 @@
 {
   "menus": [
     {
-      "name": "Debug_Menu",
-      "layers": [
-        {
-          "name": "debug_texts",
-          "order": 2,
-          "texts": [
-            {
-              "id": "fps_text",
-              "action": "None",
-              "style": "None",
-              "z_index": 51,
-              "x": 65.532104,
-              "y": 0.0,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                1.0,
-                0.0,
-                1.0,
-                1.0
-              ],
-              "text": "FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? 'Smooth' : 'Laggy'}",
-              "misc": {
-                "active": true,
-                "pressable": false,
-                "editable": true
-              },
-              "input_box": false,
-              "anchor": null
-            },
-            {
-              "id": "sky_info_text",
-              "action": "None",
-              "style": "None",
-              "z_index": 52,
-              "x": 380.74408,
-              "y": 200.87695,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                0.3,
-                0.5,
-                1.0,
-                1.0
-              ],
-              "text": "Game Time Speed: {time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, \n Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees",
-              "misc": {
-                "active": true,
-                "pressable": false,
-                "editable": true
-              },
-              "input_box": false,
-              "anchor": null
-            }
-          ],
-          "circles": [],
-          "outlines": [],
-          "handles": [],
-          "polygons": [],
-          "active": true,
-          "opaque": false
-        }
-      ]
-    },
-    {
-      "name": "Main Menu",
-      "layers": [
-        {
-          "name": "main_menu_buttons",
-          "order": 2,
-          "texts": [
-            {
-              "id": "play_text",
-              "action": "None",
-              "style": "None",
-              "z_index": 2,
-              "x": 1700.0,
-              "y": 700.0,
-              "top_left_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_left_offset": [
-                0.0,
-                0.0
-              ],
-              "top_right_offset": [
-                0.0,
-                0.0
-              ],
-              "bottom_right_offset": [
-                0.0,
-                0.0
-              ],
-              "px": 24,
-              "color": [
-                1.0,
-                0.0,
-                1.0,
-                1.0
-              ],
-              "text": "Play",
-              "misc": {
-                "active": true,
-                "pressable": true,
-                "editable": true
-              },
-              "input_box": false,
-              "anchor": null
-            }
-          ],
-          "circles": [],
-          "outlines": [],
-          "handles": [],
-          "polygons": [],
-          "active": true,
-          "opaque": false
-        }
-      ]
-    },
-    {
       "name": "Editor_Menu",
       "layers": [
         {
@@ -163,8 +12,8 @@
               "action": "None",
               "style": "None",
               "z_index": 24,
-              "x": 148.72296,
-              "y": 806.61365,
+              "x": 0.04323,
+              "y": 0.56015,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -181,7 +30,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -202,8 +51,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 192.28563,
-              "y": 105.733185,
+              "x": 0.0559,
+              "y": 0.07343,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -220,7 +69,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -241,8 +90,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 190.66995,
-              "y": 168.32187,
+              "x": 0.055430003,
+              "y": 0.11689,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -259,7 +108,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -280,8 +129,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 193.7421,
-              "y": 225.68129,
+              "x": 0.05632,
+              "y": 0.15672,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -298,7 +147,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -319,8 +168,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 214.38449,
-              "y": 279.07776,
+              "x": 0.06232,
+              "y": 0.1938,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -337,7 +186,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -358,8 +207,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 212.83328,
-              "y": 324.7707,
+              "x": 0.06187,
+              "y": 0.22553998,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -376,7 +225,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -397,8 +246,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 224.23718,
-              "y": 412.9601,
+              "x": 0.06519,
+              "y": 0.28678,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -415,7 +264,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -436,8 +285,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 183.76483,
-              "y": 470.18637,
+              "x": 0.05342,
+              "y": 0.32652,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -454,7 +303,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -475,8 +324,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 205.84222,
-              "y": 544.53906,
+              "x": 0.05984,
+              "y": 0.37815,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -493,7 +342,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -514,8 +363,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 197.46338,
-              "y": 666.1362,
+              "x": 0.0574,
+              "y": 0.46259004,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -532,7 +381,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -553,8 +402,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 169.20703,
-              "y": 714.1758,
+              "x": 0.04919,
+              "y": 0.49596,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -571,7 +420,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -592,8 +441,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 180.74408,
-              "y": 630.87695,
+              "x": 0.052539997,
+              "y": 0.43811,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -610,7 +459,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -631,8 +480,8 @@
               "action": "None",
               "style": "None",
               "z_index": 50,
-              "x": 193.56612,
-              "y": 759.4297,
+              "x": 0.056269996,
+              "y": 0.52738,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -649,7 +498,7 @@
                 0.0,
                 0.0
               ],
-              "px": 24,
+              "px": 0.016374864,
               "color": [
                 0.6,
                 1.0,
@@ -672,9 +521,9 @@
               "action": "Toggle Color Picker",
               "style": "None",
               "z_index": 1,
-              "x": 1000.8617,
-              "y": 769.7613,
-              "radius": 83.57955,
+              "x": 0.29095,
+              "y": 0.53456,
+              "radius": 0.05804,
               "inside_border_thickness": 0.0,
               "border_thickness": 0.0,
               "fade": 0.0,
@@ -729,8 +578,8 @@
               "action": "None",
               "style": "None",
               "z_index": 8,
-              "x": 1124.9305,
-              "y": 657.39185,
+              "x": 0.32701,
+              "y": 0.45652,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -747,7 +596,7 @@
                 0.0,
                 0.0
               ],
-              "px": 18,
+              "px": 0.012149093,
               "color": [
                 0.7,
                 0.7,
@@ -768,8 +617,8 @@
               "action": "None",
               "style": "None",
               "z_index": 8,
-              "x": 1124.9305,
-              "y": 900.39185,
+              "x": 0.32701,
+              "y": 0.62527,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -786,7 +635,7 @@
                 0.0,
                 0.0
               ],
-              "px": 18,
+              "px": 0.012149093,
               "color": [
                 0.7,
                 0.7,
@@ -807,8 +656,8 @@
               "action": "None",
               "style": "None",
               "z_index": 8,
-              "x": 1124.9305,
-              "y": 930.39185,
+              "x": 0.32701,
+              "y": 0.64611,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -825,7 +674,7 @@
                 0.0,
                 0.0
               ],
-              "px": 18,
+              "px": 0.012149093,
               "color": [
                 0.7,
                 0.7,
@@ -846,8 +695,8 @@
               "action": "None",
               "style": "None",
               "z_index": 8,
-              "x": 1124.9305,
-              "y": 960.39185,
+              "x": 0.32701,
+              "y": 0.66694,
               "top_left_offset": [
                 0.0,
                 0.0
@@ -864,7 +713,7 @@
                 0.0,
                 0.0
               ],
-              "px": 18,
+              "px": 0.012149093,
               "color": [
                 0.7,
                 0.7,
@@ -887,9 +736,9 @@
               "action": "Drag Hue Point",
               "style": "Hue Circle",
               "z_index": 1,
-              "x": 1183.8617,
-              "y": 769.7613,
-              "radius": 83.57955,
+              "x": 0.34415,
+              "y": 0.53456,
+              "radius": 0.05804,
               "inside_border_thickness": 0.0,
               "border_thickness": 0.0,
               "fade": 0.0,
@@ -940,8 +789,8 @@
               "vertices": [
                 {
                   "pos": [
-                    1076.519,
-                    658.98987
+                    0.31294,
+                    0.45763
                   ],
                   "color": [
                     0.015,
@@ -953,8 +802,8 @@
                 },
                 {
                   "pos": [
-                    1297.3741,
-                    659.0887
+                    0.37714,
+                    0.4577
                   ],
                   "color": [
                     0.015,
@@ -966,8 +815,8 @@
                 },
                 {
                   "pos": [
-                    1301.3153,
-                    928.6394
+                    0.37829,
+                    0.64489
                   ],
                   "color": [
                     0.015,
@@ -979,8 +828,8 @@
                 },
                 {
                   "pos": [
-                    1074.9893,
-                    928.5455
+                    0.3125,
+                    0.64482
                   ],
                   "color": [
                     0.015,
@@ -999,6 +848,157 @@
             }
           ],
           "active": false,
+          "opaque": false
+        }
+      ]
+    },
+    {
+      "name": "Debug_Menu",
+      "layers": [
+        {
+          "name": "debug_texts",
+          "order": 2,
+          "texts": [
+            {
+              "id": "fps_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 51,
+              "x": 0.0009250045,
+              "y": 0.0022857145,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 0.013733757,
+              "color": [
+                1.0,
+                0.0,
+                1.0,
+                1.0
+              ],
+              "text": "FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? 'Smooth' : 'Laggy'}",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false,
+              "anchor": null
+            },
+            {
+              "id": "sky_info_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 52,
+              "x": 0.099742495,
+              "y": 0.17235722,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 0.013205536,
+              "color": [
+                0.3,
+                0.5,
+                1.0,
+                1.0
+              ],
+              "text": "Game Time Speed: {time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, \n Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees",
+              "misc": {
+                "active": true,
+                "pressable": false,
+                "editable": true
+              },
+              "input_box": false,
+              "anchor": null
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
+          "opaque": false
+        }
+      ]
+    },
+    {
+      "name": "Main Menu",
+      "layers": [
+        {
+          "name": "main_menu_buttons",
+          "order": 2,
+          "texts": [
+            {
+              "id": "play_text",
+              "action": "None",
+              "style": "None",
+              "z_index": 2,
+              "x": 0.49419004,
+              "y": 0.48611,
+              "top_left_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_left_offset": [
+                0.0,
+                0.0
+              ],
+              "top_right_offset": [
+                0.0,
+                0.0
+              ],
+              "bottom_right_offset": [
+                0.0,
+                0.0
+              ],
+              "px": 0.016374864,
+              "color": [
+                1.0,
+                0.0,
+                1.0,
+                1.0
+              ],
+              "text": "Play",
+              "misc": {
+                "active": true,
+                "pressable": true,
+                "editable": true
+              },
+              "input_box": false,
+              "anchor": null
+            }
+          ],
+          "circles": [],
+          "outlines": [],
+          "handles": [],
+          "polygons": [],
+          "active": true,
           "opaque": false
         }
       ]

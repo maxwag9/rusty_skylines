@@ -235,10 +235,10 @@ impl ApplicationHandler for App {
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
-                    match resources
-                        .ui_loader
-                        .save_gui_to_file(data_dir("ui_data/gui_layout.json"))
-                    {
+                    match resources.ui_loader.save_gui_to_file(
+                        data_dir("ui_data/gui_layout.json"),
+                        resources.window.inner_size(),
+                    ) {
                         Ok(_) => println!("GUI layout saved"),
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
                     }

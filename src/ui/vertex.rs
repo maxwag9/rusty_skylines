@@ -691,9 +691,12 @@ pub struct UiVertex {
 }
 
 impl UiVertex {
-    fn from_json(v: UiVertexJson, id: usize) -> Self {
+    fn from_json(v: UiVertexJson, id: usize, window_size: PhysicalSize<u32>) -> Self {
+        let mut pos = v.pos;
+        pos[0] *= window_size.width as f32;
+        pos[1] *= window_size.height as f32;
         UiVertex {
-            pos: v.pos,
+            pos,
             color: v.color,
             roundness: v.roundness,
             selected: false,
@@ -701,9 +704,12 @@ impl UiVertex {
         }
     }
 
-    pub fn to_json(&self) -> UiVertexJson {
+    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiVertexJson {
+        let mut pos = self.pos;
+        pos[0] /= window_size.width as f32;
+        pos[1] /= window_size.height as f32;
         UiVertexJson {
-            pos: self.pos,
+            pos,
             color: self.color,
             roundness: self.roundness,
         }
@@ -738,6 +744,34 @@ pub struct ShapeData {
     pub y: f32,
     pub radius: f32,
     pub border_thickness: f32,
+}
+
+impl ShapeData {
+    pub(crate) fn scale_from_normalized(
+        &self,
+        window_size: PhysicalSize<u32>,
+        scale: f32,
+    ) -> ShapeData {
+        ShapeData {
+            x: self.x * window_size.width as f32,
+            y: self.y * window_size.height as f32,
+            radius: self.radius * scale,
+            border_thickness: self.border_thickness * scale,
+        }
+    }
+
+    pub(crate) fn scale_to_normalized(
+        &self,
+        window_size: PhysicalSize<u32>,
+        scale: f32,
+    ) -> ShapeData {
+        ShapeData {
+            x: self.x / window_size.width as f32,
+            y: self.y / window_size.height as f32,
+            radius: self.radius / scale,
+            border_thickness: self.border_thickness / scale,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -909,7 +943,8 @@ pub struct UiButtonHandle {
 }
 
 impl UiButtonText {
-    pub(crate) fn from_json(t: UiButtonTextJson) -> Self {
+    pub(crate) fn from_json(t: UiButtonTextJson, window_size: PhysicalSize<u32>) -> Self {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         let length = t.text.len();
         UiButtonText {
             id: t.id,
@@ -917,13 +952,19 @@ impl UiButtonText {
             style: t.style.clone(),
             z_index: t.z_index,
 
-            x: t.x,
-            y: t.y,
-            top_left_offset: t.top_left_offset,
-            bottom_left_offset: t.bottom_left_offset,
-            top_right_offset: t.top_right_offset,
-            bottom_right_offset: t.bottom_right_offset,
-            px: t.px,
+            x: window_size.width as f32 * t.x,
+            y: window_size.height as f32 * t.y,
+            top_left_offset: [scale * t.top_left_offset[0], scale * t.top_left_offset[1]],
+            bottom_left_offset: [
+                scale * t.bottom_left_offset[0],
+                scale * t.bottom_left_offset[1],
+            ],
+            top_right_offset: [scale * t.top_right_offset[0], scale * t.top_right_offset[1]],
+            bottom_right_offset: [
+                scale * t.bottom_right_offset[0],
+                scale * t.bottom_right_offset[1],
+            ],
+            px: (scale * t.px) as u16,
             color: t.color,
             text: t.text.clone(),
             template: t.text,
@@ -950,22 +991,35 @@ impl UiButtonText {
         }
     }
 
-    pub fn to_json(&self) -> UiButtonTextJson {
+    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonTextJson {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonTextJson {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
             z_index: self.z_index,
 
-            x: self.x,
-            y: self.y,
+            x: self.x / window_size.width as f32,
+            y: self.y / window_size.height as f32,
 
-            top_left_offset: self.top_left_offset,
-            bottom_left_offset: self.bottom_left_offset,
-            top_right_offset: self.top_right_offset,
-            bottom_right_offset: self.bottom_right_offset,
+            top_left_offset: [
+                self.top_left_offset[0] / scale,
+                self.top_left_offset[1] / scale,
+            ],
+            bottom_left_offset: [
+                self.bottom_left_offset[0] / scale,
+                self.bottom_left_offset[1] / scale,
+            ],
+            top_right_offset: [
+                self.top_right_offset[0] / scale,
+                self.top_right_offset[1] / scale,
+            ],
+            bottom_right_offset: [
+                self.bottom_right_offset[0] / scale,
+                self.bottom_right_offset[1] / scale,
+            ],
 
-            px: self.px,
+            px: self.px as f32 / scale,
             color: self.color,
             text: self.template.clone(),
             misc: self.misc.to_json(),
@@ -977,23 +1031,27 @@ impl UiButtonText {
 
 impl UiButtonCircle {
     pub(crate) fn from_json(c: UiButtonCircleJson, window_size: PhysicalSize<u32>) -> Self {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonCircle {
             id: c.id,
-
             action: c.action,
             style: c.style,
             z_index: c.z_index,
-            x: c.x,
-            y: c.y,
-            radius: c.radius,
-            inside_border_thickness: c.inside_border_thickness,
-            border_thickness: c.border_thickness,
+            x: window_size.width as f32 * c.x,
+            y: window_size.height as f32 * c.y,
+            radius: scale * c.radius,
+            inside_border_thickness: scale * c.inside_border_thickness,
+            border_thickness: scale * c.border_thickness,
             fade: c.fade,
             fill_color: c.fill_color,
             inside_border_color: c.inside_border_color,
             border_color: c.border_color,
             glow_color: c.glow_color,
-            glow_misc: c.glow_misc,
+            glow_misc: GlowMisc {
+                glow_size: scale * c.glow_misc.glow_size,
+                glow_speed: c.glow_misc.glow_speed,
+                glow_intensity: c.glow_misc.glow_intensity,
+            },
             misc: MiscButtonSettings {
                 active: c.misc.active,
                 touched_time: 0.0,
@@ -1004,26 +1062,29 @@ impl UiButtonCircle {
         }
     }
 
-    pub fn to_json(&self) -> UiButtonCircleJson {
+    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonCircleJson {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let mut glow_misc = self.glow_misc.clone();
+        glow_misc.glow_size /= scale;
         UiButtonCircleJson {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
             z_index: self.z_index,
 
-            x: self.x,
-            y: self.y,
+            x: self.x / window_size.width as f32,
+            y: self.y / window_size.height as f32,
 
-            radius: self.radius,
-            inside_border_thickness: self.inside_border_thickness,
-            border_thickness: self.border_thickness,
+            radius: self.radius / scale,
+            inside_border_thickness: self.inside_border_thickness / scale,
+            border_thickness: self.border_thickness / scale,
 
             fade: self.fade,
             fill_color: self.fill_color,
             inside_border_color: self.inside_border_color,
             border_color: self.border_color,
             glow_color: self.glow_color,
-            glow_misc: self.glow_misc.clone(),
+            glow_misc,
 
             misc: self.misc.to_json(),
         }
@@ -1031,14 +1092,15 @@ impl UiButtonCircle {
 }
 
 impl UiButtonHandle {
-    pub(crate) fn from_json(h: UiButtonHandleJson) -> Self {
+    pub(crate) fn from_json(h: UiButtonHandleJson, window_size: PhysicalSize<u32>) -> Self {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonHandle {
             id: h.id,
             z_index: h.z_index,
-            x: h.x,
-            y: h.y,
-            radius: h.radius,
-            handle_thickness: h.handle_thickness,
+            x: window_size.width as f32 * h.x,
+            y: window_size.height as f32 * h.y,
+            radius: scale * h.radius,
+            handle_thickness: scale * h.handle_thickness,
             handle_color: h.handle_color,
             handle_misc: h.handle_misc,
             sub_handle_color: h.sub_handle_color,
@@ -1054,15 +1116,16 @@ impl UiButtonHandle {
         }
     }
 
-    pub fn to_json(&self) -> UiButtonHandleJson {
+    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonHandleJson {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonHandleJson {
             id: self.id.clone(),
             z_index: self.z_index,
-            x: self.x,
-            y: self.y,
-            radius: self.radius,
+            x: self.x / window_size.width as f32,
+            y: self.y / window_size.height as f32,
+            radius: self.radius / scale,
 
-            handle_thickness: self.handle_thickness,
+            handle_thickness: self.handle_thickness / scale,
             handle_color: self.handle_color,
             handle_misc: self.handle_misc.clone(),
 
@@ -1076,16 +1139,16 @@ impl UiButtonHandle {
 }
 
 impl UiButtonOutline {
-    pub(crate) fn from_json(o: UiButtonOutlineJson) -> Self {
+    pub(crate) fn from_json(o: UiButtonOutlineJson, window_size: PhysicalSize<u32>) -> Self {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutline {
             id: o.id,
-
             z_index: o.z_index,
             parent_id: o.parent_id,
             mode: o.mode,
             vertex_offset: 0,
             vertex_count: 0,
-            shape_data: o.shape_data,
+            shape_data: o.shape_data.scale_from_normalized(window_size, scale),
             dash_color: o.dash_color,
             dash_misc: o.dash_misc,
             sub_dash_color: o.sub_dash_color,
@@ -1100,14 +1163,15 @@ impl UiButtonOutline {
         }
     }
 
-    pub fn to_json(&self) -> UiButtonOutlineJson {
+    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonOutlineJson {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutlineJson {
             id: self.id.clone(),
             z_index: self.z_index,
             parent_id: self.parent_id.clone(),
 
             mode: self.mode,
-            shape_data: self.shape_data.clone(),
+            shape_data: self.shape_data.scale_to_normalized(window_size, scale),
 
             dash_color: self.dash_color,
             dash_misc: self.dash_misc.clone(),
@@ -1120,14 +1184,18 @@ impl UiButtonOutline {
 }
 
 impl UiButtonPolygon {
-    pub(crate) fn from_json(p: UiButtonPolygonJson, id_gen: &mut usize) -> Self {
+    pub(crate) fn from_json(
+        p: UiButtonPolygonJson,
+        id_gen: &mut usize,
+        window_size: PhysicalSize<u32>,
+    ) -> Self {
         let mut verts: Vec<UiVertex> = p
             .vertices
             .into_iter()
             .map(|vj| {
                 let id = *id_gen;
                 *id_gen += 1;
-                UiVertex::from_json(vj, id)
+                UiVertex::from_json(vj, id, window_size)
             })
             .collect();
 
@@ -1150,14 +1218,18 @@ impl UiButtonPolygon {
         }
     }
 
-    pub fn to_json(&self) -> UiButtonPolygonJson {
+    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonPolygonJson {
         UiButtonPolygonJson {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
             z_index: self.z_index,
 
-            vertices: self.vertices.iter().map(|v| v.to_json()).collect(),
+            vertices: self
+                .vertices
+                .iter()
+                .map(|v| v.to_json(window_size))
+                .collect(),
 
             misc: self.misc.to_json(),
         }
@@ -1392,7 +1464,7 @@ pub struct UiButtonTextJson {
     pub bottom_left_offset: [f32; 2],
     pub top_right_offset: [f32; 2],
     pub bottom_right_offset: [f32; 2],
-    pub px: u16,
+    pub px: f32,
     pub color: [f32; 4],
     pub text: String,
     pub misc: MiscButtonSettingsJson,
@@ -1406,17 +1478,17 @@ pub struct UiButtonCircleJson {
     pub action: String,
     pub style: String,
     pub z_index: i32,
-    pub x: f32,
-    pub y: f32,
-    pub radius: f32,
-    pub inside_border_thickness: f32,
-    pub border_thickness: f32,
-    pub fade: f32,
+    pub x: f32,                       // normalized 0.0-1.0 of screen width!
+    pub y: f32,                       // normalized 0.0-1.0 of screen height!
+    pub radius: f32,                  // normalized 0.0-1.0
+    pub inside_border_thickness: f32, // normalized 0.0-1.0
+    pub border_thickness: f32,        // normalized 0.0-1.0
+    pub fade: f32,                    // normalized 0.0-1.0
     pub fill_color: [f32; 4],
     pub inside_border_color: [f32; 4],
     pub border_color: [f32; 4],
     pub glow_color: [f32; 4],
-    pub glow_misc: GlowMisc,
+    pub glow_misc: GlowMisc, // normalized 0.0-1.0
     pub misc: MiscButtonSettingsJson,
 }
 

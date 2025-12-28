@@ -63,7 +63,7 @@ impl UiButtonLoader {
                     .texts
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|t| UiButtonText::from_json(t))
+                    .map(|t| UiButtonText::from_json(t, window_size))
                     .collect();
 
                 let circles = l
@@ -77,21 +77,21 @@ impl UiButtonLoader {
                     .outlines
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|o| UiButtonOutline::from_json(o))
+                    .map(|o| UiButtonOutline::from_json(o, window_size))
                     .collect();
 
                 let handles = l
                     .handles
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|h| UiButtonHandle::from_json(h))
+                    .map(|h| UiButtonHandle::from_json(h, window_size))
                     .collect();
 
                 let polygons = l
                     .polygons
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|p| UiButtonPolygon::from_json(p, &mut id_gen))
+                    .map(|p| UiButtonPolygon::from_json(p, &mut id_gen, window_size))
                     .collect();
 
                 layers.push(RuntimeLayer {
@@ -128,13 +128,17 @@ impl UiButtonLoader {
         loader
     }
 
-    pub fn save_gui_to_file(&self, path: PathBuf) -> anyhow::Result<()> {
+    pub fn save_gui_to_file(
+        &self,
+        path: PathBuf,
+        window_size: PhysicalSize<u32>,
+    ) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
         // Convert runtime → serializable JSON
-        let layout = self.to_json_gui_layout();
+        let layout = self.to_json_gui_layout(window_size);
 
         let json = serde_json::to_string_pretty(&layout)?;
         fs::write(&path, json)?;
@@ -143,7 +147,7 @@ impl UiButtonLoader {
         Ok(())
     }
 
-    fn to_json_gui_layout(&self) -> GuiLayout {
+    fn to_json_gui_layout(&self, window_size: PhysicalSize<u32>) -> GuiLayout {
         let mut menus = Vec::new();
         for (menu_name, menu) in &self.menus {
             let mut layers = Vec::new();
@@ -160,11 +164,11 @@ impl UiButtonLoader {
                     active: Some(l.active),
                     opaque: Some(l.opaque),
 
-                    texts: Some(l.texts.iter().map(|t| t.to_json()).collect()),
-                    circles: Some(l.circles.iter().map(|c| c.to_json()).collect()),
-                    outlines: Some(l.outlines.iter().map(|o| o.to_json()).collect()),
-                    handles: Some(l.handles.iter().map(|h| h.to_json()).collect()),
-                    polygons: Some(l.polygons.iter().map(|p| p.to_json()).collect()),
+                    texts: Some(l.texts.iter().map(|t| t.to_json(window_size)).collect()),
+                    circles: Some(l.circles.iter().map(|c| c.to_json(window_size)).collect()),
+                    outlines: Some(l.outlines.iter().map(|o| o.to_json(window_size)).collect()),
+                    handles: Some(l.handles.iter().map(|h| h.to_json(window_size)).collect()),
+                    polygons: Some(l.polygons.iter().map(|p| p.to_json(window_size)).collect()),
                 });
             }
 
