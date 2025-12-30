@@ -1,5 +1,5 @@
 use crate::resources::{InputState, TimeSystem};
-use crate::ui::actions::selected_needed;
+use crate::ui::actions::selection_needed;
 use crate::ui::helper::{dist, polygon_sdf};
 use crate::ui::input::MouseState;
 use crate::ui::selections::{
@@ -1293,7 +1293,7 @@ pub fn select_correctly(
     input_state: &InputState,
 ) {
     if let Some(p) = pending_selection {
-        if selected_needed(loader, p.action_name.as_str()) {
+        if selection_needed(loader, p.action_name.as_str()) {
             select_move_primary_to_multi(loader, p)
         } else if input_state.ctrl {
             select_to_multi(loader, p);

@@ -3,6 +3,7 @@ use crate::events::Events;
 use crate::paths::data_dir;
 use crate::renderer::Renderer;
 use crate::simulation::Simulation;
+use crate::ui::actions::{ActionSystem, make_actions};
 pub(crate) use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::World;
@@ -21,6 +22,7 @@ pub struct Resources {
     pub ui_loader: UiButtonLoader,
     pub events: Events,
     pub window: Arc<Window>,
+    pub action_system: ActionSystem,
 }
 
 impl Resources {
@@ -42,6 +44,8 @@ impl Resources {
             .set_bool("editor_mode", settings.editor_mode);
         let mut time = TimeSystem::new();
         time.total_game_time = settings.total_game_time;
+
+        let action_system = make_actions();
         Self {
             settings,
             time,
@@ -51,6 +55,7 @@ impl Resources {
             ui_loader,
             events: Events::new(),
             window,
+            action_system,
         }
     }
 }

@@ -116,6 +116,50 @@ impl UiVariableRegistry {
             _ => None,
         }
     }
+    pub fn dump(&self) {
+        let mut keys: Vec<_> = self.vars.keys().collect();
+        keys.sort();
+
+        let max_len = keys.iter().map(|k| k.len()).max().unwrap_or(0);
+
+        for key in keys {
+            let value = &self.vars[key];
+            let type_tag = match value {
+                UiValue::F32(_) => "f32",
+                UiValue::I32(_) => "i32",
+                UiValue::Bool(_) => "bool",
+                UiValue::String(_) => "str",
+            };
+            println!(
+                "  {:width$} : {} ({})",
+                key,
+                value,
+                type_tag,
+                width = max_len
+            );
+        }
+
+        if self.vars.is_empty() {
+            println!("  (empty)");
+        }
+    }
+
+    pub fn dump_filtered(&self, prefix: &str) {
+        let mut keys: Vec<_> = self.vars.keys().filter(|k| k.starts_with(prefix)).collect();
+        keys.sort();
+
+        if keys.is_empty() {
+            println!("  (no variables matching '{}')", prefix);
+            return;
+        }
+
+        let max_len = keys.iter().map(|k| k.len()).max().unwrap_or(0);
+
+        for key in keys {
+            let value = &self.vars[key];
+            println!("  {:width$} : {}", key, value, width = max_len);
+        }
+    }
 }
 
 pub fn update_ui_variables(

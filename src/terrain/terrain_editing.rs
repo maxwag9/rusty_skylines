@@ -114,6 +114,7 @@ impl TerrainEditor {
             let vec = chunk
                 .accumulated_deltas
                 .iter()
+                .filter(|&(_, &h)| h.abs() > 0.001)
                 .map(|(&(x, z), &h)| ((x, z), h))
                 .collect();
 
@@ -134,6 +135,24 @@ impl TerrainEditor {
 
         let bytes = postcard::to_allocvec(&meta)?;
         let compressed = zstd::encode_all(&bytes[..], 3)?;
+        // DEBUG: Add this before serialization
+        for (coord, chunk) in &self.edited_chunks {
+            println!(
+                "Chunk {:?}: {} deltas, dirty={}",
+                coord,
+                chunk.accumulated_deltas.len(),
+                chunk.dirty
+            );
+        }
+        let total: usize = self
+            .edited_chunks
+            .values()
+            .map(|c| c.accumulated_deltas.len())
+            .sum();
+        println!("Total deltas across all chunks: {}", total);
+        println!("Uncompressed size: {} bytes", bytes.len());
+        println!("Compressed size: {} bytes", compressed.len());
+
         fs::write(&tmp, compressed)?;
         fs::rename(&tmp, path)?;
 
@@ -146,7 +165,15 @@ impl TerrainEditor {
         let data = fs::read(path)?;
         let decompressed = zstd::decode_all(&data[..])?;
         let meta: EditFile = postcard::from_bytes(&decompressed)?;
-
+        let total_entries: usize = meta
+            .edits
+            .values()
+            .map(|c| c.accumulated_deltas.len())
+            .sum();
+        println!("Total entries: {}", total_entries);
+        println!("Avg per chunk: {}", total_entries / meta.edits.len().max(1));
+        // Add this before serialization:
+        println!("Chunk count: {}", meta.edits.len());
         let mut editor = TerrainEditor {
             edited_chunks: HashMap::new(),
         };

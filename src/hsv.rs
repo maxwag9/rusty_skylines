@@ -5,7 +5,7 @@ pub struct HSV {
     pub(crate) v: f32, // 0..1
 }
 
-pub fn rgb_to_hsv([r, g, b]: [f32; 3]) -> HSV {
+pub fn rgb_to_hsv([r, g, b, _a]: [f32; 4]) -> HSV {
     let max = r.max(g.max(b));
     let min = r.min(g.min(b));
     let d = max - min;

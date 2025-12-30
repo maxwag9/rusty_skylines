@@ -57,13 +57,12 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     h
 }
 
-/// Top-level loader function.
 pub fn load_gui_from_file(path: PathBuf, mode: BendMode) -> Result<GuiLayout, Box<dyn Error>> {
     let bytes = fs::read(&path)?;
     match mode {
         BendMode::Strict => {
             // Normal behavior
-            let parsed: GuiLayout = serde_json::from_slice(&bytes)?;
+            let parsed: GuiLayout = serde_yaml::from_slice(&bytes)?;
             Ok(parsed)
         }
         BendMode::Bent => {

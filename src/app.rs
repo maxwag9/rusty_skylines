@@ -5,8 +5,8 @@ use crate::systems::input::camera_input_system;
 use crate::systems::physics::simulation_system;
 use crate::systems::render::render_system;
 use crate::systems::ui::ui_system;
-use crate::ui::vertex::UiButtonPolygon;
-use crate::ui::vertex::UiElement::Polygon;
+use crate::ui::vertex::UiButtonCircle;
+use crate::ui::vertex::UiElement::Circle;
 use crate::world::World;
 use glam::Vec2;
 use std::sync::Arc;
@@ -236,7 +236,7 @@ impl ApplicationHandler for App {
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
                     match resources.ui_loader.save_gui_to_file(
-                        data_dir("ui_data/gui_layout.json"),
+                        data_dir("ui_data/gui_layout.yaml"),
                         resources.window.inner_size(),
                     ) {
                         Ok(_) => println!("GUI layout saved"),
@@ -281,7 +281,7 @@ impl ApplicationHandler for App {
                             .layer_name
                             .clone()
                             .as_str(),
-                        Polygon(UiButtonPolygon::default()),
+                        Circle(UiButtonCircle::default()),
                         &resources.input.mouse,
                         true,
                     );

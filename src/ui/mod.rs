@@ -1,4 +1,4 @@
-mod actions;
+pub mod actions;
 mod cache;
 pub mod helper;
 pub mod input;

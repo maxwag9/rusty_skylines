@@ -1,6 +1,9 @@
 use crate::data::BendMode;
+use crate::hsv::{HSV, rgb_to_hsv};
 use crate::paths::data_dir;
+use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::{InputState, TimeSystem};
+use crate::ui::actions::ActionSystem;
 pub(crate) use crate::ui::actions::{activate_action, execute_action};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::MouseState;
@@ -8,11 +11,9 @@ pub(crate) use crate::ui::menu::Menu;
 use crate::ui::menu::get_selected_element_color;
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::selections::{SelectedUiElement, deselect_everything};
-use crate::ui::special_actions::rgb_to_hsv;
 use crate::ui::touches::{
-    EditorInteractionResult, MouseSnapshot, apply_pending_circle_updates, find_top_hit,
-    handle_editor_mode_interactions, handle_scroll_resize, handle_text_editing, near_handle,
-    press_began_on_ui,
+    MouseSnapshot, apply_pending_circle_updates, find_top_hit, handle_editor_mode_interactions,
+    handle_scroll_resize, handle_text_editing, near_handle, press_began_on_ui,
 };
 use crate::ui::ui_loader::load_gui_from_file;
 pub(crate) use crate::ui::ui_runtime::UiRuntime;
@@ -41,7 +42,7 @@ impl UiButtonLoader {
         bend_mode: BendMode,
         window_size: PhysicalSize<u32>,
     ) -> Self {
-        let layout_path = data_dir("ui_data/gui_layout.json");
+        let layout_path = data_dir("ui_data/gui_layout.yaml");
         let layout = load_gui_from_file(layout_path, bend_mode).unwrap_or_else(|e| {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
@@ -137,13 +138,18 @@ impl UiButtonLoader {
             fs::create_dir_all(parent)?;
         }
 
-        // Convert runtime → serializable JSON
         let layout = self.to_json_gui_layout(window_size);
 
-        let json = serde_json::to_string_pretty(&layout)?;
-        fs::write(&path, json)?;
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
 
-        println!("GUI saved to {}", path.display());
+        let content = match extension {
+            "json" => serde_json::to_string_pretty(&layout)?,
+            "yaml" | "yml" | _ => serde_yaml::to_string(&layout)?,
+        };
+
+        fs::write(&path, &content)?;
+        println!("GUI saved to {} ({} bytes)", path.display(), content.len());
+
         Ok(())
     }
 
@@ -435,148 +441,88 @@ impl UiButtonLoader {
 
     pub fn handle_touches(
         &mut self,
+        action_system: &mut ActionSystem,
         dt: f32,
         input_state: &mut InputState,
         time_system: &TimeSystem,
+        world_renderer: &mut WorldRenderer,
+        window_size: PhysicalSize<u32>,
     ) {
         if !self.ui_runtime.show_gui {
             return;
         }
-        self.ui_runtime.selected_ui_element_primary.just_deselected = false;
-        self.ui_runtime.selected_ui_element_primary.just_selected = false;
 
-        if let Some(color) = get_selected_element_color(self) {
-            let r = color[0];
-            let g = color[1];
-            let b = color[2];
+        self.reset_selection_flags();
+        self.sync_selected_element_color();
 
-            let (h, s, v) = rgb_to_hsv(r, g, b);
-
-            self.variables.set_f32("color_picker.r", r);
-            self.variables.set_f32("color_picker.g", g);
-            self.variables.set_f32("color_picker.b", b);
-            self.variables.set_f32("color_picker.h", h);
-            self.variables.set_f32("color_picker.s", s);
-            self.variables.set_f32("color_picker.v", v);
-        }
-
-        let mouse_snapshot = MouseSnapshot::from_mouse(&input_state.mouse);
+        let mouse = MouseSnapshot::from_mouse(&input_state.mouse);
         let editor_mode = self.ui_runtime.editor_mode;
 
-        let press_started_on_ui = if mouse_snapshot.just_pressed {
-            press_began_on_ui(&self.menus, &mouse_snapshot, editor_mode)
-        } else {
-            (false, "None".to_string())
-        };
-
-        if mouse_snapshot.just_pressed && !press_started_on_ui.0 {
-            if !near_handle(&self.menus, &mouse_snapshot) {
-                deselect_everything(self);
-            }
+        if mouse.just_pressed && !self.press_started_on_ui(&mouse) && !self.near_any_handle(&mouse)
+        {
+            deselect_everything(self);
         }
 
-        let top_hit = find_top_hit(&mut self.menus, &mouse_snapshot, editor_mode);
+        let top_hit = find_top_hit(&mut self.menus, &mouse, editor_mode);
 
-        let EditorInteractionResult {
-            trigger_selection: mut selection,
-            pending_circle_updates,
-            moved_any_selected_object,
-        } = handle_editor_mode_interactions(
+        let interaction = handle_editor_mode_interactions(
             self,
             time_system,
-            &mouse_snapshot,
+            &mouse,
             top_hit.clone(),
             input_state,
         );
+
         self.variables
             .set_bool("editing_text", self.ui_runtime.editing_text);
-        if editor_mode {
-            handle_text_editing(
-                &mut self.ui_runtime,
-                &mut self.menus,
-                input_state,
-                mouse_snapshot,
-            );
 
-            apply_pending_circle_updates(self, dt, pending_circle_updates);
-        }
-
-        if moved_any_selected_object {
-            self.mark_editor_layers_dirty();
-            selection = true;
-        }
+        let mut trigger_selection =
+            interaction.trigger_selection || interaction.moved_any_selected_object;
 
         if editor_mode {
-            if handle_scroll_resize(self, mouse_snapshot.scroll) {
-                selection = true;
+            handle_text_editing(&mut self.ui_runtime, &mut self.menus, input_state, mouse);
+            apply_pending_circle_updates(self, dt, interaction.pending_circle_updates);
+
+            if handle_scroll_resize(self, mouse.scroll) {
+                trigger_selection = true;
             }
         }
 
-        let trigger_selection = selection;
-
-        // if self.ui_runtime.selected_ui_element.active {
-        //     self.ui_runtime.selected_ui_element.active = false;
-        //     self.update_selection();
-        //
-        // }
+        if interaction.moved_any_selected_object {
+            self.mark_editor_layers_dirty();
+        }
 
         if trigger_selection {
             self.update_selection();
         }
 
-        if self.ui_runtime.selected_ui_element_primary.just_selected
-            || self.ui_runtime.selected_ui_element_primary.just_deselected
-        {
-            if self.ui_runtime.selected_ui_element_primary.action_name != "Drag Hue Point" {
-                if let Some(menu) = self.menus.get_mut("Editor_Menu") {
-                    if let Some(_layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker")
-                    {
-                        //layer.active = false;
-                    }
-                }
-            }
-        }
-        if input_state.mouse.right_just_pressed
-            && self.ui_runtime.selected_ui_element_primary.element_type != ElementKind::None
-        {
-            if let Some(menu) = self.menus.get_mut("Editor_Menu") {
-                if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") {
-                    layer.active = true;
-                }
-            }
-        }
+        self.handle_color_picker_visibility(input_state);
 
-        activate_action(self, &top_hit, input_state);
+        activate_action(
+            action_system,
+            self,
+            &top_hit,
+            &input_state.mouse,
+            input_state,
+            time_system,
+            world_renderer,
+            window_size,
+        );
 
-        execute_action(self, &top_hit, &input_state.mouse, time_system);
+        execute_action(
+            action_system,
+            self,
+            &top_hit,
+            &input_state.mouse,
+            input_state,
+            time_system,
+            world_renderer,
+            window_size,
+        );
 
         if editor_mode {
             self.apply_ui_edit_movement(input_state);
-
-            if input_state.action_pressed_once("Delete selected GUI Element")
-                && self.ui_runtime.selected_ui_element_primary.active
-                && !self.ui_runtime.editing_text
-            {
-                println!("deleting");
-                let element_id = self
-                    .ui_runtime
-                    .selected_ui_element_primary
-                    .element_id
-                    .clone();
-                let layer_name = self
-                    .ui_runtime
-                    .selected_ui_element_primary
-                    .layer_name
-                    .clone();
-                let menu_name = self
-                    .ui_runtime
-                    .selected_ui_element_primary
-                    .menu_name
-                    .clone();
-                deselect_everything(self);
-
-                let _ = self.delete_element(&menu_name, &layer_name, &element_id);
-            }
+            self.handle_element_deletion(input_state);
         }
     }
 
@@ -1126,6 +1072,76 @@ impl UiButtonLoader {
             self.update_selection();
             self.mark_editor_layers_dirty();
         }
+    }
+
+    fn reset_selection_flags(&mut self) {
+        self.ui_runtime.selected_ui_element_primary.just_deselected = false;
+        self.ui_runtime.selected_ui_element_primary.just_selected = false;
+    }
+
+    fn sync_selected_element_color(&mut self) {
+        let Some(color) = get_selected_element_color(self) else {
+            return;
+        };
+
+        let HSV { h, s, v } = rgb_to_hsv(color);
+
+        self.variables.set_f32("color_picker.r", color[0]);
+        self.variables.set_f32("color_picker.g", color[1]);
+        self.variables.set_f32("color_picker.b", color[2]);
+        self.variables.set_f32("color_picker.h", h);
+        self.variables.set_f32("color_picker.s", s);
+        self.variables.set_f32("color_picker.v", v);
+    }
+
+    fn press_started_on_ui(&self, mouse: &MouseSnapshot) -> bool {
+        if !mouse.just_pressed {
+            return false;
+        }
+        press_began_on_ui(&self.menus, mouse, self.ui_runtime.editor_mode).0
+    }
+
+    fn near_any_handle(&self, mouse: &MouseSnapshot) -> bool {
+        near_handle(&self.menus, mouse)
+    }
+
+    fn handle_color_picker_visibility(&mut self, input_state: &InputState) {
+        let selection = &self.ui_runtime.selected_ui_element_primary;
+        // let selection_changed = selection.just_selected || selection.just_deselected;
+        // let is_hue_drag = selection.action_name == "Drag Hue Point";
+        let has_selection = selection.element_type != ElementKind::None;
+
+        let show_picker = input_state.mouse.right_just_pressed && has_selection;
+
+        let Some(menu) = self.menus.get_mut("Editor_Menu") else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") else {
+            return;
+        };
+
+        if show_picker {
+            layer.active = true;
+        }
+    }
+
+    fn handle_element_deletion(&mut self, input_state: &mut InputState) {
+        let selection = &self.ui_runtime.selected_ui_element_primary;
+
+        let can_delete = input_state.action_pressed_once("Delete selected GUI Element")
+            && selection.active
+            && !self.ui_runtime.editing_text;
+
+        if !can_delete {
+            return;
+        }
+
+        let element_id = selection.element_id.clone();
+        let layer_name = selection.layer_name.clone();
+        let menu_name = selection.menu_name.clone();
+
+        deselect_everything(self);
+        let _ = self.delete_element(&menu_name, &layer_name, &element_id);
     }
 }
 
