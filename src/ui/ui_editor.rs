@@ -564,12 +564,12 @@ impl UiButtonLoader {
                 UiElement::Outline(o) => {
                     o.id = Option::from(id.to_string());
                 }
-                UiElement::Handle(h) => {
+                UiElement::_Handle(h) => {
                     h.x = mouse.pos.x;
                     h.y = mouse.pos.y;
                     h.id = Option::from(id.to_string());
                 }
-                UiElement::Polygon(p) => {
+                UiElement::_Polygon(p) => {
                     p.id = Option::from(id.to_string());
                 }
             }
@@ -588,11 +588,11 @@ impl UiButtonLoader {
                 layer.outlines.push(o);
                 layer.dirty.mark_outlines();
             }
-            UiElement::Handle(h) => {
+            UiElement::_Handle(h) => {
                 layer.handles.push(h);
                 layer.dirty.mark_handles();
             }
-            UiElement::Polygon(p) => {
+            UiElement::_Polygon(p) => {
                 layer.polygons.push(p);
                 layer.dirty.mark_polygons();
             }
@@ -726,8 +726,8 @@ impl UiButtonLoader {
                             self.variables
                                 .set_i32("selected_element.z_index", c.z_index);
                         }
-                        Handle(_h) => {}
-                        Polygon(p) => {
+                        _Handle(_h) => {}
+                        _Polygon(p) => {
                             if self.ui_runtime.editor_mode && p.misc.editable {
                                 let mut cx = 0.0;
                                 let mut cy = 0.0;
@@ -854,7 +854,7 @@ impl UiButtonLoader {
             for p in &layer.polygons {
                 if let Some(id) = &p.id {
                     if id == element_id {
-                        return Some(UiElement::Polygon(p.clone()));
+                        return Some(UiElement::_Polygon(p.clone()));
                     }
                 }
             }
@@ -934,7 +934,7 @@ impl UiButtonLoader {
                 .position(|p| p.id.as_deref() == Some(element_id))
             {
                 let removed = layer.polygons.remove(pos);
-                return Some(UiElement::Polygon(removed));
+                return Some(UiElement::_Polygon(removed));
             }
 
             // Texts

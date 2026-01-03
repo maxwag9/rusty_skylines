@@ -182,8 +182,8 @@ impl Default for LayerDirty {
 #[derive(Debug, Clone)]
 pub enum UiElement {
     Circle(UiButtonCircle),
-    Handle(UiButtonHandle),
-    Polygon(UiButtonPolygon),
+    _Handle(UiButtonHandle),
+    _Polygon(UiButtonPolygon),
     Text(UiButtonText),
     Outline(UiButtonOutline),
 }
@@ -686,7 +686,7 @@ pub struct UiVertex {
     pub pos: [f32; 2],
     pub color: [f32; 4],
     pub roundness: f32,
-    pub selected: bool,
+    pub _selected: bool,
     pub id: usize,
 }
 
@@ -699,7 +699,7 @@ impl UiVertex {
             pos,
             color: v.color,
             roundness: v.roundness,
-            selected: false,
+            _selected: false,
             id,
         }
     }
@@ -1278,35 +1278,35 @@ impl Default for UiButtonPolygon {
                 pos: [-30.0, 30.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 roundness: 0.0,
-                selected: false,
+                _selected: false,
                 id: 0,
             },
             UiVertex {
                 pos: [0.0, -30.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 roundness: 0.0,
-                selected: false,
+                _selected: false,
                 id: 1,
             },
             UiVertex {
                 pos: [30.0, 30.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 roundness: 0.0,
-                selected: false,
+                _selected: false,
                 id: 2,
             },
             UiVertex {
                 pos: [30.0, 50.0],
                 color: [1.0, 1.0, 0.0, 1.0],
                 roundness: 0.0,
-                selected: false,
+                _selected: false,
                 id: 3,
             },
             UiVertex {
                 pos: [50.0, 30.0],
                 color: [1.0, 0.0, 1.0, 1.0],
                 roundness: 0.0,
-                selected: false,
+                _selected: false,
                 id: 5,
             },
         ];
@@ -1445,7 +1445,7 @@ impl Default for UiVertex {
             pos: [0.0, 0.0],
             color: [1.0, 1.0, 1.0, 1.0],
             roundness: 0.0,
-            selected: false,
+            _selected: false,
             id: 0,
         }
     }

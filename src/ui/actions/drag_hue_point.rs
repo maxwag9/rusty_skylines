@@ -1,7 +1,6 @@
 use crate::resources::TimeSystem;
 use crate::ui::actions::{ActionArg, ActionState, deactivate_action};
 use crate::ui::input::MouseState;
-use crate::ui::touches::HitResult;
 use crate::ui::ui_editor::{MiscButtonSettings, UiButtonCircle, UiButtonLoader, UiElement::Circle};
 use glam::Vec2;
 use std::f32::consts::{FRAC_PI_2, TAU};
@@ -28,12 +27,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-pub fn drag_hue_point(
-    loader: &mut UiButtonLoader,
-    mouse_state: &MouseState,
-    top_hit: &Option<HitResult>,
-    time: &TimeSystem,
-) {
+pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &MouseState, time: &TimeSystem) {
     let selection = &loader.ui_runtime.selected_ui_element_primary;
     let dragging = selection.dragging;
     let just_selected = selection.just_selected;
@@ -57,7 +51,7 @@ pub fn drag_hue_point(
         .unwrap_or(hue.radius);
 
     let (new_pos, color, handle_radius, hue_radius) = if dragging {
-        compute_drag_state(&hue, pointer, og_handle_r, og_hue_r, loader)
+        compute_drag_state(&hue, pointer, og_hue_r, loader)
     } else {
         compute_idle_state(
             &hue,
@@ -183,7 +177,6 @@ fn smooth_pointer(loader: &mut UiButtonLoader, mouse: &MouseState, dragging: boo
 fn compute_drag_state(
     hue: &CircleSnapshot,
     pointer: Vec2,
-    og_handle_r: f32,
     og_hue_r: f32,
     loader: &mut UiButtonLoader,
 ) -> (Option<Vec2>, Option<[f32; 4]>, f32, f32) {

@@ -248,6 +248,7 @@ impl RenderCore {
             time,
             input_state,
             ui_loader,
+            settings.show_world,
         );
 
         self.queue.submit(Some(encoder.finish()));
@@ -264,6 +265,7 @@ impl RenderCore {
         time: &TimeSystem,
         input_state: &InputState,
         ui_loader: &mut UiButtonLoader,
+        show_world: bool,
     ) {
         let color_attachment = create_color_attachment(
             &self.pipelines.msaa_view,
@@ -281,24 +283,26 @@ impl RenderCore {
             multiview_mask: None,
         });
 
-        // Sky
-        self.sky.render(&mut pass, &self.pipelines);
+        if show_world {
+            // Sky
+            self.sky.render(&mut pass, &self.pipelines);
 
-        // Terrain
-        self.world
-            .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
-        {
-            pass.set_stencil_reference(0);
+            // Terrain
             self.world
-                .render(&mut pass, &self.pipelines, camera, aspect, false);
+                .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
+            {
+                pass.set_stencil_reference(0);
+                self.world
+                    .render(&mut pass, &self.pipelines, camera, aspect, false);
 
-            pass.set_stencil_reference(1);
-            self.world
-                .render(&mut pass, &self.pipelines, camera, aspect, true);
+                pass.set_stencil_reference(1);
+                self.world
+                    .render(&mut pass, &self.pipelines, camera, aspect, true);
+            }
+
+            // Water
+            self.render_water(&mut pass);
         }
-
-        // Water
-        self.render_water(&mut pass);
 
         // Gizmo
         self.render_gizmo(&mut pass);
@@ -324,6 +328,7 @@ impl RenderCore {
         pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
         pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
         pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
+        pass.set_bind_group(2, &self.pipelines.pick_uniforms.bind_group, &[]);
         pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
         pass.draw(0..6, 0..1);
     }

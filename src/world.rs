@@ -49,7 +49,7 @@ impl World {
         self.cameras.get(&entity).map(|bundle| &bundle.camera)
     }
 
-    pub fn camera_mut(&mut self, entity: Entity) -> Option<&mut Camera> {
+    pub fn _camera_mut(&mut self, entity: Entity) -> Option<&mut Camera> {
         self.cameras
             .get_mut(&entity)
             .map(|bundle| &mut bundle.camera)

@@ -46,6 +46,7 @@ struct PartialSettings {
     total_game_time: Option<f64>,
     world_generation_benchmark_mode: Option<bool>,
     bend_mode: Option<BendMode>,
+    show_world: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -62,6 +63,7 @@ pub struct Settings {
     pub total_game_time: f64,
     pub world_generation_benchmark_mode: bool,
     pub bend_mode: BendMode,
+    pub show_world: bool,
 }
 
 impl Default for Settings {
@@ -77,6 +79,7 @@ impl Default for Settings {
             total_game_time: 0.0,
             world_generation_benchmark_mode: false,
             bend_mode: BendMode::Strict,
+            show_world: true,
         }
     }
 }
@@ -149,7 +152,9 @@ impl Settings {
         if let Some(v) = p.bend_mode {
             s.bend_mode = v;
         }
-
+        if let Some(v) = p.show_world {
+            s.show_world = v;
+        }
         s
     }
 }

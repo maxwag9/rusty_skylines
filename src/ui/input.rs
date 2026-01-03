@@ -244,7 +244,7 @@ pub struct InputState {
     pub ctrl: bool,
     pub alt: bool,
 
-    pub keybinds: Keybinds,
+    pub _keybinds: Keybinds,
     pub mouse: MouseState,
     scroll_up_hit: bool,
     scroll_down_hit: bool,
@@ -271,7 +271,7 @@ impl InputState {
             shift: false,
             ctrl: false,
             alt: false,
-            keybinds,
+            _keybinds: keybinds,
             mouse: MouseState::new(),
             scroll_up_hit: false,
             scroll_down_hit: false,

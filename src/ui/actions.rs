@@ -871,7 +871,7 @@ pub fn execute_action(
     for action_name in active_actions {
         match action_name.as_str() {
             "Drag Hue Point" => {
-                drag_hue_point(ctx.loader, ctx.mouse_state, ctx.hit, ctx.time);
+                drag_hue_point(ctx.loader, ctx.mouse_state, ctx.time);
             }
             _ => {}
         }
@@ -1082,7 +1082,7 @@ fn register_editor_actions(sys: &mut ActionSystem) {
         }
     });
 
-    sys.register_simple("load_ui", |action, ctx| {
+    sys.register_simple("load_ui", |action, _| {
         let filename = action.arg_str(0).unwrap_or("ui_layout.yaml");
         match load_gui_from_file(filename.parse().unwrap(), BendMode::Strict) {
             Ok(_) => ActionResult::Ok,
