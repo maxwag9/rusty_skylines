@@ -8,8 +8,8 @@ use crate::ui::selections::{
 use crate::ui::ui_editor::{Menu, UiButtonLoader, UiRuntime};
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::{
-    ElementKind, RuntimeLayer, TouchState, UiButtonCircle, UiButtonHandle, UiButtonPolygon,
-    UiButtonText, UiElement, UiElementRef,
+    ElementKind, LayerDirty, RuntimeLayer, TouchState, UiButtonCircle, UiButtonHandle,
+    UiButtonPolygon, UiButtonText, UiElement, UiElementRef,
 };
 use std::collections::HashMap;
 
@@ -1114,177 +1114,375 @@ fn process_text(
     input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
-    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
-        for layer in menu.layers.iter_mut().filter(|l| l.active && l.saveable) {
-            for (text_index, text) in layer.texts.iter_mut().enumerate() {
-                if !text.misc.active {
-                    continue;
-                }
-
-                let Some(id) = &text.id.clone() else { continue };
-                let runtime = loader.ui_runtime.get(id);
-
-                let is_hit = top_hit
-                    .map(|hit| hit.matches(menu_name, &layer.name, HitElement::Text(text_index)))
-                    .unwrap_or(false);
-
-                let is_selected = loader.ui_runtime.selected_ui_element_primary.active
-                    && loader.ui_runtime.selected_ui_element_primary.menu_name == *menu_name
-                    && loader.ui_runtime.selected_ui_element_primary.layer_name == layer.name
-                    && loader.ui_runtime.selected_ui_element_primary.element_id == *id;
-
-                if loader.ui_runtime.editor_mode && text.misc.editable {
-                    // if not in global editing mode, no text should be flagged as being_edited
-                    if !loader.ui_runtime.editing_text {
-                        text.being_edited = false;
-                        loader
-                            .variables
-                            .set_bool("selected_text.being_edited", text.being_edited);
-                    }
-
-                    // if this text is being edited, make sure the layer is redrawn
-                    if text.being_edited {
-                        layer.dirty.mark_texts();
-                    }
-
-                    // when editing this text, do not drag it
-                    if is_selected && loader.ui_runtime.editing_text {
-                        continue;
-                    }
-
-                    // enter edit mode:
-                    // - input_box: one click on hit
-                    // - normal text: second click on already selected text
-                    let want_enter_edit = (mouse.just_pressed
-                        && is_hit
-                        && !loader.ui_runtime.editing_text
-                        && is_selected)
-                        || (mouse.just_pressed
-                            && is_hit
-                            && !loader.ui_runtime.editing_text
-                            && !is_selected
-                            && text.input_box);
-
-                    if want_enter_edit {
-                        println!("Entered edit mode");
-                        enter_text_editing_mode(
-                            &mut loader.ui_runtime,
-                            &mut loader.variables,
-                            text,
-                        );
-
-                        layer.dirty.mark_texts();
-                    }
-
-                    // exit edit mode when clicking outside after deselection
-                    if mouse.just_pressed
-                        && !want_enter_edit
-                        && loader.ui_runtime.editing_text
-                        && text.being_edited
-                        && !is_hit
-                        || loader
-                            .ui_runtime
-                            .selected_ui_element_primary
-                            .just_deselected
-                    {
-                        println!("Exit edit mode");
-                        if is_selected && (!text.input_box || loader.ui_runtime.override_mode) {
-                            text.template = text.text.clone();
-                            layer.dirty.mark_texts();
-                        }
-
-                        loader.ui_runtime.editing_text = false;
-                        text.being_edited = false;
-                        loader
-                            .ui_runtime
-                            .selected_ui_element_primary
-                            .just_deselected = false;
-                        continue;
-                    }
-
-                    // drag / selection logic
-                    if !runtime.is_down && !is_hit {
-                        continue;
-                    }
-                }
-
-                let touched_now = if !runtime.is_down {
-                    is_hit && mouse.just_pressed
-                } else {
-                    mouse.pressed
-                };
-
-                let state = loader.ui_runtime.update_touch(
-                    id,
-                    touched_now,
-                    time_system.sim_dt,
-                    &layer.name,
-                );
-
-                if runtime.is_down && !is_selected
-                    || loader
-                        .ui_runtime
-                        .selected_ui_element_primary
-                        .just_deselected
-                {
-                    continue;
-                }
-
-                match state {
-                    TouchState::Pressed => {
-                        if loader.ui_runtime.editor_mode {
-                            loader.ui_runtime.drag_offset =
-                                Some((mouse.mx - text.x, mouse.my - text.y));
-                        }
-
-                        pending_selection = Some(SelectedUiElement {
-                            active: true,
-                            menu_name: menu_name.to_string(),
-                            layer_name: layer.name.clone(),
-                            element_id: id.clone(),
-                            just_deselected: false,
-                            dragging: false,
-                            element_type: ElementKind::Text,
-                            just_selected: true,
-                            action_name: text.action.clone(),
-                            input_box: text.input_box,
-                        });
-                        layer.dirty.mark_texts();
-                    }
-
-                    TouchState::Held => {
-                        if !text.being_edited {
-                            loader.ui_runtime.selected_ui_element_primary.dragging = true;
-                            if loader.ui_runtime.editor_mode && text.misc.editable {
-                                if let Some((ox, oy)) = loader.ui_runtime.drag_offset {
-                                    let new_x = mouse.mx - ox;
-                                    let new_y = mouse.my - oy;
-
-                                    if (new_x - text.x).abs() > 0.001
-                                        || (new_y - text.y).abs() > 0.001
-                                    {
-                                        text.x = new_x;
-                                        text.y = new_y;
-                                        layer.dirty.mark_texts();
-                                        result.moved_any_selected_object = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    TouchState::Released => {
-                        loader.ui_runtime.selected_ui_element_primary.dragging = false;
-                        loader.ui_runtime.drag_offset = None;
-                        layer.dirty.mark_texts();
-                    }
-
-                    TouchState::Idle => {}
-                }
-            }
+    for (menu_name, menu) in active_menus(&mut loader.menus) {
+        for layer in active_layers(&mut menu.layers) {
+            process_text_layer(
+                &mut loader.ui_runtime,
+                &mut loader.variables,
+                time_system,
+                mouse,
+                top_hit,
+                result,
+                menu_name,
+                layer,
+                &mut pending_selection,
+            );
         }
     }
     select_correctly(pending_selection, loader, input_state);
+}
+
+fn process_text_layer(
+    ui_runtime: &mut UiRuntime,
+    variables: &mut UiVariableRegistry,
+    time_system: &TimeSystem,
+    mouse: &MouseSnapshot,
+    top_hit: Option<&HitResult>,
+    result: &mut EditorInteractionResult,
+    menu_name: &str,
+    layer: &mut RuntimeLayer,
+    pending_selection: &mut Option<SelectedUiElement>,
+) {
+    for (text_index, text) in layer.texts.iter_mut().enumerate() {
+        process_single_text(
+            ui_runtime,
+            variables,
+            time_system,
+            mouse,
+            top_hit,
+            result,
+            menu_name,
+            &mut layer.dirty,
+            &layer.name,
+            text_index,
+            text,
+            pending_selection,
+        );
+    }
+}
+
+fn process_single_text(
+    ui_runtime: &mut UiRuntime,
+    variables: &mut UiVariableRegistry,
+    time_system: &TimeSystem,
+    mouse: &MouseSnapshot,
+    top_hit: Option<&HitResult>,
+    result: &mut EditorInteractionResult,
+    menu_name: &str,
+    dirty: &mut LayerDirty,
+    layer_name: &String,
+    text_index: usize,
+    text: &mut UiButtonText,
+    pending_selection: &mut Option<SelectedUiElement>,
+) {
+    let id = match get_active_text_id(text) {
+        Some(id) => id,
+        None => return,
+    };
+
+    let is_down = ui_runtime.get(&id).is_down;
+    let is_hit = compute_text_hit(top_hit, menu_name, layer_name, text_index);
+    let is_selected = compute_text_selected(ui_runtime, menu_name, layer_name, &id);
+
+    if ui_runtime.editor_mode && text.misc.editable {
+        let should_return = handle_text_editor_mode(
+            ui_runtime,
+            variables,
+            mouse,
+            dirty,
+            text,
+            is_hit,
+            is_selected,
+            is_down,
+        );
+        if should_return {
+            return;
+        }
+    }
+
+    let touched_now = compute_touched_now(is_down, is_hit, mouse);
+
+    let state = ui_runtime.update_touch(&id, touched_now, time_system.sim_dt, layer_name);
+
+    if should_skip_touch_handling(ui_runtime, is_down, is_selected) {
+        return;
+    }
+
+    handle_text_touch_state(
+        ui_runtime,
+        mouse,
+        result,
+        menu_name,
+        layer_name,
+        dirty,
+        text,
+        &id,
+        state,
+        pending_selection,
+    );
+}
+
+fn get_active_text_id(text: &UiButtonText) -> Option<String> {
+    if !text.misc.active {
+        return None;
+    }
+    text.id.clone()
+}
+
+fn compute_text_hit(
+    top_hit: Option<&HitResult>,
+    menu_name: &str,
+    layer_name: &str,
+    text_index: usize,
+) -> bool {
+    top_hit
+        .map(|hit| hit.matches(menu_name, layer_name, HitElement::Text(text_index)))
+        .unwrap_or(false)
+}
+
+fn compute_text_selected(
+    ui_runtime: &UiRuntime,
+    menu_name: &str,
+    layer_name: &str,
+    id: &str,
+) -> bool {
+    let sel = &ui_runtime.selected_ui_element_primary;
+    sel.active && sel.menu_name == menu_name && sel.layer_name == layer_name && sel.element_id == id
+}
+
+fn handle_text_editor_mode(
+    ui_runtime: &mut UiRuntime,
+    variables: &mut UiVariableRegistry,
+    mouse: &MouseSnapshot,
+    dirty: &mut LayerDirty,
+    text: &mut UiButtonText,
+    is_hit: bool,
+    is_selected: bool,
+    is_down: bool,
+) -> bool {
+    sync_editing_state(ui_runtime, variables, text);
+
+    if text.being_edited {
+        dirty.mark_texts();
+    }
+
+    // when editing this text, do not drag it
+    if is_selected && ui_runtime.editing_text {
+        return true;
+    }
+
+    let want_enter_edit = check_want_enter_edit(ui_runtime, mouse, text, is_hit, is_selected);
+
+    if want_enter_edit {
+        println!("Entered edit mode");
+        enter_text_editing_mode(ui_runtime, variables, text);
+        dirty.mark_texts();
+    }
+
+    if should_exit_edit_mode(ui_runtime, mouse, text, is_hit, want_enter_edit) {
+        println!("Exit edit mode");
+        exit_text_editing_mode(ui_runtime, dirty, text, is_selected);
+        return true;
+    }
+
+    // drag / selection logic - skip if not interacting
+    if !is_down && !is_hit {
+        return true;
+    }
+
+    false
+}
+
+fn sync_editing_state(
+    ui_runtime: &UiRuntime,
+    variables: &mut UiVariableRegistry,
+    text: &mut UiButtonText,
+) {
+    // if not in global editing mode, no text should be flagged as being_edited
+    if !ui_runtime.editing_text {
+        text.being_edited = false;
+        variables.set_bool("selected_text.being_edited", text.being_edited);
+    }
+}
+
+fn check_want_enter_edit(
+    ui_runtime: &UiRuntime,
+    mouse: &MouseSnapshot,
+    text: &UiButtonText,
+    is_hit: bool,
+    is_selected: bool,
+) -> bool {
+    // enter edit mode:
+    // - input_box: one click on hit
+    // - normal text: second click on already selected text
+    let normal_text_enter = mouse.just_pressed && is_hit && !ui_runtime.editing_text && is_selected;
+
+    let input_box_enter =
+        mouse.just_pressed && is_hit && !ui_runtime.editing_text && !is_selected && text.input_box;
+
+    normal_text_enter || input_box_enter
+}
+
+fn should_exit_edit_mode(
+    ui_runtime: &UiRuntime,
+    mouse: &MouseSnapshot,
+    text: &UiButtonText,
+    is_hit: bool,
+    want_enter_edit: bool,
+) -> bool {
+    let clicked_outside = mouse.just_pressed
+        && !want_enter_edit
+        && ui_runtime.editing_text
+        && text.being_edited
+        && !is_hit;
+
+    clicked_outside || ui_runtime.selected_ui_element_primary.just_deselected
+}
+
+fn exit_text_editing_mode(
+    ui_runtime: &mut UiRuntime,
+    dirty: &mut LayerDirty,
+    text: &mut UiButtonText,
+    is_selected: bool,
+) {
+    if is_selected && (!text.input_box || ui_runtime.override_mode) {
+        text.template = text.text.clone();
+        dirty.mark_texts();
+    }
+
+    ui_runtime.editing_text = false;
+    text.being_edited = false;
+    ui_runtime.selected_ui_element_primary.just_deselected = false;
+}
+
+fn compute_touched_now(is_down: bool, is_hit: bool, mouse: &MouseSnapshot) -> bool {
+    if !is_down {
+        is_hit && mouse.just_pressed
+    } else {
+        mouse.pressed
+    }
+}
+
+fn should_skip_touch_handling(ui_runtime: &UiRuntime, is_down: bool, is_selected: bool) -> bool {
+    (is_down && !is_selected) || ui_runtime.selected_ui_element_primary.just_deselected
+}
+
+fn handle_text_touch_state(
+    ui_runtime: &mut UiRuntime,
+    mouse: &MouseSnapshot,
+    result: &mut EditorInteractionResult,
+    menu_name: &str,
+    layer_name: &str,
+    dirty: &mut LayerDirty,
+    text: &mut UiButtonText,
+    id: &str,
+    state: TouchState,
+    pending_selection: &mut Option<SelectedUiElement>,
+) {
+    match state {
+        TouchState::Pressed => {
+            handle_text_pressed(
+                ui_runtime,
+                mouse,
+                menu_name,
+                layer_name,
+                dirty,
+                text,
+                id,
+                pending_selection,
+            );
+        }
+        TouchState::Held => {
+            handle_text_held(ui_runtime, mouse, result, dirty, text);
+        }
+        TouchState::Released => {
+            handle_text_released(ui_runtime, dirty);
+        }
+        TouchState::Idle => {}
+    }
+}
+
+fn handle_text_pressed(
+    ui_runtime: &mut UiRuntime,
+    mouse: &MouseSnapshot,
+    menu_name: &str,
+    layer_name: &str,
+    dirty: &mut LayerDirty,
+    text: &UiButtonText,
+    id: &str,
+    pending_selection: &mut Option<SelectedUiElement>,
+) {
+    if ui_runtime.editor_mode {
+        ui_runtime.drag_offset = Some((mouse.mx - text.x, mouse.my - text.y));
+    }
+
+    dirty.mark_texts();
+    *pending_selection = Some(SelectedUiElement {
+        active: true,
+        menu_name: menu_name.to_string(),
+        layer_name: layer_name.to_string(),
+        element_id: id.to_string(),
+        just_deselected: false,
+        dragging: false,
+        element_type: ElementKind::Text,
+        just_selected: true,
+        action_name: text.action.clone(),
+        input_box: text.input_box,
+    });
+}
+
+fn handle_text_held(
+    ui_runtime: &mut UiRuntime,
+    mouse: &MouseSnapshot,
+    result: &mut EditorInteractionResult,
+    dirty: &mut LayerDirty,
+    text: &mut UiButtonText,
+) {
+    if text.being_edited {
+        return;
+    }
+
+    ui_runtime.selected_ui_element_primary.dragging = true;
+
+    if ui_runtime.editor_mode && text.misc.editable {
+        apply_text_drag(ui_runtime, mouse, result, dirty, text);
+    }
+}
+
+fn apply_text_drag(
+    ui_runtime: &UiRuntime,
+    mouse: &MouseSnapshot,
+    result: &mut EditorInteractionResult,
+    dirty: &mut LayerDirty,
+    text: &mut UiButtonText,
+) {
+    if let Some((ox, oy)) = ui_runtime.drag_offset {
+        let new_x = mouse.mx - ox;
+        let new_y = mouse.my - oy;
+
+        if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
+            text.x = new_x;
+            text.y = new_y;
+            dirty.mark_texts();
+            result.moved_any_selected_object = true;
+        }
+    }
+}
+
+fn handle_text_released(ui_runtime: &mut UiRuntime, dirty: &mut LayerDirty) {
+    ui_runtime.selected_ui_element_primary.dragging = false;
+    ui_runtime.drag_offset = None;
+    dirty.mark_texts();
+}
+
+fn active_menus(menus: &mut HashMap<String, Menu>) -> impl Iterator<Item = (&String, &mut Menu)> {
+    menus.iter_mut().filter(|(_, menu)| menu.active)
+}
+
+fn active_layers(layers: &mut Vec<RuntimeLayer>) -> impl Iterator<Item = &mut RuntimeLayer> {
+    layers
+        .iter_mut()
+        .filter(|layer| layer.active && layer.saveable)
 }
 
 pub fn select_correctly(

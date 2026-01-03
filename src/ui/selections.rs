@@ -131,6 +131,7 @@ pub fn deselect_everything(loader: &mut UiButtonLoader) {
         for layer in menu.layers.iter_mut() {
             for text in &mut layer.texts {
                 text.being_edited = false;
+                text.clear_selection();
             }
         }
     }

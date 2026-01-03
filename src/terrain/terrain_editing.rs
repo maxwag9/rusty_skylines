@@ -135,15 +135,14 @@ impl TerrainEditor {
 
         let bytes = postcard::to_allocvec(&meta)?;
         let compressed = zstd::encode_all(&bytes[..], 3)?;
-        // DEBUG: Add this before serialization
-        for (coord, chunk) in &self.edited_chunks {
-            println!(
-                "Chunk {:?}: {} deltas, dirty={}",
-                coord,
-                chunk.accumulated_deltas.len(),
-                chunk.dirty
-            );
-        }
+        // for (coord, chunk) in &self.edited_chunks {
+        //     println!(
+        //         "Chunk {:?}: {} deltas, dirty={}",
+        //         coord,
+        //         chunk.accumulated_deltas.len(),
+        //         chunk.dirty
+        //     );
+        // }
         let total: usize = self
             .edited_chunks
             .values()

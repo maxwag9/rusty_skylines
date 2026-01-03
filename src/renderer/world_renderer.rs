@@ -66,7 +66,7 @@ impl WorldRenderer {
         terrain_params.seed = 201035458;
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
-        let chunk_size = 128;
+        let chunk_size = 64;
         let view_radius_render = 128;
         let view_radius_generate = 64;
 
