@@ -1,7 +1,6 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text::Anchor;
 use crate::ui::helper::ensure_ccw;
-use crate::ui::ui_editor::UiVariableRegistry;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
@@ -182,12 +181,59 @@ impl Default for LayerDirty {
 #[derive(Debug, Clone)]
 pub enum UiElement {
     Circle(UiButtonCircle),
-    _Handle(UiButtonHandle),
-    _Polygon(UiButtonPolygon),
+    Handle(UiButtonHandle),
+    Polygon(UiButtonPolygon),
     Text(UiButtonText),
     Outline(UiButtonOutline),
 }
 
+impl UiElement {
+    /// Get element kind name for descriptions
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            UiElement::Circle(_) => "circle",
+            UiElement::Text(_) => "text",
+            UiElement::Polygon(_) => "polygon",
+            UiElement::Handle(_) => "handle",
+            UiElement::Outline(_) => "outline",
+        }
+    }
+    pub fn id(&self) -> &str {
+        match self {
+            UiElement::Text(t) => t.id.as_deref().unwrap_or(""),
+            UiElement::Circle(c) => c.id.as_deref().unwrap_or(""),
+            UiElement::Outline(o) => o.id.as_deref().unwrap_or(""),
+            UiElement::Handle(h) => h.id.as_deref().unwrap_or(""),
+            UiElement::Polygon(p) => p.id.as_deref().unwrap_or(""),
+        }
+    }
+
+    pub fn center(&self) -> (f32, f32) {
+        match self {
+            UiElement::Text(t) => (t.x, t.y),
+            UiElement::Circle(c) => (c.x, c.y),
+            UiElement::Handle(h) => (h.x, h.y),
+            UiElement::Outline(o) => (o.shape_data.x, o.shape_data.y),
+            UiElement::Polygon(p) => {
+                let count = p.vertices.len().max(1);
+                let sum = p
+                    .vertices
+                    .iter()
+                    .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
+                (sum.0 / count as f32, sum.1 / count as f32)
+            }
+        }
+    }
+    pub fn kind(&self) -> ElementKind {
+        match self {
+            UiElement::Circle(_) => ElementKind::Circle,
+            UiElement::Text(_) => ElementKind::Text,
+            UiElement::Polygon(_) => ElementKind::Polygon,
+            UiElement::Outline(_) => ElementKind::Outline,
+            UiElement::Handle(_) => ElementKind::Handle,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ButtonRuntime {
     pub touched_time: f32,
@@ -471,27 +517,9 @@ impl<'a> UiElementMut<'a> {
     }
 
     pub fn bump_z(&mut self, delta: i32) {
-        match self {
-            UiElementMut::Text(t) => t.z_index += delta,
-            UiElementMut::Circle(c) => c.z_index += delta,
-            UiElementMut::Outline(o) => o.z_index += delta,
-            UiElementMut::Handle(h) => h.z_index += delta,
-            UiElementMut::Polygon(p) => p.z_index += delta,
-        }
+        todo!()
     }
-    pub fn z_index(&self) -> i32 {
-        match self {
-            UiElementMut::Text(t) => t.z_index,
-            UiElementMut::Circle(c) => c.z_index,
-            UiElementMut::Outline(o) => o.z_index,
-            UiElementMut::Handle(h) => h.z_index,
-            UiElementMut::Polygon(p) => p.z_index,
-        }
-    }
-    pub fn update_z(&mut self, delta: i32, variables: &mut UiVariableRegistry) {
-        self.bump_z(delta);
-        variables.set_i32("selected_element.z_index", self.z_index());
-    }
+
     pub fn translate(&mut self, dx: f32, dy: f32) {
         match self {
             UiElementMut::Text(t) => {
@@ -519,6 +547,7 @@ impl<'a> UiElementMut<'a> {
         }
     }
 
+    //noinspection GrazieStyle
     pub fn resize(&mut self, scale: f32) {
         match self {
             UiElementMut::Text(t) => {
@@ -531,7 +560,7 @@ impl<'a> UiElementMut<'a> {
                 c.radius *= scale;
             }
             UiElementMut::Outline(_) | UiElementMut::Handle(_) => {
-                // outlines and handles have no generic resize behaviour here.
+                // outlines and handles have no generic resize behavior here.
                 // If you want, implement per-field scaling.
             }
             UiElementMut::Polygon(p) => {
@@ -556,6 +585,7 @@ impl<'a> UiElementMut<'a> {
         }
     }
 }
+
 impl RuntimeLayer {
     pub fn iter_all_elements(&self) -> impl Iterator<Item = (UiElementRef<'_>, ElementKind)> {
         self.texts
@@ -603,18 +633,11 @@ impl RuntimeLayer {
             f(UiElementMut::Polygon(p), ElementKind::Polygon);
         }
     }
-    pub fn sort_by_z(&mut self) {
-        self.texts.sort_by_key(|e| e.z_index);
-        self.circles.sort_by_key(|e| e.z_index);
-        self.outlines.sort_by_key(|e| e.z_index);
-        self.handles.sort_by_key(|e| e.z_index);
-        self.polygons.sort_by_key(|e| e.z_index);
-    }
 
-    pub fn bump_element_z(&mut self, id: &str, delta: i32, variables: &mut UiVariableRegistry) {
+    pub fn bump_element_z(&mut self, id: &str, delta: i32) {
         self.iter_all_elements_mut(|mut elem, _| {
             if elem.id() == id {
-                elem.update_z(delta, variables);
+                elem.bump_z(delta);
             }
         });
     }
@@ -825,7 +848,6 @@ pub struct UiButtonText {
     pub id: Option<String>,
     pub action: String,
     pub style: String,
-    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub top_left_offset: [f32; 2],
@@ -879,7 +901,6 @@ pub struct UiButtonPolygon {
     pub id: Option<String>,
     pub action: String,
     pub style: String,
-    pub z_index: i32,
     pub vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
     pub tri_count: u32,
@@ -890,8 +911,6 @@ pub struct UiButtonCircle {
     pub id: Option<String>,
     pub action: String,
     pub style: String,
-    pub z_index: i32,
-
     pub x: f32,
     pub y: f32,
     pub radius: f32,
@@ -909,7 +928,6 @@ pub struct UiButtonCircle {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonOutline {
     pub id: Option<String>,
-    pub z_index: i32,
     pub parent_id: Option<String>,
 
     pub mode: f32, // 0 = circle, 1 = polygon
@@ -929,7 +947,6 @@ pub struct UiButtonOutline {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonHandle {
     pub id: Option<String>,
-    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub radius: f32,
@@ -950,8 +967,6 @@ impl UiButtonText {
             id: t.id,
             action: t.action.clone(),
             style: t.style.clone(),
-            z_index: t.z_index,
-
             x: window_size.width as f32 * t.x,
             y: window_size.height as f32 * t.y,
             top_left_offset: [scale * t.top_left_offset[0], scale * t.top_left_offset[1]],
@@ -997,7 +1012,6 @@ impl UiButtonText {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
-            z_index: self.z_index,
 
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
@@ -1036,7 +1050,6 @@ impl UiButtonCircle {
             id: c.id,
             action: c.action,
             style: c.style,
-            z_index: c.z_index,
             x: window_size.width as f32 * c.x,
             y: window_size.height as f32 * c.y,
             radius: scale * c.radius,
@@ -1070,8 +1083,6 @@ impl UiButtonCircle {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
-            z_index: self.z_index,
-
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
 
@@ -1096,7 +1107,6 @@ impl UiButtonHandle {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonHandle {
             id: h.id,
-            z_index: h.z_index,
             x: window_size.width as f32 * h.x,
             y: window_size.height as f32 * h.y,
             radius: scale * h.radius,
@@ -1120,7 +1130,6 @@ impl UiButtonHandle {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonHandleJson {
             id: self.id.clone(),
-            z_index: self.z_index,
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
             radius: self.radius / scale,
@@ -1143,7 +1152,6 @@ impl UiButtonOutline {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutline {
             id: o.id,
-            z_index: o.z_index,
             parent_id: o.parent_id,
             mode: o.mode,
             vertex_offset: 0,
@@ -1167,7 +1175,6 @@ impl UiButtonOutline {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutlineJson {
             id: self.id.clone(),
-            z_index: self.z_index,
             parent_id: self.parent_id.clone(),
 
             mode: self.mode,
@@ -1205,7 +1212,6 @@ impl UiButtonPolygon {
             id: p.id,
             action: p.action,
             style: p.style,
-            z_index: p.z_index,
             vertices: verts,
             misc: MiscButtonSettings {
                 active: p.misc.active,
@@ -1223,7 +1229,6 @@ impl UiButtonPolygon {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
-            z_index: self.z_index,
 
             vertices: self
                 .vertices
@@ -1234,6 +1239,15 @@ impl UiButtonPolygon {
             misc: self.misc.to_json(),
         }
     }
+
+    pub fn center(&self) -> (f32, f32) {
+        let count = self.vertices.len().max(1);
+        let sum = self
+            .vertices
+            .iter()
+            .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
+        (sum.0 / count as f32, sum.1 / count as f32)
+    }
 }
 
 impl Default for UiButtonText {
@@ -1242,7 +1256,6 @@ impl Default for UiButtonText {
             id: None,
             action: "None".to_string(),
             style: "None".to_string(),
-            z_index: 0,
             x: 0.0,
             y: 0.0,
             top_left_offset: [0.0; 2],
@@ -1315,7 +1328,6 @@ impl Default for UiButtonPolygon {
             id: None,
             action: "None".to_string(),
             style: "None".to_string(),
-            z_index: 0,
             vertices: verts,
             misc: MiscButtonSettings::default(),
             tri_count: 0,
@@ -1329,7 +1341,6 @@ impl Default for UiButtonCircle {
             id: None,
             action: "None".to_string(),
             style: "None".to_string(),
-            z_index: 0,
             x: 0.0,
             y: 0.0,
             radius: 10.0,
@@ -1350,7 +1361,6 @@ impl Default for UiButtonOutline {
     fn default() -> Self {
         Self {
             id: None,
-            z_index: 0,
             parent_id: None,
             mode: 1.0,
             vertex_offset: 0,
@@ -1369,7 +1379,6 @@ impl Default for UiButtonHandle {
     fn default() -> Self {
         Self {
             id: None,
-            z_index: 0,
             x: 0.0,
             y: 0.0,
             radius: 6.0,
@@ -1456,8 +1465,6 @@ pub struct UiButtonTextJson {
     pub id: Option<String>,
     pub action: String,
     pub style: String,
-    pub z_index: i32,
-
     pub x: f32,
     pub y: f32,
     pub top_left_offset: [f32; 2],
@@ -1477,7 +1484,6 @@ pub struct UiButtonCircleJson {
     pub id: Option<String>,
     pub action: String,
     pub style: String,
-    pub z_index: i32,
     pub x: f32,                       // normalized 0.0-1.0 of screen width!
     pub y: f32,                       // normalized 0.0-1.0 of screen height!
     pub radius: f32,                  // normalized 0.0-1.0
@@ -1495,7 +1501,6 @@ pub struct UiButtonCircleJson {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonHandleJson {
     pub id: Option<String>,
-    pub z_index: i32,
     pub x: f32,
     pub y: f32,
     pub radius: f32,
@@ -1511,7 +1516,6 @@ pub struct UiButtonHandleJson {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UiButtonOutlineJson {
     pub id: Option<String>,
-    pub z_index: i32,
     pub parent_id: Option<String>,
     pub mode: f32,             // 0 = circle, 1 = polygon
     pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
@@ -1529,7 +1533,6 @@ pub struct UiButtonPolygonJson {
     pub id: Option<String>,
     pub action: String,
     pub style: String,
-    pub z_index: i32,
     pub vertices: Vec<UiVertexJson>,
     pub misc: MiscButtonSettingsJson,
 }

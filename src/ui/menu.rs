@@ -1,8 +1,8 @@
 use crate::ui::cache::*;
-use crate::ui::ui_editor::{
-    ElementKind, LayerDirty, RuntimeLayer, UiButtonLoader, UiVariableRegistry,
-};
+use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::variables::UiVariableRegistry;
+use crate::ui::vertex::*;
 
 #[derive(Debug)]
 pub struct Menu {
@@ -11,6 +11,47 @@ pub struct Menu {
 }
 
 impl Menu {
+    pub fn get_element(&mut self, layer_name: &str, element_id: &str) -> Option<UiElement> {
+        let layer = self.layers.iter().find(|l| l.name == layer_name)?;
+
+        if let Some(c) = layer
+            .circles
+            .iter()
+            .find(|c| c.id.as_deref() == Some(element_id))
+        {
+            return Some(UiElement::Circle(c.clone()));
+        }
+        if let Some(t) = layer
+            .texts
+            .iter()
+            .find(|t| t.id.as_deref() == Some(element_id))
+        {
+            return Some(UiElement::Text(t.clone()));
+        }
+        if let Some(p) = layer
+            .polygons
+            .iter()
+            .find(|p| p.id.as_deref() == Some(element_id))
+        {
+            return Some(UiElement::Polygon(p.clone()));
+        }
+        if let Some(h) = layer
+            .handles
+            .iter()
+            .find(|h| h.id.as_deref() == Some(element_id))
+        {
+            return Some(UiElement::Handle(h.clone()));
+        }
+        if let Some(o) = layer
+            .outlines
+            .iter()
+            .find(|o| o.id.as_deref() == Some(element_id))
+        {
+            return Some(UiElement::Outline(o.clone()));
+        }
+
+        None
+    }
     pub fn rebuild_layer_cache_index(&mut self, layer_index: usize, runtime: &UiRuntime) {
         let (before, rest) = self.layers.split_at_mut(layer_index);
         let (layer, after) = rest.split_first_mut().unwrap();

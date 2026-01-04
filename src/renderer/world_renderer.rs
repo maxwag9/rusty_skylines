@@ -61,7 +61,7 @@ pub struct WorldRenderer {
 }
 
 impl WorldRenderer {
-    pub fn new(device: &Device) -> Self {
+    pub fn new(device: &Device, settings: &Settings) -> Self {
         let mut terrain_params = TerrainParams::default();
         terrain_params.seed = 201035458;
         let terrain_gen = TerrainGenerator::new(terrain_params);
@@ -80,16 +80,21 @@ impl WorldRenderer {
         println!("Using {} chunk workers", threads);
 
         let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size as u32);
-        let terrain_editor = match TerrainEditor::load_edits(data_dir("edited_chunks")) {
-            Ok(te) => {
-                println!("World loaded");
-                te
-            }
-            Err(e) => {
-                eprintln!("Failed to load World: {e}");
-                TerrainEditor::default()
-            }
-        };
+        let terrain_editor: TerrainEditor;
+        if settings.show_world {
+            terrain_editor = match TerrainEditor::load_edits(data_dir("edited_chunks")) {
+                Ok(te) => {
+                    println!("World loaded");
+                    te
+                }
+                Err(e) => {
+                    eprintln!("Failed to load World: {e}");
+                    TerrainEditor::default()
+                }
+            };
+        } else {
+            terrain_editor = TerrainEditor::default();
+        }
 
         Self {
             arena,
@@ -167,7 +172,10 @@ impl WorldRenderer {
         self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.handle_terrain_editing(device, queue, input_state);
+        if settings.show_world {
+            self.handle_terrain_editing(device, queue, input_state);
+        }
+
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;

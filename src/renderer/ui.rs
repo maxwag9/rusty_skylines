@@ -2,7 +2,8 @@ use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text::Anchor;
 use crate::renderer::ui_upload::*;
 use crate::resources::{InputState, TimeSystem};
-use crate::ui::ui_editor::{UiButtonLoader, UiRuntime};
+use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_runtime::UiRuntime;
 use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiVertexPoly,
 };
@@ -164,7 +165,6 @@ pub struct TextParams {
 }
 
 pub struct DrawCmd<'a> {
-    pub z: i32,
     pub pipeline: &'a RenderPipeline,
     pub bind_group0: &'a BindGroup,
     pub bind_group1: Option<BindGroup>,
@@ -244,8 +244,6 @@ impl UiRenderer {
 
         ui.update_dynamic_texts();
 
-        ui.sync_console_ui();
-
         for (_, menu) in ui.menus.iter().filter(|(_, menu)| menu.active) {
             for layer in menu.layers.iter().filter(|l| l.active) {
                 let mut cmds: Vec<DrawCmd> = Vec::new();
@@ -259,11 +257,8 @@ impl UiRenderer {
                         }],
                     });
 
-                    for idx in self.sorted_indices_by_z(&layer.circles, |c| c.z_index) {
-                        let z = layer.circles[idx].z_index;
-
+                    for (idx, _) in layer.circles.iter().enumerate() {
                         cmds.push(DrawCmd {
-                            z,
                             pipeline: &self.pipelines.circle_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(circle_bg.clone()),
@@ -273,7 +268,6 @@ impl UiRenderer {
                         });
 
                         cmds.push(DrawCmd {
-                            z,
                             pipeline: &self.pipelines.glow_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(circle_bg.clone()),
@@ -294,9 +288,8 @@ impl UiRenderer {
                         }],
                     });
 
-                    for idx in self.sorted_indices_by_z(&layer.handles, |h| h.z_index) {
+                    for (idx, _) in layer.handles.iter().enumerate() {
                         cmds.push(DrawCmd {
-                            z: layer.handles[idx].z_index,
                             pipeline: &self.pipelines.handle_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(handle_bg.clone()),
@@ -336,7 +329,6 @@ impl UiRenderer {
                             let count = p.tri_count * 3;
 
                             cmds.push(DrawCmd {
-                                z: p.z_index,
                                 pipeline: &self.pipelines.polygon_pipeline,
                                 bind_group0: &self.pipelines.uniform_bind_group,
                                 bind_group1: poly_bg.clone(),
@@ -376,9 +368,8 @@ impl UiRenderer {
                         ],
                     });
 
-                    for (i, o) in layer.outlines.iter().enumerate() {
+                    for (i, _) in layer.outlines.iter().enumerate() {
                         cmds.push(DrawCmd {
-                            z: o.z_index,
                             pipeline: &self.pipelines.outline_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(outline_bg.clone()),
@@ -391,10 +382,7 @@ impl UiRenderer {
 
                 if layer.gpu.text_count > 0 {
                     if let Some(text_vbo) = &layer.gpu.text_vbo {
-                        let z = layer.texts.iter().map(|t| t.z_index).max().unwrap_or(0);
-
                         cmds.push(DrawCmd {
-                            z,
                             pipeline: &self.pipelines.text_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(self.pipelines.text_bind_group.clone()),
@@ -404,8 +392,6 @@ impl UiRenderer {
                         });
                     }
                 }
-
-                cmds.sort_by_key(|c| c.z);
 
                 for c in cmds {
                     pass.set_pipeline(c.pipeline);

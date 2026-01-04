@@ -1,5 +1,4 @@
-use crate::ui::ui_editor::UiVariableRegistry;
-use crate::ui::variables::UiValue;
+use crate::ui::variables::{UiValue, UiVariableRegistry};
 use std::fmt;
 
 // ------------------------------------------------------------
@@ -169,6 +168,7 @@ enum Token {
     End,
 }
 
+//noinspection GrazieInspection
 fn tokenize_expr(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
@@ -1145,7 +1145,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             Some(Value::Str(format!("{}{}", n, suffix)))
         },
         "bytes" => |args| {
-            // Format bytes to human readable
+            // Format bytes to human-readable
             let n = args.first()?.as_f64()?;
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(2.0) as usize;
             let units = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -2331,6 +2331,7 @@ pub fn eval_expr(expr: &str, vars: &UiVariableRegistry) -> Option<Value> {
     parser.parse_expr()
 }
 
+//noinspection GrazieInspection
 // ------------------------------------------------------------
 // Final public function
 // ------------------------------------------------------------

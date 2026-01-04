@@ -1,10 +1,9 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
-use crate::ui::ui_editor::{
-    ButtonRuntime, LayerDirty, RuntimeLayer, UiButtonLoader, UiButtonPolygon, UiRuntime,
-    UiVertexPoly,
-};
+use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::vertex::*;
 
 pub fn rebuild_text_cache(layer: &mut RuntimeLayer, rebuilt: &mut LayerDirty, runtime: &UiRuntime) {
     layer.cache.texts.clear();

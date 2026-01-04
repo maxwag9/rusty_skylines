@@ -132,7 +132,7 @@ impl RenderCore {
             .expect("Failed to create render pipelines");
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
             .expect("Failed to create UI pipelines");
-        let world = WorldRenderer::new(&device);
+        let world = WorldRenderer::new(&device, settings);
         let sky = SkyRenderer::new();
 
         Self {

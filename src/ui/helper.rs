@@ -156,13 +156,13 @@ pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
         let mut ear_found = false;
 
         for i in 0..m {
-            let i0 = idx[(i + m - 1) % m];
-            let i1 = idx[i];
-            let i2 = idx[(i + 1) % m];
+            let a = idx[(i + m - 1) % m];
+            let b = idx[i];
+            let c = idx[(i + 1) % m];
 
-            let p0 = verts[i0].pos;
-            let p1 = verts[i1].pos;
-            let p2 = verts[i2].pos;
+            let p0 = verts[a].pos;
+            let p1 = verts[b].pos;
+            let p2 = verts[c].pos;
 
             // avoid degeneracy
             let area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
@@ -176,7 +176,7 @@ pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
 
             let mut contains = false;
             for &j in &idx {
-                if j == i0 || j == i1 || j == i2 {
+                if j == a || j == b || j == c {
                     continue;
                 }
                 if point_in_tri(verts[j].pos, p0, p1, p2) {
@@ -189,15 +189,7 @@ pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
             }
 
             // to guarantee CCW triangles:
-            if area < 0.0 {
-                tri_indices.push(i0 as u32);
-                tri_indices.push(i2 as u32);
-                tri_indices.push(i1 as u32);
-            } else {
-                tri_indices.push(i0 as u32);
-                tri_indices.push(i1 as u32);
-                tri_indices.push(i2 as u32);
-            }
+            push_triangle_indices(&mut tri_indices, area, a, b, c);
 
             idx.remove(i);
             ear_found = true;
@@ -227,21 +219,24 @@ pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
 
         let area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
 
-        if area < 0.0 {
-            tri_indices.push(a as u32);
-            tri_indices.push(c as u32);
-            tri_indices.push(b as u32);
-        } else {
-            tri_indices.push(a as u32);
-            tri_indices.push(b as u32);
-            tri_indices.push(c as u32);
-        }
+        push_triangle_indices(&mut tri_indices, area, a, b, c);
     }
 
     // convert index list into raw UiVertex list
     tri_indices.into_iter().map(|i| verts[i as usize]).collect()
 }
 
+fn push_triangle_indices(tri_indices: &mut Vec<u32>, area: f32, a: usize, b: usize, c: usize) {
+    if area < 0.0 {
+        tri_indices.push(a as u32);
+        tri_indices.push(c as u32);
+        tri_indices.push(b as u32);
+    } else {
+        tri_indices.push(a as u32);
+        tri_indices.push(b as u32);
+        tri_indices.push(c as u32);
+    }
+}
 fn compute_signed_area(verts: &[UiVertex]) -> f32 {
     let mut area = 0.0;
     let n = verts.len();

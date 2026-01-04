@@ -1,7 +1,8 @@
 use crate::resources::TimeSystem;
 use crate::ui::actions::{ActionArg, ActionState, deactivate_action};
 use crate::ui::input::MouseState;
-use crate::ui::ui_editor::{MiscButtonSettings, UiButtonCircle, UiButtonLoader, UiElement::Circle};
+use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::vertex::{MiscButtonSettings, UiButtonCircle};
 use glam::Vec2;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -66,33 +67,33 @@ pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &MouseState, tim
 
     let handle_color = get_handle_color(loader);
 
-    let created = loader.edit_circle(
-        "Editor_Menu",
-        "Color Picker",
-        "color picker handle circle",
-        new_pos.map(|p| p.x),
-        new_pos.map(|p| p.y),
-        Some(handle_radius),
-        color.or(handle_color),
-        None,
-    );
-
-    loader.edit_circle(
-        "Editor_Menu",
-        "Color Picker",
-        "Color Picker Color Circle",
-        None,
-        None,
-        Some(hue_radius),
-        None,
-        None,
-    );
+    // let created = loader.edit_circle(
+    //     "Editor_Menu",
+    //     "Color Picker",
+    //     "color picker handle circle",
+    //     new_pos.map(|p| p.x),
+    //     new_pos.map(|p| p.y),
+    //     Some(handle_radius),
+    //     color.or(handle_color),
+    //     None,
+    // );
+    //
+    // loader.edit_circle(
+    //     "Editor_Menu",
+    //     "Color Picker",
+    //     "Color Picker Color Circle",
+    //     None,
+    //     None,
+    //     Some(hue_radius),
+    //     None,
+    //     None,
+    // );
 
     if just_deselected {
         deactivate_action(loader, "Drag Hue Point");
-        let _ = loader.delete_element("Editor_Menu", "Color Picker", "color picker handle circle");
+        //let _ = loader.delete_element("Editor_Menu", "Color Picker", "color picker handle circle");
     }
-
+    let created = false;
     if !created && just_selected && is_action_active(loader) {
         spawn_handle_circle(loader, mouse_state);
     }
@@ -270,7 +271,6 @@ fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &MouseState) {
         id: Some("color picker handle circle".to_string()),
         action: "None".to_string(),
         style: "None".to_string(),
-        z_index: 990,
         x: mouse.pos.x,
         y: mouse.pos.y,
         radius: 6.0,
@@ -291,7 +291,7 @@ fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &MouseState) {
         },
     };
 
-    let _ = loader.add_element("Editor_Menu", "Color Picker", Circle(handle), mouse, false);
+    //let _ = loader.add_element("Editor_Menu", "Color Picker", Circle(handle), mouse, false);
 }
 
 fn apply_to_multi_selection(loader: &mut UiButtonLoader, color: [f32; 4]) {

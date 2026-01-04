@@ -5,6 +5,7 @@ use crate::systems::input::camera_input_system;
 use crate::systems::physics::simulation_system;
 use crate::systems::render::render_system;
 use crate::systems::ui::ui_system;
+use crate::ui::ui_edits::create_element;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
 use crate::world::World;
@@ -61,19 +62,19 @@ impl Schedule {
 
     pub fn run_sim(&self, world: &mut World, resources: &mut Resources) {
         for system in &self.sim_systems {
-            (system)(world, resources);
+            system(world, resources);
         }
     }
 
     pub fn run_render(&self, world: &mut World, resources: &mut Resources) {
         for system in &self.render_systems {
-            (system)(world, resources);
+            system(world, resources);
         }
     }
 
     pub fn run_inputs(&self, world: &mut World, resources: &mut Resources) {
         for system in &self.input_systems {
-            (system)(world, resources);
+            system(world, resources);
         }
     }
 }
@@ -250,23 +251,27 @@ impl ApplicationHandler for App {
                         Ok(_) => println!("Settings saved"),
                         Err(e) => eprintln!("Failed to save Settings: {e}"),
                     }
-                    match resources
-                        .renderer
-                        .core
-                        .world
-                        .terrain_editor
-                        .save_edits(data_dir("edited_chunks"))
-                    {
-                        Ok(_) => println!("World saved"),
-                        Err(e) => eprintln!("Failed to save World: {e}"),
+                    if resources.settings.show_world {
+                        match resources
+                            .renderer
+                            .core
+                            .world
+                            .terrain_editor
+                            .save_edits(data_dir("edited_chunks"))
+                        {
+                            Ok(_) => println!("World saved"),
+                            Err(e) => eprintln!("Failed to save World: {e}"),
+                        }
                     }
+
                     event_loop.exit()
                 }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
                     && resources.ui_loader.ui_runtime.editor_mode
                 {
-                    let result = resources.ui_loader.add_element(
+                    let result = create_element(
+                        &mut resources.ui_loader.menus,
                         resources
                             .ui_loader
                             .ui_runtime
@@ -283,7 +288,6 @@ impl ApplicationHandler for App {
                             .as_str(),
                         Circle(UiButtonCircle::default()),
                         &resources.input.mouse,
-                        true,
                     );
 
                     match result {

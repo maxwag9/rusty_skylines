@@ -96,21 +96,21 @@ impl UiVariableRegistry {
         }
     }
 
-    pub fn _get_i32(&self, name: &str) -> Option<i32> {
+    pub fn get_i32(&self, name: &str) -> Option<i32> {
         match self.vars.get(name)? {
             UiValue::I32(v) => Some(*v),
             _ => None,
         }
     }
 
-    pub fn _get_bool(&self, name: &str) -> Option<bool> {
+    pub fn get_bool(&self, name: &str) -> Option<bool> {
         match self.vars.get(name)? {
             UiValue::Bool(v) => Some(*v),
             _ => None,
         }
     }
 
-    pub fn _get_string(&self, name: &str) -> Option<&str> {
+    pub fn get_string(&self, name: &str) -> Option<&str> {
         match self.vars.get(name)? {
             UiValue::String(v) => Some(v),
             _ => None,

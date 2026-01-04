@@ -88,13 +88,13 @@ struct ParsedKeyCombo {
 
 impl ParsedKeyCombo {
     fn matches(&self, input: &InputState) -> bool {
-        if self.require_ctrl && !input.ctrl {
+        if input.ctrl != self.require_ctrl {
             return false;
         }
-        if self.require_shift && !input.shift {
+        if input.shift != self.require_shift {
             return false;
         }
-        if self.require_alt && !input.alt {
+        if input.alt != self.require_alt {
             return false;
         }
 

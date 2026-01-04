@@ -2,17 +2,21 @@ use crate::resources::{InputState, TimeSystem};
 use crate::ui::actions::selection_needed;
 use crate::ui::helper::{dist, polygon_sdf};
 use crate::ui::input::MouseState;
+use crate::ui::menu::Menu;
 use crate::ui::selections::{
     SelectedUiElement, select_move_primary_to_multi, select_to_multi, select_ui_element,
 };
-use crate::ui::ui_editor::{Menu, UiButtonLoader, UiRuntime};
+use crate::ui::ui_edit_manager::{
+    MoveElementCommand, MoveVertexCommand, ResizeElementCommand, TextEditCommand, UiEditManager,
+};
+use crate::ui::ui_editor::{DragStartState, UiButtonLoader, get_element, get_element_size};
+use crate::ui::ui_runtime::UiRuntime;
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::{
     ElementKind, LayerDirty, RuntimeLayer, TouchState, UiButtonCircle, UiButtonHandle,
-    UiButtonPolygon, UiButtonText, UiElement,
+    UiButtonPolygon, UiButtonText,
 };
 use std::collections::{HashMap, HashSet};
-
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -51,9 +55,9 @@ pub(crate) struct HitResult {
     pub menu_name: String,
     pub layer_name: String,
     pub element: HitElement,
-    pub z_index: i32,
     pub layer_order: u32,
     pub action: Option<String>,
+    element_order: usize,
 }
 
 impl HitResult {
@@ -62,11 +66,25 @@ impl HitResult {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct PendingDragStart {
+    pub menu: String,
+    pub layer: String,
+    pub element_id: String,
+    pub element_kind: ElementKind,
+    pub start_pos: (f32, f32),
+    pub start_size: Option<f32>,
+}
+
 #[derive(Default)]
 pub(crate) struct EditorInteractionResult {
     pub trigger_selection: bool,
     pub pending_circle_updates: Vec<(String, f32, f32)>,
     pub moved_any_selected_object: bool,
+    pub pending_drag_start: Option<PendingDragStart>,
+    pub pending_move_commands: Vec<MoveElementCommand>,
+    pub pending_vertex_commands: Vec<MoveVertexCommand>,
+    pub pending_resize_commands: Vec<ResizeElementCommand>,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -367,8 +385,8 @@ fn find_top_hit_circles(
                     menu_name: menu_name.to_string(),
                     layer_name: layer.name.clone(),
                     element: HitElement::Circle(circle_index),
-                    z_index: circle.z_index,
                     layer_order: layer.order,
+                    element_order: circle_index,
                     action: Some(circle.action.clone()),
                 },
             );
@@ -394,7 +412,7 @@ fn find_top_hit_handles(
                     menu_name: menu_name.to_string(),
                     layer_name: layer.name.clone(),
                     element: HitElement::Handle(handle_index),
-                    z_index: handle.z_index,
+                    element_order: handle_index,
                     layer_order: layer.order,
                     action: None,
                 },
@@ -421,8 +439,8 @@ fn find_top_hit_polygons(
                     menu_name: menu_name.to_string(),
                     layer_name: layer.name.clone(),
                     element: HitElement::Polygon(poly_index),
-                    z_index: poly.z_index,
                     layer_order: layer.order,
+                    element_order: poly_index,
                     action: Some(poly.action.clone()),
                 },
             );
@@ -453,8 +471,8 @@ fn find_top_hit_texts(
                     menu_name: menu_name.to_string(),
                     layer_name: layer.name.clone(),
                     element: HitElement::Text(text_index),
-                    z_index: text.z_index,
                     layer_order: layer.order,
+                    element_order: text_index,
                     action: Some(text.action.clone()),
                 },
             );
@@ -463,14 +481,18 @@ fn find_top_hit_texts(
 }
 
 fn consider_candidate(best: &mut Option<HitResult>, candidate: HitResult) {
-    if let Some(current) = best {
-        let current_key = (current.layer_order, current.z_index);
-        let candidate_key = (candidate.layer_order, candidate.z_index);
-        if candidate_key > current_key {
-            *current = candidate;
+    let candidate_key = (candidate.layer_order, candidate.element_order);
+
+    match best {
+        Some(current) => {
+            let current_key = (current.layer_order, current.element_order);
+            if candidate_key > current_key {
+                *current = candidate;
+            }
         }
-    } else {
-        *best = Some(candidate);
+        None => {
+            *best = Some(candidate);
+        }
     }
 }
 
@@ -541,6 +563,7 @@ fn process_circles(
     input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
+    let mut pending_drag: Option<PendingDragStart> = None;
 
     for (menu_name, menu) in active_menus(&mut loader.menus) {
         for layer in active_saveable_layers(&mut menu.layers) {
@@ -553,13 +576,19 @@ fn process_circles(
                 menu_name,
                 layer,
                 &mut pending_selection,
+                &mut pending_drag,
             );
         }
     }
 
+    // Push pending move commands after iteration (coalescing handles rapid updates)
+    for cmd in result.pending_move_commands.drain(..) {
+        loader.ui_edit_manager.push_command(cmd);
+    }
+
+    apply_pending_drag(loader, pending_drag);
     select_correctly(pending_selection, loader, input_state);
 }
-
 fn process_circles_layer(
     ui_runtime: &mut UiRuntime,
     dt: f32,
@@ -569,6 +598,7 @@ fn process_circles_layer(
     menu_name: &str,
     layer: &mut RuntimeLayer,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     for (circle_index, circle) in layer.circles.iter_mut().enumerate() {
         process_single_circle(
@@ -583,6 +613,7 @@ fn process_circles_layer(
             circle_index,
             circle,
             pending_selection,
+            pending_drag,
         );
     }
 }
@@ -599,6 +630,7 @@ fn process_single_circle(
     circle_index: usize,
     circle: &mut UiButtonCircle,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     let id = match get_circle_id(circle) {
         Some(id) => id,
@@ -632,6 +664,7 @@ fn process_single_circle(
         &id,
         state,
         pending_selection,
+        pending_drag,
     );
 }
 
@@ -653,6 +686,7 @@ fn handle_circle_touch_state(
     id: &str,
     state: TouchState,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     match state {
         TouchState::Pressed => {
@@ -665,13 +699,16 @@ fn handle_circle_touch_state(
                 circle,
                 id,
                 pending_selection,
+                pending_drag,
             );
         }
         TouchState::Held => {
-            handle_circle_held(ui_runtime, mouse, result, dirty, circle);
+            handle_circle_held(
+                ui_runtime, mouse, result, dirty, circle, menu_name, layer_name,
+            );
         }
         TouchState::Released => {
-            handle_circle_released(ui_runtime, dirty);
+            handle_circle_released(ui_runtime, dirty, result);
         }
         TouchState::Idle => {}
     }
@@ -686,9 +723,20 @@ fn handle_circle_pressed(
     circle: &UiButtonCircle,
     id: &str,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     if ui_runtime.editor_mode {
         ui_runtime.drag_offset = Some((mouse.mx - circle.x, mouse.my - circle.y));
+
+        // Collect drag info instead of calling loader.begin_drag
+        *pending_drag = Some(PendingDragStart {
+            menu: menu_name.to_string(),
+            layer: layer_name.to_string(),
+            element_id: id.to_string(),
+            element_kind: ElementKind::Circle,
+            start_pos: (circle.x, circle.y),
+            start_size: Some(circle.radius),
+        });
     }
 
     *pending_selection = Some(create_selection(
@@ -709,6 +757,8 @@ fn handle_circle_held(
     result: &mut EditorInteractionResult,
     dirty: &mut LayerDirty,
     circle: &mut UiButtonCircle,
+    menu_name: &str,
+    layer_name: &str,
 ) {
     ui_runtime.selected_ui_element_primary.dragging = true;
 
@@ -721,6 +771,19 @@ fn handle_circle_held(
         let new_y = mouse.my - oy;
 
         if (new_x - circle.x).abs() > 0.001 || (new_y - circle.y).abs() > 0.001 {
+            let id = circle.id.clone().unwrap_or_default();
+
+            // Push command for undo (coalescing will merge rapid updates)
+            result.pending_move_commands.push(MoveElementCommand {
+                menu: menu_name.to_string(),
+                layer: layer_name.to_string(),
+                element_id: id,
+                element_kind: ElementKind::Circle,
+                before: (circle.x, circle.y),
+                after: (new_x, new_y),
+            });
+
+            // Visual update
             circle.x = new_x;
             circle.y = new_y;
             dirty.mark_circles();
@@ -729,14 +792,21 @@ fn handle_circle_held(
     }
 }
 
-fn handle_circle_released(ui_runtime: &mut UiRuntime, dirty: &mut LayerDirty) {
+fn handle_circle_released(
+    ui_runtime: &mut UiRuntime,
+    dirty: &mut LayerDirty,
+    result: &mut EditorInteractionResult,
+) {
     ui_runtime.selected_ui_element_primary.dragging = false;
     ui_runtime.drag_offset = None;
     dirty.mark_circles();
+
+    // Signal that drag ended - will be handled in handle_touches
+    result.trigger_selection = true;
 }
 
 // ============================================================================
-// PROCESS HANDLES
+// PROCESS HANDLES - COMPLETE REWRITE
 // ============================================================================
 
 fn process_handles(
@@ -748,6 +818,7 @@ fn process_handles(
     input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
+    let mut pending_drag: Option<PendingDragStart> = None;
 
     for (menu_name, menu) in active_menus(&mut loader.menus) {
         for layer in active_layers(&mut menu.layers) {
@@ -760,11 +831,31 @@ fn process_handles(
                 menu_name,
                 layer,
                 &mut pending_selection,
+                &mut pending_drag,
             );
         }
     }
 
+    // Apply pending drag after iteration
+    apply_pending_drag(loader, pending_drag);
+
     select_correctly(pending_selection, loader, input_state);
+}
+
+fn apply_pending_drag(loader: &mut UiButtonLoader, pending_drag: Option<PendingDragStart>) {
+    if let Some(drag) = pending_drag {
+        if loader.drag_start_state.is_none() {
+            loader.drag_start_state = Some(DragStartState {
+                menu: drag.menu,
+                layer: drag.layer,
+                element_id: drag.element_id,
+                element_kind: drag.element_kind,
+                start_pos: drag.start_pos,
+                start_size: drag.start_size,
+                start_vertices: None,
+            });
+        }
+    }
 }
 
 fn process_handles_layer(
@@ -776,6 +867,7 @@ fn process_handles_layer(
     menu_name: &str,
     layer: &mut RuntimeLayer,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     for (handle_index, handle) in layer.handles.iter_mut().enumerate() {
         process_single_handle(
@@ -790,6 +882,7 @@ fn process_handles_layer(
             handle_index,
             handle,
             pending_selection,
+            pending_drag,
         );
     }
 }
@@ -806,6 +899,7 @@ fn process_single_handle(
     handle_index: usize,
     handle: &mut UiButtonHandle,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     let id = match get_handle_id(handle) {
         Some(id) => id,
@@ -839,6 +933,7 @@ fn process_single_handle(
         &id,
         state,
         pending_selection,
+        pending_drag,
     );
 }
 
@@ -860,6 +955,7 @@ fn handle_handle_touch_state(
     id: &str,
     state: TouchState,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     match state {
         TouchState::Pressed => {
@@ -872,13 +968,14 @@ fn handle_handle_touch_state(
                 handle,
                 id,
                 pending_selection,
+                pending_drag,
             );
         }
         TouchState::Held => {
             handle_handle_held(ui_runtime, mouse, result, handle);
         }
         TouchState::Released => {
-            handle_handle_released(ui_runtime, dirty);
+            handle_handle_released(ui_runtime, dirty, result);
         }
         TouchState::Idle => {}
     }
@@ -893,9 +990,19 @@ fn handle_handle_pressed(
     handle: &UiButtonHandle,
     id: &str,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     if ui_runtime.editor_mode {
         ui_runtime.drag_offset = Some((mouse.mx - handle.x, mouse.my - handle.y));
+
+        *pending_drag = Some(PendingDragStart {
+            menu: menu_name.to_string(),
+            layer: layer_name.to_string(),
+            element_id: id.to_string(),
+            element_kind: ElementKind::Handle,
+            start_pos: (handle.x, handle.y),
+            start_size: Some(handle.radius),
+        });
     }
 
     *pending_selection = Some(create_selection(
@@ -927,17 +1034,20 @@ fn handle_handle_held(
     }
 }
 
-fn handle_handle_released(ui_runtime: &mut UiRuntime, dirty: &mut LayerDirty) {
+fn handle_handle_released(
+    ui_runtime: &mut UiRuntime,
+    dirty: &mut LayerDirty,
+    result: &mut EditorInteractionResult,
+) {
     ui_runtime.selected_ui_element_primary.dragging = false;
     ui_runtime.drag_offset = None;
     dirty.mark_handles();
+    result.trigger_selection = true;
 }
 
 // ============================================================================
-// PROCESS POLYGONS
+// PROCESS POLYGONS - COMPLETE REWRITE
 // ============================================================================
-
-const VERTEX_RADIUS: f32 = 20.0;
 
 fn process_polygons(
     loader: &mut UiButtonLoader,
@@ -948,6 +1058,8 @@ fn process_polygons(
     input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
+    let mut pending_drag: Option<PendingDragStart> = None;
+    let mut pending_vertices: Option<Vec<[f32; 2]>> = None;
 
     for (menu_name, menu) in active_menus(&mut loader.menus) {
         for layer in active_saveable_layers(&mut menu.layers) {
@@ -960,10 +1072,21 @@ fn process_polygons(
                 menu_name,
                 layer,
                 &mut pending_selection,
+                &mut pending_drag,
+                &mut pending_vertices,
             );
         }
     }
 
+    // Push pending commands after iteration
+    for cmd in result.pending_move_commands.drain(..) {
+        loader.ui_edit_manager.push_command(cmd);
+    }
+    for cmd in result.pending_vertex_commands.drain(..) {
+        loader.ui_edit_manager.push_command(cmd);
+    }
+
+    apply_pending_drag(loader, pending_drag);
     select_correctly(pending_selection, loader, input_state);
 }
 
@@ -976,6 +1099,8 @@ fn process_polygons_layer(
     menu_name: &str,
     layer: &mut RuntimeLayer,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
+    pending_vertices: &mut Option<Vec<[f32; 2]>>,
 ) {
     for (poly_index, poly) in layer.polygons.iter_mut().enumerate() {
         process_single_polygon(
@@ -990,6 +1115,8 @@ fn process_polygons_layer(
             poly_index,
             poly,
             pending_selection,
+            pending_drag,
+            pending_vertices,
         );
     }
 }
@@ -1006,6 +1133,8 @@ fn process_single_polygon(
     poly_index: usize,
     poly: &mut UiButtonPolygon,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
+    pending_vertices: &mut Option<Vec<[f32; 2]>>,
 ) {
     let id = match get_polygon_id(poly) {
         Some(id) => id,
@@ -1043,6 +1172,8 @@ fn process_single_polygon(
         state,
         vertex_hit,
         pending_selection,
+        pending_drag,
+        pending_vertices,
     );
 }
 
@@ -1052,7 +1183,7 @@ fn get_polygon_id(poly: &UiButtonPolygon) -> Option<String> {
     }
     poly.id.clone()
 }
-
+const VERTEX_RADIUS: f32 = 20.0;
 fn compute_polygon_hits(poly: &UiButtonPolygon, mouse: &MouseSnapshot) -> (Option<usize>, bool) {
     let verts = &poly.vertices;
 
@@ -1113,6 +1244,8 @@ fn handle_polygon_touch_state(
     state: TouchState,
     vertex_hit: Option<usize>,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
+    pending_vertices: &mut Option<Vec<[f32; 2]>>,
 ) {
     match state {
         TouchState::Pressed => {
@@ -1126,13 +1259,17 @@ fn handle_polygon_touch_state(
                 id,
                 vertex_hit,
                 pending_selection,
+                pending_drag,
+                pending_vertices,
             );
         }
         TouchState::Held => {
-            handle_polygon_held(ui_runtime, mouse, result, dirty, poly);
+            handle_polygon_held(
+                ui_runtime, mouse, result, dirty, poly, menu_name, layer_name,
+            );
         }
         TouchState::Released => {
-            handle_polygon_released(ui_runtime, dirty);
+            handle_polygon_released(ui_runtime, dirty, result);
         }
         TouchState::Idle => {}
     }
@@ -1148,9 +1285,26 @@ fn handle_polygon_pressed(
     id: &str,
     vertex_hit: Option<usize>,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
+    pending_vertices: &mut Option<Vec<[f32; 2]>>,
 ) {
     if ui_runtime.editor_mode && poly.misc.editable {
         setup_polygon_drag(ui_runtime, mouse, poly, vertex_hit);
+
+        let (cx, cy) = compute_polygon_centroid(poly);
+
+        // Collect all vertex positions for undo
+        let vertices: Vec<[f32; 2]> = poly.vertices.iter().map(|v| v.pos).collect();
+        *pending_vertices = Some(vertices);
+
+        *pending_drag = Some(PendingDragStart {
+            menu: menu_name.to_string(),
+            layer: layer_name.to_string(),
+            element_id: id.to_string(),
+            element_kind: ElementKind::Polygon,
+            start_pos: (cx, cy),
+            start_size: None,
+        });
     }
 
     *pending_selection = Some(create_selection(
@@ -1189,6 +1343,8 @@ fn handle_polygon_held(
     result: &mut EditorInteractionResult,
     dirty: &mut LayerDirty,
     poly: &mut UiButtonPolygon,
+    menu_name: &str,
+    layer_name: &str,
 ) {
     ui_runtime.selected_ui_element_primary.dragging = true;
 
@@ -1197,9 +1353,13 @@ fn handle_polygon_held(
     }
 
     if let Some(active_id) = ui_runtime.active_vertex {
-        apply_vertex_drag(ui_runtime, mouse, result, dirty, poly, active_id);
+        apply_vertex_drag(
+            ui_runtime, mouse, result, dirty, poly, active_id, menu_name, layer_name,
+        );
     } else {
-        apply_polygon_drag(ui_runtime, mouse, result, dirty, poly);
+        apply_polygon_drag(
+            ui_runtime, mouse, result, dirty, poly, menu_name, layer_name,
+        );
     }
 }
 
@@ -1210,12 +1370,33 @@ fn apply_vertex_drag(
     dirty: &mut LayerDirty,
     poly: &mut UiButtonPolygon,
     active_id: usize,
+    menu_name: &str,
+    layer_name: &str,
 ) {
     let (ox, oy) = ui_runtime.drag_offset.unwrap_or((0.0, 0.0));
     let new_x = mouse.mx - ox;
     let new_y = mouse.my - oy;
 
-    if let Some(v) = poly.vertices.iter_mut().find(|v| v.id == active_id) {
+    if let Some((idx, v)) = poly
+        .vertices
+        .iter_mut()
+        .enumerate()
+        .find(|(_, v)| v.id == active_id)
+    {
+        let old_pos = v.pos;
+
+        // Push command for undo
+        if let Some(poly_id) = &poly.id {
+            result.pending_vertex_commands.push(MoveVertexCommand {
+                menu: menu_name.to_string(),
+                layer: layer_name.to_string(),
+                element_id: poly_id.clone(),
+                vertex_index: idx,
+                before: old_pos,
+                after: [new_x, new_y],
+            });
+        }
+
         v.pos = [new_x, new_y];
         dirty.mark_polygons();
         dirty.mark_outlines();
@@ -1229,6 +1410,8 @@ fn apply_polygon_drag(
     result: &mut EditorInteractionResult,
     dirty: &mut LayerDirty,
     poly: &mut UiButtonPolygon,
+    menu_name: &str,
+    layer_name: &str,
 ) {
     let Some((ox, oy)) = ui_runtime.drag_offset else {
         return;
@@ -1241,6 +1424,18 @@ fn apply_polygon_drag(
     let dy = new_cy - ccy;
 
     if dx.abs() > 0.001 || dy.abs() > 0.001 {
+        if let Some(poly_id) = &poly.id {
+            // Push move command for the polygon centroid
+            result.pending_move_commands.push(MoveElementCommand {
+                menu: menu_name.to_string(),
+                layer: layer_name.to_string(),
+                element_id: poly_id.clone(),
+                element_kind: ElementKind::Polygon,
+                before: (ccx, ccy),
+                after: (new_cx, new_cy),
+            });
+        }
+
         for v in poly.vertices.iter_mut() {
             v.pos[0] += dx;
             v.pos[1] += dy;
@@ -1251,15 +1446,20 @@ fn apply_polygon_drag(
     }
 }
 
-fn handle_polygon_released(ui_runtime: &mut UiRuntime, dirty: &mut LayerDirty) {
+fn handle_polygon_released(
+    ui_runtime: &mut UiRuntime,
+    dirty: &mut LayerDirty,
+    result: &mut EditorInteractionResult,
+) {
     ui_runtime.selected_ui_element_primary.dragging = false;
     ui_runtime.drag_offset = None;
     ui_runtime.active_vertex = None;
     dirty.mark_polygons();
+    result.trigger_selection = true;
 }
 
 // ============================================================================
-// PROCESS TEXT
+// PROCESS TEXT - COMPLETE REWRITE
 // ============================================================================
 
 fn process_text(
@@ -1271,6 +1471,7 @@ fn process_text(
     input_state: &InputState,
 ) {
     let mut pending_selection: Option<SelectedUiElement> = None;
+    let mut pending_drag: Option<PendingDragStart> = None;
 
     for (menu_name, menu) in active_menus(&mut loader.menus) {
         for layer in active_saveable_layers(&mut menu.layers) {
@@ -1284,9 +1485,13 @@ fn process_text(
                 menu_name,
                 layer,
                 &mut pending_selection,
+                &mut pending_drag,
             );
         }
     }
+
+    // Apply pending drag after iteration
+    apply_pending_drag(loader, pending_drag);
 
     select_correctly(pending_selection, loader, input_state);
 }
@@ -1301,6 +1506,7 @@ fn process_text_layer(
     menu_name: &str,
     layer: &mut RuntimeLayer,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     for (text_index, text) in layer.texts.iter_mut().enumerate() {
         process_single_text(
@@ -1316,6 +1522,7 @@ fn process_text_layer(
             text_index,
             text,
             pending_selection,
+            pending_drag,
         );
     }
 }
@@ -1333,6 +1540,7 @@ fn process_single_text(
     text_index: usize,
     text: &mut UiButtonText,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     let id = match get_text_id(text) {
         Some(id) => id,
@@ -1382,6 +1590,7 @@ fn process_single_text(
         &id,
         state,
         pending_selection,
+        pending_drag,
     );
 }
 
@@ -1423,13 +1632,11 @@ fn handle_text_editor_mode(
     let want_enter_edit = check_want_enter_edit(ui_runtime, mouse, text, is_hit, is_selected);
 
     if want_enter_edit {
-        println!("Entered edit mode");
         enter_text_editing_mode(ui_runtime, variables, text);
         dirty.mark_texts();
     }
 
     if should_exit_edit_mode(ui_runtime, mouse, text, is_hit, want_enter_edit) {
-        println!("Exit edit mode");
         exit_text_editing_mode(ui_runtime, dirty, text, is_selected);
         return true;
     }
@@ -1523,6 +1730,7 @@ fn handle_text_touch_state(
     id: &str,
     state: TouchState,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     match state {
         TouchState::Pressed => {
@@ -1535,13 +1743,16 @@ fn handle_text_touch_state(
                 text,
                 id,
                 pending_selection,
+                pending_drag,
             );
         }
         TouchState::Held => {
-            handle_text_held(ui_runtime, mouse, result, dirty, text);
+            handle_text_held(
+                ui_runtime, mouse, result, dirty, text, menu_name, layer_name,
+            );
         }
         TouchState::Released => {
-            handle_text_released(ui_runtime, dirty);
+            handle_text_released(ui_runtime, dirty, result);
         }
         TouchState::Idle => {}
     }
@@ -1556,9 +1767,19 @@ fn handle_text_pressed(
     text: &UiButtonText,
     id: &str,
     pending_selection: &mut Option<SelectedUiElement>,
+    pending_drag: &mut Option<PendingDragStart>,
 ) {
     if ui_runtime.editor_mode {
         ui_runtime.drag_offset = Some((mouse.mx - text.x, mouse.my - text.y));
+
+        *pending_drag = Some(PendingDragStart {
+            menu: menu_name.to_string(),
+            layer: layer_name.to_string(),
+            element_id: id.to_string(),
+            element_kind: ElementKind::Text,
+            start_pos: (text.x, text.y),
+            start_size: Some(text.px as f32),
+        });
     }
 
     dirty.mark_texts();
@@ -1579,6 +1800,8 @@ fn handle_text_held(
     result: &mut EditorInteractionResult,
     dirty: &mut LayerDirty,
     text: &mut UiButtonText,
+    menu_name: &str,
+    layer_name: &str,
 ) {
     if text.being_edited {
         return;
@@ -1587,7 +1810,9 @@ fn handle_text_held(
     ui_runtime.selected_ui_element_primary.dragging = true;
 
     if ui_runtime.editor_mode && text.misc.editable {
-        apply_text_drag(ui_runtime, mouse, result, dirty, text);
+        apply_text_drag(
+            ui_runtime, mouse, result, dirty, text, menu_name, layer_name,
+        );
     }
 }
 
@@ -1597,6 +1822,8 @@ fn apply_text_drag(
     result: &mut EditorInteractionResult,
     dirty: &mut LayerDirty,
     text: &mut UiButtonText,
+    menu_name: &str,
+    layer_name: &str,
 ) {
     let Some((ox, oy)) = ui_runtime.drag_offset else {
         return;
@@ -1606,6 +1833,17 @@ fn apply_text_drag(
     let new_y = mouse.my - oy;
 
     if (new_x - text.x).abs() > 0.001 || (new_y - text.y).abs() > 0.001 {
+        if let Some(id) = &text.id {
+            result.pending_move_commands.push(MoveElementCommand {
+                menu: menu_name.to_string(),
+                layer: layer_name.to_string(),
+                element_id: id.clone(),
+                element_kind: ElementKind::Text,
+                before: (text.x, text.y),
+                after: (new_x, new_y),
+            });
+        }
+
         text.x = new_x;
         text.y = new_y;
         dirty.mark_texts();
@@ -1613,10 +1851,15 @@ fn apply_text_drag(
     }
 }
 
-fn handle_text_released(ui_runtime: &mut UiRuntime, dirty: &mut LayerDirty) {
+fn handle_text_released(
+    ui_runtime: &mut UiRuntime,
+    dirty: &mut LayerDirty,
+    result: &mut EditorInteractionResult,
+) {
     ui_runtime.selected_ui_element_primary.dragging = false;
     ui_runtime.drag_offset = None;
     dirty.mark_texts();
+    result.trigger_selection = true;
 }
 
 // ============================================================================
@@ -1633,7 +1876,7 @@ fn process_keyboard_ui_navigation(loader: &mut UiButtonLoader, input: &mut Input
 
     let sel = loader.ui_runtime.selected_ui_element_primary.clone();
 
-    let sel_pos = match find_selected_center(loader, &sel) {
+    let sel_pos = match find_selected_center(&loader.menus, &sel) {
         Some(p) => p,
         None => return,
     };
@@ -1862,25 +2105,12 @@ fn is_better_candidate(
 }
 
 fn find_selected_center(
-    loader: &mut UiButtonLoader,
+    menus: &HashMap<String, Menu>,
     sel: &SelectedUiElement,
 ) -> Option<(f32, f32)> {
-    let elem = loader.find_element(&sel.menu_name, &sel.layer_name, &sel.element_id)?;
+    let elem = get_element(menus, &sel.menu_name, &sel.layer_name, &sel.element_id)?;
 
-    Some(match elem {
-        UiElement::Text(t) => (t.x, t.y),
-        UiElement::Circle(c) => (c.x, c.y),
-        UiElement::_Handle(h) => (h.x, h.y),
-        UiElement::Outline(o) => (o.shape_data.x, o.shape_data.y),
-        UiElement::_Polygon(p) => {
-            let count = p.vertices.len().max(1);
-            let sum = p
-                .vertices
-                .iter()
-                .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-            (sum.0 / count as f32, sum.1 / count as f32)
-        }
-    })
+    Some(elem.center())
 }
 
 // ============================================================================
@@ -1935,12 +2165,21 @@ fn calculate_smoothed_radius(current_radius: f32, target_radius: f32, dt: f32) -
 }
 
 fn apply_radius_to_related_elements(loader: &mut UiButtonLoader, parent_id: &str, new_radius: f32) {
-    for (_, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
+    let mut resize_info: Option<(String, String, f32, f32)> = None;
+
+    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, m)| m.active) {
         for layer in &mut menu.layers {
             for circle in &mut layer.circles {
                 if circle.id.as_ref() == Some(&parent_id.to_string()) {
+                    let old_radius = circle.radius;
                     circle.radius = new_radius;
                     layer.dirty.mark_circles();
+                    resize_info = Some((
+                        menu_name.clone(),
+                        layer.name.clone(),
+                        old_radius,
+                        new_radius,
+                    ));
                 }
             }
 
@@ -1959,48 +2198,72 @@ fn apply_radius_to_related_elements(loader: &mut UiButtonLoader, parent_id: &str
             }
         }
     }
+
+    if let Some((menu, layer, old_radius, new_radius)) = resize_info {
+        loader.ui_edit_manager.push_command(ResizeElementCommand {
+            menu,
+            layer,
+            element_id: parent_id.to_string(),
+            element_kind: ElementKind::Circle,
+            before: old_radius,
+            after: new_radius,
+        });
+    }
 }
 
-// ============================================================================
-// SCROLL RESIZE
-// ============================================================================
-
-pub(crate) fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> bool {
+/// Handle scroll-wheel resizing with undo support
+pub fn handle_scroll_resize(loader: &mut UiButtonLoader, scroll: f32) -> bool {
     if !loader.ui_runtime.selected_ui_element_primary.active || scroll == 0.0 {
         return false;
     }
 
     let selected = loader.ui_runtime.selected_ui_element_primary.clone();
-    let mut selection_changed = false;
 
-    for (menu_name, menu) in loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
-        for layer in &mut menu.layers {
-            if selected.menu_name != *menu_name || selected.layer_name != layer.name {
-                continue;
-            }
-
-            for circle in &mut layer.circles {
-                if let Some(id) = &circle.id {
-                    if *id == selected.element_id {
-                        circle.radius = (circle.radius + scroll * 3.0).max(2.0);
-                        layer.dirty.mark_circles();
-                        selection_changed = true;
-                    }
-                }
-            }
-        }
+    if selected.element_type != ElementKind::Circle {
+        return false;
     }
 
-    selection_changed
+    let Some(old_size) = get_element_size(
+        &loader.menus,
+        &selected.menu_name,
+        &selected.layer_name,
+        &selected.element_id,
+        selected.element_type,
+    ) else {
+        return false;
+    };
+
+    let new_size = (old_size + scroll * 3.0).max(2.0);
+
+    loader.ui_edit_manager.push_command(ResizeElementCommand {
+        menu: selected.menu_name.clone(),
+        layer: selected.layer_name.clone(),
+        element_id: selected.element_id.clone(),
+        element_kind: selected.element_type,
+        before: old_size,
+        after: new_size,
+    });
+
+    loader.set_element_size(
+        &selected.menu_name,
+        &selected.layer_name,
+        &selected.element_id,
+        selected.element_type,
+        new_size,
+    );
+
+    true
 }
 
 // ============================================================================
 // TEXT EDITING
 // ============================================================================
 
+/// Handle text editing with undo support
 pub fn handle_text_editing(
     ui_runtime: &mut UiRuntime,
     menus: &mut HashMap<String, Menu>,
+    undo_manager: &mut UiEditManager,
     input: &mut InputState,
     mouse_snapshot: MouseSnapshot,
 ) {
@@ -2013,10 +2276,14 @@ pub fn handle_text_editing(
         return;
     }
 
+    let sel_menu = sel.menu_name.clone();
     let sel_layer = sel.layer_name.clone();
     let sel_element_id = sel.element_id.clone();
 
-    for (_, menu) in menus.iter_mut().filter(|(_, m)| m.active) {
+    for (menu_name, menu) in menus
+        .iter_mut()
+        .filter(|(n, m)| **n == sel_menu && m.active)
+    {
         for layer in &mut menu.layers {
             if layer.name != sel_layer {
                 continue;
@@ -2027,6 +2294,10 @@ pub fn handle_text_editing(
                     continue;
                 }
 
+                let before_text = text.text.clone();
+                let before_template = text.template.clone();
+                let before_caret = text.caret;
+
                 process_text_editing_input(
                     ui_runtime,
                     input,
@@ -2034,13 +2305,28 @@ pub fn handle_text_editing(
                     text,
                     &mut layer.dirty,
                 );
+
+                if text.text != before_text || text.template != before_template {
+                    undo_manager.push_command(TextEditCommand {
+                        menu: menu_name.clone(),
+                        layer: layer.name.clone(),
+                        element_id: sel_element_id.clone(),
+                        before_text,
+                        after_text: text.text.clone(),
+                        before_template,
+                        after_template: text.template.clone(),
+                        before_caret,
+                        after_caret: text.caret,
+                    });
+                }
+
                 return;
             }
         }
     }
 }
 
-fn process_text_editing_input(
+pub(crate) fn process_text_editing_input(
     ui_runtime: &mut UiRuntime,
     input: &mut InputState,
     mouse_snapshot: MouseSnapshot,
@@ -2367,4 +2653,16 @@ fn caret_to_byte(text: &str, caret: usize) -> usize {
         .nth(caret)
         .map(|(i, _)| i)
         .unwrap_or_else(|| text.len())
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+pub fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    const EPSILON: f32 = 0.001;
+    (a[0] - b[0]).abs() < EPSILON
+        && (a[1] - b[1]).abs() < EPSILON
+        && (a[2] - b[2]).abs() < EPSILON
+        && (a[3] - b[3]).abs() < EPSILON
 }

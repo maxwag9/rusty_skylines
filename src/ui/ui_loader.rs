@@ -41,7 +41,7 @@ impl SimpleRng {
     fn next_i32_range(&mut self, lo: i32, hi: i32) -> i32 {
         let r = self.next_u64() as i128;
         let span = (hi - lo) as i128;
-        (lo as i128 + (r % (span as i128 + 1))) as i32
+        (lo as i128 + (r % (span + 1))) as i32
     }
 }
 
@@ -171,7 +171,6 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextJson {
         id: Some(format!("t_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "None".to_string(),
-        z_index: rng.next_i32_range(0, 200),
 
         // user requested 0..1e3 and active true always
         x: rng.next_f32_range(0.0, 1_000.0),
@@ -203,7 +202,6 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleJson {
         id: Some(format!("c_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "Bent".to_string(),
-        z_index: rng.next_i32_range(0, 200),
         x: rng.next_f32_range(0.0, 1_000.0),
         y: rng.next_f32_range(0.0, 1_000.0),
         radius: rng.next_f32_range(1.0, 500.0),
@@ -250,7 +248,6 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleJson {
 fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleJson {
     UiButtonHandleJson {
         id: Some(format!("h_{}", rng.next_u64())),
-        z_index: rng.next_i32_range(0, 200),
         x: rng.next_f32_range(0.0, 1_000.0),
         y: rng.next_f32_range(0.0, 1_000.0),
         radius: rng.next_f32_range(1.0, 100.0),
@@ -294,7 +291,6 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineJson {
     let r = rng.next_f32_range(1.0, 400.0);
     UiButtonOutlineJson {
         id: Some(format!("o_{}", rng.next_u64())),
-        z_index: rng.next_i32_range(0, 200),
         parent_id: None,
         mode: if rng.next_bool() { 0.0 } else { 1.0 },
         shape_data: ShapeData {
@@ -358,7 +354,6 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonJson {
         id: Some(format!("p_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "BentPoly".to_string(),
-        z_index: rng.next_i32_range(0, 200),
         vertices: verts,
         misc: MiscButtonSettingsJson {
             active: true,

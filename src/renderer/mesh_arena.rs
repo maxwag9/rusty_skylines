@@ -41,8 +41,8 @@ struct AllocationRequest {
 impl AllocationRequest {
     fn from_scratch<V>(scratch: &GeometryScratch<V>) -> Self {
         Self {
-            vertex_bytes: scratch.new_vertices.len() as u64 * std::mem::size_of::<V>() as u64,
-            vertex_align: std::mem::size_of::<V>() as u64,
+            vertex_bytes: scratch.new_vertices.len() as u64 * size_of::<V>() as u64,
+            vertex_align: size_of::<V>() as u64,
             index_bytes_above: scratch.indices_above.len() as u64 * 4,
             index_bytes_under: scratch.indices_under.len() as u64 * 4,
         }

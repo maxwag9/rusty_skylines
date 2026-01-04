@@ -1,37 +1,92 @@
+//! UI Button Loader with integrated undo/redo support
+//!
+//! Uses Command pattern for all undoable operations.
+
 use crate::data::BendMode;
 use crate::hsv::{HSV, rgb_to_hsv};
 use crate::paths::data_dir;
 use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::{InputState, TimeSystem};
-use crate::ui::actions::ActionSystem;
-pub(crate) use crate::ui::actions::{activate_action, execute_action};
+use crate::ui::actions::{ActionSystem, activate_action, execute_action};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::MouseState;
-pub(crate) use crate::ui::menu::Menu;
-use crate::ui::menu::get_selected_element_color;
+use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::selections::{SelectedUiElement, deselect_everything};
 use crate::ui::touches::{
     MouseSnapshot, apply_pending_circle_updates, find_top_hit, handle_editor_mode_interactions,
     handle_scroll_resize, handle_text_editing, near_handle, press_began_on_ui,
 };
+use crate::ui::ui_edit_manager::{
+    ChangeZIndexCommand, Command, ModifyPolygonCommand, MoveElementCommand, ResizeElementCommand,
+    UiEditManager,
+};
+use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::load_gui_from_file;
-pub(crate) use crate::ui::ui_runtime::UiRuntime;
-pub(crate) use crate::ui::variables::UiVariableRegistry;
-use crate::ui::vertex::UiElement::*;
-pub(crate) use crate::ui::vertex::*;
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::variables::UiVariableRegistry;
+use crate::ui::vertex::*;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use winit::dpi::PhysicalSize;
 
-pub struct UiButtonLoader {
-    pub menus: HashMap<String, Menu>,
+// ============================================================================
+// DRAG STATE FOR UNDO TRACKING
+// ============================================================================
 
-    pub console_lines: VecDeque<String>,
+/// Captured state when a drag operation begins
+#[derive(Clone, Debug)]
+pub struct DragStartState {
+    pub menu: String,
+    pub layer: String,
+    pub element_id: String,
+    pub element_kind: ElementKind,
+    pub start_pos: (f32, f32),
+    pub start_size: Option<f32>,
+    pub start_vertices: Option<Vec<[f32; 2]>>,
+}
+
+/// Snap-to-grid settings
+#[derive(Clone, Debug)]
+pub struct SnapSettings {
+    pub enabled: bool,
+    pub grid_size: f32,
+}
+
+impl Default for SnapSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            grid_size: 10.0,
+        }
+    }
+}
+
+// ============================================================================
+// UI BUTTON LOADER
+// ============================================================================
+
+/// Main UI loader with editor and undo support
+pub struct UiButtonLoader {
+    /// All menus keyed by name
+    pub menus: HashMap<String, Menu>,
+    /// Runtime state for UI interactions
     pub ui_runtime: UiRuntime,
+    /// Console output lines
+    pub console_lines: VecDeque<String>,
+    /// Variable registry for dynamic text
     pub variables: UiVariableRegistry,
+    /// UiEdit/Undo/Redo manager
+    pub ui_edit_manager: UiEditManager,
+    /// Current drag operation state (for undo tracking)
+    pub drag_start_state: Option<DragStartState>,
+    /// Snap-to-grid settings
+    pub snap_settings: SnapSettings,
+    /// Multi-selection support (element IDs)
+    pub multi_selection: Vec<SelectedUiElement>,
+    /// Clipboard for copy/paste elements
+    pub element_clipboard: Option<UiElement>,
 }
 
 impl UiButtonLoader {
@@ -47,14 +102,20 @@ impl UiButtonLoader {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
         });
+
         let mut loader = Self {
             menus: Default::default(),
             ui_runtime: UiRuntime::new(editor_mode, override_mode, show_gui),
             console_lines: VecDeque::new(),
             variables: UiVariableRegistry::new(),
+            ui_edit_manager: UiEditManager::new(),
+            drag_start_state: None,
+            snap_settings: SnapSettings::default(),
+            multi_selection: Vec::new(),
+            element_clipboard: None,
         };
 
-        // JSON layers to runtime layers...…
+        // Load menus from layout
         let mut id_gen: usize = 1;
         for menu_json in layout.menus {
             let mut layers = Vec::new();
@@ -112,8 +173,7 @@ impl UiButtonLoader {
                 });
             }
 
-            layers.sort_by_key(|l| l.order); // SORT!
-            // Insert this menu into the loader
+            layers.sort_by_key(|l| l.order);
             loader.menus.insert(
                 menu_json.name.clone(),
                 Menu {
@@ -124,13 +184,11 @@ impl UiButtonLoader {
         }
 
         loader.add_editor_layers();
-        loader.ensure_console_layer();
-
         loader
     }
 
     pub fn save_gui_to_file(
-        &self,
+        &mut self,
         path: PathBuf,
         window_size: PhysicalSize<u32>,
     ) -> anyhow::Result<()> {
@@ -139,7 +197,6 @@ impl UiButtonLoader {
         }
 
         let layout = self.to_json_gui_layout(window_size);
-
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
 
         let content = match extension {
@@ -148,8 +205,9 @@ impl UiButtonLoader {
         };
 
         fs::write(&path, &content)?;
-        println!("GUI saved to {} ({} bytes)", path.display(), content.len());
+        self.ui_edit_manager.mark_saved();
 
+        println!("GUI saved to {} ({} bytes)", path.display(), content.len());
         Ok(())
     }
 
@@ -159,7 +217,6 @@ impl UiButtonLoader {
             let mut layers = Vec::new();
 
             for l in &menu.layers {
-                // Skip editor-only layers to avoid saving internal crap
                 if !l.saveable {
                     continue;
                 }
@@ -169,8 +226,12 @@ impl UiButtonLoader {
                     order: l.order,
                     active: Some(l.active),
                     opaque: Some(l.opaque),
-
-                    texts: Some(l.texts.iter().map(|t| t.to_json(window_size)).collect()),
+                    texts: Some(
+                        l.texts
+                            .iter()
+                            .map(|t: &UiButtonText| t.to_json(window_size))
+                            .collect(),
+                    ),
                     circles: Some(l.circles.iter().map(|c| c.to_json(window_size)).collect()),
                     outlines: Some(l.outlines.iter().map(|o| o.to_json(window_size)).collect()),
                     handles: Some(l.handles.iter().map(|h| h.to_json(window_size)).collect()),
@@ -187,162 +248,10 @@ impl UiButtonLoader {
         GuiLayout { menus }
     }
 
-    fn add_editor_layers(&mut self) {
-        let menu = self.menus.entry("Editor_Menu".into()).or_insert(Menu {
-            layers: Vec::new(),
-            active: true,
-        });
-
-        // Insert layers
-        menu.layers.push(RuntimeLayer {
-            name: "editor_selection".into(),
-            order: 900,
-            active: true,
-            cache: LayerCache::default(),
-            texts: vec![],
-            circles: vec![],
-            outlines: vec![],
-            handles: vec![],
-            polygons: vec![],
-            dirty: LayerDirty::all(),
-            gpu: LayerGpu::default(),
-            opaque: true,
-            saveable: false,
-        });
-
-        menu.layers.push(RuntimeLayer {
-            name: "editor_handles".into(),
-            order: 950,
-            active: true,
-            cache: LayerCache::default(),
-            texts: vec![],
-            circles: vec![],
-            outlines: vec![],
-            handles: vec![],
-            polygons: vec![],
-            dirty: LayerDirty::all(),
-            gpu: LayerGpu::default(),
-            opaque: true,
-            saveable: false,
-        });
-
-        // ensure correct draw order
-        menu.layers.sort_by_key(|l| l.order);
-    }
-
-    pub fn ensure_console_layer(&mut self) -> &mut RuntimeLayer {
-        // 1. Ensure Debug_Menu exists
-        let menu = self.menus.entry("Debug_Menu".into()).or_insert(Menu {
-            layers: Vec::new(),
-            active: true,
-        });
-
-        // 2. If shader_console layer exists, return it
-        if let Some(idx) = menu.layers.iter().position(|l| l.name == "shader_console") {
-            return &mut menu.layers[idx];
-        }
-
-        // 3. Create shader_console layer
-        menu.layers.push(RuntimeLayer {
-            name: "shader_console".into(),
-            order: 980,
-            active: true,
-            cache: LayerCache::default(),
-            texts: vec![],
-            circles: vec![],
-            outlines: vec![],
-            handles: vec![],
-            polygons: vec![],
-            dirty: LayerDirty::all(),
-            gpu: LayerGpu::default(),
-            opaque: false,
-            saveable: false,
-        });
-
-        // 4. Sort by order
-        menu.layers.sort_by_key(|l| l.order);
-
-        // 5. Return newly created layer
-        let idx = menu
-            .layers
-            .iter()
-            .position(|l| l.name == "shader_console")
-            .expect("shader_console layer missing");
-
-        &mut menu.layers[idx]
-    }
-
-    pub fn sync_console_ui(&mut self) {
-        let lines: Vec<String> = self.console_lines.iter().cloned().collect();
-
-        let layer = self.ensure_console_layer();
-
-        layer.texts.clear();
-        for (i, line) in lines.into_iter().enumerate() {
-            layer.texts.push(UiButtonText {
-                id: Some(format!("console_line_{}", i)),
-                action: "None".to_string(),
-                style: "None".to_string(),
-                z_index: 980 + i as i32,
-                x: 20.0,
-                y: 20.0 + i as f32 * 22.0,
-                top_left_offset: [0.0, 0.0],
-                bottom_left_offset: [0.0, 0.0],
-                top_right_offset: [0.0, 0.0],
-                bottom_right_offset: [0.0, 0.0],
-                px: 18,
-                color: [0.95, 0.9, 0.8, 0.95],
-                text: line.to_string(),
-                template: line.to_string(),
-                misc: MiscButtonSettings {
-                    active: true,
-                    touched_time: 0.0,
-                    is_touched: false,
-                    pressable: false,
-                    editable: false,
-                },
-                natural_width: 50.0,
-                natural_height: 20.0,
-                ascent: 10.0,
-                being_edited: false,
-                caret: line.len(),
-                being_hovered: false,
-                just_unhovered: false,
-                sel_start: 0,
-                sel_end: 0,
-                has_selection: false,
-                glyph_bounds: vec![],
-                input_box: false,
-                anchor: None,
-            });
-        }
-
-        layer.dirty.mark_texts();
-    }
-
-    pub(crate) fn mark_editor_layers_dirty(&mut self) {
-        const TARGETS: [&str; 3] = ["editor_selection", "editor_handles", "shader_console"];
-
-        let menu = self.menus.get_mut("Debug_Menu");
-        if let Some(menu) = menu {
-            for layer in &mut menu.layers {
-                if TARGETS.contains(&layer.name.as_str()) {
-                    layer.dirty.mark_all();
-                }
-            }
-        }
-    }
-    pub fn log_console(&mut self, message: impl Into<String>) {
-        self.console_lines.push_back(message.into());
-
-        while self.console_lines.len() > 6 {
-            self.console_lines.pop_front();
-        }
-    }
-
     pub fn update_dynamic_texts(&mut self) {
         let mut being_hovered = false;
         let mut selected_being_hovered = false;
+
         for (menu_name, menu) in &mut self.menus {
             for layer in &mut menu.layers {
                 let mut any_changed = false;
@@ -372,7 +281,6 @@ impl UiButtonLoader {
                         }
                     }
 
-                    // Skip if no template braces exist!
                     if !t.template.contains('{')
                         || !t.template.contains('}')
                         || (t.being_edited && !t.input_box)
@@ -380,30 +288,25 @@ impl UiButtonLoader {
                         continue;
                     }
 
-                    // Resolve template
                     if !t.input_box || self.ui_runtime.override_mode {
-                        // Not an input box, always update!
                         let new_text = resolve_template(&t.template, &self.variables);
                         if new_text != t.text {
                             t.text = new_text;
                             any_changed = true;
                         }
                     } else {
-                        // input box stuff
                         if this_text(
                             &self.ui_runtime.selected_ui_element_primary,
                             menu_name,
                             layer.name.as_str(),
                             t.id.clone(),
                         ) {
-                            // Editing input box (selected) update the associated variable.
                             let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
                             if new_text != t.text {
                                 t.text = new_text;
                                 any_changed = true;
                             }
                         } else {
-                            // Not editing an input box, just update
                             let new_text = resolve_template(&t.template, &self.variables);
                             if new_text != t.text {
                                 t.text = new_text;
@@ -411,6 +314,7 @@ impl UiButtonLoader {
                             }
                         }
                     }
+
                     if t.input_box && self.ui_runtime.selected_ui_element_primary.just_deselected {
                         if this_text(
                             &self.ui_runtime.selected_ui_element_primary,
@@ -418,7 +322,6 @@ impl UiButtonLoader {
                             layer.name.as_str(),
                             t.id.clone(),
                         ) {
-                            // Editing input box (selected) update the associated variable.
                             let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
                             if new_text != t.text {
                                 t.text = new_text;
@@ -433,181 +336,11 @@ impl UiButtonLoader {
                 }
             }
         }
+
         self.variables
             .set_bool("any_text.being_hovered", being_hovered);
         self.variables
             .set_bool("selected_text.being_hovered", selected_being_hovered);
-    }
-
-    pub fn handle_touches(
-        &mut self,
-        action_system: &mut ActionSystem,
-        dt: f32,
-        input_state: &mut InputState,
-        time_system: &TimeSystem,
-        world_renderer: &mut WorldRenderer,
-        window_size: PhysicalSize<u32>,
-    ) {
-        if !self.ui_runtime.show_gui {
-            return;
-        }
-
-        self.reset_selection_flags();
-        self.sync_selected_element_color();
-
-        let mouse = MouseSnapshot::from_mouse(&input_state.mouse);
-        let editor_mode = self.ui_runtime.editor_mode;
-
-        if mouse.just_pressed && !self.press_started_on_ui(&mouse) && !self.near_any_handle(&mouse)
-        {
-            deselect_everything(self);
-        }
-
-        let top_hit = find_top_hit(&mut self.menus, &mouse, editor_mode);
-
-        let interaction = handle_editor_mode_interactions(
-            self,
-            time_system,
-            &mouse,
-            top_hit.clone(),
-            input_state,
-        );
-
-        self.variables
-            .set_bool("editing_text", self.ui_runtime.editing_text);
-
-        let mut trigger_selection =
-            interaction.trigger_selection || interaction.moved_any_selected_object;
-
-        if editor_mode {
-            handle_text_editing(&mut self.ui_runtime, &mut self.menus, input_state, mouse);
-            apply_pending_circle_updates(self, dt, interaction.pending_circle_updates);
-
-            if handle_scroll_resize(self, mouse.scroll) {
-                trigger_selection = true;
-            }
-        }
-
-        if interaction.moved_any_selected_object {
-            self.mark_editor_layers_dirty();
-        }
-
-        if trigger_selection {
-            self.update_selection();
-        }
-
-        self.handle_color_picker_visibility(input_state);
-
-        activate_action(
-            action_system,
-            self,
-            &top_hit,
-            &input_state.mouse,
-            input_state,
-            time_system,
-            world_renderer,
-            window_size,
-        );
-
-        execute_action(
-            action_system,
-            self,
-            &top_hit,
-            &input_state.mouse,
-            input_state,
-            time_system,
-            world_renderer,
-            window_size,
-        );
-
-        if editor_mode {
-            self.apply_ui_edit_movement(input_state);
-            self.handle_element_deletion(input_state);
-        }
-    }
-
-    pub fn add_element(
-        &mut self,
-        menu_name: &str,
-        layer_name: &str,
-        mut element: UiElement,
-        mouse: &MouseState,
-        on_mouse_pos: bool,
-    ) -> Result<(), String> {
-        // 1. Get selected menu
-        let menu = self
-            .menus
-            .get_mut(menu_name)
-            .ok_or_else(|| format!("Menu *{}* doesn't exist", menu_name))?;
-
-        // 2. Get selected layer
-        let layer = menu
-            .layers
-            .iter_mut()
-            .find(|l| l.name == layer_name)
-            .ok_or_else(|| format!("Layer *{}* not found in *{}* menu", layer_name, menu_name))?;
-        let id = mouse.pos.x as u32 - mouse.pos.y as u32;
-
-        // 3. Apply mouse positioning (editor placement)
-        if on_mouse_pos {
-            match &mut element {
-                UiElement::Text(t) => {
-                    t.x = mouse.pos.x;
-                    t.y = mouse.pos.y;
-                    t.id = Option::from(id.to_string());
-                }
-                UiElement::Circle(c) => {
-                    c.x = mouse.pos.x;
-                    c.y = mouse.pos.y;
-                    c.id = Option::from(id.to_string());
-                }
-                UiElement::Outline(o) => {
-                    o.id = Option::from(id.to_string());
-                }
-                UiElement::_Handle(h) => {
-                    h.x = mouse.pos.x;
-                    h.y = mouse.pos.y;
-                    h.id = Option::from(id.to_string());
-                }
-                UiElement::_Polygon(p) => {
-                    p.id = Option::from(id.to_string());
-                }
-            }
-        }
-        // 4. Insert element (NO ids needed)
-        match element {
-            UiElement::Text(t) => {
-                layer.texts.push(t);
-                layer.dirty.mark_texts();
-            }
-            UiElement::Circle(c) => {
-                layer.circles.push(c);
-                layer.dirty.mark_circles();
-            }
-            UiElement::Outline(o) => {
-                layer.outlines.push(o);
-                layer.dirty.mark_outlines();
-            }
-            UiElement::_Handle(h) => {
-                layer.handles.push(h);
-                layer.dirty.mark_handles();
-            }
-            UiElement::_Polygon(p) => {
-                layer.polygons.push(p);
-                layer.dirty.mark_polygons();
-            }
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn hash_id(id: &str) -> f32 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        id.hash(&mut hasher);
-        let hash_u64 = hasher.finish(); // 64-bit
-        // map to [0, 1]
-        (hash_u64 as f64 / u64::MAX as f64) as f32
     }
 
     pub fn update_selection(&mut self) {
@@ -632,6 +365,7 @@ impl UiButtonLoader {
             }
             return;
         }
+
         let sel = self.ui_runtime.selected_ui_element_primary.clone();
 
         if let Some(menu) = self.menus.get_mut(&sel.menu_name) {
@@ -644,7 +378,13 @@ impl UiButtonLoader {
                     .set_i32("selected_layer.order", layer.order as i32);
             }
         }
-        if let Some(element) = self.find_element(&sel.menu_name, &sel.layer_name, &sel.element_id) {
+
+        if let Some(element) = get_element(
+            &self.menus,
+            &sel.menu_name,
+            &sel.layer_name,
+            &sel.element_id,
+        ) {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu
                     .layers
@@ -657,12 +397,12 @@ impl UiButtonLoader {
                     editor_layer.outlines.clear();
                     editor_layer.handles.clear();
                     editor_layer.polygons.clear();
+
                     match element {
-                        Circle(c) => {
+                        UiElement::Circle(c) => {
                             if self.ui_runtime.editor_mode && c.misc.editable {
                                 let circle_outline = UiButtonOutline {
                                     id: Some("Circle Outline".to_string()),
-                                    z_index: c.z_index,
                                     parent_id: c.id.clone(),
                                     mode: 0.0,
                                     vertex_offset: 0,
@@ -719,15 +459,12 @@ impl UiButtonLoader {
                                         pressable: true,
                                         editable: false,
                                     },
-                                    z_index: c.z_index,
                                 };
                                 editor_layer.handles.push(handle);
                             }
-                            self.variables
-                                .set_i32("selected_element.z_index", c.z_index);
                         }
-                        _Handle(_h) => {}
-                        _Polygon(p) => {
+                        UiElement::Handle(_h) => {}
+                        UiElement::Polygon(p) => {
                             if self.ui_runtime.editor_mode && p.misc.editable {
                                 let mut cx = 0.0;
                                 let mut cy = 0.0;
@@ -743,13 +480,12 @@ impl UiButtonLoader {
                                     let dx = v.pos[0] - cx;
                                     let dy = v.pos[1] - cy;
                                     let distance = (dx * dx + dy * dy).sqrt();
-
                                     radius = radius.max(distance);
+
                                     let vertex_outline = UiButtonCircle {
                                         id: Some(format!("vertex_outline_{}", i)),
                                         action: "None".to_string(),
                                         style: "None".to_string(),
-                                        z_index: i as i32,
                                         x: v.pos[0],
                                         y: v.pos[1],
                                         radius: 10.0,
@@ -775,9 +511,9 @@ impl UiButtonLoader {
                                     };
                                     editor_layer.circles.push(vertex_outline);
                                 }
+
                                 let polygon_outline = UiButtonOutline {
                                     id: Some("Polygon Outline".to_string()),
-                                    z_index: p.z_index,
                                     parent_id: p.id.clone(),
                                     mode: 1.0,
                                     vertex_offset: 0,
@@ -806,18 +542,9 @@ impl UiButtonLoader {
                                 };
                                 editor_layer.outlines.push(polygon_outline);
                             }
-                            self.variables
-                                .set_i32("selected_element.z_index", p.z_index);
                         }
-                        Text(tx) => {
-                            // if self.ui_runtime.editor_mode {
-                            //
-                            // }
-
-                            self.variables
-                                .set_i32("selected_element.z_index", tx.z_index);
-                        }
-                        Outline(_o) => {}
+                        UiElement::Text(_tx) => {}
+                        UiElement::Outline(_o) => {}
                     }
                 }
             }
@@ -829,126 +556,535 @@ impl UiButtonLoader {
         }
     }
 
-    pub fn find_element(
-        &mut self,
-        menu_name: &str,
-        layer_name: &str,
-        element_id: &str,
-    ) -> Option<UiElement> {
-        if let Some(menu) = self.menus.get_mut(menu_name) {
-            let layer = menu
-                .layers
-                .iter()
-                .find(|l| l.name == layer_name.to_string())?;
+    pub(crate) fn mark_editor_layers_dirty(&mut self) {
+        const TARGETS: [&str; 3] = ["editor_selection", "editor_handles", "shader_console"];
 
-            // Circles
-            for c in &layer.circles {
-                if let Some(id) = &c.id {
-                    if id == element_id {
-                        return Some(Circle(c.clone()));
-                    }
-                }
-            }
-
-            // Polygons
-            for p in &layer.polygons {
-                if let Some(id) = &p.id {
-                    if id == element_id {
-                        return Some(UiElement::_Polygon(p.clone()));
-                    }
-                }
-            }
-
-            // Texts
-            for tx in &layer.texts {
-                if let Some(id) = &tx.id {
-                    if id == element_id {
-                        return Some(UiElement::Text(tx.clone()));
-                    }
+        if let Some(menu) = self.menus.get_mut("Debug_Menu") {
+            for layer in &mut menu.layers {
+                if TARGETS.contains(&layer.name.as_str()) {
+                    layer.dirty.mark_all();
                 }
             }
         }
-        None
     }
 
-    pub fn edit_circle(
+    // ========================================================================
+    // UNDO/REDO OPERATIONS
+    // ========================================================================
+
+    /// Handle Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y input
+    pub fn handle_undo_redo_input(&mut self, input_state: &mut InputState, dt: f32) {
+        self.ui_edit_manager.update(dt);
+
+        if !self.ui_runtime.editor_mode {
+            return;
+        }
+
+        // Ctrl+Shift+Z
+        if input_state.action_pressed_once("Redo") {
+            self.perform_redo(&input_state.mouse);
+            return;
+        }
+        // Ctrl+Z = Undo
+        if input_state.action_pressed_once("Undo") {
+            println!("hi");
+            self.perform_undo(&input_state.mouse);
+            return;
+        }
+    }
+
+    /// Perform undo operation
+    pub fn perform_undo(&mut self, mouse: &MouseState) {
+        println!("performing UNDERWOOD");
+        if let Some(desc) = self.ui_edit_manager.undo(
+            &mut self.ui_runtime,
+            &mut self.menus,
+            &mut self.variables,
+            mouse,
+        ) {
+            self.log_console(format!("↩ Undo: {}", desc));
+            self.mark_editor_layers_dirty();
+            self.update_selection();
+        } else {
+            self.log_console("Nothing to undo");
+        }
+    }
+
+    /// Perform redo operation
+    pub fn perform_redo(&mut self, mouse: &MouseState) {
+        if let Some(desc) = self.ui_edit_manager.redo(
+            &mut self.ui_runtime,
+            &mut self.menus,
+            &mut self.variables,
+            mouse,
+        ) {
+            self.log_console(format!("↪ Redo: {}", desc));
+            self.mark_editor_layers_dirty();
+            self.update_selection();
+        } else {
+            self.log_console("Nothing to redo");
+        }
+    }
+
+    /// Delete element by ID (internal, for undo system)
+    pub fn delete_element_by_id(&mut self, menu_name: &str, layer_name: &str, element_id: &str) {
+        if let Some(element) = get_element(&self.menus, menu_name, layer_name, element_id) {
+            delete_element(&mut self.menus, menu_name, layer_name, &element);
+        }
+    }
+
+    /// Called when drag starts - captures initial state
+    pub fn begin_drag(
         &mut self,
-        menu_name: &str,
-        layer_name: &str,
+        menu: &str,
+        layer: &str,
         element_id: &str,
-        x: Option<f32>,
-        y: Option<f32>,
-        radius: Option<f32>,
-        fill_color: Option<[f32; 4]>,
-        border_color: Option<[f32; 4]>,
-    ) -> bool {
-        if let Some(menu) = self.menus.get_mut(menu_name) {
-            let layer = menu.layers.iter_mut().find(|l| {
-                //println!("COMPARING [{}] with [{}]", l.name, layer_name);
-                l.name == layer_name
+        element_kind: ElementKind,
+    ) {
+        let start_pos = get_element_position(&self.menus, menu, layer, element_id);
+        let start_size = get_element_size(&self.menus, menu, layer, element_id, element_kind);
+        let start_vertices = if element_kind == ElementKind::Polygon {
+            get_polygon_vertices(&self.menus, menu, layer, element_id)
+        } else {
+            None
+        };
+
+        self.drag_start_state = Some(DragStartState {
+            menu: menu.to_string(),
+            layer: layer.to_string(),
+            element_id: element_id.to_string(),
+            element_kind,
+            start_pos,
+            start_size,
+            start_vertices,
+        });
+    }
+
+    /// Called when drag ends - records undo action if state changed
+    pub fn end_drag(&mut self) {
+        let Some(start) = self.drag_start_state.take() else {
+            return;
+        };
+
+        // Check for position change
+        let new_pos =
+            get_element_position(&self.menus, &start.menu, &start.layer, &start.element_id);
+        let dx = (new_pos.0 - start.start_pos.0).abs();
+        let dy = (new_pos.1 - start.start_pos.1).abs();
+
+        if dx > 0.5 || dy > 0.5 {
+            self.ui_edit_manager.push_command(MoveElementCommand {
+                menu: start.menu.clone(),
+                layer: start.layer.clone(),
+                element_id: start.element_id.clone(),
+                element_kind: start.element_kind,
+                before: start.start_pos,
+                after: new_pos,
             });
+        }
 
-            // Circles
-            if let Some(layer) = layer {
-                for c in &mut layer.circles {
-                    if let Some(id) = &c.id {
-                        if id.as_str() == element_id {
-                            c.x = x.unwrap_or(c.x);
-                            c.y = y.unwrap_or(c.y);
-                            c.radius = radius.unwrap_or(c.radius);
-                            c.fill_color = fill_color.unwrap_or(c.fill_color);
-                            c.border_color = border_color.unwrap_or(c.border_color);
-                            layer.dirty.mark_circles();
-                            return true;
-                        }
+        // Check for size change
+        if let (Some(old_size), Some(new_size)) = (
+            start.start_size,
+            get_element_size(
+                &self.menus,
+                &start.menu,
+                &start.layer,
+                &start.element_id,
+                start.element_kind,
+            ),
+        ) {
+            if (new_size - old_size).abs() > 0.5 {
+                self.ui_edit_manager.push_command(ResizeElementCommand {
+                    menu: start.menu.clone(),
+                    layer: start.layer.clone(),
+                    element_id: start.element_id.clone(),
+                    element_kind: start.element_kind,
+                    before: old_size,
+                    after: new_size,
+                });
+            }
+        }
+
+        // Check for vertex changes (polygons)
+        if start.element_kind == ElementKind::Polygon {
+            if let (Some(old_verts), Some(new_verts)) = (
+                &start.start_vertices,
+                get_polygon_vertices(&self.menus, &start.menu, &start.layer, &start.element_id),
+            ) {
+                let changed = old_verts.iter().zip(new_verts.iter()).any(|(old, new)| {
+                    (old[0] - new[0]).abs() > 0.5 || (old[1] - new[1]).abs() > 0.5
+                });
+
+                if changed {
+                    if let (Some(old_state), Some(new_state)) = (
+                        self.create_polygon_snapshot_with_vertices(
+                            &start.menu,
+                            &start.layer,
+                            &start.element_id,
+                            old_verts,
+                        ),
+                        self.get_polygon(&start.menu, &start.layer, &start.element_id),
+                    ) {
+                        self.ui_edit_manager.push_command(ModifyPolygonCommand {
+                            menu: start.menu,
+                            layer: start.layer,
+                            before: old_state,
+                            after: new_state,
+                        });
                     }
                 }
             }
         }
-        false
     }
-    pub fn delete_element(
+
+    /// Finalize any in-progress drag operation (alias for end_drag)
+    pub fn finalize_drag(&mut self) {
+        self.end_drag();
+    }
+
+    // ========================================================================
+    // ELEMENT POSITION/SIZE/COLOR SETTERS (for undo system)
+    // ========================================================================
+
+    pub fn set_element_position(
         &mut self,
-        menu_name: &str,
-        layer_name: &str,
-        element_id: &str,
-    ) -> Option<UiElement> {
-        // get mutable layer
-        if let Some(menu) = self.menus.get_mut(menu_name) {
-            let layer = menu.layers.iter_mut().find(|l| l.name == layer_name)?;
+        menu: &str,
+        layer: &str,
+        id: &str,
+        kind: ElementKind,
+        pos: (f32, f32),
+    ) {
+        let Some(menu) = self.menus.get_mut(menu) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
+            return;
+        };
 
-            // Circles
-            if let Some(pos) = layer
-                .circles
-                .iter()
-                .position(|c| c.id.as_deref() == Some(element_id))
-            {
-                let removed = layer.circles.remove(pos);
-                return Some(UiElement::Circle(removed));
+        match kind {
+            ElementKind::Circle => {
+                if let Some(c) = layer
+                    .circles
+                    .iter_mut()
+                    .find(|c| c.id.as_deref() == Some(id))
+                {
+                    c.x = pos.0;
+                    c.y = pos.1;
+                    layer.dirty.mark_circles();
+                }
             }
-
-            // Polygons
-            if let Some(pos) = layer
-                .polygons
-                .iter()
-                .position(|p| p.id.as_deref() == Some(element_id))
-            {
-                let removed = layer.polygons.remove(pos);
-                return Some(UiElement::_Polygon(removed));
+            ElementKind::Text => {
+                if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
+                    t.x = pos.0;
+                    t.y = pos.1;
+                    layer.dirty.mark_texts();
+                }
             }
+            ElementKind::Polygon => {
+                if let Some(p) = layer
+                    .polygons
+                    .iter_mut()
+                    .find(|p| p.id.as_deref() == Some(id))
+                {
+                    let (cx, cy) = p.center();
+                    let dx = pos.0 - cx;
+                    let dy = pos.1 - cy;
+                    for v in &mut p.vertices {
+                        v.pos[0] += dx;
+                        v.pos[1] += dy;
+                    }
+                    layer.dirty.mark_polygons();
+                }
+            }
+            ElementKind::Handle => {
+                if let Some(h) = layer
+                    .handles
+                    .iter_mut()
+                    .find(|h| h.id.as_deref() == Some(id))
+                {
+                    h.x = pos.0;
+                    h.y = pos.1;
+                    layer.dirty.mark_handles();
+                }
+            }
+            _ => {}
+        }
+    }
 
-            // Texts
-            if let Some(pos) = layer
-                .texts
-                .iter()
-                .position(|t| t.id.as_deref() == Some(element_id))
-            {
-                let removed = layer.texts.remove(pos);
-                return Some(UiElement::Text(removed));
+    pub fn set_element_size(
+        &mut self,
+        menu: &str,
+        layer: &str,
+        id: &str,
+        kind: ElementKind,
+        size: f32,
+    ) {
+        let Some(menu) = self.menus.get_mut(menu) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
+            return;
+        };
+
+        match kind {
+            ElementKind::Circle => {
+                if let Some(c) = layer
+                    .circles
+                    .iter_mut()
+                    .find(|c| c.id.as_deref() == Some(id))
+                {
+                    c.radius = size.max(2.0);
+                    layer.dirty.mark_circles();
+                }
+            }
+            ElementKind::Text => {
+                if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
+                    t.px = size.max(4.0) as u16;
+                    layer.dirty.mark_texts();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Change z-index (internal, for undo system - does NOT record undo)
+    pub fn change_z_index(&mut self, menu: &str, layer: &str, id: &str, delta: i32) {
+        let Some(menu) = self.menus.get_mut(menu) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
+            return;
+        };
+
+        layer.bump_element_z(id, delta);
+        layer.dirty.mark_all();
+    }
+
+    /// Change z-index with undo support
+    pub fn change_z_index_undoable(&mut self, menu: &str, layer: &str, id: &str, delta: i32) {
+        self.ui_edit_manager.push_command(ChangeZIndexCommand {
+            menu: menu.to_string(),
+            layer: layer.to_string(),
+            element_id: id.to_string(),
+            delta,
+        });
+
+        self.change_z_index(menu, layer, id, delta);
+    }
+
+    pub fn replace_circle(&mut self, menu: &str, layer: &str, new_state: &UiButtonCircle) {
+        let Some(menu) = self.menus.get_mut(menu) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
+            return;
+        };
+
+        if let Some(c) = layer.circles.iter_mut().find(|c| c.id == new_state.id) {
+            *c = new_state.clone();
+            layer.dirty.mark_circles();
+        }
+    }
+
+    pub fn replace_text(&mut self, menu: &str, layer: &str, new_state: &UiButtonText) {
+        let Some(menu) = self.menus.get_mut(menu) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
+            return;
+        };
+
+        if let Some(t) = layer.texts.iter_mut().find(|t| t.id == new_state.id) {
+            *t = new_state.clone();
+            layer.dirty.mark_texts();
+        }
+    }
+
+    pub fn replace_polygon(&mut self, menu: &str, layer: &str, new_state: &UiButtonPolygon) {
+        let Some(menu) = self.menus.get_mut(menu) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
+            return;
+        };
+
+        if let Some(p) = layer.polygons.iter_mut().find(|p| p.id == new_state.id) {
+            *p = new_state.clone();
+            layer.dirty.mark_polygons();
+        }
+    }
+
+    fn get_polygon(&self, menu: &str, layer: &str, id: &str) -> Option<UiButtonPolygon> {
+        let menu = self.menus.get(menu)?;
+        let layer = menu.layers.iter().find(|l| l.name == layer)?;
+        layer
+            .polygons
+            .iter()
+            .find(|p| p.id.as_deref() == Some(id))
+            .cloned()
+    }
+
+    fn create_polygon_snapshot_with_vertices(
+        &self,
+        menu: &str,
+        layer: &str,
+        id: &str,
+        vertices: &[[f32; 2]],
+    ) -> Option<UiButtonPolygon> {
+        let mut poly = self.get_polygon(menu, layer, id)?;
+        for (i, pos) in vertices.iter().enumerate() {
+            if let Some(v) = poly.vertices.get_mut(i) {
+                v.pos = *pos;
             }
         }
-        None
+        Some(poly)
     }
+
+    // ========================================================================
+    // UTILITY FUNCTIONS
+    // ========================================================================
+
+    fn generate_unique_id(&self) -> u32 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as u32)
+            .unwrap_or(0)
+    }
+
+    fn apply_snap(&self, pos: (f32, f32)) -> (f32, f32) {
+        if !self.snap_settings.enabled {
+            return pos;
+        }
+        let grid = self.snap_settings.grid_size;
+        ((pos.0 / grid).round() * grid, (pos.1 / grid).round() * grid)
+    }
+
+    pub fn log_console(&mut self, message: impl Into<String>) {
+        self.console_lines.push_back(message.into());
+        while self.console_lines.len() > 6 {
+            self.console_lines.pop_front();
+        }
+    }
+
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.ui_edit_manager.is_dirty()
+    }
+
+    pub fn handle_touches(
+        &mut self,
+        action_system: &mut ActionSystem,
+        dt: f32,
+        input_state: &mut InputState,
+        time_system: &TimeSystem,
+        world_renderer: &mut WorldRenderer,
+        window_size: PhysicalSize<u32>,
+    ) {
+        if !self.ui_runtime.show_gui {
+            return;
+        }
+
+        self.ui_edit_manager.update(dt);
+        self.handle_undo_redo_input(input_state, dt);
+        self.reset_selection_flags();
+        self.sync_selected_element_color();
+
+        let mouse = MouseSnapshot::from_mouse(&input_state.mouse);
+        let editor_mode = self.ui_runtime.editor_mode;
+
+        if mouse.just_pressed && !self.press_started_on_ui(&mouse) && !self.near_any_handle(&mouse)
+        {
+            deselect_everything(self);
+        }
+
+        let top_hit = find_top_hit(&mut self.menus, &mouse, editor_mode);
+
+        let interaction = handle_editor_mode_interactions(
+            self,
+            time_system,
+            &mouse,
+            top_hit.clone(),
+            input_state,
+        );
+
+        self.variables
+            .set_bool("editing_text", self.ui_runtime.editing_text);
+
+        let mut trigger_selection =
+            interaction.trigger_selection || interaction.moved_any_selected_object;
+
+        if editor_mode {
+            handle_text_editing(
+                &mut self.ui_runtime,
+                &mut self.menus,
+                &mut self.ui_edit_manager,
+                input_state,
+                mouse,
+            );
+            apply_pending_circle_updates(self, dt, interaction.pending_circle_updates);
+
+            if handle_scroll_resize(self, mouse.scroll) {
+                trigger_selection = true;
+            }
+        }
+
+        // Check if drag ended (mouse released while we had a drag in progress)
+        if !mouse.pressed && self.drag_start_state.is_some() {
+            self.finalize_drag();
+        }
+
+        if interaction.moved_any_selected_object {
+            self.mark_editor_layers_dirty();
+        }
+
+        if trigger_selection {
+            self.update_selection();
+        }
+
+        activate_action(
+            action_system,
+            self,
+            &top_hit,
+            &input_state.mouse,
+            input_state,
+            time_system,
+            world_renderer,
+            window_size,
+        );
+
+        execute_action(
+            action_system,
+            self,
+            &top_hit,
+            &input_state.mouse,
+            input_state,
+            time_system,
+            world_renderer,
+            window_size,
+        );
+
+        if editor_mode {
+            self.apply_ui_edit_movement(input_state);
+        }
+    }
+
+    pub fn toggle_snap(&mut self) {
+        self.snap_settings.enabled = !self.snap_settings.enabled;
+        self.log_console(format!(
+            "Snap to grid: {}",
+            if self.snap_settings.enabled {
+                "ON"
+            } else {
+                "OFF"
+            }
+        ));
+    }
+
+    pub fn set_grid_size(&mut self, size: f32) {
+        self.snap_settings.grid_size = size.max(1.0);
+    }
+
     pub fn apply_ui_edit_movement(&mut self, input_state: &mut InputState) {
         let sel = &self.ui_runtime.selected_ui_element_primary;
         if !sel.active {
@@ -995,9 +1131,7 @@ impl UiButtonLoader {
                 changed = true;
             }
 
-            // -----------------------------
             // Resizing (+, -, scroll)
-            // -----------------------------
             let mut scale = 1.0;
 
             if input_state.action_repeat("Resize Element Bigger") {
@@ -1019,26 +1153,21 @@ impl UiButtonLoader {
                 changed = true;
             }
 
-            // -----------------------------
             // Element Z movement
-            // -----------------------------
             if !input_state.shift {
                 if input_state.action_repeat("Move Element Z Up") {
-                    layer.bump_element_z(&sel.element_id, 1, &mut self.variables);
-                    layer.sort_by_z();
+                    layer.bump_element_z(&sel.element_id, 1);
                     layer.dirty.mark_all();
                     changed = true;
                 }
 
                 if input_state.action_repeat("Move Element Z Down") {
-                    layer.bump_element_z(&sel.element_id, -1, &mut self.variables);
-                    layer.sort_by_z();
+                    layer.bump_element_z(&sel.element_id, -1);
                     layer.dirty.mark_all();
                     changed = true;
                 }
             }
         }
-        // ====== end block 1 (layer + menu borrow released) ======
 
         // ============================================================
         // BLOCK 2: LAYER ORDERING
@@ -1063,11 +1192,7 @@ impl UiButtonLoader {
                 }
             }
         }
-        // ====== end block 2 ======
 
-        // ============================================================
-        // FINAL: only dirty if something changed
-        // ============================================================
         if changed {
             self.update_selection();
             self.mark_editor_layers_dirty();
@@ -1105,46 +1230,64 @@ impl UiButtonLoader {
         near_handle(&self.menus, mouse)
     }
 
-    fn handle_color_picker_visibility(&mut self, input_state: &InputState) {
-        let selection = &self.ui_runtime.selected_ui_element_primary;
-        // let selection_changed = selection.just_selected || selection.just_deselected;
-        // let is_hue_drag = selection.action_name == "Drag Hue Point";
-        let has_selection = selection.element_type != ElementKind::None;
+    fn add_editor_layers(&mut self) {
+        let menu = self.menus.entry("Editor_Menu".into()).or_insert(Menu {
+            layers: Vec::new(),
+            active: true,
+        });
 
-        let show_picker = input_state.mouse.right_just_pressed && has_selection;
+        menu.layers.push(RuntimeLayer {
+            name: "editor_selection".into(),
+            order: 900,
+            active: true,
+            cache: LayerCache::default(),
+            texts: vec![],
+            circles: vec![],
+            outlines: vec![],
+            handles: vec![],
+            polygons: vec![],
+            dirty: LayerDirty::all(),
+            gpu: LayerGpu::default(),
+            opaque: true,
+            saveable: false,
+        });
 
-        let Some(menu) = self.menus.get_mut("Editor_Menu") else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == "Color Picker") else {
-            return;
-        };
+        menu.layers.push(RuntimeLayer {
+            name: "editor_handles".into(),
+            order: 950,
+            active: true,
+            cache: LayerCache::default(),
+            texts: vec![],
+            circles: vec![],
+            outlines: vec![],
+            handles: vec![],
+            polygons: vec![],
+            dirty: LayerDirty::all(),
+            gpu: LayerGpu::default(),
+            opaque: true,
+            saveable: false,
+        });
 
-        if show_picker {
-            layer.active = true;
-        }
+        menu.layers.sort_by_key(|l| l.order);
     }
-
-    fn handle_element_deletion(&mut self, input_state: &mut InputState) {
-        let selection = &self.ui_runtime.selected_ui_element_primary;
-
-        let can_delete = input_state.action_pressed_once("Delete selected GUI Element")
-            && selection.active
-            && !self.ui_runtime.editing_text;
-
-        if !can_delete {
-            return;
-        }
-
-        let element_id = selection.element_id.clone();
-        let layer_name = selection.layer_name.clone();
-        let menu_name = selection.menu_name.clone();
-
-        deselect_everything(self);
-        let _ = self.delete_element(&menu_name, &layer_name, &element_id);
+    pub(crate) fn hash_id(id: &str) -> f32 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut hasher);
+        let hash_u64 = hasher.finish(); // 64-bit
+        // map to [0, 1]
+        (hash_u64 as f64 / u64::MAX as f64) as f32
     }
 }
 
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    const EPSILON: f32 = 0.001;
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
+}
 fn this_text(
     selected: &SelectedUiElement,
     menu: &str,
@@ -1163,4 +1306,110 @@ fn this_text(
     }
 
     false
+}
+
+pub fn get_element(
+    menus: &HashMap<String, Menu>,
+    menu_name: &str,
+    layer_name: &str,
+    element_id: &str,
+) -> Option<UiElement> {
+    let menu = menus.get(menu_name)?;
+    let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
+
+    if let Some(c) = layer
+        .circles
+        .iter()
+        .find(|c| c.id.as_deref() == Some(element_id))
+    {
+        return Some(UiElement::Circle(c.clone()));
+    }
+    if let Some(t) = layer
+        .texts
+        .iter()
+        .find(|t| t.id.as_deref() == Some(element_id))
+    {
+        return Some(UiElement::Text(t.clone()));
+    }
+    if let Some(p) = layer
+        .polygons
+        .iter()
+        .find(|p| p.id.as_deref() == Some(element_id))
+    {
+        return Some(UiElement::Polygon(p.clone()));
+    }
+    if let Some(h) = layer
+        .handles
+        .iter()
+        .find(|h| h.id.as_deref() == Some(element_id))
+    {
+        return Some(UiElement::Handle(h.clone()));
+    }
+    if let Some(o) = layer
+        .outlines
+        .iter()
+        .find(|o| o.id.as_deref() == Some(element_id))
+    {
+        return Some(UiElement::Outline(o.clone()));
+    }
+
+    None
+}
+
+pub fn get_element_position(
+    menus: &HashMap<String, Menu>,
+    menu_name: &str,
+    layer_name: &str,
+    element_id: &str,
+) -> (f32, f32) {
+    if let Some(element) = get_element(menus, menu_name, layer_name, element_id) {
+        element.center()
+    } else {
+        (0.0, 0.0)
+    }
+}
+pub fn get_element_size(
+    menus: &HashMap<String, Menu>,
+    menu_name: &str,
+    layer_name: &str,
+    id: &str,
+    kind: ElementKind,
+) -> Option<f32> {
+    let menu = menus.get(menu_name)?;
+    let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
+
+    match kind {
+        ElementKind::Circle => layer
+            .circles
+            .iter()
+            .find(|c| c.id.as_deref() == Some(id))
+            .map(|c| c.radius),
+        ElementKind::Text => layer
+            .texts
+            .iter()
+            .find(|t| t.id.as_deref() == Some(id))
+            .map(|t| t.px as f32),
+        ElementKind::Handle => layer
+            .handles
+            .iter()
+            .find(|h| h.id.as_deref() == Some(id))
+            .map(|h| h.radius),
+        _ => None,
+    }
+}
+
+pub fn get_polygon_vertices(
+    menus: &HashMap<String, Menu>,
+    menu_name: &str,
+    layer_name: &str,
+    id: &str,
+) -> Option<Vec<[f32; 2]>> {
+    let menu = menus.get(menu_name)?;
+    let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
+
+    layer
+        .polygons
+        .iter()
+        .find(|p| p.id.as_deref() == Some(id))
+        .map(|p| p.vertices.iter().map(|v| v.pos).collect())
 }

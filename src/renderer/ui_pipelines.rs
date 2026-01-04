@@ -254,32 +254,33 @@ impl UiPipelines {
                 operation: BlendOperation::Add,
             },
         });
+        let ssbo_entries = &[
+            // binding 0 = ShapeParams SSBO
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 1 = PolygonVertices SSBO
+            BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ];
         let outline_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Outline Layout"),
-            entries: &[
-                // binding 0 = ShapeParams SSBO
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 1 = PolygonVertices SSBO
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            entries: ssbo_entries,
         });
         let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Outline Pipeline Layout"),
@@ -328,30 +329,9 @@ impl UiPipelines {
             "UI Polygon Shader",
         )?
         .module;
-        let polygon_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let polygon_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("polygon_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
+            entries: ssbo_entries,
         });
 
         let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {

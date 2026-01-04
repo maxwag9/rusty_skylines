@@ -1,8 +1,7 @@
 use crate::renderer::ui::{GlyphUv, PAD, TextParams};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::TimeSystem;
-use crate::ui::ui_editor::UiVertexText;
-use crate::ui::vertex::UiButtonText;
+use crate::ui::vertex::{UiButtonText, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
 use serde::{Deserialize, Serialize};
@@ -67,11 +66,11 @@ impl TextAtlas {
             view_formats: &[],
         });
 
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&SamplerDescriptor {
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
         let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
@@ -208,8 +207,8 @@ impl TextAtlas {
 
                     for row in 0..m.height {
                         let src = row * m.width;
-                        let dst = (gy as usize + row as usize) * target_w as usize + gx as usize;
-                        try_cpu_atlas[dst..dst + m.width as usize]
+                        let dst = (gy as usize + row) * target_w as usize + gx as usize;
+                        try_cpu_atlas[dst..dst + m.width]
                             .copy_from_slice(&bitmap[src..src + m.width]);
                     }
 
@@ -391,38 +390,7 @@ pub fn render_selection(
             let col = [0.3, 0.5, 1.0, 0.35];
             let uv = [-1.0, -1.0];
 
-            text_vertices.extend_from_slice(&[
-                UiVertexText {
-                    pos: [x_start, y0],
-                    uv,
-                    color: col,
-                },
-                UiVertexText {
-                    pos: [x_end, y0],
-                    uv,
-                    color: col,
-                },
-                UiVertexText {
-                    pos: [x_end, y1],
-                    uv,
-                    color: col,
-                },
-                UiVertexText {
-                    pos: [x_start, y0],
-                    uv,
-                    color: col,
-                },
-                UiVertexText {
-                    pos: [x_end, y1],
-                    uv,
-                    color: col,
-                },
-                UiVertexText {
-                    pos: [x_start, y1],
-                    uv,
-                    color: col,
-                },
-            ]);
+            push_quad(text_vertices, x_start, y0, x_end, y1, uv, col);
         }
     }
 }
@@ -511,38 +479,7 @@ pub fn render_editor_caret(
     let caret_color = [1.0, 1.0, 1.0, caret_alpha];
     let uv = [-1.0, -1.0];
 
-    text_vertices.extend_from_slice(&[
-        UiVertexText {
-            pos: [x0, y0],
-            uv,
-            color: caret_color,
-        },
-        UiVertexText {
-            pos: [x1, y0],
-            uv,
-            color: caret_color,
-        },
-        UiVertexText {
-            pos: [x1, y1],
-            uv,
-            color: caret_color,
-        },
-        UiVertexText {
-            pos: [x0, y0],
-            uv,
-            color: caret_color,
-        },
-        UiVertexText {
-            pos: [x1, y1],
-            uv,
-            color: caret_color,
-        },
-        UiVertexText {
-            pos: [x0, y1],
-            uv,
-            color: caret_color,
-        },
-    ]);
+    push_quad(text_vertices, x0, y0, x1, y1, uv, caret_color);
 }
 
 // Placed outside the impl or as a private associated function

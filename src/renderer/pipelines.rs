@@ -228,119 +228,83 @@ impl Pipelines {
                     immediate_size: 0,
                 });
 
-        let above_water = self
-            .device
-            .create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Terrain Pipeline"),
-                layout: Some(&terrain_pipeline_layout),
-                vertex: VertexState {
-                    module: &self.terrain_pipeline_above_water.shader.module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Vertex::desc()],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: &self.terrain_pipeline_above_water.shader.module,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(ColorTargetState {
-                        format: self.config.format,
-                        blend: Some(BlendState::REPLACE),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: PrimitiveState {
-                    cull_mode: Some(Face::Front),
-                    topology: PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: true,
-                    depth_compare: CompareFunction::LessEqual,
-                    stencil: StencilState {
-                        front: StencilFaceState {
-                            compare: CompareFunction::Always,
-                            fail_op: StencilOperation::Keep,
-                            depth_fail_op: StencilOperation::Keep,
-                            pass_op: StencilOperation::Replace,
-                        },
-                        back: StencilFaceState {
-                            compare: CompareFunction::Always,
-                            fail_op: StencilOperation::Keep,
-                            depth_fail_op: StencilOperation::Keep,
-                            pass_op: StencilOperation::Replace,
-                        },
-                        read_mask: 0xFF,
-                        write_mask: 0,
-                    },
-                    bias: Default::default(),
-                }),
-                multisample: MultisampleState {
-                    count: self.msaa_samples,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
-        let under_water = self
-            .device
-            .create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Terrain Pipeline"),
-                layout: Some(&terrain_pipeline_layout),
-                vertex: VertexState {
-                    module: &self.terrain_pipeline_above_water.shader.module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Vertex::desc()],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: &self.terrain_pipeline_above_water.shader.module,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(ColorTargetState {
-                        format: self.config.format,
-                        blend: Some(BlendState::REPLACE),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: PrimitiveState {
-                    cull_mode: Some(Face::Front),
-                    topology: PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: true,
-                    depth_compare: CompareFunction::LessEqual,
-                    stencil: StencilState {
-                        front: StencilFaceState {
-                            compare: CompareFunction::Always,
-                            fail_op: StencilOperation::Keep,
-                            depth_fail_op: StencilOperation::Keep,
-                            pass_op: StencilOperation::Replace,
-                        },
-                        back: StencilFaceState {
-                            compare: CompareFunction::Always,
-                            fail_op: StencilOperation::Keep,
-                            depth_fail_op: StencilOperation::Keep,
-                            pass_op: StencilOperation::Replace,
-                        },
-                        read_mask: 0xFF,
-                        write_mask: 0xFF,
-                    },
-                    bias: Default::default(),
-                }),
-                multisample: MultisampleState {
-                    count: self.msaa_samples,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
+        let above_water = self.create_terrain_pipeline(
+            &self.device,
+            &terrain_pipeline_layout,
+            Some("Terrain Pipeline (Above Water)"),
+            0,
+        );
+
+        let under_water = self.create_terrain_pipeline(
+            &self.device,
+            &terrain_pipeline_layout,
+            Some("Terrain Pipeline (Under Water)"),
+            0xFF,
+        );
         (above_water, under_water)
+    }
+
+    fn create_terrain_pipeline(
+        &self,
+        device: &Device, // Or &self.device
+        layout: &PipelineLayout,
+        label: Option<&str>,
+        stencil_write_mask: u32,
+    ) -> RenderPipeline {
+        device.create_render_pipeline(&RenderPipelineDescriptor {
+            label,
+            layout: Some(layout),
+            vertex: VertexState {
+                module: &self.terrain_pipeline_above_water.shader.module,
+                entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &self.terrain_pipeline_above_water.shader.module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format: self.config.format,
+                    blend: Some(BlendState::REPLACE),
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                cull_mode: Some(Face::Front),
+                topology: PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: StencilState {
+                    front: StencilFaceState {
+                        compare: CompareFunction::Always,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Replace,
+                    },
+                    back: StencilFaceState {
+                        compare: CompareFunction::Always,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Replace,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: stencil_write_mask,
+                },
+                bias: Default::default(),
+            }),
+            multisample: MultisampleState {
+                count: self.msaa_samples,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            cache: None,
+            multiview_mask: None,
+        })
     }
 
     fn build_gizmo_pipeline(&self) -> RenderPipeline {
@@ -465,16 +429,16 @@ impl Pipelines {
     }
 
     fn build_sky_pipeline(&self) -> RenderPipeline {
-        let sky_pipeline_layout =
-            self.device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Sky Pipeline Layout"),
-                    bind_group_layouts: &[
-                        &self.uniforms.bind_group_layout,     // group 0
-                        &self.sky_uniforms.bind_group_layout, // group 1
-                    ],
-                    immediate_size: 0,
-                });
+        let sky_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Sky Pipeline Layout"),
+                bind_group_layouts: &[
+                    &self.uniforms.bind_group_layout,     // group 0
+                    &self.sky_uniforms.bind_group_layout, // group 1
+                ],
+                immediate_size: 0,
+            });
         self.device
             .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("Sky Pipeline"),
@@ -517,25 +481,25 @@ impl Pipelines {
             array_stride: 16,
             step_mode: VertexStepMode::Instance, // IMPORTANT
             attributes: &[
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32,
+                    format: VertexFormat::Float32,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 4,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32,
+                    format: VertexFormat::Float32,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 8,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float32,
+                    format: VertexFormat::Float32,
                 },
-                wgpu::VertexAttribute {
+                VertexAttribute {
                     offset: 12,
                     shader_location: 3,
-                    format: wgpu::VertexFormat::Float32,
+                    format: VertexFormat::Float32,
                 },
             ],
         };
@@ -591,7 +555,7 @@ impl Pipelines {
         let grass_texture_pipeline_layout = self.device.create_pipeline_layout(&Default::default());
         self.grass_texture_pipeline.pipeline =
             self.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                .create_compute_pipeline(&ComputePipelineDescriptor {
                     label: Some("Procedural Texture Compute Pipeline GRASS"),
                     layout: Some(&grass_texture_pipeline_layout),
                     module: &self.grass_texture_pipeline.shader.module,
@@ -679,22 +643,22 @@ pub fn create_grass_texture(
     device: &Device,
     config: &SurfaceConfiguration,
 ) -> (Texture, TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    let texture = device.create_texture(&TextureDescriptor {
         label: Some("Grass Texture"),
-        size: wgpu::Extent3d {
+        size: Extent3d {
             width: config.width,
             height: config.height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm, // NOT sRGB
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm, // NOT sRGB
+        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&TextureViewDescriptor::default());
     (texture, view)
 }
 
@@ -801,9 +765,9 @@ fn make_dummy_render_pipeline_state(
     }
 }
 fn make_dummy_compute_pipeline(device: &Device) -> ComputePipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("dummy compute shader"),
-        source: wgpu::ShaderSource::Wgsl(
+        source: ShaderSource::Wgsl(
             "
             @compute @workgroup_size(1)
             fn main() {
@@ -814,13 +778,13 @@ fn make_dummy_compute_pipeline(device: &Device) -> ComputePipeline {
         ),
     });
 
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
         label: Some("dummy compute layout"),
         bind_group_layouts: &[],
         immediate_size: 0,
     });
 
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    device.create_compute_pipeline(&ComputePipelineDescriptor {
         label: Some("dummy compute pipeline"),
         layout: Some(&layout),
         module: &shader,

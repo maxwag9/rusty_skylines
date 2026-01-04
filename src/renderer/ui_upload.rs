@@ -4,10 +4,9 @@ use crate::renderer::ui_text::{
     render_editor_outline, render_selection,
 };
 use crate::resources::TimeSystem;
-use crate::ui::ui_editor::{
-    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonText, UiRuntime, UiVertexPoly,
-    UiVertexText,
-};
+
+use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::vertex::*;
 use wgpu::{BufferDescriptor, BufferUsages, Queue};
 
 pub fn upload_circles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
