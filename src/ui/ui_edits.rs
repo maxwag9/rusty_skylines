@@ -26,8 +26,9 @@ pub fn set_element_position(
     match kind {
         ElementKind::Circle => {
             if let Some(c) = layer
-                .circles
+                .elements
                 .iter_mut()
+                .filter_map(UiElement::as_circle_mut)
                 .find(|c| c.id.as_deref() == Some(id))
             {
                 c.x = pos.0;
@@ -36,7 +37,12 @@ pub fn set_element_position(
             }
         }
         ElementKind::Text => {
-            if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
+            if let Some(t) = layer
+                .elements
+                .iter_mut()
+                .filter_map(UiElement::as_text_mut)
+                .find(|t| t.id.as_deref() == Some(id))
+            {
                 t.x = pos.0;
                 t.y = pos.1;
                 layer.dirty.mark_texts();
@@ -44,8 +50,9 @@ pub fn set_element_position(
         }
         ElementKind::Polygon => {
             if let Some(p) = layer
-                .polygons
+                .elements
                 .iter_mut()
+                .filter_map(UiElement::as_polygon_mut)
                 .find(|p| p.id.as_deref() == Some(id))
             {
                 let (cx, cy) = p.center();
@@ -60,8 +67,9 @@ pub fn set_element_position(
         }
         ElementKind::Handle => {
             if let Some(h) = layer
-                .handles
+                .elements
                 .iter_mut()
+                .filter_map(UiElement::as_handle_mut)
                 .find(|h| h.id.as_deref() == Some(id))
             {
                 h.x = pos.0;
@@ -88,24 +96,34 @@ pub fn set_element_size(
         return;
     };
 
-    match kind {
-        ElementKind::Circle => {
-            if let Some(c) = layer
-                .circles
-                .iter_mut()
-                .find(|c| c.id.as_deref() == Some(id))
-            {
-                c.radius = size.max(2.0);
+    let size = size.max(2.0);
+
+    for element in &mut layer.elements {
+        match element {
+            // PRIMARY ELEMENT
+            UiElement::Circle(c) if kind == ElementKind::Circle && c.id.as_deref() == Some(id) => {
+                c.radius = size;
                 layer.dirty.mark_circles();
             }
-        }
-        ElementKind::Text => {
-            if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
+
+            UiElement::Text(t) if kind == ElementKind::Text && t.id.as_deref() == Some(id) => {
                 t.px = size.max(4.0) as u16;
                 layer.dirty.mark_texts();
             }
+
+            // DEPENDENTS (always applied immediately)
+            UiElement::Handle(h) if h.parent_id.as_deref() == Some(id) => {
+                h.radius = size;
+                layer.dirty.mark_handles();
+            }
+
+            UiElement::Outline(o) if o.parent_id.as_deref() == Some(id) => {
+                o.shape_data.radius = size;
+                layer.dirty.mark_outlines();
+            }
+
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -128,8 +146,9 @@ pub fn set_element_color(
     match kind {
         ElementKind::Circle => {
             if let Some(c) = layer
-                .circles
+                .elements
                 .iter_mut()
+                .filter_map(UiElement::as_circle_mut)
                 .find(|c| c.id.as_deref() == Some(id))
             {
                 match property {
@@ -143,7 +162,12 @@ pub fn set_element_color(
             }
         }
         ElementKind::Text => {
-            if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
+            if let Some(t) = layer
+                .elements
+                .iter_mut()
+                .filter_map(UiElement::as_text_mut)
+                .find(|t| t.id.as_deref() == Some(id))
+            {
                 if matches!(property, ColorProperty::TextColor) {
                     t.color = color;
                     layer.dirty.mark_texts();
@@ -170,8 +194,9 @@ pub fn set_vertex_position(
     };
 
     if let Some(poly) = layer
-        .polygons
+        .elements
         .iter_mut()
+        .filter_map(UiElement::as_polygon_mut)
         .find(|p| p.id.as_deref() == Some(id))
     {
         if let Some(v) = poly.vertices.get_mut(vertex_index) {
@@ -212,7 +237,12 @@ pub fn set_text_content(
         return;
     };
 
-    if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
+    if let Some(t) = layer
+        .elements
+        .iter_mut()
+        .filter_map(UiElement::as_text_mut)
+        .find(|t| t.id.as_deref() == Some(id))
+    {
         t.text = text.to_string();
         t.template = template.to_string();
         t.caret = caret;
@@ -251,7 +281,12 @@ pub fn replace_circle(
         return;
     };
 
-    if let Some(c) = layer.circles.iter_mut().find(|c| c.id == new_state.id) {
+    if let Some(c) = layer
+        .elements
+        .iter_mut()
+        .filter_map(UiElement::as_circle_mut)
+        .find(|c| c.id == new_state.id)
+    {
         *c = new_state.clone();
         layer.dirty.mark_circles();
     }
@@ -270,7 +305,12 @@ pub fn replace_text(
         return;
     };
 
-    if let Some(t) = layer.texts.iter_mut().find(|t| t.id == new_state.id) {
+    if let Some(t) = layer
+        .elements
+        .iter_mut()
+        .filter_map(UiElement::as_text_mut)
+        .find(|t| t.id == new_state.id)
+    {
         *t = new_state.clone();
         layer.dirty.mark_texts();
     }
@@ -289,7 +329,12 @@ pub fn replace_polygon(
         return;
     };
 
-    if let Some(p) = layer.polygons.iter_mut().find(|p| p.id == new_state.id) {
+    if let Some(p) = layer
+        .elements
+        .iter_mut()
+        .filter_map(UiElement::as_polygon_mut)
+        .find(|p| p.id == new_state.id)
+    {
         *p = new_state.clone();
         layer.dirty.mark_polygons();
     }
@@ -311,56 +356,14 @@ pub fn delete_element(
 
     let element_id = element.id();
 
-    match element {
-        UiElement::Circle(_) => {
-            if let Some(pos) = layer
-                .circles
-                .iter()
-                .position(|c| c.id.as_deref() == Some(element_id))
-            {
-                layer.circles.remove(pos);
-                layer.dirty.mark_circles();
-            }
-        }
-        UiElement::Text(_) => {
-            if let Some(pos) = layer
-                .texts
-                .iter()
-                .position(|t| t.id.as_deref() == Some(element_id))
-            {
-                layer.texts.remove(pos);
-                layer.dirty.mark_texts();
-            }
-        }
-        UiElement::Polygon(_) => {
-            if let Some(pos) = layer
-                .polygons
-                .iter()
-                .position(|p| p.id.as_deref() == Some(element_id))
-            {
-                layer.polygons.remove(pos);
-                layer.dirty.mark_polygons();
-            }
-        }
-        UiElement::Handle(_) => {
-            if let Some(pos) = layer
-                .handles
-                .iter()
-                .position(|h| h.id.as_deref() == Some(element_id))
-            {
-                layer.handles.remove(pos);
-                layer.dirty.mark_handles();
-            }
-        }
-        UiElement::Outline(_) => {
-            if let Some(pos) = layer
-                .outlines
-                .iter()
-                .position(|o| o.id.as_deref() == Some(element_id))
-            {
-                layer.outlines.remove(pos);
-                layer.dirty.mark_outlines();
-            }
+    if let Some(pos) = layer.elements.iter().position(|e| e.id() == element_id) {
+        let removed = layer.elements.remove(pos);
+        match removed {
+            UiElement::Circle(_) => layer.dirty.mark_circles(),
+            UiElement::Text(_) => layer.dirty.mark_texts(),
+            UiElement::Polygon(_) => layer.dirty.mark_polygons(),
+            UiElement::Handle(_) => layer.dirty.mark_handles(),
+            UiElement::Outline(_) => layer.dirty.mark_outlines(),
         }
     }
 }
@@ -409,28 +412,15 @@ pub fn create_element(
         }
     }
 
-    match element {
-        UiElement::Text(t) => {
-            layer.texts.push(t);
-            layer.dirty.mark_texts();
-        }
-        UiElement::Circle(c) => {
-            layer.circles.push(c);
-            layer.dirty.mark_circles();
-        }
-        UiElement::Outline(o) => {
-            layer.outlines.push(o);
-            layer.dirty.mark_outlines();
-        }
-        UiElement::Handle(h) => {
-            layer.handles.push(h);
-            layer.dirty.mark_handles();
-        }
-        UiElement::Polygon(p) => {
-            layer.polygons.push(p);
-            layer.dirty.mark_polygons();
-        }
+    // Push element veryyy simple
+    match &element {
+        UiElement::Text(_) => layer.dirty.mark_texts(),
+        UiElement::Circle(_) => layer.dirty.mark_circles(),
+        UiElement::Outline(_) => layer.dirty.mark_outlines(),
+        UiElement::Handle(_) => layer.dirty.mark_handles(),
+        UiElement::Polygon(_) => layer.dirty.mark_polygons(),
     }
+    layer.elements.push(element);
 
     Ok(())
 }

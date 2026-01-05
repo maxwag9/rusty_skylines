@@ -72,24 +72,122 @@ pub enum TouchState {
     Idle,
 }
 
+#[derive(Debug, Clone)]
+pub enum UiElementCache {
+    Circle(CircleParams),
+    Handle(HandleParams),
+    Polygon(Vec<UiVertexPoly>),
+    Text(TextParams),
+    Outline(OutlineParams),
+}
+
 #[derive(Debug)]
 pub struct LayerCache {
-    pub texts: Vec<TextParams>,
-    pub circle_params: Vec<CircleParams>,
-    pub outline_params: Vec<OutlineParams>,
-    pub handle_params: Vec<HandleParams>,
-    pub polygon_vertices: Vec<UiVertexPoly>,
+    pub elements: Vec<UiElementCache>,
     pub outline_poly_vertices: Vec<[f32; 2]>,
+}
+
+impl UiElementCache {
+    // non-mutable
+    pub fn as_circle(&self) -> Option<&CircleParams> {
+        match self {
+            UiElementCache::Circle(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_handle(&self) -> Option<&HandleParams> {
+        match self {
+            UiElementCache::Handle(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub fn as_polygon(&self) -> Option<&Vec<UiVertexPoly>> {
+        match self {
+            UiElementCache::Polygon(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_text(&self) -> Option<&TextParams> {
+        match self {
+            UiElementCache::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn as_outline(&self) -> Option<&OutlineParams> {
+        match self {
+            UiElementCache::Outline(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    // mutable
+    pub fn as_circle_mut(&mut self) -> Option<&mut CircleParams> {
+        match self {
+            UiElementCache::Circle(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_handle_mut(&mut self) -> Option<&mut HandleParams> {
+        match self {
+            UiElementCache::Handle(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub fn as_polygon_mut(&mut self) -> Option<&mut Vec<UiVertexPoly>> {
+        match self {
+            UiElementCache::Polygon(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_text_mut(&mut self) -> Option<&mut TextParams> {
+        match self {
+            UiElementCache::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn as_outline_mut(&mut self) -> Option<&mut OutlineParams> {
+        match self {
+            UiElementCache::Outline(o) => Some(o),
+            _ => None,
+        }
+    }
+}
+
+impl LayerCache {
+    // non-mutable iterators
+    pub fn iter_circles(&self) -> impl Iterator<Item = &CircleParams> {
+        self.elements.iter().filter_map(UiElementCache::as_circle)
+    }
+
+    pub fn iter_handles(&self) -> impl Iterator<Item = &HandleParams> {
+        self.elements.iter().filter_map(UiElementCache::as_handle)
+    }
+
+    pub fn iter_polygons(&self) -> impl Iterator<Item = &Vec<UiVertexPoly>> {
+        self.elements.iter().filter_map(UiElementCache::as_polygon)
+    }
+
+    pub fn iter_texts(&self) -> impl Iterator<Item = &TextParams> {
+        self.elements.iter().filter_map(UiElementCache::as_text)
+    }
+
+    pub fn iter_outlines(&self) -> impl Iterator<Item = &OutlineParams> {
+        self.elements.iter().filter_map(UiElementCache::as_outline)
+    }
 }
 
 impl Default for LayerCache {
     fn default() -> Self {
         Self {
-            texts: vec![],
-            circle_params: vec![],
-            outline_params: vec![],
-            handle_params: vec![],
-            polygon_vertices: vec![],
+            elements: vec![],
             outline_poly_vertices: vec![],
         }
     }
@@ -177,7 +275,14 @@ impl Default for LayerDirty {
         Self::all()
     }
 }
-
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum UiElementJson {
+    Circle(UiButtonCircleJson),
+    Handle(UiButtonHandleJson),
+    Polygon(UiButtonPolygonJson),
+    Text(UiButtonTextJson),
+    Outline(UiButtonOutlineJson),
+}
 #[derive(Debug, Clone)]
 pub enum UiElement {
     Circle(UiButtonCircle),
@@ -188,14 +293,112 @@ pub enum UiElement {
 }
 
 impl UiElement {
+    pub(crate) fn from_json(element: UiElementJson, window_size: PhysicalSize<u32>) -> UiElement {
+        match element {
+            UiElementJson::Circle(e) => {
+                UiElement::Circle(UiButtonCircle::from_json(e, window_size))
+            }
+            UiElementJson::Handle(e) => {
+                UiElement::Handle(UiButtonHandle::from_json(e, window_size))
+            }
+            UiElementJson::Polygon(e) => {
+                UiElement::Polygon(UiButtonPolygon::from_json(e, window_size))
+            }
+            UiElementJson::Text(e) => UiElement::Text(UiButtonText::from_json(e, window_size)),
+            UiElementJson::Outline(e) => {
+                UiElement::Outline(UiButtonOutline::from_json(e, window_size))
+            }
+        }
+    }
+    pub(crate) fn to_json(&self, window_size: PhysicalSize<u32>) -> UiElementJson {
+        match self {
+            UiElement::Circle(e) => UiElementJson::Circle(UiButtonCircle::to_json(e, window_size)),
+            UiElement::Handle(e) => UiElementJson::Handle(UiButtonHandle::to_json(e, window_size)),
+            UiElement::Polygon(e) => {
+                UiElementJson::Polygon(UiButtonPolygon::to_json(e, window_size))
+            }
+            UiElement::Text(e) => UiElementJson::Text(UiButtonText::to_json(e, window_size)),
+            UiElement::Outline(e) => {
+                UiElementJson::Outline(UiButtonOutline::to_json(e, window_size))
+            }
+        }
+    }
+    pub fn as_text_mut(&mut self) -> Option<&mut UiButtonText> {
+        match self {
+            UiElement::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+    pub fn as_circle_mut(&mut self) -> Option<&mut UiButtonCircle> {
+        match self {
+            UiElement::Circle(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_polygon_mut(&mut self) -> Option<&mut UiButtonPolygon> {
+        match self {
+            UiElement::Polygon(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_handle_mut(&mut self) -> Option<&mut UiButtonHandle> {
+        match self {
+            UiElement::Handle(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub fn as_outline_mut(&mut self) -> Option<&mut UiButtonOutline> {
+        match self {
+            UiElement::Outline(o) => Some(o),
+            _ => None,
+        }
+    }
+    pub fn as_circle(&self) -> Option<&UiButtonCircle> {
+        match self {
+            UiElement::Circle(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    pub fn as_handle(&self) -> Option<&UiButtonHandle> {
+        match self {
+            UiElement::Handle(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub fn as_polygon(&self) -> Option<&UiButtonPolygon> {
+        match self {
+            UiElement::Polygon(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_text(&self) -> Option<&UiButtonText> {
+        match self {
+            UiElement::Text(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn as_outline(&self) -> Option<&UiButtonOutline> {
+        match self {
+            UiElement::Outline(o) => Some(o),
+            _ => None,
+        }
+    }
+
     /// Get element kind name for descriptions
     pub fn kind_name(&self) -> &'static str {
         match self {
-            UiElement::Circle(_) => "circle",
-            UiElement::Text(_) => "text",
-            UiElement::Polygon(_) => "polygon",
-            UiElement::Handle(_) => "handle",
-            UiElement::Outline(_) => "outline",
+            UiElement::Circle(_) => "Circle",
+            UiElement::Text(_) => "Text",
+            UiElement::Polygon(_) => "Polygon",
+            UiElement::Handle(_) => "Handle",
+            UiElement::Outline(_) => "Outline",
         }
     }
     pub fn id(&self) -> &str {
@@ -231,6 +434,93 @@ impl UiElement {
             UiElement::Polygon(_) => ElementKind::Polygon,
             UiElement::Outline(_) => ElementKind::Outline,
             UiElement::Handle(_) => ElementKind::Handle,
+        }
+    }
+    pub fn resize(&mut self, scale: f32) {
+        match self {
+            UiElement::Text(t) => {
+                t.px = ((t.px as f32) * scale).round() as u16;
+
+                println!("Text size: {}", t.px)
+            }
+            UiElement::Circle(c) => {
+                c.radius *= scale;
+            }
+            UiElement::Outline(_) | UiElement::Handle(_) => {}
+            UiElement::Polygon(p) => {
+                // compute centroid
+                let mut cx = 0.0f32;
+                let mut cy = 0.0f32;
+                let count = p.vertices.len() as f32;
+                if count <= 0.0 {
+                    return;
+                }
+                for v in &p.vertices {
+                    cx += v.pos[0];
+                    cy += v.pos[1];
+                }
+                cx /= count;
+                cy /= count;
+
+                for v in &mut p.vertices {
+                    v.pos[0] = cx + (v.pos[0] - cx) * scale;
+                    v.pos[1] = cy + (v.pos[1] - cy) * scale;
+                }
+            }
+        }
+    }
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        match self {
+            UiElement::Text(t) => {
+                t.x += dx;
+                t.y += dy;
+            }
+            UiElement::Circle(c) => {
+                c.x += dx;
+                c.y += dy;
+            }
+            UiElement::Handle(h) => {
+                h.x += dx;
+                h.y += dy;
+            }
+            UiElement::Outline(o) => {
+                o.shape_data.x += dx;
+                o.shape_data.y += dy;
+            }
+            UiElement::Polygon(p) => {
+                for v in &mut p.vertices {
+                    v.pos[0] += dx;
+                    v.pos[1] += dy;
+                }
+            }
+        }
+    }
+    /// Replaces self if same variant and matching id. Returns true if replaced.
+    pub fn replace_if_matches(&mut self, new_state: &UiElement) -> bool {
+        match (self, new_state) {
+            (UiElement::Polygon(p), UiElement::Polygon(new_p)) if p.id == new_p.id => {
+                *p = new_p.clone();
+                true
+            }
+            (UiElement::Circle(c), UiElement::Circle(new_c)) if c.id == new_c.id => {
+                *c = new_c.clone();
+                true
+            }
+            (UiElement::Text(t), UiElement::Text(new_t)) if t.id == new_t.id => {
+                *t = new_t.clone();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn mark_dirty(&self, dirty: &mut LayerDirty) {
+        match self {
+            UiElement::Polygon(_) => dirty.mark_polygons(),
+            UiElement::Circle(_) => dirty.mark_circles(),
+            UiElement::Text(_) => dirty.mark_texts(),
+            UiElement::Handle(_) => dirty.mark_handles(),
+            UiElement::Outline(_) => dirty.mark_outlines(),
         }
     }
 }
@@ -377,7 +667,7 @@ pub struct PolygonEdgeGpu {
 
 // For text — pos + uv + color
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct UiVertexText {
     pub pos: [f32; 2],
     pub uv: [f32; 2],
@@ -413,11 +703,7 @@ impl UiVertexText {
 pub struct RuntimeLayer {
     pub name: String,
     pub order: u32,
-    pub texts: Vec<UiButtonText>,
-    pub circles: Vec<UiButtonCircle>,
-    pub outlines: Vec<UiButtonOutline>,
-    pub handles: Vec<UiButtonHandle>,
-    pub polygons: Vec<UiButtonPolygon>,
+    pub elements: Vec<UiElement>,
     pub active: bool,
     // NEW: cached GPU data!!!
     pub cache: LayerCache,
@@ -426,43 +712,6 @@ pub struct RuntimeLayer {
     pub gpu: LayerGpu,
     pub opaque: bool,
     pub saveable: bool,
-}
-
-pub enum UiElementRef<'a> {
-    Text(&'a UiButtonText),
-    Circle(&'a UiButtonCircle),
-    Outline(&'a UiButtonOutline),
-    Handle(&'a UiButtonHandle),
-    Polygon(&'a UiButtonPolygon),
-}
-
-impl<'a> UiElementRef<'a> {
-    pub fn id(&self) -> &str {
-        match self {
-            UiElementRef::Text(t) => t.id.as_deref().unwrap_or(""),
-            UiElementRef::Circle(c) => c.id.as_deref().unwrap_or(""),
-            UiElementRef::Outline(o) => o.id.as_deref().unwrap_or(""),
-            UiElementRef::Handle(h) => h.id.as_deref().unwrap_or(""),
-            UiElementRef::Polygon(p) => p.id.as_deref().unwrap_or(""),
-        }
-    }
-
-    pub fn center(&self) -> (f32, f32) {
-        match self {
-            UiElementRef::Text(t) => (t.x, t.y),
-            UiElementRef::Circle(c) => (c.x, c.y),
-            UiElementRef::Handle(h) => (h.x, h.y),
-            UiElementRef::Outline(o) => (o.shape_data.x, o.shape_data.y),
-            UiElementRef::Polygon(p) => {
-                let count = p.vertices.len().max(1);
-                let sum = p
-                    .vertices
-                    .iter()
-                    .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-                (sum.0 / count as f32, sum.1 / count as f32)
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,220 +723,118 @@ pub enum ElementKind {
     Polygon,
     None,
 }
-
+impl From<&UiElement> for ElementKind {
+    fn from(element: &UiElement) -> Self {
+        match element {
+            UiElement::Circle(_) => ElementKind::Circle,
+            UiElement::Handle(_) => ElementKind::Handle,
+            UiElement::Polygon(_) => ElementKind::Polygon,
+            UiElement::Text(_) => ElementKind::Text,
+            UiElement::Outline(_) => ElementKind::Outline,
+        }
+    }
+}
 impl std::fmt::Display for ElementKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
-pub enum UiElementMut<'a> {
-    Text(&'a mut UiButtonText),
-    Circle(&'a mut UiButtonCircle),
-    Outline(&'a mut UiButtonOutline),
-    Handle(&'a mut UiButtonHandle),
-    Polygon(&'a mut UiButtonPolygon),
-}
-
-impl<'a> UiElementMut<'a> {
-    pub fn id(&self) -> &str {
-        match self {
-            UiElementMut::Text(t) => t.id.as_deref().unwrap_or(""),
-            UiElementMut::Circle(c) => c.id.as_deref().unwrap_or(""),
-            UiElementMut::Outline(o) => o.id.as_deref().unwrap_or(""),
-            UiElementMut::Handle(h) => h.id.as_deref().unwrap_or(""),
-            UiElementMut::Polygon(p) => p.id.as_deref().unwrap_or(""),
-        }
-    }
-
-    pub fn center(&self) -> (f32, f32) {
-        match self {
-            UiElementMut::Text(t) => (t.x, t.y),
-            UiElementMut::Circle(c) => (c.x, c.y),
-            UiElementMut::Handle(h) => (h.x, h.y),
-            UiElementMut::Outline(o) => (o.shape_data.x, o.shape_data.y),
-            UiElementMut::Polygon(p) => {
-                let count = p.vertices.len().max(1);
-                let sum = p
-                    .vertices
-                    .iter()
-                    .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-                (sum.0 / count as f32, sum.1 / count as f32)
-            }
-        }
-    }
-
-    pub fn bump_z(&mut self, delta: i32) {
-        todo!()
-    }
-
-    pub fn translate(&mut self, dx: f32, dy: f32) {
-        match self {
-            UiElementMut::Text(t) => {
-                t.x += dx;
-                t.y += dy;
-            }
-            UiElementMut::Circle(c) => {
-                c.x += dx;
-                c.y += dy;
-            }
-            UiElementMut::Handle(h) => {
-                h.x += dx;
-                h.y += dy;
-            }
-            UiElementMut::Outline(o) => {
-                o.shape_data.x += dx;
-                o.shape_data.y += dy;
-            }
-            UiElementMut::Polygon(p) => {
-                for v in &mut p.vertices {
-                    v.pos[0] += dx;
-                    v.pos[1] += dy;
-                }
-            }
-        }
-    }
-
-    //noinspection GrazieStyle
-    pub fn resize(&mut self, scale: f32) {
-        match self {
-            UiElementMut::Text(t) => {
-                // preserve previous intent: px scaled as float then cast back to u16
-                t.px = ((t.px as f32) * scale).round() as u16;
-
-                println!("Text size: {}", t.px)
-            }
-            UiElementMut::Circle(c) => {
-                c.radius *= scale;
-            }
-            UiElementMut::Outline(_) | UiElementMut::Handle(_) => {
-                // outlines and handles have no generic resize behavior here.
-                // If you want, implement per-field scaling.
-            }
-            UiElementMut::Polygon(p) => {
-                // compute centroid
-                let mut cx = 0.0f32;
-                let mut cy = 0.0f32;
-                let count = p.vertices.len() as f32;
-                if count > 0.0 {
-                    for v in &p.vertices {
-                        cx += v.pos[0];
-                        cy += v.pos[1];
-                    }
-                    cx /= count;
-                    cy /= count;
-
-                    for v in &mut p.vertices {
-                        v.pos[0] = cx + (v.pos[0] - cx) * scale;
-                        v.pos[1] = cy + (v.pos[1] - cy) * scale;
-                    }
-                }
-            }
-        }
-    }
-}
 
 impl RuntimeLayer {
-    pub fn iter_all_elements(&self) -> impl Iterator<Item = (UiElementRef<'_>, ElementKind)> {
-        self.texts
-            .iter()
-            .map(|t| (UiElementRef::Text(t), ElementKind::Text))
-            .chain(
-                self.circles
-                    .iter()
-                    .map(|c| (UiElementRef::Circle(c), ElementKind::Circle)),
-            )
-            .chain(
-                self.outlines
-                    .iter()
-                    .map(|o| (UiElementRef::Outline(o), ElementKind::Outline)),
-            )
-            .chain(
-                self.handles
-                    .iter()
-                    .map(|h| (UiElementRef::Handle(h), ElementKind::Handle)),
-            )
-            .chain(
-                self.polygons
-                    .iter()
-                    .map(|p| (UiElementRef::Polygon(p), ElementKind::Polygon)),
-            )
-    }
-
-    pub fn iter_all_elements_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(UiElementMut<'_>, ElementKind),
-    {
-        for t in &mut self.texts {
-            f(UiElementMut::Text(t), ElementKind::Text);
-        }
-        for c in &mut self.circles {
-            f(UiElementMut::Circle(c), ElementKind::Circle);
-        }
-        for o in &mut self.outlines {
-            f(UiElementMut::Outline(o), ElementKind::Outline);
-        }
-        for h in &mut self.handles {
-            f(UiElementMut::Handle(h), ElementKind::Handle);
-        }
-        for p in &mut self.polygons {
-            f(UiElementMut::Polygon(p), ElementKind::Polygon);
-        }
-    }
-
     pub fn bump_element_z(&mut self, id: &str, delta: i32) {
-        self.iter_all_elements_mut(|mut elem, _| {
-            if elem.id() == id {
-                elem.bump_z(delta);
-            }
-        });
+        let len = self.elements.len();
+        let Some(idx) = self.elements.iter().position(|e| e.id() == id) else {
+            return;
+        };
+
+        let new_idx = (idx as i32 + delta).clamp(0, (len - 1) as i32) as usize;
+
+        if idx == new_idx {
+            return;
+        }
+
+        let element = self.elements.remove(idx);
+        self.elements.insert(new_idx, element);
     }
 
     // simplified bump_element_xy using the helper
     pub fn bump_element_xy(&mut self, id: &str, dx: f32, dy: f32) {
-        if let Some(mut el) = self.find_element_mut(id) {
+        if let Some(el) = self.find_element_mut(id) {
             el.translate(dx, dy);
         }
     }
 
     // simplified resize_element using the helper
     pub fn resize_element(&mut self, id: &str, scale: f32) {
-        if let Some(mut el) = self.find_element_mut(id) {
+        if let Some(el) = self.find_element_mut(id) {
             el.resize(scale);
         }
     }
-    pub fn find_element_mut(&mut self, id: &str) -> Option<UiElementMut<'_>> {
-        if let Some(e) = self.texts.iter_mut().find(|e| e.id.as_deref() == Some(id)) {
-            return Some(UiElementMut::Text(e));
+    pub fn find_element_mut(&mut self, id: &str) -> Option<&mut UiElement> {
+        self.elements.iter_mut().find(|e| e.id() == id)
+    }
+
+    pub fn iter_circles(&self) -> impl Iterator<Item = &UiButtonCircle> {
+        self.elements.iter().filter_map(UiElement::as_circle)
+    }
+
+    pub fn iter_handles(&self) -> impl Iterator<Item = &UiButtonHandle> {
+        self.elements.iter().filter_map(UiElement::as_handle)
+    }
+
+    pub fn iter_polygons(&self) -> impl Iterator<Item = &UiButtonPolygon> {
+        self.elements.iter().filter_map(UiElement::as_polygon)
+    }
+
+    pub fn iter_texts(&self) -> impl Iterator<Item = &UiButtonText> {
+        self.elements.iter().filter_map(UiElement::as_text)
+    }
+
+    pub fn iter_outlines(&self) -> impl Iterator<Item = &UiButtonOutline> {
+        self.elements.iter().filter_map(UiElement::as_outline)
+    }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = &UiElement> {
+        self.elements.iter()
+    }
+
+    pub fn iter_all_mut(&mut self) -> impl Iterator<Item = &mut UiElement> {
+        self.elements.iter_mut()
+    }
+    /// Clear all Circle elements
+    pub fn clear_circles(&mut self) {
+        self.elements.retain(|e| !matches!(e, UiElement::Circle(_)));
+    }
+
+    /// Clear all Handle elements
+    pub fn clear_handles(&mut self) {
+        self.elements.retain(|e| !matches!(e, UiElement::Handle(_)));
+    }
+
+    /// Clear all Polygon elements
+    pub fn clear_polygons(&mut self) {
+        self.elements
+            .retain(|e| !matches!(e, UiElement::Polygon(_)));
+    }
+
+    /// Clear all Text elements
+    pub fn clear_texts(&mut self) {
+        self.elements.retain(|e| !matches!(e, UiElement::Text(_)));
+    }
+
+    /// Clear all Outline elements
+    pub fn clear_outlines(&mut self) {
+        self.elements
+            .retain(|e| !matches!(e, UiElement::Outline(_)));
+    }
+    pub fn replace_element(&mut self, new_state: &UiElement) -> bool {
+        for elem in &mut self.elements {
+            if elem.replace_if_matches(new_state) {
+                new_state.mark_dirty(&mut self.dirty);
+                return true;
+            }
         }
-        if let Some(e) = self
-            .circles
-            .iter_mut()
-            .find(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(UiElementMut::Circle(e));
-        }
-        if let Some(e) = self
-            .outlines
-            .iter_mut()
-            .find(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(UiElementMut::Outline(e));
-        }
-        if let Some(e) = self
-            .handles
-            .iter_mut()
-            .find(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(UiElementMut::Handle(e));
-        }
-        if let Some(e) = self
-            .polygons
-            .iter_mut()
-            .find(|e| e.id.as_deref() == Some(id))
-        {
-            return Some(UiElementMut::Polygon(e));
-        }
-        None
+        false
     }
 }
 
@@ -695,11 +842,7 @@ impl RuntimeLayer {
 pub struct UiLayerJson {
     pub name: String,
     pub order: u32,
-    pub texts: Option<Vec<UiButtonTextJson>>,
-    pub circles: Option<Vec<UiButtonCircleJson>>,
-    pub outlines: Option<Vec<UiButtonOutlineJson>>,
-    pub handles: Option<Vec<UiButtonHandleJson>>,
-    pub polygons: Option<Vec<UiButtonPolygonJson>>,
+    pub elements: Option<Vec<UiElementJson>>,
     pub active: Option<bool>,
     pub opaque: Option<bool>,
 }
@@ -1191,18 +1334,14 @@ impl UiButtonOutline {
 }
 
 impl UiButtonPolygon {
-    pub(crate) fn from_json(
-        p: UiButtonPolygonJson,
-        id_gen: &mut usize,
-        window_size: PhysicalSize<u32>,
-    ) -> Self {
+    pub(crate) fn from_json(p: UiButtonPolygonJson, window_size: PhysicalSize<u32>) -> Self {
+        let mut id_gen = 1;
         let mut verts: Vec<UiVertex> = p
             .vertices
             .into_iter()
             .map(|vj| {
-                let id = *id_gen;
-                *id_gen += 1;
-                UiVertex::from_json(vj, id, window_size)
+                id_gen += 1;
+                UiVertex::from_json(vj, id_gen, window_size)
             })
             .collect();
 

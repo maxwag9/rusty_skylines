@@ -111,10 +111,9 @@ fn get_picker_circles(loader: &UiButtonLoader) -> Option<(CircleSnapshot, Circle
         .iter()
         .find(|l| l.name == "Color Picker")?;
 
-    let hue = layer.circles.iter().find(|c| c.style == "Hue Circle")?;
+    let hue = layer.iter_circles().find(|c| c.style == "Hue Circle")?;
     let handle = layer
-        .circles
-        .iter()
+        .iter_circles()
         .find(|c| c.id.as_deref() == Some("color picker handle circle"))?;
 
     Some((
@@ -302,9 +301,9 @@ fn apply_to_multi_selection(loader: &mut UiButtonLoader, color: [f32; 4]) {
         .cloned()
         .collect();
 
-    for elem in elements {
-        if let Some(menu) = loader.menus.get_mut(&elem.menu_name) {
-            menu.change_element_color(&elem.layer_name, &elem.element_id, elem.element_type, color);
-        }
-    }
+    // for elem in elements {
+    //     if let Some(menu) = loader.menus.get_mut(&elem.menu_name) {
+    //         menu.change_element_color(&elem.layer_name, &elem.element_id, elem.element_type(&loader.menus), color);
+    //     }
+    // }
 }

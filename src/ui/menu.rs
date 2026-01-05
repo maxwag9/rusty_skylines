@@ -11,47 +11,34 @@ pub struct Menu {
 }
 
 impl Menu {
-    pub fn get_element(&mut self, layer_name: &str, element_id: &str) -> Option<UiElement> {
+    pub fn get_element(&self, layer_name: &str, element_id: &str) -> Option<UiElement> {
         let layer = self.layers.iter().find(|l| l.name == layer_name)?;
 
-        if let Some(c) = layer
-            .circles
-            .iter()
-            .find(|c| c.id.as_deref() == Some(element_id))
-        {
-            return Some(UiElement::Circle(c.clone()));
-        }
-        if let Some(t) = layer
-            .texts
-            .iter()
-            .find(|t| t.id.as_deref() == Some(element_id))
-        {
-            return Some(UiElement::Text(t.clone()));
-        }
-        if let Some(p) = layer
-            .polygons
-            .iter()
-            .find(|p| p.id.as_deref() == Some(element_id))
-        {
-            return Some(UiElement::Polygon(p.clone()));
-        }
-        if let Some(h) = layer
-            .handles
-            .iter()
-            .find(|h| h.id.as_deref() == Some(element_id))
-        {
-            return Some(UiElement::Handle(h.clone()));
-        }
-        if let Some(o) = layer
-            .outlines
-            .iter()
-            .find(|o| o.id.as_deref() == Some(element_id))
-        {
-            return Some(UiElement::Outline(o.clone()));
-        }
+        layer.elements.iter().find_map(|e| match e {
+            UiElement::Circle(c) if c.id.as_deref() == Some(element_id) => {
+                Some(UiElement::Circle(c.clone()))
+            }
 
-        None
+            UiElement::Text(t) if t.id.as_deref() == Some(element_id) => {
+                Some(UiElement::Text(t.clone()))
+            }
+
+            UiElement::Polygon(p) if p.id.as_deref() == Some(element_id) => {
+                Some(UiElement::Polygon(p.clone()))
+            }
+
+            UiElement::Handle(h) if h.id.as_deref() == Some(element_id) => {
+                Some(UiElement::Handle(h.clone()))
+            }
+
+            UiElement::Outline(o) if o.id.as_deref() == Some(element_id) => {
+                Some(UiElement::Outline(o.clone()))
+            }
+
+            _ => None,
+        })
     }
+
     pub fn rebuild_layer_cache_index(&mut self, layer_index: usize, runtime: &UiRuntime) {
         let (before, rest) = self.layers.split_at_mut(layer_index);
         let (layer, after) = rest.split_first_mut().unwrap();
@@ -63,6 +50,8 @@ impl Menu {
 
         let outlines_dirty = dirty.outlines || dirty.polygons;
         let mut rebuilt = LayerDirty::none();
+
+        init_cache_structure(layer);
 
         if dirty.texts {
             rebuild_text_cache(layer, &mut rebuilt, runtime);
@@ -126,14 +115,14 @@ impl Menu {
         match element_type {
             ElementKind::Polygon => {
                 if let Some(p) = layer
-                    .polygons
+                    .elements
                     .iter_mut()
+                    .filter_map(UiElement::as_polygon_mut)
                     .find(|p| p.id.as_deref() == Some(element_id))
                 {
                     for v in p.vertices.iter_mut() {
                         v.color = new_color;
                     }
-
                     layer.dirty.mark_polygons();
                     return true;
                 }
@@ -141,8 +130,9 @@ impl Menu {
 
             ElementKind::Circle => {
                 if let Some(c) = layer
-                    .circles
+                    .elements
                     .iter_mut()
+                    .filter_map(UiElement::as_circle_mut)
                     .find(|c| c.id.as_deref() == Some(element_id))
                 {
                     c.fill_color = new_color.into();
@@ -153,8 +143,9 @@ impl Menu {
 
             ElementKind::Text => {
                 if let Some(t) = layer
-                    .texts
+                    .elements
                     .iter_mut()
+                    .filter_map(UiElement::as_text_mut)
                     .find(|t| t.id.as_deref() == Some(element_id))
                 {
                     t.color = new_color;
@@ -163,9 +154,7 @@ impl Menu {
                 }
             }
 
-            ElementKind::Outline => {}
-            ElementKind::Handle => {}
-            ElementKind::None => {}
+            ElementKind::Outline | ElementKind::Handle | ElementKind::None => {}
         }
 
         false
@@ -188,21 +177,19 @@ pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
         .find(|l| l.active && l.saveable && l.name == selected.layer_name)?;
 
     // Match element type
-    match selected.element_type {
+    match selected.element_type(&loader.menus) {
         ElementKind::Polygon => {
             let poly = layer
-                .polygons
-                .iter()
+                .iter_polygons()
                 .find(|p| p.id.as_deref() == Some(&selected.element_id))?;
 
-            // take color from first vertex (they are all the same in your system)
+            // take color from first vertex (but they are not all the same!!)
             poly.vertices.get(0).map(|v| v.color)
         }
 
         ElementKind::Circle => {
             let circle = layer
-                .circles
-                .iter()
+                .iter_circles()
                 .find(|c| c.id.as_deref() == Some(&selected.element_id))?;
 
             Some(circle.fill_color.into())
@@ -210,8 +197,7 @@ pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
 
         ElementKind::Text => {
             let text = layer
-                .texts
-                .iter()
+                .iter_texts()
                 .find(|t| t.id.as_deref() == Some(&selected.element_id))?;
 
             Some(text.color)

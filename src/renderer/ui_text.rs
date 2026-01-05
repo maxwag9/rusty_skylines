@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use wgpu::*;
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug)]
-pub(crate) enum Anchor {
+pub enum Anchor {
     TopLeft,
     Center,
     CenterLeft,

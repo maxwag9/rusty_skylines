@@ -1,5 +1,7 @@
+use crate::ui::menu::Menu;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::*;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct SelectedUiElement {
@@ -9,7 +11,6 @@ pub struct SelectedUiElement {
     pub active: bool,
     pub just_deselected: bool,
     pub dragging: bool,
-    pub element_type: ElementKind,
     pub just_selected: bool,
     pub action_name: String,
     pub input_box: bool,
@@ -24,17 +25,24 @@ impl SelectedUiElement {
             active: false,
             just_deselected: true,
             dragging: false,
-            element_type: ElementKind::None,
             just_selected: false,
             action_name: "None".to_string(),
             input_box: false,
         }
     }
+    pub fn element_type(&self, menus: &HashMap<String, Menu>) -> ElementKind {
+        menus
+            .get(&self.menu_name)
+            .and_then(|menu| menu.layers.iter().find(|l| l.name == self.layer_name))
+            .and_then(|layer| layer.iter_all().find(|e| e.id() == &self.element_id))
+            .map(ElementKind::from)
+            .unwrap_or(ElementKind::None)
+    }
 }
 
 pub fn select_ui_element(loader: &mut UiButtonLoader, s: SelectedUiElement) {
     loader.ui_runtime.selected_ui_element_multi.clear();
-    loader.ui_runtime.selected_ui_element_primary = make_selected_element(&s);
+    loader.ui_runtime.selected_ui_element_primary = make_selected_element(&loader.menus, &s);
     loader.variables.set_string(
         "selected_menu",
         loader
@@ -66,7 +74,7 @@ pub fn select_to_multi(loader: &mut UiButtonLoader, s: SelectedUiElement) {
     loader
         .ui_runtime
         .selected_ui_element_multi
-        .push(make_selected_element(&s));
+        .push(make_selected_element(&loader.menus, &s));
 }
 
 pub fn select_move_primary_to_multi(loader: &mut UiButtonLoader, s: SelectedUiElement) {
@@ -75,7 +83,7 @@ pub fn select_move_primary_to_multi(loader: &mut UiButtonLoader, s: SelectedUiEl
         .selected_ui_element_multi
         .push(loader.ui_runtime.selected_ui_element_primary.clone());
 
-    loader.ui_runtime.selected_ui_element_primary = make_selected_element(&s);
+    loader.ui_runtime.selected_ui_element_primary = make_selected_element(&loader.menus, &s);
     println!(
         "Selected multi: {:?}, Selected primary: {:?}",
         loader.ui_runtime.selected_ui_element_multi[0].element_id,
@@ -84,20 +92,22 @@ pub fn select_move_primary_to_multi(loader: &mut UiButtonLoader, s: SelectedUiEl
     loader.update_selection()
 }
 
-pub fn make_selected_element(s: &SelectedUiElement) -> SelectedUiElement {
+pub fn make_selected_element(
+    menus: &HashMap<String, Menu>,
+    s: &SelectedUiElement,
+) -> SelectedUiElement {
     SelectedUiElement {
         menu_name: s.menu_name.clone(),
         layer_name: s.layer_name.clone(),
         element_id: s.element_id.clone(),
         active: true,
-        just_deselected: if s.element_type == ElementKind::None {
+        just_deselected: if s.element_type(menus) == ElementKind::None {
             true
         } else {
             false
         },
         dragging: s.dragging,
-        element_type: s.element_type,
-        just_selected: if s.element_type == ElementKind::None {
+        just_selected: if s.element_type(menus) == ElementKind::None {
             false
         } else {
             true
@@ -130,7 +140,7 @@ pub fn deselect_everything(loader: &mut UiButtonLoader) {
     loader.ui_runtime.editing_text = false;
     for (_, menu) in loader.menus.iter_mut() {
         for layer in menu.layers.iter_mut() {
-            for text in &mut layer.texts {
+            for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
                 text.being_edited = false;
                 text.clear_selection();
             }

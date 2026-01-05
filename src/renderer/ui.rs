@@ -148,7 +148,7 @@ impl Default for PolygonOutlineParams {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TextParams {
     pub pos: [f32; 2],
     pub px: u16,
@@ -164,6 +164,27 @@ pub struct TextParams {
     pub anchor: Option<Anchor>,
 }
 
+impl Default for TextParams {
+    fn default() -> Self {
+        Self {
+            pos: [0.0, 0.0],
+            px: 0,
+            color: [0.0, 0.0, 0.0, 0.0],
+            id_hash: 0.0,
+            misc: [0.0; 4], // active, touched_time, is_touched, id_hash
+
+            text: "".to_string(),
+            natural_width: 20.0,
+            natural_height: 10.0,
+            id: None,
+            caret: 0,
+            glyph_bounds: vec![],
+            anchor: None,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct DrawCmd<'a> {
     pub pipeline: &'a RenderPipeline,
     pub bind_group0: &'a BindGroup,
@@ -247,6 +268,7 @@ impl UiRenderer {
         for (_, menu) in ui.menus.iter().filter(|(_, menu)| menu.active) {
             for layer in menu.layers.iter().filter(|l| l.active) {
                 let mut cmds: Vec<DrawCmd> = Vec::new();
+
                 if layer.gpu.circle_count > 0 {
                     let circle_bg = self.device.create_bind_group(&BindGroupDescriptor {
                         label: None,
@@ -257,23 +279,26 @@ impl UiRenderer {
                         }],
                     });
 
-                    for (idx, _) in layer.circles.iter().enumerate() {
+                    // use the Layer iterator for circles
+                    for (idx, _) in layer.iter_circles().enumerate() {
+                        let idx_u = idx as u32;
+                        let circle_bg_clone = circle_bg.clone();
                         cmds.push(DrawCmd {
                             pipeline: &self.pipelines.circle_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(circle_bg.clone()),
+                            bind_group1: Some(circle_bg_clone.clone()),
                             vertex_buffer: Some(&self.pipelines.quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: idx as u32..idx as u32 + 1,
+                            instance_range: idx_u..idx_u + 1,
                         });
 
                         cmds.push(DrawCmd {
                             pipeline: &self.pipelines.glow_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(circle_bg.clone()),
+                            bind_group1: Some(circle_bg_clone),
                             vertex_buffer: Some(&self.pipelines.quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: idx as u32..idx as u32 + 1,
+                            instance_range: idx_u..idx_u + 1,
                         });
                     }
                 }
@@ -288,20 +313,21 @@ impl UiRenderer {
                         }],
                     });
 
-                    for (idx, _) in layer.handles.iter().enumerate() {
+                    for (idx, _) in layer.iter_handles().enumerate() {
+                        let idx_u = idx as u32;
                         cmds.push(DrawCmd {
                             pipeline: &self.pipelines.handle_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(handle_bg.clone()),
                             vertex_buffer: Some(&self.pipelines.handle_quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: idx as u32..idx as u32 + 1,
+                            instance_range: idx_u..idx_u + 1,
                         });
                     }
                 }
 
                 if layer.gpu.poly_count > 0 {
-                    let mut offset = 0u32;
+                    let mut offset: u32 = 0;
 
                     let poly_bg = if let (Some(info), Some(edges)) =
                         (&layer.gpu.poly_info_ssbo, &layer.gpu.poly_edge_ssbo)
@@ -325,9 +351,9 @@ impl UiRenderer {
                     };
 
                     if let Some(poly_vbo) = &layer.gpu.poly_vbo {
-                        for p in layer.polygons.iter() {
-                            let count = p.tri_count * 3;
-
+                        // use the Layer iterator for polygons
+                        for p in layer.iter_polygons() {
+                            let count = (p.tri_count).saturating_mul(3);
                             cmds.push(DrawCmd {
                                 pipeline: &self.pipelines.polygon_pipeline,
                                 bind_group0: &self.pipelines.uniform_bind_group,
@@ -336,8 +362,7 @@ impl UiRenderer {
                                 vertex_range: offset..offset + count,
                                 instance_range: 0..1,
                             });
-
-                            offset += count;
+                            offset = offset.saturating_add(count);
                         }
                     }
                 }
@@ -368,14 +393,15 @@ impl UiRenderer {
                         ],
                     });
 
-                    for (i, _) in layer.outlines.iter().enumerate() {
+                    for (i, _) in layer.iter_outlines().enumerate() {
+                        let i_u = i as u32;
                         cmds.push(DrawCmd {
                             pipeline: &self.pipelines.outline_pipeline,
                             bind_group0: &self.pipelines.uniform_bind_group,
                             bind_group1: Some(outline_bg.clone()),
                             vertex_buffer: Some(&self.pipelines.quad_buffer),
                             vertex_range: 0..4,
-                            instance_range: i as u32..i as u32 + 1,
+                            instance_range: i_u..i_u + 1,
                         });
                     }
                 }

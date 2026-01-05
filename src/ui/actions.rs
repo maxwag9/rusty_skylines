@@ -1130,7 +1130,6 @@ fn register_debug_actions(sys: &mut ActionSystem) {
         println!("  Menu: {}", sel.menu_name);
         println!("  Layer: {}", sel.layer_name);
         println!("  Element: {}", sel.element_id);
-        println!("  Type: {:?}", sel.element_type);
         println!("  Active: {}", sel.active);
         println!("  Dragging: {}", sel.dragging);
         ActionResult::Ok

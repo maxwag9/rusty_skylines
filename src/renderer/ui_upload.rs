@@ -1,17 +1,20 @@
-use crate::renderer::ui::UiRenderer;
+use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, UiRenderer};
 use crate::renderer::ui_text::{
     Anchor, anchor_to_top_left, glyphs_to_vertices, render_corner_brackets, render_editor_caret,
     render_editor_outline, render_selection,
 };
 use crate::resources::TimeSystem;
+use std::collections::HashMap;
 
 use crate::ui::ui_runtime::UiRuntime;
 use crate::ui::vertex::*;
 use wgpu::{BufferDescriptor, BufferUsages, Queue};
 
 pub fn upload_circles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
-    let circle_len = layer.cache.circle_params.len() as u32;
-    let circle_bytes = bytemuck::cast_slice(&layer.cache.circle_params);
+    let circle_params: Vec<CircleParams> = layer.cache.iter_circles().cloned().collect();
+
+    let circle_len = circle_params.len() as u32;
+    let circle_bytes = bytemuck::cast_slice(&circle_params);
     ui_renderer.write_storage_buffer(
         queue,
         &mut layer.gpu.circle_ssbo,
@@ -24,8 +27,10 @@ pub fn upload_circles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut R
 
 pub fn upload_outlines(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
     // 1. ShapeParams SSBO
-    let outline_len = layer.cache.outline_params.len() as u32;
-    let outline_bytes = bytemuck::cast_slice(&layer.cache.outline_params);
+    let outline_params: Vec<OutlineParams> = layer.cache.iter_outlines().cloned().collect();
+
+    let outline_len = outline_params.len() as u32;
+    let outline_bytes = bytemuck::cast_slice(&outline_params);
     ui_renderer.write_storage_buffer(
         queue,
         &mut layer.gpu.outline_shapes_ssbo,
@@ -63,8 +68,10 @@ pub fn upload_outlines(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
 }
 
 pub fn upload_handles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
-    let handle_len = layer.cache.handle_params.len() as u32;
-    let handle_bytes = bytemuck::cast_slice(&layer.cache.handle_params);
+    let handle_params: Vec<HandleParams> = layer.cache.iter_handles().cloned().collect();
+
+    let handle_len = handle_params.len() as u32;
+    let handle_bytes = bytemuck::cast_slice(&handle_params);
     ui_renderer.write_storage_buffer(
         queue,
         &mut layer.gpu.handle_ssbo,
@@ -77,9 +84,11 @@ pub fn upload_handles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut R
 
 pub fn upload_polygons(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
     // 1. Polygons (VBO)
-    let mut poly_vertices: Vec<UiVertexPoly> =
-        Vec::with_capacity(layer.cache.polygon_vertices.len());
-    poly_vertices.extend_from_slice(&layer.cache.polygon_vertices);
+    let mut poly_vertices: Vec<UiVertexPoly> = Vec::new();
+
+    for poly in layer.cache.iter_polygons() {
+        poly_vertices.extend_from_slice(poly);
+    }
 
     let poly_count = poly_vertices.len() as u32;
     if poly_count > 0 {
@@ -89,11 +98,11 @@ pub fn upload_polygons(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
     layer.gpu.poly_count = poly_count;
 
     // 2. Polygon infos and edges (SSBOs)
-    let mut infos: Vec<PolygonInfoGpu> = Vec::with_capacity(layer.polygons.len());
+    let mut infos: Vec<PolygonInfoGpu> = Vec::new();
     let mut edges: Vec<PolygonEdgeGpu> = Vec::new();
 
-    for poly in &layer.polygons {
-        // Uses the provided helper function
+    for poly in layer.iter_polygons() {
+        infos.reserve(1);
         crate::renderer::ui::make_poly_ssbo(&mut edges, poly, &mut infos);
     }
 
@@ -202,8 +211,16 @@ pub fn build_text_vertices(
     queue: &Queue,
 ) -> Vec<UiVertexText> {
     let mut text_vertices: Vec<UiVertexText> = Vec::new();
-
-    for tp in &mut layer.cache.texts {
+    let caret_by_id: HashMap<String, usize> = layer
+        .iter_texts()
+        .filter_map(|t| t.id.as_ref().map(|id| (id.clone(), t.caret)))
+        .collect();
+    for tp in layer
+        .cache
+        .elements
+        .iter_mut()
+        .filter_map(UiElementCache::as_text_mut)
+    {
         // ensure atlas has this size
         if !ui_renderer
             .pipelines
@@ -231,16 +248,8 @@ pub fn build_text_vertices(
 
         let pad = 4.0; // same as your selection outline pad
 
-        // find caret from original UiButtonText if present
-        let mut maybe_caret = None;
-        if let Some(ref text_id) = tp.id {
-            for original in &layer.texts {
-                if original.id.as_ref() == Some(text_id) {
-                    maybe_caret = Some(original.caret);
-                    break;
-                }
-            }
-        }
+        let maybe_caret = tp.id.as_ref().and_then(|id| caret_by_id.get(id).copied());
+
         let caret_index = maybe_caret.unwrap_or(tp.text.len());
         tp.glyph_bounds.clear();
 
@@ -265,9 +274,9 @@ pub fn build_text_vertices(
         // find mutable original text if needed (for writing glyph bounds back)
         let mut original_text: Option<&mut UiButtonText> = None;
         if let Some(ref text_id) = tp.id {
-            for o in &mut layer.texts {
-                if o.id.as_ref() == Some(text_id) {
-                    original_text = Some(o);
+            for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
+                if t.id.as_ref() == Some(text_id) {
+                    original_text = Some(t);
                     break;
                 }
             }

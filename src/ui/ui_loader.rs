@@ -141,26 +141,17 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
         polys.push(synth_polygon(rng));
     }
 
+    let mut elements = Vec::new();
+    elements.extend(texts.into_iter().map(UiElementJson::Text));
+    elements.extend(circles.into_iter().map(UiElementJson::Circle));
+    elements.extend(outlines.into_iter().map(UiElementJson::Outline));
+    elements.extend(handles.into_iter().map(UiElementJson::Handle));
+    elements.extend(polys.into_iter().map(UiElementJson::Polygon));
+
     UiLayerJson {
         name,
         order: order as u32,
-        texts: if texts.is_empty() { None } else { Some(texts) },
-        circles: if circles.is_empty() {
-            None
-        } else {
-            Some(circles)
-        },
-        outlines: if outlines.is_empty() {
-            None
-        } else {
-            Some(outlines)
-        },
-        handles: if handles.is_empty() {
-            None
-        } else {
-            Some(handles)
-        },
-        polygons: if polys.is_empty() { None } else { Some(polys) },
+        elements: Some(elements),
         active: Some(true),
         opaque: Some(rng.next_bool()),
     }

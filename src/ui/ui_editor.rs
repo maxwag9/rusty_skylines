@@ -14,12 +14,11 @@ use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::selections::{SelectedUiElement, deselect_everything};
 use crate::ui::touches::{
-    MouseSnapshot, apply_pending_circle_updates, find_top_hit, handle_editor_mode_interactions,
-    handle_scroll_resize, handle_text_editing, near_handle, press_began_on_ui,
+    MouseSnapshot, find_top_hit, handle_editor_mode_interactions, handle_scroll_resize,
+    handle_text_editing, near_handle, press_began_on_ui,
 };
 use crate::ui::ui_edit_manager::{
-    ChangeZIndexCommand, Command, ModifyPolygonCommand, MoveElementCommand, ResizeElementCommand,
-    UiEditManager,
+    Command, ModifyPolygonCommand, MoveElementCommand, ResizeElementCommand, UiEditManager,
 };
 use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::load_gui_from_file;
@@ -102,7 +101,6 @@ impl UiButtonLoader {
             eprintln!("❌ Failed to load GUI layout: {e}");
             GuiLayout { menus: vec![] }
         });
-
         let mut loader = Self {
             menus: Default::default(),
             ui_runtime: UiRuntime::new(editor_mode, override_mode, show_gui),
@@ -116,44 +114,15 @@ impl UiButtonLoader {
         };
 
         // Load menus from layout
-        let mut id_gen: usize = 1;
         for menu_json in layout.menus {
             let mut layers = Vec::new();
 
             for l in menu_json.layers {
-                let texts = l
-                    .texts
+                let elements = l
+                    .elements
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|t| UiButtonText::from_json(t, window_size))
-                    .collect();
-
-                let circles = l
-                    .circles
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|c| UiButtonCircle::from_json(c, window_size))
-                    .collect();
-
-                let outlines = l
-                    .outlines
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|o| UiButtonOutline::from_json(o, window_size))
-                    .collect();
-
-                let handles = l
-                    .handles
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|h| UiButtonHandle::from_json(h, window_size))
-                    .collect();
-
-                let polygons = l
-                    .polygons
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|p| UiButtonPolygon::from_json(p, &mut id_gen, window_size))
+                    .map(|t| UiElement::from_json(t, window_size))
                     .collect();
 
                 layers.push(RuntimeLayer {
@@ -161,11 +130,7 @@ impl UiButtonLoader {
                     order: l.order,
                     active: l.active.unwrap_or(true),
                     opaque: l.opaque.unwrap_or(false),
-                    texts,
-                    circles,
-                    outlines,
-                    handles,
-                    polygons,
+                    elements,
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
@@ -220,22 +185,19 @@ impl UiButtonLoader {
                 if !l.saveable {
                     continue;
                 }
+                let elements = Some(
+                    l.elements
+                        .iter()
+                        .map(|e| UiElement::to_json(&e, window_size))
+                        .collect::<Vec<_>>(),
+                );
 
                 layers.push(UiLayerJson {
                     name: l.name.clone(),
                     order: l.order,
                     active: Some(l.active),
                     opaque: Some(l.opaque),
-                    texts: Some(
-                        l.texts
-                            .iter()
-                            .map(|t: &UiButtonText| t.to_json(window_size))
-                            .collect(),
-                    ),
-                    circles: Some(l.circles.iter().map(|c| c.to_json(window_size)).collect()),
-                    outlines: Some(l.outlines.iter().map(|o| o.to_json(window_size)).collect()),
-                    handles: Some(l.handles.iter().map(|h| h.to_json(window_size)).collect()),
-                    polygons: Some(l.polygons.iter().map(|p| p.to_json(window_size)).collect()),
+                    elements,
                 });
             }
 
@@ -256,7 +218,7 @@ impl UiButtonLoader {
             for layer in &mut menu.layers {
                 let mut any_changed = false;
 
-                for t in &mut layer.texts {
+                for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
                     if self.ui_runtime.selected_ui_element_primary.just_deselected
                         || self.ui_runtime.selected_ui_element_primary.just_selected
                     {
@@ -356,10 +318,10 @@ impl UiButtonLoader {
                     .find(|l| l.name == "editor_selection")
                 {
                     editor_layer.active = false;
-                    editor_layer.circles.clear();
-                    editor_layer.outlines.clear();
-                    editor_layer.handles.clear();
-                    editor_layer.polygons.clear();
+                    editor_layer.clear_circles();
+                    editor_layer.clear_handles();
+                    editor_layer.clear_outlines();
+                    editor_layer.clear_polygons();
                     editor_layer.dirty.mark_all()
                 }
             }
@@ -393,10 +355,10 @@ impl UiButtonLoader {
                 {
                     editor_layer.active = true;
                     editor_layer.dirty.mark_all();
-                    editor_layer.circles.clear();
-                    editor_layer.outlines.clear();
-                    editor_layer.handles.clear();
-                    editor_layer.polygons.clear();
+                    editor_layer.clear_circles();
+                    editor_layer.clear_handles();
+                    editor_layer.clear_outlines();
+                    editor_layer.clear_polygons();
 
                     match element {
                         UiElement::Circle(c) => {
@@ -429,7 +391,9 @@ impl UiButtonLoader {
                                         border_thickness: 0.1 * c.radius,
                                     },
                                 };
-                                editor_layer.outlines.push(circle_outline);
+                                editor_layer
+                                    .elements
+                                    .push(UiElement::Outline(circle_outline));
 
                                 let handle = UiButtonHandle {
                                     id: Some("Circle Handle".to_string()),
@@ -460,7 +424,7 @@ impl UiButtonLoader {
                                         editable: false,
                                     },
                                 };
-                                editor_layer.handles.push(handle);
+                                editor_layer.elements.push(UiElement::Handle(handle));
                             }
                         }
                         UiElement::Handle(_h) => {}
@@ -509,7 +473,9 @@ impl UiButtonLoader {
                                             editable: false,
                                         },
                                     };
-                                    editor_layer.circles.push(vertex_outline);
+                                    editor_layer
+                                        .elements
+                                        .push(UiElement::Circle(vertex_outline));
                                 }
 
                                 let polygon_outline = UiButtonOutline {
@@ -540,7 +506,9 @@ impl UiButtonLoader {
                                         border_thickness: 2.0,
                                     },
                                 };
-                                editor_layer.outlines.push(polygon_outline);
+                                editor_layer
+                                    .elements
+                                    .push(UiElement::Outline(polygon_outline));
                             }
                         }
                         UiElement::Text(_tx) => {}
@@ -743,184 +711,11 @@ impl UiButtonLoader {
         self.end_drag();
     }
 
-    // ========================================================================
-    // ELEMENT POSITION/SIZE/COLOR SETTERS (for undo system)
-    // ========================================================================
-
-    pub fn set_element_position(
-        &mut self,
-        menu: &str,
-        layer: &str,
-        id: &str,
-        kind: ElementKind,
-        pos: (f32, f32),
-    ) {
-        let Some(menu) = self.menus.get_mut(menu) else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
-            return;
-        };
-
-        match kind {
-            ElementKind::Circle => {
-                if let Some(c) = layer
-                    .circles
-                    .iter_mut()
-                    .find(|c| c.id.as_deref() == Some(id))
-                {
-                    c.x = pos.0;
-                    c.y = pos.1;
-                    layer.dirty.mark_circles();
-                }
-            }
-            ElementKind::Text => {
-                if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
-                    t.x = pos.0;
-                    t.y = pos.1;
-                    layer.dirty.mark_texts();
-                }
-            }
-            ElementKind::Polygon => {
-                if let Some(p) = layer
-                    .polygons
-                    .iter_mut()
-                    .find(|p| p.id.as_deref() == Some(id))
-                {
-                    let (cx, cy) = p.center();
-                    let dx = pos.0 - cx;
-                    let dy = pos.1 - cy;
-                    for v in &mut p.vertices {
-                        v.pos[0] += dx;
-                        v.pos[1] += dy;
-                    }
-                    layer.dirty.mark_polygons();
-                }
-            }
-            ElementKind::Handle => {
-                if let Some(h) = layer
-                    .handles
-                    .iter_mut()
-                    .find(|h| h.id.as_deref() == Some(id))
-                {
-                    h.x = pos.0;
-                    h.y = pos.1;
-                    layer.dirty.mark_handles();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub fn set_element_size(
-        &mut self,
-        menu: &str,
-        layer: &str,
-        id: &str,
-        kind: ElementKind,
-        size: f32,
-    ) {
-        let Some(menu) = self.menus.get_mut(menu) else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
-            return;
-        };
-
-        match kind {
-            ElementKind::Circle => {
-                if let Some(c) = layer
-                    .circles
-                    .iter_mut()
-                    .find(|c| c.id.as_deref() == Some(id))
-                {
-                    c.radius = size.max(2.0);
-                    layer.dirty.mark_circles();
-                }
-            }
-            ElementKind::Text => {
-                if let Some(t) = layer.texts.iter_mut().find(|t| t.id.as_deref() == Some(id)) {
-                    t.px = size.max(4.0) as u16;
-                    layer.dirty.mark_texts();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Change z-index (internal, for undo system - does NOT record undo)
-    pub fn change_z_index(&mut self, menu: &str, layer: &str, id: &str, delta: i32) {
-        let Some(menu) = self.menus.get_mut(menu) else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
-            return;
-        };
-
-        layer.bump_element_z(id, delta);
-        layer.dirty.mark_all();
-    }
-
-    /// Change z-index with undo support
-    pub fn change_z_index_undoable(&mut self, menu: &str, layer: &str, id: &str, delta: i32) {
-        self.ui_edit_manager.push_command(ChangeZIndexCommand {
-            menu: menu.to_string(),
-            layer: layer.to_string(),
-            element_id: id.to_string(),
-            delta,
-        });
-
-        self.change_z_index(menu, layer, id, delta);
-    }
-
-    pub fn replace_circle(&mut self, menu: &str, layer: &str, new_state: &UiButtonCircle) {
-        let Some(menu) = self.menus.get_mut(menu) else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
-            return;
-        };
-
-        if let Some(c) = layer.circles.iter_mut().find(|c| c.id == new_state.id) {
-            *c = new_state.clone();
-            layer.dirty.mark_circles();
-        }
-    }
-
-    pub fn replace_text(&mut self, menu: &str, layer: &str, new_state: &UiButtonText) {
-        let Some(menu) = self.menus.get_mut(menu) else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
-            return;
-        };
-
-        if let Some(t) = layer.texts.iter_mut().find(|t| t.id == new_state.id) {
-            *t = new_state.clone();
-            layer.dirty.mark_texts();
-        }
-    }
-
-    pub fn replace_polygon(&mut self, menu: &str, layer: &str, new_state: &UiButtonPolygon) {
-        let Some(menu) = self.menus.get_mut(menu) else {
-            return;
-        };
-        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer) else {
-            return;
-        };
-
-        if let Some(p) = layer.polygons.iter_mut().find(|p| p.id == new_state.id) {
-            *p = new_state.clone();
-            layer.dirty.mark_polygons();
-        }
-    }
-
     fn get_polygon(&self, menu: &str, layer: &str, id: &str) -> Option<UiButtonPolygon> {
         let menu = self.menus.get(menu)?;
         let layer = menu.layers.iter().find(|l| l.name == layer)?;
         layer
-            .polygons
-            .iter()
+            .iter_polygons()
             .find(|p| p.id.as_deref() == Some(id))
             .cloned()
     }
@@ -1022,7 +817,6 @@ impl UiButtonLoader {
                 input_state,
                 mouse,
             );
-            apply_pending_circle_updates(self, dt, interaction.pending_circle_updates);
 
             if handle_scroll_resize(self, mouse.scroll) {
                 trigger_selection = true;
@@ -1241,11 +1035,7 @@ impl UiButtonLoader {
             order: 900,
             active: true,
             cache: LayerCache::default(),
-            texts: vec![],
-            circles: vec![],
-            outlines: vec![],
-            handles: vec![],
-            polygons: vec![],
+            elements: vec![],
             dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: true,
@@ -1257,11 +1047,7 @@ impl UiButtonLoader {
             order: 950,
             active: true,
             cache: LayerCache::default(),
-            texts: vec![],
-            circles: vec![],
-            outlines: vec![],
-            handles: vec![],
-            polygons: vec![],
+            elements: vec![],
             dirty: LayerDirty::all(),
             gpu: LayerGpu::default(),
             opaque: true,
@@ -1318,36 +1104,31 @@ pub fn get_element(
     let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
 
     if let Some(c) = layer
-        .circles
-        .iter()
+        .iter_circles()
         .find(|c| c.id.as_deref() == Some(element_id))
     {
         return Some(UiElement::Circle(c.clone()));
     }
     if let Some(t) = layer
-        .texts
-        .iter()
+        .iter_texts()
         .find(|t| t.id.as_deref() == Some(element_id))
     {
         return Some(UiElement::Text(t.clone()));
     }
     if let Some(p) = layer
-        .polygons
-        .iter()
+        .iter_polygons()
         .find(|p| p.id.as_deref() == Some(element_id))
     {
         return Some(UiElement::Polygon(p.clone()));
     }
     if let Some(h) = layer
-        .handles
-        .iter()
+        .iter_handles()
         .find(|h| h.id.as_deref() == Some(element_id))
     {
         return Some(UiElement::Handle(h.clone()));
     }
     if let Some(o) = layer
-        .outlines
-        .iter()
+        .iter_outlines()
         .find(|o| o.id.as_deref() == Some(element_id))
     {
         return Some(UiElement::Outline(o.clone()));
@@ -1380,18 +1161,15 @@ pub fn get_element_size(
 
     match kind {
         ElementKind::Circle => layer
-            .circles
-            .iter()
+            .iter_circles()
             .find(|c| c.id.as_deref() == Some(id))
             .map(|c| c.radius),
         ElementKind::Text => layer
-            .texts
-            .iter()
+            .iter_texts()
             .find(|t| t.id.as_deref() == Some(id))
             .map(|t| t.px as f32),
         ElementKind::Handle => layer
-            .handles
-            .iter()
+            .iter_handles()
             .find(|h| h.id.as_deref() == Some(id))
             .map(|h| h.radius),
         _ => None,
@@ -1408,8 +1186,7 @@ pub fn get_polygon_vertices(
     let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
 
     layer
-        .polygons
-        .iter()
+        .iter_polygons() // mutable iterator
         .find(|p| p.id.as_deref() == Some(id))
         .map(|p| p.vertices.iter().map(|v| v.pos).collect())
 }
