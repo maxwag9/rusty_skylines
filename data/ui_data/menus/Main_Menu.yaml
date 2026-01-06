@@ -1,0 +1,16 @@
+name: Main Menu
+layers:
+  - name: main_menu_buttons
+    order: 2
+    elements:
+      - !Text
+        id: play_text
+        x: 0.49419004
+        y: 0.48611
+        px: 0.016374864
+        color:
+          - 1.0
+          - 0.0
+          - 1.0
+          - 1.0
+        text: Play

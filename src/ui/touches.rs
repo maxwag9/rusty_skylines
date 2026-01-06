@@ -2613,3 +2613,20 @@ pub fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
         && (a[2] - b[2]).abs() < EPSILON
         && (a[3] - b[3]).abs() < EPSILON
 }
+
+// pub(crate) fn apply_pending_circle_updates(
+//     loader: &mut UiButtonLoader,
+//     dt: f32,
+//     pending_circle_updates: Vec<(String, f32, f32)>,
+// ) {
+//     for (parent_id, mx, my) in pending_circle_updates {
+//         let update_info = find_circle_update_info(loader, &parent_id, mx, my);
+//
+//         let Some((current_radius, target_radius)) = update_info else {
+//             continue;
+//         };
+//
+//         let new_radius = calculate_smoothed_radius(current_radius, target_radius, dt);
+//         loader.ui_edit_manager.
+//     }
+// }

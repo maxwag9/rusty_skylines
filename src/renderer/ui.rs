@@ -49,7 +49,7 @@ pub struct CircleParams {
 
     pub fade: f32,  // 0..1 for fade effect
     pub style: u32, // 0 = normal, 1 = hue circle, 2 = SV, etc.
-    pub inside_border_thickness: f32,
+    pub inside_border_thickness_percentage: f32,
     pub _pad: u32, // padding to maintain 16-byte alignment
 }
 
@@ -66,7 +66,7 @@ impl Default for CircleParams {
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
             fade: 0.0,
             style: 0,
-            inside_border_thickness: 0.0,
+            inside_border_thickness_percentage: 0.0,
             _pad: 1,
         }
     }

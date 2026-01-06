@@ -45,7 +45,7 @@ pub fn rebuild_circle_cache(
             let (rt, hash) = runtime_info(runtime, &c.id);
 
             *cached = CircleParams {
-                center_radius_border: [c.x, c.y, c.radius, c.border_thickness],
+                center_radius_border: [c.x, c.y, c.radius, c.border_thickness_percentage],
                 fill_color: c.fill_color,
                 inside_border_color: c.inside_border_color,
                 border_color: c.border_color,
@@ -64,7 +64,7 @@ pub fn rebuild_circle_cache(
                 ],
                 fade: c.fade,
                 style: style_to_u32(&c.style),
-                inside_border_thickness: c.inside_border_thickness,
+                inside_border_thickness_percentage: c.inside_border_thickness_percentage,
                 _pad: 1,
             };
         }

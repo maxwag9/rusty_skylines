@@ -276,12 +276,12 @@ impl Default for LayerDirty {
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub enum UiElementJson {
-    Circle(UiButtonCircleJson),
-    Handle(UiButtonHandleJson),
-    Polygon(UiButtonPolygonJson),
-    Text(UiButtonTextJson),
-    Outline(UiButtonOutlineJson),
+pub enum UiElementYaml {
+    Circle(UiButtonCircleYaml),
+    Handle(UiButtonHandleYaml),
+    Polygon(UiButtonPolygonYaml),
+    Text(UiButtonTextYaml),
+    Outline(UiButtonOutlineYaml),
 }
 #[derive(Debug, Clone)]
 pub enum UiElement {
@@ -293,33 +293,33 @@ pub enum UiElement {
 }
 
 impl UiElement {
-    pub(crate) fn from_json(element: UiElementJson, window_size: PhysicalSize<u32>) -> UiElement {
+    pub(crate) fn from_yaml(element: UiElementYaml, window_size: PhysicalSize<u32>) -> UiElement {
         match element {
-            UiElementJson::Circle(e) => {
-                UiElement::Circle(UiButtonCircle::from_json(e, window_size))
+            UiElementYaml::Circle(e) => {
+                UiElement::Circle(UiButtonCircle::from_yaml(e, window_size))
             }
-            UiElementJson::Handle(e) => {
-                UiElement::Handle(UiButtonHandle::from_json(e, window_size))
+            UiElementYaml::Handle(e) => {
+                UiElement::Handle(UiButtonHandle::from_yaml(e, window_size))
             }
-            UiElementJson::Polygon(e) => {
-                UiElement::Polygon(UiButtonPolygon::from_json(e, window_size))
+            UiElementYaml::Polygon(e) => {
+                UiElement::Polygon(UiButtonPolygon::from_yaml(e, window_size))
             }
-            UiElementJson::Text(e) => UiElement::Text(UiButtonText::from_json(e, window_size)),
-            UiElementJson::Outline(e) => {
-                UiElement::Outline(UiButtonOutline::from_json(e, window_size))
+            UiElementYaml::Text(e) => UiElement::Text(UiButtonText::from_yaml(e, window_size)),
+            UiElementYaml::Outline(e) => {
+                UiElement::Outline(UiButtonOutline::from_yaml(e, window_size))
             }
         }
     }
-    pub(crate) fn to_json(&self, window_size: PhysicalSize<u32>) -> UiElementJson {
+    pub(crate) fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiElementYaml {
         match self {
-            UiElement::Circle(e) => UiElementJson::Circle(UiButtonCircle::to_json(e, window_size)),
-            UiElement::Handle(e) => UiElementJson::Handle(UiButtonHandle::to_json(e, window_size)),
+            UiElement::Circle(e) => UiElementYaml::Circle(UiButtonCircle::to_yaml(e, window_size)),
+            UiElement::Handle(e) => UiElementYaml::Handle(UiButtonHandle::to_yaml(e, window_size)),
             UiElement::Polygon(e) => {
-                UiElementJson::Polygon(UiButtonPolygon::to_json(e, window_size))
+                UiElementYaml::Polygon(UiButtonPolygon::to_yaml(e, window_size))
             }
-            UiElement::Text(e) => UiElementJson::Text(UiButtonText::to_json(e, window_size)),
+            UiElement::Text(e) => UiElementYaml::Text(UiButtonText::to_yaml(e, window_size)),
             UiElement::Outline(e) => {
-                UiElementJson::Outline(UiButtonOutline::to_json(e, window_size))
+                UiElementYaml::Outline(UiButtonOutline::to_yaml(e, window_size))
             }
         }
     }
@@ -839,12 +839,37 @@ impl RuntimeLayer {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct UiLayerJson {
+#[serde(default)] // This tells serde to fill missing fields with defaults when loading
+pub struct UiLayerYaml {
     pub name: String,
+
+    #[serde(default, skip_serializing_if = "is_default")] // Skips if 0
     pub order: u32,
-    pub elements: Option<Vec<UiElementJson>>,
-    pub active: Option<bool>,
-    pub opaque: Option<bool>,
+
+    // Skips if None or Empty Vector
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elements: Option<Vec<UiElementYaml>>,
+
+    // Default is true. Skip if true.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub active: bool,
+
+    // Default is false. Skip if false.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub opaque: bool,
+}
+
+// Manual Default impl required because of the custom default values (like active=true)
+impl Default for UiLayerYaml {
+    fn default() -> Self {
+        Self {
+            name: "Layer".to_string(),
+            order: 0,
+            elements: None,
+            active: true,
+            opaque: false,
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -857,7 +882,7 @@ pub struct UiVertex {
 }
 
 impl UiVertex {
-    fn from_json(v: UiVertexJson, id: usize, window_size: PhysicalSize<u32>) -> Self {
+    fn from_yaml(v: UiVertexYaml, id: usize, window_size: PhysicalSize<u32>) -> Self {
         let mut pos = v.pos;
         pos[0] *= window_size.width as f32;
         pos[1] *= window_size.height as f32;
@@ -870,11 +895,11 @@ impl UiVertex {
         }
     }
 
-    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiVertexJson {
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiVertexYaml {
         let mut pos = self.pos;
         pos[0] /= window_size.width as f32;
         pos[1] /= window_size.height as f32;
-        UiVertexJson {
+        UiVertexYaml {
             pos,
             color: self.color,
             roundness: self.roundness,
@@ -882,29 +907,71 @@ impl UiVertex {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
-pub struct UiVertexJson {
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq)]
+#[serde(default)]
+pub struct UiVertexYaml {
+    // Position usually shouldn't be skipped as it defines the shape
     pub pos: [f32; 2],
     pub color: [f32; 4],
+
+    #[serde(skip_serializing_if = "is_default")]
     pub roundness: f32,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+impl Default for UiVertexYaml {
+    fn default() -> Self {
+        Self {
+            pos: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            roundness: 0.0,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[serde(default)]
 pub struct GlowMisc {
+    #[serde(skip_serializing_if = "is_default")]
     pub glow_size: f32,
+    #[serde(skip_serializing_if = "is_default")]
     pub glow_speed: f32,
+    #[serde(skip_serializing_if = "is_default")]
     pub glow_intensity: f32,
 }
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct DashMisc {
-    pub dash_len: f32,
-    pub dash_spacing: f32,
-    pub dash_roundness: f32,
-    pub dash_speed: f32,
+impl Default for GlowMisc {
+    fn default() -> Self {
+        Self {
+            glow_size: 0.0,
+            glow_speed: 0.0,
+            glow_intensity: 0.0,
+        }
+    }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[serde(default)]
+pub struct DashMisc {
+    #[serde(skip_serializing_if = "is_default")]
+    pub dash_len: f32,
+    #[serde(skip_serializing_if = "is_default")]
+    pub dash_spacing: f32,
+    #[serde(skip_serializing_if = "is_default")]
+    pub dash_roundness: f32,
+    #[serde(skip_serializing_if = "is_default")]
+    pub dash_speed: f32,
+}
+impl Default for DashMisc {
+    fn default() -> Self {
+        Self {
+            dash_len: 1.0,
+            dash_spacing: 10.0,
+            dash_roundness: 0.0,
+            dash_speed: 1.0,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct ShapeData {
     pub x: f32,
     pub y: f32,
@@ -940,7 +1007,7 @@ impl ShapeData {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct HandleMisc {
     pub handle_len: f32,
     pub handle_width: f32,
@@ -958,8 +1025,8 @@ pub struct MiscButtonSettings {
 }
 
 impl MiscButtonSettings {
-    pub fn to_json(&self) -> MiscButtonSettingsJson {
-        MiscButtonSettingsJson {
+    pub fn to_yaml(&self) -> MiscButtonSettingsYaml {
+        MiscButtonSettingsYaml {
             active: self.active,
             pressable: self.pressable,
             editable: self.editable,
@@ -967,22 +1034,32 @@ impl MiscButtonSettings {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct MiscButtonSettingsJson {
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct MiscButtonSettingsYaml {
     pub active: bool,
     pub pressable: bool,
     pub editable: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct GuiLayout {
-    pub menus: Vec<MenuJson>,
+impl Default for MiscButtonSettingsYaml {
+    fn default() -> Self {
+        Self {
+            active: true,
+            pressable: true,
+            editable: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct MenuJson {
+pub struct GuiLayout {
+    pub menus: Vec<MenuYaml>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MenuYaml {
     pub name: String,
-    pub layers: Vec<UiLayerJson>,
+    pub layers: Vec<UiLayerYaml>,
 }
 
 // --- all possible button shapes ---
@@ -1057,8 +1134,8 @@ pub struct UiButtonCircle {
     pub x: f32,
     pub y: f32,
     pub radius: f32,
-    pub inside_border_thickness: f32,
-    pub border_thickness: f32,
+    pub inside_border_thickness_percentage: f32,
+    pub border_thickness_percentage: f32,
     pub fade: f32,
     pub fill_color: [f32; 4],
     pub inside_border_color: [f32; 4],
@@ -1103,7 +1180,7 @@ pub struct UiButtonHandle {
 }
 
 impl UiButtonText {
-    pub(crate) fn from_json(t: UiButtonTextJson, window_size: PhysicalSize<u32>) -> Self {
+    pub(crate) fn from_yaml(t: UiButtonTextYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         let length = t.text.len();
         UiButtonText {
@@ -1149,9 +1226,9 @@ impl UiButtonText {
         }
     }
 
-    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonTextJson {
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonTextYaml {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        UiButtonTextJson {
+        UiButtonTextYaml {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
@@ -1179,7 +1256,7 @@ impl UiButtonText {
             px: self.px as f32 / scale,
             color: self.color,
             text: self.template.clone(),
-            misc: self.misc.to_json(),
+            misc: self.misc.to_yaml(),
             input_box: self.input_box,
             anchor: self.anchor,
         }
@@ -1187,17 +1264,18 @@ impl UiButtonText {
 }
 
 impl UiButtonCircle {
-    pub(crate) fn from_json(c: UiButtonCircleJson, window_size: PhysicalSize<u32>) -> Self {
+    pub(crate) fn from_yaml(c: UiButtonCircleYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let radius = scale * c.radius;
         UiButtonCircle {
             id: c.id,
             action: c.action,
             style: c.style,
             x: window_size.width as f32 * c.x,
             y: window_size.height as f32 * c.y,
-            radius: scale * c.radius,
-            inside_border_thickness: scale * c.inside_border_thickness,
-            border_thickness: scale * c.border_thickness,
+            radius,
+            inside_border_thickness_percentage: c.inside_border_thickness_percentage,
+            border_thickness_percentage: c.border_thickness_percentage,
             fade: c.fade,
             fill_color: c.fill_color,
             inside_border_color: c.inside_border_color,
@@ -1218,11 +1296,11 @@ impl UiButtonCircle {
         }
     }
 
-    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonCircleJson {
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonCircleYaml {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         let mut glow_misc = self.glow_misc.clone();
         glow_misc.glow_size /= scale;
-        UiButtonCircleJson {
+        UiButtonCircleYaml {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
@@ -1230,8 +1308,8 @@ impl UiButtonCircle {
             y: self.y / window_size.height as f32,
 
             radius: self.radius / scale,
-            inside_border_thickness: self.inside_border_thickness / scale,
-            border_thickness: self.border_thickness / scale,
+            inside_border_thickness_percentage: self.inside_border_thickness_percentage,
+            border_thickness_percentage: self.border_thickness_percentage,
 
             fade: self.fade,
             fill_color: self.fill_color,
@@ -1240,13 +1318,13 @@ impl UiButtonCircle {
             glow_color: self.glow_color,
             glow_misc,
 
-            misc: self.misc.to_json(),
+            misc: self.misc.to_yaml(),
         }
     }
 }
 
 impl UiButtonHandle {
-    pub(crate) fn from_json(h: UiButtonHandleJson, window_size: PhysicalSize<u32>) -> Self {
+    pub(crate) fn from_yaml(h: UiButtonHandleYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonHandle {
             id: h.id,
@@ -1269,9 +1347,9 @@ impl UiButtonHandle {
         }
     }
 
-    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonHandleJson {
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonHandleYaml {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        UiButtonHandleJson {
+        UiButtonHandleYaml {
             id: self.id.clone(),
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
@@ -1285,13 +1363,13 @@ impl UiButtonHandle {
             sub_handle_misc: self.sub_handle_misc.clone(),
 
             parent_id: self.parent_id.clone(),
-            misc: self.misc.to_json(),
+            misc: self.misc.to_yaml(),
         }
     }
 }
 
 impl UiButtonOutline {
-    pub(crate) fn from_json(o: UiButtonOutlineJson, window_size: PhysicalSize<u32>) -> Self {
+    pub(crate) fn from_yaml(o: UiButtonOutlineYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutline {
             id: o.id,
@@ -1314,9 +1392,9 @@ impl UiButtonOutline {
         }
     }
 
-    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonOutlineJson {
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonOutlineYaml {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        UiButtonOutlineJson {
+        UiButtonOutlineYaml {
             id: self.id.clone(),
             parent_id: self.parent_id.clone(),
 
@@ -1328,20 +1406,20 @@ impl UiButtonOutline {
             sub_dash_color: self.sub_dash_color,
             sub_dash_misc: self.sub_dash_misc.clone(),
 
-            misc: self.misc.to_json(),
+            misc: self.misc.to_yaml(),
         }
     }
 }
 
 impl UiButtonPolygon {
-    pub(crate) fn from_json(p: UiButtonPolygonJson, window_size: PhysicalSize<u32>) -> Self {
+    pub(crate) fn from_yaml(p: UiButtonPolygonYaml, window_size: PhysicalSize<u32>) -> Self {
         let mut id_gen = 1;
         let mut verts: Vec<UiVertex> = p
             .vertices
             .into_iter()
             .map(|vj| {
                 id_gen += 1;
-                UiVertex::from_json(vj, id_gen, window_size)
+                UiVertex::from_yaml(vj, id_gen, window_size)
             })
             .collect();
 
@@ -1363,8 +1441,8 @@ impl UiButtonPolygon {
         }
     }
 
-    pub fn to_json(&self, window_size: PhysicalSize<u32>) -> UiButtonPolygonJson {
-        UiButtonPolygonJson {
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonPolygonYaml {
+        UiButtonPolygonYaml {
             id: self.id.clone(),
             action: self.action.clone(),
             style: self.style.clone(),
@@ -1372,10 +1450,10 @@ impl UiButtonPolygon {
             vertices: self
                 .vertices
                 .iter()
-                .map(|v| v.to_json(window_size))
+                .map(|v| v.to_yaml(window_size))
                 .collect(),
 
-            misc: self.misc.to_json(),
+            misc: self.misc.to_yaml(),
         }
     }
 
@@ -1483,8 +1561,8 @@ impl Default for UiButtonCircle {
             x: 0.0,
             y: 0.0,
             radius: 10.0,
-            inside_border_thickness: 0.0,
-            border_thickness: 1.0,
+            inside_border_thickness_percentage: 0.0,
+            border_thickness_percentage: 1.0,
             fade: 0.0,
             fill_color: [1.0, 1.0, 1.0, 1.0],
             inside_border_color: [0.0, 0.0, 0.0, 1.0],
@@ -1528,27 +1606,6 @@ impl Default for UiButtonHandle {
             sub_handle_misc: HandleMisc::default(),
             misc: MiscButtonSettings::default(),
             parent_id: None,
-        }
-    }
-}
-
-impl Default for GlowMisc {
-    fn default() -> Self {
-        Self {
-            glow_size: 0.0,
-            glow_speed: 0.0,
-            glow_intensity: 0.0,
-        }
-    }
-}
-
-impl Default for DashMisc {
-    fn default() -> Self {
-        Self {
-            dash_len: 20.0,
-            dash_spacing: 10.0,
-            dash_roundness: 0.0,
-            dash_speed: 0.0,
         }
     }
 }
@@ -1599,79 +1656,314 @@ impl Default for UiVertex {
     }
 }
 
+// --- TEXT ---
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonTextJson {
+#[serde(default)]
+pub struct UiButtonTextYaml {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
     pub action: String,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
     pub style: String,
+
     pub x: f32,
     pub y: f32,
+
+    #[serde(skip_serializing_if = "is_zero_vec2")]
     pub top_left_offset: [f32; 2],
+    #[serde(skip_serializing_if = "is_zero_vec2")]
     pub bottom_left_offset: [f32; 2],
+    #[serde(skip_serializing_if = "is_zero_vec2")]
     pub top_right_offset: [f32; 2],
+    #[serde(skip_serializing_if = "is_zero_vec2")]
     pub bottom_right_offset: [f32; 2],
+
+    #[serde(skip_serializing_if = "is_default")]
     pub px: f32,
+
     pub color: [f32; 4],
     pub text: String,
-    pub misc: MiscButtonSettingsJson,
+
+    // If 'misc' matches defaults (active:true, pressable:false, editable:false),
+    // this entire block is removed from YAML.
+    #[serde(skip_serializing_if = "is_default")]
+    pub misc: MiscButtonSettingsYaml,
+
+    #[serde(skip_serializing_if = "is_default")]
     pub input_box: bool,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<Anchor>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonCircleJson {
-    pub id: Option<String>,
-    pub action: String,
-    pub style: String,
-    pub x: f32,                       // normalized 0.0-1.0 of screen width!
-    pub y: f32,                       // normalized 0.0-1.0 of screen height!
-    pub radius: f32,                  // normalized 0.0-1.0
-    pub inside_border_thickness: f32, // normalized 0.0-1.0
-    pub border_thickness: f32,        // normalized 0.0-1.0
-    pub fade: f32,                    // normalized 0.0-1.0
-    pub fill_color: [f32; 4],
-    pub inside_border_color: [f32; 4],
-    pub border_color: [f32; 4],
-    pub glow_color: [f32; 4],
-    pub glow_misc: GlowMisc, // normalized 0.0-1.0
-    pub misc: MiscButtonSettingsJson,
+impl Default for UiButtonTextYaml {
+    fn default() -> Self {
+        Self {
+            id: None,
+            action: "None".to_string(),
+            style: "None".to_string(),
+            x: 0.0,
+            y: 0.0,
+            top_left_offset: [0.0; 2],
+            bottom_left_offset: [0.0; 2],
+            top_right_offset: [0.0; 2],
+            bottom_right_offset: [0.0; 2],
+            px: 0.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            text: String::new(),
+            misc: MiscButtonSettingsYaml::default(),
+            input_box: false,
+            anchor: None,
+        }
+    }
 }
 
+// --- CIRCLE ---
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonHandleJson {
+#[serde(default)]
+pub struct UiButtonCircleYaml {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub action: String,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub style: String,
+
     pub x: f32,
     pub y: f32,
     pub radius: f32,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub inside_border_thickness_percentage: f32,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub border_thickness_percentage: f32,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub fade: f32,
+    #[serde(skip_serializing_if = "is_default")]
+    pub fill_color: [f32; 4],
+    #[serde(skip_serializing_if = "is_default")]
+    pub inside_border_color: [f32; 4],
+    #[serde(skip_serializing_if = "is_default")]
+    pub border_color: [f32; 4],
+
+    // Default implies [0,0,0,0] (transparent). Skip if so.
+    #[serde(skip_serializing_if = "is_default")]
+    pub glow_color: [f32; 4],
+
+    // If glow settings are all 0.0, remove block
+    #[serde(skip_serializing_if = "is_default")]
+    pub glow_misc: GlowMisc,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub misc: MiscButtonSettingsYaml,
+}
+
+impl Default for UiButtonCircleYaml {
+    fn default() -> Self {
+        Self {
+            id: None,
+            action: "None".to_string(),
+            style: "None".to_string(),
+            x: 0.0,
+            y: 0.0,
+            radius: 0.0,
+            inside_border_thickness_percentage: 0.0,
+            border_thickness_percentage: 0.0,
+            fade: 0.0,
+            fill_color: [1.0, 1.0, 1.0, 1.0],
+            inside_border_color: [0.0, 0.0, 0.0, 0.0],
+            border_color: [0.0, 0.0, 0.0, 0.0],
+            glow_color: [0.0, 0.0, 0.0, 0.0],
+            glow_misc: GlowMisc::default(),
+            misc: MiscButtonSettingsYaml::default(),
+        }
+    }
+}
+
+// --- HANDLE ---
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(default)]
+pub struct UiButtonHandleYaml {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    pub x: f32,
+    pub y: f32,
+    pub radius: f32,
+
+    #[serde(skip_serializing_if = "is_default")]
     pub handle_thickness: f32,
+
     pub handle_color: [f32; 4],
-    pub handle_misc: HandleMisc,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub handle_misc: HandleMisc, // Assuming HandleMisc exists and derives Default+PartialEq
+
     pub sub_handle_color: [f32; 4],
+
+    #[serde(skip_serializing_if = "is_default")]
     pub sub_handle_misc: HandleMisc,
-    pub misc: MiscButtonSettingsJson,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub misc: MiscButtonSettingsYaml,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
 }
 
+impl Default for UiButtonHandleYaml {
+    fn default() -> Self {
+        Self {
+            id: None,
+            x: 0.0,
+            y: 0.0,
+            radius: 0.0,
+            handle_thickness: 0.0,
+            handle_color: [1.0, 1.0, 1.0, 1.0],
+            handle_misc: HandleMisc::default(), // Ensure HandleMisc derives Default!
+            sub_handle_color: [1.0, 1.0, 1.0, 1.0],
+            sub_handle_misc: HandleMisc::default(),
+            misc: MiscButtonSettingsYaml::default(),
+            parent_id: None,
+        }
+    }
+}
+
+// --- OUTLINE ---
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonOutlineJson {
+#[serde(default)]
+pub struct UiButtonOutlineYaml {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
-    pub mode: f32,             // 0 = circle, 1 = polygon
-    pub shape_data: ShapeData, // cx, cy, radius, thickness OR unused for poly
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub mode: f32,
+
+    // Assuming ShapeData derives Default/PartialEq
+    #[serde(skip_serializing_if = "is_default")]
+    pub shape_data: ShapeData,
 
     pub dash_color: [f32; 4],
+
+    #[serde(skip_serializing_if = "is_default")]
     pub dash_misc: DashMisc,
+
     pub sub_dash_color: [f32; 4],
+
+    #[serde(skip_serializing_if = "is_default")]
     pub sub_dash_misc: DashMisc,
 
-    pub misc: MiscButtonSettingsJson,
+    #[serde(skip_serializing_if = "is_default")]
+    pub misc: MiscButtonSettingsYaml,
 }
 
+impl Default for UiButtonOutlineYaml {
+    fn default() -> Self {
+        Self {
+            id: None,
+            parent_id: None,
+            mode: 0.0,
+            shape_data: ShapeData::default(),
+            dash_color: [1.0, 1.0, 1.0, 1.0],
+            dash_misc: DashMisc::default(),
+            sub_dash_color: [1.0, 1.0, 1.0, 1.0],
+            sub_dash_misc: DashMisc::default(),
+            misc: MiscButtonSettingsYaml::default(),
+        }
+    }
+}
+
+// --- POLYGON ---
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct UiButtonPolygonJson {
+#[serde(default)]
+pub struct UiButtonPolygonYaml {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
     pub action: String,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
     pub style: String,
-    pub vertices: Vec<UiVertexJson>,
-    pub misc: MiscButtonSettingsJson,
+
+    // If vertices are empty, we might as well skip, but usually polygon has data
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vertices: Vec<UiVertexYaml>,
+
+    #[serde(skip_serializing_if = "is_default")]
+    pub misc: MiscButtonSettingsYaml,
+}
+
+impl Default for UiButtonPolygonYaml {
+    fn default() -> Self {
+        Self {
+            id: None,
+            action: "None".to_string(),
+            style: "None".to_string(),
+            vertices: Vec::new(),
+            misc: MiscButtonSettingsYaml::default(),
+        }
+    }
+}
+// Checks if a standard type matches its default (e.g., false for bool, 0 for u32)
+fn is_default<T: Default + PartialEq>(t: &T) -> bool {
+    t == &T::default()
+}
+
+// Checks if a boolean is true (useful for things like 'active' where default is true)
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+// Checks if the [f32; 2] offset is [0.0, 0.0]
+fn is_zero_offset(v: &[f32; 2]) -> bool {
+    v[0] == 0.0 && v[1] == 0.0
+}
+
+// Checks if the string is "None" or empty
+fn is_none_string(s: &String) -> bool {
+    s == "None" || s.is_empty()
+}
+
+// Returns "None" for the default value of strings
+fn default_none_string() -> String {
+    "None".to_string()
+}
+
+// Returns true for default active states
+fn default_true() -> bool {
+    true
+}
+
+// Check: is [f32; 2] == [0.0, 0.0]?
+fn is_zero_vec2(v: &[f32; 2]) -> bool {
+    v[0] == 0.0 && v[1] == 0.0
 }

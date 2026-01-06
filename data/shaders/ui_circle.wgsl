@@ -11,7 +11,7 @@ struct ScreenUniform {
 var<uniform> screen: ScreenUniform;
 
 struct CircleParams {
-    // center.x, center.y, radius, outer_border_thickness
+    // center.x, center.y, radius, outer_border_thickness_percentage
     center_radius_border: vec4<f32>,
     fill_color: vec4<f32>,
     inside_border_color: vec4<f32>,
@@ -22,7 +22,7 @@ struct CircleParams {
 
     fade: f32,
     style: u32,
-    inside_border_thickness: f32,
+    inside_border_thickness_percentage: f32,
     _pad0: u32,
 };
 
@@ -91,76 +91,66 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let center = crb.xy;
     let radius = crb.z;
-    let border = crb.w;
+
+    // --- CHANGES HERE ---
+    // Convert normalized percentage (0.0 - 1.0) to absolute pixels
+    let border_thick = crb.w * radius;
+    let inside_thick = p.inside_border_thickness_percentage * radius;
 
     let dist = distance(in.local_pos, center);
 
-    // ---- Outer border with outward AA (unchanged) ----
-    var border_outer: f32;
-    if crb.z > 0.0 {
-        border_outer = smoothstep(radius + 1.0, radius, dist);
-    } else {
-        border_outer = smoothstep(radius, radius - 1.0, dist);
-    }
+    // 1. Start with the Base Fill Color
+    var col = p.fill_color;
 
-    let border_inner = smoothstep(radius - border, radius - border - 1.0, dist);
-    let border_mask = border_outer - border_inner;
-
-    // Base color: fill + outer border
-    var col = mix(p.fill_color, p.border_color, border_mask);
-    col.a *= border_outer;
-
-    // ---- Blender style hue wheel (unchanged) ----
-    if p.style == 1u && dist < radius {
+    // ---- Blender style hue wheel ----
+    // This effectively replaces the Fill Color
+    if p.style == 1u {
         let uv = (in.local_pos - center) / radius;
 
         // Hue from angle
         let angle = atan2(uv.y, uv.x);
         let angle_shifted = angle + (PI / 2.0);
-
-        // Wrap to [-PI, PI]
         let angle_wrapped = atan2(sin(angle_shifted), cos(angle_shifted));
-
-        // Convert to hue 0..1
         let h = (angle_wrapped / (2.0 * PI)) + 0.5;
 
-        // Saturation from radial distance
+        // Saturation
         let s_linear = clamp(length(uv), 0.0, 1.0);
         let s = pow(s_linear, 0.47);
-
-        // Always bright in Blender's hue wheel
         let v = 1.0;
 
         let rgb = hsv_to_rgb(vec3<f32>(h, s, v));
-
-        // Keep border, replace interior
-        col = mix(vec4<f32>(rgb, 1.0), p.border_color, border_mask);
-        col.a *= border_outer;
+        col = vec4<f32>(rgb, 1.0);
     }
 
-    // ---- Inside border (new) ----
-    // Drawn as a ring just inside the outer border, fully inside the circle.
-    // Thickness is p.inside_border_thickness, measured inward from the inner edge of the outer border.
-    if p.inside_border_thickness > 0.0 {
-        let inner_edge = radius - border;
-        let t = p.inside_border_thickness;
+    // 2. Mix Inside Border (Layered on top of Fill)
+    // The boundary between Fill and Inside Border
+    if inside_thick > 0.0 {
+        // Calculate the inner edge pixel position based on the calculated thicknesses
+        let edge_fill_inner = radius - border_thick - inside_thick;
 
-        // Outer edge of inside border is at inner_edge
-        let inside_outer = smoothstep(inner_edge + 1.0, inner_edge, dist);
+        // 0.0 = Fill, 1.0 = Inside Border (and everything outwards)
+        let aa_inner = smoothstep(edge_fill_inner - 0.5, edge_fill_inner + 0.5, dist);
 
-        // Inner edge is further inward by t
-        let inner_edge_in = inner_edge - t;
-        let inside_inner = smoothstep(inner_edge_in, inner_edge_in - 1.0, dist);
-
-        let inside_mask = inside_outer - inside_inner;
-
-        // Only affect pixels that are inside the circle and outside the outer border region interior
-        if dist < inner_edge && inside_mask > 0.0 {
-            col = mix(col, p.inside_border_color, inside_mask);
-        }
+        col = mix(col, p.inside_border_color, aa_inner);
     }
 
-    // ---- Fade (unchanged) ----
+    // 3. Mix Outer Border (Layered on top of Inside Border + Fill)
+    // The boundary between Inside Border and Outer Border
+    if border_thick > 0.0 {
+        let edge_inner_outer = radius - border_thick;
+
+        // 0.0 = Previous Layers, 1.0 = Outer Border (and everything outwards)
+        let aa_outer = smoothstep(edge_inner_outer - 0.5, edge_inner_outer + 0.5, dist);
+
+        col = mix(col, p.border_color, aa_outer);
+    }
+
+    // 4. Apply Shape Alpha (The actual outer edge of the circle)
+    // Everything outside 'radius' fades to transparent
+    let alpha_shape = smoothstep(radius + 0.5, radius - 0.5, dist);
+    col.a *= alpha_shape;
+
+    // ---- Fade logic ----
     if p.fade > 0.9 {
         let d = distance(in.local_pos, screen.mouse);
         let fade = clamp(1.0 - d / 300.0, 0.0, 1.0);

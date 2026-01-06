@@ -21,7 +21,9 @@ use crate::ui::ui_edit_manager::{
     Command, ModifyPolygonCommand, MoveElementCommand, ResizeElementCommand, UiEditManager,
 };
 use crate::ui::ui_edits::*;
-use crate::ui::ui_loader::load_gui_from_file;
+use crate::ui::ui_loader::{
+    load_legacy_gui_layout_legacy, load_menus_from_directory, sanitize_filename,
+};
 use crate::ui::ui_runtime::UiRuntime;
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
@@ -93,14 +95,21 @@ impl UiButtonLoader {
         editor_mode: bool,
         override_mode: bool,
         show_gui: bool,
-        bend_mode: BendMode,
+        bend_mode: &BendMode,
         window_size: PhysicalSize<u32>,
     ) -> Self {
-        let layout_path = data_dir("ui_data/gui_layout.yaml");
-        let layout = load_gui_from_file(layout_path, bend_mode).unwrap_or_else(|e| {
-            eprintln!("❌ Failed to load GUI layout: {e}");
-            GuiLayout { menus: vec![] }
-        });
+        let menus_dir = data_dir("ui_data/menus");
+        let legacy_path = data_dir("ui_data/gui_layout.yaml");
+
+        // Try new format first, fallback to legacy
+        let menu_files = load_menus_from_directory(&menus_dir, bend_mode)
+            .ok()
+            .filter(|menus| !menus.is_empty())
+            .unwrap_or_else(|| {
+                println!("📂 No menus in directory, trying legacy file...");
+                load_legacy_gui_layout_legacy(&legacy_path, bend_mode)
+            });
+
         let mut loader = Self {
             menus: Default::default(),
             ui_runtime: UiRuntime::new(editor_mode, override_mode, show_gui),
@@ -113,23 +122,23 @@ impl UiButtonLoader {
             element_clipboard: None,
         };
 
-        // Load menus from layout
-        for menu_json in layout.menus {
+        // Load menus from files
+        for menu_yaml in menu_files {
             let mut layers = Vec::new();
 
-            for l in menu_json.layers {
+            for l in menu_yaml.layers {
                 let elements = l
                     .elements
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|t| UiElement::from_json(t, window_size))
+                    .map(|t| UiElement::from_yaml(t, window_size))
                     .collect();
 
                 layers.push(RuntimeLayer {
                     name: l.name,
                     order: l.order,
-                    active: l.active.unwrap_or(true),
-                    opaque: l.opaque.unwrap_or(false),
+                    active: l.active,
+                    opaque: l.opaque,
                     elements,
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
@@ -140,7 +149,7 @@ impl UiButtonLoader {
 
             layers.sort_by_key(|l| l.order);
             loader.menus.insert(
-                menu_json.name.clone(),
+                menu_yaml.name.clone(),
                 Menu {
                     layers,
                     active: true,
@@ -154,60 +163,72 @@ impl UiButtonLoader {
 
     pub fn save_gui_to_file(
         &mut self,
-        path: PathBuf,
+        menus_dir: PathBuf,
         window_size: PhysicalSize<u32>,
     ) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        fs::create_dir_all(&menus_dir)?;
+
+        let mut total_bytes = 0usize;
+        let mut saved_count = 0usize;
+
+        for (menu_name, menu) in &self.menus {
+            let menu_yaml = self.menu_to_yaml(menu_name, menu, window_size);
+
+            // Skip menus with no saveable layers
+            if menu_yaml.layers.is_empty() {
+                continue;
+            }
+            let safe_name = sanitize_filename(menu_name);
+            let file_path = menus_dir.join(format!("{}.{}", safe_name, "yaml"));
+
+            let content = serde_yaml::to_string(&menu_yaml)?;
+
+            fs::write(&file_path, &content)?;
+            total_bytes += content.len();
+            saved_count += 1;
+
+            println!("  📁 {} ({} bytes)", file_path.display(), content.len());
         }
 
-        let layout = self.to_json_gui_layout(window_size);
-        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
-
-        let content = match extension {
-            "json" => serde_json::to_string_pretty(&layout)?,
-            "yaml" | "yml" | _ => serde_yaml::to_string(&layout)?,
-        };
-
-        fs::write(&path, &content)?;
         self.ui_edit_manager.mark_saved();
+        println!(
+            "✅ GUI saved: {} menus, {} total bytes in {}",
+            saved_count,
+            total_bytes,
+            menus_dir.display()
+        );
 
-        println!("GUI saved to {} ({} bytes)", path.display(), content.len());
         Ok(())
     }
 
-    fn to_json_gui_layout(&self, window_size: PhysicalSize<u32>) -> GuiLayout {
-        let mut menus = Vec::new();
-        for (menu_name, menu) in &self.menus {
-            let mut layers = Vec::new();
-
-            for l in &menu.layers {
-                if !l.saveable {
-                    continue;
-                }
-                let elements = Some(
+    fn menu_to_yaml(
+        &self,
+        menu_name: &str,
+        menu: &Menu,
+        window_size: PhysicalSize<u32>,
+    ) -> MenuYaml {
+        let layers = menu
+            .layers
+            .iter()
+            .filter(|l| l.saveable)
+            .map(|l| UiLayerYaml {
+                name: l.name.clone(),
+                order: l.order,
+                active: l.active,
+                opaque: l.opaque,
+                elements: Some(
                     l.elements
                         .iter()
-                        .map(|e| UiElement::to_json(&e, window_size))
-                        .collect::<Vec<_>>(),
-                );
-
-                layers.push(UiLayerJson {
-                    name: l.name.clone(),
-                    order: l.order,
-                    active: Some(l.active),
-                    opaque: Some(l.opaque),
-                    elements,
-                });
-            }
-
-            menus.push(MenuJson {
-                name: menu_name.to_string(),
-                layers,
+                        .map(|e| UiElement::to_yaml(e, window_size))
+                        .collect(),
+                ),
             })
-        }
+            .collect();
 
-        GuiLayout { menus }
+        MenuYaml {
+            name: menu_name.to_string(),
+            layers,
+        }
     }
 
     pub fn update_dynamic_texts(&mut self) {
@@ -453,8 +474,8 @@ impl UiButtonLoader {
                                         x: v.pos[0],
                                         y: v.pos[1],
                                         radius: 10.0,
-                                        inside_border_thickness: 2.0,
-                                        border_thickness: 0.0,
+                                        inside_border_thickness_percentage: 2.0,
+                                        border_thickness_percentage: 0.0,
                                         fade: 1.0,
                                         fill_color: [0.0, 0.8, 0.0, 0.6],
                                         inside_border_color: [0.0; 4],

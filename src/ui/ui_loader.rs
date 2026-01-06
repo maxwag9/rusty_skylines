@@ -57,16 +57,37 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     h
 }
 
-pub fn load_gui_from_file(path: PathBuf, mode: BendMode) -> Result<GuiLayout, Box<dyn Error>> {
+/// Load from legacy single-file format
+pub fn load_legacy_gui_layout_legacy(path: &PathBuf, mode: &BendMode) -> Vec<MenuYaml> {
+    if !path.exists() {
+        println!("📄 Legacy file not found: {}", path.display());
+        return vec![];
+    }
+
+    match load_gui_from_file_legacy(path.clone(), mode) {
+        Ok(layout) => {
+            println!("📄 Loaded legacy layout with {} menus", layout.menus.len());
+            layout.menus
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to load legacy GUI layout: {e}");
+            vec![]
+        }
+    }
+}
+
+/// Legacy single-file loader
+pub fn load_gui_from_file_legacy(
+    path: PathBuf,
+    mode: &BendMode,
+) -> Result<GuiLayout, Box<dyn Error>> {
     let bytes = fs::read(&path)?;
     match mode {
         BendMode::Strict => {
-            // Normal behavior
             let parsed: GuiLayout = serde_yaml::from_slice(&bytes)?;
             Ok(parsed)
         }
         BendMode::Bent => {
-            // Always synthesize from raw bytes deterministically
             let seed = fnv1a_64(&bytes);
             let mut rng = SimpleRng::new(seed);
             let layout = synthesize_layout_from_bytes(&bytes, &mut rng);
@@ -74,7 +95,93 @@ pub fn load_gui_from_file(path: PathBuf, mode: BendMode) -> Result<GuiLayout, Bo
         }
     }
 }
+pub fn load_menus_from_directory(
+    menus_dir: &PathBuf,
+    mode: &BendMode,
+) -> Result<Vec<MenuYaml>, Box<dyn Error>> {
+    let mut menus = Vec::new();
 
+    if !menus_dir.is_dir() {
+        println!("📂 Menus directory not found: {}", menus_dir.display());
+        return Ok(menus);
+    }
+
+    for entry in fs::read_dir(menus_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        let is_yaml = path
+            .extension()
+            .map_or(false, |e| e == "yaml" || e == "yml" || e == "Yaml");
+
+        if is_yaml && path.is_file() {
+            match load_menu_from_file(&path, mode) {
+                Ok(menu) => {
+                    println!("  📄 Loaded menu: {}", menu.name);
+                    menus.push(menu);
+                }
+                Err(e) => {
+                    eprintln!("  ⚠️ Failed to load {}: {}", path.display(), e);
+                }
+            }
+        }
+    }
+
+    println!(
+        "📂 Loaded {} menus from {}",
+        menus.len(),
+        menus_dir.display()
+    );
+    Ok(menus)
+}
+
+pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+
+    match mode {
+        BendMode::Strict => {
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
+            let parsed: MenuYaml = match extension {
+                "Yaml" => serde_yaml::from_slice(&bytes)?,
+                _ => serde_yaml::from_slice(&bytes)?,
+            };
+            Ok(parsed)
+        }
+        BendMode::Bent => {
+            let seed = fnv1a_64(&bytes);
+            let mut rng = SimpleRng::new(seed);
+            let menu = synthesize_menu_from_bytes(&bytes, &mut rng, path);
+            Ok(menu)
+        }
+    }
+}
+
+pub fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' => '_',
+            c if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' => c,
+            _ => '_',
+        })
+        .collect()
+}
+
+/// Legacy single-file loader (for migration)
+pub fn load_gui_from_file(path: PathBuf, mode: BendMode) -> Result<GuiLayout, Box<dyn Error>> {
+    let bytes = fs::read(&path)?;
+    match mode {
+        BendMode::Strict => {
+            let parsed: GuiLayout = serde_yaml::from_slice(&bytes)?;
+            Ok(parsed)
+        }
+        BendMode::Bent => {
+            let seed = fnv1a_64(&bytes);
+            let mut rng = SimpleRng::new(seed);
+            let layout = synthesize_layout_from_bytes(&bytes, &mut rng);
+            Ok(layout)
+        }
+    }
+}
 fn synthesize_layout_from_bytes(bytes: &[u8], rng: &mut SimpleRng) -> GuiLayout {
     // mix bytes into rng for more entropy
     for chunk in bytes.chunks(8) {
@@ -95,7 +202,7 @@ fn synthesize_layout_from_bytes(bytes: &[u8], rng: &mut SimpleRng) -> GuiLayout 
             let layer = synth_layer(rng, mi, li);
             layers.push(layer);
         }
-        menus.push(MenuJson {
+        menus.push(MenuYaml {
             name: format!("menu_{}_{}", mi, rng.next_u64()),
             layers,
         });
@@ -103,8 +210,39 @@ fn synthesize_layout_from_bytes(bytes: &[u8], rng: &mut SimpleRng) -> GuiLayout 
 
     GuiLayout { menus }
 }
+fn synthesize_menu_from_bytes(bytes: &[u8], rng: &mut SimpleRng, path: &PathBuf) -> MenuYaml {
+    // Mix bytes into rng for more entropy
+    for chunk in bytes.chunks(8) {
+        let mut v: u64 = 0;
+        for (i, &b) in chunk.iter().enumerate().take(8) {
+            v |= (b as u64) << (i * 8);
+        }
+        rng.state = rng.state.wrapping_add(v);
+        let _ = rng.next_u64();
+    }
 
-fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLayerJson {
+    // Derive menu name from filename
+    let menu_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("menu_{}", rng.next_u64()));
+
+    let layers_n = 1 + (rng.next_u64() % 4) as usize;
+    let mut layers = Vec::with_capacity(layers_n);
+
+    for li in 0..layers_n {
+        let layer = synth_layer(rng, 0, li);
+        layers.push(layer);
+    }
+
+    MenuYaml {
+        name: menu_name,
+        layers,
+    }
+}
+
+fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLayerYaml {
     // ensure active true always, visible
     let name = format!("layer_{}_{}_{}", menu_idx, layer_idx, rng.next_u64());
     let order = (rng.next_u64() % 100) as i32;
@@ -142,23 +280,23 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
     }
 
     let mut elements = Vec::new();
-    elements.extend(texts.into_iter().map(UiElementJson::Text));
-    elements.extend(circles.into_iter().map(UiElementJson::Circle));
-    elements.extend(outlines.into_iter().map(UiElementJson::Outline));
-    elements.extend(handles.into_iter().map(UiElementJson::Handle));
-    elements.extend(polys.into_iter().map(UiElementJson::Polygon));
+    elements.extend(texts.into_iter().map(UiElementYaml::Text));
+    elements.extend(circles.into_iter().map(UiElementYaml::Circle));
+    elements.extend(outlines.into_iter().map(UiElementYaml::Outline));
+    elements.extend(handles.into_iter().map(UiElementYaml::Handle));
+    elements.extend(polys.into_iter().map(UiElementYaml::Polygon));
 
-    UiLayerJson {
+    UiLayerYaml {
         name,
         order: order as u32,
         elements: Some(elements),
-        active: Some(true),
-        opaque: Some(rng.next_bool()),
+        active: true,
+        opaque: rng.next_bool(),
     }
 }
 
-fn synth_text(rng: &mut SimpleRng) -> UiButtonTextJson {
-    UiButtonTextJson {
+fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
+    UiButtonTextYaml {
         id: Some(format!("t_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "None".to_string(),
@@ -178,7 +316,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextJson {
             rng.next_f32_range(0.0, 1.0),
         ],
         text: synth_text_string(rng),
-        misc: MiscButtonSettingsJson {
+        misc: MiscButtonSettingsYaml {
             active: true,
             pressable: rng.next_bool(),
             editable: rng.next_bool(),
@@ -188,16 +326,16 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextJson {
     }
 }
 
-fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleJson {
-    UiButtonCircleJson {
+fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
+    UiButtonCircleYaml {
         id: Some(format!("c_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "Bent".to_string(),
         x: rng.next_f32_range(0.0, 1_000.0),
         y: rng.next_f32_range(0.0, 1_000.0),
         radius: rng.next_f32_range(1.0, 500.0),
-        inside_border_thickness: rng.next_f32_range(0.0, 20.0),
-        border_thickness: rng.next_f32_range(0.0, 20.0),
+        inside_border_thickness_percentage: rng.next_f32_range(0.0, 20.0),
+        border_thickness_percentage: rng.next_f32_range(0.0, 20.0),
         fade: rng.next_f32_range(0.0, 1.0),
         fill_color: [
             rng.next_f32_range(0.0, 2.0),
@@ -228,7 +366,7 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleJson {
             glow_speed: rng.next_f32_range(0.0, 10.0),
             glow_intensity: rng.next_f32_range(0.0, 10.0),
         },
-        misc: MiscButtonSettingsJson {
+        misc: MiscButtonSettingsYaml {
             active: true,
             pressable: rng.next_bool(),
             editable: rng.next_bool(),
@@ -236,8 +374,8 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleJson {
     }
 }
 
-fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleJson {
-    UiButtonHandleJson {
+fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
+    UiButtonHandleYaml {
         id: Some(format!("h_{}", rng.next_u64())),
         x: rng.next_f32_range(0.0, 1_000.0),
         y: rng.next_f32_range(0.0, 1_000.0),
@@ -267,7 +405,7 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleJson {
             handle_roundness: rng.next_f32_range(0.0, 2.0),
             handle_speed: rng.next_f32_range(0.0, 2.0),
         },
-        misc: MiscButtonSettingsJson {
+        misc: MiscButtonSettingsYaml {
             active: true,
             pressable: rng.next_bool(),
             editable: rng.next_bool(),
@@ -276,11 +414,11 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleJson {
     }
 }
 
-fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineJson {
+fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineYaml {
     let x = rng.next_f32_range(0.0, 1_000.0);
     let y = rng.next_f32_range(0.0, 1_000.0);
     let r = rng.next_f32_range(1.0, 400.0);
-    UiButtonOutlineJson {
+    UiButtonOutlineYaml {
         id: Some(format!("o_{}", rng.next_u64())),
         parent_id: None,
         mode: if rng.next_bool() { 0.0 } else { 1.0 },
@@ -314,7 +452,7 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineJson {
             dash_roundness: rng.next_f32_range(0.0, 3.0),
             dash_speed: rng.next_f32_range(0.0, 10.0),
         },
-        misc: MiscButtonSettingsJson {
+        misc: MiscButtonSettingsYaml {
             active: true,
             pressable: rng.next_bool(),
             editable: rng.next_bool(),
@@ -322,11 +460,11 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineJson {
     }
 }
 
-fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonJson {
+fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
     let verts_n = 3 + rng.next_usize(6); // 3..8 vertices
     let mut verts = Vec::with_capacity(verts_n);
     for _ in 0..verts_n {
-        verts.push(UiVertexJson {
+        verts.push(UiVertexYaml {
             pos: [
                 rng.next_f32_range(0.0, 1_000.0),
                 rng.next_f32_range(0.0, 1_000.0),
@@ -341,12 +479,12 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonJson {
         });
     }
 
-    UiButtonPolygonJson {
+    UiButtonPolygonYaml {
         id: Some(format!("p_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "BentPoly".to_string(),
         vertices: verts,
-        misc: MiscButtonSettingsJson {
+        misc: MiscButtonSettingsYaml {
             active: true,
             pressable: rng.next_bool(),
             editable: rng.next_bool(),

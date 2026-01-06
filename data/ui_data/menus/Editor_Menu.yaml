@@ -1,0 +1,281 @@
+name: Editor_Menu
+layers:
+  - name: editor_information
+    order: 3
+    elements:
+      - !Text
+        id: mouse_pos_delta_text
+        x: 0.04323
+        y: 0.56015
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Mouse Position change since last frame: {mouse_pos_delta.x:.2|fix|int=3}, {mouse_pos_delta.y:.2|fix|int=3}'
+      - !Text
+        id: selected_menu_text
+        x: 0.0559
+        y: 0.07343
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Selected Menu: {selected_menu}'
+      - !Text
+        id: selected_layer_text
+        x: 0.055430003
+        y: 0.11689
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Selected Layer: {selected_layer}'
+      - !Text
+        id: selected_element_text
+        x: 0.05632
+        y: 0.15672
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Selected GUI element ID: {selected_ui_element_id}'
+      - !Text
+        id: editing_text_text
+        x: 0.06232
+        y: 0.1938
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Editing Text?: {editing_text}'
+      - !Text
+        id: selected_text.being_edited_text
+        x: 0.06187
+        y: 0.22553998
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Editing selected Text?: {selected_text.being_edited}'
+      - !Text
+        id: selected_layer.order_text
+        x: 0.06519
+        y: 0.28678
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Selected Layer Order: {selected_layer.order}'
+      - !Text
+        id: selected_element.z_index_text
+        x: 0.05342
+        y: 0.32652
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Selected GUI element z_index: {selected_element.z_index}'
+      - !Text
+        id: mouse_pos_text
+        x: 0.05984
+        y: 0.37815
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Mouse Position: {mouse_pos.x:.0|fix}, {mouse_pos.y:.0|fix}'
+      - !Text
+        id: any_text.being_hovered_text
+        x: 0.0574
+        y: 0.46259004
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Any Text being hovered: {any_text.being_hovered}'
+      - !Text
+        id: selected_text.being_hovered_text
+        x: 0.04919
+        y: 0.49596
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Selected Text being hovered: {selected_text.being_hovered}'
+      - !Text
+        id: color_picker.color_text
+        x: 0.052539997
+        y: 0.43811
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Color: , R={color_picker.r:.2|fix}, G={color_picker.g:.2|fix}, B={color_picker.b:.2|fix}, H={color_picker.h:.2|fix}, S={color_picker.s:.2|fix}, V={color_picker.v:.2|fix},'
+      - !Text
+        id: editor_mode_text
+        x: 0.056269996
+        y: 0.52738
+        px: 0.016374864
+        color:
+          - 0.6
+          - 1.0
+          - 1.0
+          - 1.0
+        text: 'Editor Mode: {editor_mode}'
+      - !Circle
+        id: fard circle
+        action: Toggle Color Picker
+        x: 0.29095
+        y: 0.53456
+        radius: 0.05804
+        fill_color:
+          - 0.2
+          - 0.2
+          - 0.2
+          - 0.5
+        inside_border_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        border_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+    active: false
+  - name: Color Picker
+    order: 900
+    elements:
+      - !Text
+        id: Color Picker Title
+        x: 0.32701
+        y: 0.45652
+        px: 0.012149093
+        color:
+          - 0.7
+          - 0.7
+          - 0.7
+          - 1.0
+        text: ColorPicker
+      - !Text
+        id: Color Picker Red Input Box
+        x: 0.32701
+        y: 0.62527
+        px: 0.012149093
+        color:
+          - 0.7
+          - 0.7
+          - 0.7
+          - 1.0
+        text: 'Red: {color_picker.r:.2|fix}'
+        input_box: true
+      - !Text
+        id: Color Picker Green Input Box
+        x: 0.32701
+        y: 0.64611
+        px: 0.012149093
+        color:
+          - 0.7
+          - 0.7
+          - 0.7
+          - 1.0
+        text: 'Green: {color_picker.g:.2|fix}'
+        input_box: true
+      - !Text
+        id: Color Picker Blue Input Box
+        x: 0.32701
+        y: 0.66694
+        px: 0.012149093
+        color:
+          - 0.7
+          - 0.7
+          - 0.7
+          - 1.0
+        text: 'Blue: {color_picker.b:.2|fix}'
+        input_box: true
+      - !Circle
+        id: Color Picker Color Circle
+        action: Drag Hue Point
+        style: Hue Circle
+        x: 0.34415
+        y: 0.53456
+        radius: 0.05804
+        fill_color:
+          - 0.2
+          - 0.2
+          - 0.2
+          - 0.5
+        misc:
+          active: true
+          pressable: true
+          editable: false
+      - !Polygon
+        id: Color Picker Body
+        vertices:
+          - pos:
+              - 0.31294
+              - 0.45763
+            color:
+              - 0.015
+              - 0.015
+              - 0.015
+              - 1.0
+            roundness: 0.5
+          - pos:
+              - 0.37714
+              - 0.4577
+            color:
+              - 0.015
+              - 0.015
+              - 0.015
+              - 1.0
+            roundness: 0.5
+          - pos:
+              - 0.37829
+              - 0.64489
+            color:
+              - 0.015
+              - 0.015
+              - 0.015
+              - 1.0
+            roundness: 0.5
+          - pos:
+              - 0.3125
+              - 0.64482
+            color:
+              - 0.015
+              - 0.015
+              - 0.015
+              - 1.0
+            roundness: 0.5
+    active: false

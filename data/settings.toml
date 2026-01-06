@@ -5,12 +5,12 @@ editor_mode = true
 override_mode = false
 show_gui = true
 background_color = [
-    0.001,
-    0.001,
-    0.001,
+    0.01,
+    0.01,
+    0.01,
     1.0,
 ]
-total_game_time = 10954.041478586383
+total_game_time = 11095.599346928298
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = false
