@@ -1,5 +1,5 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
-use crate::renderer::ui_text::Anchor;
+use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
@@ -714,7 +714,7 @@ pub struct RuntimeLayer {
     pub saveable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ElementKind {
     Text,
     Circle,
@@ -1061,7 +1061,24 @@ pub struct MenuYaml {
     pub name: String,
     pub layers: Vec<UiLayerYaml>,
 }
+impl UiButtonText {
+    pub fn clear_selection(&mut self) {
+        self.sel_start = self.caret;
+        self.sel_end = self.caret;
+        self.has_selection = false;
+    }
 
+    pub fn selection_range(&self) -> (usize, usize) {
+        if !self.has_selection {
+            return (self.caret, self.caret);
+        }
+        if self.sel_start <= self.sel_end {
+            (self.sel_start, self.sel_end)
+        } else {
+            (self.sel_end, self.sel_start)
+        }
+    }
+}
 // --- all possible button shapes ---
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonText {
@@ -1095,25 +1112,6 @@ pub struct UiButtonText {
 
     pub input_box: bool,
     pub anchor: Option<Anchor>,
-}
-
-impl UiButtonText {
-    pub fn clear_selection(&mut self) {
-        self.sel_start = self.caret;
-        self.sel_end = self.caret;
-        self.has_selection = false;
-    }
-
-    pub fn selection_range(&self) -> (usize, usize) {
-        if !self.has_selection {
-            return (self.caret, self.caret);
-        }
-        if self.sel_start <= self.sel_end {
-            (self.sel_start, self.sel_end)
-        } else {
-            (self.sel_end, self.sel_start)
-        }
-    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -1170,7 +1168,6 @@ pub struct UiButtonHandle {
     pub x: f32,
     pub y: f32,
     pub radius: f32,
-    pub handle_thickness: f32,
     pub handle_color: [f32; 4],
     pub handle_misc: HandleMisc,
     pub sub_handle_color: [f32; 4],
@@ -1331,7 +1328,6 @@ impl UiButtonHandle {
             x: window_size.width as f32 * h.x,
             y: window_size.height as f32 * h.y,
             radius: scale * h.radius,
-            handle_thickness: scale * h.handle_thickness,
             handle_color: h.handle_color,
             handle_misc: h.handle_misc,
             sub_handle_color: h.sub_handle_color,
@@ -1355,7 +1351,6 @@ impl UiButtonHandle {
             y: self.y / window_size.height as f32,
             radius: self.radius / scale,
 
-            handle_thickness: self.handle_thickness / scale,
             handle_color: self.handle_color,
             handle_misc: self.handle_misc.clone(),
 
@@ -1599,7 +1594,6 @@ impl Default for UiButtonHandle {
             x: 0.0,
             y: 0.0,
             radius: 6.0,
-            handle_thickness: 2.0,
             handle_color: [1.0, 1.0, 1.0, 1.0],
             handle_misc: HandleMisc::default(),
             sub_handle_color: [1.0, 1.0, 1.0, 1.0],
@@ -1624,8 +1618,8 @@ impl Default for ShapeData {
 impl Default for HandleMisc {
     fn default() -> Self {
         Self {
-            handle_len: 10.0,
-            handle_width: 2.0,
+            handle_len: 0.15,
+            handle_width: 0.1,
             handle_roundness: 0.0,
             handle_speed: 0.0,
         }
@@ -1810,9 +1804,6 @@ pub struct UiButtonHandleYaml {
     pub y: f32,
     pub radius: f32,
 
-    #[serde(skip_serializing_if = "is_default")]
-    pub handle_thickness: f32,
-
     pub handle_color: [f32; 4],
 
     #[serde(skip_serializing_if = "is_default")]
@@ -1837,9 +1828,8 @@ impl Default for UiButtonHandleYaml {
             x: 0.0,
             y: 0.0,
             radius: 0.0,
-            handle_thickness: 0.0,
             handle_color: [1.0, 1.0, 1.0, 1.0],
-            handle_misc: HandleMisc::default(), // Ensure HandleMisc derives Default!
+            handle_misc: HandleMisc::default(),
             sub_handle_color: [1.0, 1.0, 1.0, 1.0],
             sub_handle_misc: HandleMisc::default(),
             misc: MiscButtonSettingsYaml::default(),

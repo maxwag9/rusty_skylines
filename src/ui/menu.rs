@@ -11,6 +11,9 @@ pub struct Menu {
 }
 
 impl Menu {
+    pub fn sort_layers(&mut self) {
+        self.layers.sort_by_key(|l| l.order);
+    }
     pub fn get_element(&self, layer_name: &str, element_id: &str) -> Option<UiElement> {
         let layer = self.layers.iter().find(|l| l.name == layer_name)?;
 
@@ -74,10 +77,6 @@ impl Menu {
         }
 
         layer.dirty.clear(rebuilt);
-    }
-
-    pub fn sort_layers(&mut self) {
-        self.layers.sort_by_key(|l| l.order);
     }
 
     pub fn bump_layer_order(

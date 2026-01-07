@@ -1,6 +1,6 @@
 use crate::renderer::pipelines::load_shader;
 use crate::renderer::ui::ScreenUniform;
-use crate::renderer::ui_text::TextAtlas;
+use crate::renderer::ui_text_rendering::TextAtlas;
 use crate::ui::helper::{make_pipeline, make_storage_layout, make_uniform_layout};
 use crate::ui::vertex::{UiVertexPoly, UiVertexText};
 use std::path::{Path, PathBuf};

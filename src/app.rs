@@ -182,10 +182,8 @@ impl ApplicationHandler for App {
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
                     resources.settings.editor_mode = !resources.settings.editor_mode;
-                    resources
-                        .ui_loader
-                        .ui_runtime
-                        .update_editor_mode(resources.settings.editor_mode);
+                    resources.ui_loader.touch_manager.options.editor_mode =
+                        resources.settings.editor_mode;
                     resources
                         .ui_loader
                         .variables
@@ -194,10 +192,8 @@ impl ApplicationHandler for App {
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
                     resources.settings.override_mode = !resources.settings.override_mode;
-                    resources
-                        .ui_loader
-                        .ui_runtime
-                        .update_override_mode(resources.settings.override_mode);
+                    resources.ui_loader.touch_manager.options.override_mode =
+                        resources.settings.override_mode;
                     resources
                         .ui_loader
                         .variables
@@ -206,28 +202,22 @@ impl ApplicationHandler for App {
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
                     resources.settings.show_gui = !resources.settings.show_gui;
-                    resources
-                        .ui_loader
-                        .ui_runtime
-                        .update_show_gui(resources.settings.show_gui);
+                    resources.ui_loader.touch_manager.options.show_gui =
+                        resources.settings.show_gui;
                     resources
                         .ui_loader
                         .variables
                         .set_bool("show_gui", resources.settings.show_gui);
                     resources.settings.override_mode = false;
-                    resources
-                        .ui_loader
-                        .ui_runtime
-                        .update_override_mode(resources.settings.override_mode);
+                    resources.ui_loader.touch_manager.options.override_mode =
+                        resources.settings.override_mode;
                     resources
                         .ui_loader
                         .variables
                         .set_bool("override_mode", resources.settings.override_mode);
                     resources.settings.editor_mode = false;
-                    resources
-                        .ui_loader
-                        .ui_runtime
-                        .update_editor_mode(resources.settings.editor_mode);
+                    resources.ui_loader.touch_manager.options.editor_mode =
+                        resources.settings.editor_mode;
                     resources
                         .ui_loader
                         .variables
@@ -268,7 +258,7 @@ impl ApplicationHandler for App {
                 }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
-                    && resources.ui_loader.ui_runtime.editor_mode
+                    && resources.ui_loader.touch_manager.options.editor_mode
                 {
                     let result = create_element(
                         &mut resources.ui_loader.menus,

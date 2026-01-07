@@ -1,12 +1,12 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, UiRenderer};
-use crate::renderer::ui_text::{
+use crate::renderer::ui_text_rendering::{
     Anchor, anchor_to_top_left, glyphs_to_vertices, render_corner_brackets, render_editor_caret,
     render_editor_outline, render_selection,
 };
 use crate::resources::TimeSystem;
 use std::collections::HashMap;
 
-use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::*;
 use wgpu::{BufferDescriptor, BufferUsages, Queue};
 
@@ -168,14 +168,14 @@ pub fn upload_text(
     queue: &Queue,
     layer: &mut RuntimeLayer,
     time_system: &TimeSystem,
-    ui_runtime: &UiRuntime,
+    touch_manager: &UiTouchManager,
     menu_name: &String,
 ) {
     let text_vertices = build_text_vertices(
         ui_renderer,
         layer,
         time_system,
-        ui_runtime,
+        touch_manager,
         menu_name,
         queue,
     );
@@ -206,7 +206,7 @@ pub fn build_text_vertices(
     ui_renderer: &mut UiRenderer,
     layer: &mut RuntimeLayer,
     time_system: &TimeSystem,
-    ui_runtime: &UiRuntime,
+    touch_manager: &UiTouchManager,
     menu_name: &String,
     queue: &Queue,
 ) -> Vec<UiVertexText> {
@@ -336,21 +336,16 @@ pub fn build_text_vertices(
             orig.ascent = metrics.ascent; // <-- use per-size ascent
             being_edited = orig.being_edited;
             being_hovered = orig.being_hovered;
-            orig.being_hovered = false;
-            orig.just_unhovered = true;
             is_input_box = orig.input_box
         }
 
         // ---- selection / editor outlines / brackets etc ----
         let mut is_selected = false;
         if let Some(ref text_id) = tp.id {
-            let sel = &ui_runtime.selected_ui_element_primary;
-            if sel.active
-                && sel.element_id == *text_id
-                && sel.layer_name == layer.name
-                && sel.menu_name == *menu_name
-            {
-                is_selected = true;
+            if let Some(sel) = &touch_manager.selection.primary {
+                if sel.id == *text_id && sel.layer == layer.name && sel.menu == *menu_name {
+                    is_selected = true;
+                }
             }
         }
 
@@ -359,7 +354,7 @@ pub fn build_text_vertices(
         }
 
         // editor outline
-        if ui_runtime.editor_mode && !being_edited && !is_selected {
+        if touch_manager.options.editor_mode && !being_edited && !is_selected {
             render_editor_outline(
                 min_x,
                 min_y,

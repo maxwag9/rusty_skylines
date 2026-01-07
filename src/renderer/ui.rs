@@ -1,11 +1,11 @@
 use crate::renderer::ui_pipelines::UiPipelines;
-use crate::renderer::ui_text::Anchor;
+use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
 use crate::resources::{InputState, TimeSystem};
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::{
-    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiVertexPoly,
+    PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiElement, UiVertexPoly,
 };
 use std::ops::Range;
 use std::path::Path;
@@ -248,7 +248,7 @@ impl UiRenderer {
             for idx in dirty_indices {
                 menu.rebuild_layer_cache_index(idx, &ui_loader.ui_runtime);
                 let layer = &mut menu.layers[idx];
-                self.upload_layer(queue, layer, time, &ui_loader.ui_runtime, menu_name);
+                self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
             }
         }
     }
@@ -259,116 +259,79 @@ impl UiRenderer {
     }
 
     pub fn render<'a>(&self, pass: &mut RenderPass<'a>, ui: &mut UiButtonLoader) {
-        if !ui.ui_runtime.show_gui {
+        if !ui.touch_manager.options.show_gui {
             return;
         }
 
         ui.update_dynamic_texts();
 
+        let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
+
         for (_, menu) in ui.menus.iter().filter(|(_, menu)| menu.active) {
             for layer in menu.layers.iter().filter(|l| l.active) {
-                let mut cmds: Vec<DrawCmd> = Vec::new();
+                layers_to_render.push(layer);
+            }
+        }
 
-                if layer.gpu.circle_count > 0 {
-                    let circle_bg = self.device.create_bind_group(&BindGroupDescriptor {
+        layers_to_render.sort_by_key(|l| l.order);
+
+        for layer in layers_to_render {
+            let mut cmds: Vec<DrawCmd> = Vec::new();
+
+            let circle_bg = if layer.gpu.circle_count > 0 {
+                Some(self.device.create_bind_group(&BindGroupDescriptor {
+                    label: None,
+                    layout: &self.pipelines.circle_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
+                    }],
+                }))
+            } else {
+                None
+            };
+
+            let handle_bg = if layer.gpu.handle_count > 0 {
+                Some(self.device.create_bind_group(&BindGroupDescriptor {
+                    label: None,
+                    layout: &self.pipelines.handle_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: layer.gpu.handle_ssbo.as_ref().unwrap().as_entire_binding(),
+                    }],
+                }))
+            } else {
+                None
+            };
+
+            let poly_bg = if layer.gpu.poly_count > 0 {
+                if let (Some(info), Some(edges)) =
+                    (&layer.gpu.poly_info_ssbo, &layer.gpu.poly_edge_ssbo)
+                {
+                    Some(self.device.create_bind_group(&BindGroupDescriptor {
                         label: None,
-                        layout: &self.pipelines.circle_layout,
-                        entries: &[BindGroupEntry {
-                            binding: 0,
-                            resource: layer.gpu.circle_ssbo.as_ref().unwrap().as_entire_binding(),
-                        }],
-                    });
-
-                    // use the Layer iterator for circles
-                    for (idx, _) in layer.iter_circles().enumerate() {
-                        let idx_u = idx as u32;
-                        let circle_bg_clone = circle_bg.clone();
-                        cmds.push(DrawCmd {
-                            pipeline: &self.pipelines.circle_pipeline,
-                            bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(circle_bg_clone.clone()),
-                            vertex_buffer: Some(&self.pipelines.quad_buffer),
-                            vertex_range: 0..4,
-                            instance_range: idx_u..idx_u + 1,
-                        });
-
-                        cmds.push(DrawCmd {
-                            pipeline: &self.pipelines.glow_pipeline,
-                            bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(circle_bg_clone),
-                            vertex_buffer: Some(&self.pipelines.quad_buffer),
-                            vertex_range: 0..4,
-                            instance_range: idx_u..idx_u + 1,
-                        });
-                    }
+                        layout: &self.pipelines.polygon_layout,
+                        entries: &[
+                            BindGroupEntry {
+                                binding: 0,
+                                resource: info.as_entire_binding(),
+                            },
+                            BindGroupEntry {
+                                binding: 1,
+                                resource: edges.as_entire_binding(),
+                            },
+                        ],
+                    }))
+                } else {
+                    None
                 }
+            } else {
+                None
+            };
 
-                if layer.gpu.handle_count > 0 {
-                    let handle_bg = self.device.create_bind_group(&BindGroupDescriptor {
-                        label: None,
-                        layout: &self.pipelines.handle_layout,
-                        entries: &[BindGroupEntry {
-                            binding: 0,
-                            resource: layer.gpu.handle_ssbo.as_ref().unwrap().as_entire_binding(),
-                        }],
-                    });
-
-                    for (idx, _) in layer.iter_handles().enumerate() {
-                        let idx_u = idx as u32;
-                        cmds.push(DrawCmd {
-                            pipeline: &self.pipelines.handle_pipeline,
-                            bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(handle_bg.clone()),
-                            vertex_buffer: Some(&self.pipelines.handle_quad_buffer),
-                            vertex_range: 0..4,
-                            instance_range: idx_u..idx_u + 1,
-                        });
-                    }
-                }
-
-                if layer.gpu.poly_count > 0 {
-                    let mut offset: u32 = 0;
-
-                    let poly_bg = if let (Some(info), Some(edges)) =
-                        (&layer.gpu.poly_info_ssbo, &layer.gpu.poly_edge_ssbo)
-                    {
-                        Some(self.device.create_bind_group(&BindGroupDescriptor {
-                            label: None,
-                            layout: &self.pipelines.polygon_layout,
-                            entries: &[
-                                BindGroupEntry {
-                                    binding: 0,
-                                    resource: info.as_entire_binding(),
-                                },
-                                BindGroupEntry {
-                                    binding: 1,
-                                    resource: edges.as_entire_binding(),
-                                },
-                            ],
-                        }))
-                    } else {
-                        None
-                    };
-
-                    if let Some(poly_vbo) = &layer.gpu.poly_vbo {
-                        // use the Layer iterator for polygons
-                        for p in layer.iter_polygons() {
-                            let count = (p.tri_count).saturating_mul(3);
-                            cmds.push(DrawCmd {
-                                pipeline: &self.pipelines.polygon_pipeline,
-                                bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: poly_bg.clone(),
-                                vertex_buffer: Some(poly_vbo),
-                                vertex_range: offset..offset + count,
-                                instance_range: 0..1,
-                            });
-                            offset = offset.saturating_add(count);
-                        }
-                    }
-                }
-
-                if layer.gpu.outline_count > 0 {
-                    let outline_bg = self.device.create_bind_group(&BindGroupDescriptor {
+            let outline_bg = if layer.gpu.outline_count > 0 {
+                Some(
+                    self.device.create_bind_group(&BindGroupDescriptor {
                         label: None,
                         layout: &self.pipelines.outline_layout,
                         entries: &[
@@ -391,45 +354,110 @@ impl UiRenderer {
                                     .as_entire_binding(),
                             },
                         ],
+                    }),
+                )
+            } else {
+                None
+            };
+
+            let mut circle_idx: u32 = 0;
+            let mut handle_idx: u32 = 0;
+            let mut outline_idx: u32 = 0;
+            let mut poly_vtx_offset: u32 = 0;
+
+            for element in &layer.elements {
+                match element {
+                    UiElement::Circle(_) => {
+                        if let Some(bg) = &circle_bg {
+                            cmds.push(DrawCmd {
+                                pipeline: &self.pipelines.circle_pipeline,
+                                bind_group0: &self.pipelines.uniform_bind_group,
+                                bind_group1: Some(bg.clone()),
+                                vertex_buffer: Some(&self.pipelines.quad_buffer),
+                                vertex_range: 0..4,
+                                instance_range: circle_idx..circle_idx + 1,
+                            });
+                            cmds.push(DrawCmd {
+                                pipeline: &self.pipelines.glow_pipeline,
+                                bind_group0: &self.pipelines.uniform_bind_group,
+                                bind_group1: Some(bg.clone()),
+                                vertex_buffer: Some(&self.pipelines.quad_buffer),
+                                vertex_range: 0..4,
+                                instance_range: circle_idx..circle_idx + 1,
+                            });
+                        }
+                        circle_idx += 1;
+                    }
+                    UiElement::Handle(_) => {
+                        if let Some(bg) = &handle_bg {
+                            cmds.push(DrawCmd {
+                                pipeline: &self.pipelines.handle_pipeline,
+                                bind_group0: &self.pipelines.uniform_bind_group,
+                                bind_group1: Some(bg.clone()),
+                                vertex_buffer: Some(&self.pipelines.handle_quad_buffer),
+                                vertex_range: 0..4,
+                                instance_range: handle_idx..handle_idx + 1,
+                            });
+                        }
+                        handle_idx += 1;
+                    }
+                    UiElement::Polygon(poly) => {
+                        let count = poly.tri_count.saturating_mul(3);
+                        if let (Some(bg), Some(vbo)) = (&poly_bg, &layer.gpu.poly_vbo) {
+                            cmds.push(DrawCmd {
+                                pipeline: &self.pipelines.polygon_pipeline,
+                                bind_group0: &self.pipelines.uniform_bind_group,
+                                bind_group1: Some(bg.clone()),
+                                vertex_buffer: Some(vbo),
+                                vertex_range: poly_vtx_offset..poly_vtx_offset + count,
+                                instance_range: 0..1,
+                            });
+                        }
+                        poly_vtx_offset = poly_vtx_offset.saturating_add(count);
+                    }
+                    UiElement::Outline(_) => {
+                        if let Some(bg) = &outline_bg {
+                            cmds.push(DrawCmd {
+                                pipeline: &self.pipelines.outline_pipeline,
+                                bind_group0: &self.pipelines.uniform_bind_group,
+                                bind_group1: Some(bg.clone()),
+                                vertex_buffer: Some(&self.pipelines.quad_buffer),
+                                vertex_range: 0..4,
+                                instance_range: outline_idx..outline_idx + 1,
+                            });
+                        }
+                        outline_idx += 1;
+                    }
+                    UiElement::Text(_) => {
+                        // Text is handled above everything below!!
+                    }
+                }
+            }
+
+            if layer.gpu.text_count > 0 {
+                if let Some(text_vbo) = &layer.gpu.text_vbo {
+                    cmds.push(DrawCmd {
+                        pipeline: &self.pipelines.text_pipeline,
+                        bind_group0: &self.pipelines.uniform_bind_group,
+                        bind_group1: Some(self.pipelines.text_bind_group.clone()),
+                        vertex_buffer: Some(text_vbo),
+                        vertex_range: 0..layer.gpu.text_count,
+                        instance_range: 0..1,
                     });
-
-                    for (i, _) in layer.iter_outlines().enumerate() {
-                        let i_u = i as u32;
-                        cmds.push(DrawCmd {
-                            pipeline: &self.pipelines.outline_pipeline,
-                            bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(outline_bg.clone()),
-                            vertex_buffer: Some(&self.pipelines.quad_buffer),
-                            vertex_range: 0..4,
-                            instance_range: i_u..i_u + 1,
-                        });
-                    }
                 }
+            }
 
-                if layer.gpu.text_count > 0 {
-                    if let Some(text_vbo) = &layer.gpu.text_vbo {
-                        cmds.push(DrawCmd {
-                            pipeline: &self.pipelines.text_pipeline,
-                            bind_group0: &self.pipelines.uniform_bind_group,
-                            bind_group1: Some(self.pipelines.text_bind_group.clone()),
-                            vertex_buffer: Some(text_vbo),
-                            vertex_range: 0..layer.gpu.text_count,
-                            instance_range: 0..1,
-                        });
-                    }
+            // --- Execute ---
+            for c in cmds {
+                pass.set_pipeline(c.pipeline);
+                pass.set_bind_group(0, c.bind_group0, &[]);
+                if let Some(bg1) = &c.bind_group1 {
+                    pass.set_bind_group(1, bg1, &[]);
                 }
-
-                for c in cmds {
-                    pass.set_pipeline(c.pipeline);
-                    pass.set_bind_group(0, c.bind_group0, &[]);
-                    if let Some(bg1) = &c.bind_group1 {
-                        pass.set_bind_group(1, bg1, &[]);
-                    }
-                    if let Some(vb) = c.vertex_buffer {
-                        pass.set_vertex_buffer(0, vb.slice(..));
-                    }
-                    pass.draw(c.vertex_range.clone(), c.instance_range.clone());
+                if let Some(vb) = c.vertex_buffer {
+                    pass.set_vertex_buffer(0, vb.slice(..));
                 }
+                pass.draw(c.vertex_range.clone(), c.instance_range.clone());
             }
         }
     }
@@ -475,15 +503,15 @@ impl UiRenderer {
         &mut self,
         queue: &Queue,
         layer: &mut RuntimeLayer,
+        touch_manager: &UiTouchManager,
         time_system: &TimeSystem,
-        ui_runtime: &UiRuntime,
         menu_name: &String,
     ) {
         upload_circles(self, queue, layer);
         upload_outlines(self, queue, layer);
         upload_handles(self, queue, layer);
         upload_polygons(self, queue, layer);
-        upload_text(self, queue, layer, time_system, ui_runtime, menu_name);
+        upload_text(self, queue, layer, time_system, touch_manager, menu_name);
     }
 
     pub fn rebuild_text_bind_group(&mut self) {

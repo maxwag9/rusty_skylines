@@ -9,7 +9,7 @@ pub(crate) mod shader_watcher;
 pub(crate) mod textures;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;
-pub(crate) mod ui_text;
+pub(crate) mod ui_text_rendering;
 pub(crate) mod ui_upload;
 pub(crate) mod uniform_updates;
 pub(crate) mod world_renderer;

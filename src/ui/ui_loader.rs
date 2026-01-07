@@ -60,17 +60,17 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
 /// Load from legacy single-file format
 pub fn load_legacy_gui_layout_legacy(path: &PathBuf, mode: &BendMode) -> Vec<MenuYaml> {
     if !path.exists() {
-        println!("📄 Legacy file not found: {}", path.display());
+        println!("Legacy file not found: {}", path.display());
         return vec![];
     }
 
     match load_gui_from_file_legacy(path.clone(), mode) {
         Ok(layout) => {
-            println!("📄 Loaded legacy layout with {} menus", layout.menus.len());
+            println!("Loaded legacy layout with {} menus", layout.menus.len());
             layout.menus
         }
         Err(e) => {
-            eprintln!("❌ Failed to load legacy GUI layout: {e}");
+            eprintln!("Failed to load legacy GUI layout: {e}");
             vec![]
         }
     }
@@ -102,7 +102,7 @@ pub fn load_menus_from_directory(
     let mut menus = Vec::new();
 
     if !menus_dir.is_dir() {
-        println!("📂 Menus directory not found: {}", menus_dir.display());
+        println!("Menus directory not found: {}", menus_dir.display());
         return Ok(menus);
     }
 
@@ -117,11 +117,11 @@ pub fn load_menus_from_directory(
         if is_yaml && path.is_file() {
             match load_menu_from_file(&path, mode) {
                 Ok(menu) => {
-                    println!("  📄 Loaded menu: {}", menu.name);
+                    //println!("Loaded menu: {}", menu.name);
                     menus.push(menu);
                 }
                 Err(e) => {
-                    eprintln!("  ⚠️ Failed to load {}: {}", path.display(), e);
+                    eprintln!("Failed to load {}: {}", path.display(), e);
                 }
             }
         }
@@ -166,22 +166,6 @@ pub fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-/// Legacy single-file loader (for migration)
-pub fn load_gui_from_file(path: PathBuf, mode: BendMode) -> Result<GuiLayout, Box<dyn Error>> {
-    let bytes = fs::read(&path)?;
-    match mode {
-        BendMode::Strict => {
-            let parsed: GuiLayout = serde_yaml::from_slice(&bytes)?;
-            Ok(parsed)
-        }
-        BendMode::Bent => {
-            let seed = fnv1a_64(&bytes);
-            let mut rng = SimpleRng::new(seed);
-            let layout = synthesize_layout_from_bytes(&bytes, &mut rng);
-            Ok(layout)
-        }
-    }
-}
 fn synthesize_layout_from_bytes(bytes: &[u8], rng: &mut SimpleRng) -> GuiLayout {
     // mix bytes into rng for more entropy
     for chunk in bytes.chunks(8) {
@@ -248,11 +232,11 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
     let order = (rng.next_u64() % 100) as i32;
 
     // counts
-    let texts_n = rng.next_usize(3); // 0..2 texts
-    let circles_n = rng.next_usize(3); // 0..2 circles
-    let outlines_n = rng.next_usize(2); // 0..1 outlines
-    let handles_n = rng.next_usize(2); // 0..1 handles
-    let polys_n = rng.next_usize(3); // 0..2 polygons
+    let texts_n = rng.next_usize(4); // 0..2 texts
+    let circles_n = rng.next_usize(4); // 0..2 circles
+    let outlines_n = rng.next_usize(3); // 0..1 outlines
+    let handles_n = rng.next_usize(3); // 0..1 handles
+    let polys_n = rng.next_usize(4); // 0..2 polygons
 
     let mut texts = Vec::with_capacity(texts_n);
     for _ in 0..texts_n {
@@ -300,20 +284,18 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         id: Some(format!("t_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "None".to_string(),
-
-        // user requested 0..1e3 and active true always
-        x: rng.next_f32_range(0.0, 1_000.0),
-        y: rng.next_f32_range(0.0, 1_000.0),
+        x: rng.next_f32_range(0.0, 1.0),
+        y: rng.next_f32_range(0.0, 1.0),
         top_left_offset: [0.0, 0.0],
         bottom_left_offset: [0.0, 0.0],
         top_right_offset: [0.0, 0.0],
         bottom_right_offset: [0.0, 0.0],
-        px: rng.next_f32_range(0.0, 0.3),
+        px: rng.next_f32_range(0.0, 0.1),
         color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 1.0),
+            rng.next_f32_range(0.0, 0.9),
         ],
         text: synth_text_string(rng),
         misc: MiscButtonSettingsYaml {
@@ -331,38 +313,38 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
         id: Some(format!("c_{}", rng.next_u64())),
         action: "None".to_string(),
         style: "Bent".to_string(),
-        x: rng.next_f32_range(0.0, 1_000.0),
-        y: rng.next_f32_range(0.0, 1_000.0),
-        radius: rng.next_f32_range(1.0, 500.0),
-        inside_border_thickness_percentage: rng.next_f32_range(0.0, 20.0),
-        border_thickness_percentage: rng.next_f32_range(0.0, 20.0),
+        x: rng.next_f32_range(0.0, 1.0),
+        y: rng.next_f32_range(0.0, 1.0),
+        radius: rng.next_f32_range(0.0, 0.3),
+        inside_border_thickness_percentage: rng.next_f32_range(0.0, 0.3),
+        border_thickness_percentage: rng.next_f32_range(0.0, 0.3),
         fade: rng.next_f32_range(0.0, 1.0),
         fill_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 1.0),
+            rng.next_f32_range(0.0, 0.9),
         ],
         inside_border_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 1.0),
+            rng.next_f32_range(0.0, 0.9),
         ],
         border_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 1.0),
+            rng.next_f32_range(0.0, 0.9),
         ],
         glow_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 1.0),
+            rng.next_f32_range(0.0, 0.9),
         ],
         glow_misc: GlowMisc {
-            glow_size: rng.next_f32_range(0.0, 200.0),
+            glow_size: rng.next_f32_range(0.0, 0.3),
             glow_speed: rng.next_f32_range(0.0, 10.0),
             glow_intensity: rng.next_f32_range(0.0, 10.0),
         },
@@ -377,19 +359,18 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
 fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
     UiButtonHandleYaml {
         id: Some(format!("h_{}", rng.next_u64())),
-        x: rng.next_f32_range(0.0, 1_000.0),
-        y: rng.next_f32_range(0.0, 1_000.0),
-        radius: rng.next_f32_range(1.0, 100.0),
-        handle_thickness: rng.next_f32_range(0.5, 20.0),
+        x: rng.next_f32_range(0.0, 1.0),
+        y: rng.next_f32_range(0.0, 1.0),
+        radius: rng.next_f32_range(0.0, 0.3),
         handle_color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),
-            rng.next_f32_range(0.0, 1.0),
+            rng.next_f32_range(0.0, 0.9),
         ],
         handle_misc: HandleMisc {
-            handle_len: rng.next_f32_range(0.0, 20.0),
-            handle_width: rng.next_f32_range(0.0, 20.0),
+            handle_len: rng.next_f32_range(0.0, 0.1),
+            handle_width: rng.next_f32_range(0.0, 0.1),
             handle_roundness: rng.next_f32_range(0.0, 2.0),
             handle_speed: rng.next_f32_range(0.0, 2.0),
         },
@@ -400,8 +381,8 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
             rng.next_f32_range(0.0, 1.0),
         ],
         sub_handle_misc: HandleMisc {
-            handle_len: rng.next_f32_range(0.0, 20.0),
-            handle_width: rng.next_f32_range(0.0, 20.0),
+            handle_len: rng.next_f32_range(0.0, 0.1),
+            handle_width: rng.next_f32_range(0.0, 0.1),
             handle_roundness: rng.next_f32_range(0.0, 2.0),
             handle_speed: rng.next_f32_range(0.0, 2.0),
         },
@@ -415,9 +396,9 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
 }
 
 fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineYaml {
-    let x = rng.next_f32_range(0.0, 1_000.0);
-    let y = rng.next_f32_range(0.0, 1_000.0);
-    let r = rng.next_f32_range(1.0, 400.0);
+    let x = rng.next_f32_range(0.0, 1.0);
+    let y = rng.next_f32_range(0.0, 1.0);
+    let r = rng.next_f32_range(0.0, 0.3);
     UiButtonOutlineYaml {
         id: Some(format!("o_{}", rng.next_u64())),
         parent_id: None,
@@ -426,7 +407,7 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineYaml {
             x,
             radius: r,
             y,
-            border_thickness: rng.next_f32_range(0.1, 50.0),
+            border_thickness: rng.next_f32_range(0.0, 1.0),
         },
         dash_color: [
             rng.next_f32_range(0.0, 2.0),
@@ -465,15 +446,12 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
     let mut verts = Vec::with_capacity(verts_n);
     for _ in 0..verts_n {
         verts.push(UiVertexYaml {
-            pos: [
-                rng.next_f32_range(0.0, 1_000.0),
-                rng.next_f32_range(0.0, 1_000.0),
-            ],
+            pos: [rng.next_f32_range(0.0, 1.0), rng.next_f32_range(0.0, 1.0)],
             color: [
                 rng.next_f32_range(0.0, 2.0),
                 rng.next_f32_range(0.0, 2.0),
                 rng.next_f32_range(0.0, 2.0),
-                rng.next_f32_range(0.0, 1.0),
+                rng.next_f32_range(0.0, 0.9),
             ],
             roundness: rng.next_f32_range(0.0, 1.0),
         });

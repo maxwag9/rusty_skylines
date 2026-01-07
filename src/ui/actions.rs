@@ -6,10 +6,9 @@ use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::{InputState, TimeSystem};
 use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::MouseState;
-use crate::ui::selections::deselect_everything;
-use crate::ui::touches::HitResult;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::ui_loader::load_gui_from_file;
+use crate::ui::ui_loader::load_menus_from_directory;
+use crate::ui::ui_text_editing::HitResult;
 use glam::Vec2;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1049,27 +1048,31 @@ fn register_color_picker_actions(sys: &mut ActionSystem) {
 
 fn register_editor_actions(sys: &mut ActionSystem) {
     sys.register_simple("toggle_editor", |_action, ctx| {
-        ctx.loader.ui_runtime.editor_mode = !ctx.loader.ui_runtime.editor_mode;
+        ctx.loader.touch_manager.options.editor_mode =
+            !ctx.loader.touch_manager.options.editor_mode;
         ActionResult::Ok
     });
 
     sys.register_simple("enable_editor", |_action, ctx| {
-        ctx.loader.ui_runtime.editor_mode = true;
+        ctx.loader.touch_manager.options.editor_mode = true;
         ActionResult::Ok
     });
 
     sys.register_simple("disable_editor", |_action, ctx| {
-        ctx.loader.ui_runtime.editor_mode = false;
+        ctx.loader.touch_manager.options.editor_mode = false;
         ActionResult::Ok
     });
 
     sys.register_simple("toggle_gui", |_action, ctx| {
-        ctx.loader.ui_runtime.show_gui = !ctx.loader.ui_runtime.show_gui;
+        ctx.loader.touch_manager.options.show_gui = !ctx.loader.touch_manager.options.show_gui;
         ActionResult::Ok
     });
 
     sys.register_simple("deselect_all", |_action, ctx| {
-        deselect_everything(ctx.loader);
+        ctx.loader
+            .touch_manager
+            .selection
+            .deselect_all(&mut ctx.loader.menus); // Todo!
         ActionResult::Ok
     });
 
@@ -1084,7 +1087,7 @@ fn register_editor_actions(sys: &mut ActionSystem) {
 
     sys.register_simple("load_ui", |action, _| {
         let filename = action.arg_str(0).unwrap_or("ui_layout.yaml");
-        match load_gui_from_file(filename.parse().unwrap(), BendMode::Strict) {
+        match load_menus_from_directory(&PathBuf::from(filename), &BendMode::Strict) {
             Ok(_) => ActionResult::Ok,
             Err(e) => ActionResult::Error(format!("Failed to load: {}", e)),
         }
