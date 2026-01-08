@@ -270,10 +270,7 @@ impl Command for ModifyCircleCommand {
         replace_circle(menus, &self.menu, &self.layer, &self.after);
     }
     fn description(&self) -> String {
-        format!(
-            "Modify circle '{}'",
-            self.before.id.as_deref().unwrap_or("?")
-        )
+        format!("Modify circle '{}'", self.before.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -318,7 +315,7 @@ impl Command for ModifyTextCommand {
     }
 
     fn description(&self) -> String {
-        format!("Modify text '{}'", self.before.id.as_deref().unwrap_or("?"))
+        format!("Modify text '{}'", self.before.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -363,10 +360,7 @@ impl Command for ModifyPolygonCommand {
     }
 
     fn description(&self) -> String {
-        format!(
-            "Modify polygon '{}'",
-            self.before.id.as_deref().unwrap_or("?")
-        )
+        format!("Modify polygon '{}'", self.before.id)
     }
 
     fn as_any(&self) -> &dyn Any {

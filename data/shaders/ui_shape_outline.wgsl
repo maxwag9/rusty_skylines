@@ -59,7 +59,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let thickness_factor = sd.w;
 
     // Slightly expand for outline thickness, same logic as before.
-    let radius = base_radius + thickness_factor * base_radius * 0.01;
+    let radius = base_radius + thickness_factor * base_radius;
 
     // 'in.pos' is assumed to be a unit quad in some range (e.g. [-1, 1]).
     // We scale by 'radius' around 'center' for both circle and polygon.
@@ -111,8 +111,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let thickness_factor = sd.w;
 
     let hundredth_radius = radius * 0.01;
-    let thickness = thickness_factor * hundredth_radius;
-    let W = 0.5 * thickness;
+    let thickness = thickness_factor * radius;
+    let W = thickness;
 
     let dash_len     = max(0.001, s.dash_misc.x);
     let dash_space   = max(0.001, s.dash_misc.y);

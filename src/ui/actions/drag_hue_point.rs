@@ -114,7 +114,7 @@ fn get_picker_circles(loader: &UiButtonLoader) -> Option<(CircleSnapshot, Circle
     let hue = layer.iter_circles().find(|c| c.style == "Hue Circle")?;
     let handle = layer
         .iter_circles()
-        .find(|c| c.id.as_deref() == Some("color picker handle circle"))?;
+        .find(|c| c.id == "color picker handle circle")?;
 
     Some((
         CircleSnapshot {
@@ -267,7 +267,7 @@ fn is_action_active(loader: &UiButtonLoader) -> bool {
 
 fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &MouseState) {
     let handle = UiButtonCircle {
-        id: Some("color picker handle circle".to_string()),
+        id: "color picker handle circle".to_string(),
         action: "None".to_string(),
         style: "None".to_string(),
         x: mouse.pos.x,

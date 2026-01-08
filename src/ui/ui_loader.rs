@@ -281,7 +281,7 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
 
 fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
     UiButtonTextYaml {
-        id: Some(format!("t_{}", rng.next_u64())),
+        id: format!("t_{}", rng.next_u64()),
         action: "None".to_string(),
         style: "None".to_string(),
         x: rng.next_f32_range(0.0, 1.0),
@@ -310,7 +310,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
 
 fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
     UiButtonCircleYaml {
-        id: Some(format!("c_{}", rng.next_u64())),
+        id: format!("c_{}", rng.next_u64()),
         action: "None".to_string(),
         style: "Bent".to_string(),
         x: rng.next_f32_range(0.0, 1.0),
@@ -358,7 +358,7 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
 
 fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
     UiButtonHandleYaml {
-        id: Some(format!("h_{}", rng.next_u64())),
+        id: format!("h_{}", rng.next_u64()),
         x: rng.next_f32_range(0.0, 1.0),
         y: rng.next_f32_range(0.0, 1.0),
         radius: rng.next_f32_range(0.0, 0.3),
@@ -391,7 +391,7 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
             pressable: rng.next_bool(),
             editable: rng.next_bool(),
         },
-        parent_id: None,
+        parent: None,
     }
 }
 
@@ -400,8 +400,8 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineYaml {
     let y = rng.next_f32_range(0.0, 1.0);
     let r = rng.next_f32_range(0.0, 0.3);
     UiButtonOutlineYaml {
-        id: Some(format!("o_{}", rng.next_u64())),
-        parent_id: None,
+        id: format!("o_{}", rng.next_u64()),
+        parent: None,
         mode: if rng.next_bool() { 0.0 } else { 1.0 },
         shape_data: ShapeData {
             x,
@@ -458,7 +458,7 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
     }
 
     UiButtonPolygonYaml {
-        id: Some(format!("p_{}", rng.next_u64())),
+        id: format!("p_{}", rng.next_u64()),
         action: "None".to_string(),
         style: "BentPoly".to_string(),
         vertices: verts,

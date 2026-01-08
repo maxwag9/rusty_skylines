@@ -205,6 +205,12 @@ impl UiButtonLoader {
             .update(dt, input_snapshot, elements.into_iter());
         // Process all emitted events
         let result = self.process_touch_events();
+        if result.drag_ended || result.update_selection {
+            println!(
+                "Result drag_ended: {}, Result Selection updated: {}",
+                result.drag_ended, result.update_selection
+            );
+        }
 
         // Apply results
         self.apply_event_results(result, &input_state.mouse);
@@ -311,6 +317,8 @@ impl UiButtonLoader {
 
     /// Handle a single touch event
     fn handle_touch_event(&mut self, event: &TouchEvent, result: &mut EventProcessingResult) {
+        println!("handle_touch_event: {:?}", event);
+
         match event {
             // ----------------------------------------------------------------
             // HOVER EVENTS
@@ -889,7 +897,7 @@ impl UiButtonLoader {
                     .elements
                     .iter_mut()
                     .filter_map(UiElement::as_circle_mut)
-                    .find(|c| c.id.as_deref() == Some(id))
+                    .find(|c| c.id == id)
                 {
                     circle.x = pos.0;
                     circle.y = pos.1;
@@ -906,7 +914,7 @@ impl UiButtonLoader {
                     .elements
                     .iter_mut()
                     .filter_map(UiElement::as_text_mut)
-                    .find(|t| t.id.as_deref() == Some(id))
+                    .find(|t| t.id == id)
                 {
                     if text.being_edited {
                         return;
@@ -926,7 +934,7 @@ impl UiButtonLoader {
                     .elements
                     .iter_mut()
                     .filter_map(UiElement::as_polygon_mut)
-                    .find(|p| p.id.as_deref() == Some(id))
+                    .find(|p| p.id == id)
                 {
                     for v in &mut poly.vertices {
                         v.pos[0] += delta.0;
@@ -952,7 +960,7 @@ impl UiButtonLoader {
                     .elements
                     .iter_mut()
                     .filter_map(UiElement::as_polygon_mut)
-                    .find(|p| p.id.as_deref() == Some(id))
+                    .find(|p| p.id == id)
                 {
                     if let Some(v) = poly.vertices.get_mut(vertex_idx) {
                         v.pos = [pos.0, pos.1];
@@ -963,34 +971,42 @@ impl UiButtonLoader {
         }
     }
 
-    fn handle_handle_drag(&mut self, menu: &str, layer: &str, id: &str, position: (f32, f32)) {
+    fn handle_handle_drag(
+        &mut self,
+        menu_name: &str,
+        layer_name: &str,
+        id: &str,
+        position: (f32, f32),
+    ) {
         // Extract parent_id first (clone to own the data)
-        let parent_id = {
-            let handle = match self.get_handle(menu, layer, id) {
+        let affected_element = {
+            let handle = match self.get_handle(menu_name, layer_name, id) {
                 Some(h) => h,
                 None => return,
             };
-            match &handle.parent_id {
-                Some(id) => id.clone(),
+            match &handle.parent {
+                Some(affected_element) => affected_element.clone(),
                 None => return,
             }
         };
-        // Borrow is now dropped, we can mutate
-
         // Find parent circle and update its radius
-        for (_, menu_data) in &mut self.menus {
-            for layer_data in &mut menu_data.layers {
-                if let Some(circle) = layer_data
+        if let Some(menu) = self.menus.get_mut(&affected_element.menu) {
+            if let Some(layer) = menu
+                .layers
+                .iter_mut()
+                .find(|l| l.name == affected_element.layer)
+            {
+                if let Some(circle) = layer
                     .elements
                     .iter_mut()
                     .filter_map(UiElement::as_circle_mut)
-                    .find(|c| c.id.as_deref() == Some(parent_id.as_str()))
+                    .find(|c| c.id == affected_element.id.as_str())
                 {
                     let dx = position.0 - circle.x;
                     let dy = position.1 - circle.y;
                     let new_radius = (dx * dx + dy * dy).sqrt().max(2.0);
                     circle.radius = new_radius;
-                    layer_data.dirty.mark_circles();
+                    layer.dirty.mark_circles();
                     return;
                 }
             }
@@ -1014,15 +1030,13 @@ impl UiButtonLoader {
             .elements
             .iter_mut()
             .filter_map(UiElement::as_text_mut)
-            .find(|t| t.id.as_deref() == Some(id))
+            .find(|t| t.id == id)
     }
 
     fn get_handle(&self, menu: &str, layer: &str, id: &str) -> Option<&UiButtonHandle> {
         let menu_data = self.menus.get(menu)?;
         let layer_data = menu_data.layers.iter().find(|l| l.name == layer)?;
-        layer_data
-            .iter_handles()
-            .find(|h| h.id.as_deref() == Some(id))
+        layer_data.iter_handles().find(|h| h.id == id)
     }
 
     fn get_element_position(&self, menu: &str, layer: &str, id: &str) -> (f32, f32) {
@@ -1046,7 +1060,7 @@ impl UiButtonLoader {
         let layer_data = menu_data.layers.iter().find(|l| l.name == layer)?;
         layer_data
             .iter_polygons()
-            .find(|p| p.id.as_deref() == Some(id))
+            .find(|p| p.id == id)
             .map(|p| p.vertices.iter().map(|v| v.pos).collect())
     }
 
@@ -1459,15 +1473,10 @@ impl UiButtonLoader {
 
                     if !being_hovered && t.being_hovered {
                         being_hovered = true;
-                        if t.id
-                            == Option::from(
-                                self.ui_runtime
-                                    .selected_ui_element_primary
-                                    .element_id
-                                    .clone(),
-                            )
-                        {
-                            selected_being_hovered = true;
+                        if let Some(sel) = &self.touch_manager.selection.primary {
+                            if t.id == sel.id {
+                                selected_being_hovered = true;
+                            }
                         }
                     }
 
@@ -1533,6 +1542,254 @@ impl UiButtonLoader {
             .set_bool("selected_text.being_hovered", selected_being_hovered);
     }
 
+    /// Updates existing handles and outlines based on their parent elements' positions and sizes
+    fn update_selection_visuals(menus: &HashMap<String, Menu>, editor_layer: &mut RuntimeLayer) {
+        for element in &mut editor_layer.elements {
+            match element {
+                UiElement::Handle(h) => {
+                    if let Some(ref parent) = h.parent {
+                        if let Some(menu) = menus.get(&parent.menu) {
+                            if let Some(layer) = menu.layers.iter().find(|l| l.name == parent.layer)
+                            {
+                                if let Some(c) = layer.iter_circles().find(|c| c.id == parent.id) {
+                                    h.x = c.x;
+                                    h.y = c.y;
+                                    h.radius = c.radius;
+                                }
+                            }
+                        }
+                    }
+                }
+                UiElement::Outline(o) => {
+                    if let Some(ref parent) = o.parent {
+                        if let Some(menu) = menus.get(&parent.menu) {
+                            if let Some(layer) = menu.layers.iter().find(|l| l.name == parent.layer)
+                            {
+                                match parent.kind {
+                                    ElementKind::Circle => {
+                                        if let Some(c) =
+                                            layer.iter_circles().find(|c| c.id == parent.id)
+                                        {
+                                            o.shape_data.x = c.x;
+                                            o.shape_data.y = c.y;
+                                            o.shape_data.radius = c.radius;
+                                            o.misc = c.misc.clone();
+                                        }
+                                    }
+                                    ElementKind::Polygon => {
+                                        if let Some(p) =
+                                            layer.iter_polygons().find(|p| p.id == parent.id)
+                                        {
+                                            let mut cx = 0.0;
+                                            let mut cy = 0.0;
+                                            for v in &p.vertices {
+                                                cx += v.pos[0];
+                                                cy += v.pos[1];
+                                            }
+                                            if !p.vertices.is_empty() {
+                                                cx /= p.vertices.len() as f32;
+                                                cy /= p.vertices.len() as f32;
+                                            }
+
+                                            let mut radius: f32 = 0.0;
+                                            for v in &p.vertices {
+                                                let dx = v.pos[0] - cx;
+                                                let dy = v.pos[1] - cy;
+                                                radius = radius.max((dx * dx + dy * dy).sqrt());
+                                            }
+
+                                            o.shape_data.x = cx;
+                                            o.shape_data.y = cy;
+                                            o.shape_data.radius = radius;
+                                            o.vertex_count = p.vertices.len() as u32;
+                                            o.misc = p.misc.clone();
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Creates selection visuals (outlines and handles) for the selected element
+    fn create_selection_visuals(
+        editor_layer: &mut RuntimeLayer,
+        element: &UiElement,
+        sel: &SelectedUiElement,
+        editor_mode: bool,
+    ) {
+        match element {
+            UiElement::Circle(c) => {
+                if editor_mode && c.misc.editable {
+                    let circle_outline = UiButtonOutline {
+                        id: "Circle Outline".to_string(),
+                        parent: Some(ElementRef {
+                            menu: sel.menu_name.clone(),
+                            layer: sel.layer_name.clone(),
+                            id: c.id.clone(),
+                            kind: ElementKind::Circle,
+                        }),
+                        mode: 0.0,
+                        vertex_offset: 0,
+                        vertex_count: 0,
+                        dash_color: [0.2, 0.0, 0.4, 0.8],
+                        dash_misc: DashMisc {
+                            dash_len: 4.0,
+                            dash_spacing: 1.5,
+                            dash_roundness: 1.0,
+                            dash_speed: 4.0,
+                        },
+                        sub_dash_color: [0.8, 1.0, 1.0, 0.5],
+                        sub_dash_misc: DashMisc {
+                            dash_len: 1.0,
+                            dash_spacing: 1.0,
+                            dash_roundness: 0.0,
+                            dash_speed: -2.0,
+                        },
+                        misc: c.misc.clone(),
+                        shape_data: ShapeData {
+                            x: c.x,
+                            y: c.y,
+                            radius: c.radius,
+                            border_thickness: 0.1,
+                        },
+                    };
+                    editor_layer
+                        .elements
+                        .push(UiElement::Outline(circle_outline));
+
+                    let handle = UiButtonHandle {
+                        id: "Circle Handle".to_string(),
+                        parent: Some(ElementRef {
+                            menu: sel.menu_name.clone(),
+                            layer: sel.layer_name.clone(),
+                            id: c.id.clone(),
+                            kind: ElementKind::Circle,
+                        }),
+                        x: c.x,
+                        y: c.y,
+                        radius: c.radius,
+                        handle_color: [0.65, 0.22, 0.05, 1.0],
+                        handle_misc: HandleMisc {
+                            handle_len: 0.09,
+                            handle_width: 0.2,
+                            handle_roundness: 0.3,
+                            handle_speed: 0.0,
+                        },
+                        sub_handle_color: [0.0, 0.0, 0.0, 0.7],
+                        sub_handle_misc: HandleMisc {
+                            handle_len: 0.08,
+                            handle_width: 0.05,
+                            handle_roundness: 0.5,
+                            handle_speed: 0.0,
+                        },
+                        misc: MiscButtonSettings {
+                            active: true,
+                            touched_time: 0.0,
+                            is_touched: false,
+                            pressable: true,
+                            editable: false,
+                        },
+                    };
+                    editor_layer.elements.push(UiElement::Handle(handle));
+                }
+            }
+            UiElement::Polygon(p) => {
+                if editor_mode && p.misc.editable {
+                    let mut cx = 0.0;
+                    let mut cy = 0.0;
+                    for v in &p.vertices {
+                        cx += v.pos[0];
+                        cy += v.pos[1];
+                    }
+                    cx /= p.vertices.len() as f32;
+                    cy /= p.vertices.len() as f32;
+
+                    let mut radius: f32 = 0.0;
+                    for (i, v) in p.vertices.iter().enumerate() {
+                        let dx = v.pos[0] - cx;
+                        let dy = v.pos[1] - cy;
+                        radius = radius.max((dx * dx + dy * dy).sqrt());
+
+                        let vertex_outline = UiButtonCircle {
+                            id: format!("vertex_outline_{}", i),
+                            action: "None".to_string(),
+                            style: "None".to_string(),
+                            x: v.pos[0],
+                            y: v.pos[1],
+                            radius: 10.0,
+                            inside_border_thickness_percentage: 2.0,
+                            border_thickness_percentage: 0.0,
+                            fade: 1.0,
+                            fill_color: [0.0, 0.8, 0.0, 0.6],
+                            inside_border_color: [0.0; 4],
+                            border_color: [0.0, 0.0, 0.0, 0.0],
+                            glow_color: [0.0, 0.0, 0.5, 0.0],
+                            glow_misc: GlowMisc {
+                                glow_size: 0.0,
+                                glow_speed: 0.0,
+                                glow_intensity: 0.0,
+                            },
+                            misc: MiscButtonSettings {
+                                active: false,
+                                touched_time: 0.0,
+                                is_touched: false,
+                                pressable: false,
+                                editable: false,
+                            },
+                        };
+                        editor_layer
+                            .elements
+                            .push(UiElement::Circle(vertex_outline));
+                    }
+
+                    let polygon_outline = UiButtonOutline {
+                        id: "Polygon Outline".to_string(),
+                        parent: Some(ElementRef {
+                            menu: sel.menu_name.clone(),
+                            layer: sel.layer_name.clone(),
+                            id: p.id.clone(),
+                            kind: ElementKind::Polygon,
+                        }),
+                        mode: 1.0,
+                        vertex_offset: 0,
+                        vertex_count: p.vertices.len() as u32,
+                        dash_color: [0.2, 0.0, 0.4, 0.8],
+                        dash_misc: DashMisc {
+                            dash_len: 4.0,
+                            dash_spacing: 1.5,
+                            dash_roundness: 1.0,
+                            dash_speed: 4.0,
+                        },
+                        sub_dash_color: [0.8, 1.0, 1.0, 0.5],
+                        sub_dash_misc: DashMisc {
+                            dash_len: 1.0,
+                            dash_spacing: 1.0,
+                            dash_roundness: 0.0,
+                            dash_speed: -2.0,
+                        },
+                        misc: p.misc.clone(),
+                        shape_data: ShapeData {
+                            x: cx,
+                            y: cy,
+                            radius,
+                            border_thickness: 0.1,
+                        },
+                    };
+                    editor_layer
+                        .elements
+                        .push(UiElement::Outline(polygon_outline));
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn update_selection(&mut self) {
         if self.ui_runtime.selected_ui_element_primary.just_deselected {
             self.ui_runtime.editing_text = false;
@@ -1558,7 +1815,7 @@ impl UiButtonLoader {
 
         let sel = self.ui_runtime.selected_ui_element_primary.clone();
 
-        if let Some(menu) = self.menus.get_mut(&sel.menu_name) {
+        if let Some(menu) = self.menus.get(&sel.menu_name) {
             if let Some(layer) = menu
                 .layers
                 .iter()
@@ -1569,13 +1826,19 @@ impl UiButtonLoader {
             }
         }
 
-        if let Some(element) = get_element(
+        let element = get_element(
             &self.menus,
             &sel.menu_name,
             &sel.layer_name,
             &sel.element_id,
-        ) {
-            if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
+        );
+
+        if let Some(element) = element {
+            let is_handle = element.kind() == ElementKind::Handle;
+            let editor_mode = self.touch_manager.options.editor_mode;
+
+            // Temporarily remove Editor_Menu to avoid borrow conflicts
+            if let Some(mut editor_menu) = self.menus.remove("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu
                     .layers
                     .iter_mut()
@@ -1584,164 +1847,19 @@ impl UiButtonLoader {
                     editor_layer.active = true;
                     editor_layer.dirty.mark_all();
                     editor_layer.clear_circles();
-                    editor_layer.clear_handles();
-                    editor_layer.clear_outlines();
                     editor_layer.clear_polygons();
 
-                    match element {
-                        UiElement::Circle(c) => {
-                            if self.touch_manager.options.editor_mode && c.misc.editable {
-                                let circle_outline = UiButtonOutline {
-                                    id: Some("Circle Outline".to_string()),
-                                    parent_id: c.id.clone(),
-                                    mode: 0.0,
-                                    vertex_offset: 0,
-                                    vertex_count: 0,
-                                    dash_color: [0.2, 0.0, 0.4, 0.8],
-                                    dash_misc: DashMisc {
-                                        dash_len: 4.0,
-                                        dash_spacing: 1.5,
-                                        dash_roundness: 1.0,
-                                        dash_speed: 4.0,
-                                    },
-                                    sub_dash_color: [0.8, 1.0, 1.0, 0.5],
-                                    sub_dash_misc: DashMisc {
-                                        dash_len: 1.0,
-                                        dash_spacing: 1.0,
-                                        dash_roundness: 0.0,
-                                        dash_speed: -2.0,
-                                    },
-                                    misc: c.misc,
-                                    shape_data: ShapeData {
-                                        x: c.x,
-                                        y: c.y,
-                                        radius: c.radius,
-                                        border_thickness: 0.1 * c.radius,
-                                    },
-                                };
-                                editor_layer
-                                    .elements
-                                    .push(UiElement::Outline(circle_outline));
-
-                                let handle = UiButtonHandle {
-                                    id: Some("Circle Handle".to_string()),
-                                    parent_id: c.id,
-                                    x: c.x,
-                                    y: c.y,
-                                    radius: c.radius,
-                                    handle_color: [0.65, 0.22, 0.05, 1.0],
-                                    handle_misc: HandleMisc {
-                                        handle_len: 0.09,
-                                        handle_width: 0.2,
-                                        handle_roundness: 0.3,
-                                        handle_speed: 0.0,
-                                    },
-                                    sub_handle_color: [0.0, 0.0, 0.0, 0.7],
-                                    sub_handle_misc: HandleMisc {
-                                        handle_len: 0.08,
-                                        handle_width: 0.05,
-                                        handle_roundness: 0.5,
-                                        handle_speed: 0.0,
-                                    },
-                                    misc: MiscButtonSettings {
-                                        active: true,
-                                        touched_time: 0.0,
-                                        is_touched: false,
-                                        pressable: true,
-                                        editable: false,
-                                    },
-                                };
-                                editor_layer.elements.push(UiElement::Handle(handle));
-                            }
-                        }
-                        UiElement::Handle(_h) => {}
-                        UiElement::Polygon(p) => {
-                            if self.touch_manager.options.editor_mode && p.misc.editable {
-                                let mut cx = 0.0;
-                                let mut cy = 0.0;
-                                for v in &p.vertices {
-                                    cx += v.pos[0];
-                                    cy += v.pos[1];
-                                }
-                                cx /= p.vertices.len() as f32;
-                                cy /= p.vertices.len() as f32;
-
-                                let mut radius: f32 = 0.0;
-                                for (i, v) in p.vertices.iter().enumerate() {
-                                    let dx = v.pos[0] - cx;
-                                    let dy = v.pos[1] - cy;
-                                    let distance = (dx * dx + dy * dy).sqrt();
-                                    radius = radius.max(distance);
-
-                                    let vertex_outline = UiButtonCircle {
-                                        id: Some(format!("vertex_outline_{}", i)),
-                                        action: "None".to_string(),
-                                        style: "None".to_string(),
-                                        x: v.pos[0],
-                                        y: v.pos[1],
-                                        radius: 10.0,
-                                        inside_border_thickness_percentage: 2.0,
-                                        border_thickness_percentage: 0.0,
-                                        fade: 1.0,
-                                        fill_color: [0.0, 0.8, 0.0, 0.6],
-                                        inside_border_color: [0.0; 4],
-                                        border_color: [0.0, 0.0, 0.0, 0.0],
-                                        glow_color: [0.0, 0.0, 0.5, 0.0],
-                                        glow_misc: GlowMisc {
-                                            glow_size: 0.0,
-                                            glow_speed: 0.0,
-                                            glow_intensity: 0.0,
-                                        },
-                                        misc: MiscButtonSettings {
-                                            active: false,
-                                            touched_time: 0.0,
-                                            is_touched: false,
-                                            pressable: false,
-                                            editable: false,
-                                        },
-                                    };
-                                    editor_layer
-                                        .elements
-                                        .push(UiElement::Circle(vertex_outline));
-                                }
-
-                                let polygon_outline = UiButtonOutline {
-                                    id: Some("Polygon Outline".to_string()),
-                                    parent_id: p.id.clone(),
-                                    mode: 1.0,
-                                    vertex_offset: 0,
-                                    vertex_count: p.vertices.len() as u32,
-                                    dash_color: [0.2, 0.0, 0.4, 0.8],
-                                    dash_misc: DashMisc {
-                                        dash_len: 4.0,
-                                        dash_spacing: 1.5,
-                                        dash_roundness: 1.0,
-                                        dash_speed: 4.0,
-                                    },
-                                    sub_dash_color: [0.8, 1.0, 1.0, 0.5],
-                                    sub_dash_misc: DashMisc {
-                                        dash_len: 1.0,
-                                        dash_spacing: 1.0,
-                                        dash_roundness: 0.0,
-                                        dash_speed: -2.0,
-                                    },
-                                    misc: p.misc,
-                                    shape_data: ShapeData {
-                                        x: cx,
-                                        y: cy,
-                                        radius,
-                                        border_thickness: 2.0,
-                                    },
-                                };
-                                editor_layer
-                                    .elements
-                                    .push(UiElement::Outline(polygon_outline));
-                            }
-                        }
-                        UiElement::Text(_tx) => {}
-                        UiElement::Outline(_o) => {}
+                    if is_handle {
+                        // Update existing handles/outlines from parent
+                        Self::update_selection_visuals(&self.menus, editor_layer);
+                    } else {
+                        // Create new selection visuals
+                        editor_layer.clear_handles();
+                        editor_layer.clear_outlines();
+                        Self::create_selection_visuals(editor_layer, &element, &sel, editor_mode);
                     }
                 }
+                self.menus.insert("Editor_Menu".to_string(), editor_menu);
             }
         }
 
@@ -1750,7 +1868,6 @@ impl UiButtonLoader {
             self.ui_runtime.selected_ui_element_primary.just_selected = true;
         }
     }
-
     // ========================================================================
     // UNDO/REDO OPERATIONS
     // ========================================================================
@@ -1875,10 +1992,7 @@ impl UiButtonLoader {
     fn get_polygon(&self, menu: &str, layer: &str, id: &str) -> Option<UiButtonPolygon> {
         let menu = self.menus.get(menu)?;
         let layer = menu.layers.iter().find(|l| l.name == layer)?;
-        layer
-            .iter_polygons()
-            .find(|p| p.id.as_deref() == Some(id))
-            .cloned()
+        layer.iter_polygons().find(|p| p.id == id).cloned()
     }
 
     fn create_polygon_snapshot_with_vertices(
@@ -2073,12 +2187,7 @@ fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
     const EPSILON: f32 = 0.001;
     a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
 }
-fn this_text(
-    selected: &SelectedUiElement,
-    menu: &str,
-    layer: &str,
-    element_id: Option<String>,
-) -> bool {
+fn this_text(selected: &SelectedUiElement, menu: &str, layer: &str, element_id: String) -> bool {
     if selected.menu_name != menu {
         return false;
     }
@@ -2086,11 +2195,7 @@ fn this_text(
         return false;
     }
 
-    if let Some(id) = element_id {
-        return selected.element_id == id;
-    }
-
-    false
+    selected.element_id == element_id
 }
 
 pub fn get_element(
@@ -2102,34 +2207,19 @@ pub fn get_element(
     let menu = menus.get(menu_name)?;
     let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
 
-    if let Some(c) = layer
-        .iter_circles()
-        .find(|c| c.id.as_deref() == Some(element_id))
-    {
+    if let Some(c) = layer.iter_circles().find(|c| c.id == element_id) {
         return Some(UiElement::Circle(c.clone()));
     }
-    if let Some(t) = layer
-        .iter_texts()
-        .find(|t| t.id.as_deref() == Some(element_id))
-    {
+    if let Some(t) = layer.iter_texts().find(|t| t.id == element_id) {
         return Some(UiElement::Text(t.clone()));
     }
-    if let Some(p) = layer
-        .iter_polygons()
-        .find(|p| p.id.as_deref() == Some(element_id))
-    {
+    if let Some(p) = layer.iter_polygons().find(|p| p.id == element_id) {
         return Some(UiElement::Polygon(p.clone()));
     }
-    if let Some(h) = layer
-        .iter_handles()
-        .find(|h| h.id.as_deref() == Some(element_id))
-    {
+    if let Some(h) = layer.iter_handles().find(|h| h.id == element_id) {
         return Some(UiElement::Handle(h.clone()));
     }
-    if let Some(o) = layer
-        .iter_outlines()
-        .find(|o| o.id.as_deref() == Some(element_id))
-    {
+    if let Some(o) = layer.iter_outlines().find(|o| o.id == element_id) {
         return Some(UiElement::Outline(o.clone()));
     }
 
@@ -2159,18 +2249,9 @@ pub fn get_element_size(
     let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
 
     match kind {
-        ElementKind::Circle => layer
-            .iter_circles()
-            .find(|c| c.id.as_deref() == Some(id))
-            .map(|c| c.radius),
-        ElementKind::Text => layer
-            .iter_texts()
-            .find(|t| t.id.as_deref() == Some(id))
-            .map(|t| t.px as f32),
-        ElementKind::Handle => layer
-            .iter_handles()
-            .find(|h| h.id.as_deref() == Some(id))
-            .map(|h| h.radius),
+        ElementKind::Circle => layer.iter_circles().find(|c| c.id == id).map(|c| c.radius),
+        ElementKind::Text => layer.iter_texts().find(|t| t.id == id).map(|t| t.px as f32),
+        ElementKind::Handle => layer.iter_handles().find(|h| h.id == id).map(|h| h.radius),
         _ => None,
     }
 }
@@ -2186,6 +2267,6 @@ pub fn get_polygon_vertices(
 
     layer
         .iter_polygons() // mutable iterator
-        .find(|p| p.id.as_deref() == Some(id))
+        .find(|p| p.id == id)
         .map(|p| p.vertices.iter().map(|v| v.pos).collect())
 }

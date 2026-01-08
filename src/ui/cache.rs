@@ -3,6 +3,7 @@ use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
 
 pub fn rebuild_text_cache(layer: &mut RuntimeLayer, rebuilt: &mut LayerDirty, runtime: &UiRuntime) {
@@ -74,7 +75,7 @@ pub fn rebuild_circle_cache(
 }
 
 fn find_polygon_by_id<'a>(
-    id: &Option<String>,
+    id: &Option<ElementRef>,
     before: &'a [RuntimeLayer],
     after: &'a [RuntimeLayer],
 ) -> Option<&'a UiButtonPolygon> {
@@ -83,7 +84,7 @@ fn find_polygon_by_id<'a>(
     for layer in before.iter().chain(after.iter()) {
         for element in &layer.elements {
             if let UiElement::Polygon(p) = element {
-                if p.id.as_ref() == Some(target) {
+                if p.id == target.id {
                     return Some(p);
                 }
             }
@@ -108,7 +109,7 @@ pub fn rebuild_outline_cache(
     {
         if let (UiElement::Outline(o), UiElementCache::Outline(cached)) = (element, cache_element) {
             if o.mode == 1.0 {
-                if let Some(poly) = find_polygon_by_id(&o.parent_id, before, after) {
+                if let Some(poly) = find_polygon_by_id(&o.parent, before, after) {
                     o.vertex_offset = layer.cache.outline_poly_vertices.len() as u32;
                     o.vertex_count = poly.vertices.len() as u32;
 
@@ -241,14 +242,13 @@ pub fn rebuild_polygon_cache(
     rebuilt.mark_polygons();
 }
 
-pub fn runtime_info(runtime: &UiRuntime, id: &Option<String>) -> (ButtonRuntime, f32) {
-    let id_str = id.as_deref().unwrap_or("");
-    let runtime = runtime.get(id_str);
+pub fn runtime_info(runtime: &UiRuntime, id: &String) -> (ButtonRuntime, f32) {
+    let runtime = runtime.get(id);
 
-    let hash = if id_str.is_empty() {
+    let hash = if id.is_empty() {
         f32::MAX
     } else {
-        UiButtonLoader::hash_id(id_str)
+        UiButtonLoader::hash_id(id)
     };
 
     (runtime, hash)

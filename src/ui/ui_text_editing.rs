@@ -87,7 +87,7 @@ pub fn handle_text_editing(
             }
 
             for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                if text.id.as_ref() != Some(&sel_element_id) {
+                if text.id != sel_element_id {
                     continue;
                 }
 

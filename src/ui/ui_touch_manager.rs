@@ -15,6 +15,7 @@ use crate::ui::ui_editor::GuiOptions;
 use crate::ui::vertex::{
     ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonText, UiElement,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 // ============================================================================
@@ -59,7 +60,7 @@ impl Default for TouchConfig {
 // ============================================================================
 
 /// Reference to an element (menu/layer/id)
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ElementRef {
     pub menu: String,
     pub layer: String,
@@ -82,6 +83,7 @@ impl ElementRef {
 #[derive(Clone, Debug)]
 pub struct HitTestResult {
     pub element_ref: ElementRef,
+    pub affected_element: Option<ElementRef>,
     pub z_order: u32,
     pub element_order: usize,
     pub action: Option<String>,
@@ -204,6 +206,12 @@ pub enum TouchEvent {
     NavigateDirection {
         direction: NavigationDirection,
     },
+    // HandleDragStart {
+    //     handle_element: ElementRef,
+    //     affected_element: ElementRef,
+    //     start_position: (f32, f32),
+    //     vertex_index: Option<usize>
+    // },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,7 +228,6 @@ pub enum NavigationDirection {
 
 /// Trait for elements that can be hit-tested
 pub trait Touchable {
-    fn id(&self) -> Option<&str>;
     fn kind(&self) -> ElementKind;
     fn hit_test(&self, point: (f32, f32)) -> Option<TouchableHit>;
     fn center(&self) -> (f32, f32);
@@ -249,10 +256,6 @@ pub trait Draggable: Touchable {
 // ============================================================================
 
 impl Touchable for UiButtonCircle {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-
     fn kind(&self) -> ElementKind {
         ElementKind::Circle
     }
@@ -308,10 +311,6 @@ impl Draggable for UiButtonCircle {
 }
 
 impl Touchable for UiButtonPolygon {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-
     fn kind(&self) -> ElementKind {
         ElementKind::Polygon
     }
@@ -400,10 +399,6 @@ impl Draggable for UiButtonPolygon {
 }
 
 impl Touchable for UiButtonText {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-
     fn kind(&self) -> ElementKind {
         ElementKind::Text
     }
@@ -463,10 +458,6 @@ impl Draggable for UiButtonText {
 }
 
 impl Touchable for UiButtonHandle {
-    fn id(&self) -> Option<&str> {
-        self.id.as_deref()
-    }
-
     fn kind(&self) -> ElementKind {
         ElementKind::Handle
     }
@@ -631,7 +622,7 @@ impl HitDetector {
     ) -> Option<HitTestResult> {
         let (id, kind, active, pressable, editable, action) = match element {
             UiElement::Circle(c) => (
-                c.id.as_deref(),
+                c.id.clone(),
                 ElementKind::Circle,
                 c.misc.active,
                 c.misc.pressable,
@@ -639,7 +630,7 @@ impl HitDetector {
                 Some(c.action.as_str()),
             ),
             UiElement::Polygon(p) => (
-                p.id.as_deref(),
+                p.id.clone(),
                 ElementKind::Polygon,
                 p.misc.active,
                 p.misc.pressable,
@@ -647,7 +638,7 @@ impl HitDetector {
                 Some(p.action.as_str()),
             ),
             UiElement::Text(t) => (
-                t.id.as_deref(),
+                t.id.clone(),
                 ElementKind::Text,
                 t.misc.active,
                 t.misc.pressable,
@@ -655,7 +646,7 @@ impl HitDetector {
                 Some(t.action.as_str()),
             ),
             UiElement::Handle(h) => (
-                h.id.as_deref(),
+                h.id.clone(),
                 ElementKind::Handle,
                 h.misc.active,
                 h.misc.pressable,
@@ -675,8 +666,8 @@ impl HitDetector {
             return None;
         }
 
-        let id = id?;
         let mut text_being_edited = None;
+        let mut affected_element = None;
         let hit = match element {
             UiElement::Circle(c) => c.hit_test(point),
             UiElement::Polygon(p) => p.hit_test(point),
@@ -684,12 +675,16 @@ impl HitDetector {
                 text_being_edited = Some(t.being_edited);
                 t.hit_test(point)
             }
-            UiElement::Handle(h) => h.hit_test(point),
+            UiElement::Handle(h) => {
+                affected_element = h.parent.clone();
+                h.hit_test(point)
+            }
             _ => None,
         }?;
 
         Some(HitTestResult {
-            element_ref: ElementRef::new(menu_name, layer_name, id, kind),
+            element_ref: ElementRef::new(menu_name, layer_name, id.as_str(), kind),
+            affected_element,
             z_order: layer_order,
             element_order,
             action: action.map(|s| s.to_string()),
@@ -714,22 +709,19 @@ impl HitDetector {
         for (menu_name, layer_name, element) in elements {
             let (id, kind, center) = match element {
                 UiElement::Circle(c) if c.misc.active => {
-                    (c.id.as_deref(), ElementKind::Circle, (c.x, c.y))
+                    (c.id.clone(), ElementKind::Circle, (c.x, c.y))
                 }
                 UiElement::Polygon(p) if p.misc.active => {
-                    (p.id.as_deref(), ElementKind::Polygon, p.center())
+                    (p.id.clone(), ElementKind::Polygon, p.center())
                 }
                 UiElement::Text(t) if t.misc.active => {
-                    (t.id.as_deref(), ElementKind::Text, (t.x, t.y))
+                    (t.id.clone(), ElementKind::Text, (t.x, t.y))
                 }
                 _ => continue,
             };
 
-            if let Some(id) = id {
-                if center.0 >= min_x && center.0 <= max_x && center.1 >= min_y && center.1 <= max_y
-                {
-                    results.push(ElementRef::new(menu_name, layer_name, id, kind));
-                }
+            if center.0 >= min_x && center.0 <= max_x && center.1 >= min_y && center.1 <= max_y {
+                results.push(ElementRef::new(menu_name, layer_name, id.as_str(), kind));
             }
         }
 
@@ -751,6 +743,7 @@ pub struct DragCoordinator {
 #[derive(Clone, Debug)]
 pub struct ActiveDrag {
     pub element: ElementRef,
+    pub affected_element: Option<ElementRef>,
     pub start_position: (f32, f32),
     pub current_position: (f32, f32),
     pub offset: (f32, f32),
@@ -783,6 +776,7 @@ impl DragCoordinator {
     pub fn begin(
         &mut self,
         element: ElementRef,
+        affected_element: Option<ElementRef>,
         mouse_pos: (f32, f32),
         anchor: (f32, f32),
         vertex_index: Option<usize>,
@@ -791,6 +785,7 @@ impl DragCoordinator {
 
         self.active_drag = Some(ActiveDrag {
             element,
+            affected_element,
             start_position: mouse_pos,
             current_position: mouse_pos,
             offset,
@@ -815,11 +810,22 @@ impl DragCoordinator {
         if !drag.threshold_exceeded && distance >= config.drag_threshold {
             drag.threshold_exceeded = true;
             let drag_element = drag.element.clone();
-            events.push(TouchEvent::DragStart {
-                element: drag_element,
-                start_position: drag.start_position,
-                vertex_index: drag.vertex_index,
-            });
+            if drag_element.kind == ElementKind::Handle {
+                // if let Some(affected_element) = drag.affected_element.clone() {
+                //     events.push(TouchEvent::HandleDragStart {
+                //         handle_element: drag_element,
+                //         affected_element,
+                //         start_position: drag.start_position,
+                //         vertex_index: drag.vertex_index,
+                //     });
+                // }
+            } else {
+                events.push(TouchEvent::DragStart {
+                    element: drag_element,
+                    start_position: drag.start_position,
+                    vertex_index: drag.vertex_index,
+                });
+            }
         }
 
         if drag.threshold_exceeded {
@@ -1201,8 +1207,13 @@ impl UiTouchManager {
             // Begin potential drag
             if !hit.text_being_edited.unwrap_or(false) {
                 let anchor = input.position; // Could get from element's drag anchor
-                self.drag
-                    .begin(element.clone(), input.position, anchor, hit.vertex_index);
+                self.drag.begin(
+                    element.clone(),
+                    hit.affected_element.clone(),
+                    input.position,
+                    anchor,
+                    hit.vertex_index,
+                );
             }
 
             // Handle selection
@@ -1534,7 +1545,13 @@ mod tests {
         };
 
         let elem = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
-        dc.begin(elem, (100.0, 100.0), (100.0, 100.0), None);
+        dc.begin(
+            elem.clone(),
+            Some(elem),
+            (100.0, 100.0),
+            (100.0, 100.0),
+            None,
+        );
 
         // Move less than threshold
         let events = dc.update((102.0, 102.0), &config);

@@ -29,7 +29,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_circle_mut)
-                .find(|c| c.id.as_deref() == Some(id))
+                .find(|c| c.id == id)
             {
                 c.x = pos.0;
                 c.y = pos.1;
@@ -41,7 +41,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_text_mut)
-                .find(|t| t.id.as_deref() == Some(id))
+                .find(|t| t.id == id)
             {
                 t.x = pos.0;
                 t.y = pos.1;
@@ -53,7 +53,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_polygon_mut)
-                .find(|p| p.id.as_deref() == Some(id))
+                .find(|p| p.id == id)
             {
                 let (cx, cy) = p.center();
                 let dx = pos.0 - cx;
@@ -70,7 +70,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_handle_mut)
-                .find(|h| h.id.as_deref() == Some(id))
+                .find(|h| h.id == id)
             {
                 h.x = pos.0;
                 h.y = pos.1;
@@ -101,23 +101,23 @@ pub fn set_element_size(
     for element in &mut layer.elements {
         match element {
             // PRIMARY ELEMENT
-            UiElement::Circle(c) if kind == ElementKind::Circle && c.id.as_deref() == Some(id) => {
+            UiElement::Circle(c) if kind == ElementKind::Circle && c.id == id => {
                 c.radius = size;
                 layer.dirty.mark_circles();
             }
 
-            UiElement::Text(t) if kind == ElementKind::Text && t.id.as_deref() == Some(id) => {
+            UiElement::Text(t) if kind == ElementKind::Text && t.id == id => {
                 t.px = size.max(4.0) as u16;
                 layer.dirty.mark_texts();
             }
 
             // DEPENDENTS (always applied immediately)
-            UiElement::Handle(h) if h.parent_id.as_deref() == Some(id) => {
+            UiElement::Handle(h) if matches!(h.parent.as_ref(), Some(p) if p.id == id) => {
                 h.radius = size;
                 layer.dirty.mark_handles();
             }
 
-            UiElement::Outline(o) if o.parent_id.as_deref() == Some(id) => {
+            UiElement::Outline(o) if matches!(o.parent.as_ref(), Some(p) if p.id == id) => {
                 o.shape_data.radius = size;
                 layer.dirty.mark_outlines();
             }
@@ -149,7 +149,7 @@ pub fn set_element_color(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_circle_mut)
-                .find(|c| c.id.as_deref() == Some(id))
+                .find(|c| c.id == id)
             {
                 match property {
                     ColorProperty::Fill => c.fill_color = color,
@@ -166,7 +166,7 @@ pub fn set_element_color(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_text_mut)
-                .find(|t| t.id.as_deref() == Some(id))
+                .find(|t| t.id == id)
             {
                 if matches!(property, ColorProperty::TextColor) {
                     t.color = color;
@@ -197,7 +197,7 @@ pub fn set_vertex_position(
         .elements
         .iter_mut()
         .filter_map(UiElement::as_polygon_mut)
-        .find(|p| p.id.as_deref() == Some(id))
+        .find(|p| p.id == id)
     {
         if let Some(v) = poly.vertices.get_mut(vertex_index) {
             v.pos = pos;
@@ -241,7 +241,7 @@ pub fn set_text_content(
         .elements
         .iter_mut()
         .filter_map(UiElement::as_text_mut)
-        .find(|t| t.id.as_deref() == Some(id))
+        .find(|t| t.id == id)
     {
         t.text = text.to_string();
         t.template = template.to_string();
@@ -392,23 +392,23 @@ pub fn create_element(
         UiElement::Text(t) => {
             t.x = mouse.pos.x;
             t.y = mouse.pos.y;
-            t.id = Option::from(id.to_string());
+            t.id = id.to_string();
         }
         UiElement::Circle(c) => {
             c.x = mouse.pos.x;
             c.y = mouse.pos.y;
-            c.id = Option::from(id.to_string());
+            c.id = id.to_string();
         }
         UiElement::Outline(o) => {
-            o.id = Option::from(id.to_string());
+            o.id = id.to_string();
         }
         UiElement::Handle(h) => {
             h.x = mouse.pos.x;
             h.y = mouse.pos.y;
-            h.id = Option::from(id.to_string());
+            h.id = id.to_string();
         }
         UiElement::Polygon(p) => {
-            p.id = Option::from(id.to_string());
+            p.id = id.to_string();
         }
     }
 

@@ -96,7 +96,7 @@ impl Default for OutlineParams {
             vertex_count: 0,
             _pad0: 1,
 
-            shape_data: [600.0, 600.0, 60.0, 10.0],
+            shape_data: [600.0, 600.0, 60.0, 0.1],
             dash_color: [0.0, 0.2, 0.7, 0.8],
             dash_misc: [2.0, 1.0, 1.0, 2.0], // (dash_len, dash_spacing, dash_roundness, speed)
             sub_dash_color: [0.3, 0.4, 0.5, 0.9],
@@ -158,7 +158,7 @@ pub struct TextParams {
     pub text: String,
     pub natural_width: f32,
     pub natural_height: f32,
-    pub id: Option<String>,
+    pub id: String,
     pub caret: usize,
     pub glyph_bounds: Vec<(f32, f32)>,
     pub anchor: Option<Anchor>,
@@ -176,7 +176,7 @@ impl Default for TextParams {
             text: "".to_string(),
             natural_width: 20.0,
             natural_height: 10.0,
-            id: None,
+            id: "None".to_string(),
             caret: 0,
             glyph_bounds: vec![],
             anchor: None,

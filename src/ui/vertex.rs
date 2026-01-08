@@ -1,6 +1,7 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
+use crate::ui::ui_touch_manager::ElementRef;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
@@ -403,11 +404,11 @@ impl UiElement {
     }
     pub fn id(&self) -> &str {
         match self {
-            UiElement::Text(t) => t.id.as_deref().unwrap_or(""),
-            UiElement::Circle(c) => c.id.as_deref().unwrap_or(""),
-            UiElement::Outline(o) => o.id.as_deref().unwrap_or(""),
-            UiElement::Handle(h) => h.id.as_deref().unwrap_or(""),
-            UiElement::Polygon(p) => p.id.as_deref().unwrap_or(""),
+            UiElement::Text(t) => &*t.id,
+            UiElement::Circle(c) => c.id.as_str(),
+            UiElement::Outline(o) => &*o.id,
+            UiElement::Handle(h) => &*h.id,
+            UiElement::Polygon(p) => &*p.id,
         }
     }
 
@@ -714,7 +715,7 @@ pub struct RuntimeLayer {
     pub saveable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ElementKind {
     Text,
     Circle,
@@ -1082,7 +1083,7 @@ impl UiButtonText {
 // --- all possible button shapes ---
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonText {
-    pub id: Option<String>,
+    pub id: String,
     pub action: String,
     pub style: String,
     pub x: f32,
@@ -1116,7 +1117,7 @@ pub struct UiButtonText {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
-    pub id: Option<String>,
+    pub id: String,
     pub action: String,
     pub style: String,
     pub vertices: Vec<UiVertex>,
@@ -1126,7 +1127,7 @@ pub struct UiButtonPolygon {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircle {
-    pub id: Option<String>,
+    pub id: String,
     pub action: String,
     pub style: String,
     pub x: f32,
@@ -1145,8 +1146,8 @@ pub struct UiButtonCircle {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonOutline {
-    pub id: Option<String>,
-    pub parent_id: Option<String>,
+    pub id: String,
+    pub parent: Option<ElementRef>,
 
     pub mode: f32, // 0 = circle, 1 = polygon
 
@@ -1164,7 +1165,7 @@ pub struct UiButtonOutline {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonHandle {
-    pub id: Option<String>,
+    pub id: String,
     pub x: f32,
     pub y: f32,
     pub radius: f32,
@@ -1173,7 +1174,7 @@ pub struct UiButtonHandle {
     pub sub_handle_color: [f32; 4],
     pub sub_handle_misc: HandleMisc,
     pub misc: MiscButtonSettings,
-    pub parent_id: Option<String>,
+    pub parent: Option<ElementRef>,
 }
 
 impl UiButtonText {
@@ -1332,7 +1333,7 @@ impl UiButtonHandle {
             handle_misc: h.handle_misc,
             sub_handle_color: h.sub_handle_color,
             sub_handle_misc: h.sub_handle_misc,
-            parent_id: h.parent_id,
+            parent: h.parent,
             misc: MiscButtonSettings {
                 active: h.misc.active,
                 touched_time: 0.0,
@@ -1357,7 +1358,7 @@ impl UiButtonHandle {
             sub_handle_color: self.sub_handle_color,
             sub_handle_misc: self.sub_handle_misc.clone(),
 
-            parent_id: self.parent_id.clone(),
+            parent: self.parent.clone(),
             misc: self.misc.to_yaml(),
         }
     }
@@ -1368,7 +1369,7 @@ impl UiButtonOutline {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutline {
             id: o.id,
-            parent_id: o.parent_id,
+            parent: o.parent,
             mode: o.mode,
             vertex_offset: 0,
             vertex_count: 0,
@@ -1391,7 +1392,7 @@ impl UiButtonOutline {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutlineYaml {
             id: self.id.clone(),
-            parent_id: self.parent_id.clone(),
+            parent: self.parent.clone(),
 
             mode: self.mode,
             shape_data: self.shape_data.scale_to_normalized(window_size, scale),
@@ -1465,7 +1466,7 @@ impl UiButtonPolygon {
 impl Default for UiButtonText {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
             x: 0.0,
@@ -1537,7 +1538,7 @@ impl Default for UiButtonPolygon {
         ];
 
         Self {
-            id: None,
+            id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
             vertices: verts,
@@ -1550,7 +1551,7 @@ impl Default for UiButtonPolygon {
 impl Default for UiButtonCircle {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
             x: 0.0,
@@ -1572,8 +1573,8 @@ impl Default for UiButtonCircle {
 impl Default for UiButtonOutline {
     fn default() -> Self {
         Self {
-            id: None,
-            parent_id: None,
+            id: "None".to_string(),
+            parent: None,
             mode: 1.0,
             vertex_offset: 0,
             vertex_count: 0,
@@ -1590,7 +1591,7 @@ impl Default for UiButtonOutline {
 impl Default for UiButtonHandle {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             x: 0.0,
             y: 0.0,
             radius: 6.0,
@@ -1599,7 +1600,7 @@ impl Default for UiButtonHandle {
             sub_handle_color: [1.0, 1.0, 1.0, 1.0],
             sub_handle_misc: HandleMisc::default(),
             misc: MiscButtonSettings::default(),
-            parent_id: None,
+            parent: None,
         }
     }
 }
@@ -1654,8 +1655,11 @@ impl Default for UiVertex {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct UiButtonTextYaml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub id: String,
 
     #[serde(
         default = "default_none_string",
@@ -1702,7 +1706,7 @@ pub struct UiButtonTextYaml {
 impl Default for UiButtonTextYaml {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
             x: 0.0,
@@ -1725,8 +1729,11 @@ impl Default for UiButtonTextYaml {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct UiButtonCircleYaml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub id: String,
 
     #[serde(
         default = "default_none_string",
@@ -1774,7 +1781,7 @@ pub struct UiButtonCircleYaml {
 impl Default for UiButtonCircleYaml {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
             x: 0.0,
@@ -1797,8 +1804,11 @@ impl Default for UiButtonCircleYaml {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct UiButtonHandleYaml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub id: String,
 
     pub x: f32,
     pub y: f32,
@@ -1818,13 +1828,13 @@ pub struct UiButtonHandleYaml {
     pub misc: MiscButtonSettingsYaml,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
+    pub parent: Option<ElementRef>,
 }
 
 impl Default for UiButtonHandleYaml {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             x: 0.0,
             y: 0.0,
             radius: 0.0,
@@ -1833,7 +1843,7 @@ impl Default for UiButtonHandleYaml {
             sub_handle_color: [1.0, 1.0, 1.0, 1.0],
             sub_handle_misc: HandleMisc::default(),
             misc: MiscButtonSettingsYaml::default(),
-            parent_id: None,
+            parent: None,
         }
     }
 }
@@ -1842,11 +1852,14 @@ impl Default for UiButtonHandleYaml {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct UiButtonOutlineYaml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub id: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
+    pub parent: Option<ElementRef>,
 
     #[serde(skip_serializing_if = "is_default")]
     pub mode: f32,
@@ -1872,8 +1885,8 @@ pub struct UiButtonOutlineYaml {
 impl Default for UiButtonOutlineYaml {
     fn default() -> Self {
         Self {
-            id: None,
-            parent_id: None,
+            id: "None".to_string(),
+            parent: None,
             mode: 0.0,
             shape_data: ShapeData::default(),
             dash_color: [1.0, 1.0, 1.0, 1.0],
@@ -1889,8 +1902,11 @@ impl Default for UiButtonOutlineYaml {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(default)]
 pub struct UiButtonPolygonYaml {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub id: String,
 
     #[serde(
         default = "default_none_string",
@@ -1915,7 +1931,7 @@ pub struct UiButtonPolygonYaml {
 impl Default for UiButtonPolygonYaml {
     fn default() -> Self {
         Self {
-            id: None,
+            id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
             vertices: Vec::new(),

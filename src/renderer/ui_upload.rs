@@ -213,7 +213,7 @@ pub fn build_text_vertices(
     let mut text_vertices: Vec<UiVertexText> = Vec::new();
     let caret_by_id: HashMap<String, usize> = layer
         .iter_texts()
-        .filter_map(|t| t.id.as_ref().map(|id| (id.clone(), t.caret)))
+        .map(|t| (t.id.clone(), t.caret))
         .collect();
     for tp in layer
         .cache
@@ -248,7 +248,7 @@ pub fn build_text_vertices(
 
         let pad = 4.0; // same as your selection outline pad
 
-        let maybe_caret = tp.id.as_ref().and_then(|id| caret_by_id.get(id).copied());
+        let maybe_caret = caret_by_id.get(&tp.id).copied();
 
         let caret_index = maybe_caret.unwrap_or(tp.text.len());
         tp.glyph_bounds.clear();
@@ -273,14 +273,14 @@ pub fn build_text_vertices(
 
         // find mutable original text if needed (for writing glyph bounds back)
         let mut original_text: Option<&mut UiButtonText> = None;
-        if let Some(ref text_id) = tp.id {
-            for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                if t.id.as_ref() == Some(text_id) {
-                    original_text = Some(t);
-                    break;
-                }
+
+        for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
+            if t.id == tp.id {
+                original_text = Some(t);
+                break;
             }
         }
+
         if let Some(orig) = &mut original_text {
             orig.glyph_bounds.clear();
         }
@@ -341,11 +341,9 @@ pub fn build_text_vertices(
 
         // ---- selection / editor outlines / brackets etc ----
         let mut is_selected = false;
-        if let Some(ref text_id) = tp.id {
-            if let Some(sel) = &touch_manager.selection.primary {
-                if sel.id == *text_id && sel.layer == layer.name && sel.menu == *menu_name {
-                    is_selected = true;
-                }
+        if let Some(sel) = &touch_manager.selection.primary {
+            if sel.id == tp.id && sel.layer == layer.name && sel.menu == *menu_name {
+                is_selected = true;
             }
         }
 
