@@ -119,15 +119,6 @@ pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
         return Vec::new();
     }
 
-    // enforce CCW orientation
-    if compute_signed_area(&verts) < 0.0 {
-        verts.reverse();
-        // also fix ids so selection stays sane
-        for (i, v) in verts.iter_mut().enumerate() {
-            v.id = i;
-        }
-    }
-
     // working index list
     let mut idx: Vec<usize> = (0..n).collect();
     let mut tri_indices: Vec<u32> = Vec::with_capacity((n - 2) * 3);

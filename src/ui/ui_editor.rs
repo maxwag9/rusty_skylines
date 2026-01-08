@@ -478,9 +478,11 @@ impl UiButtonLoader {
         // Store drag offset for editor mode
         if self.touch_manager.editor.enabled {
             if let Some(elem) = self.get_element(&element.menu, &element.layer, &element.id) {
-                let center = elem.center();
-                let offset = (position.0 - center.0, position.1 - center.1);
-                self.ui_runtime.drag_offset = Some(offset);
+                if vertex_index.is_none() {
+                    let center = elem.center();
+                    let offset = (position.0 - center.0, position.1 - center.1);
+                    self.ui_runtime.drag_offset = Some(offset);
+                }
                 self.touch_manager.editor.active_vertex = vertex_index;
             }
         }

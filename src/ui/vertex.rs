@@ -990,7 +990,7 @@ impl ShapeData {
             x: self.x * window_size.width as f32,
             y: self.y * window_size.height as f32,
             radius: self.radius * scale,
-            border_thickness: self.border_thickness * scale,
+            border_thickness: self.border_thickness,
         }
     }
 
@@ -1003,7 +1003,7 @@ impl ShapeData {
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
             radius: self.radius / scale,
-            border_thickness: self.border_thickness / scale,
+            border_thickness: self.border_thickness,
         }
     }
 }
@@ -1280,7 +1280,7 @@ impl UiButtonCircle {
             border_color: c.border_color,
             glow_color: c.glow_color,
             glow_misc: GlowMisc {
-                glow_size: scale * c.glow_misc.glow_size,
+                glow_size: c.glow_misc.glow_size,
                 glow_speed: c.glow_misc.glow_speed,
                 glow_intensity: c.glow_misc.glow_intensity,
             },
@@ -1296,8 +1296,6 @@ impl UiButtonCircle {
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonCircleYaml {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        let mut glow_misc = self.glow_misc.clone();
-        glow_misc.glow_size /= scale;
         UiButtonCircleYaml {
             id: self.id.clone(),
             action: self.action.clone(),
@@ -1314,7 +1312,7 @@ impl UiButtonCircle {
             inside_border_color: self.inside_border_color,
             border_color: self.border_color,
             glow_color: self.glow_color,
-            glow_misc,
+            glow_misc: self.glow_misc.clone(),
 
             misc: self.misc.to_yaml(),
         }
@@ -1501,39 +1499,32 @@ impl Default for UiButtonPolygon {
     fn default() -> Self {
         let verts = vec![
             UiVertex {
-                pos: [-30.0, 30.0],
+                pos: [-60.0, 60.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 roundness: 0.0,
                 _selected: false,
                 id: 0,
             },
             UiVertex {
-                pos: [0.0, -30.0],
+                pos: [0.0, -60.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 roundness: 0.0,
                 _selected: false,
                 id: 1,
             },
             UiVertex {
-                pos: [30.0, 30.0],
+                pos: [60.0, 60.0],
                 color: [1.0, 1.0, 1.0, 1.0],
                 roundness: 0.0,
                 _selected: false,
                 id: 2,
             },
             UiVertex {
-                pos: [30.0, 50.0],
+                pos: [60.0, 100.0],
                 color: [1.0, 1.0, 0.0, 1.0],
                 roundness: 0.0,
                 _selected: false,
                 id: 3,
-            },
-            UiVertex {
-                pos: [50.0, 30.0],
-                color: [1.0, 0.0, 1.0, 1.0],
-                roundness: 0.0,
-                _selected: false,
-                id: 5,
             },
         ];
 
