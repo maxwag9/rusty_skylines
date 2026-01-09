@@ -30,8 +30,15 @@ var<storage, read> shapes: array<ShapeParams>;
 
 // All polygon vertices for all instances packed in one buffer.
 // Coordinates are in screen-space pixels.
+struct UiVertexPoly {
+    pos: vec2<f32>,
+    data: vec2<f32>, // [roundness_px, polygon_index]
+    color: vec4<f32>,
+    misc: vec4<f32>, // active, touched_time, is_touched, hash
+};
+
 @group(1) @binding(1)
-var<storage, read> poly_vertices: array<vec2<f32>>;
+var<storage, read> poly_vertices: array<UiVertexPoly>;
 
 // ==== VERTEX ====
 struct VertexInput {
@@ -110,25 +117,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let radius  = sd.z;
     let thickness_factor = sd.w;
 
-    let hundredth_radius = radius * 0.01;
     let thickness = thickness_factor * radius;
     let W = thickness;
 
-    let dash_len     = max(0.001, s.dash_misc.x);
-    let dash_space   = max(0.001, s.dash_misc.y);
+    // Dash parameters - now interpreted as fractions of circumference/perimeter
+    let dash_len     = max(0.0001, s.dash_misc.x);   // fraction of circumference
+    let dash_space   = max(0.0001, s.dash_misc.y);   // fraction of circumference
     let dash_round   = clamp(s.dash_misc.z, 0.0, 1.0);
-    let speed        = s.dash_misc.w;
+    let speed        = s.dash_misc.w;                 // revolutions per second
 
-    let sub_len      = max(0.001, s.sub_dash_misc.x);
-    let sub_space    = max(0.001, s.sub_dash_misc.y);
+    // Sub-dash parameters - fractions of capsule perimeter
+    let sub_len      = max(0.0001, s.sub_dash_misc.x);
+    let sub_space    = max(0.0001, s.sub_dash_misc.y);
     let sub_round    = clamp(s.sub_dash_misc.z, 0.0, 1.0);
-    let sub_speed    = s.sub_dash_misc.w;
+    let sub_speed    = s.sub_dash_misc.w;             // loops around capsule per second
 
     // =========================
     // MODE 0: circle outline
     // =========================
     if (mode < 0.5) {
-        let center = s.shape_data.xy; // we also have center here if preferred
+        let center = s.shape_data.xy;
         let p = in.local_pos - center;
         let dist = length(p);
 
@@ -142,18 +150,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let arc_px = ang * radius;
         let circ_px = 2.0 * PI * radius;
 
-        // main dash pattern
-        var dash_px   = dash_len   * thickness * hundredth_radius;
-        var space_px  = dash_space * thickness * hundredth_radius;
+        // Main dash pattern - NORMALIZED TO CIRCUMFERENCE
+        // dash_len and dash_space are now fractions of the full circle
+        var dash_px   = dash_len   * circ_px;
+        var space_px  = dash_space * circ_px;
         var period_px = dash_px + space_px;
 
+        // Snap to integer number of periods around the circle
         let n = max(1.0, floor(circ_px / period_px + 0.5));
         let period_adj = circ_px / n;
         dash_px  = dash_px  * (period_adj / period_px);
         space_px = period_adj - dash_px;
         period_px = period_adj;
 
-        let scroll_px = speed * screen.time * thickness;
+        // Scroll speed normalized to circumference (revolutions per second)
+        let scroll_px = speed * screen.time * circ_px;
         let tcoord = repeat(arc_px + scroll_px + 0.5 * dash_px, period_px);
         let s0 = tcoord - 0.5 * dash_px;
 
@@ -167,21 +178,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let aa_main = max(0.75, fwidth(sd_capsule) * 0.75);
         let main_mask = 1.0 - smoothstep(0.0, aa_main, sd_capsule);
 
-        // sub-dashes along capsule perimeter (circle mode reference)
+        // Sub-dashes along capsule perimeter - NORMALIZED TO CAPSULE PERIMETER
         var sub_mask = 0.0;
         if (main_mask > 0.0) {
-            var sub_dash_px = sub_len   * thickness;
-            var sub_space_px = sub_space * thickness;
-            var sub_period   = sub_dash_px + sub_space_px;
-
             let P_capsule = 2.0 * PI * W + 4.0 * L;
 
+            // sub_len and sub_space are fractions of the capsule perimeter
+            var sub_dash_px  = sub_len   * P_capsule;
+            var sub_space_px = sub_space * P_capsule;
+            var sub_period   = sub_dash_px + sub_space_px;
+
+            // Snap to integer number of sub-dashes around the capsule
             let n_sub = max(1.0, floor(P_capsule / sub_period + 0.5));
             let sub_period_adj = P_capsule / n_sub;
             sub_dash_px  = sub_dash_px  * (sub_period_adj / sub_period);
             sub_space_px = sub_period_adj - sub_dash_px;
             sub_period   = sub_period_adj;
 
+            // Compute position along capsule perimeter
             var u = 0.0;
             if (s0 <= -L) {
                 let theta = atan2(v_ring, s0 + L);
@@ -195,7 +209,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 u = 2.0 * PI * W + 2.0 * L + (L - s0);
             }
 
-            let u_scrolled = repeat(u + sub_speed * screen.time * thickness + 0.5 * sub_dash_px,
+            // Sub-dash scroll normalized to capsule perimeter (loops per second)
+            let u_scrolled = repeat(u + sub_speed * screen.time * P_capsule + 0.5 * sub_dash_px,
                                      sub_period);
             let su = u_scrolled - 0.5 * sub_dash_px;
 
@@ -227,7 +242,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // =========================
     // MODE 1: polygon outline
     // =========================
-
     let ofs      = s.vertex_offset;
     let cnt_raw  = s.vertex_count;
     let cnt      = min(cnt_raw, MAX_POLY_VERTS);
@@ -239,7 +253,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // centroid
     var centrid = vec2<f32>(0.0);
     for (var i: u32 = 0u; i < cnt; i = i + 1u) {
-        centrid = centrid + poly_vertices[ofs + i];
+        centrid = centrid + poly_vertices[ofs + i].pos;
     }
     centrid = centrid / f32(cnt);
 
@@ -249,7 +263,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var ord : array<u32,       MAX_POLY_VERTS>;
 
     for (var i: u32 = 0u; i < cnt; i = i + 1u) {
-        let p = poly_vertices[ofs + i];
+        let p = poly_vertices[ofs + i].pos;
         vtx[i] = p;
         ang[i] = atan2(p.y - centrid.y, p.x - centrid.x);
         ord[i] = i;
@@ -353,11 +367,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     //    - arc_px / circ_px identical to circle logic
     let v_ring = best_v;
     let arc_px = best_u;
-    let circ_px = P;
+    let circ_px = P;  // perimeter for polygon
 
-    // --------- main dash pattern (same as circle) ----------
-    var dash_px   = dash_len   * thickness * hundredth_radius;
-    var space_px  = dash_space * thickness * hundredth_radius;
+    // --------- main dash pattern - NORMALIZED TO PERIMETER ----------
+    var dash_px   = dash_len   * circ_px;
+    var space_px  = dash_space * circ_px;
     var period_px = dash_px + space_px;
 
     let n = max(1.0, floor(circ_px / period_px + 0.5));
@@ -366,7 +380,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     space_px = period_adj - dash_px;
     period_px = period_adj;
 
-    let scroll_px = speed * screen.time * thickness;
+    // Scroll speed normalized to perimeter
+    let scroll_px = speed * screen.time * circ_px;
     let tcoord = repeat(arc_px + scroll_px + 0.5 * dash_px, period_px);
     let s0 = tcoord - 0.5 * dash_px;
 
@@ -380,21 +395,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa_main = max(0.75, fwidth(sd_capsule) * 0.75);
     var main_mask = 1.0 - smoothstep(0.0, aa_main, sd_capsule);
 
-    // 4) clip using polygon band: removes corner “extensions”
+    // 4) clip using polygon band: removes corner "extensions"
     let band = abs(sd_poly) - W;
     let aa_band = max(0.75, fwidth(sd_poly) * 1.5);
     let poly_mask = 1.0 - smoothstep(0.0, aa_band, band);
 
     main_mask = main_mask * poly_mask;
 
-    // --------- sub-dashes along capsule perimeter ----------
+    // --------- sub-dashes - NORMALIZED TO CAPSULE PERIMETER ----------
     var sub_mask = 0.0;
     if (main_mask > 0.0) {
-        var sub_dash_px = sub_len   * thickness;
-        var sub_space_px = sub_space * thickness;
-        var sub_period   = sub_dash_px + sub_space_px;
-
         let P_capsule = 2.0 * PI * W + 4.0 * L;
+
+        var sub_dash_px  = sub_len   * P_capsule;
+        var sub_space_px = sub_space * P_capsule;
+        var sub_period   = sub_dash_px + sub_space_px;
 
         let n_sub = max(1.0, floor(P_capsule / sub_period + 0.5));
         let sub_period_adj = P_capsule / n_sub;
@@ -415,7 +430,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             u = 2.0 * PI * W + 2.0 * L + (L - s0);
         }
 
-        let u_scrolled = repeat(u + sub_speed * screen.time * thickness + 0.5 * sub_dash_px,
+        // Sub-dash scroll normalized to capsule perimeter
+        let u_scrolled = repeat(u + sub_speed * screen.time * P_capsule + 0.5 * sub_dash_px,
                                  sub_period);
         let su = u_scrolled - 0.5 * sub_dash_px;
 

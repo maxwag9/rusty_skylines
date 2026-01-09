@@ -3,8 +3,8 @@ use crate::ui::input::MouseState;
 use crate::ui::menu::Menu;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
-use crate::ui::ui_touch_manager::EditorTouchExtension;
-use crate::ui::vertex::{LayerDirty, UiButtonText, UiElement};
+use crate::ui::ui_touch_manager::{EditorTouchExtension, ElementRef};
+use crate::ui::vertex::{ElementKind, LayerDirty, UiButtonText, UiElement};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy)]
@@ -99,9 +99,12 @@ pub fn handle_text_editing(
 
                 if text.text != before_text || text.template != before_template {
                     undo_manager.push_command(TextEditCommand {
-                        menu: menu_name.clone(),
-                        layer: layer.name.clone(),
-                        element_id: sel_element_id.clone(),
+                        affected_element: ElementRef {
+                            menu: menu_name.clone(),
+                            layer: layer.name.clone(),
+                            id: sel_element_id.clone(),
+                            kind: ElementKind::Text,
+                        },
                         before_text,
                         after_text: text.text.clone(),
                         before_template,

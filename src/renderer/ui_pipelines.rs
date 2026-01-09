@@ -273,7 +273,7 @@ impl UiPipelines {
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
-                    min_binding_size: None,
+                    min_binding_size: Some(48.try_into()?),
                 },
                 count: None,
             },

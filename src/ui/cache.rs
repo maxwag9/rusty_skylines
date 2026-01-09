@@ -83,6 +83,7 @@ fn find_polygon_by_id<'a>(
 
     for layer in before.iter().chain(after.iter()) {
         for element in &layer.elements {
+            //panic!("Yay");
             if let UiElement::Polygon(p) = element {
                 if p.id == target.id {
                     return Some(p);

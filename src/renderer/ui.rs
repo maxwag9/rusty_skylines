@@ -578,7 +578,7 @@ pub(crate) fn upload_poly_vbo(
         layer.gpu.poly_vbo = Some(ui_renderer.device.create_buffer(&BufferDescriptor {
             label: Some(&format!("{}_poly_vbo", layer.name)),
             size: bytes.len() as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
     }

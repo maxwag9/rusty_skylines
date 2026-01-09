@@ -9,6 +9,7 @@ use crate::ui::input::MouseState;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edits::*;
 use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
 use std::any::Any;
@@ -29,6 +30,7 @@ pub trait Command: Any {
     /// Apply undo (restore before state)
     fn undo(
         &self,
+        touch_manager: &mut UiTouchManager,
         ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -38,6 +40,7 @@ pub trait Command: Any {
     /// Apply redo (apply after state)
     fn redo(
         &self,
+        touch_manager: &mut UiTouchManager,
         ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -88,10 +91,7 @@ impl Clone for Box<dyn Command> {
 /// Command for moving a single element
 #[derive(Clone, Debug)]
 pub struct MoveElementCommand {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
-    pub element_kind: ElementKind,
+    pub affected_element: ElementRef,
     pub before: (f32, f32),
     pub after: (f32, f32),
 }
@@ -99,6 +99,7 @@ pub struct MoveElementCommand {
 impl Command for MoveElementCommand {
     fn undo(
         &self,
+        touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -106,16 +107,17 @@ impl Command for MoveElementCommand {
     ) {
         set_element_position(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
-            self.element_kind,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.affected_element.kind,
             self.before,
         );
     }
 
     fn redo(
         &self,
+        touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -123,16 +125,16 @@ impl Command for MoveElementCommand {
     ) {
         set_element_position(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
-            self.element_kind,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.affected_element.kind,
             self.after,
         );
     }
 
     fn description(&self) -> String {
-        format!("Move '{}'", self.element_id)
+        format!("Move '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -146,11 +148,7 @@ impl Command for MoveElementCommand {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
-        if self.menu == other.menu
-            && self.layer == other.layer
-            && self.element_id == other.element_id
-            && self.element_kind == other.element_kind
-        {
+        if self.affected_element == other.affected_element {
             self.after = other.after;
             true
         } else {
@@ -166,10 +164,7 @@ impl Command for MoveElementCommand {
 /// Command for resizing an element
 #[derive(Clone, Debug)]
 pub struct ResizeElementCommand {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
-    pub element_kind: ElementKind,
+    pub affected_element: ElementRef,
     pub before: f32,
     pub after: f32,
 }
@@ -177,6 +172,7 @@ pub struct ResizeElementCommand {
 impl Command for ResizeElementCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -184,16 +180,17 @@ impl Command for ResizeElementCommand {
     ) {
         set_element_size(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
-            self.element_kind,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.affected_element.kind,
             self.before,
         );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -201,16 +198,16 @@ impl Command for ResizeElementCommand {
     ) {
         set_element_size(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
-            self.element_kind,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.affected_element.kind,
             self.after,
         );
     }
 
     fn description(&self) -> String {
-        format!("Resize '{}'", self.element_id)
+        format!("Resize '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -224,10 +221,7 @@ impl Command for ResizeElementCommand {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
-        if self.menu == other.menu
-            && self.layer == other.layer
-            && self.element_id == other.element_id
-        {
+        if self.affected_element == other.affected_element {
             self.after = other.after;
             true
         } else {
@@ -243,8 +237,7 @@ impl Command for ResizeElementCommand {
 /// Command for modifying a circle's full state
 #[derive(Clone, Debug)]
 pub struct ModifyCircleCommand {
-    pub menu: String,
-    pub layer: String,
+    pub affected_element: ElementRef,
     pub before: UiButtonCircle,
     pub after: UiButtonCircle,
 }
@@ -252,25 +245,38 @@ pub struct ModifyCircleCommand {
 impl Command for ModifyCircleCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        replace_circle(menus, &self.menu, &self.layer, &self.before);
+        replace_circle(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.before,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        replace_circle(menus, &self.menu, &self.layer, &self.after);
+        replace_circle(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.after,
+        );
     }
+
     fn description(&self) -> String {
-        format!("Modify circle '{}'", self.before.id)
+        format!("Modify circle '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -287,8 +293,7 @@ impl Command for ModifyCircleCommand {
 /// Command for modifying text's full state
 #[derive(Clone, Debug)]
 pub struct ModifyTextCommand {
-    pub menu: String,
-    pub layer: String,
+    pub affected_element: ElementRef,
     pub before: UiButtonText,
     pub after: UiButtonText,
 }
@@ -296,26 +301,38 @@ pub struct ModifyTextCommand {
 impl Command for ModifyTextCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        replace_text(menus, &self.menu, &self.layer, &self.before);
+        replace_text(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.before,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        replace_text(menus, &self.menu, &self.layer, &self.after);
+        replace_text(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.after,
+        );
     }
 
     fn description(&self) -> String {
-        format!("Modify text '{}'", self.before.id)
+        format!("Modify text '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -332,8 +349,7 @@ impl Command for ModifyTextCommand {
 /// Command for modifying polygon's full state
 #[derive(Clone, Debug)]
 pub struct ModifyPolygonCommand {
-    pub menu: String,
-    pub layer: String,
+    pub affected_element: ElementRef,
     pub before: UiButtonPolygon,
     pub after: UiButtonPolygon,
 }
@@ -341,26 +357,38 @@ pub struct ModifyPolygonCommand {
 impl Command for ModifyPolygonCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        replace_polygon(menus, &self.menu, &self.layer, &self.before);
+        replace_polygon(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.before,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        replace_polygon(menus, &self.menu, &self.layer, &self.after);
+        replace_polygon(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.after,
+        );
     }
 
     fn description(&self) -> String {
-        format!("Modify polygon '{}'", self.before.id)
+        format!("Modify polygon '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -377,30 +405,42 @@ impl Command for ModifyPolygonCommand {
 /// Command for creating an element
 #[derive(Clone, Debug)]
 pub struct CreateElementCommand {
-    pub menu: String,
-    pub layer: String,
+    pub affected_element: ElementRef,
     pub element: UiElement,
 }
 
 impl Command for CreateElementCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        delete_element(menus, &self.menu, &self.layer, &self.element);
+        delete_element(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.element,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
     ) {
-        let _ = create_element(menus, &self.menu, &self.layer, self.element.clone(), mouse);
+        let _ = create_element(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            self.element.clone(),
+            mouse,
+        );
     }
 
     fn description(&self) -> String {
@@ -421,30 +461,42 @@ impl Command for CreateElementCommand {
 /// Command for deleting an element
 #[derive(Clone, Debug)]
 pub struct DeleteElementCommand {
-    pub menu: String,
-    pub layer: String,
+    pub affected_element: ElementRef,
     pub element: UiElement,
 }
 
 impl Command for DeleteElementCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
     ) {
-        let _ = create_element(menus, &self.menu, &self.layer, self.element.clone(), mouse);
+        let _ = create_element(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            self.element.clone(),
+            mouse,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        delete_element(menus, &self.menu, &self.layer, &self.element);
+        delete_element(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.element,
+        );
     }
 
     fn description(&self) -> String {
@@ -465,40 +517,47 @@ impl Command for DeleteElementCommand {
 /// Command for changing z-index
 #[derive(Clone, Debug)]
 pub struct ChangeZIndexCommand {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
+    pub affected_element: ElementRef,
     pub delta: i32,
 }
 
 impl Command for ChangeZIndexCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
-        __variables: &mut UiVariableRegistry,
+        _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
         change_z_index(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
             -self.delta,
         );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
-        __variables: &mut UiVariableRegistry,
+        _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        change_z_index(menus, &self.menu, &self.layer, &self.element_id, self.delta);
+        change_z_index(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.delta,
+        );
     }
+
     fn description(&self) -> String {
-        format!("Change Z-index of '{}'", self.element_id)
+        format!("Change Z-index of '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -515,8 +574,7 @@ impl Command for ChangeZIndexCommand {
 /// Command for changing layer order
 #[derive(Clone, Debug)]
 pub struct ChangeLayerOrderCommand {
-    pub menu: String,
-    pub layer: String,
+    pub affected_element: ElementRef,
     pub before: u32,
     pub after: u32,
 }
@@ -524,26 +582,38 @@ pub struct ChangeLayerOrderCommand {
 impl Command for ChangeLayerOrderCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        set_layer_order(menus, &self.menu, &self.layer, self.before);
+        set_layer_order(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            self.before,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        set_layer_order(menus, &self.menu, &self.layer, self.after);
+        set_layer_order(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            self.after,
+        );
     }
 
     fn description(&self) -> String {
-        format!("Reorder layer '{}'", self.layer)
+        format!("Reorder layer '{}'", self.affected_element.layer)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -560,9 +630,7 @@ impl Command for ChangeLayerOrderCommand {
 /// Command for text content editing
 #[derive(Clone, Debug)]
 pub struct TextEditCommand {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
+    pub affected_element: ElementRef,
     pub before_text: String,
     pub after_text: String,
     pub before_template: String,
@@ -574,6 +642,7 @@ pub struct TextEditCommand {
 impl Command for TextEditCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -581,9 +650,9 @@ impl Command for TextEditCommand {
     ) {
         set_text_content(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
             &self.before_text,
             &self.before_template,
             self.before_caret,
@@ -592,6 +661,7 @@ impl Command for TextEditCommand {
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -599,9 +669,9 @@ impl Command for TextEditCommand {
     ) {
         set_text_content(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
             &self.after_text,
             &self.after_template,
             self.after_caret,
@@ -609,7 +679,7 @@ impl Command for TextEditCommand {
     }
 
     fn description(&self) -> String {
-        format!("Edit text '{}'", self.element_id)
+        format!("Edit text '{}'", self.affected_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -626,9 +696,7 @@ impl Command for TextEditCommand {
 /// Command for moving a polygon vertex
 #[derive(Clone, Debug)]
 pub struct MoveVertexCommand {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
+    pub affected_element: ElementRef,
     pub vertex_index: usize,
     pub before: [f32; 2],
     pub after: [f32; 2],
@@ -637,6 +705,7 @@ pub struct MoveVertexCommand {
 impl Command for MoveVertexCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -644,9 +713,9 @@ impl Command for MoveVertexCommand {
     ) {
         set_vertex_position(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
             self.vertex_index,
             self.before,
         );
@@ -654,6 +723,7 @@ impl Command for MoveVertexCommand {
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -661,16 +731,19 @@ impl Command for MoveVertexCommand {
     ) {
         set_vertex_position(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
             self.vertex_index,
             self.after,
         );
     }
 
     fn description(&self) -> String {
-        format!("Move vertex {} of '{}'", self.vertex_index, self.element_id)
+        format!(
+            "Move vertex {} of '{}'",
+            self.vertex_index, self.affected_element.id
+        )
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -684,9 +757,7 @@ impl Command for MoveVertexCommand {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
-        if self.menu == other.menu
-            && self.layer == other.layer
-            && self.element_id == other.element_id
+        if self.affected_element == other.affected_element
             && self.vertex_index == other.vertex_index
         {
             self.after = other.after;
@@ -730,10 +801,7 @@ impl std::fmt::Display for ColorProperty {
 /// Command for changing a color property
 #[derive(Clone, Debug)]
 pub struct ChangeColorCommand {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
-    pub element_kind: ElementKind,
+    pub affected_element: ElementRef,
     pub property: ColorProperty,
     pub before: [f32; 4],
     pub after: [f32; 4],
@@ -742,6 +810,7 @@ pub struct ChangeColorCommand {
 impl Command for ChangeColorCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -749,10 +818,10 @@ impl Command for ChangeColorCommand {
     ) {
         set_element_color(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
-            self.element_kind,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.affected_element.kind,
             &self.property,
             self.before,
         );
@@ -760,6 +829,7 @@ impl Command for ChangeColorCommand {
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -767,17 +837,20 @@ impl Command for ChangeColorCommand {
     ) {
         set_element_color(
             menus,
-            &self.menu,
-            &self.layer,
-            &self.element_id,
-            self.element_kind,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.affected_element.id,
+            self.affected_element.kind,
             &self.property,
             self.after,
         );
     }
 
     fn description(&self) -> String {
-        format!("Change {} color of '{}'", self.property, self.element_id)
+        format!(
+            "Change {} color of '{}'",
+            self.property, self.affected_element.id
+        )
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -794,25 +867,30 @@ impl Command for ChangeColorCommand {
 /// Command for duplicating an element
 #[derive(Clone, Debug)]
 pub struct DuplicateElementCommand {
-    pub menu: String,
-    pub layer: String,
-    pub original_id: String,
+    pub affected_element: ElementRef,
     pub new_element: UiElement,
 }
 
 impl Command for DuplicateElementCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        delete_element(menus, &self.menu, &self.layer, &self.new_element);
+        delete_element(
+            menus,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
+            &self.new_element,
+        );
     }
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -820,15 +898,62 @@ impl Command for DuplicateElementCommand {
     ) {
         let _ = create_element(
             menus,
-            &self.menu,
-            &self.layer,
+            &self.affected_element.menu,
+            &self.affected_element.layer,
             self.new_element.clone(),
             mouse,
         );
     }
 
     fn description(&self) -> String {
-        format!("Duplicate '{}'", self.original_id)
+        format!("Duplicate '{}'", self.affected_element.id)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn clone_box(&self) -> Box<dyn Command> {
+        Box::new(self.clone())
+    }
+}
+
+/// Command for deselecting all elements
+#[derive(Clone, Debug)]
+pub struct DeselectAllCommand {
+    pub(crate) primary: Option<ElementRef>,
+    pub(crate) secondary: Vec<ElementRef>,
+}
+
+impl Command for DeselectAllCommand {
+    fn undo(
+        &self,
+        touch_manager: &mut UiTouchManager,
+        _ui_runtime: &mut UiRuntime,
+        menus: &mut HashMap<String, Menu>,
+        _variables: &mut UiVariableRegistry,
+        _mouse: &MouseState,
+    ) {
+        touch_manager
+            .selection
+            .select_from_overwrite(menus, &self.primary, &self.secondary);
+    }
+
+    fn redo(
+        &self,
+        touch_manager: &mut UiTouchManager,
+        _ui_runtime: &mut UiRuntime,
+        menus: &mut HashMap<String, Menu>,
+        _variables: &mut UiVariableRegistry,
+        _mouse: &MouseState,
+    ) {
+        touch_manager.selection.deselect_all(menus);
+    }
+
+    fn description(&self) -> String {
+        "Deselected all Ui Elements".to_string()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -845,10 +970,7 @@ impl Command for DuplicateElementCommand {
 /// Data for a single element move within MoveMultipleCommand
 #[derive(Clone, Debug)]
 pub struct ElementMove {
-    pub menu: String,
-    pub layer: String,
-    pub element_id: String,
-    pub element_kind: ElementKind,
+    pub affected_element: ElementRef,
     pub before: (f32, f32),
     pub after: (f32, f32),
 }
@@ -862,6 +984,7 @@ pub struct MoveMultipleCommand {
 impl Command for MoveMultipleCommand {
     fn undo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -870,10 +993,10 @@ impl Command for MoveMultipleCommand {
         for m in &self.moves {
             set_element_position(
                 menus,
-                &m.menu,
-                &m.layer,
-                &m.element_id,
-                m.element_kind,
+                &m.affected_element.menu,
+                &m.affected_element.layer,
+                &m.affected_element.id,
+                m.affected_element.kind,
                 m.before,
             );
         }
@@ -881,6 +1004,7 @@ impl Command for MoveMultipleCommand {
 
     fn redo(
         &self,
+        _touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -889,10 +1013,10 @@ impl Command for MoveMultipleCommand {
         for m in &self.moves {
             set_element_position(
                 menus,
-                &m.menu,
-                &m.layer,
-                &m.element_id,
-                m.element_kind,
+                &m.affected_element.menu,
+                &m.affected_element.layer,
+                &m.affected_element.id,
+                m.affected_element.kind,
                 m.after,
             );
         }
@@ -919,12 +1043,11 @@ impl Command for MoveMultipleCommand {
         }
 
         // Verify same elements in same order
-        let matches = self.moves.iter().zip(&other.moves).all(|(a, b)| {
-            a.menu == b.menu
-                && a.layer == b.layer
-                && a.element_id == b.element_id
-                && a.element_kind == b.element_kind
-        });
+        let matches = self
+            .moves
+            .iter()
+            .zip(&other.moves)
+            .all(|(a, b)| a.affected_element == b.affected_element);
 
         if matches {
             for (existing, new) in self.moves.iter_mut().zip(&other.moves) {
@@ -968,6 +1091,7 @@ impl std::fmt::Debug for BatchCommand {
 impl Command for BatchCommand {
     fn undo(
         &self,
+        touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -975,12 +1099,13 @@ impl Command for BatchCommand {
     ) {
         // Undo in reverse order
         for cmd in self.commands.iter().rev() {
-            cmd.undo(_ui_runtime, menus, _variables, mouse);
+            cmd.undo(touch_manager, _ui_runtime, menus, _variables, mouse);
         }
     }
 
     fn redo(
         &self,
+        touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -988,7 +1113,7 @@ impl Command for BatchCommand {
     ) {
         // Redo in forward order
         for cmd in &self.commands {
-            cmd.redo(_ui_runtime, menus, _variables, mouse);
+            cmd.redo(touch_manager, _ui_runtime, menus, _variables, mouse);
         }
     }
 
@@ -1137,6 +1262,7 @@ impl UiEditManager {
     pub fn execute(
         &mut self,
         command: Box<dyn Command>,
+        touch_manager: &mut UiTouchManager,
         ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
@@ -1147,7 +1273,7 @@ impl UiEditManager {
         }
 
         // Execute the command immediately
-        command.redo(ui_runtime, menus, variables, mouse);
+        command.redo(touch_manager, ui_runtime, menus, variables, mouse);
 
         // Now push it for undo capability
         if let Some(ref mut batch) = self.pending_batch {
@@ -1164,12 +1290,20 @@ impl UiEditManager {
     pub fn execute_command<C: Command + 'static>(
         &mut self,
         command: C,
+        touch_manager: &mut UiTouchManager,
         ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
         mouse: &MouseState,
     ) {
-        self.execute(Box::new(command), ui_runtime, menus, variables, mouse);
+        self.execute(
+            Box::new(command),
+            touch_manager,
+            ui_runtime,
+            menus,
+            variables,
+            mouse,
+        );
     }
 
     fn push_internal(&mut self, command: Box<dyn Command>) {
@@ -1214,6 +1348,7 @@ impl UiEditManager {
     /// Perform undo. Returns description of what was undone.
     pub fn undo(
         &mut self,
+        touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -1230,7 +1365,7 @@ impl UiEditManager {
 
         timestamped
             .command
-            .undo(_ui_runtime, menus, _variables, mouse);
+            .undo(touch_manager, _ui_runtime, menus, _variables, mouse);
 
         self.history_position = self.history_position.saturating_sub(1);
         self.redo_stack.push(timestamped.command);
@@ -1242,6 +1377,7 @@ impl UiEditManager {
     /// Perform redo. Returns description of what was redone.
     pub fn redo(
         &mut self,
+        touch_manager: &mut UiTouchManager,
         _ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -1256,7 +1392,7 @@ impl UiEditManager {
         let command = self.redo_stack.pop()?;
         let desc = command.description();
 
-        command.redo(_ui_runtime, menus, _variables, mouse);
+        command.redo(touch_manager, _ui_runtime, menus, _variables, mouse);
 
         self.history_position += 1;
         self.undo_stack.push_back(TimestampedCommand {
@@ -1316,19 +1452,13 @@ mod tests {
     #[test]
     fn test_move_coalescing() {
         let mut cmd1 = MoveElementCommand {
-            menu: "m".into(),
-            layer: "l".into(),
-            element_id: "e".into(),
-            element_kind: ElementKind::Circle,
+            affected_element: ElementRef::default(),
             before: (0.0, 0.0),
             after: (5.0, 5.0),
         };
 
         let cmd2 = MoveElementCommand {
-            menu: "m".into(),
-            layer: "l".into(),
-            element_id: "e".into(),
-            element_kind: ElementKind::Circle,
+            affected_element: ElementRef::default(),
             before: (5.0, 5.0),
             after: (10.0, 10.0),
         };
@@ -1341,19 +1471,14 @@ mod tests {
     #[test]
     fn test_no_coalesce_different_element() {
         let mut cmd1 = MoveElementCommand {
-            menu: "m".into(),
-            layer: "l".into(),
-            element_id: "e1".into(),
-            element_kind: ElementKind::Circle,
+            affected_element: ElementRef::default(),
             before: (0.0, 0.0),
             after: (5.0, 5.0),
         };
-
+        let mut affected_2 = ElementRef::default();
+        affected_2.id = "e2".into();
         let cmd2 = MoveElementCommand {
-            menu: "m".into(),
-            layer: "l".into(),
-            element_id: "e2".into(),
-            element_kind: ElementKind::Circle,
+            affected_element: affected_2,
             before: (0.0, 0.0),
             after: (10.0, 10.0),
         };
@@ -1363,21 +1488,17 @@ mod tests {
 
     #[test]
     fn test_batch_undo_order() {
+        let mut affected_2 = ElementRef::default();
+        affected_2.id = "b".into();
         let batch = BatchCommand {
             commands: vec![
                 Box::new(MoveElementCommand {
-                    menu: "m".into(),
-                    layer: "l".into(),
-                    element_id: "a".into(),
-                    element_kind: ElementKind::Circle,
+                    affected_element: ElementRef::default(),
                     before: (0.0, 0.0),
                     after: (1.0, 1.0),
                 }),
                 Box::new(MoveElementCommand {
-                    menu: "m".into(),
-                    layer: "l".into(),
-                    element_id: "b".into(),
-                    element_kind: ElementKind::Circle,
+                    affected_element: affected_2,
                     before: (0.0, 0.0),
                     after: (2.0, 2.0),
                 }),
@@ -1395,8 +1516,7 @@ mod tests {
         assert!(!manager.is_dirty());
 
         manager.push_command(CreateElementCommand {
-            menu: "m".into(),
-            layer: "l".into(),
+            affected_element: ElementRef::default(),
             element: UiElement::Circle(UiButtonCircle::default()),
         });
 

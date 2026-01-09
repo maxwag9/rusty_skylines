@@ -5,7 +5,7 @@ use crate::systems::input::camera_input_system;
 use crate::systems::physics::simulation_system;
 use crate::systems::render::render_system;
 use crate::systems::ui::ui_system;
-use crate::ui::ui_edits::create_element;
+use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
 use crate::world::World;
@@ -260,29 +260,18 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Add GUI element")
                     && resources.ui_loader.touch_manager.options.editor_mode
                 {
-                    let result = create_element(
-                        &mut resources.ui_loader.menus,
-                        resources
-                            .ui_loader
-                            .ui_runtime
-                            .selected_ui_element_primary
-                            .menu_name
-                            .clone()
-                            .as_str(),
-                        resources
-                            .ui_loader
-                            .ui_runtime
-                            .selected_ui_element_primary
-                            .layer_name
-                            .clone()
-                            .as_str(),
-                        Circle(UiButtonCircle::default()),
-                        &resources.input.mouse,
-                    );
-
-                    match result {
-                        Ok(r) => println!("Added GUI element: {:?}", r),
-                        Err(r) => println!("Failed adding GUI element: {:?}", r),
+                    if let Some(sel) = &resources.ui_loader.touch_manager.selection.primary {
+                        resources.ui_loader.ui_edit_manager.execute_command(
+                            CreateElementCommand {
+                                affected_element: sel.clone(),
+                                element: Circle(UiButtonCircle::default()),
+                            },
+                            &mut resources.ui_loader.touch_manager,
+                            &mut resources.ui_loader.ui_runtime,
+                            &mut resources.ui_loader.menus,
+                            &mut resources.ui_loader.variables,
+                            &resources.input.mouse,
+                        )
                     }
                 }
             }

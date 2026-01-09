@@ -6,6 +6,7 @@ use crate::renderer::world_renderer::WorldRenderer;
 use crate::resources::{InputState, TimeSystem};
 use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::MouseState;
+use crate::ui::ui_edit_manager::DeselectAllCommand;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_loader::load_menus_from_directory;
 use crate::ui::ui_text_editing::HitResult;
@@ -1069,10 +1070,17 @@ fn register_editor_actions(sys: &mut ActionSystem) {
     });
 
     sys.register_simple("deselect_all", |_action, ctx| {
-        ctx.loader
-            .touch_manager
-            .selection
-            .deselect_all(&mut ctx.loader.menus); // Todo!
+        ctx.loader.ui_edit_manager.execute_command(
+            DeselectAllCommand {
+                primary: ctx.loader.touch_manager.selection.primary.clone(),
+                secondary: ctx.loader.touch_manager.selection.secondary.clone(),
+            },
+            &mut ctx.loader.touch_manager,
+            &mut ctx.loader.ui_runtime,
+            &mut ctx.loader.menus,
+            &mut ctx.loader.variables,
+            &mut ctx.mouse_state,
+        );
         ActionResult::Ok
     });
 

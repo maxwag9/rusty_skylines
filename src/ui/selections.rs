@@ -77,6 +77,32 @@ impl SelectionManager {
         self.just_selected = true;
     }
 
+    pub(crate) fn select_from_overwrite(
+        &mut self,
+        menus: &HashMap<String, Menu>,
+        primary: &Option<ElementRef>,
+        secondary: &Vec<ElementRef>,
+    ) {
+        if let Some(primary_some) = primary {
+            if let Some(menu) = menus.get(&primary_some.menu) {
+                if let Some(layer) = menu.layers.iter().find(|l| l.name == primary_some.layer) {
+                    if let Some(element) = layer.elements.iter().find(|e| e.id() == primary_some.id)
+                    {
+                        if let Some(text) = element.as_text() {
+                            self.primary_is_input_box = text.input_box;
+                        }
+                        self.primary_action = element.action();
+                    }
+                }
+            }
+        }
+
+        self.primary = primary.clone();
+        self.secondary = secondary.clone();
+        self.just_selected = true;
+        self.selection_changed = true;
+        self.just_deselected = false;
+    }
     /// Add element to selection (multi-select)
     pub fn add_to_selection(&mut self, element: ElementRef) {
         // Don't add duplicates

@@ -69,6 +69,17 @@ pub struct ElementRef {
 }
 
 impl ElementRef {
+    pub(crate) fn default() -> ElementRef {
+        ElementRef {
+            menu: "m".into(),
+            layer: "l".into(),
+            id: "e".into(),
+            kind: ElementKind::None,
+        }
+    }
+}
+
+impl ElementRef {
     pub fn new(menu: &str, layer: &str, id: &str, kind: ElementKind) -> Self {
         Self {
             menu: menu.to_string(),

@@ -59,7 +59,7 @@ pub fn upload_outlines(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
             layer.gpu.outline_poly_vertices_ssbo =
                 Some(ui_renderer.device.create_buffer(&BufferDescriptor {
                     label: Some(&format!("{}_outline_poly_dummy", layer.name)),
-                    size: 16, // one vec2<f32>
+                    size: 48,
                     usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));

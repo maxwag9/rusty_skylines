@@ -411,7 +411,15 @@ impl UiElement {
             UiElement::Polygon(p) => &*p.id,
         }
     }
-
+    pub fn action(&self) -> Option<String> {
+        match self {
+            UiElement::Text(t) => Some(t.action.clone()),
+            UiElement::Circle(c) => Some(c.action.clone()),
+            UiElement::Outline(o) => None, //"None, in outline UiElement.action()",
+            UiElement::Handle(h) => None,  //"None, in handle UiElement.action()",
+            UiElement::Polygon(p) => Some(p.action.clone()),
+        }
+    }
     pub fn center(&self) -> (f32, f32) {
         match self {
             UiElement::Text(t) => (t.x, t.y),
@@ -724,6 +732,7 @@ pub enum ElementKind {
     Polygon,
     None,
 }
+
 impl From<&UiElement> for ElementKind {
     fn from(element: &UiElement) -> Self {
         match element {
@@ -887,6 +896,7 @@ impl UiVertex {
         let mut pos = v.pos;
         pos[0] *= window_size.width as f32;
         pos[1] *= window_size.height as f32;
+
         UiVertex {
             pos,
             color: v.color,
@@ -1781,7 +1791,7 @@ impl Default for UiButtonCircleYaml {
             inside_border_thickness_percentage: 0.0,
             border_thickness_percentage: 0.0,
             fade: 0.0,
-            fill_color: [1.0, 1.0, 1.0, 1.0],
+            fill_color: [0.0, 0.0, 0.0, 0.0],
             inside_border_color: [0.0, 0.0, 0.0, 0.0],
             border_color: [0.0, 0.0, 0.0, 0.0],
             glow_color: [0.0, 0.0, 0.0, 0.0],
