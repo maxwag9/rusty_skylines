@@ -535,7 +535,8 @@ impl ActionSystem {
                 let action_name = action.arg_string(0);
                 let state = ActionState::with_time(&action_name, ctx.time.total_time);
                 ctx.loader
-                    .ui_runtime
+                    .touch_manager
+                    .runtimes
                     .action_states
                     .insert(action_name, state);
                 ActionResult::Ok
@@ -543,7 +544,13 @@ impl ActionSystem {
 
             "stop" | "deactivate" | "stop_action" => {
                 let action_name = action.arg_string(0);
-                if let Some(state) = ctx.loader.ui_runtime.action_states.get_mut(&action_name) {
+                if let Some(state) = ctx
+                    .loader
+                    .touch_manager
+                    .runtimes
+                    .action_states
+                    .get_mut(&action_name)
+                {
                     state.active = false;
                 }
                 ActionResult::Ok
@@ -551,7 +558,11 @@ impl ActionSystem {
 
             "remove_action" => {
                 let action_name = action.arg_string(0);
-                ctx.loader.ui_runtime.action_states.remove(&action_name);
+                ctx.loader
+                    .touch_manager
+                    .runtimes
+                    .action_states
+                    .remove(&action_name);
                 ActionResult::Ok
             }
 
@@ -663,7 +674,7 @@ impl ActionSystem {
 
             "debug_actions" => {
                 println!("[Debug] Active action states:");
-                for (name, state) in &ctx.loader.ui_runtime.action_states {
+                for (name, state) in &ctx.loader.touch_manager.runtimes.action_states {
                     println!("  '{}': active={}", name, state.active);
                 }
                 ActionResult::Ok
@@ -682,7 +693,8 @@ impl ActionSystem {
             "drag_hue_point" => {
                 let state = ActionState::with_time("Drag Hue Point", ctx.time.total_time);
                 ctx.loader
-                    .ui_runtime
+                    .touch_manager
+                    .runtimes
                     .action_states
                     .insert("Drag Hue Point".to_string(), state);
                 ActionResult::Ok
@@ -861,7 +873,8 @@ pub fn execute_action(
     // Execute continuous/dragging actions
     let active_actions: Vec<String> = ctx
         .loader
-        .ui_runtime
+        .touch_manager
+        .runtimes
         .action_states
         .iter()
         .filter(|(_, state)| state.active)
@@ -910,7 +923,12 @@ pub fn activate_action(
 }
 
 pub fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
-    if let Some(state) = loader.ui_runtime.action_states.get_mut(action_name) {
+    if let Some(state) = loader
+        .touch_manager
+        .runtimes
+        .action_states
+        .get_mut(action_name)
+    {
         state.active = false;
     }
 }
@@ -993,7 +1011,8 @@ fn register_color_picker_actions(sys: &mut ActionSystem) {
     sys.register_simple("drag_hue_point", |_action, ctx| {
         let state = ActionState::with_time("Drag Hue Point", ctx.time.total_time);
         ctx.loader
-            .ui_runtime
+            .touch_manager
+            .runtimes
             .action_states
             .insert("Drag Hue Point".to_string(), state);
         ActionResult::Ok
@@ -1002,7 +1021,8 @@ fn register_color_picker_actions(sys: &mut ActionSystem) {
     sys.register_simple("stop_hue_drag", |_action, ctx| {
         if let Some(state) = ctx
             .loader
-            .ui_runtime
+            .touch_manager
+            .runtimes
             .action_states
             .get_mut("Drag Hue Point")
         {
@@ -1076,7 +1096,6 @@ fn register_editor_actions(sys: &mut ActionSystem) {
                 secondary: ctx.loader.touch_manager.selection.secondary.clone(),
             },
             &mut ctx.loader.touch_manager,
-            &mut ctx.loader.ui_runtime,
             &mut ctx.loader.menus,
             &mut ctx.loader.variables,
             &mut ctx.mouse_state,
@@ -1136,13 +1155,19 @@ fn register_debug_actions(sys: &mut ActionSystem) {
     });
 
     sys.register_simple("dump_selection", |_action, ctx| {
-        let sel = &ctx.loader.ui_runtime.selected_ui_element_primary;
+        let Some(sel) = &ctx.loader.touch_manager.selection.primary else {
+            println!("=== Selection ===");
+            println!("  Nothing selected...");
+            return ActionResult::Ok;
+        };
         println!("=== Selection ===");
-        println!("  Menu: {}", sel.menu_name);
-        println!("  Layer: {}", sel.layer_name);
-        println!("  Element: {}", sel.element_id);
-        println!("  Active: {}", sel.active);
-        println!("  Dragging: {}", sel.dragging);
+        println!("  Menu: {}", sel.menu);
+        println!("  Layer: {}", sel.layer);
+        println!("  Element: {}", sel.id);
+        println!(
+            "  Dragging: {}",
+            ctx.loader.touch_manager.drag.active_drag.is_some()
+        );
         ActionResult::Ok
     });
 

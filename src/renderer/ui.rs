@@ -246,7 +246,7 @@ impl UiRenderer {
                 .collect();
 
             for idx in dirty_indices {
-                menu.rebuild_layer_cache_index(idx, &ui_loader.ui_runtime);
+                menu.rebuild_layer_cache_index(idx, &ui_loader.touch_manager.runtimes);
                 let layer = &mut menu.layers[idx];
                 self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
             }

@@ -65,14 +65,9 @@ pub fn handle_text_editing(
     input: &mut InputState,
     mouse_snapshot: MouseSnapshot,
 ) {
-    if editor.editing_text.is_none() {
-        return;
-    }
-
-    let Some(sel) = selection.primary.as_ref() else {
+    let Some(sel) = &selection.primary else {
         return;
     };
-
     let sel_menu = sel.menu.clone();
     let sel_layer = sel.layer.clone();
     let sel_element_id = sel.id.clone();
@@ -81,20 +76,16 @@ pub fn handle_text_editing(
         .iter_mut()
         .filter(|(n, m)| **n == sel_menu && m.active)
     {
-        for layer in &mut menu.layers {
-            if layer.name != sel_layer {
-                continue;
-            }
-
-            for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                if text.id != sel_element_id {
-                    continue;
-                }
-
+        for layer in &mut menu.layers.iter_mut().filter(|l| l.name == sel_layer) {
+            for text in layer
+                .elements
+                .iter_mut()
+                .filter_map(UiElement::as_text_mut)
+                .filter(|t| t.id == sel_element_id)
+            {
                 let before_text = text.text.clone();
                 let before_template = text.template.clone();
                 let before_caret = text.caret;
-
                 process_text_editing_input(editor, input, mouse_snapshot, text, &mut layer.dirty);
 
                 if text.text != before_text || text.template != before_template {

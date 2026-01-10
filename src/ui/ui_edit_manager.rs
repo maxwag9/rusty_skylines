@@ -8,7 +8,6 @@
 use crate::ui::input::MouseState;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edits::*;
-use crate::ui::ui_runtime::UiRuntime;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
@@ -31,7 +30,6 @@ pub trait Command: Any {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
-        ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -41,7 +39,6 @@ pub trait Command: Any {
     fn redo(
         &self,
         touch_manager: &mut UiTouchManager,
-        ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -100,7 +97,7 @@ impl Command for MoveElementCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -118,7 +115,7 @@ impl Command for MoveElementCommand {
     fn redo(
         &self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -173,7 +170,7 @@ impl Command for ResizeElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -191,7 +188,7 @@ impl Command for ResizeElementCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -246,7 +243,7 @@ impl Command for ModifyCircleCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -262,7 +259,7 @@ impl Command for ModifyCircleCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -302,7 +299,7 @@ impl Command for ModifyTextCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -318,7 +315,7 @@ impl Command for ModifyTextCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -358,7 +355,7 @@ impl Command for ModifyPolygonCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -374,7 +371,7 @@ impl Command for ModifyPolygonCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -413,7 +410,7 @@ impl Command for CreateElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -429,7 +426,7 @@ impl Command for CreateElementCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -469,7 +466,7 @@ impl Command for DeleteElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -486,7 +483,7 @@ impl Command for DeleteElementCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -525,7 +522,7 @@ impl Command for ChangeZIndexCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -542,7 +539,7 @@ impl Command for ChangeZIndexCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -583,7 +580,7 @@ impl Command for ChangeLayerOrderCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -599,7 +596,7 @@ impl Command for ChangeLayerOrderCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -643,7 +640,7 @@ impl Command for TextEditCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -662,7 +659,7 @@ impl Command for TextEditCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -706,7 +703,7 @@ impl Command for MoveVertexCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -724,7 +721,7 @@ impl Command for MoveVertexCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -811,7 +808,7 @@ impl Command for ChangeColorCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -830,7 +827,7 @@ impl Command for ChangeColorCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -875,7 +872,7 @@ impl Command for DuplicateElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -891,7 +888,7 @@ impl Command for DuplicateElementCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -931,7 +928,7 @@ impl Command for DeselectAllCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -944,7 +941,7 @@ impl Command for DeselectAllCommand {
     fn redo(
         &self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -985,7 +982,7 @@ impl Command for MoveMultipleCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -1005,7 +1002,7 @@ impl Command for MoveMultipleCommand {
     fn redo(
         &self,
         _touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
@@ -1092,28 +1089,28 @@ impl Command for BatchCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
     ) {
         // Undo in reverse order
         for cmd in self.commands.iter().rev() {
-            cmd.undo(touch_manager, _ui_runtime, menus, _variables, mouse);
+            cmd.undo(touch_manager, menus, _variables, mouse);
         }
     }
 
     fn redo(
         &self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
     ) {
         // Redo in forward order
         for cmd in &self.commands {
-            cmd.redo(touch_manager, _ui_runtime, menus, _variables, mouse);
+            cmd.redo(touch_manager, menus, _variables, mouse);
         }
     }
 
@@ -1263,7 +1260,6 @@ impl UiEditManager {
         &mut self,
         command: Box<dyn Command>,
         touch_manager: &mut UiTouchManager,
-        ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -1273,7 +1269,7 @@ impl UiEditManager {
         }
 
         // Execute the command immediately
-        command.redo(touch_manager, ui_runtime, menus, variables, mouse);
+        command.redo(touch_manager, menus, variables, mouse);
 
         // Now push it for undo capability
         if let Some(ref mut batch) = self.pending_batch {
@@ -1291,19 +1287,11 @@ impl UiEditManager {
         &mut self,
         command: C,
         touch_manager: &mut UiTouchManager,
-        ui_runtime: &mut UiRuntime,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
         mouse: &MouseState,
     ) {
-        self.execute(
-            Box::new(command),
-            touch_manager,
-            ui_runtime,
-            menus,
-            variables,
-            mouse,
-        );
+        self.execute(Box::new(command), touch_manager, menus, variables, mouse);
     }
 
     fn push_internal(&mut self, command: Box<dyn Command>) {
@@ -1349,7 +1337,7 @@ impl UiEditManager {
     pub fn undo(
         &mut self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -1365,7 +1353,7 @@ impl UiEditManager {
 
         timestamped
             .command
-            .undo(touch_manager, _ui_runtime, menus, _variables, mouse);
+            .undo(touch_manager, menus, _variables, mouse);
 
         self.history_position = self.history_position.saturating_sub(1);
         self.redo_stack.push(timestamped.command);
@@ -1378,7 +1366,7 @@ impl UiEditManager {
     pub fn redo(
         &mut self,
         touch_manager: &mut UiTouchManager,
-        _ui_runtime: &mut UiRuntime,
+
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &MouseState,
@@ -1392,7 +1380,7 @@ impl UiEditManager {
         let command = self.redo_stack.pop()?;
         let desc = command.description();
 
-        command.redo(touch_manager, _ui_runtime, menus, _variables, mouse);
+        command.redo(touch_manager, menus, _variables, mouse);
 
         self.history_position += 1;
         self.undo_stack.push_back(TimestampedCommand {

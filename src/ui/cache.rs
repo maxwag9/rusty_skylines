@@ -2,11 +2,15 @@ use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams}
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
 
-pub fn rebuild_text_cache(layer: &mut RuntimeLayer, rebuilt: &mut LayerDirty, runtime: &UiRuntime) {
+pub fn rebuild_text_cache(
+    layer: &mut RuntimeLayer,
+    rebuilt: &mut LayerDirty,
+    runtime: &UiRuntimes,
+) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
         if let (UiElement::Text(t), UiElementCache::Text(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &t.id);
@@ -39,7 +43,7 @@ pub fn rebuild_text_cache(layer: &mut RuntimeLayer, rebuilt: &mut LayerDirty, ru
 pub fn rebuild_circle_cache(
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
-    runtime: &UiRuntime,
+    runtime: &UiRuntimes,
 ) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
         if let (UiElement::Circle(c), UiElementCache::Circle(cached)) = (element, cache_element) {
@@ -99,7 +103,7 @@ pub fn rebuild_outline_cache(
     before: &[RuntimeLayer],
     after: &[RuntimeLayer],
     rebuilt: &mut LayerDirty,
-    runtime: &UiRuntime,
+    runtime: &UiRuntimes,
 ) {
     layer.cache.outline_poly_vertices.clear();
 
@@ -163,7 +167,7 @@ pub fn rebuild_outline_cache(
 pub fn rebuild_handle_cache(
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
-    runtime: &UiRuntime,
+    runtime: &UiRuntimes,
 ) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
         if let (UiElement::Handle(h), UiElementCache::Handle(cached)) = (element, cache_element) {
@@ -201,7 +205,7 @@ pub fn rebuild_handle_cache(
 pub fn rebuild_polygon_cache(
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
-    runtime: &UiRuntime,
+    runtime: &UiRuntimes,
 ) {
     let mut poly_index = 0;
 
@@ -243,7 +247,7 @@ pub fn rebuild_polygon_cache(
     rebuilt.mark_polygons();
 }
 
-pub fn runtime_info(runtime: &UiRuntime, id: &String) -> (ButtonRuntime, f32) {
+pub fn runtime_info(runtime: &UiRuntimes, id: &String) -> (ButtonRuntime, f32) {
     let runtime = runtime.get(id);
 
     let hash = if id.is_empty() {

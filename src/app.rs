@@ -267,7 +267,6 @@ impl ApplicationHandler for App {
                                 element: Circle(UiButtonCircle::default()),
                             },
                             &mut resources.ui_loader.touch_manager,
-                            &mut resources.ui_loader.ui_runtime,
                             &mut resources.ui_loader.menus,
                             &mut resources.ui_loader.variables,
                             &resources.input.mouse,

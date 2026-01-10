@@ -1,6 +1,6 @@
 use crate::ui::cache::*;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::ui_runtime::UiRuntime;
+use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
 
@@ -32,7 +32,7 @@ impl Menu {
         })
     }
 
-    pub fn rebuild_layer_cache_index(&mut self, layer_index: usize, runtime: &UiRuntime) {
+    pub fn rebuild_layer_cache_index(&mut self, layer_index: usize, runtime: &UiRuntimes) {
         let (before, rest) = self.layers.split_at_mut(layer_index);
         let (layer, after) = rest.split_first_mut().unwrap();
 
@@ -151,39 +151,39 @@ impl Menu {
 }
 
 pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
-    let selected = &loader.ui_runtime.selected_ui_element_primary;
+    let Some(sel) = &loader.touch_manager.selection.primary else {
+        return None;
+    };
 
-    if !selected.active || selected.action_name == "Drag Hue Point" {
+    if loader.touch_manager.selection.primary_action == Some("Drag Hue Point".to_string()) {
         return None;
     }
 
     // Find the menu
-    let menu = loader.menus.get(&selected.menu_name)?;
+    let menu = loader.menus.get(&sel.menu)?;
     // Find the layer
     let layer = menu
         .layers
         .iter()
-        .find(|l| l.active && l.saveable && l.name == selected.layer_name)?;
+        .find(|l| l.active && l.saveable && l.name == sel.layer)?;
 
     // Match element type
-    match selected.element_type(&loader.menus) {
+    match sel.kind {
         ElementKind::Polygon => {
-            let poly = layer
-                .iter_polygons()
-                .find(|p| p.id == selected.element_id)?;
+            let poly = layer.iter_polygons().find(|p| p.id == sel.id)?;
 
             // take color from first vertex (but they are not all the same!!)
             poly.vertices.get(0).map(|v| v.color)
         }
 
         ElementKind::Circle => {
-            let circle = layer.iter_circles().find(|c| c.id == selected.element_id)?;
+            let circle = layer.iter_circles().find(|c| c.id == sel.id)?;
 
             Some(circle.fill_color.into())
         }
 
         ElementKind::Text => {
-            let text = layer.iter_texts().find(|t| t.id == selected.element_id)?;
+            let text = layer.iter_texts().find(|t| t.id == sel.id)?;
 
             Some(text.color)
         }

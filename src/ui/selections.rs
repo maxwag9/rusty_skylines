@@ -68,7 +68,7 @@ impl SelectionManager {
 
     /// Select a single element, clearing any existing selection
     pub fn select(&mut self, element: ElementRef, action: Option<String>, is_input_box: bool) {
-        self.just_deselected = self.primary.is_some();
+        self.just_deselected = false;
         self.primary = Some(element);
         self.secondary.clear();
         self.primary_action = action;
@@ -222,23 +222,5 @@ impl SelectionManager {
     /// Check if box selecting
     pub fn is_box_selecting(&self) -> bool {
         self.box_select_anchor.is_some()
-    }
-
-    /// Convert to SelectedUiElement for compatibility
-    pub fn to_selected_ui_element(&self) -> SelectedUiElement {
-        match &self.primary {
-            Some(element) => SelectedUiElement {
-                active: true,
-                menu_name: element.menu.clone(),
-                layer_name: element.layer.clone(),
-                element_id: element.id.clone(),
-                just_selected: self.just_selected,
-                just_deselected: self.just_deselected,
-                dragging: false,
-                action_name: self.primary_action.clone().unwrap_or_default(),
-                input_box: self.primary_is_input_box,
-            },
-            None => SelectedUiElement::default(),
-        }
     }
 }

@@ -12,6 +12,7 @@
 
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_editor::GuiOptions;
+use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::vertex::{
     ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonText, UiElement,
 };
@@ -1063,7 +1064,7 @@ pub struct UiTouchManager {
     pub drag: DragCoordinator,
     pub editor: EditorTouchExtension,
     pub events: TouchEventQueue,
-
+    pub runtimes: UiRuntimes,
     // State
     element_states: HashMap<String, ElementTouchData>,
     current_hover: Option<ElementRef>,
@@ -1083,6 +1084,7 @@ impl UiTouchManager {
             drag: DragCoordinator::new(),
             editor: EditorTouchExtension::new(editor_mode),
             events: TouchEventQueue::new(64),
+            runtimes: UiRuntimes::new(),
             element_states: HashMap::new(),
             current_hover: None,
             interaction_mode: InteractionMode::None,
