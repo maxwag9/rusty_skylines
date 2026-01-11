@@ -245,7 +245,7 @@ impl ApplicationHandler for App {
                         match resources
                             .renderer
                             .core
-                            .world
+                            .terrain_renderer
                             .terrain_editor
                             .save_edits(data_dir("edited_chunks"))
                         {

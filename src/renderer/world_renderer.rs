@@ -3,7 +3,7 @@ use crate::data::Settings;
 use crate::mouse_ray::*;
 use crate::paths::data_dir;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
-use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
+use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::renderer::pipelines::Pipelines;
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::chunk_builder::*;
@@ -31,8 +31,8 @@ struct FrameState {
     r2_gen: i32,
 }
 
-pub struct WorldRenderer {
-    pub arena: MeshArena,
+pub struct TerrainRenderer {
+    pub arena: TerrainMeshArena,
 
     pub chunks: HashMap<(i32, i32), ChunkMeshLod>,
     pub pending: HashMap<(i32, i32), (u64, usize)>,
@@ -60,7 +60,7 @@ pub struct WorldRenderer {
     pub job_config: ChunkJobConfig,
 }
 
-impl WorldRenderer {
+impl TerrainRenderer {
     pub fn new(device: &Device, settings: &Settings) -> Self {
         let mut terrain_params = TerrainParams::default();
         terrain_params.seed = 201035458;
@@ -70,7 +70,7 @@ impl WorldRenderer {
         let view_radius_render = 128;
         let view_radius_generate = 64;
 
-        let arena = MeshArena::new(
+        let arena = TerrainMeshArena::new(
             device,
             256 * 1024 * 1024, // vertex bytes per page
             128 * 1024 * 1024, // index bytes per page

@@ -1,4 +1,4 @@
-use crate::renderer::mesh_arena::{GeometryScratch, MeshArena};
+use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, gather_neighbor_edge_heights,
     regenerate_vertices_from_height_grid,
@@ -313,7 +313,7 @@ impl TerrainEditor {
         &mut self,
         device: &Device,
         queue: &Queue,
-        arena: &mut MeshArena,
+        arena: &mut TerrainMeshArena,
         chunks: &mut HashMap<(i32, i32), ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
         scratch: &mut GeometryScratch<Vertex>,
@@ -344,7 +344,7 @@ impl TerrainEditor {
         coord: (i32, i32),
         device: &Device,
         queue: &Queue,
-        arena: &mut MeshArena,
+        arena: &mut TerrainMeshArena,
         chunks: &mut HashMap<(i32, i32), ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
         scratch: &mut GeometryScratch<Vertex>,

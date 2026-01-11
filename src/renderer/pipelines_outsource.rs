@@ -25,6 +25,7 @@ pub struct Shaders {
     pub(crate) sky: ShaderAsset,
     pub(crate) stars: ShaderAsset,
     pub(crate) grass_texture: ShaderAsset,
+    pub(crate) road: ShaderAsset,
 }
 
 pub fn load_all_shaders(device: &Device, shader_dir: &Path) -> anyhow::Result<Shaders> {
@@ -39,6 +40,7 @@ pub fn load_all_shaders(device: &Device, shader_dir: &Path) -> anyhow::Result<Sh
             &shader_dir.join("textures/grass.wgsl"),
             "Grass Texture Shader",
         )?,
+        road: load_shader(device, &shader_dir.join("road.wgsl"), "Road Shader")?,
     })
 }
 
@@ -146,7 +148,26 @@ pub fn create_sky_uniforms(device: &Device) -> GpuResourceSet {
         buffer,
     }
 }
-
+pub fn create_road_uniforms(device: &Device) -> GpuResourceSet {
+    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("Fog BGL"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    });
+    GpuResourceSet {
+        bind_group_layout,
+        bind_group,
+        buffer,
+    }
+}
 pub fn create_fog_uniforms(device: &Device) -> GpuResourceSet {
     let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Fog BGL"),

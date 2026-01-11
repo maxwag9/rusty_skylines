@@ -3,6 +3,7 @@ use crate::data::Settings;
 use crate::mouse_ray::*;
 use crate::paths::shader_dir;
 use crate::renderer::astronomy::*;
+use crate::renderer::general_mesh_arena::GeneralMeshArena;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment,
@@ -10,8 +11,9 @@ use crate::renderer::render_passes::{
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::uniform_updates::UniformUpdater;
-use crate::renderer::world_renderer::WorldRenderer;
+use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
+use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::SkyRenderer;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
@@ -32,13 +34,14 @@ pub struct RenderCore {
 
     pub pipelines: Pipelines,
     ui_renderer: UiRenderer,
-    pub world: WorldRenderer,
-
+    pub terrain_renderer: TerrainRenderer,
+    pub road_renderer: RoadRenderSubsystem,
     size: PhysicalSize<u32>,
 
     shader_watcher: Option<ShaderWatcher>,
     sky: SkyRenderer,
     encoder: Option<CommandEncoder>,
+    arena: GeneralMeshArena,
 }
 
 impl RenderCore {
@@ -132,9 +135,14 @@ impl RenderCore {
             .expect("Failed to create render pipelines");
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
             .expect("Failed to create UI pipelines");
-        let world = WorldRenderer::new(&device, settings);
+        let world = TerrainRenderer::new(&device, settings);
         let sky = SkyRenderer::new();
-
+        let road_renderer = RoadRenderSubsystem {};
+        let arena = GeneralMeshArena::new(
+            &device,
+            256 * 1024 * 1024, // vertex bytes per page
+            128 * 1024 * 1024, // index bytes per page
+        );
         Self {
             surface,
             device,
@@ -143,11 +151,13 @@ impl RenderCore {
             pipelines,
             msaa_samples,
             ui_renderer,
-            world,
+            terrain_renderer: world,
+            road_renderer,
             size,
             shader_watcher,
             sky,
             encoder: None,
+            arena,
         }
     }
 
@@ -193,7 +203,7 @@ impl RenderCore {
             view,
             proj,
         );
-        self.world.pick_terrain_point(ray);
+        self.terrain_renderer.pick_terrain_point(ray);
 
         // Update all uniforms
         let uniform_updater = UniformUpdater::new(&self.queue, &self.pipelines);
@@ -212,7 +222,7 @@ impl RenderCore {
         uniform_updater.update_gizmo_vertices(camera.target, camera.orbit_radius);
 
         // Update world
-        self.world.update(
+        self.terrain_renderer.update(
             &self.device,
             &self.queue,
             camera,
@@ -288,20 +298,36 @@ impl RenderCore {
             self.sky.render(&mut pass, &self.pipelines);
 
             // Terrain
-            self.world
+            self.terrain_renderer
                 .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
             {
                 pass.set_stencil_reference(0);
-                self.world
+                self.terrain_renderer
                     .render(&mut pass, &self.pipelines, camera, aspect, false);
 
                 pass.set_stencil_reference(1);
-                self.world
+                self.terrain_renderer
                     .render(&mut pass, &self.pipelines, camera, aspect, true);
             }
 
             // Water
             self.render_water(&mut pass);
+            pass.set_pipeline(&self.pipelines.road_pipeline.pipeline);
+
+            for draw in &self.road_renderer.road_gpu_storage.draw_calls {
+                pass.set_bind_group(
+                    0,
+                    self.pipelines
+                        .road_material_bind_group(draw.material_layer_index),
+                    &[],
+                );
+
+                self.arena.bind_vertex_buffer(&mut pass);
+                self.arena
+                    .bind_index_buffer(draw.material_layer_index, &mut pass);
+
+                pass.draw_indexed(draw.index_range.clone(), draw.vertex_offset as i32, 0..1);
+            }
         }
 
         // Gizmo

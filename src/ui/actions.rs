@@ -2,7 +2,7 @@ pub mod drag_hue_point;
 
 use crate::data::BendMode;
 use crate::hsv::{HSV, hsv_to_rgb, rgb_to_hsv};
-use crate::renderer::world_renderer::WorldRenderer;
+use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
 use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::MouseState;
@@ -197,7 +197,7 @@ pub struct ActionContext<'a> {
     pub mouse_state: &'a MouseState,
     pub input_state: &'a InputState,
     pub time: &'a TimeSystem,
-    pub world_renderer: &'a mut WorldRenderer,
+    pub world_renderer: &'a mut TerrainRenderer,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
 }
@@ -854,7 +854,7 @@ pub fn execute_action(
     mouse_state: &MouseState,
     input_state: &InputState,
     time: &TimeSystem,
-    world_renderer: &mut WorldRenderer,
+    world_renderer: &mut TerrainRenderer,
     window_size: PhysicalSize<u32>,
 ) {
     let mut ctx = ActionContext {
@@ -899,7 +899,7 @@ pub fn activate_action(
     mouse_state: &MouseState,
     input_state: &InputState,
     time: &TimeSystem,
-    world_renderer: &mut WorldRenderer,
+    world_renderer: &mut TerrainRenderer,
     window_size: PhysicalSize<u32>,
 ) {
     if let Some(hit) = top_hit {

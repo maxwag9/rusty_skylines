@@ -10,16 +10,17 @@
 //! - Every node is an intersection with attachable traffic controls
 //! - Mutable operations must occur outside simulation ticks
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 // ============================================================================
 // ID Newtypes
 // ============================================================================
 
+use crate::hsv::lerp;
+use crate::terrain::roads::road_mesh_manager::{ChunkId, HorizontalProfile, chunk_x_range};
+
 /// Stable, monotonically increasing node identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct NodeId(u32);
+pub struct NodeId(pub u32);
 
 impl NodeId {
     #[inline]
@@ -50,7 +51,7 @@ impl From<NodeId> for u32 {
 /// Stable, monotonically increasing segment identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct SegmentId(u32);
+pub struct SegmentId(pub u32);
 
 impl SegmentId {
     #[inline]
@@ -156,6 +157,24 @@ pub enum VerticalProfile {
     Custom { profile_id: u32 },
 }
 
+impl VerticalProfile {
+    pub(crate) fn evaluate(&self, t: f32) -> f32 {
+        match self {
+            VerticalProfile::Flat => 0.0,
+            VerticalProfile::Linear { start_z, end_z } => lerp(*start_z, *end_z, t),
+            VerticalProfile::Custom { .. } => 0.0,
+        }
+    }
+    #[inline]
+    pub fn slope(&self) -> f32 {
+        match self {
+            VerticalProfile::Flat => 0.0,
+            VerticalProfile::Linear { start_z, end_z } => end_z - start_z,
+            VerticalProfile::Custom { .. } => 0.0,
+        }
+    }
+}
+
 impl Default for VerticalProfile {
     fn default() -> Self {
         Self::Flat
@@ -241,19 +260,19 @@ impl AttachedControl {
 /// Every node is an intersection with attachable traffic controls.
 #[derive(Debug, Clone)]
 pub struct Node {
-    x: f32,
-    y: f32,
-    z: f32,
-    chunk_id: u32,
-    enabled: bool,
-    attached_controls: Vec<AttachedControl>,
-    incoming_lanes: Vec<LaneId>,
-    outgoing_lanes: Vec<LaneId>,
-    next_control_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub chunk_id: ChunkId,
+    pub enabled: bool,
+    pub attached_controls: Vec<AttachedControl>,
+    pub incoming_lanes: Vec<LaneId>,
+    pub outgoing_lanes: Vec<LaneId>,
+    pub next_control_id: u32,
 }
 
 impl Node {
-    fn new(x: f32, y: f32, z: f32, chunk_id: u32) -> Self {
+    fn new(x: f32, y: f32, z: f32, chunk_id: ChunkId) -> Self {
         Self {
             x,
             y,
@@ -288,7 +307,7 @@ impl Node {
     }
 
     #[inline]
-    pub fn chunk_id(&self) -> u32 {
+    pub fn chunk_id(&self) -> ChunkId {
         self.chunk_id
     }
 
@@ -341,13 +360,14 @@ impl Node {
 /// Segments are grouping/metadata; lanes are the first-class graph edges.
 #[derive(Debug, Clone)]
 pub struct Segment {
-    start: NodeId,
-    end: NodeId,
-    enabled: bool,
-    lanes: Vec<LaneId>,
-    structure: StructureType,
-    vertical_profile: VerticalProfile,
-    version: u32,
+    pub start: NodeId,
+    pub end: NodeId,
+    pub enabled: bool,
+    pub lanes: Vec<LaneId>,
+    pub structure: StructureType,
+    pub horizontal_profile: HorizontalProfile,
+    pub(crate) vertical_profile: VerticalProfile,
+    pub(crate) version: u32,
 }
 
 impl Segment {
@@ -355,6 +375,7 @@ impl Segment {
         start: NodeId,
         end: NodeId,
         structure: StructureType,
+        horizontal_profile: HorizontalProfile,
         vertical_profile: VerticalProfile,
     ) -> Self {
         Self {
@@ -363,6 +384,7 @@ impl Segment {
             enabled: true,
             lanes: Vec::new(),
             structure,
+            horizontal_profile,
             vertical_profile,
             version: 0,
         }
@@ -536,14 +558,10 @@ pub struct RoadManager {
     nodes: Vec<Node>,
     segments: Vec<Segment>,
     lanes: Vec<Lane>,
-    #[cfg(debug_assertions)]
-    simulation_active: AtomicBool,
 }
 
-// Safety: RoadManager uses no interior mutability except for debug-only atomic.
+// Safety: RoadManager uses no interior mutability.
 // All mutable access is explicitly controlled by the caller.
-unsafe impl Send for RoadManager {}
-unsafe impl Sync for RoadManager {}
 
 impl RoadManager {
     /// Creates an empty road topology.
@@ -552,8 +570,6 @@ impl RoadManager {
             nodes: Vec::new(),
             segments: Vec::new(),
             lanes: Vec::new(),
-            #[cfg(debug_assertions)]
-            simulation_active: AtomicBool::new(false),
         }
     }
 
@@ -563,44 +579,8 @@ impl RoadManager {
             nodes: Vec::with_capacity(nodes),
             segments: Vec::with_capacity(segments),
             lanes: Vec::with_capacity(lanes),
-            #[cfg(debug_assertions)]
-            simulation_active: AtomicBool::new(false),
         }
     }
-
-    // ------------------------------------------------------------------------
-    // Debug simulation lock
-    // ------------------------------------------------------------------------
-
-    /// Marks simulation as active. Debug-only check for mutation during sim.
-    #[cfg(debug_assertions)]
-    pub fn begin_simulation(&self) {
-        self.simulation_active.store(true, Ordering::SeqCst);
-    }
-
-    #[cfg(not(debug_assertions))]
-    pub fn begin_simulation(&self) {}
-
-    /// Marks simulation as inactive.
-    #[cfg(debug_assertions)]
-    pub fn end_simulation(&self) {
-        self.simulation_active.store(false, Ordering::SeqCst);
-    }
-
-    #[cfg(not(debug_assertions))]
-    pub fn end_simulation(&self) {}
-
-    #[cfg(debug_assertions)]
-    fn assert_not_simulating(&self) {
-        debug_assert!(
-            !self.simulation_active.load(Ordering::SeqCst),
-            "Attempted mutation during active simulation"
-        );
-    }
-
-    #[cfg(not(debug_assertions))]
-    #[inline]
-    fn assert_not_simulating(&self) {}
 
     // ------------------------------------------------------------------------
     // Node operations
@@ -608,8 +588,7 @@ impl RoadManager {
 
     /// Adds a new intersection node at the specified position.
     /// Returns the stable, monotonically increasing ID.
-    pub fn add_node(&mut self, x: f32, y: f32, z: f32, chunk_id: u32) -> NodeId {
-        self.assert_not_simulating();
+    pub fn add_node(&mut self, x: f32, y: f32, z: f32, chunk_id: ChunkId) -> NodeId {
         let id = NodeId::new(self.nodes.len() as u32);
         self.nodes.push(Node::new(x, y, z, chunk_id));
         id
@@ -625,19 +604,16 @@ impl RoadManager {
     /// Only valid during command application, not during simulation.
     #[inline]
     pub fn node_mut(&mut self, id: NodeId) -> &mut Node {
-        self.assert_not_simulating();
         &mut self.nodes[id.0 as usize]
     }
 
     /// Disables a node. Does not affect connected lanes/segments.
     pub fn disable_node(&mut self, id: NodeId) {
-        self.assert_not_simulating();
         self.nodes[id.0 as usize].enabled = false;
     }
 
     /// Re-enables a previously disabled node.
     pub fn enable_node(&mut self, id: NodeId) {
-        self.assert_not_simulating();
         self.nodes[id.0 as usize].enabled = true;
     }
 
@@ -672,12 +648,17 @@ impl RoadManager {
         start: NodeId,
         end: NodeId,
         structure: StructureType,
+        horizontal_profile: HorizontalProfile,
         vertical_profile: VerticalProfile,
     ) -> SegmentId {
-        self.assert_not_simulating();
         let id = SegmentId::new(self.segments.len() as u32);
-        self.segments
-            .push(Segment::new(start, end, structure, vertical_profile));
+        self.segments.push(Segment::new(
+            start,
+            end,
+            structure,
+            horizontal_profile,
+            vertical_profile,
+        ));
         id
     }
 
@@ -690,13 +671,11 @@ impl RoadManager {
     /// Returns a mutable reference to the segment.
     #[inline]
     pub fn segment_mut(&mut self, id: SegmentId) -> &mut Segment {
-        self.assert_not_simulating();
         &mut self.segments[id.0 as usize]
     }
 
     /// Disables a segment and all its lanes. Increments segment version.
     pub fn disable_segment(&mut self, id: SegmentId) {
-        self.assert_not_simulating();
         let segment = &mut self.segments[id.0 as usize];
         segment.enabled = false;
         segment.version += 1;
@@ -710,7 +689,6 @@ impl RoadManager {
 
     /// Re-enables a segment (lanes must be re-enabled separately if desired).
     pub fn enable_segment(&mut self, id: SegmentId) {
-        self.assert_not_simulating();
         self.segments[id.0 as usize].enabled = true;
     }
 
@@ -735,6 +713,34 @@ impl RoadManager {
         self.segments.len()
     }
 
+    pub fn segment_ids_touching_chunk(&self, chunk_id: ChunkId) -> Vec<SegmentId> {
+        let (min_x, max_x) = chunk_x_range(chunk_id);
+
+        self.segments
+            .iter()
+            .enumerate()
+            .filter(|(idx, seg)| {
+                if !seg.enabled {
+                    return false;
+                }
+
+                // Assuming NodeId indices are valid and within bounds
+                let start = self.nodes.get(seg.start.raw() as usize);
+                let end = self.nodes.get(seg.end.raw() as usize);
+
+                match (start, end) {
+                    (Some(start), Some(end)) => {
+                        let seg_min_x = f32::min(start.x, end.x);
+                        let seg_max_x = f32::max(start.x, end.x);
+
+                        seg_max_x >= min_x && seg_min_x < max_x
+                    }
+                    _ => false,
+                }
+            })
+            .map(|(idx, _)| SegmentId::new(idx as u32)) // Index == raw SegmentId because of append-only monotonic allocation
+            .collect()
+    }
     // ------------------------------------------------------------------------
     // Lane operations
     // ------------------------------------------------------------------------
@@ -751,8 +757,6 @@ impl RoadManager {
         vehicle_mask: u32,
         base_cost: f32,
     ) -> LaneId {
-        self.assert_not_simulating();
-
         // Validate lane connects segment endpoints
         let seg = &self.segments[segment.0 as usize];
         debug_assert!(
@@ -790,27 +794,17 @@ impl RoadManager {
     /// Returns a mutable reference to the lane.
     #[inline]
     pub fn lane_mut(&mut self, id: LaneId) -> &mut Lane {
-        self.assert_not_simulating();
         &mut self.lanes[id.0 as usize]
     }
 
     /// Disables a lane.
     pub fn disable_lane(&mut self, id: LaneId) {
-        self.assert_not_simulating();
         self.lanes[id.0 as usize].enabled = false;
     }
 
     /// Re-enables a lane.
     pub fn enable_lane(&mut self, id: LaneId) {
-        self.assert_not_simulating();
         self.lanes[id.0 as usize].enabled = true;
-    }
-
-    /// Updates the dynamic cost for a lane. Called by chunk simulation.
-    /// This is the one lane mutation allowed outside command phase.
-    #[inline]
-    pub fn set_lane_dynamic_cost(&mut self, id: LaneId, cost: f32) {
-        self.lanes[id.0 as usize].dynamic_cost = cost;
     }
 
     /// Returns an iterator over all lanes in insertion order.
@@ -841,7 +835,6 @@ impl RoadManager {
     /// Attaches a traffic control to a node intersection.
     /// Returns the stable control ID for later modification/removal.
     pub fn attach_control(&mut self, node_id: NodeId, control: TrafficControl) -> ControlId {
-        self.assert_not_simulating();
         let node = &mut self.nodes[node_id.0 as usize];
         let id = ControlId::new(node.next_control_id);
         node.next_control_id += 1;
@@ -855,7 +848,6 @@ impl RoadManager {
 
     /// Disables a traffic control (soft remove for undo support).
     pub fn disable_control(&mut self, node_id: NodeId, control_id: ControlId) {
-        self.assert_not_simulating();
         let node = &mut self.nodes[node_id.0 as usize];
         if let Some(ctrl) = node
             .attached_controls
@@ -868,7 +860,6 @@ impl RoadManager {
 
     /// Re-enables a traffic control.
     pub fn enable_control(&mut self, node_id: NodeId, control_id: ControlId) {
-        self.assert_not_simulating();
         let node = &mut self.nodes[node_id.0 as usize];
         if let Some(ctrl) = node
             .attached_controls
@@ -892,8 +883,6 @@ impl RoadManager {
     where
         F: FnOnce(&mut Self),
     {
-        self.assert_not_simulating();
-
         let segment_count_before = self.segments.len();
 
         // Disable old segment and its lanes
@@ -916,7 +905,7 @@ impl RoadManager {
     /// Returns lanes whose from or to nodes belong to the specified chunk.
     ///
     /// Note: For production use, build chunk-local spatial indexes.
-    pub fn lane_view_for_chunk(&self, chunk_id: u32) -> LaneGraphView<'_> {
+    pub fn lane_view_for_chunk(&self, chunk_id: ChunkId) -> LaneGraphView<'_> {
         let mut lane_ids = Vec::new();
 
         for (id, lane) in self.iter_lanes() {
@@ -937,7 +926,7 @@ impl RoadManager {
     }
 
     /// Returns nodes belonging to a specific chunk.
-    pub fn nodes_in_chunk(&self, chunk_id: u32) -> Vec<NodeId> {
+    pub fn nodes_in_chunk(&self, chunk_id: ChunkId) -> Vec<NodeId> {
         self.iter_nodes()
             .filter(|(_, n)| n.is_enabled() && n.chunk_id() == chunk_id)
             .map(|(id, _)| id)
@@ -1180,7 +1169,7 @@ pub struct LaneRuntimeState {
 /// Owned by chunk simulation code, not by RoadManager.
 #[derive(Debug, Clone)]
 pub struct RoadChunkState {
-    chunk_id: u32,
+    chunk_id: ChunkId,
     /// Lane states stored in deterministic order (by LaneId).
     lane_states: Vec<(LaneId, LaneRuntimeState)>,
     /// Last simulation update time in seconds.
@@ -1193,7 +1182,7 @@ pub struct RoadChunkState {
 
 impl RoadChunkState {
     /// Creates a new chunk state for the given lanes.
-    pub fn new(chunk_id: u32, lanes: &[LaneId], prng_seed: u64) -> Self {
+    pub fn new(chunk_id: u64, lanes: &[LaneId], prng_seed: u64) -> Self {
         let mut lane_states: Vec<_> = lanes
             .iter()
             .map(|&id| (id, LaneRuntimeState::default()))
@@ -1212,7 +1201,7 @@ impl RoadChunkState {
 
     /// Returns the chunk ID this state belongs to.
     #[inline]
-    pub fn chunk_id(&self) -> u32 {
+    pub fn chunk_id(&self) -> u64 {
         self.chunk_id
     }
 
@@ -1242,18 +1231,6 @@ impl RoadChunkState {
         &mut self,
     ) -> impl Iterator<Item = (LaneId, &mut LaneRuntimeState)> {
         self.lane_states.iter_mut().map(|(id, state)| (*id, state))
-    }
-
-    /// Updates dynamic costs in the RoadManager from this chunk's state.
-    pub fn apply_dynamic_costs(&self, manager: &mut RoadManager) {
-        for (lane_id, state) in &self.lane_states {
-            let total_modifier = if state.blocked {
-                f32::MAX * 0.5 // Large but not overflow
-            } else {
-                state.dynamic_cost_modifier
-            };
-            manager.set_lane_dynamic_cost(*lane_id, total_modifier);
-        }
     }
 
     /// Adds a lane to tracking (used when lanes are added to chunk).
@@ -1297,7 +1274,7 @@ pub struct ChunkBoundarySummary {
 
 impl ChunkBoundarySummary {
     /// Creates a boundary summary for a chunk.
-    pub fn compute(manager: &RoadManager, chunk_id: u32) -> Self {
+    pub fn compute(manager: &RoadManager, chunk_id: ChunkId) -> Self {
         let mut incoming = Vec::new();
         let mut outgoing = Vec::new();
 
@@ -1345,13 +1322,14 @@ pub enum Command {
         x: f32,
         y: f32,
         z: f32,
-        chunk_id: u32,
+        chunk_id: ChunkId,
     },
     /// Add a new road segment.
     AddSegment {
         start: NodeId,
         end: NodeId,
         structure: StructureType,
+        horizontal_profile: HorizontalProfile,
         vertical_profile: VerticalProfile,
     },
     /// Add a new lane to a segment.
@@ -1429,6 +1407,7 @@ pub fn apply_command(manager: &mut RoadManager, command: &Command) -> CommandRes
             start,
             end,
             structure,
+            horizontal_profile,
             vertical_profile,
         } => {
             if start.raw() as usize >= manager.node_count()
@@ -1436,7 +1415,13 @@ pub fn apply_command(manager: &mut RoadManager, command: &Command) -> CommandRes
             {
                 return CommandResult::InvalidReference;
             }
-            let id = manager.add_segment(*start, *end, *structure, vertical_profile.clone());
+            let id = manager.add_segment(
+                *start,
+                *end,
+                *structure,
+                *horizontal_profile,
+                *vertical_profile,
+            );
             CommandResult::SegmentCreated(id)
         }
         Command::AddLane {
@@ -1582,6 +1567,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         assert_eq!(segment.raw(), 0);
@@ -1639,6 +1625,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
@@ -1664,6 +1651,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let old_lane = manager.add_lane(node_a, node_b, old_segment, 30.0, 5, 0xFF, 1.0);
@@ -1676,6 +1664,7 @@ mod tests {
                 node_a,
                 node_b,
                 StructureType::Surface,
+                HorizontalProfile::Linear,
                 VerticalProfile::Flat,
             );
             mgr.add_lane(node_a, node_b, new_seg, 50.0, 10, 0xFF, 1.0);
@@ -1709,8 +1698,20 @@ mod tests {
         assert_eq!(n2.raw(), 1);
         assert_eq!(n3.raw(), 2);
 
-        let s1 = manager.add_segment(n1, n2, StructureType::Surface, VerticalProfile::Flat);
-        let s2 = manager.add_segment(n2, n3, StructureType::Surface, VerticalProfile::Flat);
+        let s1 = manager.add_segment(
+            n1,
+            n2,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
+        let s2 = manager.add_segment(
+            n2,
+            n3,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
 
         assert_eq!(s1.raw(), 0);
         assert_eq!(s2.raw(), 1);
@@ -1736,6 +1737,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
@@ -1752,8 +1754,13 @@ mod tests {
         let mut manager = RoadManager::new();
         let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
         let node_b = manager.add_node(0.0, 0.0, 10.0, 1);
-        let segment =
-            manager.add_segment(node_a, node_b, StructureType::Bridge, VerticalProfile::Flat);
+        let segment = manager.add_segment(
+            node_a,
+            node_b,
+            StructureType::Bridge,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
 
         let length = lane_length(manager.lane(lane), &manager);
@@ -1769,6 +1776,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
@@ -1791,6 +1799,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Bridge,
+            HorizontalProfile::Linear,
             VerticalProfile::Linear {
                 start_z: 0.0,
                 end_z: 10.0,
@@ -1816,6 +1825,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Bridge,
+            HorizontalProfile::Linear,
             VerticalProfile::Linear {
                 start_z: 0.0,
                 end_z: 10.0,
@@ -1843,6 +1853,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
@@ -1879,12 +1890,14 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let seg_ac = manager.add_segment(
             node_a,
             node_c,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
 
@@ -1917,15 +1930,33 @@ mod tests {
         let n2b = manager.add_node(110.0, 0.0, 0.0, 2);
 
         // Chunk 1 internal segment
-        let seg1 = manager.add_segment(n1a, n1b, StructureType::Surface, VerticalProfile::Flat);
+        let seg1 = manager.add_segment(
+            n1a,
+            n1b,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
         let lane1 = manager.add_lane(n1a, n1b, seg1, 50.0, 10, 0xFF, 1.0);
 
         // Chunk 2 internal segment
-        let seg2 = manager.add_segment(n2a, n2b, StructureType::Surface, VerticalProfile::Flat);
+        let seg2 = manager.add_segment(
+            n2a,
+            n2b,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
         let lane2 = manager.add_lane(n2a, n2b, seg2, 50.0, 10, 0xFF, 1.0);
 
         // Cross-chunk segment (1 -> 2)
-        let seg_cross = manager.add_segment(n1b, n2a, StructureType::Bridge, VerticalProfile::Flat);
+        let seg_cross = manager.add_segment(
+            n1b,
+            n2a,
+            StructureType::Bridge,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
         let lane_cross = manager.add_lane(n1b, n2a, seg_cross, 50.0, 10, 0xFF, 1.0);
 
         // View for chunk 1
@@ -1952,7 +1983,13 @@ mod tests {
         let n1 = manager.add_node(0.0, 0.0, 0.0, 1);
         let n2 = manager.add_node(50.0, 0.0, 0.0, 2);
 
-        let seg = manager.add_segment(n1, n2, StructureType::Surface, VerticalProfile::Flat);
+        let seg = manager.add_segment(
+            n1,
+            n2,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
         let _lane_out = manager.add_lane(n1, n2, seg, 50.0, 10, 0xFF, 1.0);
         let _lane_in = manager.add_lane(n2, n1, seg, 50.0, 10, 0xFF, 1.0);
 
@@ -1974,6 +2011,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
@@ -1991,10 +2029,6 @@ mod tests {
         }
 
         assert!((chunk_state.lane_state(lane).unwrap().occupancy_estimate - 0.5).abs() < 0.001);
-
-        // Apply to manager
-        chunk_state.apply_dynamic_costs(&mut manager);
-        assert!((manager.lane(lane).dynamic_cost() - 10.0).abs() < 0.001);
     }
 
     #[test]
@@ -2037,6 +2071,7 @@ mod tests {
                 start: node_a,
                 end: node_b,
                 structure: StructureType::Surface,
+                horizontal_profile: HorizontalProfile::Linear,
                 vertical_profile: VerticalProfile::Flat,
             },
         );
@@ -2112,6 +2147,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Bridge,
+            HorizontalProfile::Linear,
             VerticalProfile::Linear {
                 start_z: 0.0,
                 end_z: 50.0,
@@ -2151,6 +2187,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
 
@@ -2173,9 +2210,27 @@ mod tests {
         let n3 = manager.add_node(20.0, 0.0, 0.0, 1);
         let n4 = manager.add_node(30.0, 0.0, 0.0, 1);
 
-        let s1 = manager.add_segment(n1, n2, StructureType::Surface, VerticalProfile::Flat);
-        let s2 = manager.add_segment(n2, n3, StructureType::Surface, VerticalProfile::Flat);
-        let s3 = manager.add_segment(n3, n4, StructureType::Surface, VerticalProfile::Flat);
+        let s1 = manager.add_segment(
+            n1,
+            n2,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
+        let s2 = manager.add_segment(
+            n2,
+            n3,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
+        let s3 = manager.add_segment(
+            n3,
+            n4,
+            StructureType::Surface,
+            HorizontalProfile::Linear,
+            VerticalProfile::Flat,
+        );
 
         let l1 = manager.add_lane(n1, n2, s1, 50.0, 10, 0xFF, 1.0);
         let l2 = manager.add_lane(n2, n3, s2, 50.0, 10, 0xFF, 1.0);
@@ -2204,6 +2259,7 @@ mod tests {
             node_a,
             node_b,
             StructureType::Surface,
+            HorizontalProfile::Linear,
             VerticalProfile::Flat,
         );
 

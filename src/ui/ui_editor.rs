@@ -5,7 +5,7 @@
 use crate::data::BendMode;
 use crate::hsv::{HSV, rgb_to_hsv};
 use crate::paths::data_dir;
-use crate::renderer::world_renderer::WorldRenderer;
+use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
 use crate::ui::actions::{ActionSystem, activate_action, execute_action};
 use crate::ui::helper::calc_move_speed;
@@ -171,7 +171,7 @@ impl UiButtonLoader {
         dt: f32,
         input_state: &mut InputState,
         time_system: &TimeSystem,
-        world_renderer: &mut WorldRenderer,
+        world_renderer: &mut TerrainRenderer,
         window_size: PhysicalSize<u32>,
     ) {
         if !self.touch_manager.options.show_gui {

@@ -9,7 +9,7 @@ pub fn ui_system(_world: &mut World, resources: &mut Resources) {
         dt,
         &mut resources.input,
         &resources.time,
-        &mut resources.renderer.core.world,
+        &mut resources.renderer.core.terrain_renderer,
         resources.window.inner_size(),
     );
 }

@@ -1,4 +1,4 @@
-use crate::renderer::world_renderer::WorldRenderer;
+use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::terrain::TerrainGenerator;
 use glam::Vec3;
 
@@ -95,7 +95,7 @@ pub fn ground_camera_target(
 pub fn resolve_pitch_by_search(
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    world_renderer: &WorldRenderer,
+    world_renderer: &TerrainRenderer,
 ) {
     let target = camera.target;
     let orbit_radius = camera.orbit_radius;
@@ -128,7 +128,7 @@ pub fn resolve_pitch_by_search(
 }
 
 // Stricter version: checks multiple points along orbit for terrain collision
-fn is_clear_strict(camera: &Camera, world: &WorldRenderer, pitch: f32) -> bool {
+fn is_clear_strict(camera: &Camera, world: &TerrainRenderer, pitch: f32) -> bool {
     let mut tmp = camera.clone();
     tmp.pitch = pitch;
 

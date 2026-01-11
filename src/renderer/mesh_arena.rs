@@ -1,3 +1,6 @@
+use crate::renderer::general_mesh_arena::{
+    FreeRange, commit_alloc, find_fit, free_insert_and_coalesce,
+};
 use crate::terrain::chunk_builder::GpuChunkHandle;
 use crate::ui::vertex::VertexWithPosition;
 use wgpu::{Buffer, BufferUsages, Device, Queue};
@@ -156,13 +159,13 @@ impl MeshPage {
     }
 }
 
-pub struct MeshArena {
+pub struct TerrainMeshArena {
     pub pages: Vec<MeshPage>,
     pub page_v_bytes: u64,
     pub page_i_bytes: u64,
 }
 
-impl MeshArena {
+impl TerrainMeshArena {
     pub fn new(device: &Device, page_v_bytes: u64, page_i_bytes: u64) -> Self {
         let mut arena = Self {
             pages: Vec::new(),
@@ -262,74 +265,11 @@ impl MeshArena {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct FreeRange {
-    start: u64, // bytes
-    size: u64,  // bytes
-}
-
 fn align_up(x: u64, a: u64) -> u64 {
     if a == 0 {
         return x;
     }
     ((x + a - 1) / a) * a
-}
-
-fn free_insert_and_coalesce(free: &mut Vec<FreeRange>, start: u64, size: u64) {
-    free.push(FreeRange { start, size });
-    free.sort_by_key(|r| r.start);
-
-    let mut out: Vec<FreeRange> = Vec::with_capacity(free.len());
-    for r in free.drain(..) {
-        if let Some(last) = out.last_mut() {
-            if last.start + last.size == r.start {
-                last.size += r.size;
-                continue;
-            }
-        }
-        out.push(r);
-    }
-    *free = out;
-}
-fn find_fit(free: &[FreeRange], size: u64, align: u64) -> Option<u64> {
-    for r in free {
-        let aligned = align_up(r.start, align);
-        let pad = aligned - r.start;
-        if pad + size <= r.size {
-            return Some(aligned);
-        }
-    }
-    None
-}
-fn commit_alloc(free: &mut Vec<FreeRange>, start: u64, size: u64) {
-    for i in 0..free.len() {
-        let r = free[i];
-        if start >= r.start && start + size <= r.start + r.size {
-            let mut new_ranges = Vec::with_capacity(2);
-
-            if start > r.start {
-                new_ranges.push(FreeRange {
-                    start: r.start,
-                    size: start - r.start,
-                });
-            }
-
-            let end = start + size;
-            let r_end = r.start + r.size;
-            if end < r_end {
-                new_ranges.push(FreeRange {
-                    start: end,
-                    size: r_end - end,
-                });
-            }
-
-            free.swap_remove(i);
-            free.extend(new_ranges);
-            return;
-        }
-    }
-
-    unreachable!("commit_alloc called with invalid range");
 }
 
 // Triangle clipping logic - completely separate from allocation

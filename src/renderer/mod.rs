@@ -1,6 +1,7 @@
 pub(crate) mod astronomy;
 mod benchmark;
 pub(crate) mod core;
+pub mod general_mesh_arena;
 pub(crate) mod mesh_arena;
 pub(crate) mod pipelines;
 pub(crate) mod pipelines_outsource;

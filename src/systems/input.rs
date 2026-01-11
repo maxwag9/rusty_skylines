@@ -98,10 +98,10 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     ground_camera_target(
         camera,
         cam_ctrl,
-        &resources.renderer.core.world.terrain_gen,
+        &resources.renderer.core.terrain_renderer.terrain_gen,
         1.0,
     );
-    resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.world);
+    resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.terrain_renderer);
     // SMOOTH target → camera
     let t = 1.0 - (-cam_ctrl.orbit_smoothness * 60.0 * dt).exp();
 
