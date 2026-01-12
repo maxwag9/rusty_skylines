@@ -117,6 +117,9 @@ keys = ["MouseLeft"]
 ["Edit Terrain -"]
 keys = ["MouseRight"]
 
+["Place Road Node"]
+keys = ["MouseLeft"]
+
 ["Speed up Time 2x"]
 keys = ["ArrowRight"]
 ["Speed up Time 8x"]

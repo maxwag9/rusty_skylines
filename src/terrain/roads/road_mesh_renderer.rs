@@ -1,11 +1,14 @@
-use crate::renderer::world_renderer::VisibleChunk;
+use crate::renderer::world_renderer::{PickedPoint, VisibleChunk};
+use crate::resources::InputState;
+use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, ChunkMesh, CrossSection, MeshConfig, RoadMeshManager, RoadVertex,
 };
-use crate::terrain::roads::roads::RoadManager;
+use crate::terrain::roads::roads::{RoadManager, apply_commands};
 /// road_mesh_renderer.rs
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
+use wgpu::Device;
 use wgpu::util::DeviceExt;
 
 pub struct RoadRenderSubsystem {
@@ -20,6 +23,7 @@ pub struct RoadRenderSubsystem {
 
     pub visible_chunks: Vec<ChunkId>,
     pub road_manager: RoadManager,
+    pub road_editor: RoadEditor,
     pub road_vertex_buffer: Option<wgpu::Buffer>,
     pub road_index_buffer: Option<wgpu::Buffer>,
 }
@@ -34,13 +38,31 @@ impl RoadRenderSubsystem {
             material_array: MaterialArray::new(),
             visible_chunks: Vec::new(),
             road_manager: RoadManager::new(),
+            road_editor: RoadEditor::new(),
             road_vertex_buffer: None,
             road_index_buffer: None,
         }
     }
 
     /// Call this each frame with visible chunk IDs
-    pub fn update(&mut self, visible_chunks: &Vec<VisibleChunk>, device: &wgpu::Device) {
+    pub fn update(
+        &mut self,
+        visible_chunks: &Vec<VisibleChunk>,
+        device: &Device,
+        input: &mut InputState,
+        picked_point: &Option<PickedPoint>,
+    ) {
+        let road_commands = self
+            .road_editor
+            .update(&self.road_manager, input, picked_point);
+        if !road_commands.is_empty() {
+            println!("{:?}", road_commands);
+            let results = apply_commands(
+                &mut self.mesh_manager,
+                &mut self.road_manager,
+                &road_commands,
+            );
+        }
         // Clear old GPU buffers
         self.road_vertex_buffer = None;
         self.road_index_buffer = None;
@@ -68,7 +90,7 @@ impl RoadRenderSubsystem {
             } else {
                 // Use cached mesh or skip if None
                 match self.mesh_manager.get_chunk_mesh(chunk_id) {
-                    Some(mesh) => &mesh.clone(),
+                    Some(mesh) => mesh,
                     None => continue,
                 }
             };

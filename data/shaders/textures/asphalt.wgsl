@@ -1,4 +1,4 @@
-// shaders/asphalt.wgsl
+// asphalt.wgsl
 struct Params {
     seed: u32,
     scale: f32,

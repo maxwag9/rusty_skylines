@@ -352,7 +352,7 @@ pub fn build_text_vertices(
         }
 
         // editor outline
-        if touch_manager.options.editor_mode && !being_edited && !is_selected {
+        if touch_manager.editor.enabled && !being_edited && !is_selected {
             render_editor_outline(
                 min_x,
                 min_y,

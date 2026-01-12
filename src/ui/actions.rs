@@ -1069,18 +1069,17 @@ fn register_color_picker_actions(sys: &mut ActionSystem) {
 
 fn register_editor_actions(sys: &mut ActionSystem) {
     sys.register_simple("toggle_editor", |_action, ctx| {
-        ctx.loader.touch_manager.options.editor_mode =
-            !ctx.loader.touch_manager.options.editor_mode;
+        ctx.loader.touch_manager.editor.enabled = !ctx.loader.touch_manager.editor.enabled;
         ActionResult::Ok
     });
 
     sys.register_simple("enable_editor", |_action, ctx| {
-        ctx.loader.touch_manager.options.editor_mode = true;
+        ctx.loader.touch_manager.editor.enabled = true;
         ActionResult::Ok
     });
 
     sys.register_simple("disable_editor", |_action, ctx| {
-        ctx.loader.touch_manager.options.editor_mode = false;
+        ctx.loader.touch_manager.editor.enabled = false;
         ActionResult::Ok
     });
 

@@ -124,25 +124,19 @@ impl ProceduralTextureManager {
             texture_cache: HashMap::new(),
         }
     }
-
-    pub fn request_texture(
-        &mut self,
-        kind: MaterialKind,
-        params: Params,
-        size: u32,
-    ) -> &wgpu::TextureView {
-        let key = TextureCacheKey {
-            kind,
-            resolution: size,
-            params,
-        };
-
-        if !self.texture_cache.contains_key(&key) {
-            self.ensure_pipeline(kind);
-            self.generate_texture(key);
+    pub fn ensure_texture(&mut self, key: &TextureCacheKey) {
+        if !self.texture_cache.contains_key(key) {
+            self.ensure_pipeline(key.kind);
+            self.generate_texture(*key);
         }
+    }
 
-        &self.texture_cache.get(&key).unwrap().view
+    pub fn get_texture_view(&self, key: &TextureCacheKey) -> &TextureView {
+        &self
+            .texture_cache
+            .get(key)
+            .expect("texture must be ensured first")
+            .view
     }
 
     pub fn reload_all_shaders(&mut self) {
@@ -297,11 +291,14 @@ impl ProceduralTextureManager {
         );
     }
 
-    pub fn get_views(&self, materials: &[TextureCacheKey]) -> Vec<&TextureView> {
+    pub fn get_views(&mut self, materials: &[TextureCacheKey]) -> Vec<&TextureView> {
+        for key in materials {
+            self.ensure_texture(key);
+        }
+
         materials
             .iter()
-            .filter_map(|m| self.texture_cache.get(m))
-            .map(|cached| &cached.view)
+            .map(|key| self.get_texture_view(key))
             .collect()
     }
 }

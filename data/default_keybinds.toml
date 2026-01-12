@@ -1,8 +1,58 @@
+["Navigate UI Up"]
+keys = ["Shift+ArrowUp"]
+
+["Move Cursor Left"]
+keys = ["ArrowLeft"]
+
+["Save GUI layout"]
+keys = ["Ctrl+KeyS"]
+
+["Fly Camera Up"]
+keys = ["KeyE"]
+
+["Add GUI element"]
+keys = ["KeyP"]
+
 ["Copy text"]
 keys = ["Ctrl+KeyC"]
 
+["Navigate UI Down"]
+keys = ["Shift+ArrowDown"]
+
 ["Cut text"]
 keys = ["Ctrl+KeyX"]
+
+["Toggle editor mode"]
+keys = ["F6"]
+
+["Fly Camera Down"]
+keys = ["KeyQ"]
+
+["Fly Camera Left"]
+keys = ["KeyA"]
+
+["Fly Camera Forward"]
+keys = ["KeyW"]
+
+["Fly Camera Right"]
+keys = ["KeyD"]
+
+["Navigate UI Right"]
+keys = ["Shift+ArrowRight"]
+
+["Delete selected GUI Element"]
+keys = ["KeyX"]
+
+["Toggle Color Picker"]
+keys = ["KeyF"]
+["Fly Camera Backward"]
+keys = ["KeyS"]
+
+["Move Cursor Right"]
+keys = ["ArrowRight"]
+
+["Navigate UI Left"]
+keys = ["Shift+ArrowLeft"]
 
 ["Paste text"]
 keys = ["Ctrl+KeyV"]
@@ -10,46 +60,76 @@ keys = ["Ctrl+KeyV"]
 ["Cycle MSAA"]
 keys = ["F5"]
 
-["Toggle editor mode"]
-keys = ["F6"]
-
-["Save GUI layout"]
-keys = ["Ctrl+KeyS"]
-
-["Add GUI element"]
-keys = ["KeyP"]
-
-
-["Delete selected GUI Element"]
-keys = ["KeyX"]
-
-["Fly Camera Forward"]
-keys = ["KeyW"]
-["Fly Camera Backward"]
+["Move Element Down"]
 keys = ["KeyS"]
-["Fly Camera Left"]
+
+["Move Element Left"]
 keys = ["KeyA"]
-["Fly Camera Right"]
+
+["Move Element Up"]
+keys = ["KeyW"]
+
+["Move Element Right"]
 keys = ["KeyD"]
-["Fly Camera Up"]
-keys = ["KeyQ"]
-["Fly Camera Down"]
-keys = ["KeyE"]
 
-["Navigate UI Left"]
-keys = ["Shift+ArrowLeft"]
+["Orbit"]
+keys = ["MouseMiddle"]
 
-["Navigate UI Right"]
+["Resize Element Bigger"]
+keys = ["+"]
+
+["Resize Element Smaller"]
+keys = ["-"]
+
+["Resize Element Bigger Scroll"]
+keys = ["WheelUp"]
+
+["Resize Element Smaller Scroll"]
+keys = ["WheelDown"]
+
+["Move Element Z Up"]
+keys = ["ArrowUp"]
+
+["Move Element Z Down"]
+keys = ["ArrowDown"]
+
+["Move Layer Up"]
+keys = ["Ctrl+ArrowUp"]
+
+["Move Layer Down"]
+keys = ["Ctrl+ArrowDown"]
+
+["Backspace"]
+keys = ["Backspace"]
+
+
+["Toggle override mode"]
+keys = ["F7"]
+["Toggle show gui"]
+keys = ["F1"]
+["Toggle show world"]
+keys = ["Shift+F1"]
+["Leave Game"]
+keys = ["ESC"]
+
+["Edit Terrain +"]
+keys = ["MouseLeft"]
+["Edit Terrain -"]
+keys = ["MouseRight"]
+
+["Place Road Node"]
+keys = ["MouseLeft"]
+
+["Speed up Time 2x"]
+keys = ["ArrowRight"]
+["Speed up Time 8x"]
+keys = ["Ctrl+ArrowRight"]
+["Speed up Time 20x"]
 keys = ["Shift+ArrowRight"]
 
-["Navigate UI Up"]
-keys = ["Shift+ArrowUp"]
-
-["Navigate UI Down"]
-keys = ["Shift+ArrowDown"]
-
-["Move Cursor Left"]
-keys = ["ArrowLeft"]
-
-["Move Cursor Right"]
-keys = ["ArrowRight"]
+["Undo"]
+keys = ["Ctrl+KeyY"]
+["Redo"]
+keys = ["Ctrl+Shift+KeyY"]
+["Duplicate"]
+keys = ["Ctrl+KeyD"]

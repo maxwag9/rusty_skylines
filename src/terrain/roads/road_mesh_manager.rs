@@ -16,10 +16,83 @@ const N_SAMPLE: usize = 64;
 const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 /// FNV-1a prime multiplier
 const FNV_PRIME: u64 = 1099511628211;
-/// Chunk width in meters for X-axis based chunking
-const CHUNK_WIDTH: f32 = 100.0;
 
 pub type ChunkId = u64;
+
+#[inline]
+fn zigzag_i32(v: i32) -> u32 {
+    ((v << 1) ^ (v >> 31)) as u32
+}
+
+#[inline]
+fn part1by1(n: u32) -> u64 {
+    let mut x = n as u64;
+    x = (x | (x << 16)) & 0x0000FFFF0000FFFF;
+    x = (x | (x << 8)) & 0x00FF00FF00FF00FF;
+    x = (x | (x << 4)) & 0x0F0F0F0F0F0F0F0F;
+    x = (x | (x << 2)) & 0x3333333333333333;
+    x = (x | (x << 1)) & 0x5555555555555555;
+    x
+}
+
+#[inline(always)]
+pub fn chunk_coord_to_id(cx: i32, cz: i32) -> ChunkId {
+    let ux = zigzag_i32(cx);
+    let uz = zigzag_i32(cz);
+    part1by1(ux) | (part1by1(uz) << 1)
+}
+
+#[inline]
+pub fn visible_chunks_to_chunk_ids(visible_i32: &[(i32, i32, i32)]) -> Vec<ChunkId> {
+    // Preserves input order (already sorted by dist²)
+    // Fast: reserves exact capacity, no bounds checks in loop, inlined packing
+    // Zero extra allocations beyond the output vec
+    let mut ids = Vec::with_capacity(visible_i32.len());
+    for &(cx, cz, _dist2) in visible_i32 {
+        ids.push(chunk_coord_to_id(cx, cz));
+    }
+    ids
+}
+
+/// Inverse of zigzag encoding
+#[inline]
+fn unzigzag_u32(v: u32) -> i32 {
+    ((v >> 1) as i32) ^ -((v & 1) as i32)
+}
+
+/// Inverse of part1by1 - compact every other bit
+#[inline]
+fn compact1by1(x: u64) -> u32 {
+    let mut x = x & 0x5555555555555555;
+    x = (x | (x >> 1)) & 0x3333333333333333;
+    x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F;
+    x = (x | (x >> 4)) & 0x00FF00FF00FF00FF;
+    x = (x | (x >> 8)) & 0x0000FFFF0000FFFF;
+    x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
+    x as u32
+}
+
+/// Decode Morton ChunkId back to (cx, cz) coordinates
+#[inline]
+pub fn chunk_id_to_coord(id: ChunkId) -> (i32, i32) {
+    let ux = compact1by1(id);
+    let uz = compact1by1(id >> 1);
+    (unzigzag_u32(ux), unzigzag_u32(uz))
+}
+
+/// Fixed chunk X range using proper decoding
+pub fn chunk_x_range(chunk_id: ChunkId) -> (f32, f32) {
+    let (cx, _cz) = chunk_id_to_coord(chunk_id);
+    let min_x = cx as f32 * 64.0;
+    (min_x, min_x + 64.0)
+}
+
+/// You might also want chunk Z range
+pub fn chunk_z_range(chunk_id: ChunkId) -> (f32, f32) {
+    let (_cx, cz) = chunk_id_to_coord(chunk_id);
+    let min_z = cz as f32 * 64.0;
+    (min_z, min_z + 64.0)
+}
 
 /// Vertex format for road mesh. Material ID indexes texture array.
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,6 +102,36 @@ pub struct RoadVertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub material_id: u32,
+}
+impl RoadVertex {
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<RoadVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 24,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Uint32,
+                },
+            ],
+        }
+    }
 }
 
 /// A single region within a road cross-section (e.g., sidewalk, curb, lane)
@@ -308,12 +411,16 @@ fn fold_f32_to_u64(f: f32) -> u64 {
 
 /// Evaluate horizontal XY position on segment at parameter t ∈ [0,1].
 /// Deterministic: derives position only from node anchors and control points.
-pub fn evaluate_horizontal_xy(segment: &Segment, t: f32, manager: &RoadManager) -> (f32, f32) {
-    let start = manager.node(segment.start());
-    let end = manager.node(segment.end());
+pub fn evaluate_horizontal_xz(segment: &Segment, t: f32, manager: &RoadManager) -> (f32, f32) {
+    let Some(start) = manager.node(segment.start()) else {
+        return (0.0, 0.0);
+    };
+    let Some(end) = manager.node(segment.end()) else {
+        return (0.0, 0.0);
+    };
 
-    let p0 = [start.x, start.y];
-    let p3 = [end.x, end.y];
+    let p0 = [start.x, start.z];
+    let p3 = [end.x, end.z];
 
     match segment.horizontal_profile {
         HorizontalProfile::Linear => (lerp(p0[0], p3[0], t), lerp(p0[1], p3[1], t)),
@@ -322,8 +429,8 @@ pub fn evaluate_horizontal_xy(segment: &Segment, t: f32, manager: &RoadManager) 
             let omt2 = omt * omt;
             let t2 = t * t;
             let x = omt2 * p0[0] + 2.0 * omt * t * control[0] + t2 * p3[0];
-            let y = omt2 * p0[1] + 2.0 * omt * t * control[1] + t2 * p3[1];
-            (x, y)
+            let z = omt2 * p0[1] + 2.0 * omt * t * control[1] + t2 * p3[1];
+            (x, z)
         }
         HorizontalProfile::CubicBezier { control1, control2 } => {
             let omt = 1.0 - t;
@@ -335,20 +442,20 @@ pub fn evaluate_horizontal_xy(segment: &Segment, t: f32, manager: &RoadManager) 
                 + 3.0 * omt2 * t * control1[0]
                 + 3.0 * omt * t2 * control2[0]
                 + t3 * p3[0];
-            let y = omt3 * p0[1]
+            let z = omt3 * p0[1]
                 + 3.0 * omt2 * t * control1[1]
                 + 3.0 * omt * t2 * control2[1]
                 + t3 * p3[1];
-            (x, y)
+            (x, z)
         }
         HorizontalProfile::Arc { radius, large_arc } => {
-            evaluate_arc_xy(p0, p3, radius, large_arc, t)
+            evaluate_arc_xz(p0, p3, radius, large_arc, t)
         }
     }
 }
 
 /// Evaluate arc profile. Falls back to linear if geometry is degenerate.
-fn evaluate_arc_xy(p0: [f32; 2], p3: [f32; 2], radius: f32, large_arc: bool, t: f32) -> (f32, f32) {
+fn evaluate_arc_xz(p0: [f32; 2], p3: [f32; 2], radius: f32, large_arc: bool, t: f32) -> (f32, f32) {
     let chord = vec2_sub(p3, p0);
     let chord_len = vec2_length(chord);
     let abs_radius = radius.abs();
@@ -397,12 +504,16 @@ fn evaluate_arc_xy(p0: [f32; 2], p3: [f32; 2], radius: f32, large_arc: bool, t: 
 }
 
 /// Compute tangent vector at parameter t. Uses analytic derivative where possible.
-fn compute_tangent_xy(segment: &Segment, t: f32, manager: &RoadManager) -> [f32; 2] {
-    let start = manager.node(segment.start());
-    let end = manager.node(segment.end());
+fn compute_tangent_xz(segment: &Segment, t: f32, manager: &RoadManager) -> [f32; 2] {
+    let Some(start) = manager.node(segment.start()) else {
+        return [0.0, 0.0];
+    };
+    let Some(end) = manager.node(segment.end()) else {
+        return [0.0, 0.0];
+    };
 
-    let p0 = [start.x, start.y];
-    let p3 = [end.x, end.y];
+    let p0 = [start.x, start.z];
+    let p3 = [end.x, end.z];
 
     match segment.horizontal_profile {
         HorizontalProfile::Linear => vec2_normalize(vec2_sub(p3, p0)),
@@ -411,8 +522,8 @@ fn compute_tangent_xy(segment: &Segment, t: f32, manager: &RoadManager) -> [f32;
             let d0 = vec2_sub(control, p0);
             let d1 = vec2_sub(p3, control);
             let dx = 2.0 * omt * d0[0] + 2.0 * t * d1[0];
-            let dy = 2.0 * omt * d0[1] + 2.0 * t * d1[1];
-            vec2_normalize([dx, dy])
+            let dz = 2.0 * omt * d0[1] + 2.0 * t * d1[1];
+            vec2_normalize([dx, dz])
         }
         HorizontalProfile::CubicBezier { control1, control2 } => {
             let omt = 1.0 - t;
@@ -422,17 +533,17 @@ fn compute_tangent_xy(segment: &Segment, t: f32, manager: &RoadManager) -> [f32;
             let d1 = vec2_sub(control2, control1);
             let d2 = vec2_sub(p3, control2);
             let dx = 3.0 * omt2 * d0[0] + 6.0 * omt * t * d1[0] + 3.0 * t2 * d2[0];
-            let dy = 3.0 * omt2 * d0[1] + 6.0 * omt * t * d1[1] + 3.0 * t2 * d2[1];
-            vec2_normalize([dx, dy])
+            let dz = 3.0 * omt2 * d0[1] + 6.0 * omt * t * d1[1] + 3.0 * t2 * d2[1];
+            vec2_normalize([dx, dz])
         }
         HorizontalProfile::Arc { .. } => {
             // Finite difference for arc
             let dt = 0.0005;
             let t0 = (t - dt).max(0.0);
             let t1 = (t + dt).min(1.0);
-            let (x0, y0) = evaluate_horizontal_xy(segment, t0, manager);
-            let (x1, y1) = evaluate_horizontal_xy(segment, t1, manager);
-            vec2_normalize([x1 - x0, y1 - y0])
+            let (x0, z0) = evaluate_horizontal_xz(segment, t0, manager);
+            let (x1, z1) = evaluate_horizontal_xz(segment, t1, manager);
+            vec2_normalize([x1 - x0, z1 - z0])
         }
     }
 }
@@ -446,8 +557,8 @@ fn compute_tangent_xy(segment: &Segment, t: f32, manager: &RoadManager) -> [f32;
 pub fn estimate_arc_length(segment: &Segment, manager: &RoadManager) -> (f32, Vec<ArcSample>) {
     let mut samples = Vec::with_capacity(N_SAMPLE + 1);
     let mut cumulative = 0.0f32;
-    let mut prev = evaluate_horizontal_xy(segment, 0.0, manager);
-    let mut prev_z = segment.vertical_profile.evaluate(0.0);
+    let mut prev = evaluate_horizontal_xz(segment, 0.0, manager);
+    let mut prev_y = segment.vertical_profile.evaluate(0.0);
 
     samples.push(ArcSample {
         t: 0.0,
@@ -456,12 +567,12 @@ pub fn estimate_arc_length(segment: &Segment, manager: &RoadManager) -> (f32, Ve
 
     for i in 1..=N_SAMPLE {
         let t = i as f32 / N_SAMPLE as f32;
-        let (x, y) = evaluate_horizontal_xy(segment, t, manager);
-        let z = segment.vertical_profile.evaluate(t);
+        let (x, z) = evaluate_horizontal_xz(segment, t, manager);
+        let y = segment.vertical_profile.evaluate(t);
 
         let dx = x - prev.0;
-        let dy = y - prev.1;
-        let dz = z - prev_z;
+        let dz = z - prev.1;
+        let dy = y - prev_y;
         let dist = (dx * dx + dy * dy + dz * dz).sqrt();
 
         cumulative += dist;
@@ -470,8 +581,8 @@ pub fn estimate_arc_length(segment: &Segment, manager: &RoadManager) -> (f32, Ve
             cumulative_length: cumulative,
         });
 
-        prev = (x, y);
-        prev_z = z;
+        prev = (x, z);
+        prev_y = y;
     }
 
     (cumulative, samples)
@@ -530,7 +641,7 @@ pub fn arc_length_to_param(samples: &[ArcSample], target_arc: f32) -> f32 {
 /// Compute surface normal from tangent and lateral.
 /// Uses stable cross product to avoid flipping.
 fn compute_surface_normal(tangent: [f32; 3], lateral: [f32; 2]) -> [f32; 3] {
-    let lateral_3d = [lateral[0], lateral[1], 0.0];
+    let lateral_3d = [lateral[0], 0.0, lateral[1]];
     let normal = vec3_cross(lateral_3d, tangent);
     let n = vec3_normalize(normal);
     // Ensure normal points generally upward for stability
@@ -553,18 +664,18 @@ pub fn generate_rings_for_segment(
         let arc_target = arc_frac * total_length;
         let t = arc_length_to_param(&samples, arc_target);
 
-        let (x, y) = evaluate_horizontal_xy(segment, t, manager);
-        let z = segment.vertical_profile.evaluate(t);
+        let (x, z) = evaluate_horizontal_xz(segment, t, manager);
+        let y = segment.vertical_profile.evaluate(t);
 
-        let tangent_xy = compute_tangent_xy(segment, t, manager);
-        let z_slope = if total_length > 1e-10 {
+        let tangent_xz = compute_tangent_xz(segment, t, manager);
+        let y_slope = if total_length > 1e-10 {
             segment.vertical_profile.slope() / total_length
         } else {
             0.0
         };
-        let tangent = vec3_normalize([tangent_xy[0], tangent_xy[1], z_slope]);
+        let tangent = vec3_normalize([tangent_xz[0], tangent_xz[1], y_slope]);
 
-        let lateral = vec2_perpendicular(tangent_xy);
+        let lateral = vec2_perpendicular(tangent_xz);
 
         rings.push(Ring {
             t,
@@ -581,12 +692,6 @@ pub fn generate_rings_for_segment(
 // ============================================================================
 // Chunk geometry
 // ============================================================================
-
-/// Deterministic chunk X range. Used for test/production parity.
-pub fn chunk_x_range(chunk_id: ChunkId) -> (f32, f32) {
-    let min_x = chunk_id as f32 * CHUNK_WIDTH;
-    (min_x, min_x + CHUNK_WIDTH)
-}
 
 #[inline]
 fn ring_in_chunk(ring: &Ring, chunk_id: ChunkId) -> bool {
@@ -666,14 +771,19 @@ pub fn compute_topo_version(
         }
 
         // Fold node positions
-        let node = manager.node(segment.start());
-        for &coord in [&node.x, &node.y, &node.z] {
+        let Some(start) = manager.node(segment.start()) else {
+            return hash;
+        };
+
+        for &coord in [&start.x, &start.y, &start.z] {
             hash ^= fold_f32_to_u64(coord);
             hash = hash.wrapping_mul(FNV_PRIME);
         }
 
-        let node = manager.node(segment.end());
-        for &coord in [&node.x, &node.y, &node.z] {
+        let Some(end) = manager.node(segment.end()) else {
+            return hash;
+        };
+        for &coord in [&end.x, &end.y, &end.z] {
             hash ^= fold_f32_to_u64(coord);
             hash = hash.wrapping_mul(FNV_PRIME);
         }
@@ -699,8 +809,11 @@ pub fn build_chunk_mesh(
     segment_ids.sort_unstable();
 
     let lateral_samples = cross_section.lateral_samples();
+    let half_width = lateral_samples
+        .iter()
+        .map(|(lat, _, _)| lat.abs())
+        .fold(0.0_f32, f32::max);
     let num_laterals = lateral_samples.len();
-
     // Pre-allocate with estimates
     let est_rings = 50;
     let est_cap = segment_ids.len() * est_rings * num_laterals;
@@ -742,16 +855,19 @@ pub fn build_chunk_mesh(
         // Generate vertices for included rings
         for &ring_idx in &included {
             let ring = &all_rings[ring_idx];
-
             for &(lat_offset, mat_id, height) in &lateral_samples {
                 let x = ring.position[0] + ring.lateral[0] * lat_offset;
-                let y = ring.position[1] + ring.lateral[1] * lat_offset;
-                let z = ring.position[2] + height;
+                let y = ring.position[1] + height;
+                let z = ring.position[2] + ring.lateral[1] * lat_offset;
 
-                let normal = compute_surface_normal(ring.tangent, ring.lateral);
+                let lateral_3d = glam::Vec3::new(ring.lateral[0], 0.0, ring.lateral[1]);
+
+                let tangent_3d = glam::Vec3::from(ring.tangent);
+
+                let normal = lateral_3d.cross(tangent_3d).normalize().to_array();
 
                 let u = ring.arc_length * uv_scale_u;
-                let v = lat_offset * uv_scale_v;
+                let v = (lat_offset + half_width) * uv_scale_v;
 
                 vertices.push(RoadVertex {
                     position: [x, y, z],
@@ -785,7 +901,7 @@ pub fn build_chunk_mesh(
     }
 
     let topo_version = compute_topo_version(chunk_id, cross_section, manager);
-
+    //println!("{:?}", vertices); //always empty...
     ChunkMesh {
         vertices,
         indices,

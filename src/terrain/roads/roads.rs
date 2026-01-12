@@ -15,7 +15,9 @@
 // ============================================================================
 
 use crate::hsv::lerp;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, HorizontalProfile, chunk_x_range};
+use crate::terrain::roads::road_mesh_manager::{
+    ChunkId, CrossSection, CrossSectionRegion, HorizontalProfile, RoadMeshManager, chunk_x_range,
+};
 
 /// Stable, monotonically increasing node identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -149,10 +151,10 @@ impl Default for StructureType {
 /// Linear interpolation is used for Flat and Linear variants.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VerticalProfile {
-    /// Constant elevation matching start node z.
+    /// Constant elevation matching start node y.
     Flat,
-    /// Linear interpolation between explicit z values.
-    Linear { start_z: f32, end_z: f32 },
+    /// Linear interpolation between explicit y values.
+    Linear { start_y: f32, end_y: f32 },
     /// Reference to external profile data (splines, etc.).
     Custom { profile_id: u32 },
 }
@@ -161,7 +163,7 @@ impl VerticalProfile {
     pub(crate) fn evaluate(&self, t: f32) -> f32 {
         match self {
             VerticalProfile::Flat => 0.0,
-            VerticalProfile::Linear { start_z, end_z } => lerp(*start_z, *end_z, t),
+            VerticalProfile::Linear { start_y, end_y } => lerp(*start_y, *end_y, t),
             VerticalProfile::Custom { .. } => 0.0,
         }
     }
@@ -169,7 +171,7 @@ impl VerticalProfile {
     pub fn slope(&self) -> f32 {
         match self {
             VerticalProfile::Flat => 0.0,
-            VerticalProfile::Linear { start_z, end_z } => end_z - start_z,
+            VerticalProfile::Linear { start_y, end_y } => end_y - start_y,
             VerticalProfile::Custom { .. } => 0.0,
         }
     }
@@ -252,6 +254,40 @@ impl AttachedControl {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct RoadPreset {
+    pub forward_lanes: usize,
+    pub backward_lanes: usize,
+    pub speed_limit: f32,
+    pub capacity_per_lane: u32,
+    pub vehicle_mask: u32,
+    pub base_cost: f32,
+    pub structure: StructureType,
+}
+
+impl Default for RoadPreset {
+    fn default() -> Self {
+        Self {
+            // Default: basic 2-lane road (1 lane each direction) – feels like Cities: Skylines small roads
+            forward_lanes: 1,
+            backward_lanes: 1,
+            speed_limit: 50.0,
+            capacity_per_lane: 20,
+            vehicle_mask: 0xFF,
+            base_cost: 1.0,
+            structure: StructureType::Surface,
+        }
+    }
+}
+
+// Editing state – stored in RoadManager
+#[derive(Default)]
+struct EditingState {
+    active: bool,
+    preset: RoadPreset,
+    chain: Vec<NodeId>,              // Nodes placed in the current road chain
+    placed_segments: Vec<SegmentId>, // Segments created in the current road (for undo/cancel)
+}
 // ============================================================================
 // Node
 // ============================================================================
@@ -461,7 +497,7 @@ pub struct Lane {
 }
 
 impl Lane {
-    fn new(
+    pub(crate) fn new(
         from: NodeId,
         to: NodeId,
         segment: SegmentId,
@@ -555,8 +591,8 @@ impl Lane {
 /// All ID allocation is monotonic and deterministic.
 /// Iteration order is stable and matches insertion order.
 pub struct RoadManager {
-    nodes: Vec<Node>,
-    segments: Vec<Segment>,
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) segments: Vec<Segment>,
     lanes: Vec<Lane>,
 }
 
@@ -596,8 +632,8 @@ impl RoadManager {
 
     /// Returns a reference to the node with the given ID.
     #[inline]
-    pub fn node(&self, id: NodeId) -> &Node {
-        &self.nodes[id.0 as usize]
+    pub fn node(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(id.0 as usize)
     }
 
     /// Returns a mutable reference to the node.
@@ -912,8 +948,14 @@ impl RoadManager {
             if !lane.is_enabled() {
                 continue;
             }
-            let from_chunk = self.node(lane.from_node()).chunk_id();
-            let to_chunk = self.node(lane.to_node()).chunk_id();
+            let Some(from_chunk_node) = self.node(lane.from_node()) else {
+                continue;
+            };
+            let Some(to_chunk_node) = self.node(lane.to_node()) else {
+                continue;
+            };
+            let from_chunk = from_chunk_node.chunk_id();
+            let to_chunk = to_chunk_node.chunk_id();
             if from_chunk == chunk_id || to_chunk == chunk_id {
                 lane_ids.push(id);
             }
@@ -966,7 +1008,7 @@ impl<'a> LaneGraphView<'a> {
 
     /// Returns a node by ID.
     #[inline]
-    pub fn node(&self, id: NodeId) -> &Node {
+    pub fn node(&self, id: NodeId) -> Option<&Node> {
         self.manager.node(id)
     }
 
@@ -1008,8 +1050,12 @@ impl<'a> LaneGraphView<'a> {
 /// Computes the 3D length of a lane using linear distance between node anchors.
 #[inline]
 pub fn lane_length(lane: &Lane, manager: &RoadManager) -> f32 {
-    let from = manager.node(lane.from_node());
-    let to = manager.node(lane.to_node());
+    let Some(from) = manager.node(lane.from_node()) else {
+        return 0.0;
+    };
+    let Some(to) = manager.node(lane.to_node()) else {
+        return 0.0;
+    };
     let dx = to.x() - from.x();
     let dy = to.y() - from.y();
     let dz = to.z() - from.z();
@@ -1019,11 +1065,15 @@ pub fn lane_length(lane: &Lane, manager: &RoadManager) -> f32 {
 /// Computes the 2D (XY) length of a lane.
 #[inline]
 pub fn lane_length_2d(lane: &Lane, manager: &RoadManager) -> f32 {
-    let from = manager.node(lane.from_node());
-    let to = manager.node(lane.to_node());
+    let Some(from) = manager.node(lane.from_node()) else {
+        return 0.0;
+    };
+    let Some(to) = manager.node(lane.to_node()) else {
+        return 0.0;
+    };
     let dx = to.x() - from.x();
-    let dy = to.y() - from.y();
-    (dx * dx + dy * dy).sqrt()
+    let dz = to.z() - from.z();
+    (dx * dx + dz * dz).sqrt()
 }
 
 /// Samples the height (z) along a lane at parameter t in [0,1].
@@ -1031,19 +1081,23 @@ pub fn lane_length_2d(lane: &Lane, manager: &RoadManager) -> f32 {
 #[inline]
 pub fn sample_lane_height(lane: &Lane, t: f32, manager: &RoadManager) -> f32 {
     let segment = manager.segment(lane.segment());
-    let from = manager.node(lane.from_node());
-    let to = manager.node(lane.to_node());
+    let Some(from) = manager.node(lane.from_node()) else {
+        return 0.0;
+    };
+    let Some(to) = manager.node(lane.to_node()) else {
+        return 0.0;
+    };
 
     // Determine if lane direction matches segment direction
     let reversed = lane.from_node() != segment.start();
     let t_seg = if reversed { 1.0 - t } else { t };
 
     match segment.vertical_profile() {
-        VerticalProfile::Flat => from.z(),
-        VerticalProfile::Linear { start_z, end_z } => start_z + (end_z - start_z) * t_seg,
+        VerticalProfile::Flat => from.y(),
+        VerticalProfile::Linear { start_y, end_y } => start_y + (end_y - start_y) * t_seg,
         VerticalProfile::Custom { .. } => {
             // Custom profiles resolved elsewhere; fall back to linear node z
-            from.z() + (to.z() - from.z()) * t
+            from.y() + (to.y() - from.y()) * t
         }
     }
 }
@@ -1051,12 +1105,16 @@ pub fn sample_lane_height(lane: &Lane, t: f32, manager: &RoadManager) -> f32 {
 /// Samples the 3D position along a lane at parameter t in [0,1].
 #[inline]
 pub fn sample_lane_position(lane: &Lane, t: f32, manager: &RoadManager) -> (f32, f32, f32) {
-    let from = manager.node(lane.from_node());
-    let to = manager.node(lane.to_node());
+    let Some(from) = manager.node(lane.from_node()) else {
+        return (0.0, 0.0, 0.0);
+    };
+    let Some(to) = manager.node(lane.to_node()) else {
+        return (0.0, 0.0, 0.0);
+    };
 
     let x = from.x() + (to.x() - from.x()) * t;
-    let y = from.y() + (to.y() - from.y()) * t;
-    let z = sample_lane_height(lane, t, manager);
+    let z = from.z() + (to.z() - from.z()) * t;
+    let y = sample_lane_height(lane, t, manager);
 
     (x, y, z)
 }
@@ -1064,35 +1122,39 @@ pub fn sample_lane_position(lane: &Lane, t: f32, manager: &RoadManager) -> (f32,
 /// Projects a 2D point onto a lane and returns (t, distance_squared).
 /// t is the parameter [0,1] along the lane; dist_sq is squared XY distance.
 #[inline]
-pub fn project_point_to_lane_xy(lane: &Lane, x: f32, y: f32, manager: &RoadManager) -> (f32, f32) {
-    let from = manager.node(lane.from_node());
-    let to = manager.node(lane.to_node());
+pub fn project_point_to_lane_xz(lane: &Lane, x: f32, z: f32, manager: &RoadManager) -> (f32, f32) {
+    let Some(from) = manager.node(lane.from_node()) else {
+        return (0.0, 0.0);
+    };
+    let Some(to) = manager.node(lane.to_node()) else {
+        return (0.0, 0.0);
+    };
 
     let ax = from.x();
-    let ay = from.y();
+    let az = from.z();
     let bx = to.x();
-    let by = to.y();
+    let bz = to.z();
 
     let dx = bx - ax;
-    let dy = by - ay;
-    let len_sq = dx * dx + dy * dy;
+    let dz = bz - az;
+    let len_sq = dx * dx + dz * dz;
 
     if len_sq < 1e-10 {
         // Degenerate segment (zero length)
         let px = x - ax;
-        let py = y - ay;
-        return (0.0, px * px + py * py);
+        let pz = z - az;
+        return (0.0, px * px + pz * pz);
     }
 
     // Project point onto line
-    let t = ((x - ax) * dx + (y - ay) * dy) / len_sq;
+    let t = ((x - ax) * dx + (z - az) * dz) / len_sq;
     let t_clamped = t.clamp(0.0, 1.0);
 
     // Compute closest point on segment
     let cx = ax + t_clamped * dx;
-    let cy = ay + t_clamped * dy;
+    let cz = az + t_clamped * dz;
 
-    let dist_sq = (x - cx) * (x - cx) + (y - cy) * (y - cy);
+    let dist_sq = (x - cx) * (x - cx) + (z - cz) * (z - cz);
 
     (t_clamped, dist_sq)
 }
@@ -1102,7 +1164,7 @@ pub fn project_point_to_lane_xy(lane: &Lane, x: f32, y: f32, manager: &RoadManag
 ///
 /// Note: For production use, build chunk-local spatial indexes.
 /// This function is O(n) in the number of lanes.
-pub fn nearest_lane_to_point(manager: &RoadManager, x: f32, y: f32, _z: f32) -> Option<LaneId> {
+pub fn nearest_lane_to_point(manager: &RoadManager, x: f32, _y: f32, z: f32) -> Option<LaneId> {
     let mut best_id: Option<LaneId> = None;
     let mut best_dist_sq = f32::MAX;
 
@@ -1111,7 +1173,7 @@ pub fn nearest_lane_to_point(manager: &RoadManager, x: f32, y: f32, _z: f32) -> 
             continue;
         }
 
-        let (_, dist_sq) = project_point_to_lane_xy(lane, x, y, manager);
+        let (_, dist_sq) = project_point_to_lane_xz(lane, x, z, manager);
         if dist_sq < best_dist_sq {
             best_dist_sq = dist_sq;
             best_id = Some(id);
@@ -1126,7 +1188,7 @@ pub fn nearest_lane_to_point(manager: &RoadManager, x: f32, y: f32, _z: f32) -> 
 pub fn k_nearest_lanes_to_point(
     manager: &RoadManager,
     x: f32,
-    y: f32,
+    z: f32,
     k: usize,
 ) -> Vec<(LaneId, f32)> {
     let mut candidates: Vec<(LaneId, f32)> = Vec::with_capacity(manager.lane_count());
@@ -1135,7 +1197,7 @@ pub fn k_nearest_lanes_to_point(
         if !lane.is_enabled() {
             continue;
         }
-        let (_, dist_sq) = project_point_to_lane_xy(lane, x, y, manager);
+        let (_, dist_sq) = project_point_to_lane_xz(lane, x, z, manager);
         candidates.push((id, dist_sq));
     }
 
@@ -1279,8 +1341,14 @@ impl ChunkBoundarySummary {
         let mut outgoing = Vec::new();
 
         for (id, lane) in manager.iter_enabled_lanes() {
-            let from_chunk = manager.node(lane.from_node()).chunk_id();
-            let to_chunk = manager.node(lane.to_node()).chunk_id();
+            let Some(from) = manager.node(lane.from_node()) else {
+                continue;
+            };
+            let Some(to) = manager.node(lane.to_node()) else {
+                continue;
+            };
+            let from_chunk = from.chunk_id();
+            let to_chunk = to.chunk_id();
 
             if from_chunk != chunk_id && to_chunk == chunk_id {
                 incoming.push(id);
@@ -1316,7 +1384,7 @@ impl ChunkBoundarySummary {
 /// - Disable commands are idempotent
 /// - UpgradeSegmentBegin must be followed by UpgradeSegmentEnd
 #[derive(Debug, Clone)]
-pub enum Command {
+pub enum RoadCommand {
     /// Add a new intersection node.
     AddNode {
         x: f32,
@@ -1331,6 +1399,7 @@ pub enum Command {
         structure: StructureType,
         horizontal_profile: HorizontalProfile,
         vertical_profile: VerticalProfile,
+        chunk_id: ChunkId,
     },
     /// Add a new lane to a segment.
     AddLane {
@@ -1341,51 +1410,67 @@ pub enum Command {
         capacity: u32,
         vehicle_mask: u32,
         base_cost: f32,
+        chunk_id: ChunkId,
     },
     /// Disable a node.
-    DisableNode { node_id: NodeId },
+    DisableNode { node_id: NodeId, chunk_id: ChunkId },
     /// Enable a node.
-    EnableNode { node_id: NodeId },
+    EnableNode { node_id: NodeId, chunk_id: ChunkId },
     /// Disable a segment and its lanes.
-    DisableSegment { segment_id: SegmentId },
+    DisableSegment {
+        segment_id: SegmentId,
+        chunk_id: ChunkId,
+    },
     /// Enable a segment.
-    EnableSegment { segment_id: SegmentId },
+    EnableSegment {
+        segment_id: SegmentId,
+        chunk_id: ChunkId,
+    },
     /// Disable a lane.
-    DisableLane { lane_id: LaneId },
+    DisableLane { lane_id: LaneId, chunk_id: ChunkId },
     /// Enable a lane.
-    EnableLane { lane_id: LaneId },
+    EnableLane { lane_id: LaneId, chunk_id: ChunkId },
     /// Attach a traffic control to a node.
     AttachControl {
         node_id: NodeId,
+        chunk_id: ChunkId,
         control: TrafficControl,
     },
     /// Disable a traffic control.
     DisableControl {
         node_id: NodeId,
+        chunk_id: ChunkId,
         control_id: ControlId,
     },
     /// Enable a traffic control.
     EnableControl {
         node_id: NodeId,
+        chunk_id: ChunkId,
         control_id: ControlId,
     },
     /// Begin segment upgrade (disables old segment).
-    UpgradeSegmentBegin { old_segment: SegmentId },
+    UpgradeSegmentBegin {
+        old_segment: SegmentId,
+        chunk_id: ChunkId,
+    },
     /// End segment upgrade (records new segment IDs for replay).
-    UpgradeSegmentEnd { new_segments: Vec<SegmentId> },
+    UpgradeSegmentEnd {
+        new_segments: Vec<SegmentId>,
+        chunk_id: ChunkId,
+    },
 }
 
 /// Result of applying a command.
 #[derive(Debug, Clone)]
 pub enum CommandResult {
     /// Node was created with this ID.
-    NodeCreated(NodeId),
+    NodeCreated(ChunkId, NodeId),
     /// Segment was created with this ID.
-    SegmentCreated(SegmentId),
+    SegmentCreated(ChunkId, SegmentId),
     /// Lane was created with this ID.
-    LaneCreated(LaneId),
+    LaneCreated(ChunkId, LaneId),
     /// Control was attached with this ID.
-    ControlAttached(ControlId),
+    ControlAttached(ChunkId, ControlId),
     /// Command applied with no new IDs.
     Ok,
     /// Command failed (invalid reference).
@@ -1397,18 +1482,58 @@ pub enum CommandResult {
 ///
 /// # Panics
 /// Panics only on programmer errors (debug assertions).
-pub fn apply_command(manager: &mut RoadManager, command: &Command) -> CommandResult {
+pub fn apply_command(
+    road_mesh_manager: &mut RoadMeshManager,
+    manager: &mut RoadManager,
+    command: &RoadCommand,
+) -> CommandResult {
+    let cross_section = CrossSection {
+        regions: vec![
+            // Left shoulder
+            CrossSectionRegion {
+                width: 1.0,
+                material_id: 1,
+                height: 0.1,
+            },
+            // Left lane
+            CrossSectionRegion {
+                width: 2.5,
+                material_id: 0,
+                height: 0.0,
+            },
+            // Center line (thin for markings)
+            CrossSectionRegion {
+                width: 0.08,
+                material_id: 2,
+                height: 0.01,
+            },
+            // Right lane
+            CrossSectionRegion {
+                width: 2.5,
+                material_id: 0,
+                height: 0.0,
+            },
+            // Right shoulder
+            CrossSectionRegion {
+                width: 1.0,
+                material_id: 1,
+                height: 0.1,
+            },
+        ],
+    };
     match command {
-        Command::AddNode { x, y, z, chunk_id } => {
+        RoadCommand::AddNode { x, y, z, chunk_id } => {
             let id = manager.add_node(*x, *y, *z, *chunk_id);
-            CommandResult::NodeCreated(id)
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
+            CommandResult::NodeCreated(*chunk_id, id)
         }
-        Command::AddSegment {
+        RoadCommand::AddSegment {
             start,
             end,
             structure,
             horizontal_profile,
             vertical_profile,
+            chunk_id,
         } => {
             if start.raw() as usize >= manager.node_count()
                 || end.raw() as usize >= manager.node_count()
@@ -1422,9 +1547,10 @@ pub fn apply_command(manager: &mut RoadManager, command: &Command) -> CommandRes
                 *horizontal_profile,
                 *vertical_profile,
             );
-            CommandResult::SegmentCreated(id)
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
+            CommandResult::SegmentCreated(*chunk_id, id)
         }
-        Command::AddLane {
+        RoadCommand::AddLane {
             from,
             to,
             segment,
@@ -1432,6 +1558,7 @@ pub fn apply_command(manager: &mut RoadManager, command: &Command) -> CommandRes
             capacity,
             vehicle_mask,
             base_cost,
+            chunk_id,
         } => {
             if from.raw() as usize >= manager.node_count()
                 || to.raw() as usize >= manager.node_count()
@@ -1448,99 +1575,147 @@ pub fn apply_command(manager: &mut RoadManager, command: &Command) -> CommandRes
                 *vehicle_mask,
                 *base_cost,
             );
-            CommandResult::LaneCreated(id)
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
+            CommandResult::LaneCreated(*chunk_id, id)
         }
-        Command::DisableNode { node_id } => {
+        RoadCommand::DisableNode { node_id, chunk_id } => {
             if node_id.raw() as usize >= manager.node_count() {
                 return CommandResult::InvalidReference;
             }
             manager.disable_node(*node_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::EnableNode { node_id } => {
+        RoadCommand::EnableNode { node_id, chunk_id } => {
             if node_id.raw() as usize >= manager.node_count() {
                 return CommandResult::InvalidReference;
             }
             manager.enable_node(*node_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, &Default::default());
             CommandResult::Ok
         }
-        Command::DisableSegment { segment_id } => {
+        RoadCommand::DisableSegment {
+            segment_id,
+            chunk_id,
+        } => {
             if segment_id.raw() as usize >= manager.segment_count() {
                 return CommandResult::InvalidReference;
             }
             manager.disable_segment(*segment_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::EnableSegment { segment_id } => {
+        RoadCommand::EnableSegment {
+            segment_id,
+            chunk_id,
+        } => {
             if segment_id.raw() as usize >= manager.segment_count() {
                 return CommandResult::InvalidReference;
             }
             manager.enable_segment(*segment_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::DisableLane { lane_id } => {
+        RoadCommand::DisableLane { lane_id, chunk_id } => {
             if lane_id.raw() as usize >= manager.lane_count() {
                 return CommandResult::InvalidReference;
             }
             manager.disable_lane(*lane_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::EnableLane { lane_id } => {
+        RoadCommand::EnableLane { lane_id, chunk_id } => {
             if lane_id.raw() as usize >= manager.lane_count() {
                 return CommandResult::InvalidReference;
             }
             manager.enable_lane(*lane_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::AttachControl { node_id, control } => {
+        RoadCommand::AttachControl {
+            node_id,
+            chunk_id,
+            control,
+        } => {
             if node_id.raw() as usize >= manager.node_count() {
                 return CommandResult::InvalidReference;
             }
             let id = manager.attach_control(*node_id, control.clone());
-            CommandResult::ControlAttached(id)
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
+            CommandResult::ControlAttached(*chunk_id, id)
         }
-        Command::DisableControl {
+        RoadCommand::DisableControl {
             node_id,
             control_id,
+            chunk_id,
         } => {
             if node_id.raw() as usize >= manager.node_count() {
                 return CommandResult::InvalidReference;
             }
             manager.disable_control(*node_id, *control_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::EnableControl {
+        RoadCommand::EnableControl {
             node_id,
             control_id,
+            chunk_id,
         } => {
             if node_id.raw() as usize >= manager.node_count() {
                 return CommandResult::InvalidReference;
             }
             manager.enable_control(*node_id, *control_id);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::UpgradeSegmentBegin { old_segment } => {
+        RoadCommand::UpgradeSegmentBegin {
+            old_segment,
+            chunk_id,
+        } => {
             if old_segment.raw() as usize >= manager.segment_count() {
                 return CommandResult::InvalidReference;
             }
             manager.disable_segment(*old_segment);
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
-        Command::UpgradeSegmentEnd { .. } => {
-            // Recording only; no action needed
+        RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
+            // Recording only; no action needed... maybe...
+            road_mesh_manager.update_chunk_mesh(*chunk_id, &cross_section, manager);
             CommandResult::Ok
         }
     }
 }
 
 /// Applies a batch of commands in order, ensuring deterministic execution.
-pub fn apply_commands(manager: &mut RoadManager, commands: &[Command]) -> Vec<CommandResult> {
-    commands
+pub fn apply_commands(
+    road_mesh_manager: &mut RoadMeshManager,
+    road_manager: &mut RoadManager,
+    commands: &[RoadCommand],
+) -> Vec<CommandResult> {
+    let results = commands
         .iter()
-        .map(|cmd| apply_command(manager, cmd))
-        .collect()
+        .map(|cmd| apply_command(road_mesh_manager, road_manager, cmd))
+        .collect();
+    //apply_results(road_mesh_manager, &results);
+    results
 }
 
+// fn apply_results(road_mesh_manager: &mut RoadMeshManager, road_manager: &mut RoadManager, results: &Vec<CommandResult>) {
+//     for result in results {
+//         match result {
+//             &CommandResult::NodeCreated(id) => {
+//                 chunk_id =
+//                 road_mesh_manager.update_chunk_mesh()
+//             }
+//             &CommandResult::SegmentCreated(id) => {}
+//             &CommandResult::LaneCreated(id) => {}
+//             &CommandResult::ControlAttached(id) => {}
+//             &CommandResult::InvalidReference => {}
+//             &CommandResult::Ok => {}
+//         }
+//     }
+// }
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1548,6 +1723,7 @@ pub fn apply_commands(manager: &mut RoadManager, commands: &[Command]) -> Vec<Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terrain::roads::road_mesh_manager::MeshConfig;
 
     #[test]
     fn test_create_nodes_segments_lanes() {
@@ -1559,8 +1735,14 @@ mod tests {
 
         assert_eq!(node_a.raw(), 0);
         assert_eq!(node_b.raw(), 1);
-        assert!(manager.node(node_a).is_enabled());
-        assert!(manager.node(node_b).is_enabled());
+        let Some(a_node) = manager.node(node_a) else {
+            panic!()
+        };
+        let Some(b_node) = manager.node(node_b) else {
+            panic!()
+        };
+        assert!(a_node.is_enabled());
+        assert!(b_node.is_enabled());
 
         // Add segment
         let segment = manager.add_segment(
@@ -1585,10 +1767,16 @@ mod tests {
         assert!(manager.segment(segment).lanes().contains(&lane_ba));
 
         // Check node connections
-        assert!(manager.node(node_a).outgoing_lanes().contains(&lane_ab));
-        assert!(manager.node(node_a).incoming_lanes().contains(&lane_ba));
-        assert!(manager.node(node_b).outgoing_lanes().contains(&lane_ba));
-        assert!(manager.node(node_b).incoming_lanes().contains(&lane_ab));
+        let Some(a_node) = manager.node(node_a) else {
+            panic!()
+        };
+        let Some(b_node) = manager.node(node_b) else {
+            panic!()
+        };
+        assert!(a_node.outgoing_lanes().contains(&lane_ab));
+        assert!(a_node.incoming_lanes().contains(&lane_ba));
+        assert!(b_node.outgoing_lanes().contains(&lane_ba));
+        assert!(b_node.incoming_lanes().contains(&lane_ab));
     }
 
     #[test]
@@ -1597,23 +1785,35 @@ mod tests {
         let node = manager.add_node(0.0, 0.0, 0.0, 1);
 
         // Node is always an intersection
-        assert!(manager.node(node).is_intersection());
+        if let Some(a_node) = manager.node(node) {
+            assert!(a_node.is_intersection());
+        } else {
+            panic!()
+        };
 
         // Attach traffic signal
         let signal = TrafficSignal::new(vec![30.0, 5.0, 25.0, 5.0]);
         let control_id = manager.attach_control(node, TrafficControl::Signal(signal));
 
         assert_eq!(control_id.raw(), 0);
-        assert!(manager.node(node).has_active_control());
-        assert_eq!(manager.node(node).attached_controls().len(), 1);
+        if let Some(a_node) = manager.node(node) {
+            assert!(a_node.is_intersection());
+            assert!(a_node.has_active_control());
+            assert_eq!(a_node.attached_controls().len(), 1);
+        } else {
+            panic!()
+        };
 
         // Disable control
         manager.disable_control(node, control_id);
-        assert!(!manager.node(node).has_active_control());
+        let Some(a_node) = manager.node(node) else {
+            panic!()
+        };
+        assert!(!a_node.has_active_control());
 
         // Control still exists (append-only)
-        assert_eq!(manager.node(node).attached_controls().len(), 1);
-        assert!(!manager.node(node).attached_controls()[0].is_enabled());
+        assert_eq!(a_node.attached_controls().len(), 1);
+        assert!(!a_node.attached_controls()[0].is_enabled());
     }
 
     #[test]
@@ -1801,8 +2001,8 @@ mod tests {
             StructureType::Bridge,
             HorizontalProfile::Linear,
             VerticalProfile::Linear {
-                start_z: 0.0,
-                end_z: 10.0,
+                start_y: 0.0,
+                end_y: 10.0,
             },
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
@@ -1827,8 +2027,8 @@ mod tests {
             StructureType::Bridge,
             HorizontalProfile::Linear,
             VerticalProfile::Linear {
-                start_z: 0.0,
-                end_z: 10.0,
+                start_y: 0.0,
+                end_y: 10.0,
             },
         );
         // Lane goes B -> A (reversed)
@@ -1859,22 +2059,22 @@ mod tests {
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
 
         // Point on lane
-        let (t, dist_sq) = project_point_to_lane_xy(manager.lane(lane), 50.0, 0.0, &manager);
+        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), 50.0, 0.0, &manager);
         assert!((t - 0.5).abs() < 0.001);
         assert!(dist_sq < 0.001);
 
         // Point off lane
-        let (t, dist_sq) = project_point_to_lane_xy(manager.lane(lane), 50.0, 10.0, &manager);
+        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), 50.0, 10.0, &manager);
         assert!((t - 0.5).abs() < 0.001);
         assert!((dist_sq - 100.0).abs() < 0.001);
 
         // Point before start
-        let (t, dist_sq) = project_point_to_lane_xy(manager.lane(lane), -10.0, 0.0, &manager);
+        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), -10.0, 0.0, &manager);
         assert!((t - 0.0).abs() < 0.001);
         assert!((dist_sq - 100.0).abs() < 0.001);
 
         // Point after end
-        let (t, dist_sq) = project_point_to_lane_xy(manager.lane(lane), 110.0, 0.0, &manager);
+        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), 110.0, 0.0, &manager);
         assert!((t - 1.0).abs() < 0.001);
         assert!((dist_sq - 100.0).abs() < 0.001);
     }
@@ -2034,11 +2234,12 @@ mod tests {
     #[test]
     fn test_command_application() {
         let mut manager = RoadManager::new();
-
+        let mut mesh_manager = RoadMeshManager::new(MeshConfig::default());
         // Add nodes via commands
         let result = apply_command(
+            &mut mesh_manager,
             &mut manager,
-            &Command::AddNode {
+            &RoadCommand::AddNode {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
@@ -2046,13 +2247,14 @@ mod tests {
             },
         );
         let node_a = match result {
-            CommandResult::NodeCreated(id) => id,
+            CommandResult::NodeCreated(chunk_id, id) => id,
             _ => panic!("Expected NodeCreated"),
         };
 
         let result = apply_command(
+            &mut mesh_manager,
             &mut manager,
-            &Command::AddNode {
+            &RoadCommand::AddNode {
                 x: 100.0,
                 y: 0.0,
                 z: 0.0,
@@ -2060,30 +2262,33 @@ mod tests {
             },
         );
         let node_b = match result {
-            CommandResult::NodeCreated(id) => id,
+            CommandResult::NodeCreated(chunk_id, id) => id,
             _ => panic!("Expected NodeCreated"),
         };
 
         // Add segment
         let result = apply_command(
+            &mut mesh_manager,
             &mut manager,
-            &Command::AddSegment {
+            &RoadCommand::AddSegment {
                 start: node_a,
                 end: node_b,
                 structure: StructureType::Surface,
                 horizontal_profile: HorizontalProfile::Linear,
                 vertical_profile: VerticalProfile::Flat,
+                chunk_id: 10,
             },
         );
         let segment = match result {
-            CommandResult::SegmentCreated(id) => id,
+            CommandResult::SegmentCreated(chunk_id, id) => id,
             _ => panic!("Expected SegmentCreated"),
         };
 
         // Add lane
         let result = apply_command(
+            &mut mesh_manager,
             &mut manager,
-            &Command::AddLane {
+            &RoadCommand::AddLane {
                 from: node_a,
                 to: node_b,
                 segment,
@@ -2091,24 +2296,34 @@ mod tests {
                 capacity: 10,
                 vehicle_mask: 0xFF,
                 base_cost: 1.0,
+                chunk_id: 10,
             },
         );
         let lane = match result {
-            CommandResult::LaneCreated(id) => id,
+            CommandResult::LaneCreated(chunk_id, lane_id) => lane_id,
             _ => panic!("Expected LaneCreated"),
         };
 
         assert!(manager.lane(lane).is_enabled());
 
         // Disable via command
-        apply_command(&mut manager, &Command::DisableLane { lane_id: lane });
+        apply_command(
+            &mut mesh_manager,
+            &mut manager,
+            &RoadCommand::DisableLane {
+                lane_id: lane,
+                chunk_id: 12,
+            },
+        );
         assert!(!manager.lane(lane).is_enabled());
 
         // Invalid reference
         let result = apply_command(
+            &mut mesh_manager,
             &mut manager,
-            &Command::DisableNode {
+            &RoadCommand::DisableNode {
                 node_id: NodeId::new(999),
+                chunk_id: 10,
             },
         );
         assert!(matches!(result, CommandResult::InvalidReference));
@@ -2134,6 +2349,7 @@ mod tests {
         // Values must be identical
         for (id, node) in manager1.iter_nodes() {
             let node2 = manager2.node(id);
+            let Some(node2) = node2 else { panic!() };
             assert_eq!(node.x(), node2.x());
         }
     }
@@ -2149,8 +2365,8 @@ mod tests {
             StructureType::Bridge,
             HorizontalProfile::Linear,
             VerticalProfile::Linear {
-                start_z: 0.0,
-                end_z: 50.0,
+                start_y: 0.0,
+                end_y: 50.0,
             },
         );
         let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);

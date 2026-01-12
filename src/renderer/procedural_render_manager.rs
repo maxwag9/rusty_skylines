@@ -3,10 +3,11 @@ use crate::renderer::procedural_bind_group_manager::MaterialBindGroupManager;
 use crate::renderer::procedural_texture_manager::{
     MaterialKind, ProceduralTextureManager, TextureCacheKey,
 };
+use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use wgpu::{BindGroup, Buffer, CompareFunction, DepthStencilState, Sampler};
+use wgpu::{BindGroup, Buffer, CompareFunction, DepthStencilState, Sampler, VertexBufferLayout};
 
 const FULLSCREEN_SHADER_SOURCE: &str = r#"
 struct VertexOutput {
@@ -38,6 +39,7 @@ pub struct PipelineOptions {
     pub topology: wgpu::PrimitiveTopology,
     pub msaa_samples: u32,
     pub depth_stencil: Option<wgpu::DepthStencilState>,
+    pub vertex_layout: VertexBufferLayout<'static>,
 }
 
 impl Default for PipelineOptions {
@@ -46,6 +48,7 @@ impl Default for PipelineOptions {
             topology: wgpu::PrimitiveTopology::TriangleList,
             msaa_samples: 1,
             depth_stencil: None,
+            vertex_layout: RoadVertex::layout(),
         }
     }
 }
@@ -172,31 +175,6 @@ pub struct PipelineManager {
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     fullscreen_bind_group_layout: wgpu::BindGroupLayout,
     fullscreen_shader: wgpu::ShaderModule,
-    vertex_buffer_layout: wgpu::VertexBufferLayout<'static>,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 3],
-    pub uv: [f32; 2],
-    pub normal: [f32; 3],
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![
-        0 => Float32x3,
-        1 => Float32x2,
-        2 => Float32x3
-    ];
-
-    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
 }
 
 impl PipelineManager {
@@ -258,7 +236,6 @@ impl PipelineManager {
             uniform_bind_group_layout,
             fullscreen_bind_group_layout,
             fullscreen_shader,
-            vertex_buffer_layout: Vertex::layout(),
         }
     }
 
@@ -328,7 +305,6 @@ impl PipelineManager {
         let uniform_layout = &self.uniform_bind_group_layout;
         let device = &self.device;
         let surface_format = self.surface_format;
-        let vertex_buffer_layout = self.vertex_buffer_layout.clone();
 
         let mut bind_group_layouts: Vec<&wgpu::BindGroupLayout> = vec![material_layout];
         if has_uniforms {
@@ -347,7 +323,7 @@ impl PipelineManager {
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_buffer_layout],
+                buffers: &[options.vertex_layout.clone()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -364,7 +340,7 @@ impl PipelineManager {
                 topology: options.topology,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -549,7 +525,7 @@ impl RenderManager {
         label: &str,
         shader_path: &Path,
         options: PipelineOptions,
-        uniforms: Option<&wgpu::Buffer>,
+        uniforms: Option<&Buffer>,
         pass: &mut wgpu::RenderPass,
     ) {
         let views = self.procedural_textures.get_views(&materials);

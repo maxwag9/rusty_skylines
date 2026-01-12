@@ -3,12 +3,11 @@ use crate::data::Settings;
 use crate::mouse_ray::*;
 use crate::paths::data_dir;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
-use crate::renderer::core::chunk_coord_to_id;
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::renderer::pipelines::Pipelines;
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::chunk_builder::*;
-use crate::terrain::roads::road_mesh_manager::ChunkId;
+use crate::terrain::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
@@ -21,6 +20,7 @@ use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 pub struct PickedPoint {
     pub pos: Vec3,
+    pub chunk: VisibleChunk,
 }
 
 #[derive(Clone, Copy)]
@@ -69,12 +69,13 @@ pub struct TerrainRenderer {
     pub frame_timings: FrameTimings,
     pub job_config: ChunkJobConfig,
     pub visible: Vec<VisibleChunk>,
+    pub terrain_editing_enabled: bool,
 }
 
 impl TerrainRenderer {
     pub fn new(device: &Device, settings: &Settings) -> Self {
         let mut terrain_params = TerrainParams::default();
-        terrain_params.seed = 201035458;
+        terrain_params.seed = 144;
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
         let chunk_size = 64;
@@ -133,6 +134,7 @@ impl TerrainRenderer {
             benchmark: Benchmark::default(),
             frame_timings: FrameTimings::default(),
             visible: vec![],
+            terrain_editing_enabled: false,
         }
     }
 
@@ -184,7 +186,7 @@ impl TerrainRenderer {
         self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        if settings.show_world {
+        if settings.show_world && self.terrain_editing_enabled {
             self.handle_terrain_editing(device, queue, input_state);
         }
 
@@ -669,7 +671,15 @@ impl TerrainRenderer {
                 if let Some((_, pos)) =
                     raycast_chunk_heightgrid(ray, &chunk.height_grid, t, next_t + eps)
                 {
-                    self.last_picked = Some(PickedPoint { pos });
+                    let chunk = VisibleChunk {
+                        coords: ChunkCoords {
+                            x: cx,
+                            z: cz,
+                            dist2: 0,
+                        },
+                        id: chunk_coord_to_id(cx, cz),
+                    };
+                    self.last_picked = Some(PickedPoint { pos, chunk });
                     return Some((cx, cz, pos));
                 }
             }

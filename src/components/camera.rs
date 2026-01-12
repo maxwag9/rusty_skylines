@@ -13,8 +13,8 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Self {
         Self {
-            target: Vec3::new(0.0, 200.0, 0.0),
-            orbit_radius: 200.0,
+            target: Vec3::new(0.0, 100.0, 0.0),
+            orbit_radius: 100.0,
             yaw: -45f32.to_radians(),
             pitch: 20f32.to_radians(),
         }
@@ -38,7 +38,7 @@ impl Camera {
 
         let view = glam::Mat4::look_at_rh(eye, self.target, Vec3::Y);
 
-        let proj = glam::Mat4::perspective_rh(60f32.to_radians(), aspect, 10.0, 50_000.0);
+        let proj = glam::Mat4::perspective_rh(80f32.to_radians(), aspect, 10.0, 50_000.0);
 
         let view_proj = proj * view;
 

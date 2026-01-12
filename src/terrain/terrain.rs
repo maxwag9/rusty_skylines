@@ -92,6 +92,7 @@ pub struct TerrainParams {
     pub force_land_at_origin: bool,
     pub origin_island_radius: f32,
     pub origin_island_strength: f32,
+    pub origin_min_height: f32,
     pub pull_one_continent_to_origin: bool,
     pub origin_pull_strength: f32,
 
@@ -161,7 +162,7 @@ impl Default for TerrainParams {
     fn default() -> Self {
         Self {
             seed: 201035458,
-            world_scale: 0.2,
+            world_scale: 0.1,
 
             height_scale: 2000.0,
             sea_level: 0.0,
@@ -178,6 +179,7 @@ impl Default for TerrainParams {
             force_land_at_origin: true,
             origin_island_radius: 12_000.0,
             origin_island_strength: 0.75,
+            origin_min_height: 50.0,
             pull_one_continent_to_origin: true,
             origin_pull_strength: 0.50,
 
@@ -427,8 +429,8 @@ impl TerrainGenerator {
         (x + dx, z + dz)
     }
 
-    fn continental_mask(&self, wx: f32, wz: f32) -> f32 {
-        let (wx, wz) = self.scaled_coords(wx, wz);
+    fn continental_mask(&self, orig_wx: f32, orig_wz: f32) -> f32 {
+        let (wx, wz) = self.scaled_coords(orig_wx, orig_wz);
 
         let mut best = 0.0f32;
         for &(cx, cz) in &self.continent_centers {
@@ -450,19 +452,32 @@ impl TerrainGenerator {
 
         let island_raw = self.continent_noise.get_noise_2d(nx * 3.0, nz * 3.0);
         let island_v = (island_raw + 1.0) * 0.5;
-        let island =
-            smoothstep(self.p.island_threshold0, self.p.island_threshold1, island_v) * (1.0 - c);
+        let island = smoothstep(self.p.island_threshold0, self.p.island_threshold1, island_v);
         c += island * self.p.island_amp;
-
-        if self.p.force_land_at_origin {
-            let r = self.p.origin_island_radius.max(1.0);
-            let d = (wx * wx + wz * wz).sqrt();
-            let t = (1.0 - d / r).clamp(0.0, 1.0);
-            let island = t * t * (3.0 - 2.0 * t);
-            c = (c + island * self.p.origin_island_strength).clamp(0.0, 1.0);
+        c
+    }
+    #[inline]
+    fn apply_origin_land_override(&self, wx: f32, wz: f32, h: f32) -> f32 {
+        if !self.p.force_land_at_origin {
+            return h;
         }
 
-        c
+        let r = self.p.origin_island_radius.max(1.0);
+        let d2 = wx * wx + wz * wz;
+
+        if d2 >= r * r {
+            return h;
+        }
+
+        let d = d2.sqrt();
+        let t = (1.0 - d / r).clamp(0.0, 1.0);
+        let s = t * t * (3.0 - 2.0 * t);
+
+        // guaranteed minimum height ABOVE sea level
+        let min_land = self.p.sea_level + self.p.origin_min_height;
+
+        // blend, do not add
+        lerp(h, min_land, s)
     }
 
     fn latitude_factor(&self, wz: f32) -> f32 {
@@ -654,12 +669,16 @@ impl TerrainGenerator {
     }
 
     pub fn height(&self, wx: f32, wz: f32) -> f32 {
-        // sample once
         let s = self.base_sample(wx, wz);
-        // cheaper river approximation based on local slope/moisture proxies
-        let rel = self.apply_rivers_fast(&s, wx, wz);
-        let rel = micro_flatten(rel, self.p.micro_flatten);
-        rel * self.p.height_scale + self.p.sea_level
+        let mut rel = self.apply_rivers_fast(&s, wx, wz);
+
+        rel = micro_flatten(rel, self.p.micro_flatten);
+
+        let mut h = rel * self.p.height_scale + self.p.sea_level;
+
+        h = self.apply_origin_land_override(wx, wz, h);
+
+        h
     }
 
     pub fn moisture(&self, wx: f32, wz: f32, h: f32) -> f32 {
