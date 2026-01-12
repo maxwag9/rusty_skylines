@@ -1,3 +1,4 @@
+use crate::renderer::world_renderer::VisibleChunk;
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, ChunkMesh, CrossSection, MeshConfig, RoadMeshManager, RoadVertex,
 };
@@ -5,6 +6,7 @@ use crate::terrain::roads::roads::RoadManager;
 /// road_mesh_renderer.rs
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
+use wgpu::util::DeviceExt;
 
 pub struct RoadRenderSubsystem {
     pub mesh_manager: RoadMeshManager,
@@ -18,6 +20,8 @@ pub struct RoadRenderSubsystem {
 
     pub visible_chunks: Vec<ChunkId>,
     pub road_manager: RoadManager,
+    pub road_vertex_buffer: Option<wgpu::Buffer>,
+    pub road_index_buffer: Option<wgpu::Buffer>,
 }
 impl RoadRenderSubsystem {
     pub fn new(cross_section: CrossSection) -> Self {
@@ -30,39 +34,89 @@ impl RoadRenderSubsystem {
             material_array: MaterialArray::new(),
             visible_chunks: Vec::new(),
             road_manager: RoadManager::new(),
+            road_vertex_buffer: None,
+            road_index_buffer: None,
         }
     }
 
     /// Call this each frame with visible chunk IDs
-    pub fn update(&mut self, visible_chunks: &[ChunkId]) {
-        self.visible_chunks = visible_chunks.to_vec();
+    pub fn update(&mut self, visible_chunks: &Vec<VisibleChunk>, device: &wgpu::Device) {
+        // Clear old GPU buffers
+        self.road_vertex_buffer = None;
+        self.road_index_buffer = None;
+        self.road_gpu_storage.draw_calls.clear();
 
-        for &chunk_id in visible_chunks {
-            // Check if chunk needs mesh rebuild
-            if self.mesh_manager.chunk_needs_update(
+        let mut all_vertices: Vec<RoadVertex> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+
+        let mut current_index_offset: u32 = 0;
+
+        for v in visible_chunks {
+            let chunk_id = v.id;
+            let needs_rebuild = self.mesh_manager.chunk_needs_update(
                 chunk_id,
                 &self.cross_section,
                 &self.road_manager,
-            ) {
-                // Rebuild CPU mesh
-                let mesh = self.mesh_manager.update_chunk_mesh(
+            );
+
+            let mesh = if needs_rebuild {
+                self.mesh_manager.update_chunk_mesh(
                     chunk_id,
                     &self.cross_section,
                     &self.road_manager,
-                );
+                )
+            } else {
+                // Use cached mesh or skip if None
+                match self.mesh_manager.get_chunk_mesh(chunk_id) {
+                    Some(mesh) => &mesh.clone(),
+                    None => continue,
+                }
+            };
 
-                // Upload to GPU
-                self.mesh_renderer.prepare_and_upload(
-                    chunk_id,
-                    mesh,
-                    &self.material_array,
-                    &mut self.road_gpu_storage,
-                );
+            // Update version tracking
+            self.gpu_chunks.insert(chunk_id, mesh.topo_version);
 
-                // Track version
-                self.gpu_chunks.insert(chunk_id, mesh.topo_version);
-            }
+            // Append vertices
+            let vertex_start = all_vertices.len() as u32;
+            all_vertices.extend(mesh.vertices.iter().cloned());
+
+            // Append offset indices (all materials mixed — safe because layer is per-vertex)
+            let chunk_index_count = mesh.indices.len() as u32;
+            let offset_indices: Vec<u32> = mesh.indices.iter().map(|&i| i + vertex_start).collect();
+
+            let index_start = current_index_offset;
+            all_indices.extend(offset_indices);
+            current_index_offset += chunk_index_count;
+
+            // One draw call per chunk
+            let draw_call = DrawCall {
+                chunk_id,
+                material_layer_index: 0, // unused now — layer comes from vertices
+                index_range: index_start..index_start + chunk_index_count,
+                vertex_offset: vertex_start,
+            };
+            self.road_gpu_storage.draw_calls.push(draw_call);
         }
+
+        if all_vertices.is_empty() {
+            return;
+        }
+
+        // Create big GPU buffers
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Road Vertex Buffer (all chunks)"),
+            contents: bytemuck::cast_slice(&all_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Road Index Buffer (all chunks)"),
+            contents: bytemuck::cast_slice(&all_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        self.road_vertex_buffer = Some(vertex_buffer);
+        self.road_index_buffer = Some(index_buffer);
     }
 
     /// Get draw calls for current frame

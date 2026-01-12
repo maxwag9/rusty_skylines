@@ -32,3 +32,9 @@ pub fn shader_dir() -> PathBuf {
     let _ = fs::create_dir_all(&dir);
     dir
 }
+
+pub fn texture_dir() -> PathBuf {
+    let dir = shader_dir().join("textures");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}

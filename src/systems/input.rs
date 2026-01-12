@@ -1,5 +1,6 @@
 use crate::components::camera::{ground_camera_target, resolve_pitch_by_search};
 use crate::resources::Resources;
+use crate::ui::helper::calc_move_speed;
 use crate::world::World;
 use glam::Vec3;
 
@@ -31,35 +32,27 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let mut wish = Vec3::ZERO;
     if !resources.settings.editor_mode {
-        if resources.input.action_down("Fly Camera Forward") {
+        if resources.input.gameplay_down("Fly Camera Forward") {
             wish += forward;
         }
-        if resources.input.action_down("Fly Camera Backward") {
+        if resources.input.gameplay_down("Fly Camera Backward") {
             wish -= forward;
         }
-        if resources.input.action_down("Fly Camera Left") {
+        if resources.input.gameplay_down("Fly Camera Left") {
             wish -= right;
         }
-        if resources.input.action_down("Fly Camera Right") {
+        if resources.input.gameplay_down("Fly Camera Right") {
             wish += right;
         }
-        if resources.input.action_down("Fly Camera Up") {
+        if resources.input.gameplay_down("Fly Camera Up") {
             wish += up;
         }
-        if resources.input.action_down("Fly Camera Down") {
+        if resources.input.gameplay_down("Fly Camera Down") {
             wish -= up;
         }
     }
 
-    let base_speed = 8.0;
-    let mut speed = base_speed;
-
-    match (resources.input.shift, resources.input.ctrl) {
-        (true, false) => speed *= 8.0,
-        (false, true) => speed *= 0.4,
-        (true, true) => speed *= 0.1,
-        _ => {}
-    }
+    let speed = calc_move_speed(&resources.input);
 
     let decay_rate = 6.0;
     let dist = camera.orbit_radius;

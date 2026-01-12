@@ -81,8 +81,7 @@ pub struct Pipelines {
     pub water_uniforms: GpuResourceSet,
     pub fog_uniforms: GpuResourceSet,
     pub pick_uniforms: GpuResourceSet,
-    pub road_uniforms: GpuResourceSet,
-
+    //pub road_uniforms: GpuResourceSet,
     pub terrain_pipeline_above_water: RenderPipelineState,
     pub terrain_pipeline_under_water: RenderPipelineState,
     pub water_pipeline: RenderPipelineState,
@@ -115,7 +114,7 @@ impl Pipelines {
         let sky_uniforms = create_sky_uniforms(device);
         let fog_uniforms = create_fog_uniforms(device);
         let pick_uniforms = create_pick_uniforms(device);
-        let road_uniforms = create_road_uniforms(device);
+        //let road_uniforms = create_road_uniforms(device);
         let water_uniforms = create_water_uniforms(device, &sky_uniforms.buffer);
         let water_mesh = create_water_mesh(device);
         let gizmo_mesh = create_gizmo_mesh(device);
@@ -136,8 +135,7 @@ impl Pipelines {
             water_uniforms,
             fog_uniforms,
             pick_uniforms,
-            road_uniforms,
-
+            //road_uniforms,
             terrain_pipeline_above_water: make_dummy_render_pipeline_state(
                 device,
                 config.format,
@@ -180,7 +178,7 @@ impl Pipelines {
         self.water_pipeline.pipeline = self.build_water_pipeline();
         self.sky_pipeline.pipeline = self.build_sky_pipeline();
         self.stars_pipeline.pipeline = self.build_stars_pipeline();
-        self.road_pipeline.pipeline = self.build_road_pipeline();
+        //self.road_pipeline.pipeline = self.build_road_pipeline();
     }
 
     pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
@@ -557,82 +555,82 @@ impl Pipelines {
                 multiview_mask: None,
             })
     }
-    fn build_road_pipeline(&self) -> RenderPipeline {
-        let road_vertex_layout = VertexBufferLayout {
-            array_stride: 16,
-            step_mode: VertexStepMode::Vertex, // IMPORTANT
-            attributes: &[
-                VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: VertexFormat::Float32x3,
-                },
-                VertexAttribute {
-                    offset: 12,
-                    shader_location: 1,
-                    format: VertexFormat::Float32x3,
-                },
-                VertexAttribute {
-                    offset: 24,
-                    shader_location: 2,
-                    format: VertexFormat::Float32x2,
-                },
-                VertexAttribute {
-                    offset: 32,
-                    shader_location: 3,
-                    format: VertexFormat::Uint32,
-                },
-            ],
-        };
-        let road_pipeline_layout = self
-            .device
-            .create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Road Pipeline Layout"),
-                bind_group_layouts: &[
-                    &self.uniforms.bind_group_layout, // group 0
-                    &self.road_uniforms.bind_group_layout,
-                ],
-                immediate_size: 0,
-            });
-        self.device
-            .create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Road Pipeline"),
-                layout: Some(&road_pipeline_layout),
-                vertex: VertexState {
-                    module: &self.stars_pipeline.shader.module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[road_vertex_layout],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: &self.stars_pipeline.shader.module,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(ColorTargetState {
-                        format: self.config.format,
-                        blend: Some(BlendState::ALPHA_BLENDING),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: false,
-                    depth_compare: CompareFunction::Always,
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: MultisampleState {
-                    count: self.msaa_samples,
-                    ..Default::default()
-                },
-                cache: None,
-                multiview_mask: None,
-            })
-    }
+    // fn build_road_pipeline(&self) -> RenderPipeline {
+    //     let road_vertex_layout = VertexBufferLayout {
+    //         array_stride: 16,
+    //         step_mode: VertexStepMode::Vertex, // IMPORTANT
+    //         attributes: &[
+    //             VertexAttribute {
+    //                 offset: 0,
+    //                 shader_location: 0,
+    //                 format: VertexFormat::Float32x3,
+    //             },
+    //             VertexAttribute {
+    //                 offset: 12,
+    //                 shader_location: 1,
+    //                 format: VertexFormat::Float32x3,
+    //             },
+    //             VertexAttribute {
+    //                 offset: 24,
+    //                 shader_location: 2,
+    //                 format: VertexFormat::Float32x2,
+    //             },
+    //             VertexAttribute {
+    //                 offset: 32,
+    //                 shader_location: 3,
+    //                 format: VertexFormat::Uint32,
+    //             },
+    //         ],
+    //     };
+    //     let road_pipeline_layout = self
+    //         .device
+    //         .create_pipeline_layout(&PipelineLayoutDescriptor {
+    //             label: Some("Road Pipeline Layout"),
+    //             bind_group_layouts: &[
+    //                 &self.uniforms.bind_group_layout, // group 0
+    //                 &self.road_uniforms.bind_group_layout,
+    //             ],
+    //             immediate_size: 0,
+    //         });
+    //     self.device
+    //         .create_render_pipeline(&RenderPipelineDescriptor {
+    //             label: Some("Road Pipeline"),
+    //             layout: Some(&road_pipeline_layout),
+    //             vertex: VertexState {
+    //                 module: &self.stars_pipeline.shader.module,
+    //                 entry_point: Some("vs_main"),
+    //                 buffers: &[road_vertex_layout],
+    //                 compilation_options: Default::default(),
+    //             },
+    //             fragment: Some(FragmentState {
+    //                 module: &self.stars_pipeline.shader.module,
+    //                 entry_point: Some("fs_main"),
+    //                 targets: &[Some(ColorTargetState {
+    //                     format: self.config.format,
+    //                     blend: Some(BlendState::ALPHA_BLENDING),
+    //                     write_mask: ColorWrites::ALL,
+    //                 })],
+    //                 compilation_options: Default::default(),
+    //             }),
+    //             primitive: PrimitiveState {
+    //                 topology: PrimitiveTopology::TriangleStrip,
+    //                 ..Default::default()
+    //             },
+    //             depth_stencil: Some(DepthStencilState {
+    //                 format: DEPTH_FORMAT,
+    //                 depth_write_enabled: false,
+    //                 depth_compare: CompareFunction::Always,
+    //                 stencil: Default::default(),
+    //                 bias: Default::default(),
+    //             }),
+    //             multisample: MultisampleState {
+    //                 count: self.msaa_samples,
+    //                 ..Default::default()
+    //             },
+    //             cache: None,
+    //             multiview_mask: None,
+    //         })
+    // }
     fn build_grass_texture_pipeline(&mut self) {
         let grass_texture_pipeline_layout = self.device.create_pipeline_layout(&Default::default());
         self.grass_texture_pipeline.pipeline =

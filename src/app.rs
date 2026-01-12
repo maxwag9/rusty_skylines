@@ -171,7 +171,7 @@ impl ApplicationHandler for App {
                 }
 
                 // ---------------------------------------------------------------------
-                // ENGINE ACTIONS (ALL action-based, no direct key checks)
+                // ENGINE ACTIONS (ALL action-based, no direct key checks)! factorial
                 // ---------------------------------------------------------------------
 
                 // MSAA cycle
@@ -182,7 +182,7 @@ impl ApplicationHandler for App {
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
                     resources.settings.editor_mode = !resources.settings.editor_mode;
-                    resources.ui_loader.touch_manager.options.editor_mode =
+                    resources.ui_loader.touch_manager.editor.enabled =
                         resources.settings.editor_mode;
                     resources
                         .ui_loader
@@ -198,6 +198,13 @@ impl ApplicationHandler for App {
                         .ui_loader
                         .variables
                         .set_bool("override_mode", resources.settings.override_mode)
+                }
+                if input.action_repeat("Toggle show world") {
+                    resources.settings.show_world = !resources.settings.show_world;
+                    resources
+                        .ui_loader
+                        .variables
+                        .set_bool("show_world", resources.settings.show_world);
                 }
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
@@ -216,7 +223,7 @@ impl ApplicationHandler for App {
                         .variables
                         .set_bool("override_mode", resources.settings.override_mode);
                     resources.settings.editor_mode = false;
-                    resources.ui_loader.touch_manager.options.editor_mode =
+                    resources.ui_loader.touch_manager.editor.enabled =
                         resources.settings.editor_mode;
                     resources
                         .ui_loader
@@ -258,7 +265,7 @@ impl ApplicationHandler for App {
                 }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
-                    && resources.ui_loader.touch_manager.options.editor_mode
+                    && resources.ui_loader.touch_manager.editor.enabled
                 {
                     if let Some(sel) = &resources.ui_loader.touch_manager.selection.primary {
                         resources.ui_loader.ui_edit_manager.execute_command(

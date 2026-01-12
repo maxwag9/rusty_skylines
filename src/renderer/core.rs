@@ -1,10 +1,12 @@
 use crate::components::camera::*;
 use crate::data::Settings;
 use crate::mouse_ray::*;
-use crate::paths::shader_dir;
+use crate::paths::{shader_dir, texture_dir};
 use crate::renderer::astronomy::*;
 use crate::renderer::general_mesh_arena::GeneralMeshArena;
 use crate::renderer::pipelines::Pipelines;
+use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
+use crate::renderer::procedural_texture_manager::{MaterialKind, Params, TextureCacheKey};
 use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment,
 };
@@ -13,12 +15,15 @@ use crate::renderer::ui::UiRenderer;
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
+use crate::terrain::roads::road_mesh_manager::{ChunkId, CrossSection};
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::SkyRenderer;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
 use crate::world::CameraBundle;
+use std::path::Path;
 use std::sync::Arc;
+use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -42,6 +47,7 @@ pub struct RenderCore {
     sky: SkyRenderer,
     encoder: Option<CommandEncoder>,
     arena: GeneralMeshArena,
+    render_manager: RenderManager,
 }
 
 impl RenderCore {
@@ -137,12 +143,16 @@ impl RenderCore {
             .expect("Failed to create UI pipelines");
         let world = TerrainRenderer::new(&device, settings);
         let sky = SkyRenderer::new();
-        let road_renderer = RoadRenderSubsystem {};
+        let road_renderer = RoadRenderSubsystem::new(CrossSection { regions: vec![] });
         let arena = GeneralMeshArena::new(
             &device,
             256 * 1024 * 1024, // vertex bytes per page
             128 * 1024 * 1024, // index bytes per page
         );
+
+        let render_manager =
+            RenderManager::new(device.clone(), queue.clone(), Rgba8UnormSrgb, texture_dir());
+
         Self {
             surface,
             device,
@@ -158,6 +168,7 @@ impl RenderCore {
             sky,
             encoder: None,
             arena,
+            render_manager,
         }
     }
 
@@ -233,6 +244,9 @@ impl RenderCore {
         );
         self.ui_renderer
             .update(ui_loader, time, input_state, &self.queue, &self.size);
+
+        self.road_renderer
+            .update(&self.terrain_renderer.visible, &self.device);
         // Acquire frame
         let frame_result = acquire_frame(&self.surface, &self.device, &mut self.config);
         if frame_result.resized {
@@ -312,21 +326,90 @@ impl RenderCore {
 
             // Water
             self.render_water(&mut pass);
-            pass.set_pipeline(&self.pipelines.road_pipeline.pipeline);
 
-            for draw in &self.road_renderer.road_gpu_storage.draw_calls {
-                pass.set_bind_group(
-                    0,
-                    self.pipelines
-                        .road_material_bind_group(draw.material_layer_index),
-                    &[],
+            if let (Some(vertex_buffer), Some(index_buffer)) = (
+                &self.road_renderer.road_vertex_buffer,
+                &self.road_renderer.road_index_buffer,
+            ) {
+                // Ordered list of ALL possible road texture keys — the order determines layer index 0,1,2,...
+                // Example: asphalt base, markings, dirt shoulder, etc.
+                let asphalt_key = TextureCacheKey {
+                    kind: MaterialKind::Asphalt,
+                    params: Params {
+                        seed: 1,
+                        scale: 16.0,
+                        roughness: 0.5,
+                        _padding: 0,
+                        color_primary: [0.002; 4],
+                        color_secondary: [0.01; 4],
+                    },
+                    resolution: 512,
+                };
+                let concrete_key = TextureCacheKey {
+                    kind: MaterialKind::Concrete,
+                    params: Params {
+                        seed: 1,
+                        scale: 16.0,
+                        roughness: 0.5,
+                        _padding: 0,
+                        color_primary: [0.002; 4],
+                        color_secondary: [0.01; 4],
+                    },
+                    resolution: 512,
+                };
+                let goo_key = TextureCacheKey {
+                    kind: MaterialKind::Goo,
+                    params: Params {
+                        seed: 1,
+                        scale: 16.0,
+                        roughness: 0.5,
+                        _padding: 0,
+                        color_primary: [0.002; 4],
+                        color_secondary: [0.01; 4],
+                    },
+                    resolution: 512,
+                };
+                let road_material_keys = vec![
+                    asphalt_key,  // layer 0
+                    concrete_key, // layer 1
+                    goo_key,      // layer 2
+                ];
+
+                // This sets the road pipeline + texture array bind group (bind group 0)
+                self.render_manager.render(
+                    road_material_keys,
+                    "Roads",
+                    Path::new("shaders/road.wgsl"), // file containing full vertex+fragment shader
+                    PipelineOptions {
+                        depth_stencil: Some(DepthStencilState {
+                            format: TextureFormat::Depth32Float,
+                            depth_write_enabled: true,
+                            depth_compare: CompareFunction::LessEqual,
+                            stencil: Default::default(),
+                            bias: Default::default(),
+                        }),
+                        msaa_samples: 4,
+                        ..Default::default()
+                    },
+                    None, // no uniforms needed
+                    &mut pass,
                 );
 
-                self.arena.bind_vertex_buffer(&mut pass);
-                self.arena
-                    .bind_index_buffer(draw.material_layer_index, &mut pass);
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
 
-                pass.draw_indexed(draw.index_range.clone(), draw.vertex_offset as i32, 0..1);
+                for draw in &self.road_renderer.road_gpu_storage.draw_calls {
+                    let indices = draw.index_range.clone(); // start..end in the global index buffer
+                    let index_count = indices.end - indices.start;
+                    let base_vertex = draw.vertex_offset as i32;
+
+                    // Correct wgpu draw_indexed call (3 arguments: indices range, base_vertex, instances range)
+                    pass.draw_indexed(
+                        indices,     // Range<u32>: the slice of the index buffer to draw (length = index_count)
+                        base_vertex, // Added to every index value fetched from the index buffer
+                        0..1,        // One instance (no instancing)
+                    );
+                }
             }
         }
 
@@ -335,6 +418,9 @@ impl RenderCore {
 
         // UI
         self.render_ui(&mut pass, ui_loader, time, input_state);
+
+        // let view = self.render_manager.procedural_texture_manager_mut().request_texture().clone();
+        // self.render_manager.render_fullscreen_preview(&view, "Road Preview", 4, &mut pass);
     }
 
     fn render_water(&self, pass: &mut RenderPass) {
@@ -436,6 +522,28 @@ impl RenderCore {
             Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
         }
     }
+}
+
+#[inline(always)]
+pub fn chunk_coord_to_id(cx: i32, cy: i32) -> ChunkId {
+    // Bit-preserving pack: negative coordinates become high bits set (two's complement preserved)
+    // Upper 32 bits = cx, lower 32 bits = cy
+    // Fully deterministic, handles entire i32 range, zero-cost, safe
+    let x = cx as u32;
+    let y = cy as u32;
+    ((x as u64) << 32) | (y as u64)
+}
+
+#[inline]
+pub fn visible_chunks_to_chunk_ids(visible_i32: &[(i32, i32, i32)]) -> Vec<ChunkId> {
+    // Preserves input order (already sorted by dist²)
+    // Fast: reserves exact capacity, no bounds checks in loop, inlined packing
+    // Zero extra allocations beyond the output vec
+    let mut ids = Vec::with_capacity(visible_i32.len());
+    for &(cx, cy, _dist2) in visible_i32 {
+        ids.push(chunk_coord_to_id(cx, cy));
+    }
+    ids
 }
 
 fn pick_fail_safe_present_mode(

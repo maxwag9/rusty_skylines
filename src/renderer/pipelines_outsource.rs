@@ -148,26 +148,26 @@ pub fn create_sky_uniforms(device: &Device) -> GpuResourceSet {
         buffer,
     }
 }
-pub fn create_road_uniforms(device: &Device) -> GpuResourceSet {
-    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some("Fog BGL"),
-        entries: &[BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::FRAGMENT,
-            ty: BindingType::Texture {
-                sample_type: TextureSampleType::Float { filterable: true },
-                view_dimension: TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
-    });
-    GpuResourceSet {
-        bind_group_layout,
-        bind_group,
-        buffer,
-    }
-}
+// pub fn create_road_uniforms(device: &Device) -> GpuResourceSet {
+//     let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+//         label: Some("Road BGL"),
+//         entries: &[BindGroupLayoutEntry {
+//             binding: 0,
+//             visibility: ShaderStages::FRAGMENT,
+//             ty: BindingType::Texture {
+//                 sample_type: TextureSampleType::Float { filterable: true },
+//                 view_dimension: TextureViewDimension::D2,
+//                 multisampled: false,
+//             },
+//             count: None,
+//         }],
+//     });
+//     GpuResourceSet {
+//         bind_group_layout,
+//         bind_group,
+//         buffer,
+//     }
+// }
 pub fn create_fog_uniforms(device: &Device) -> GpuResourceSet {
     let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("Fog BGL"),

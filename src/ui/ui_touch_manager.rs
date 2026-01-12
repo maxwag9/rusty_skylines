@@ -1091,7 +1091,6 @@ impl UiTouchManager {
             last_input: InputSnapshot::default(),
             accumulated_time: 0.0,
             options: GuiOptions {
-                editor_mode,
                 override_mode,
                 show_gui,
             },

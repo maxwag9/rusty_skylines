@@ -107,7 +107,8 @@ keys = ["Backspace"]
 keys = ["F7"]
 ["Toggle show gui"]
 keys = ["F1"]
-
+["Toggle show world"]
+keys = ["Shift+F1"]
 ["Leave Game"]
 keys = ["ESC"]
 

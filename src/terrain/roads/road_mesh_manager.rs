@@ -22,7 +22,7 @@ const CHUNK_WIDTH: f32 = 100.0;
 pub type ChunkId = u64;
 
 /// Vertex format for road mesh. Material ID indexes texture array.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct RoadVertex {
     pub position: [f32; 3],

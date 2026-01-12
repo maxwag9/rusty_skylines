@@ -62,7 +62,6 @@ struct EventProcessingResult {
 
 pub struct GuiOptions {
     pub(crate) show_gui: bool,
-    pub(crate) editor_mode: bool,
     pub(crate) override_mode: bool,
 }
 
@@ -1806,7 +1805,7 @@ impl UiButtonLoader {
 
         if let Some(element) = element {
             let is_handle = element.kind() == ElementKind::Handle;
-            let editor_mode = self.touch_manager.options.editor_mode;
+            let editor_mode = self.touch_manager.editor.enabled;
 
             // Temporarily remove Editor_Menu to avoid borrow conflicts
             if let Some(mut editor_menu) = self.menus.remove("Editor_Menu") {
@@ -1905,16 +1904,16 @@ impl UiButtonLoader {
             let mut dx = 0.0;
             let mut dy = 0.0;
 
-            if input_state.action_repeat("Move Element Left") {
+            if input_state.gameplay_down("Move Element Left") {
                 dx -= speed;
             }
-            if input_state.action_repeat("Move Element Right") {
+            if input_state.gameplay_down("Move Element Right") {
                 dx += speed;
             }
-            if input_state.action_repeat("Move Element Up") {
+            if input_state.gameplay_down("Move Element Up") {
                 dy -= speed;
             }
-            if input_state.action_repeat("Move Element Down") {
+            if input_state.gameplay_down("Move Element Down") {
                 dy += speed;
             }
 

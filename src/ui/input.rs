@@ -255,7 +255,8 @@ pub struct InputState {
     warned_missing: HashSet<String>,
     repeat_timers: HashMap<String, RepeatTimer>,
     action_last_down: HashMap<String, bool>,
-
+    pub gameplay_last_down: HashMap<String, bool>,
+    pub gameplay_repeat_timers: HashMap<String, RepeatTimer>,
     pub now: f64,
 }
 
@@ -282,6 +283,8 @@ impl InputState {
             warned_missing: HashSet::new(),
             repeat_timers: HashMap::new(),
             action_last_down: HashMap::new(),
+            gameplay_last_down: HashMap::new(),
+            gameplay_repeat_timers: HashMap::new(),
             now: 0.0,
         }
     }
@@ -493,6 +496,70 @@ impl InputState {
             .entry(id.to_string())
             .or_insert_with(RepeatTimer::new);
         timer.tick(self.now, is_down)
+    }
+
+    fn key_active(&self, key: &BindingKey) -> bool {
+        match key {
+            BindingKey::Physical(p) => self.physical.get(p).copied().unwrap_or(false),
+            BindingKey::Logical(l) => self.logical.get(l).copied().unwrap_or(false),
+            BindingKey::Character(c) => self.text_chars.contains(c.as_str()),
+            BindingKey::Mouse(m) => self.mouse.is_button_down(*m),
+            BindingKey::WheelUp => self.scroll_up_hit,
+            BindingKey::WheelDown => self.scroll_down_hit,
+            BindingKey::WheelLeft => self.scroll_left_hit,
+            BindingKey::WheelRight => self.scroll_right_hit,
+        }
+    }
+
+    pub fn gameplay_down(&mut self, action: &str) -> bool {
+        if !self.ensure_known_action(action) {
+            return false;
+        }
+
+        if let Some(combos) = self.parsed.get(action) {
+            for combo in combos {
+                let modifiers_ok = (!combo.require_ctrl || self.ctrl)
+                    && (!combo.require_shift || self.shift)
+                    && (!combo.require_alt || self.alt);
+
+                if modifiers_ok && self.key_active(&combo.key) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    pub fn gameplay_pressed_once(&mut self, action: &str) -> bool {
+        let now = self.gameplay_down(action);
+        let last = self
+            .gameplay_last_down
+            .entry(action.to_string())
+            .or_insert(false);
+        let fired = now && !*last;
+        *last = now;
+        fired
+    }
+
+    pub fn gameplay_released(&mut self, action: &str) -> bool {
+        let now = self.gameplay_down(action);
+        let last = self
+            .gameplay_last_down
+            .entry(action.to_string())
+            .or_insert(false);
+        let released = *last && !now;
+        *last = now;
+        released
+    }
+
+    pub fn gameplay_repeat(&mut self, action: &str) -> bool {
+        let down = self.gameplay_down(action);
+        let timer = self
+            .gameplay_repeat_timers
+            .entry(action.to_string())
+            .or_insert_with(RepeatTimer::new);
+        timer.tick(self.now, down)
     }
 }
 

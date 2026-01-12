@@ -16,8 +16,8 @@ layers:
         text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
       - !Text
         id: sky_info_text
-        x: 0.099742495
-        y: 0.17235722
+        x: 0.15443
+        y: 0.37807146
         px: 0.013205536
         color:
           - 0.3
@@ -27,8 +27,8 @@ layers:
         text: "Game Time Speed: {time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, \n Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees"
       - !Circle
         id: '967'
-        x: 0.43408662
-        y: 0.3823521
+        x: 0.50986785
+        y: 0.5737807
         radius: 0.07209885
         border_thickness_percentage: 0.02282214
         fill_color:
@@ -48,8 +48,8 @@ layers:
           - 0.0
       - !Circle
         id: '968'
-        x: 0.5224365
-        y: 0.51285994
+        x: 0.29509276
+        y: 0.1800028
         radius: 0.043656804
         border_thickness_percentage: 0.2
         border_color:

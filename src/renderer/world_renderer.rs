@@ -3,10 +3,12 @@ use crate::data::Settings;
 use crate::mouse_ray::*;
 use crate::paths::data_dir;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
+use crate::renderer::core::chunk_coord_to_id;
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::renderer::pipelines::Pipelines;
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::chunk_builder::*;
+use crate::terrain::roads::road_mesh_manager::ChunkId;
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
@@ -30,7 +32,15 @@ struct FrameState {
     r2_render: i32,
     r2_gen: i32,
 }
-
+pub struct ChunkCoords {
+    x: i32,
+    z: i32, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
+    dist2: i32,
+}
+pub struct VisibleChunk {
+    pub coords: ChunkCoords,
+    pub id: ChunkId,
+}
 pub struct TerrainRenderer {
     pub arena: TerrainMeshArena,
 
@@ -58,6 +68,7 @@ pub struct TerrainRenderer {
     pub benchmark: Benchmark,
     pub frame_timings: FrameTimings,
     pub job_config: ChunkJobConfig,
+    pub visible: Vec<VisibleChunk>,
 }
 
 impl TerrainRenderer {
@@ -121,6 +132,7 @@ impl TerrainRenderer {
 
             benchmark: Benchmark::default(),
             frame_timings: FrameTimings::default(),
+            visible: vec![],
         }
     }
 
@@ -152,23 +164,23 @@ impl TerrainRenderer {
         self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        let mut visible = self.collect_visible(&frame);
+        self.visible = self.collect_visible(&frame);
         self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        visible.sort_unstable_by_key(|&(_, _, dist2)| dist2);
+        self.visible.sort_unstable_by_key(|v| v.coords.dist2);
         self.frame_timings.sort_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.compute_lod_for_visible(&visible, frame.r2_gen);
+        self.compute_lod_for_visible(frame.r2_gen);
         self.frame_timings.lod_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.dispatch_jobs_for_visible(&visible);
+        self.dispatch_jobs_for_visible();
         self.frame_timings.dispatch_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.unload_out_of_range(&frame, &visible);
+        self.unload_out_of_range(&frame);
         self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -340,7 +352,7 @@ impl TerrainRenderer {
         self.workers.forget_chunk(coord);
     }
 
-    fn collect_visible(&self, frame: &FrameState) -> Vec<(i32, i32, i32)> {
+    fn collect_visible(&self, frame: &FrameState) -> Vec<VisibleChunk> {
         let mut visible = Vec::new();
         for &(dx, dz) in &self.spiral {
             let dist2 = dx * dx + dz * dz;
@@ -353,50 +365,71 @@ impl TerrainRenderer {
 
             let (min, max) = chunk_aabb_world(cx, cz, frame.cs);
             if aabb_in_frustum(&frame.planes, min, max) {
-                visible.push((cx, cz, dist2));
+                visible.push(VisibleChunk {
+                    coords: ChunkCoords {
+                        x: cx,
+                        z: cz,
+                        dist2,
+                    },
+                    id: chunk_coord_to_id(cx, cz),
+                });
             }
         }
         visible
     }
 
-    fn compute_lod_for_visible(&mut self, visible: &[(i32, i32, i32)], r2_gen: i32) {
+    fn compute_lod_for_visible(&mut self, r2_gen: i32) {
         self.lod_map.clear();
 
-        for &(cx, cz, dist2) in visible {
-            let step = if dist2 > r2_gen {
+        for v in self.visible.iter() {
+            let step = if v.coords.dist2 > r2_gen {
                 lod_step_for_distance(r2_gen + 1)
             } else {
-                lod_step_for_distance(dist2)
+                lod_step_for_distance(v.coords.dist2)
             };
-            self.lod_map.insert((cx, cz), step);
+            self.lod_map.insert((v.coords.x, v.coords.z), step);
         }
 
         // Smooth within visible set.
         for _ in 0..2 {
             let current = self.lod_map.clone();
-            for &(cx, cz, _dist2) in visible {
-                let s = *current.get(&(cx, cz)).unwrap_or(&1);
+            for v in self.visible.iter() {
+                let s = *current.get(&(v.coords.x, v.coords.z)).unwrap_or(&1);
 
                 // Neighbors default to s if not visible, to keep edges stable.
-                let n0 = current.get(&(cx - 1, cz)).copied().unwrap_or(s);
-                let n1 = current.get(&(cx + 1, cz)).copied().unwrap_or(s);
-                let n2 = current.get(&(cx, cz - 1)).copied().unwrap_or(s);
-                let n3 = current.get(&(cx, cz + 1)).copied().unwrap_or(s);
+                let n0 = current
+                    .get(&(v.coords.x - 1, v.coords.z))
+                    .copied()
+                    .unwrap_or(s);
+                let n1 = current
+                    .get(&(v.coords.x + 1, v.coords.z))
+                    .copied()
+                    .unwrap_or(s);
+                let n2 = current
+                    .get(&(v.coords.x, v.coords.z - 1))
+                    .copied()
+                    .unwrap_or(s);
+                let n3 = current
+                    .get(&(v.coords.x, v.coords.z + 1))
+                    .copied()
+                    .unwrap_or(s);
 
                 self.lod_map
-                    .insert((cx, cz), s.min(n0).min(n1).min(n2).min(n3));
+                    .insert((v.coords.x, v.coords.z), s.min(n0).min(n1).min(n2).min(n3));
             }
         }
     }
 
-    fn dispatch_jobs_for_visible(&mut self, visible_sorted_near_to_far: &[(i32, i32, i32)]) {
+    fn dispatch_jobs_for_visible(&mut self) {
         let mut close_batch = Vec::new();
         let mut far_batch = Vec::new();
 
         let mut close_jobs_sent = 0usize;
         let mut far_batches_sent = 0usize;
 
-        for &(cx, cz, _dist2) in visible_sorted_near_to_far {
+        for v in self.visible.iter() {
+            let cx = v.coords.x;
+            let cz = v.coords.z;
             if close_jobs_sent >= self.max_close_jobs_per_frame
                 && far_batches_sent >= self.max_far_jobs_per_frame
             {
@@ -491,16 +524,16 @@ impl TerrainRenderer {
         }
     }
 
-    fn unload_out_of_range(&mut self, frame: &FrameState, visible: &[(i32, i32, i32)]) {
+    fn unload_out_of_range(&mut self, frame: &FrameState) {
         // Avoid thrash: unload outside render radius + generous margin.
         let margin = 12;
         let r = self.view_radius_render as i32 + margin;
         let r2 = r * r;
 
         // Build a set of currently-visible coords so we never unload them.
-        let mut visible_set: HashSet<(i32, i32)> = HashSet::with_capacity(visible.len());
-        for &(cx, cz, _) in visible {
-            visible_set.insert((cx, cz));
+        let mut visible_set: HashSet<(i32, i32)> = HashSet::with_capacity(self.visible.len());
+        for v in self.visible.iter() {
+            visible_set.insert((v.coords.x, v.coords.z));
         }
 
         let mut to_remove = Vec::new();

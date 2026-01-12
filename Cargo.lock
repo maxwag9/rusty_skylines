@@ -12,6 +12,7 @@ dependencies = [
  "fastnoise-lite",
  "fontdue",
  "glam",
+ "log",
  "notify",
  "num_cpus",
  "pollster",
