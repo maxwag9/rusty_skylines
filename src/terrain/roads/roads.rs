@@ -16,6 +16,7 @@
 
 use crate::hsv::lerp;
 use crate::renderer::world_renderer::TerrainRenderer;
+use crate::terrain::roads::road_editor::RoadEditorCommand;
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, CrossSection, HorizontalProfile, RoadMeshManager, chunk_x_range,
 };
@@ -1488,241 +1489,251 @@ pub fn apply_command(
     road_mesh_manager: &mut RoadMeshManager,
     cross_section: &CrossSection,
     manager: &mut RoadManager,
-    command: &RoadCommand,
+    command: &RoadEditorCommand,
 ) -> CommandResult {
     match command {
-        RoadCommand::AddNode { x, y, z, chunk_id } => {
-            let id = manager.add_node(*x, *y, *z, *chunk_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::NodeCreated(*chunk_id, id)
-        }
-        RoadCommand::AddSegment {
-            start,
-            end,
-            structure,
-            horizontal_profile,
-            vertical_profile,
-            chunk_id,
-        } => {
-            if start.raw() as usize >= manager.node_count()
-                || end.raw() as usize >= manager.node_count()
-            {
-                return CommandResult::InvalidReference;
+        RoadEditorCommand::Road(road_command) => {
+            match road_command {
+                RoadCommand::AddNode { x, y, z, chunk_id } => {
+                    let id = manager.add_node(*x, *y, *z, *chunk_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::NodeCreated(*chunk_id, id)
+                }
+                RoadCommand::AddSegment {
+                    start,
+                    end,
+                    structure,
+                    horizontal_profile,
+                    vertical_profile,
+                    chunk_id,
+                } => {
+                    if start.raw() as usize >= manager.node_count()
+                        || end.raw() as usize >= manager.node_count()
+                    {
+                        return CommandResult::InvalidReference;
+                    }
+                    let id = manager.add_segment(
+                        *start,
+                        *end,
+                        *structure,
+                        *horizontal_profile,
+                        *vertical_profile,
+                    );
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::SegmentCreated(*chunk_id, id)
+                }
+                RoadCommand::AddLane {
+                    from,
+                    to,
+                    segment,
+                    speed_limit,
+                    capacity,
+                    vehicle_mask,
+                    base_cost,
+                    chunk_id,
+                } => {
+                    if from.raw() as usize >= manager.node_count()
+                        || to.raw() as usize >= manager.node_count()
+                        || segment.raw() as usize >= manager.segment_count()
+                    {
+                        return CommandResult::InvalidReference;
+                    }
+                    let id = manager.add_lane(
+                        *from,
+                        *to,
+                        *segment,
+                        *speed_limit,
+                        *capacity,
+                        *vehicle_mask,
+                        *base_cost,
+                    );
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::LaneCreated(*chunk_id, id)
+                }
+                RoadCommand::DisableNode { node_id, chunk_id } => {
+                    if node_id.raw() as usize >= manager.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.disable_node(*node_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::EnableNode { node_id, chunk_id } => {
+                    if node_id.raw() as usize >= manager.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.enable_node(*node_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        &Default::default(),
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::DisableSegment {
+                    segment_id,
+                    chunk_id,
+                } => {
+                    if segment_id.raw() as usize >= manager.segment_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.disable_segment(*segment_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::EnableSegment {
+                    segment_id,
+                    chunk_id,
+                } => {
+                    if segment_id.raw() as usize >= manager.segment_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.enable_segment(*segment_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::DisableLane { lane_id, chunk_id } => {
+                    if lane_id.raw() as usize >= manager.lane_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.disable_lane(*lane_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::EnableLane { lane_id, chunk_id } => {
+                    if lane_id.raw() as usize >= manager.lane_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.enable_lane(*lane_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::AttachControl {
+                    node_id,
+                    chunk_id,
+                    control,
+                } => {
+                    if node_id.raw() as usize >= manager.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    let id = manager.attach_control(*node_id, control.clone());
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::ControlAttached(*chunk_id, id)
+                }
+                RoadCommand::DisableControl {
+                    node_id,
+                    control_id,
+                    chunk_id,
+                } => {
+                    if node_id.raw() as usize >= manager.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.disable_control(*node_id, *control_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::EnableControl {
+                    node_id,
+                    control_id,
+                    chunk_id,
+                } => {
+                    if node_id.raw() as usize >= manager.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.enable_control(*node_id, *control_id);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::UpgradeSegmentBegin {
+                    old_segment,
+                    chunk_id,
+                } => {
+                    if old_segment.raw() as usize >= manager.segment_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    manager.disable_segment(*old_segment);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
+                RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
+                    // Recording only; no action needed... maybe...
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        *chunk_id,
+                        &cross_section,
+                        manager,
+                    );
+                    CommandResult::Ok
+                }
             }
-            let id = manager.add_segment(
-                *start,
-                *end,
-                *structure,
-                *horizontal_profile,
-                *vertical_profile,
-            );
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::SegmentCreated(*chunk_id, id)
         }
-        RoadCommand::AddLane {
-            from,
-            to,
-            segment,
-            speed_limit,
-            capacity,
-            vehicle_mask,
-            base_cost,
-            chunk_id,
-        } => {
-            if from.raw() as usize >= manager.node_count()
-                || to.raw() as usize >= manager.node_count()
-                || segment.raw() as usize >= manager.segment_count()
-            {
-                return CommandResult::InvalidReference;
-            }
-            let id = manager.add_lane(
-                *from,
-                *to,
-                *segment,
-                *speed_limit,
-                *capacity,
-                *vehicle_mask,
-                *base_cost,
-            );
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::LaneCreated(*chunk_id, id)
-        }
-        RoadCommand::DisableNode { node_id, chunk_id } => {
-            if node_id.raw() as usize >= manager.node_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.disable_node(*node_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::EnableNode { node_id, chunk_id } => {
-            if node_id.raw() as usize >= manager.node_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.enable_node(*node_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                &Default::default(),
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::DisableSegment {
-            segment_id,
-            chunk_id,
-        } => {
-            if segment_id.raw() as usize >= manager.segment_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.disable_segment(*segment_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::EnableSegment {
-            segment_id,
-            chunk_id,
-        } => {
-            if segment_id.raw() as usize >= manager.segment_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.enable_segment(*segment_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::DisableLane { lane_id, chunk_id } => {
-            if lane_id.raw() as usize >= manager.lane_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.disable_lane(*lane_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::EnableLane { lane_id, chunk_id } => {
-            if lane_id.raw() as usize >= manager.lane_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.enable_lane(*lane_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::AttachControl {
-            node_id,
-            chunk_id,
-            control,
-        } => {
-            if node_id.raw() as usize >= manager.node_count() {
-                return CommandResult::InvalidReference;
-            }
-            let id = manager.attach_control(*node_id, control.clone());
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::ControlAttached(*chunk_id, id)
-        }
-        RoadCommand::DisableControl {
-            node_id,
-            control_id,
-            chunk_id,
-        } => {
-            if node_id.raw() as usize >= manager.node_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.disable_control(*node_id, *control_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::EnableControl {
-            node_id,
-            control_id,
-            chunk_id,
-        } => {
-            if node_id.raw() as usize >= manager.node_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.enable_control(*node_id, *control_id);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::UpgradeSegmentBegin {
-            old_segment,
-            chunk_id,
-        } => {
-            if old_segment.raw() as usize >= manager.segment_count() {
-                return CommandResult::InvalidReference;
-            }
-            manager.disable_segment(*old_segment);
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
-        RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
-            // Recording only; no action needed... maybe...
-            road_mesh_manager.update_chunk_mesh(
-                terrain_renderer,
-                *chunk_id,
-                &cross_section,
-                manager,
-            );
-            CommandResult::Ok
-        }
+        RoadEditorCommand::PreviewClear => CommandResult::Ok,
+        RoadEditorCommand::PreviewSnap(_) => CommandResult::Ok,
+        RoadEditorCommand::PreviewNode(_) => CommandResult::Ok,
+        RoadEditorCommand::PreviewLane(_) => CommandResult::Ok,
+        RoadEditorCommand::PreviewSegment(_) => CommandResult::Ok,
+        RoadEditorCommand::PreviewError(_) => CommandResult::Ok,
     }
 }
 
@@ -1732,7 +1743,7 @@ pub fn apply_commands(
     road_mesh_manager: &mut RoadMeshManager,
     cross_section: &CrossSection,
     road_manager: &mut RoadManager,
-    commands: &[RoadCommand],
+    commands: &Vec<RoadEditorCommand>,
 ) -> Vec<CommandResult> {
     let results = commands
         .iter()

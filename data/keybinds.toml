@@ -119,6 +119,8 @@ keys = ["MouseRight"]
 
 ["Place Road Node"]
 keys = ["MouseLeft"]
+["Cancel"]
+keys = ["MouseRight"]
 
 ["Speed up Time 2x"]
 keys = ["ArrowRight"]

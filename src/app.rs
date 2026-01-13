@@ -372,9 +372,9 @@ impl ApplicationHandler for App {
                         time_speed = 2.0
                     } else if resources.input.action_down("Reverse Time 20x") {
                         time_speed = -20.0
-                    } else if resources.input.action_down("Reverse up Time 8x") {
+                    } else if resources.input.action_down("Reverse Time 8x") {
                         time_speed = -8.0
-                    } else if resources.input.action_down("Reverse up Time 2x") {
+                    } else if resources.input.action_down("Reverse Time 2x") {
                         time_speed = -2.0
                     }
                     resources

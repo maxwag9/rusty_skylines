@@ -16,6 +16,10 @@ struct Uniforms {
     _pad0 : f32
 };
 
+struct RoadAppearance {
+    tint: vec4<f32>,
+}
+
 struct VertexInput {
     @location(0) position : vec3<f32>,
     @location(1) normal   : vec3<f32>,
@@ -56,6 +60,7 @@ fn vs_main(input : VertexInput) -> VertexOutput {
 // Keep these comments!
 @group(0) @binding(6) var road_sampler : sampler;
 @group(1) @binding(0) var<uniform> uniforms : Uniforms;
+@group(1) @binding(1) var<uniform> road_appearance: RoadAppearance;
 
 fn saturate(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
 
@@ -155,7 +160,8 @@ fn fs_main(input : VertexOutput) -> @location(0) vec4<f32> {
 
     let ambient = ambient_light * albedo;
 
-    let rgb = direct + ambient;
+    let rgb = (direct + ambient) * road_appearance.tint.xyz;
+    let a   = road_appearance.tint.w;
+    return vec4<f32>(rgb, a);
 
-    return vec4<f32>(rgb, tex.a);
 }

@@ -40,7 +40,7 @@ pub struct PipelineOptions {
     pub topology: wgpu::PrimitiveTopology,
     pub msaa_samples: u32,
     pub depth_stencil: Option<wgpu::DepthStencilState>,
-    pub vertex_layout: VertexBufferLayout<'static>,
+    pub vertex_layouts: Vec<VertexBufferLayout<'static>>,
     pub blend: Option<BlendState>,
     pub cull_mode: Option<Face>,
 }
@@ -51,8 +51,8 @@ impl Default for PipelineOptions {
             topology: wgpu::PrimitiveTopology::TriangleList,
             msaa_samples: 1,
             depth_stencil: None,
-            vertex_layout: RoadVertex::layout(),
-            blend: Some(BlendState::ALPHA_BLENDING),
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            blend: None,
             cull_mode: None,
         }
     }
@@ -341,7 +341,7 @@ impl PipelineManager {
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_main"),
-                buffers: &[options.vertex_layout.clone()],
+                buffers: &options.vertex_layouts.clone(),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {

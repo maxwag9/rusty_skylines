@@ -15,7 +15,7 @@ struct Uniforms {
     moon_direction: vec3<f32>,
     _pad0: f32,
 };
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(1) @binding(0) var<uniform> uniforms: Uniforms;
 
 struct PickUniform {
     pos: vec3<f32>,

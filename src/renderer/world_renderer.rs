@@ -690,7 +690,7 @@ impl TerrainRenderer {
                 radius: self.pick_radius_m,
                 underwater: 1,
                 _pad0: [0, 0, 0],
-                color: [1.0, 0.0, 0.0],
+                color: [0.01, 0.01, 0.01],
                 _pad1: 0.0,
             }
         } else {
@@ -699,7 +699,7 @@ impl TerrainRenderer {
                 radius: 0.0,
                 underwater: 0,
                 _pad0: [0, 0, 0],
-                color: [1.0, 0.0, 0.0],
+                color: [0.01, 0.01, 0.01],
                 _pad1: 0.0,
             }
         };

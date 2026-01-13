@@ -23,9 +23,6 @@ struct Uniforms {
     _pad0: f32,
 };
 
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(1) @binding(0) var<uniform> water: WaterUniform;
-
 struct SkyUniform {
     exposure: f32,
     moon_phase: f32,
@@ -40,7 +37,9 @@ struct SkyUniform {
     _pad2: f32,
 };
 
-@group(1) @binding(1) var<uniform> sky: SkyUniform;
+@group(1) @binding(0) var<uniform> uniforms: Uniforms;
+@group(1) @binding(1) var<uniform> water: WaterUniform;
+@group(1) @binding(2) var<uniform> sky: SkyUniform;
 
 fn get_orbit_target() -> vec3<f32> {
     // Camera forward in world space (-Z of inv_view)

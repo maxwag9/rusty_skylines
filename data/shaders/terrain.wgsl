@@ -40,7 +40,7 @@ struct PickUniform {
     underwater: u32,
     color: vec3<f32>,
 }
-@group(0) @binding(0) var road_sampler: sampler;
+@group(0) @binding(0) var texture_sampler: sampler;
 @group(1) @binding(0)
 var<uniform> uniforms: Uniforms;
 
@@ -89,8 +89,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     let up = vec3<f32>(0.0, 1.0, 0.0);
     let hemi = clamp(dot(n, up) * 0.5 + 0.5, 0.0, 1.0);
-    let sky_ambient = vec3<f32>(0.15, 0.18, 0.22);
-    let ground_ambient = vec3<f32>(0.03, 0.02, 0.02);
+    let sky_ambient = vec3<f32>(0.01, 0.01, 0.01);
+    let ground_ambient = vec3<f32>(0.02, 0.02, 0.02);
     let ambient = mix(ground_ambient, sky_ambient, hemi);
 
     let ndotl = dot(n, l);
@@ -105,8 +105,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let grass_amount = saturate(greenness * 2.5) * up_facing * up_facing;
 
     // Multi-scale procedural grass pattern (2 octaves)
-    let p_fine = floor(in.world_pos.xz * 900.0);
-    let p_coarse = floor(in.world_pos.xz * 20.0);
+    let p_fine = floor(in.world_pos.xz * 600.0);
+    let p_coarse = floor(in.world_pos.xz * 200.0);
     let h_fine = hash2(p_fine);
     let h_coarse = hash2(p_coarse * 0.4 + 31.7);
     let grass_pattern = h_fine * 0.55 + h_coarse * 1.85;
@@ -116,7 +116,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     base_color *= mix(1.0, shade, grass_amount);
 
     // Subtle green boost for lush grass look
-    base_color.g *= 1.0 + grass_amount * 0.22;
+    base_color.g *= 1.0 + grass_amount * 0.12;
     // ======================================
 
     let dist = distance(in.world_pos, uniforms.camera_pos);
@@ -136,7 +136,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
         if (d < pick.radius) {
             let t = 1.0 - smoothstep(0.0, pick.radius, d);
-            color = mix(color, pick.color, t);
+            color = color + pick.color * t;
         }
     }
 

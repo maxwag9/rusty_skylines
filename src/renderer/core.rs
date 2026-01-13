@@ -18,11 +18,13 @@ use crate::resources::{InputState, TimeSystem};
 use crate::terrain::roads::road_mesh_manager::{CrossSection, CrossSectionRegion, RoadVertex};
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
+use crate::terrain::water::SimpleVertex;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
-use crate::ui::vertex::Vertex;
+use crate::ui::vertex::{LineVtx, Vertex};
 use crate::world::CameraBundle;
 use std::sync::Arc;
+use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -185,7 +187,7 @@ impl RenderCore {
                 },
             ],
         };
-        let road_renderer = RoadRenderSubsystem::new(cross_section);
+        let road_renderer = RoadRenderSubsystem::new(cross_section, &device);
         let arena = GeneralMeshArena::new(
             &device,
             256 * 1024 * 1024, // vertex bytes per page
@@ -396,7 +398,12 @@ impl RenderCore {
             );
 
             // Water
-            self.render_water(&mut pass);
+            render_water(
+                &mut pass,
+                &mut self.render_manager,
+                &self.pipelines,
+                self.msaa_samples,
+            );
         }
         render_roads(
             &mut pass,
@@ -407,35 +414,18 @@ impl RenderCore {
         );
 
         // Gizmo
-        self.render_gizmo(&mut pass);
+        render_gizmo(
+            &mut pass,
+            &mut self.render_manager,
+            &self.pipelines,
+            self.msaa_samples,
+        );
 
         // UI
         self.render_ui(&mut pass, ui_loader, time, input_state);
 
         // let view = self.render_manager.procedural_texture_manager_mut().request_texture().clone();
         // self.render_manager.render_fullscreen_preview(&view, "Road Preview", 4, &mut pass);
-    }
-
-    fn render_water(&self, pass: &mut RenderPass) {
-        pass.set_pipeline(&self.pipelines.water_pipeline.pipeline);
-        pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
-        pass.set_stencil_reference(1);
-        pass.set_vertex_buffer(0, self.pipelines.water_mesh_buffers.vertex.slice(..));
-        pass.set_index_buffer(
-            self.pipelines.water_mesh_buffers.index.slice(..),
-            IndexFormat::Uint32,
-        );
-        pass.set_bind_group(1, &self.pipelines.water_uniforms.bind_group, &[]);
-        pass.draw_indexed(0..self.pipelines.water_mesh_buffers.index_count, 0, 0..1);
-    }
-
-    fn render_gizmo(&self, pass: &mut RenderPass) {
-        pass.set_pipeline(&self.pipelines.gizmo_pipeline.pipeline);
-        pass.set_bind_group(0, &self.pipelines.uniforms.bind_group, &[]);
-        pass.set_bind_group(1, &self.pipelines.fog_uniforms.bind_group, &[]);
-        pass.set_bind_group(2, &self.pipelines.pick_uniforms.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.pipelines.gizmo_mesh_buffers.vertex.slice(..));
-        pass.draw(0..6, 0..1);
     }
 
     fn render_ui(
@@ -475,14 +465,12 @@ impl RenderCore {
         // Recreate pipelines with new sample count
         self.pipelines.msaa_samples = self.msaa_samples;
         self.pipelines.resize(&self.config, self.msaa_samples);
-        self.pipelines.recreate_pipelines();
 
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
         self.ui_renderer.pipelines.rebuild_pipelines();
     }
 
     fn reload_all_shaders(&mut self) -> anyhow::Result<()> {
-        self.pipelines.reload_shaders()?;
         self.ui_renderer.reload_shaders()?;
         Ok(())
     }
@@ -516,6 +504,93 @@ impl RenderCore {
         }
     }
 }
+
+fn render_gizmo(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    msaa_samples: u32,
+) {
+    let line_shader_path = shader_dir().join("lines.wgsl");
+    render_manager.render(
+        Vec::new(),
+        "Gizmo",
+        line_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: PrimitiveTopology::LineList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([LineVtx::layout()]),
+            cull_mode: None,
+            blend: Some(BlendState::REPLACE),
+        },
+        &[&pipelines.uniforms.buffer],
+        pass,
+    );
+    pass.set_vertex_buffer(0, pipelines.gizmo_mesh_buffers.vertex.slice(..));
+    pass.draw(0..6, 0..1);
+}
+fn render_water(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    msaa_samples: u32,
+) {
+    let water_shader_path = shader_dir().join("water.wgsl");
+    render_manager.render(
+        Vec::new(),
+        "Water",
+        water_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::Always,
+                stencil: StencilState {
+                    front: StencilFaceState {
+                        compare: CompareFunction::Equal,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Keep,
+                    },
+                    back: StencilFaceState {
+                        compare: CompareFunction::Equal,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Keep,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0x00,
+                },
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([SimpleVertex::layout()]),
+            cull_mode: None,
+            blend: Some(BlendState::ALPHA_BLENDING),
+        },
+        &[
+            &pipelines.uniforms.buffer,
+            &pipelines.water_uniforms.buffer,
+            &pipelines.sky_uniforms.buffer,
+        ],
+        pass,
+    );
+    pass.set_stencil_reference(1);
+    pass.set_vertex_buffer(0, pipelines.water_mesh_buffers.vertex.slice(..));
+    pass.set_index_buffer(
+        pipelines.water_mesh_buffers.index.slice(..),
+        IndexFormat::Uint32,
+    );
+    pass.draw_indexed(0..pipelines.water_mesh_buffers.index_count, 0, 0..1);
+}
 fn render_sky(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
@@ -537,16 +612,38 @@ fn render_sky(
                 bias: Default::default(),
             }),
             msaa_samples,
-            vertex_layout: STARS_VERTEX_LAYOUT,
+            vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
         },
-        &[&pipelines.uniforms.buffer],
+        &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
     );
     pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
     pass.draw(0..4, 0..STAR_COUNT); // 4 verts, STAR_COUNT instances
 
+    let sky_shader_path = shader_dir().join("sky.wgsl");
+    render_manager.render(
+        Vec::new(),
+        "Sky",
+        sky_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: Default::default(),
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::new(),
+            cull_mode: None,
+            blend: Some(BlendState::ALPHA_BLENDING),
+        },
+        &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
+        pass,
+    );
     pass.draw(0..3, 0..1);
 }
 
@@ -642,24 +739,27 @@ fn render_roads(
     // This sets the road pipeline + texture array bind group (bind group 0)
     let road_shader_path = shader_dir().join("road.wgsl");
     render_manager.render(
-        road_material_keys,
+        road_material_keys.clone(),
         "Roads",
         road_shader_path.as_path(), // file containing full vertex+fragment shader
         PipelineOptions {
-            topology: PrimitiveTopology::TriangleList,
+            topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
-                depth_compare: CompareFunction::Less,
+                depth_compare: CompareFunction::LessEqual,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
             msaa_samples,
-            vertex_layout: RoadVertex::layout(),
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            ..Default::default()
+            blend: Some(BlendState::ALPHA_BLENDING),
         },
-        &[&pipelines.uniforms.buffer],
+        &[
+            &pipelines.uniforms.buffer,
+            &road_renderer.road_appearance.normal_buffer,
+        ],
         pass,
     );
 
@@ -668,6 +768,45 @@ fn render_roads(
             pass.set_vertex_buffer(0, gpu.vertex.slice(..));
             pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
             pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        }
+    }
+    if !road_renderer.preview_gpu.is_empty() {
+        // Choose tint based on validity
+        // let preview_bind_group = if road_renderer.preview_state.has_invalid_segment() {
+        //     &road_renderer.road_appearance.error_bind_group
+        // } else {
+        //     &road_renderer.road_appearance.preview_bind_group
+        // };
+
+        if let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
+        {
+            render_manager.render(
+                road_material_keys,
+                "Roads",
+                road_shader_path.as_path(), // file containing full vertex+fragment shader
+                PipelineOptions {
+                    topology: TriangleList,
+                    depth_stencil: Some(DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: true,
+                        depth_compare: CompareFunction::LessEqual,
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    msaa_samples,
+                    vertex_layouts: Vec::from([RoadVertex::layout()]),
+                    cull_mode: Some(Face::Back),
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                },
+                &[
+                    &pipelines.uniforms.buffer,
+                    &road_renderer.road_appearance.preview_buffer,
+                ],
+                pass,
+            );
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
+            pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
         }
     }
 }
@@ -688,7 +827,7 @@ fn render_terrain(
         "Terrain Pipeline (Above Water)",
         terrain_shader_path.as_path(), // file containing full vertex+fragment shader
         PipelineOptions {
-            topology: PrimitiveTopology::TriangleList,
+            topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
@@ -712,7 +851,7 @@ fn render_terrain(
                 bias: Default::default(),
             }),
             msaa_samples,
-            vertex_layout: Vertex::desc(),
+            vertex_layouts: Vec::from([Vertex::desc()]),
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
         },
@@ -731,7 +870,7 @@ fn render_terrain(
         "Terrain Pipeline (Under Water)",
         terrain_shader_path.as_path(), // file containing full vertex+fragment shader
         PipelineOptions {
-            topology: PrimitiveTopology::TriangleList,
+            topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
@@ -755,7 +894,7 @@ fn render_terrain(
                 bias: Default::default(),
             }),
             msaa_samples,
-            vertex_layout: Vertex::desc(),
+            vertex_layouts: Vec::from([Vertex::desc()]),
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
         },
