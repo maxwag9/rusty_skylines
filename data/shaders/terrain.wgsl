@@ -40,14 +40,14 @@ struct PickUniform {
     underwater: u32,
     color: vec3<f32>,
 }
-
-@group(0) @binding(0)
+@group(0) @binding(0) var road_sampler: sampler;
+@group(1) @binding(0)
 var<uniform> uniforms: Uniforms;
 
-@group(1) @binding(0)
+@group(1) @binding(1)
 var<uniform> fog: FogUniforms;
 
-@group(2) @binding(0)
+@group(1) @binding(2)
 var<uniform> pick: PickUniform;
 
 struct VertexIn {
@@ -105,10 +105,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let grass_amount = saturate(greenness * 2.5) * up_facing * up_facing;
 
     // Multi-scale procedural grass pattern (2 octaves)
-    let p_fine = floor(in.world_pos.xz * 200.0);
-    let p_coarse = floor(in.world_pos.xz * 50.0);
+    let p_fine = floor(in.world_pos.xz * 900.0);
+    let p_coarse = floor(in.world_pos.xz * 20.0);
     let h_fine = hash2(p_fine);
-    let h_coarse = hash2(p_coarse * 0.2 + 31.7);
+    let h_coarse = hash2(p_coarse * 0.4 + 31.7);
     let grass_pattern = h_fine * 0.55 + h_coarse * 1.85;
 
     // Simulate light/shadow variation between grass blades

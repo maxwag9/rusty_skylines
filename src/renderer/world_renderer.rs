@@ -4,7 +4,6 @@ use crate::mouse_ray::*;
 use crate::paths::data_dir;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
-use crate::renderer::pipelines::Pipelines;
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::chunk_builder::*;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
@@ -555,24 +554,7 @@ impl TerrainRenderer {
         }
     }
 
-    pub fn render<'a>(
-        &'a self,
-        pass: &mut RenderPass<'a>,
-        pipelines: &'a Pipelines,
-        camera: &'a Camera,
-        aspect: f32,
-        underwater: bool,
-    ) {
-        if !underwater {
-            pass.set_pipeline(&pipelines.terrain_pipeline_above_water.pipeline);
-        } else {
-            pass.set_pipeline(&pipelines.terrain_pipeline_under_water.pipeline);
-        }
-
-        pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
-        pass.set_bind_group(1, &pipelines.fog_uniforms.bind_group, &[]);
-        pass.set_bind_group(2, &pipelines.pick_uniforms.bind_group, &[]);
-
+    pub fn render(&self, pass: &mut RenderPass, camera: &Camera, aspect: f32, underwater: bool) {
         let (_, _, view_proj) = camera.matrices(aspect);
         let planes = extract_frustum_planes(view_proj);
 

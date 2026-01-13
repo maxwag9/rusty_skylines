@@ -2,7 +2,7 @@ use crate::components::camera::Camera;
 use crate::renderer::pipelines_outsource::*;
 use crate::resources::Uniforms;
 use crate::terrain::water::SimpleVertex;
-use crate::ui::vertex::{LineVtx, Vertex};
+use crate::ui::vertex::LineVtx;
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::fs;
@@ -81,19 +81,15 @@ pub struct Pipelines {
     pub water_uniforms: GpuResourceSet,
     pub fog_uniforms: GpuResourceSet,
     pub pick_uniforms: GpuResourceSet,
-    //pub road_uniforms: GpuResourceSet,
-    pub terrain_pipeline_above_water: RenderPipelineState,
-    pub terrain_pipeline_under_water: RenderPipelineState,
+
     pub water_pipeline: RenderPipelineState,
     pub water_mesh_buffers: MeshBuffers,
     pub sky_pipeline: RenderPipelineState,
-    pub stars_pipeline: RenderPipelineState,
     pub stars_mesh_buffers: MeshBuffers,
     pub gizmo_pipeline: RenderPipelineState,
     pub gizmo_mesh_buffers: MeshBuffers,
     pub grass_texture_pipeline: ComputePipelineState,
     pub grass_texture_resources: GpuResourceSet,
-    pub road_pipeline: RenderPipelineState,
 }
 
 impl Pipelines {
@@ -135,17 +131,7 @@ impl Pipelines {
             water_uniforms,
             fog_uniforms,
             pick_uniforms,
-            //road_uniforms,
-            terrain_pipeline_above_water: make_dummy_render_pipeline_state(
-                device,
-                config.format,
-                shaders.terrain.clone(),
-            ),
-            terrain_pipeline_under_water: make_dummy_render_pipeline_state(
-                device,
-                config.format,
-                shaders.terrain,
-            ),
+
             water_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.water),
             water_mesh_buffers: water_mesh,
 
@@ -154,7 +140,6 @@ impl Pipelines {
             gizmo_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.line),
             gizmo_mesh_buffers: gizmo_mesh,
 
-            stars_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.stars),
             stars_mesh_buffers: stars_mesh,
 
             grass_texture_pipeline: make_dummy_compute_pipeline_state(
@@ -162,7 +147,6 @@ impl Pipelines {
                 shaders.grass_texture,
             ),
             grass_texture_resources,
-            road_pipeline: make_dummy_render_pipeline_state(device, config.format, shaders.road),
         };
 
         this.recreate_pipelines();
@@ -170,23 +154,12 @@ impl Pipelines {
     }
 
     pub(crate) fn recreate_pipelines(&mut self) {
-        (
-            self.terrain_pipeline_above_water.pipeline,
-            self.terrain_pipeline_under_water.pipeline,
-        ) = self.build_terrain_pipelines();
         self.gizmo_pipeline.pipeline = self.build_gizmo_pipeline();
         self.water_pipeline.pipeline = self.build_water_pipeline();
-        self.sky_pipeline.pipeline = self.build_sky_pipeline();
-        self.stars_pipeline.pipeline = self.build_stars_pipeline();
         //self.road_pipeline.pipeline = self.build_road_pipeline();
     }
 
     pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.terrain_pipeline_above_water.shader = load_shader(
-            &self.device,
-            &self.terrain_pipeline_above_water.shader.path,
-            "Ground Shader",
-        )?;
         self.gizmo_pipeline.shader = load_shader(
             &self.device,
             &self.gizmo_pipeline.shader.path,
@@ -199,11 +172,6 @@ impl Pipelines {
         )?;
         self.sky_pipeline.shader =
             load_shader(&self.device, &self.sky_pipeline.shader.path, "Sky Shader")?;
-        self.stars_pipeline.shader = load_shader(
-            &self.device,
-            &self.stars_pipeline.shader.path,
-            "Stars Shader",
-        )?;
 
         self.recreate_pipelines();
         Ok(())
@@ -218,97 +186,6 @@ impl Pipelines {
             create_msaa_targets(&self.device, &self.config, msaa_samples);
         (self.depth_texture, self.depth_view) =
             create_depth_texture(&self.device, &self.config, msaa_samples);
-    }
-    fn build_terrain_pipelines(&self) -> (RenderPipeline, RenderPipeline) {
-        let terrain_pipeline_layout =
-            self.device
-                .create_pipeline_layout(&PipelineLayoutDescriptor {
-                    label: Some("Terrain Pipeline Layout"),
-                    bind_group_layouts: &[
-                        &self.uniforms.bind_group_layout,      // group(0)
-                        &self.fog_uniforms.bind_group_layout,  // group(1)
-                        &self.pick_uniforms.bind_group_layout, // group(2) :O
-                    ],
-                    immediate_size: 0,
-                });
-
-        let above_water = self.create_terrain_pipeline(
-            &self.device,
-            &terrain_pipeline_layout,
-            Some("Terrain Pipeline (Above Water)"),
-            0,
-        );
-
-        let under_water = self.create_terrain_pipeline(
-            &self.device,
-            &terrain_pipeline_layout,
-            Some("Terrain Pipeline (Under Water)"),
-            0xFF,
-        );
-        (above_water, under_water)
-    }
-
-    fn create_terrain_pipeline(
-        &self,
-        device: &Device, // Or &self.device
-        layout: &PipelineLayout,
-        label: Option<&str>,
-        stencil_write_mask: u32,
-    ) -> RenderPipeline {
-        device.create_render_pipeline(&RenderPipelineDescriptor {
-            label,
-            layout: Some(layout),
-            vertex: VertexState {
-                module: &self.terrain_pipeline_above_water.shader.module,
-                entry_point: Some("vs_main"),
-                buffers: &[Vertex::desc()],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &self.terrain_pipeline_above_water.shader.module,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format: self.config.format,
-                    blend: Some(BlendState::REPLACE),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: PrimitiveState {
-                cull_mode: Some(Face::Front),
-                topology: PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
-                stencil: StencilState {
-                    front: StencilFaceState {
-                        compare: CompareFunction::Always,
-                        fail_op: StencilOperation::Keep,
-                        depth_fail_op: StencilOperation::Keep,
-                        pass_op: StencilOperation::Replace,
-                    },
-                    back: StencilFaceState {
-                        compare: CompareFunction::Always,
-                        fail_op: StencilOperation::Keep,
-                        depth_fail_op: StencilOperation::Keep,
-                        pass_op: StencilOperation::Replace,
-                    },
-                    read_mask: 0xFF,
-                    write_mask: stencil_write_mask,
-                },
-                bias: Default::default(),
-            }),
-            multisample: MultisampleState {
-                count: self.msaa_samples,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            cache: None,
-            multiview_mask: None,
-        })
     }
 
     fn build_gizmo_pipeline(&self) -> RenderPipeline {
@@ -480,81 +357,6 @@ impl Pipelines {
             })
     }
 
-    fn build_stars_pipeline(&self) -> RenderPipeline {
-        let stars_vertex_layout = VertexBufferLayout {
-            array_stride: 16,
-            step_mode: VertexStepMode::Instance, // IMPORTANT
-            attributes: &[
-                VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: VertexFormat::Float32,
-                },
-                VertexAttribute {
-                    offset: 4,
-                    shader_location: 1,
-                    format: VertexFormat::Float32,
-                },
-                VertexAttribute {
-                    offset: 8,
-                    shader_location: 2,
-                    format: VertexFormat::Float32,
-                },
-                VertexAttribute {
-                    offset: 12,
-                    shader_location: 3,
-                    format: VertexFormat::Float32,
-                },
-            ],
-        };
-        let stars_pipeline_layout = self
-            .device
-            .create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Stars Pipeline Layout"),
-                bind_group_layouts: &[
-                    &self.uniforms.bind_group_layout, // group 0
-                ],
-                immediate_size: 0,
-            });
-        self.device
-            .create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Stars Pipeline"),
-                layout: Some(&stars_pipeline_layout),
-                vertex: VertexState {
-                    module: &self.stars_pipeline.shader.module,
-                    entry_point: Some("vs_main"),
-                    buffers: &[stars_vertex_layout],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: &self.stars_pipeline.shader.module,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(ColorTargetState {
-                        format: self.config.format,
-                        blend: Some(BlendState::ALPHA_BLENDING),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: false,
-                    depth_compare: CompareFunction::Always,
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: MultisampleState {
-                    count: self.msaa_samples,
-                    ..Default::default()
-                },
-                cache: None,
-                multiview_mask: None,
-            })
-    }
     // fn build_road_pipeline(&self) -> RenderPipeline {
     //     let road_vertex_layout = VertexBufferLayout {
     //         array_stride: 16,

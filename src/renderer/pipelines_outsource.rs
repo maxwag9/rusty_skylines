@@ -19,7 +19,6 @@ use wgpu::*;
 
 // Helper struct to hold all shaders
 pub struct Shaders {
-    pub(crate) terrain: ShaderAsset,
     pub(crate) line: ShaderAsset,
     pub(crate) water: ShaderAsset,
     pub(crate) sky: ShaderAsset,
@@ -30,7 +29,6 @@ pub struct Shaders {
 
 pub fn load_all_shaders(device: &Device, shader_dir: &Path) -> anyhow::Result<Shaders> {
     Ok(Shaders {
-        terrain: load_shader(device, &shader_dir.join("ground.wgsl"), "Ground Shader")?,
         line: load_shader(device, &shader_dir.join("lines.wgsl"), "Line Shader")?,
         water: load_shader(device, &shader_dir.join("water.wgsl"), "Water Shader")?,
         sky: load_shader(device, &shader_dir.join("sky.wgsl"), "Sky Shader")?,

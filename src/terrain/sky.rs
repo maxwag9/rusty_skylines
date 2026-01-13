@@ -1,32 +1,32 @@
-use crate::renderer::pipelines::Pipelines;
-use wgpu::RenderPass;
+use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
-const STAR_COUNT: u32 = 116812;
-
-pub struct SkyRenderer;
-
-impl SkyRenderer {
-    pub(crate) fn new() -> Self {
-        // nothing lol
-        SkyRenderer
-    }
-}
-
-impl SkyRenderer {
-    pub fn render(&self, pass: &mut RenderPass, pipelines: &Pipelines) {
-        // just render
-        pass.set_pipeline(&pipelines.stars_pipeline.pipeline);
-        pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
-        pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
-        pass.draw(0..4, 0..STAR_COUNT); // 4 verts, STAR_COUNT instances
-
-        pass.set_pipeline(&pipelines.sky_pipeline.pipeline);
-        pass.set_bind_group(0, &pipelines.uniforms.bind_group, &[]);
-        pass.set_bind_group(1, &pipelines.sky_uniforms.bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-}
-
+pub const STAR_COUNT: u32 = 116812;
+pub const STARS_VERTEX_LAYOUT: VertexBufferLayout = VertexBufferLayout {
+    array_stride: 16,
+    step_mode: VertexStepMode::Instance, // IMPORTANT
+    attributes: &[
+        VertexAttribute {
+            offset: 0,
+            shader_location: 0,
+            format: VertexFormat::Float32,
+        },
+        VertexAttribute {
+            offset: 4,
+            shader_location: 1,
+            format: VertexFormat::Float32,
+        },
+        VertexAttribute {
+            offset: 8,
+            shader_location: 2,
+            format: VertexFormat::Float32,
+        },
+        VertexAttribute {
+            offset: 12,
+            shader_location: 3,
+            format: VertexFormat::Float32,
+        },
+    ],
+};
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SkyUniform {

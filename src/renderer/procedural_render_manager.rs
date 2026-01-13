@@ -1,14 +1,13 @@
 use crate::renderer::pipelines::DEPTH_FORMAT;
 use crate::renderer::procedural_bind_group_manager::MaterialBindGroupManager;
-use crate::renderer::procedural_texture_manager::{
-    MaterialKind, ProceduralTextureManager, TextureCacheKey,
-};
+use crate::renderer::procedural_texture_manager::{ProceduralTextureManager, TextureCacheKey};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use wgpu::{
-    BindGroup, Buffer, CompareFunction, DepthStencilState, Face, Sampler, VertexBufferLayout,
+    BindGroup, BlendState, Buffer, CompareFunction, DepthStencilState, Face, Sampler,
+    VertexBufferLayout,
 };
 
 const FULLSCREEN_SHADER_SOURCE: &str = r#"
@@ -42,6 +41,8 @@ pub struct PipelineOptions {
     pub msaa_samples: u32,
     pub depth_stencil: Option<wgpu::DepthStencilState>,
     pub vertex_layout: VertexBufferLayout<'static>,
+    pub blend: Option<BlendState>,
+    pub cull_mode: Option<Face>,
 }
 
 impl Default for PipelineOptions {
@@ -51,6 +52,8 @@ impl Default for PipelineOptions {
             msaa_samples: 1,
             depth_stencil: None,
             vertex_layout: RoadVertex::layout(),
+            blend: Some(BlendState::ALPHA_BLENDING),
+            cull_mode: None,
         }
     }
 }
@@ -74,7 +77,7 @@ impl From<wgpu::DepthBiasState> for DepthBiasStateKey {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct StencilFaceStateKey {
-    compare: wgpu::CompareFunction,
+    compare: CompareFunction,
     fail_op: wgpu::StencilOperation,
     depth_fail_op: wgpu::StencilOperation,
     pass_op: wgpu::StencilOperation,
@@ -152,7 +155,7 @@ impl From<&PipelineOptions> for PipelineOptionsKey {
 struct PipelineCacheKey {
     shader_path: PathBuf,
     material_kinds: Vec<TextureCacheKey>,
-    has_uniforms: bool,
+    uniform_count: usize,
     options: PipelineOptionsKey,
 }
 
@@ -174,7 +177,7 @@ pub struct PipelineManager {
     shader_cache: HashMap<PathBuf, ShaderEntry>,
     pipeline_cache: HashMap<PipelineCacheKey, wgpu::RenderPipeline>,
     fullscreen_pipeline_cache: HashMap<FullscreenPipelineKey, wgpu::RenderPipeline>,
-    uniform_bind_group_layout: wgpu::BindGroupLayout,
+    uniform_bind_group_layouts: HashMap<usize, wgpu::BindGroupLayout>,
     fullscreen_bind_group_layout: wgpu::BindGroupLayout,
     fullscreen_shader: wgpu::ShaderModule,
 }
@@ -185,21 +188,6 @@ impl PipelineManager {
         queue: wgpu::Queue,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
-        let uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Uniform BindGroup Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
         let fullscreen_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Fullscreen Preview BindGroup Layout"),
@@ -235,7 +223,7 @@ impl PipelineManager {
             shader_cache: HashMap::new(),
             pipeline_cache: HashMap::new(),
             fullscreen_pipeline_cache: HashMap::new(),
-            uniform_bind_group_layout,
+            uniform_bind_group_layouts: HashMap::new(),
             fullscreen_bind_group_layout,
             fullscreen_shader,
         }
@@ -253,12 +241,40 @@ impl PipelineManager {
         self.surface_format
     }
 
-    pub fn uniform_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.uniform_bind_group_layout
+    pub fn uniform_bind_group_layout(&mut self, count: usize) -> &wgpu::BindGroupLayout {
+        self.ensure_uniform_bind_group_layout(count);
+        self.uniform_bind_group_layouts.get(&count).unwrap()
     }
 
     pub fn fullscreen_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.fullscreen_bind_group_layout
+    }
+
+    fn ensure_uniform_bind_group_layout(&mut self, count: usize) {
+        if count == 0 || self.uniform_bind_group_layouts.contains_key(&count) {
+            return;
+        }
+
+        let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..count)
+            .map(|i| wgpu::BindGroupLayoutEntry {
+                binding: i as u32,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            })
+            .collect();
+
+        let layout = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(&format!("Uniform BindGroup Layout (count: {})", count)),
+                entries: &entries,
+            });
+        self.uniform_bind_group_layouts.insert(count, layout);
     }
 
     fn load_shader(&mut self, path: &Path) {
@@ -287,13 +303,13 @@ impl PipelineManager {
         shader_path: &Path,
         material_kinds: &Vec<TextureCacheKey>,
         material_layout: &wgpu::BindGroupLayout,
-        has_uniforms: bool,
+        uniform_count: usize,
         options: &PipelineOptions,
     ) -> &wgpu::RenderPipeline {
         let cache_key = PipelineCacheKey {
             shader_path: shader_path.to_path_buf(),
             material_kinds: material_kinds.clone(),
-            has_uniforms,
+            uniform_count,
             options: options.into(),
         };
 
@@ -302,15 +318,15 @@ impl PipelineManager {
         }
 
         self.load_shader(shader_path);
+        self.ensure_uniform_bind_group_layout(uniform_count);
 
         let shader = &self.shader_cache.get(shader_path).unwrap().module;
-        let uniform_layout = &self.uniform_bind_group_layout;
         let device = &self.device;
         let surface_format = self.surface_format;
 
         let mut bind_group_layouts: Vec<&wgpu::BindGroupLayout> = vec![material_layout];
-        if has_uniforms {
-            bind_group_layouts.push(uniform_layout);
+        if uniform_count > 0 {
+            bind_group_layouts.push(self.uniform_bind_group_layouts.get(&uniform_count).unwrap());
         }
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -333,7 +349,7 @@ impl PipelineManager {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: options.blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -342,7 +358,7 @@ impl PipelineManager {
                 topology: options.topology,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(Face::Back),
+                cull_mode: options.cull_mode,
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
@@ -445,15 +461,51 @@ impl PipelineManager {
         self.pipeline_cache.clear();
     }
 
-    pub fn create_uniform_bind_group(&self, buffer: &wgpu::Buffer, label: &str) -> wgpu::BindGroup {
+    pub fn create_uniform_bind_group(
+        &self,
+        buffers: &[&wgpu::Buffer],
+        label: &str,
+    ) -> wgpu::BindGroup {
+        let count = buffers.len();
+        let layout = self
+            .uniform_bind_group_layouts
+            .get(&count)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Uniform layout for {} buffers not found. Pipeline must be created first.",
+                    count
+                )
+            });
+
+        let entries: Vec<wgpu::BindGroupEntry> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, buffer)| wgpu::BindGroupEntry {
+                binding: i as u32,
+                resource: buffer.as_entire_binding(),
+            })
+            .collect();
+
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
-            layout: &self.uniform_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            layout,
+            entries: &entries,
         })
+    }
+}
+
+/// Cache key for uniform bind groups using buffer addresses
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct UniformBindGroupKey(Vec<usize>);
+
+impl UniformBindGroupKey {
+    fn from_buffers(buffers: &[&Buffer]) -> Self {
+        Self(
+            buffers
+                .iter()
+                .map(|b| *b as *const Buffer as usize)
+                .collect(),
+        )
     }
 }
 
@@ -462,14 +514,14 @@ pub struct RenderManager {
     material_manager: MaterialBindGroupManager,
     procedural_textures: ProceduralTextureManager,
     fullscreen_sampler: Sampler,
-    uniform_bind_groups: HashMap<*const Buffer, BindGroup>,
+    uniform_bind_groups: HashMap<UniformBindGroupKey, BindGroup>,
 }
 
 impl RenderManager {
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,
-        target_format: wgpu::TextureFormat, // renamed for clarity
+        target_format: wgpu::TextureFormat,
         shader_dir: PathBuf,
     ) -> Self {
         let procedural_textures =
@@ -497,7 +549,6 @@ impl RenderManager {
         }
     }
 
-    // Accessors
     pub fn device(&self) -> &wgpu::Device {
         self.pipeline_manager.device()
     }
@@ -513,46 +564,51 @@ impl RenderManager {
     pub fn pipeline_manager_mut(&mut self) -> &mut PipelineManager {
         &mut self.pipeline_manager
     }
+
     pub fn procedural_texture_manager_mut(&mut self) -> &mut ProceduralTextureManager {
         &mut self.procedural_textures
     }
+
     pub fn reload_all_shaders(&mut self) {
         self.pipeline_manager.reload_all_shaders();
     }
 
-    // Rendering (use cached bind groups)
     pub fn render(
         &mut self,
         materials: Vec<TextureCacheKey>,
         label: &str,
         shader_path: &Path,
         options: PipelineOptions,
-        uniforms: Option<&Buffer>,
+        uniforms: &[&Buffer],
         pass: &mut wgpu::RenderPass,
     ) {
         let views = self.procedural_textures.get_views(&materials);
-        let material_layout = &self.material_manager.get_layout(materials.len()).clone();
+        let material_layout = self.material_manager.get_layout(materials.len()).clone();
         let material_bind_group = self.material_manager.request_bind_group(&materials, views);
 
         let pipeline = self.pipeline_manager.get_or_create_pipeline(
             shader_path,
             &materials,
-            material_layout,
-            uniforms.is_some(),
+            &material_layout,
+            uniforms.len(),
             &options,
         );
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, material_bind_group, &[]);
 
-        if let Some(uniform_buffer) = uniforms {
-            let key = uniform_buffer as *const wgpu::Buffer;
-            let bind_group = self.uniform_bind_groups.entry(key).or_insert_with(|| {
-                self.pipeline_manager.create_uniform_bind_group(
-                    uniform_buffer,
-                    &format!("{} Uniform BindGroup", label),
-                )
-            });
+        if !uniforms.is_empty() {
+            let key = UniformBindGroupKey::from_buffers(uniforms);
+
+            // Extract references before entry() to enable disjoint field borrowing
+            let pm = &self.pipeline_manager;
+            let label_owned = format!("{} Uniform BindGroup", label);
+
+            let bind_group = self
+                .uniform_bind_groups
+                .entry(key)
+                .or_insert_with(|| pm.create_uniform_bind_group(uniforms, &label_owned));
+
             pass.set_bind_group(1, &*bind_group, &[]);
         }
     }
@@ -606,208 +662,5 @@ impl RenderManager {
         self.pipeline_manager
             .queue()
             .write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
-    }
-}
-
-pub struct SimpleMaterialBindGroupManager {
-    device: wgpu::Device,
-    layout: wgpu::BindGroupLayout,
-    bind_groups: HashMap<Vec<MaterialKind>, wgpu::BindGroup>,
-    textures: HashMap<MaterialKind, wgpu::TextureView>,
-    sampler: wgpu::Sampler,
-}
-
-impl SimpleMaterialBindGroupManager {
-    pub fn new(device: wgpu::Device) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Material BindGroup Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Material Sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-
-        Self {
-            device,
-            layout,
-            bind_groups: HashMap::new(),
-            textures: HashMap::new(),
-            sampler,
-        }
-    }
-
-    pub fn register_texture(&mut self, kind: MaterialKind, view: wgpu::TextureView) {
-        self.textures.insert(kind, view);
-        self.bind_groups.clear();
-    }
-
-    pub fn ensure_bind_group(&mut self, materials: &[MaterialKind]) {
-        let key = materials.to_vec();
-        if self.bind_groups.contains_key(&key) {
-            return;
-        }
-
-        if materials.is_empty() {
-            return;
-        }
-
-        let first_material = materials[0];
-        let texture = self
-            .textures
-            .get(&first_material)
-            .expect("Texture not registered");
-
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&format!("{:?} BindGroup", materials)),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(texture),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
-        self.bind_groups.insert(key, bind_group);
-    }
-}
-
-pub struct MultiTextureMaterialBindGroupManager {
-    device: wgpu::Device,
-    layouts: HashMap<usize, wgpu::BindGroupLayout>,
-    bind_groups: HashMap<Vec<MaterialKind>, wgpu::BindGroup>,
-    textures: HashMap<MaterialKind, wgpu::TextureView>,
-    sampler: wgpu::Sampler,
-}
-
-impl MultiTextureMaterialBindGroupManager {
-    pub fn new(device: wgpu::Device) -> Self {
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Multi-Material Sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-
-        Self {
-            device,
-            layouts: HashMap::new(),
-            bind_groups: HashMap::new(),
-            textures: HashMap::new(),
-            sampler,
-        }
-    }
-
-    pub fn register_texture(&mut self, kind: MaterialKind, view: wgpu::TextureView) {
-        self.textures.insert(kind, view);
-        self.bind_groups.clear();
-    }
-
-    pub fn ensure_bind_group(&mut self, materials: &[MaterialKind]) {
-        let key = materials.to_vec();
-        if self.bind_groups.contains_key(&key) {
-            return;
-        }
-
-        let texture_count = materials.len();
-        if texture_count == 0 {
-            return;
-        }
-
-        if !self.layouts.contains_key(&texture_count) {
-            let mut entries = Vec::with_capacity(texture_count + 1);
-
-            for i in 0..texture_count {
-                entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: i as u32,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                });
-            }
-
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: texture_count as u32,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
-
-            let layout = self
-                .device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some(&format!("Material BindGroup Layout ({})", texture_count)),
-                    entries: &entries,
-                });
-
-            self.layouts.insert(texture_count, layout);
-        }
-
-        let layout = self.layouts.get(&texture_count).unwrap();
-        let device = &self.device;
-        let sampler = &self.sampler;
-
-        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::with_capacity(texture_count + 1);
-
-        for (i, material) in materials.iter().enumerate() {
-            let texture = self
-                .textures
-                .get(material)
-                .unwrap_or_else(|| panic!("Texture not registered for {:?}", material));
-            entries.push(wgpu::BindGroupEntry {
-                binding: i as u32,
-                resource: wgpu::BindingResource::TextureView(texture),
-            });
-        }
-
-        entries.push(wgpu::BindGroupEntry {
-            binding: texture_count as u32,
-            resource: wgpu::BindingResource::Sampler(sampler),
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&format!("{:?} BindGroup", materials)),
-            layout,
-            entries: &entries,
-        });
-
-        self.bind_groups.insert(key, bind_group);
     }
 }

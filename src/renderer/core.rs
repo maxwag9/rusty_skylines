@@ -17,9 +17,10 @@ use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::roads::road_mesh_manager::{CrossSection, CrossSectionRegion, RoadVertex};
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
-use crate::terrain::sky::SkyRenderer;
+use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
+use crate::ui::vertex::Vertex;
 use crate::world::CameraBundle;
 use std::sync::Arc;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -43,7 +44,6 @@ pub struct RenderCore {
     size: PhysicalSize<u32>,
 
     shader_watcher: Option<ShaderWatcher>,
-    sky: SkyRenderer,
     encoder: Option<CommandEncoder>,
     arena: GeneralMeshArena,
     render_manager: RenderManager,
@@ -141,9 +141,13 @@ impl RenderCore {
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
             .expect("Failed to create UI pipelines");
         let world = TerrainRenderer::new(&device, settings);
-        let sky = SkyRenderer::new();
         let cross_section = CrossSection {
             regions: vec![
+                CrossSectionRegion {
+                    width: 0.01,
+                    material_id: 0,
+                    height: 0.001,
+                },
                 // Left shoulder
                 CrossSectionRegion {
                     width: 1.0,
@@ -156,12 +160,12 @@ impl RenderCore {
                     material_id: 2,
                     height: 0.001,
                 },
-                // Center line (thin for markings)
-                CrossSectionRegion {
-                    width: 0.08,
-                    material_id: 0,
-                    height: 0.002,
-                },
+                // // Center line (thin for markings)
+                // CrossSectionRegion {
+                //     width: 0.08,
+                //     material_id: 0,
+                //     height: 0.002,
+                // },
                 // Right lane
                 CrossSectionRegion {
                     width: 2.5,
@@ -173,6 +177,11 @@ impl RenderCore {
                     width: 1.0,
                     material_id: 0,
                     height: 0.1,
+                },
+                CrossSectionRegion {
+                    width: 0.01,
+                    material_id: 0,
+                    height: 0.001,
                 },
             ],
         };
@@ -198,7 +207,6 @@ impl RenderCore {
             road_renderer,
             size,
             shader_watcher,
-            sky,
             encoder: None,
             arena,
             render_manager,
@@ -214,19 +222,18 @@ impl RenderCore {
         self.surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
     }
-
-    pub(crate) fn render(
+    pub fn update_render(
         &mut self,
         camera_bundle: &mut CameraBundle,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &mut InputState,
         settings: &Settings,
+        aspect: f32,
     ) {
         let camera = &mut camera_bundle.camera;
         self.check_shader_changes(ui_loader);
 
-        let aspect = self.config.width as f32 / self.config.height as f32;
         let cam_pos = camera.position();
         let orbit_radius = camera.orbit_radius;
 
@@ -285,6 +292,26 @@ impl RenderCore {
             input_state,
             &self.terrain_renderer.last_picked,
         );
+    }
+    pub(crate) fn render(
+        &mut self,
+        camera_bundle: &mut CameraBundle,
+        ui_loader: &mut UiButtonLoader,
+        time: &TimeSystem,
+        input_state: &mut InputState,
+        settings: &Settings,
+    ) {
+        let aspect = self.config.width as f32 / self.config.height as f32;
+        self.update_render(
+            camera_bundle,
+            ui_loader,
+            time,
+            input_state,
+            settings,
+            aspect,
+        );
+        let camera = &camera_bundle.camera;
+
         // Acquire frame
         let frame_result = acquire_frame(&self.surface, &self.device, &mut self.config);
         if frame_result.resized {
@@ -347,136 +374,37 @@ impl RenderCore {
 
         if show_world {
             // Sky
-            self.sky.render(&mut pass, &self.pipelines);
+            render_sky(
+                &mut pass,
+                &mut self.render_manager,
+                &self.pipelines,
+                self.msaa_samples,
+            );
 
             // Terrain
             self.terrain_renderer
                 .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
-            {
-                pass.set_stencil_reference(0);
-                self.terrain_renderer
-                    .render(&mut pass, &self.pipelines, camera, aspect, false);
 
-                pass.set_stencil_reference(1);
-                self.terrain_renderer
-                    .render(&mut pass, &self.pipelines, camera, aspect, true);
-            }
+            render_terrain(
+                &mut pass,
+                &mut self.render_manager,
+                &self.terrain_renderer,
+                &self.pipelines,
+                self.msaa_samples,
+                camera,
+                aspect,
+            );
 
             // Water
             self.render_water(&mut pass);
         }
-
-        // Ordered list of ALL possible road texture keys — the order determines layer index 0,1,2,...
-        let concrete_key = TextureCacheKey {
-            kind: MaterialKind::Concrete,
-            params: Params {
-                seed: 1,
-                scale: 2.0,
-                roughness: 1.0,
-                _padding: 0,
-                color_primary: [0.32, 0.30, 0.28, 1.0], // Light gray
-                color_secondary: [0.15, 0.13, 0.10, 1.0], // Darker gray
-            },
-            resolution: 512,
-        };
-        let goo_key = TextureCacheKey {
-            kind: MaterialKind::Goo,
-            params: Params {
-                seed: 0,
-                scale: 3.0,
-                roughness: 0.3,
-                _padding: 0,
-                color_primary: [0.02, 0.02, 0.03, 1.0], // Near black
-                color_secondary: [0.10, 0.10, 0.12, 1.0], // Slight blue-ish sheen
-            },
-            resolution: 512,
-        };
-        let newest_asphalt_key = TextureCacheKey {
-            kind: MaterialKind::Asphalt,
-            params: Params {
-                seed: 0,
-                scale: 16.0,
-                roughness: 0.5,
-                _padding: 0,
-                color_primary: [0.004, 0.004, 0.004, 1.0],
-                color_secondary: [0.015, 0.015, 0.015, 1.0],
-            },
-            resolution: 512,
-        };
-        let worn_newest_asphalt_key = TextureCacheKey {
-            kind: MaterialKind::Asphalt,
-            params: Params {
-                seed: 1,
-                scale: 16.0,
-                roughness: 0.3,
-                _padding: 0,
-                color_primary: [0.006, 0.006, 0.006, 1.0],
-                color_secondary: [0.020, 0.020, 0.020, 1.0],
-            },
-            resolution: 512,
-        };
-        let orange_asphalt_key = TextureCacheKey {
-            kind: MaterialKind::Asphalt,
-            params: Params {
-                seed: 2,
-                scale: 16.0,
-                roughness: 0.5,
-                _padding: 0,
-                color_primary: [0.04, 0.04, 0.006, 1.0],
-                color_secondary: [0.120, 0.120, 0.120, 1.0],
-            },
-            resolution: 512,
-        };
-        let gray_asphalt_key = TextureCacheKey {
-            kind: MaterialKind::Asphalt,
-            params: Params {
-                seed: 3,
-                scale: 16.0,
-                roughness: 0.8,
-                _padding: 0,
-                color_primary: [0.02, 0.02, 0.02, 1.0],
-                color_secondary: [0.080, 0.080, 0.080, 1.0],
-            },
-            resolution: 512,
-        };
-        let road_material_keys = vec![
-            concrete_key,            // 0
-            goo_key,                 // 1
-            newest_asphalt_key,      // 2
-            worn_newest_asphalt_key, // 3
-            orange_asphalt_key,      // 4
-            gray_asphalt_key,        // 5
-        ];
-
-        // This sets the road pipeline + texture array bind group (bind group 0)
-        let road_shader_path = shader_dir().join("road.wgsl");
-        self.render_manager.render(
-            road_material_keys,
-            "Roads",
-            road_shader_path.as_path(), // file containing full vertex+fragment shader
-            PipelineOptions {
-                topology: PrimitiveTopology::TriangleList,
-                depth_stencil: Some(DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: true,
-                    depth_compare: CompareFunction::Less,
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                msaa_samples: self.msaa_samples,
-                vertex_layout: RoadVertex::layout(),
-            },
-            Some(&self.pipelines.uniforms.buffer),
+        render_roads(
             &mut pass,
+            &mut self.render_manager,
+            &self.road_renderer,
+            &self.pipelines,
+            self.msaa_samples,
         );
-
-        for chunk_id in &self.road_renderer.visible_draw_list {
-            if let Some(gpu) = self.road_renderer.chunk_gpu.get(chunk_id) {
-                pass.set_vertex_buffer(0, gpu.vertex.slice(..));
-                pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu.index_count, 0, 0..1);
-            }
-        }
 
         // Gizmo
         self.render_gizmo(&mut pass);
@@ -588,7 +516,258 @@ impl RenderCore {
         }
     }
 }
+fn render_sky(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    msaa_samples: u32,
+) {
+    let stars_shader_path = shader_dir().join("stars.wgsl");
+    render_manager.render(
+        Vec::new(),
+        "Stars",
+        stars_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: PrimitiveTopology::TriangleStrip,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layout: STARS_VERTEX_LAYOUT,
+            cull_mode: None,
+            blend: Some(BlendState::ALPHA_BLENDING),
+        },
+        &[&pipelines.uniforms.buffer],
+        pass,
+    );
+    pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
+    pass.draw(0..4, 0..STAR_COUNT); // 4 verts, STAR_COUNT instances
 
+    pass.draw(0..3, 0..1);
+}
+
+fn render_roads(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    road_renderer: &RoadRenderSubsystem,
+    pipelines: &Pipelines,
+    msaa_samples: u32,
+) {
+    // Ordered list of ALL possible road texture keys — the order determines layer index 0,1,2,...
+    let concrete_key = TextureCacheKey {
+        kind: MaterialKind::Concrete,
+        params: Params {
+            seed: 1,
+            scale: 2.0,
+            roughness: 1.0,
+            _padding: 0,
+            color_primary: [0.32, 0.30, 0.28, 1.0], // Light gray
+            color_secondary: [0.15, 0.13, 0.10, 1.0], // Darker gray
+        },
+        resolution: 512,
+    };
+    let goo_key = TextureCacheKey {
+        kind: MaterialKind::Goo,
+        params: Params {
+            seed: 0,
+            scale: 3.0,
+            roughness: 0.3,
+            _padding: 0,
+            color_primary: [0.02, 0.02, 0.03, 1.0], // Near black
+            color_secondary: [0.10, 0.10, 0.12, 1.0], // Slight blue-ish sheen
+        },
+        resolution: 512,
+    };
+    let newest_asphalt_key = TextureCacheKey {
+        kind: MaterialKind::Asphalt,
+        params: Params {
+            seed: 0,
+            scale: 16.0,
+            roughness: 0.5,
+            _padding: 0,
+            color_primary: [0.004, 0.004, 0.004, 1.0],
+            color_secondary: [0.015, 0.015, 0.015, 1.0],
+        },
+        resolution: 512,
+    };
+    let worn_newest_asphalt_key = TextureCacheKey {
+        kind: MaterialKind::Asphalt,
+        params: Params {
+            seed: 1,
+            scale: 16.0,
+            roughness: 0.3,
+            _padding: 0,
+            color_primary: [0.006, 0.006, 0.006, 1.0],
+            color_secondary: [0.020, 0.020, 0.020, 1.0],
+        },
+        resolution: 512,
+    };
+    let orange_asphalt_key = TextureCacheKey {
+        kind: MaterialKind::Asphalt,
+        params: Params {
+            seed: 2,
+            scale: 16.0,
+            roughness: 0.5,
+            _padding: 0,
+            color_primary: [0.04, 0.04, 0.006, 1.0],
+            color_secondary: [0.120, 0.120, 0.120, 1.0],
+        },
+        resolution: 512,
+    };
+    let gray_asphalt_key = TextureCacheKey {
+        kind: MaterialKind::Asphalt,
+        params: Params {
+            seed: 3,
+            scale: 16.0,
+            roughness: 0.8,
+            _padding: 0,
+            color_primary: [0.02, 0.02, 0.02, 1.0],
+            color_secondary: [0.080, 0.080, 0.080, 1.0],
+        },
+        resolution: 512,
+    };
+    let road_material_keys = vec![
+        concrete_key,            // 0
+        goo_key,                 // 1
+        newest_asphalt_key,      // 2
+        worn_newest_asphalt_key, // 3
+        orange_asphalt_key,      // 4
+        gray_asphalt_key,        // 5
+    ];
+
+    // This sets the road pipeline + texture array bind group (bind group 0)
+    let road_shader_path = shader_dir().join("road.wgsl");
+    render_manager.render(
+        road_material_keys,
+        "Roads",
+        road_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: PrimitiveTopology::TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layout: RoadVertex::layout(),
+            cull_mode: Some(Face::Back),
+            ..Default::default()
+        },
+        &[&pipelines.uniforms.buffer],
+        pass,
+    );
+
+    for chunk_id in &road_renderer.visible_draw_list {
+        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
+            pass.set_vertex_buffer(0, gpu.vertex.slice(..));
+            pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        }
+    }
+}
+
+fn render_terrain(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    terrain_renderer: &TerrainRenderer,
+    pipelines: &Pipelines,
+    msaa_samples: u32,
+    camera: &Camera,
+    aspect: f32,
+) {
+    pass.set_stencil_reference(0);
+    let terrain_shader_path = shader_dir().join("terrain.wgsl");
+    render_manager.render(
+        Vec::new(),
+        "Terrain Pipeline (Above Water)",
+        terrain_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: PrimitiveTopology::TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: StencilState {
+                    front: StencilFaceState {
+                        compare: CompareFunction::Always,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Replace,
+                    },
+                    back: StencilFaceState {
+                        compare: CompareFunction::Always,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Replace,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0,
+                },
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layout: Vertex::desc(),
+            blend: Some(BlendState::REPLACE),
+            cull_mode: Some(Face::Front),
+        },
+        &[
+            &pipelines.uniforms.buffer,
+            &pipelines.fog_uniforms.buffer,
+            &pipelines.pick_uniforms.buffer,
+        ],
+        pass,
+    );
+    terrain_renderer.render(pass, camera, aspect, false);
+
+    pass.set_stencil_reference(1);
+    render_manager.render(
+        Vec::new(),
+        "Terrain Pipeline (Under Water)",
+        terrain_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: PrimitiveTopology::TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: StencilState {
+                    front: StencilFaceState {
+                        compare: CompareFunction::Always,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Replace,
+                    },
+                    back: StencilFaceState {
+                        compare: CompareFunction::Always,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Replace,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0xFF,
+                },
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layout: Vertex::desc(),
+            blend: Some(BlendState::REPLACE),
+            cull_mode: Some(Face::Front),
+        },
+        &[
+            &pipelines.uniforms.buffer,
+            &pipelines.fog_uniforms.buffer,
+            &pipelines.pick_uniforms.buffer,
+        ],
+        pass,
+    );
+    terrain_renderer.render(pass, camera, aspect, true);
+}
 fn pick_fail_safe_present_mode(
     surface: &Surface,
     adapter: &Adapter,
