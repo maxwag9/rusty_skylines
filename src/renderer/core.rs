@@ -147,31 +147,31 @@ impl RenderCore {
                 // Left shoulder
                 CrossSectionRegion {
                     width: 1.0,
-                    material_id: 1,
+                    material_id: 0,
                     height: 0.1,
                 },
                 // Left lane
                 CrossSectionRegion {
                     width: 2.5,
-                    material_id: 0,
-                    height: 0.0,
+                    material_id: 2,
+                    height: 0.001,
                 },
                 // Center line (thin for markings)
                 CrossSectionRegion {
                     width: 0.08,
-                    material_id: 2,
-                    height: 0.01,
+                    material_id: 0,
+                    height: 0.002,
                 },
                 // Right lane
                 CrossSectionRegion {
                     width: 2.5,
-                    material_id: 0,
-                    height: 0.0,
+                    material_id: 2,
+                    height: 0.001,
                 },
                 // Right shoulder
                 CrossSectionRegion {
                     width: 1.0,
-                    material_id: 1,
+                    material_id: 0,
                     height: 0.1,
                 },
             ],
@@ -263,7 +263,7 @@ impl RenderCore {
         uniform_updater.update_fog_uniforms(&self.config, view, camera.position().y);
         uniform_updater.update_sky_uniforms(astronomy.moon_phase);
         uniform_updater.update_water_uniforms();
-        uniform_updater.update_gizmo_vertices(camera.target, camera.orbit_radius);
+        uniform_updater.update_gizmo_vertices(camera.target, camera.orbit_radius, false);
 
         // Update world
         self.terrain_renderer.update(
@@ -279,8 +279,9 @@ impl RenderCore {
             .update(ui_loader, time, input_state, &self.queue, &self.size);
 
         self.road_renderer.update(
-            &self.terrain_renderer.visible,
+            &self.terrain_renderer,
             &self.device,
+            &self.queue,
             input_state,
             &self.terrain_renderer.last_picked,
         );
@@ -365,90 +366,118 @@ impl RenderCore {
             self.render_water(&mut pass);
         }
 
-        if let (Some(vertex_buffer), Some(index_buffer)) = (
-            &self.road_renderer.road_vertex_buffer,
-            &self.road_renderer.road_index_buffer,
-        ) {
-            // Ordered list of ALL possible road texture keys — the order determines layer index 0,1,2,...
-            // Example: asphalt base, markings, dirt shoulder, etc.
-            let asphalt_key = TextureCacheKey {
-                kind: MaterialKind::Asphalt,
-                params: Params {
-                    seed: 1,
-                    scale: 16.0,
-                    roughness: 0.5,
-                    _padding: 0,
-                    color_primary: [0.002, 0.002, 0.002, 1.0],
-                    color_secondary: [0.01, 0.01, 0.01, 1.0],
-                },
-                resolution: 512,
-            };
-            let concrete_key = TextureCacheKey {
-                kind: MaterialKind::Concrete,
-                params: Params {
-                    seed: 1,
-                    scale: 2.0,
-                    roughness: 1.0,
-                    _padding: 0,
-                    color_primary: [0.32, 0.30, 0.28, 1.0], // Light gray
-                    color_secondary: [0.15, 0.13, 0.10, 1.0], // Darker gray
-                },
-                resolution: 512,
-            };
-            let goo_key = TextureCacheKey {
-                kind: MaterialKind::Goo,
-                params: Params {
-                    seed: 1,
-                    scale: 3.0,
-                    roughness: 0.3,
-                    _padding: 0,
-                    color_primary: [0.05, 0.05, 0.06, 1.0], // Near black
-                    color_secondary: [0.15, 0.15, 0.18, 1.0], // Slight blue-ish sheen
-                },
-                resolution: 512,
-            };
-            let road_material_keys = vec![
-                asphalt_key,  // layer 0
-                concrete_key, // layer 1
-                goo_key,      // layer 2
-            ];
+        // Ordered list of ALL possible road texture keys — the order determines layer index 0,1,2,...
+        let concrete_key = TextureCacheKey {
+            kind: MaterialKind::Concrete,
+            params: Params {
+                seed: 1,
+                scale: 2.0,
+                roughness: 1.0,
+                _padding: 0,
+                color_primary: [0.32, 0.30, 0.28, 1.0], // Light gray
+                color_secondary: [0.15, 0.13, 0.10, 1.0], // Darker gray
+            },
+            resolution: 512,
+        };
+        let goo_key = TextureCacheKey {
+            kind: MaterialKind::Goo,
+            params: Params {
+                seed: 0,
+                scale: 3.0,
+                roughness: 0.3,
+                _padding: 0,
+                color_primary: [0.02, 0.02, 0.03, 1.0], // Near black
+                color_secondary: [0.10, 0.10, 0.12, 1.0], // Slight blue-ish sheen
+            },
+            resolution: 512,
+        };
+        let newest_asphalt_key = TextureCacheKey {
+            kind: MaterialKind::Asphalt,
+            params: Params {
+                seed: 0,
+                scale: 16.0,
+                roughness: 0.5,
+                _padding: 0,
+                color_primary: [0.004, 0.004, 0.004, 1.0],
+                color_secondary: [0.015, 0.015, 0.015, 1.0],
+            },
+            resolution: 512,
+        };
+        let worn_newest_asphalt_key = TextureCacheKey {
+            kind: MaterialKind::Asphalt,
+            params: Params {
+                seed: 1,
+                scale: 16.0,
+                roughness: 0.3,
+                _padding: 0,
+                color_primary: [0.006, 0.006, 0.006, 1.0],
+                color_secondary: [0.020, 0.020, 0.020, 1.0],
+            },
+            resolution: 512,
+        };
+        let orange_asphalt_key = TextureCacheKey {
+            kind: MaterialKind::Asphalt,
+            params: Params {
+                seed: 2,
+                scale: 16.0,
+                roughness: 0.5,
+                _padding: 0,
+                color_primary: [0.04, 0.04, 0.006, 1.0],
+                color_secondary: [0.120, 0.120, 0.120, 1.0],
+            },
+            resolution: 512,
+        };
+        let gray_asphalt_key = TextureCacheKey {
+            kind: MaterialKind::Asphalt,
+            params: Params {
+                seed: 3,
+                scale: 16.0,
+                roughness: 0.8,
+                _padding: 0,
+                color_primary: [0.02, 0.02, 0.02, 1.0],
+                color_secondary: [0.080, 0.080, 0.080, 1.0],
+            },
+            resolution: 512,
+        };
+        let road_material_keys = vec![
+            concrete_key,            // 0
+            goo_key,                 // 1
+            newest_asphalt_key,      // 2
+            worn_newest_asphalt_key, // 3
+            orange_asphalt_key,      // 4
+            gray_asphalt_key,        // 5
+        ];
 
-            // This sets the road pipeline + texture array bind group (bind group 0)
-            let road_shader_path = shader_dir().join("road.wgsl");
-            self.render_manager.render(
-                road_material_keys,
-                "Roads",
-                road_shader_path.as_path(), // file containing full vertex+fragment shader
-                PipelineOptions {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    depth_stencil: Some(DepthStencilState {
-                        format: DEPTH_FORMAT,
-                        depth_write_enabled: true,
-                        depth_compare: CompareFunction::Always,
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    msaa_samples: 4,
-                    vertex_layout: RoadVertex::layout(),
-                },
-                Some(&self.pipelines.uniforms.buffer),
-                &mut pass,
-            );
+        // This sets the road pipeline + texture array bind group (bind group 0)
+        let road_shader_path = shader_dir().join("road.wgsl");
+        self.render_manager.render(
+            road_material_keys,
+            "Roads",
+            road_shader_path.as_path(), // file containing full vertex+fragment shader
+            PipelineOptions {
+                topology: PrimitiveTopology::TriangleList,
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::Less,
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                msaa_samples: self.msaa_samples,
+                vertex_layout: RoadVertex::layout(),
+            },
+            Some(&self.pipelines.uniforms.buffer),
+            &mut pass,
+        );
 
-            pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
-            for draw in &self.road_renderer.road_gpu_storage.draw_calls {
-                let indices = draw.index_range.clone(); // start..end in the global index buffer
-                let index_count = indices.end - indices.start;
-
-                // Correct wgpu draw_indexed call (3 arguments: indices range, base_vertex, instances range)
-                pass.draw_indexed(
-                    indices, // Range<u32>: the slice of the index buffer to draw (length = index_count)
-                    0,       // Added to every index value fetched from the index buffer
-                    0..1,    // One instance (no instancing)
-                );
+        for chunk_id in &self.road_renderer.visible_draw_list {
+            if let Some(gpu) = self.road_renderer.chunk_gpu.get(chunk_id) {
+                pass.set_vertex_buffer(0, gpu.vertex.slice(..));
+                pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
+                pass.draw_indexed(0..gpu.index_count, 0, 0..1);
             }
         }
+
         // Gizmo
         self.render_gizmo(&mut pass);
 

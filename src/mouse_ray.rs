@@ -21,7 +21,7 @@ pub struct PickUniform {
 }
 
 #[inline(always)]
-fn height_bilinear(grid: &ChunkHeightGrid, x: f32, z: f32) -> f32 {
+pub fn height_bilinear(grid: &ChunkHeightGrid, x: f32, z: f32) -> f32 {
     let eps = 1e-6 * grid.cell;
 
     let min_x = grid.base_x;

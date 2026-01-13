@@ -7,7 +7,9 @@ use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use wgpu::{BindGroup, Buffer, CompareFunction, DepthStencilState, Sampler, VertexBufferLayout};
+use wgpu::{
+    BindGroup, Buffer, CompareFunction, DepthStencilState, Face, Sampler, VertexBufferLayout,
+};
 
 const FULLSCREEN_SHADER_SOURCE: &str = r#"
 struct VertexOutput {
@@ -340,7 +342,7 @@ impl PipelineManager {
                 topology: options.topology,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
+                cull_mode: Some(Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,

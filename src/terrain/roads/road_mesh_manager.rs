@@ -7,7 +7,8 @@
 //! - Bitwise identical shared vertices at chunk seams
 //! - World-space UVs with deterministic arc-length parameterization
 
-use crate::terrain::roads::roads::{RoadManager, Segment};
+use crate::renderer::world_renderer::TerrainRenderer;
+use crate::terrain::roads::roads::{RoadManager, Segment, SegmentId};
 use std::collections::HashMap;
 
 /// Number of samples for arc-length estimation
@@ -87,7 +88,7 @@ pub fn chunk_x_range(chunk_id: ChunkId) -> (f32, f32) {
     (min_x, min_x + 64.0)
 }
 
-/// You might also want chunk Z range
+/// You might also want chunk Z range (unused)
 pub fn chunk_z_range(chunk_id: ChunkId) -> (f32, f32) {
     let (_cx, cz) = chunk_id_to_coord(chunk_id);
     let min_z = cz as f32 * 64.0;
@@ -140,6 +141,12 @@ pub struct CrossSectionRegion {
     pub width: f32,
     pub height: f32,
     pub material_id: u32,
+}
+pub struct LateralStrip {
+    pub left: f32,
+    pub right: f32,
+    pub material_id: u32,
+    pub height: f32,
 }
 
 /// Cross-section definition with multiple lateral regions.
@@ -198,6 +205,28 @@ impl CrossSection {
             samples.push((cumulative, last.material_id, last.height));
         }
         samples
+    }
+    pub fn lateral_strips(&self) -> Vec<LateralStrip> {
+        let mut strips = Vec::with_capacity(self.regions.len());
+        let mut x = self.left_offset();
+
+        for r in &self.regions {
+            let left = x;
+            let right = x + r.width;
+            strips.push(LateralStrip {
+                left,
+                right,
+                material_id: r.material_id,
+                height: r.height,
+            });
+            x = right;
+        }
+
+        strips
+    }
+
+    pub fn half_width(&self) -> f32 {
+        self.left_offset().abs() + self.regions.iter().map(|r| r.width).sum::<f32>()
     }
 }
 
@@ -270,6 +299,7 @@ impl Default for MeshConfig {
 pub struct RoadMeshManager {
     cache: HashMap<ChunkId, ChunkMesh>,
     config: MeshConfig,
+    pub segment_ring_cache: HashMap<SegmentId, Vec<Ring>>,
 }
 
 impl RoadMeshManager {
@@ -277,7 +307,20 @@ impl RoadMeshManager {
         Self {
             cache: HashMap::new(),
             config,
+            segment_ring_cache: Default::default(),
         }
+    }
+
+    pub fn rings_for_segment(
+        &mut self,
+        manager: &RoadManager,
+        seg_id: SegmentId,
+        segment: &Segment,
+        max_edge_len: f32,
+    ) -> &Vec<Ring> {
+        self.segment_ring_cache
+            .entry(seg_id)
+            .or_insert_with(|| generate_rings_for_segment(segment, manager, max_edge_len))
     }
 
     pub fn get_chunk_mesh(&self, chunk_id: ChunkId) -> Option<&ChunkMesh> {
@@ -299,6 +342,7 @@ impl RoadMeshManager {
         cross_section: &CrossSection,
         manager: &RoadManager,
     ) -> bool {
+        //if manager.segment_ids_touching_chunk(chunk_id).len() == 0 {return false}
         match self.cache.get(&chunk_id) {
             None => true,
             Some(mesh) => {
@@ -311,11 +355,13 @@ impl RoadMeshManager {
     /// Update chunk mesh and return reference to cached result
     pub fn update_chunk_mesh(
         &mut self,
+        terrain_renderer: &TerrainRenderer,
         chunk_id: ChunkId,
         cross_section: &CrossSection,
         manager: &RoadManager,
     ) -> &ChunkMesh {
-        let mesh = build_chunk_mesh(
+        let mesh = self.build_chunk_mesh(
+            terrain_renderer,
             chunk_id,
             cross_section,
             manager,
@@ -329,6 +375,204 @@ impl RoadMeshManager {
 
     pub fn config(&self) -> &MeshConfig {
         &self.config
+    }
+    /// Build chunk mesh from topology. Guarantees deterministic output and seam consistency.
+    pub fn build_chunk_mesh(
+        &mut self,
+        terrain_renderer: &TerrainRenderer,
+        chunk_id: ChunkId,
+        cross_section: &CrossSection,
+        manager: &RoadManager,
+        max_edge_len: f32,
+        uv_scale_u: f32,
+        uv_scale_v: f32,
+    ) -> ChunkMesh {
+        let mut segment_ids = manager.segment_ids_touching_chunk(chunk_id);
+        segment_ids.sort_unstable();
+
+        let strips = cross_section.lateral_strips();
+        let half_width = cross_section.half_width();
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+
+        for seg_id in segment_ids {
+            let segment = manager.segment(seg_id);
+            if !segment.enabled {
+                continue;
+            }
+
+            let all_rings = self.rings_for_segment(manager, seg_id, segment, max_edge_len);
+            if all_rings.len() < 2 {
+                continue;
+            }
+
+            // Determine included rings
+            let mut included = Vec::new();
+            for i in 0..all_rings.len() {
+                let r = &all_rings[i];
+                let in_chunk = ring_in_chunk(r, chunk_id);
+                let adj_prev = i > 0 && quad_intersects_chunk(&all_rings[i - 1], r, chunk_id);
+                let adj_next = i + 1 < all_rings.len()
+                    && quad_intersects_chunk(r, &all_rings[i + 1], chunk_id);
+
+                if in_chunk || adj_prev || adj_next {
+                    if included.last().copied() != Some(i) {
+                        included.push(i);
+                    }
+                }
+            }
+
+            if included.len() < 2 {
+                continue;
+            }
+
+            const CLEARANCE: f32 = 0.04_f32;
+
+            // === HORIZONTAL STRIP SURFACES ===
+            for strip in &strips {
+                let base_vertex = vertices.len() as u32;
+
+                // Vertices
+                for &ring_idx in &included {
+                    let ring = &all_rings[ring_idx];
+
+                    let txz = glam::Vec3::new(ring.tangent[0], 0.0, ring.tangent[1]).normalize();
+                    let lateral = glam::Vec3::new(-txz.z, 0.0, txz.x);
+                    let normal = lateral.cross(txz).normalize();
+
+                    for &lat in &[strip.left, strip.right] {
+                        let terrain_y =
+                            terrain_renderer.get_height_at([ring.position[0], ring.position[2]]);
+
+                        let pos = glam::Vec3::new(
+                            ring.position[0],
+                            terrain_y + strip.height + CLEARANCE,
+                            ring.position[2],
+                        ) + lateral * lat;
+
+                        let u = ring.arc_length * uv_scale_u;
+                        let v = (lat + half_width) * uv_scale_v;
+
+                        vertices.push(RoadVertex {
+                            position: pos.to_array(),
+                            normal: normal.to_array(),
+                            uv: [u, v],
+                            material_id: strip.material_id,
+                        });
+                    }
+                }
+
+                // Indices
+                let ring_count = included.len();
+                for i in 0..ring_count - 1 {
+                    let i0 = base_vertex + (i * 2) as u32;
+                    let i1 = i0 + 1;
+                    let i2 = i0 + 2;
+                    let i3 = i0 + 3;
+
+                    indices.extend_from_slice(&[i0, i1, i2, i1, i3, i2]);
+                }
+            }
+
+            // === VERTICAL CONNECTING FACES (CURBS) ===
+            // Connect strips with different heights using vertical faces
+            for i in 0..strips.len() - 1 {
+                let current_strip = &strips[i];
+                let next_strip = &strips[i + 1];
+
+                let height_diff = current_strip.height - next_strip.height;
+
+                // Skip if heights are essentially equal
+                if height_diff.abs() < 0.0001 {
+                    continue;
+                }
+
+                // Lateral position where the two strips meet
+                let lat = current_strip.right; // equals next_strip.left
+
+                let higher_height = current_strip.height.max(next_strip.height);
+                let lower_height = current_strip.height.min(next_strip.height);
+
+                // Use material from the higher strip (your rule)
+                let material_id = if current_strip.height >= next_strip.height {
+                    current_strip.material_id
+                } else {
+                    next_strip.material_id
+                };
+
+                let base_vertex = vertices.len() as u32;
+
+                // Generate vertices for the vertical face
+                for &ring_idx in &included {
+                    let ring = &all_rings[ring_idx];
+
+                    let txz = glam::Vec3::new(ring.tangent[0], 0.0, ring.tangent[1]).normalize();
+                    let lateral_dir = glam::Vec3::new(-txz.z, 0.0, txz.x);
+
+                    // Normal points towards the lower side (so curb face is visible from road)
+                    let normal = if height_diff > 0.0 {
+                        lateral_dir // current/left is higher, normal points right
+                    } else {
+                        -lateral_dir // next/right is higher, normal points left
+                    };
+
+                    let terrain_y =
+                        terrain_renderer.get_height_at([ring.position[0], ring.position[2]]);
+                    let base_pos =
+                        glam::Vec3::new(ring.position[0], terrain_y + CLEARANCE, ring.position[2])
+                            + lateral_dir * lat;
+
+                    let pos_high = base_pos + glam::Vec3::Y * higher_height;
+                    let pos_low = base_pos + glam::Vec3::Y * lower_height;
+
+                    let u = ring.arc_length * uv_scale_u;
+                    let v_height = (higher_height - lower_height) * uv_scale_v;
+
+                    // High vertex
+                    vertices.push(RoadVertex {
+                        position: pos_high.to_array(),
+                        normal: normal.to_array(),
+                        uv: [u, 0.0],
+                        material_id,
+                    });
+                    // Low vertex
+                    vertices.push(RoadVertex {
+                        position: pos_low.to_array(),
+                        normal: normal.to_array(),
+                        uv: [u, v_height],
+                        material_id,
+                    });
+                }
+
+                // Generate indices for the vertical face
+                let ring_count = included.len();
+                for j in 0..ring_count - 1 {
+                    let i0 = base_vertex + (j * 2) as u32; // ring j, high
+                    let i1 = i0 + 1; // ring j, low
+                    let i2 = i0 + 2; // ring j+1, high
+                    let i3 = i0 + 3; // ring j+1, low
+
+                    // Winding order based on which side is higher
+                    // Face should be visible from the lower side
+                    if height_diff > 0.0 {
+                        // Left is higher, face visible from right
+                        indices.extend_from_slice(&[i0, i1, i2, i2, i1, i3]);
+                    } else {
+                        // Right is higher, face visible from left
+                        indices.extend_from_slice(&[i0, i2, i1, i1, i2, i3]);
+                    }
+                }
+            }
+        }
+
+        let topo_version = compute_topo_version(chunk_id, cross_section, manager);
+
+        ChunkMesh {
+            vertices,
+            indices,
+            topo_version,
+        }
     }
 }
 
@@ -795,119 +1039,6 @@ pub fn compute_topo_version(
 // ============================================================================
 // Mesh building
 // ============================================================================
-
-/// Build chunk mesh from topology. Guarantees deterministic output and seam consistency.
-pub fn build_chunk_mesh(
-    chunk_id: ChunkId,
-    cross_section: &CrossSection,
-    manager: &RoadManager,
-    max_edge_len: f32,
-    uv_scale_u: f32,
-    uv_scale_v: f32,
-) -> ChunkMesh {
-    let mut segment_ids = manager.segment_ids_touching_chunk(chunk_id);
-    segment_ids.sort_unstable();
-
-    let lateral_samples = cross_section.lateral_samples();
-    let half_width = lateral_samples
-        .iter()
-        .map(|(lat, _, _)| lat.abs())
-        .fold(0.0_f32, f32::max);
-    let num_laterals = lateral_samples.len();
-    // Pre-allocate with estimates
-    let est_rings = 50;
-    let est_cap = segment_ids.len() * est_rings * num_laterals;
-    let mut vertices: Vec<RoadVertex> = Vec::with_capacity(est_cap);
-    let mut indices: Vec<u32> = Vec::with_capacity(est_cap * 6);
-
-    for seg_id in segment_ids {
-        let segment = manager.segment(seg_id); //else { continue };
-        if !segment.enabled {
-            continue;
-        }
-
-        let all_rings = generate_rings_for_segment(segment, manager, max_edge_len);
-        if all_rings.len() < 2 {
-            continue;
-        }
-
-        // Determine which rings to include for this chunk
-        let mut included: Vec<usize> = Vec::new();
-        for (i, ring) in all_rings.iter().enumerate() {
-            let in_chunk = ring_in_chunk(ring, chunk_id);
-            let adj_prev = i > 0 && quad_intersects_chunk(&all_rings[i - 1], ring, chunk_id);
-            let adj_next =
-                i + 1 < all_rings.len() && quad_intersects_chunk(ring, &all_rings[i + 1], chunk_id);
-
-            if in_chunk || adj_prev || adj_next {
-                if included.last().copied() != Some(i) {
-                    included.push(i);
-                }
-            }
-        }
-
-        if included.len() < 2 {
-            continue;
-        }
-
-        let base_vertex = vertices.len() as u32;
-
-        // Generate vertices for included rings
-        for &ring_idx in &included {
-            let ring = &all_rings[ring_idx];
-            for &(lat_offset, mat_id, height) in &lateral_samples {
-                let x = ring.position[0] + ring.lateral[0] * lat_offset;
-                let y = ring.position[1] + height;
-                let z = ring.position[2] + ring.lateral[1] * lat_offset;
-
-                let lateral_3d = glam::Vec3::new(ring.lateral[0], 0.0, ring.lateral[1]);
-
-                let tangent_3d = glam::Vec3::from(ring.tangent);
-
-                let normal = lateral_3d.cross(tangent_3d).normalize().to_array();
-
-                let u = ring.arc_length * uv_scale_u;
-                let v = (lat_offset + half_width) * uv_scale_v;
-
-                vertices.push(RoadVertex {
-                    position: [x, y, z],
-                    normal,
-                    uv: [u, v],
-                    material_id: mat_id,
-                });
-            }
-        }
-
-        // Generate indices (CCW winding)
-        let ring_count = included.len();
-        for i in 0..(ring_count - 1) {
-            for j in 0..(num_laterals - 1) {
-                let v0 = base_vertex + (i * num_laterals + j) as u32;
-                let v1 = base_vertex + (i * num_laterals + j + 1) as u32;
-                let v2 = base_vertex + ((i + 1) * num_laterals + j) as u32;
-                let v3 = base_vertex + ((i + 1) * num_laterals + j + 1) as u32;
-
-                // First triangle
-                indices.push(v0);
-                indices.push(v2);
-                indices.push(v1);
-
-                // Second triangle
-                indices.push(v1);
-                indices.push(v2);
-                indices.push(v3);
-            }
-        }
-    }
-
-    let topo_version = compute_topo_version(chunk_id, cross_section, manager);
-    //println!("{:?}", vertices); //always empty...
-    ChunkMesh {
-        vertices,
-        indices,
-        topo_version,
-    }
-}
 
 // ============================================================================
 // Tests

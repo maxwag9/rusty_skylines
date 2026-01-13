@@ -128,7 +128,7 @@ impl TerrainRenderer {
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
-            pick_radius_m: 100.0,
+            pick_radius_m: 1.0,
             last_picked: None,
 
             benchmark: Benchmark::default(),
@@ -724,6 +724,33 @@ impl TerrainRenderer {
 
         queue.write_buffer(pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
+    pub fn get_height_at(&self, pos: [f32; 2]) -> f32 {
+        let chunk_size = self.chunk_size as f32;
+
+        let [cx, cz] = pos_to_chunk_coord(pos, chunk_size);
+
+        let chunk = match self.chunks.get(&(cx, cz)) {
+            Some(c) => c,
+            None => return 0.0,
+        };
+
+        let [lx, lz] = pos_to_chunk_local(pos, chunk_size);
+
+        height_bilinear(&chunk.height_grid, lx, lz)
+    }
+}
+
+fn pos_to_chunk_coord(pos: [f32; 2], chunk_size: f32) -> [i32; 2] {
+    [
+        (pos[0] / chunk_size).floor() as i32,
+        (pos[1] / chunk_size).floor() as i32,
+    ]
+}
+fn pos_to_chunk_local(pos: [f32; 2], chunk_size: f32) -> [f32; 2] {
+    [
+        pos[0] - (pos[0] / chunk_size).floor() * chunk_size,
+        pos[1] - (pos[1] / chunk_size).floor() * chunk_size,
+    ]
 }
 
 #[derive(Clone, Copy)]

@@ -5,8 +5,8 @@ layers:
     elements:
       - !Text
         id: play_text
-        x: 0.506488
-        y: 0.49489677
+        x: 0.8275116
+        y: 0.92290735
         px: 0.016374864
         color:
           - 1.0

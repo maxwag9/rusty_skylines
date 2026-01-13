@@ -54,14 +54,14 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let speed = calc_move_speed(&resources.input);
 
-    let decay_rate = 6.0;
+    let decay_rate = 3.0;
     let dist = camera.orbit_radius;
-    let speed_factor = (dist / 10.0).clamp(50.0, 100.0);
+    let speed_factor = (dist / 10.0).max(0.1);
 
     if wish.length_squared() > 0.0 {
         wish = wish.normalize();
         let target_vel = wish * speed * speed_factor;
-        cam_ctrl.velocity = cam_ctrl.velocity.lerp(target_vel, 1.0 - (-10.0 * dt).exp());
+        cam_ctrl.velocity = cam_ctrl.velocity.lerp(target_vel, 1.0 - (-15.0 * dt).exp());
     } else {
         let k = (1.0 - decay_rate * dt).max(0.0);
         cam_ctrl.velocity *= k;
@@ -70,10 +70,19 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         }
     }
 
-    if cam_ctrl.zoom_velocity.abs() > 0.0001 {
-        camera.orbit_radius += cam_ctrl.zoom_velocity * dt * 1.5;
-        cam_ctrl.zoom_velocity *= (1.0 - cam_ctrl.zoom_damping * dt).max(0.0);
-        camera.orbit_radius = camera.orbit_radius.clamp(15.0, 10_000.0);
+    if cam_ctrl.zoom_velocity.abs() > 0.00001 {
+        let r = camera.orbit_radius;
+
+        // Adaptive zoom step
+        let base_step = 0.05; // meters, allows crawling near 1 m
+        let scale_step = r * 0.25; // exponential feel at distance
+        let zoom_step = (base_step + scale_step) * cam_ctrl.zoom_velocity * dt;
+
+        camera.orbit_radius = (r + zoom_step).clamp(1.0, 100_000.0);
+
+        // Radius-aware damping
+        let damping = cam_ctrl.zoom_damping * (1.0 + (r / 500.0).sqrt());
+        cam_ctrl.zoom_velocity *= (1.0 - damping * dt).max(0.0);
     } else {
         cam_ctrl.zoom_velocity = 0.0;
     }
@@ -92,7 +101,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         camera,
         cam_ctrl,
         &resources.renderer.core.terrain_renderer.terrain_gen,
-        1.0,
+        0.1,
     );
     resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.terrain_renderer);
     // SMOOTH target → camera

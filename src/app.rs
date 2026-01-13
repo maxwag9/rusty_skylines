@@ -335,8 +335,8 @@ impl ApplicationHandler for App {
                             let radius = world.camera(cam).unwrap().orbit_radius;
 
                             if let Some(controller) = world.camera_controller_mut(cam) {
-                                let zoom_factor = 100.0;
-                                controller.zoom_velocity -= scroll.y * zoom_factor * radius.sqrt();
+                                let zoom_factor = 4.5;
+                                controller.zoom_velocity -= scroll.y * zoom_factor;
                             }
                         }
                     }
@@ -370,6 +370,12 @@ impl ApplicationHandler for App {
                         time_speed = 8.0
                     } else if resources.input.action_down("Speed up Time 2x") {
                         time_speed = 2.0
+                    } else if resources.input.action_down("Reverse Time 20x") {
+                        time_speed = -20.0
+                    } else if resources.input.action_down("Reverse up Time 8x") {
+                        time_speed = -8.0
+                    } else if resources.input.action_down("Reverse up Time 2x") {
+                        time_speed = -2.0
                     }
                     resources
                         .ui_loader

@@ -107,9 +107,20 @@ impl<'a> UniformUpdater<'a> {
         );
     }
 
-    pub fn update_gizmo_vertices(&self, target: glam::Vec3, orbit_radius: f32) {
+    pub fn update_gizmo_vertices(
+        &self,
+        target: glam::Vec3,
+        orbit_radius: f32,
+        scale_with_orbit: bool,
+    ) {
         let t = target;
-        let s = orbit_radius * 0.2;
+
+        // 1 m per axis or radius-scaled gizmo
+        let s = if scale_with_orbit {
+            orbit_radius * 0.2
+        } else {
+            1.0
+        };
 
         let axes = [
             LineVtx {

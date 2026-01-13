@@ -13,10 +13,10 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Self {
         Self {
-            target: Vec3::new(0.0, 100.0, 0.0),
-            orbit_radius: 100.0,
-            yaw: -45f32.to_radians(),
-            pitch: 20f32.to_radians(),
+            target: Vec3::new(0.0, 10.0, 0.0),
+            orbit_radius: 10.0,
+            yaw: 60f32.to_radians(),
+            pitch: 25f32.to_radians(),
         }
     }
 
@@ -38,7 +38,7 @@ impl Camera {
 
         let view = glam::Mat4::look_at_rh(eye, self.target, Vec3::Y);
 
-        let proj = glam::Mat4::perspective_rh(80f32.to_radians(), aspect, 10.0, 50_000.0);
+        let proj = glam::Mat4::perspective_rh(80f32.to_radians(), aspect, 0.5, 50_000.0);
 
         let view_proj = proj * view;
 
@@ -110,7 +110,7 @@ pub fn resolve_pitch_by_search(
         max_terrain_y = max_terrain_y.max(terrain_y);
     }
 
-    let min_clearance = 20.0; // small extra buffer
+    let min_clearance = 1.0; // small extra buffer
     let desired_y = max_terrain_y + min_clearance;
 
     let dy = desired_y - target.y;
