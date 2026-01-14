@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use wgpu::util::DeviceExt;
-use wgpu::{Device, Queue, TextureView};
+use wgpu::{Device, Queue, TextureDimension, TextureView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialKind {
@@ -98,7 +98,7 @@ pub struct TextureCacheKey {
 
 struct CachedTexture {
     _texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    view: TextureView,
 }
 
 struct PipelineEntry {
@@ -221,17 +221,19 @@ impl ProceduralTextureManager {
             let entry = self.pipelines.get(&key.kind).unwrap();
             (entry.pipeline.clone(), entry.bind_group_layout.clone())
         };
-
+        let size = wgpu::Extent3d {
+            width: key.resolution,
+            height: key.resolution,
+            depth_or_array_layers: 1,
+        };
+        let dimension = TextureDimension::D2;
+        let mip_count = size.max_mips(dimension);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d {
-                width: key.resolution,
-                height: key.resolution,
-                depth_or_array_layers: 1,
-            },
+            size,
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+            dimension,
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],

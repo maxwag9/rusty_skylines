@@ -112,11 +112,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let grass_pattern = h_fine * 0.55 + h_coarse * 1.85;
 
     // Simulate light/shadow variation between grass blades
-    let shade = mix(0.78, 1.18, grass_pattern);
+    let shade = mix(0.58, 1.28, grass_pattern);
     base_color *= mix(1.0, shade, grass_amount);
 
     // Subtle green boost for lush grass look
-    base_color.g *= 1.0 + grass_amount * 0.12;
+    base_color.g *= 1.0 + grass_amount * 0.25;
     // ======================================
 
     let dist = distance(in.world_pos, uniforms.camera_pos);

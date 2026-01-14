@@ -2,14 +2,10 @@
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer, VisibleChunk};
 use crate::resources::InputState;
 use crate::terrain::roads::road_editor::RoadEditor;
-use crate::terrain::roads::road_mesh_manager::{
-    ChunkId, CrossSection, MeshConfig, RoadMeshManager, RoadVertex,
-};
+use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
 use crate::terrain::roads::roads::{RoadManager, apply_commands};
 
-use crate::terrain::roads::road_preview::{
-    PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState, build_preview_mesh,
-};
+use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use wgpu::util::DeviceExt;
@@ -21,7 +17,6 @@ pub struct ChunkGpuMesh {
     pub index_count: u32,
     pub topo_version: u64,
 }
-
 pub struct RoadRenderSubsystem {
     pub mesh_manager: RoadMeshManager,
     pub mesh_renderer: RoadMeshRenderer,
@@ -30,7 +25,6 @@ pub struct RoadRenderSubsystem {
     pub chunk_gpu: HashMap<ChunkId, ChunkGpuMesh>,
     pub visible_draw_list: Vec<ChunkId>,
 
-    pub cross_section: CrossSection,
     pub material_array: MaterialArray,
 
     pub visible_chunks: Vec<ChunkId>,
@@ -50,14 +44,13 @@ pub struct RoadRenderSubsystem {
     pub road_appearance: RoadAppearanceGpu,
 }
 impl RoadRenderSubsystem {
-    pub fn new(cross_section: CrossSection, device: &Device) -> Self {
+    pub fn new(device: &Device) -> Self {
         Self {
             mesh_manager: RoadMeshManager::new(MeshConfig::default()),
             mesh_renderer: RoadMeshRenderer::new(),
             road_gpu_storage: RoadGpuStorage::new(),
             chunk_gpu: Default::default(),
             visible_draw_list: vec![],
-            cross_section,
             material_array: MaterialArray::new(),
             visible_chunks: Vec::new(),
             road_manager: RoadManager::new(),
@@ -91,22 +84,22 @@ impl RoadRenderSubsystem {
         // === NEW: Capture preview state before applying commands ===
         self.preview_state.ingest(&road_commands);
         self.road_appearance
-            .update_preview_buffer(device, queue, &self.preview_state);
+            .update_preview_buffer(queue, &self.preview_state);
         // Apply real topology commands (preview commands are no-ops)
         if !road_commands.is_empty() {
             //println!("{:?}", road_commands);
             let _results = apply_commands(
                 terrain_renderer,
                 &mut self.mesh_manager,
-                &self.cross_section,
                 &mut self.road_manager,
                 &road_commands,
             );
         }
 
-        // === NEW: Build and upload preview mesh ===
-        let preview_mesh =
-            build_preview_mesh(terrain_renderer, &self.preview_state, &self.cross_section);
+        let preview_mesh = self
+            .mesh_manager
+            .build_preview_mesh(terrain_renderer, &self.preview_state);
+
         self.preview_gpu.upload(device, &preview_mesh);
 
         // === Existing chunk mesh update logic ===
@@ -115,19 +108,13 @@ impl RoadRenderSubsystem {
         for v in &terrain_renderer.visible {
             let chunk_id = v.id;
 
-            let needs_rebuild = self.mesh_manager.chunk_needs_update(
-                chunk_id,
-                &self.cross_section,
-                &self.road_manager,
-            );
+            let needs_rebuild = self
+                .mesh_manager
+                .chunk_needs_update(chunk_id, &self.road_manager);
 
             let mesh = if needs_rebuild {
-                self.mesh_manager.update_chunk_mesh(
-                    terrain_renderer,
-                    chunk_id,
-                    &self.cross_section,
-                    &self.road_manager,
-                )
+                self.mesh_manager
+                    .update_chunk_mesh(terrain_renderer, chunk_id, &self.road_manager)
             } else {
                 match self.mesh_manager.get_chunk_mesh(chunk_id) {
                     Some(m) => m,

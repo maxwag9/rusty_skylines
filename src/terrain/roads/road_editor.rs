@@ -1,16 +1,18 @@
 use crate::renderer::world_renderer::PickedPoint;
 use crate::resources::InputState;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, HorizontalProfile};
+use crate::terrain::roads::road_mesh_manager::{
+    ChunkId, ConnectedSegmentInfo, CrossSection, HorizontalProfile, SegmentGeometry,
+};
 use crate::terrain::roads::roads::{
     LaneId, NodeId, RoadCommand, RoadManager, SegmentId, StructureType, VerticalProfile,
     nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
 use glam::Vec3;
 
-const NODE_SNAP_RADIUS: f32 = 6.0;
-const LANE_SNAP_RADIUS: f32 = 10.0;
+const NODE_SNAP_RADIUS: f32 = 8.0;
+const LANE_SNAP_RADIUS: f32 = 8.0;
 const ENDPOINT_T_EPS: f32 = 0.02;
-const MIN_SEGMENT_LENGTH: f32 = 0.25;
+const MIN_SEGMENT_LENGTH: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoadType {
@@ -44,11 +46,11 @@ impl RoadType {
         StructureType::Surface
     }
 
-    pub fn lanes_each_direction(self) -> u32 {
+    pub fn lanes_each_direction(self) -> (usize, usize) {
         match self {
-            RoadType::SmallRoad => 1,
-            RoadType::MediumRoad => 2,
-            RoadType::Highway => 3,
+            RoadType::SmallRoad => (1, 1),
+            RoadType::MediumRoad => (2, 2),
+            RoadType::Highway => (3, 3),
         }
     }
 
@@ -100,6 +102,15 @@ pub struct NodePreview {
     pub world_pos: Vec3,
     pub result: NodePreviewResult,
     pub is_valid: bool,
+    pub connected_segments: Vec<ConnectedSegmentInfo>,
+    pub incoming_lanes: Vec<LaneId>,
+    pub outgoing_lanes: Vec<LaneId>,
+}
+
+impl NodePreview {
+    pub(crate) fn lane_counts(&self) -> (usize, usize) {
+        (self.incoming_lanes.len(), self.outgoing_lanes.len())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,7 +142,7 @@ pub struct SegmentPreview {
     pub would_split_end: Option<SplitInfo>,
     pub would_merge_start: Option<NodeId>,
     pub would_merge_end: Option<NodeId>,
-    pub lane_count_each_dir: u32,
+    pub lane_count_each_dir: (usize, usize),
     pub estimated_length: f32,
 }
 
@@ -360,7 +371,7 @@ impl RoadEditor {
         place_pressed: bool,
         output: &mut Vec<RoadEditorCommand>,
     ) {
-        let node_preview = self.build_node_preview_from_snap(snap);
+        let node_preview = self.build_node_preview_from_snap(manager, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed {
@@ -418,7 +429,7 @@ impl RoadEditor {
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
 
-        let node_preview = self.build_node_preview_from_snap(snap);
+        let node_preview = self.build_node_preview_from_snap(manager, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed && is_valid {
@@ -526,7 +537,7 @@ impl RoadEditor {
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
 
-        let node_preview = self.build_node_preview_from_snap(snap);
+        let node_preview = self.build_node_preview_from_snap(manager, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed && is_valid {
@@ -643,23 +654,82 @@ impl RoadEditor {
         }
     }
 
-    fn build_node_preview_from_snap(&self, snap: &SnapResult) -> NodePreview {
-        let result = match snap.kind {
-            SnapKind::Node { id } => NodePreviewResult::MergedIntoExisting(id),
-            SnapKind::Lane { t, .. } => {
+    fn build_node_preview_from_snap(
+        &self,
+        manager: &RoadManager,
+        snap: &SnapResult,
+    ) -> NodePreview {
+        let (result, incoming_lanes, outgoing_lanes, connected_segments) = match snap.kind {
+            SnapKind::Node { id: node_id } => {
+                let (in_lanes, out_lanes) = gather_node_lanes(manager, node_id);
+                let connected = manager.segments_connected_to_node(node_id);
+                let mut connections = Vec::new();
+                for segment_id in connected {
+                    let segment = manager.segment(segment_id);
+                    let Some(geom) = SegmentGeometry::from_segment(segment_id, segment, manager)
+                    else {
+                        continue;
+                    };
+                    let cross_section = CrossSection::from_segment(manager, segment);
+
+                    let is_start = segment.start() == node_id;
+                    let (t_at_node, direction_sign) =
+                        if is_start { (0.0, 1.0) } else { (1.0, -1.0) };
+
+                    let tangent = geom.tangent_xz(t_at_node);
+                    let direction = [tangent[0] * direction_sign, tangent[1] * direction_sign];
+
+                    connections.push(ConnectedSegmentInfo {
+                        direction_xz: direction,
+                        tangent_xz: tangent,
+                        segment_id: None,
+                        cross_section,
+                        node_is_start: is_start,
+                    });
+                }
+                (
+                    NodePreviewResult::MergedIntoExisting(node_id),
+                    in_lanes,
+                    out_lanes,
+                    connections,
+                )
+            }
+
+            SnapKind::Lane { lane_id, t } => {
                 if t < ENDPOINT_T_EPS || t > 1.0 - ENDPOINT_T_EPS {
-                    NodePreviewResult::NewNode
+                    // Endpoint snap behaves like free placement
+                    (
+                        NodePreviewResult::NewNode,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
                 } else {
-                    NodePreviewResult::SplitIntersection
+                    let (in_lanes, out_lanes) = gather_split_lanes(manager, lane_id);
+                    (
+                        NodePreviewResult::SplitIntersection,
+                        in_lanes,
+                        out_lanes,
+                        Vec::new(),
+                    )
                 }
             }
-            SnapKind::Free => NodePreviewResult::NewNode,
+
+            SnapKind::Free => (
+                NodePreviewResult::NewNode,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
         };
 
         NodePreview {
             world_pos: snap.world_pos,
             result,
             is_valid: true,
+            connected_segments,
+            incoming_lanes,
+            outgoing_lanes,
         }
     }
 
@@ -764,7 +834,7 @@ impl RoadEditor {
             end: end_id,
             structure: self.road_type.structure(),
             horizontal_profile: HorizontalProfile::Linear,
-            vertical_profile: VerticalProfile::Linear {
+            vertical_profile: VerticalProfile::EndPoints {
                 start_y: start_pos.y,
                 end_y: end_pos.y,
             },
@@ -843,7 +913,7 @@ impl RoadEditor {
                 end: seg_end_id,
                 structure: self.road_type.structure(),
                 horizontal_profile: HorizontalProfile::Linear,
-                vertical_profile: VerticalProfile::Linear {
+                vertical_profile: VerticalProfile::EndPoints {
                     start_y: seg_start_pos.y,
                     end_y: seg_end_pos.y,
                 },
@@ -956,7 +1026,7 @@ impl RoadEditor {
             end: new_node_id,
             structure,
             horizontal_profile: HorizontalProfile::Linear,
-            vertical_profile: VerticalProfile::Linear {
+            vertical_profile: VerticalProfile::EndPoints {
                 start_y: y_a,
                 end_y: split_pos.y,
             },
@@ -968,7 +1038,7 @@ impl RoadEditor {
             end: b_id,
             structure,
             horizontal_profile: HorizontalProfile::Linear,
-            vertical_profile: VerticalProfile::Linear {
+            vertical_profile: VerticalProfile::EndPoints {
                 start_y: split_pos.y,
                 end_y: y_b,
             },
@@ -1060,13 +1130,13 @@ impl RoadEditor {
         base_cost: f32,
         chunk_id: ChunkId,
     ) {
-        let lanes_each_dir = self.road_type.lanes_each_direction();
+        let (left_lanes, right_lanes) = self.road_type.lanes_each_direction();
         let speed = self.road_type.speed_limit();
         let capacity = self.road_type.capacity();
         let mask = self.road_type.vehicle_mask();
         let cost = base_cost.max(0.1);
 
-        for _ in 0..lanes_each_dir {
+        for _ in 0..right_lanes {
             cmds.push(RoadCommand::AddLane {
                 from: start,
                 to: end,
@@ -1079,7 +1149,7 @@ impl RoadEditor {
             });
         }
 
-        for _ in 0..lanes_each_dir {
+        for _ in 0..left_lanes {
             cmds.push(RoadCommand::AddLane {
                 from: end,
                 to: start,
@@ -1125,4 +1195,27 @@ fn polyline_length(points: &[Vec3]) -> f32 {
 
 fn compute_curve_segment_count(arc_length: f32) -> usize {
     ((arc_length / 6.0).ceil() as usize).clamp(4, 32)
+}
+
+fn gather_node_lanes(manager: &RoadManager, node_id: NodeId) -> (Vec<LaneId>, Vec<LaneId>) {
+    let Some(node) = manager.node(node_id) else {
+        return (Vec::new(), Vec::new());
+    };
+
+    (
+        node.incoming_lanes().to_vec(),
+        node.outgoing_lanes().to_vec(),
+    )
+}
+
+fn gather_split_lanes(manager: &RoadManager, lane_id: LaneId) -> (Vec<LaneId>, Vec<LaneId>) {
+    let lane = manager.lane(lane_id);
+
+    // At a split point:
+    // from → new_node is incoming
+    // new_node → to is outgoing
+    (
+        vec![lane_id], // incoming
+        vec![lane_id], // outgoing
+    )
 }

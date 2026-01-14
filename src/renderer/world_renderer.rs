@@ -716,9 +716,7 @@ impl TerrainRenderer {
             None => return 0.0,
         };
 
-        let [lx, lz] = pos_to_chunk_local(pos, chunk_size);
-
-        height_bilinear(&chunk.height_grid, lx, lz)
+        height_bilinear(&chunk.height_grid, pos[0], pos[1])
     }
 }
 

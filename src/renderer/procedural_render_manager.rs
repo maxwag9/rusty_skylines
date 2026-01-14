@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use wgpu::{
-    BindGroup, BlendState, Buffer, CompareFunction, DepthStencilState, Face, Sampler,
-    VertexBufferLayout,
+    BindGroup, BlendState, Buffer, CompareFunction, DepthStencilState, Device, Face, Queue,
+    Sampler, VertexBufferLayout,
 };
 
 const FULLSCREEN_SHADER_SOURCE: &str = r#"
@@ -519,8 +519,8 @@ pub struct RenderManager {
 
 impl RenderManager {
     pub fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
+        device: &Device,
+        queue: &Queue,
         target_format: wgpu::TextureFormat,
         shader_dir: PathBuf,
     ) -> Self {

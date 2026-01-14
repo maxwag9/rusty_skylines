@@ -2,7 +2,6 @@ use crate::renderer::astronomy::AstronomyState;
 use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
-use crate::ui::vertex::LineVtx;
 
 pub struct UniformUpdater<'a> {
     queue: &'a wgpu::Queue,
@@ -104,55 +103,6 @@ impl<'a> UniformUpdater<'a> {
             &self.pipelines.water_uniforms.buffer,
             0,
             bytemuck::bytes_of(&wu),
-        );
-    }
-
-    pub fn update_gizmo_vertices(
-        &self,
-        target: glam::Vec3,
-        orbit_radius: f32,
-        scale_with_orbit: bool,
-    ) {
-        let t = target;
-
-        // 1 m per axis or radius-scaled gizmo
-        let s = if scale_with_orbit {
-            orbit_radius * 0.2
-        } else {
-            1.0
-        };
-
-        let axes = [
-            LineVtx {
-                pos: [t.x, t.y, t.z],
-                color: [1.0, 0.2, 0.2],
-            },
-            LineVtx {
-                pos: [t.x + s, t.y, t.z],
-                color: [1.0, 0.2, 0.2],
-            },
-            LineVtx {
-                pos: [t.x, t.y, t.z],
-                color: [0.2, 1.0, 0.2],
-            },
-            LineVtx {
-                pos: [t.x, t.y + s, t.z],
-                color: [0.2, 1.0, 0.2],
-            },
-            LineVtx {
-                pos: [t.x, t.y, t.z],
-                color: [0.2, 0.6, 1.0],
-            },
-            LineVtx {
-                pos: [t.x, t.y, t.z + s],
-                color: [0.2, 0.6, 1.0],
-            },
-        ];
-
-        self.queue.write_buffer(
-            &self.pipelines.gizmo_mesh_buffers.vertex,
-            0,
-            bytemuck::cast_slice(&axes),
         );
     }
 }

@@ -14,11 +14,10 @@
 // ID Newtypes
 // ============================================================================
 
-use crate::hsv::lerp;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_editor::RoadEditorCommand;
 use crate::terrain::roads::road_mesh_manager::{
-    ChunkId, CrossSection, HorizontalProfile, RoadMeshManager, chunk_x_range,
+    ChunkId, HorizontalProfile, RoadMeshManager, chunk_x_range,
 };
 
 /// Stable, monotonically increasing node identifier.
@@ -153,28 +152,16 @@ impl Default for StructureType {
 /// Linear interpolation is used for Flat and Linear variants.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VerticalProfile {
-    /// Constant elevation matching start node y.
     Flat,
-    /// Linear interpolation between explicit y values.
-    Linear { start_y: f32, end_y: f32 },
-    /// Reference to external profile data (splines, etc.).
-    Custom { profile_id: u32 },
+    EndPoints { start_y: f32, end_y: f32 },
 }
 
 impl VerticalProfile {
-    pub(crate) fn evaluate(&self, t: f32) -> f32 {
-        match self {
-            VerticalProfile::Flat => 0.0,
-            VerticalProfile::Linear { start_y, end_y } => lerp(*start_y, *end_y, t),
-            VerticalProfile::Custom { .. } => 0.0,
-        }
-    }
     #[inline]
     pub fn slope(&self) -> f32 {
         match self {
             VerticalProfile::Flat => 0.0,
-            VerticalProfile::Linear { start_y, end_y } => end_y - start_y,
-            VerticalProfile::Custom { .. } => 0.0,
+            VerticalProfile::EndPoints { start_y, end_y } => end_y - start_y,
         }
     }
 }
@@ -324,6 +311,30 @@ impl Node {
         }
     }
 
+    pub(crate) fn version(&self) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+
+        #[inline(always)]
+        fn mix(h: &mut u64, v: u64) {
+            *h ^= v;
+            *h = h.wrapping_mul(0x100000001b3);
+        }
+
+        mix(&mut h, self.x.to_bits() as u64);
+        mix(&mut h, self.y.to_bits() as u64);
+        mix(&mut h, self.z.to_bits() as u64);
+
+        mix(&mut h, self.chunk_id as u64);
+        mix(&mut h, self.enabled as u64);
+        mix(&mut h, self.next_control_id as u64);
+
+        mix(&mut h, self.attached_controls.len() as u64);
+        mix(&mut h, self.incoming_lanes.len() as u64);
+        mix(&mut h, self.outgoing_lanes.len() as u64);
+
+        h
+    }
+
     #[inline]
     pub fn x(&self) -> f32 {
         self.x
@@ -355,11 +366,6 @@ impl Node {
     }
 
     /// Every node is an intersection by design.
-    #[inline]
-    pub fn is_intersection(&self) -> bool {
-        true
-    }
-
     #[inline]
     pub fn attached_controls(&self) -> &[AttachedControl] {
         &self.attached_controls
@@ -674,6 +680,59 @@ impl RoadManager {
     #[inline]
     pub fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    pub(crate) fn lane_counts_for_segment(&self, segment: &Segment) -> (usize, usize) {
+        let mut left_lanes = 0;
+        let mut right_lanes = 0;
+        let seg_node_a_id = segment.start();
+        let seg_node_b_id = segment.end();
+        for lane_id in segment.lanes.iter() {
+            let lane = self.lane(*lane_id);
+            if lane.from == seg_node_a_id && lane.to == seg_node_b_id {
+                right_lanes += 1;
+            } else {
+                left_lanes += 1;
+            }
+        }
+        (left_lanes, right_lanes)
+    }
+    pub fn segments_connected_to_node(&self, node_id: NodeId) -> Vec<SegmentId> {
+        let Some(node) = self.node(node_id) else {
+            return Vec::new();
+        };
+
+        let mut segments = Vec::new();
+
+        for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
+            let lane = &self.lanes[lane_id.0 as usize];
+            let seg = lane.segment();
+
+            // de-dup without HashSet (cheap, small N…)
+            if !segments.contains(&seg) {
+                segments.push(seg);
+            }
+        }
+
+        segments
+    }
+    pub fn segment_count_connected_to_node(&self, node_id: NodeId) -> usize {
+        let Some(node) = self.node(node_id) else {
+            return 0;
+        };
+
+        let mut count = 0;
+        let mut seen = Vec::new();
+
+        for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
+            let seg = self.lanes[lane_id.0 as usize].segment();
+            if !seen.contains(&seg) {
+                seen.push(seg);
+                count += 1;
+            }
+        }
+
+        count
     }
 
     // ------------------------------------------------------------------------
@@ -1093,15 +1152,7 @@ pub fn sample_lane_height(lane: &Lane, t: f32, manager: &RoadManager) -> f32 {
     // Determine if lane direction matches segment direction
     let reversed = lane.from_node() != segment.start();
     let t_seg = if reversed { 1.0 - t } else { t };
-
-    match segment.vertical_profile() {
-        VerticalProfile::Flat => from.y(),
-        VerticalProfile::Linear { start_y, end_y } => start_y + (end_y - start_y) * t_seg,
-        VerticalProfile::Custom { .. } => {
-            // Custom profiles resolved elsewhere; fall back to linear node z
-            from.y() + (to.y() - from.y()) * t
-        }
-    }
+    from.y()
 }
 
 /// Samples the 3D position along a lane at parameter t in [0,1].
@@ -1487,7 +1538,6 @@ pub enum CommandResult {
 pub fn apply_command(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
-    cross_section: &CrossSection,
     manager: &mut RoadManager,
     command: &RoadEditorCommand,
 ) -> CommandResult {
@@ -1496,12 +1546,7 @@ pub fn apply_command(
             match road_command {
                 RoadCommand::AddNode { x, y, z, chunk_id } => {
                     let id = manager.add_node(*x, *y, *z, *chunk_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::NodeCreated(*chunk_id, id)
                 }
                 RoadCommand::AddSegment {
@@ -1524,12 +1569,7 @@ pub fn apply_command(
                         *horizontal_profile,
                         *vertical_profile,
                     );
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::SegmentCreated(*chunk_id, id)
                 }
                 RoadCommand::AddLane {
@@ -1557,12 +1597,7 @@ pub fn apply_command(
                         *vehicle_mask,
                         *base_cost,
                     );
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::LaneCreated(*chunk_id, id)
                 }
                 RoadCommand::DisableNode { node_id, chunk_id } => {
@@ -1570,12 +1605,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.disable_node(*node_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::EnableNode { node_id, chunk_id } => {
@@ -1586,7 +1616,6 @@ pub fn apply_command(
                     road_mesh_manager.update_chunk_mesh(
                         terrain_renderer,
                         *chunk_id,
-                        &cross_section,
                         &Default::default(),
                     );
                     CommandResult::Ok
@@ -1599,12 +1628,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.disable_segment(*segment_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::EnableSegment {
@@ -1615,12 +1639,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.enable_segment(*segment_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::DisableLane { lane_id, chunk_id } => {
@@ -1628,12 +1647,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.disable_lane(*lane_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::EnableLane { lane_id, chunk_id } => {
@@ -1641,12 +1655,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.enable_lane(*lane_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::AttachControl {
@@ -1658,12 +1667,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     let id = manager.attach_control(*node_id, control.clone());
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::ControlAttached(*chunk_id, id)
                 }
                 RoadCommand::DisableControl {
@@ -1675,12 +1679,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.disable_control(*node_id, *control_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::EnableControl {
@@ -1692,12 +1691,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.enable_control(*node_id, *control_id);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::UpgradeSegmentBegin {
@@ -1708,22 +1702,12 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     manager.disable_segment(*old_segment);
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
                 RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
                     // Recording only; no action needed... maybe...
-                    road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
-                        *chunk_id,
-                        &cross_section,
-                        manager,
-                    );
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, *chunk_id, manager);
                     CommandResult::Ok
                 }
             }
@@ -1741,21 +1725,12 @@ pub fn apply_command(
 pub fn apply_commands(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
-    cross_section: &CrossSection,
     road_manager: &mut RoadManager,
     commands: &Vec<RoadEditorCommand>,
 ) -> Vec<CommandResult> {
     let results = commands
         .iter()
-        .map(|cmd| {
-            apply_command(
-                terrain_renderer,
-                road_mesh_manager,
-                cross_section,
-                road_manager,
-                cmd,
-            )
-        })
+        .map(|cmd| apply_command(terrain_renderer, road_mesh_manager, road_manager, cmd))
         .collect();
     //apply_results(road_mesh_manager, &results);
     results
@@ -1845,7 +1820,7 @@ mod tests {
 
         // Node is always an intersection
         if let Some(a_node) = manager.node(node) {
-            assert!(a_node.is_intersection());
+            assert!(true);
         } else {
             panic!()
         };
@@ -1856,7 +1831,7 @@ mod tests {
 
         assert_eq!(control_id.raw(), 0);
         if let Some(a_node) = manager.node(node) {
-            assert!(a_node.is_intersection());
+            assert!(true);
             assert!(a_node.has_active_control());
             assert_eq!(a_node.attached_controls().len(), 1);
         } else {
@@ -2059,7 +2034,7 @@ mod tests {
             node_b,
             StructureType::Bridge,
             HorizontalProfile::Linear,
-            VerticalProfile::Linear {
+            VerticalProfile::EndPoints {
                 start_y: 0.0,
                 end_y: 10.0,
             },
@@ -2085,7 +2060,7 @@ mod tests {
             node_b,
             StructureType::Bridge,
             HorizontalProfile::Linear,
-            VerticalProfile::Linear {
+            VerticalProfile::EndPoints {
                 start_y: 0.0,
                 end_y: 10.0,
             },
@@ -2423,7 +2398,7 @@ mod tests {
             node_b,
             StructureType::Bridge,
             HorizontalProfile::Linear,
-            VerticalProfile::Linear {
+            VerticalProfile::EndPoints {
                 start_y: 0.0,
                 end_y: 50.0,
             },

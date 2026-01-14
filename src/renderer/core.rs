@@ -4,6 +4,7 @@ use crate::mouse_ray::*;
 use crate::paths::{shader_dir, texture_dir};
 use crate::renderer::astronomy::*;
 use crate::renderer::general_mesh_arena::GeneralMeshArena;
+use crate::renderer::gizmo::Gizmo;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
 use crate::renderer::procedural_texture_manager::{MaterialKind, Params, TextureCacheKey};
@@ -49,6 +50,7 @@ pub struct RenderCore {
     encoder: Option<CommandEncoder>,
     arena: GeneralMeshArena,
     render_manager: RenderManager,
+    pub gizmo: Gizmo,
 }
 
 impl RenderCore {
@@ -187,16 +189,15 @@ impl RenderCore {
                 },
             ],
         };
-        let road_renderer = RoadRenderSubsystem::new(cross_section, &device);
+        let road_renderer = RoadRenderSubsystem::new(&device);
         let arena = GeneralMeshArena::new(
             &device,
             256 * 1024 * 1024, // vertex bytes per page
             128 * 1024 * 1024, // index bytes per page
         );
 
-        let render_manager =
-            RenderManager::new(device.clone(), queue.clone(), Rgba8UnormSrgb, texture_dir());
-
+        let render_manager = RenderManager::new(&device, &queue, Rgba8UnormSrgb, texture_dir());
+        let gizmo = Gizmo::new(&device);
         Self {
             surface,
             device,
@@ -212,6 +213,7 @@ impl RenderCore {
             encoder: None,
             arena,
             render_manager,
+            gizmo,
         }
     }
 
@@ -272,7 +274,6 @@ impl RenderCore {
         uniform_updater.update_fog_uniforms(&self.config, view, camera.position().y);
         uniform_updater.update_sky_uniforms(astronomy.moon_phase);
         uniform_updater.update_water_uniforms();
-        uniform_updater.update_gizmo_vertices(camera.target, camera.orbit_radius, false);
 
         // Update world
         self.terrain_renderer.update(
@@ -419,6 +420,10 @@ impl RenderCore {
             &mut self.render_manager,
             &self.pipelines,
             self.msaa_samples,
+            &mut self.gizmo,
+            camera,
+            &self.device,
+            &self.queue,
         );
 
         // UI
@@ -510,6 +515,10 @@ fn render_gizmo(
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
     msaa_samples: u32,
+    gizmo: &mut Gizmo,
+    camera: &Camera,
+    device: &Device,
+    queue: &Queue,
 ) {
     let line_shader_path = shader_dir().join("lines.wgsl");
     render_manager.render(
@@ -533,8 +542,11 @@ fn render_gizmo(
         &[&pipelines.uniforms.buffer],
         pass,
     );
-    pass.set_vertex_buffer(0, pipelines.gizmo_mesh_buffers.vertex.slice(..));
-    pass.draw(0..6, 0..1);
+    gizmo.update_gizmo_vertices(camera.target, camera.orbit_radius, false);
+    let vertex_count = gizmo.update_buffer(device, queue);
+    pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
+    pass.draw(0..vertex_count, 0..1);
+    gizmo.clear(); // Clears Gizmo
 }
 fn render_water(
     pass: &mut RenderPass,
@@ -770,45 +782,46 @@ fn render_roads(
             pass.draw_indexed(0..gpu.index_count, 0, 0..1);
         }
     }
-    if !road_renderer.preview_gpu.is_empty() {
-        // Choose tint based on validity
-        // let preview_bind_group = if road_renderer.preview_state.has_invalid_segment() {
-        //     &road_renderer.road_appearance.error_bind_group
-        // } else {
-        //     &road_renderer.road_appearance.preview_bind_group
-        // };
-
-        if let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
-        {
-            render_manager.render(
-                road_material_keys,
-                "Roads",
-                road_shader_path.as_path(), // file containing full vertex+fragment shader
-                PipelineOptions {
-                    topology: TriangleList,
-                    depth_stencil: Some(DepthStencilState {
-                        format: DEPTH_FORMAT,
-                        depth_write_enabled: true,
-                        depth_compare: CompareFunction::LessEqual,
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    msaa_samples,
-                    vertex_layouts: Vec::from([RoadVertex::layout()]),
-                    cull_mode: Some(Face::Back),
-                    blend: Some(BlendState::ALPHA_BLENDING),
-                },
-                &[
-                    &pipelines.uniforms.buffer,
-                    &road_renderer.road_appearance.preview_buffer,
-                ],
-                pass,
-            );
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
-            pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
-        }
+    if road_renderer.preview_gpu.is_empty() {
+        return;
     }
+    let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
+    else {
+        return;
+    };
+
+    let nudge_bias = DepthBiasState {
+        constant: -4,
+        slope_scale: -2.0,
+        clamp: 0.0,
+    };
+    render_manager.render(
+        road_material_keys,
+        "Roads",
+        road_shader_path.as_path(), // file containing full vertex+fragment shader
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::LessEqual,
+                stencil: Default::default(),
+                bias: nudge_bias,
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            cull_mode: Some(Face::Back),
+            blend: Some(BlendState::ALPHA_BLENDING),
+        },
+        &[
+            &pipelines.uniforms.buffer,
+            &road_renderer.road_appearance.preview_buffer,
+        ],
+        pass,
+    );
+    pass.set_vertex_buffer(0, vb.slice(..));
+    pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
+    pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
 }
 
 fn render_terrain(
