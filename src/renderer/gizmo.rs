@@ -11,21 +11,61 @@ pub struct PendingGizmoRender {
 pub struct Gizmo {
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
+    total_game_time: f64,
 }
 
 impl Gizmo {
-    pub fn update(&mut self, road_manager: &RoadManager) {
+    pub fn update(&mut self, total_game_time: f64, road_manager: &RoadManager) {
+        self.total_game_time = total_game_time;
         for node_b in &road_manager.nodes {
-            self.render_circle([node_b.x, node_b.y, node_b.z], 2.0, [1.0, 0.0, 0.0]);
+            let color: [f32; 3] = if node_b.enabled {
+                [0.0, 0.0, 0.9]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
+            self.render_circle([node_b.x, node_b.y, node_b.z], 2.0, color);
             for lane_id in node_b.incoming_lanes.iter() {
                 let lane = road_manager.lane(*lane_id);
                 let Some(node_a) = road_manager.node(lane.from_node()) else {
                     continue;
                 };
+                let lane_index = lane.lane_index();
+                let segment = road_manager.segment(lane.segment());
+                let seg_start = road_manager.node(segment.start()).unwrap();
+                let seg_end = road_manager.node(segment.end()).unwrap();
+
+                let seg_dir =
+                    Vec3::new(seg_end.x - seg_start.x, 0.0, seg_end.z - seg_start.z).normalize();
+
+                let seg_right = Vec3::new(seg_dir.z, 0.0, -seg_dir.x);
+
+                let lane_is_forward = lane.from_node() == segment.start();
+
+                let lane_width = 2.5;
+                let initial_offset = if lane_is_forward {
+                    lane_width * 0.5
+                } else {
+                    -lane_width * 0.5
+                };
+                let offset = seg_right * (lane_index as f32 * lane_width - initial_offset);
+                let a = Vec3::new(node_a.x, node_a.y, node_a.z);
+                let b = Vec3::new(node_b.x, node_b.y, node_b.z);
+                let start = a + offset;
+                let end = b + offset;
+                let color: [f32; 3] = if lane.is_enabled() {
+                    if lane_is_forward {
+                        [0.0, 0.9, 0.0]
+                    } else {
+                        [0.2, 0.9, 0.0]
+                    }
+                } else {
+                    [1.0, 0.05, 0.0]
+                };
                 self.render_arrow(
-                    [node_a.x, node_a.y, node_a.z],
-                    [node_b.x, node_b.y, node_b.z],
-                    [0.0, 1.0, 0.0],
+                    [start.x, start.y, start.z],
+                    [end.x, end.y, end.z],
+                    color,
+                    true,
                 );
             }
         }
@@ -41,6 +81,7 @@ impl Gizmo {
         Self {
             pending_renders: Vec::new(),
             gizmo_buffer,
+            total_game_time: 0.0,
         }
     }
     pub fn clear(&mut self) {
@@ -50,15 +91,16 @@ impl Gizmo {
         let vertices = self.collect_vertices();
 
         let byte_size = (vertices.len() * size_of::<LineVtx>()) as u64;
-        let max_size = self.gizmo_buffer.size();
+        let mut max_size = self.gizmo_buffer.size();
 
-        if byte_size > max_size {
+        while byte_size > max_size {
             self.gizmo_buffer = device.create_buffer(&BufferDescriptor {
                 label: Some("Ez Gizmo VB"),
                 size: max_size * 2,
                 usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            max_size = self.gizmo_buffer.size();
         }
 
         queue.write_buffer(&self.gizmo_buffer, 0, bytemuck::cast_slice(&vertices));
@@ -135,76 +177,151 @@ impl Gizmo {
             vertices: circle_vertices,
         })
     }
-    pub fn render_arrow(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3]) {
+    pub fn render_arrow(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3], dashed: bool) {
         let mut vertices = Vec::<LineVtx>::new();
 
-        // Main line
-        vertices.push(LineVtx { pos: start, color });
-        vertices.push(LineVtx { pos: end, color });
-
-        // Direction
+        // Direction + length
         let dx = end[0] - start[0];
         let dy = end[1] - start[1];
         let dz = end[2] - start[2];
-
         let len = (dx * dx + dy * dy + dz * dz).sqrt();
-        if len == 0.0 {
+        if len <= 0.0001 {
             return;
         }
 
-        let nx = dx / len;
-        let ny = dy / len;
-        let nz = dz / len;
+        let inv_len = 1.0 / len;
+        let nx = dx * inv_len;
+        let ny = dy * inv_len;
+        let nz = dz * inv_len;
 
-        // Pick an up vector that is not parallel
-        let (ux, uy, uz) = if ny.abs() > 0.99 {
+        // Normalized dash parameters --------------------------------------------
+
+        // Visual rule: about one arrow head every ~5 meters
+        let target_spacing = 5.0;
+        let steps = (len / target_spacing).ceil().max(1.0);
+        let step_len = len / steps;
+
+        // Dash ratio
+        let dash_ratio = if dashed { 0.6 } else { 1.0 };
+        let dash_len = step_len * dash_ratio;
+
+        // Collect arrow-head positions (from END backwards)
+        let mut head_positions = Vec::<f32>::new();
+
+        let mut i = 0.0;
+        while i < steps {
+            let t_head = len - i * step_len;
+            if t_head <= 0.0 {
+                break;
+            }
+            head_positions.push(t_head);
+            i += 1.0;
+        }
+
+        // Shaft -----------------------------------------------------------------
+
+        for &t_head in &head_positions {
+            let t0 = (t_head - dash_len).max(0.0);
+            let t1 = t_head;
+
+            let p0 = [start[0] + nx * t0, start[1] + ny * t0, start[2] + nz * t0];
+            let p1 = [start[0] + nx * t1, start[1] + ny * t1, start[2] + nz * t1];
+
+            vertices.push(LineVtx { pos: p0, color });
+            vertices.push(LineVtx { pos: p1, color });
+        }
+
+        // Colors ----------------------------------------------------------------
+
+        let flap_color = [
+            (color[0] + 1.0) * 0.5,
+            (color[1] + 1.0) * 0.5,
+            (color[2] + 1.0) * 0.5,
+        ];
+
+        // Orthonormal frame -----------------------------------------------------
+
+        let (ux0, uy0, uz0) = if ny.abs() > 0.99 {
             (1.0, 0.0, 0.0)
         } else {
             (0.0, 1.0, 0.0)
         };
 
         // side = dir × up
-        let mut sx = ny * uz - nz * uy;
-        let mut sy = nz * ux - nx * uz;
-        let mut sz = nx * uy - ny * ux;
+        let mut sx = ny * uz0 - nz * uy0;
+        let mut sy = nz * ux0 - nx * uz0;
+        let mut sz = nx * uy0 - ny * ux0;
 
-        let slen = (sx * sx + sy * sy + sz * sz).sqrt();
-        if slen == 0.0 {
+        let sl = (sx * sx + sy * sy + sz * sz).sqrt();
+        if sl <= 0.0001 {
             return;
         }
 
-        sx /= slen;
-        sy /= slen;
-        sz /= slen;
+        let inv_sl = 1.0 / sl;
+        sx *= inv_sl;
+        sy *= inv_sl;
+        sz *= inv_sl;
 
-        let head_len = 0.3;
-        let head_width = 0.15;
+        // up_perp = dir × side
+        let ux = ny * sz - nz * sy;
+        let uy = nz * sx - nx * sz;
+        let uz = nx * sy - ny * sx;
 
-        let hx = end[0] - nx * head_len;
-        let hy = end[1] - ny * head_len;
-        let hz = end[2] - nz * head_len;
+        // Arrow head params -----------------------------------------------------
 
-        // Left flap
-        vertices.push(LineVtx { pos: end, color });
-        vertices.push(LineVtx {
-            pos: [
-                hx + sx * head_width,
-                hy + sy * head_width,
-                hz + sz * head_width,
-            ],
-            color,
-        });
+        let head_len = step_len * 0.15;
+        let head_width = 0.30;
 
-        // Right flap
-        vertices.push(LineVtx { pos: end, color });
-        vertices.push(LineVtx {
-            pos: [
-                hx - sx * head_width,
-                hy - sy * head_width,
-                hz - sz * head_width,
-            ],
-            color,
-        });
+        let spin_speed = 1.0;
+        let time = self.total_game_time as f32;
+
+        // Arrow heads -----------------------------------------------------------
+
+        for (i, &t) in head_positions.iter().enumerate() {
+            let px = start[0] + nx * t;
+            let py = start[1] + ny * t;
+            let pz = start[2] + nz * t;
+
+            let bx = px - nx * head_len;
+            let by = py - ny * head_len;
+            let bz = pz - nz * head_len;
+
+            let angle = time * spin_speed + i as f32 * 0.6;
+            let c = angle.cos();
+            let s = angle.sin();
+
+            let rx = sx * c + ux * s;
+            let ry = sy * c + uy * s;
+            let rz = sz * c + uz * s;
+
+            // Left flap
+            vertices.push(LineVtx {
+                pos: [px, py, pz],
+                color: flap_color,
+            });
+            vertices.push(LineVtx {
+                pos: [
+                    bx + rx * head_width,
+                    by + ry * head_width,
+                    bz + rz * head_width,
+                ],
+                color: flap_color,
+            });
+
+            // Right flap
+            vertices.push(LineVtx {
+                pos: [px, py, pz],
+                color: flap_color,
+            });
+            vertices.push(LineVtx {
+                pos: [
+                    bx - rx * head_width,
+                    by - ry * head_width,
+                    bz - rz * head_width,
+                ],
+                color: flap_color,
+            });
+        }
 
         self.pending_renders.push(PendingGizmoRender { vertices });
     }

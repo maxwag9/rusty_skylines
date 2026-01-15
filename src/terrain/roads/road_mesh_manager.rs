@@ -13,7 +13,7 @@ use std::collections::HashMap;
 const N_SAMPLE: usize = 64;
 const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 const FNV_PRIME: u64 = 1099511628211;
-const CLEARANCE: f32 = 0.04;
+pub const CLEARANCE: f32 = 0.04;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
 pub type ChunkId = u64;
@@ -158,12 +158,13 @@ pub struct CrossSection {
 impl CrossSection {
     fn from_node_preview(node_preview: &NodePreview) -> CrossSection {
         let (left_lanes, right_lanes) = node_preview.lane_counts();
+        let left_lanes = left_lanes.max(1);
         let right_lanes = right_lanes.max(1);
         let median = false;
         let sidewalk_left = left_lanes > 0;
         let sidewalk_right = true;
         build_cross_section(
-            0,
+            left_lanes,
             right_lanes,
             sidewalk_left,
             sidewalk_right,
@@ -172,7 +173,7 @@ impl CrossSection {
         )
     }
 
-    pub(crate) fn from_segment(road_manager: &RoadManager, segment: &Segment) -> CrossSection {
+    pub fn from_segment(road_manager: &RoadManager, segment: &Segment) -> CrossSection {
         let (left_lanes, right_lanes) = road_manager.lane_counts_for_segment(segment);
         let lane_count = left_lanes + right_lanes;
         let median = lane_count > 6 && left_lanes != 0 && right_lanes != 0;
@@ -204,19 +205,28 @@ impl CrossSection {
         )
     }
 
-    fn from_node(node: &Node, connections: usize) -> CrossSection {
+    fn from_node(node: &Node, connections: usize, node_type: NodeType) -> CrossSection {
         let mut right_lanes = node.outgoing_lanes.len().max(1);
-        let left_lanes = node.incoming_lanes.len();
-        if connections == 2 {
-            right_lanes = 1 //right_lanes.div_ceil(2);
+        let mut left_lanes = node.incoming_lanes.len();
+        match node_type {
+            NodeType::Sole => {
+                right_lanes *= 2;
+                left_lanes *= 2;
+            }
+            NodeType::End => {}
+            NodeType::Through => {
+                right_lanes = right_lanes / 2;
+                left_lanes = left_lanes / 2
+            }
+            NodeType::Intersection => {}
         }
         let median = false;
         let sidewalk_left = left_lanes > 0;
         let sidewalk_right = true;
 
         build_cross_section(
-            0,
-            2,
+            left_lanes,
+            right_lanes,
             sidewalk_left,
             sidewalk_right,
             median,
@@ -225,8 +235,8 @@ impl CrossSection {
     }
 
     pub fn from_node_geometry(geom: &NodeGeometry, params: &CrossSectionParams) -> Self {
-        let left_lanes = geom.outgoing_lanes.len();
-        let right_lanes = geom.incoming_lanes.len().max(1);
+        let left_lanes = geom._outgoing_lanes.len();
+        let right_lanes = geom._incoming_lanes.len().max(1);
 
         let median = false;
         let sidewalk_left = left_lanes > 0;
@@ -528,7 +538,7 @@ impl SegmentGeometry {
 #[derive(Clone, Debug)]
 pub struct ConnectedSegmentInfo {
     pub direction_xz: [f32; 2],
-    pub tangent_xz: [f32; 2],
+    pub _tangent_xz: [f32; 2],
     pub segment_id: Option<SegmentId>,
     pub cross_section: CrossSection,
     pub node_is_start: bool,
@@ -538,8 +548,8 @@ pub struct ConnectedSegmentInfo {
 pub struct NodeGeometry {
     pub position: [f32; 3],
     pub connections: Vec<ConnectedSegmentInfo>,
-    pub incoming_lanes: Vec<LaneId>,
-    pub outgoing_lanes: Vec<LaneId>,
+    pub _incoming_lanes: Vec<LaneId>,
+    pub _outgoing_lanes: Vec<LaneId>,
     pub is_preview: bool,
 }
 
@@ -562,24 +572,20 @@ impl NodeGeometry {
 
             connections.push(ConnectedSegmentInfo {
                 direction_xz: direction,
-                tangent_xz: tangent,
+                _tangent_xz: tangent,
                 segment_id: Some(seg_id),
                 cross_section,
                 node_is_start: is_start,
             });
         }
 
-        connections.sort_by(|a, b| {
-            let angle_a = a.direction_xz[1].atan2(a.direction_xz[0]);
-            let angle_b = b.direction_xz[1].atan2(b.direction_xz[0]);
-            angle_a.partial_cmp(&angle_b).unwrap()
-        });
+        sort_connections_by_angle(&mut connections);
 
         Some(Self {
             position: [node.x, node.y, node.z],
             connections,
-            incoming_lanes: node.incoming_lanes.clone(),
-            outgoing_lanes: node.outgoing_lanes.clone(),
+            _incoming_lanes: node.incoming_lanes.clone(),
+            _outgoing_lanes: node.outgoing_lanes.clone(),
             is_preview: false,
         })
     }
@@ -606,24 +612,20 @@ impl NodeGeometry {
 
             connections.push(ConnectedSegmentInfo {
                 direction_xz: direction,
-                tangent_xz: tangent,
+                _tangent_xz: tangent,
                 segment_id: None,
                 cross_section,
                 node_is_start: is_start,
             });
         }
         connections.append(&mut node_preview.connected_segments.clone());
-        connections.sort_by(|a, b| {
-            let angle_a = a.direction_xz[1].atan2(a.direction_xz[0]);
-            let angle_b = b.direction_xz[1].atan2(b.direction_xz[0]);
-            angle_a.partial_cmp(&angle_b).unwrap()
-        });
+        sort_connections_by_angle(&mut connections);
 
         Self {
             position: node_preview.world_pos.to_array(),
             connections,
-            incoming_lanes: node_preview.incoming_lanes.clone(),
-            outgoing_lanes: node_preview.outgoing_lanes.clone(),
+            _incoming_lanes: node_preview.incoming_lanes.clone(),
+            _outgoing_lanes: node_preview.outgoing_lanes.clone(),
             is_preview: true,
         }
     }
@@ -646,6 +648,13 @@ impl NodeGeometry {
     }
 }
 
+fn sort_connections_by_angle(connections: &mut Vec<ConnectedSegmentInfo>) {
+    connections.sort_by(|a, b| {
+        let angle_a = a.direction_xz[1].atan2(a.direction_xz[0]);
+        let angle_b = b.direction_xz[1].atan2(b.direction_xz[0]);
+        angle_a.partial_cmp(&angle_b).unwrap()
+    });
+}
 // ============================================================================
 // Ring and Arc-length sampling (for segments)
 // ============================================================================
@@ -1085,48 +1094,54 @@ fn build_sole_node_mesh(
         .map(|i| (i as f32 / NODE_ANGULAR_SEGMENTS as f32) * std::f32::consts::TAU)
         .collect();
 
-    // For each lateral strip, create a ring of quads
-    // Map lateral position to radius: left_offset -> 0, right_offset -> half_width
-    // We use the positive side of the cross-section, mapping to radii
+    // Precompute total circumference at reference radius
+    let ref_r = half_width;
+    let circumference = std::f32::consts::TAU * ref_r;
+    let arc_start = angles[0];
     for strip in &strips {
-        // Map from lateral coordinates to radial
-        // The cross-section goes from -half_width to +half_width
-        // We map this to radius 0 to half_width (using absolute values)
-        let inner_r = (strip.left + half_width).max(0.0);
-        let outer_r = (strip.right + half_width).max(inner_r + 0.001);
+        let inner_r = strip.left.max(0.0);
+        let outer_r = strip.right.max(inner_r + 0.001);
 
         if outer_r <= inner_r {
             continue;
         }
 
         let base_vertex = vertices.len() as u32;
-        let arc_start = angles[0];
+
         for &angle in &angles {
-            let arc_len_inner = inner_r * (angle - arc_start);
-            let arc_len_outer = outer_r * (angle - arc_start);
+            let delta_angle = angle - arc_start;
+
+            // U: arc length at reference radius, NOT per-vertex radius
+            let arc_len = delta_angle * ref_r;
+            let u = arc_len * uv_scale_u;
+
+            // V: identical to segment cross-section mapping
+            let v_inner = (inner_r + half_width) * uv_scale_v;
+            let v_outer = (outer_r + half_width) * uv_scale_v;
+
             let (cos_a, sin_a) = (angle.cos(), angle.sin());
+
+            // Inner vertex
             let x_inner = center.x + inner_r * cos_a;
             let z_inner = center.z + inner_r * sin_a;
             let terrain_y_inner = terrain_renderer.get_height_at([x_inner, z_inner]);
-            let inner_pos =
-                glam::Vec3::new(x_inner, terrain_y_inner + strip.height + CLEARANCE, z_inner);
-            let x_outer = center.x + outer_r * cos_a;
-            let z_outer = center.z + outer_r * sin_a;
-            let terrain_y_outer = terrain_renderer.get_height_at([x_outer, z_outer]);
-            let outer_pos =
-                glam::Vec3::new(x_outer, terrain_y_outer + strip.height + CLEARANCE, z_outer);
 
             vertices.push(RoadVertex {
-                position: inner_pos.to_array(),
+                position: [x_inner, terrain_y_inner + strip.height + CLEARANCE, z_inner],
                 normal: [0.0, 1.0, 0.0],
-                uv: [arc_len_inner * uv_scale_u, outer_r * uv_scale_v],
+                uv: [u, v_inner],
                 material_id: strip.material_id,
             });
 
+            // Outer vertex
+            let x_outer = center.x + outer_r * cos_a;
+            let z_outer = center.z + outer_r * sin_a;
+            let terrain_y_outer = terrain_renderer.get_height_at([x_outer, z_outer]);
+
             vertices.push(RoadVertex {
-                position: outer_pos.to_array(),
+                position: [x_outer, terrain_y_outer + strip.height + CLEARANCE, z_outer],
                 normal: [0.0, 1.0, 0.0],
-                uv: [arc_len_outer * uv_scale_u, outer_r * uv_scale_v],
+                uv: [u, v_outer],
                 material_id: strip.material_id,
             });
         }
@@ -1137,7 +1152,7 @@ fn build_sole_node_mesh(
         }
     }
 
-    // Build curb faces
+    // Build curb faces (probably needs similar UV love, but that's another party)
     build_circular_curb_faces(
         terrain_renderer,
         &center,
@@ -1300,7 +1315,7 @@ fn build_through_node_mesh(
     let angle_between = (-dot).acos();
 
     // If nearly straight (< 15 degrees deviation), no fill needed
-    if angle_between < 0.26 {
+    if angle_between < 0.0 {
         return;
     }
 
@@ -1348,16 +1363,7 @@ fn build_through_node_mesh(
             gap_angle_b - std::f32::consts::PI,
         )
     } else {
-        // Both gaps are less than 180°, fill both small gaps
-        build_through_node_small_gaps(
-            terrain_renderer,
-            node_geom,
-            cross_section,
-            uv_scale_u,
-            uv_scale_v,
-            vertices,
-            indices,
-        );
+        // Both gaps are less than 180°
         return;
     };
     // Number of segments for the curved fill
@@ -1371,8 +1377,8 @@ fn build_through_node_mesh(
         .collect();
 
     for strip in &strips {
-        let inner_r = (strip.left).max(0.0);
-        let outer_r = (strip.right).max(inner_r + 0.001);
+        let inner_r = strip.left.max(0.0);
+        let outer_r = strip.right.max(inner_r + 0.001);
 
         if outer_r <= inner_r {
             continue;
@@ -1440,128 +1446,6 @@ fn build_through_node_mesh(
         vertices,
         indices,
     );
-}
-
-/// Helper for through nodes when both gaps are small (< 180°)
-fn build_through_node_small_gaps(
-    terrain_renderer: &TerrainRenderer,
-    node_geom: &NodeGeometry,
-    cross_section: &CrossSection,
-    uv_scale_u: f32,
-    uv_scale_v: f32,
-    vertices: &mut Vec<RoadVertex>,
-    indices: &mut Vec<u32>,
-) {
-    if node_geom.connections.len() != 2 {
-        return;
-    }
-
-    let center = glam::Vec3::from_array(node_geom.position);
-    let strips = cross_section.right_lateral_strips();
-    let half_width = cross_section.half_width();
-
-    let conn0 = &node_geom.connections[0];
-    let conn1 = &node_geom.connections[1];
-
-    let angle0 = conn0.direction_xz[1].atan2(conn0.direction_xz[0]);
-    let angle1 = conn1.direction_xz[1].atan2(conn1.direction_xz[0]);
-
-    // Build two small fills, one on each side
-    for &(start, end) in &[(angle0, angle1), (angle1, angle0)] {
-        let mut sweep = end - start;
-        while sweep < 0.0 {
-            sweep += std::f32::consts::TAU;
-        }
-        while sweep >= std::f32::consts::TAU {
-            sweep -= std::f32::consts::TAU;
-        }
-
-        if sweep < 0.01 || sweep > std::f32::consts::PI {
-            continue;
-        }
-
-        // Offset by 90° to get to the edge perpendicular to segment direction
-        let fill_start = start + std::f32::consts::FRAC_PI_2;
-        let fill_end = end - std::f32::consts::FRAC_PI_2;
-
-        let mut fill_sweep = fill_end - fill_start;
-        while fill_sweep < -std::f32::consts::PI {
-            fill_sweep += std::f32::consts::TAU;
-        }
-        while fill_sweep > std::f32::consts::PI {
-            fill_sweep -= std::f32::consts::TAU;
-        }
-
-        if fill_sweep.abs() < 0.01 {
-            continue;
-        }
-
-        let n_segments = (fill_sweep.abs() / std::f32::consts::TAU * NODE_ANGULAR_SEGMENTS as f32)
-            .ceil() as usize;
-        let n_segments = n_segments.max(2);
-
-        let angles: Vec<f32> = (0..=n_segments)
-            .map(|i| fill_start + (i as f32 / n_segments as f32) * fill_sweep)
-            .collect();
-
-        for strip in &strips {
-            let inner_r = strip.left.max(0.0);
-            let outer_r = strip.right.max(inner_r + 0.001);
-
-            if outer_r <= inner_r {
-                continue;
-            }
-
-            let base_vertex = vertices.len() as u32;
-            let arc_start = angles[0];
-            for &angle in &angles {
-                let arc_len_inner = inner_r * (angle - arc_start);
-                let arc_len_outer = outer_r * (angle - arc_start);
-                let (cos_a, sin_a) = (angle.cos(), angle.sin());
-                let x_inner = center.x + inner_r * cos_a;
-                let z_inner = center.z + inner_r * sin_a;
-                let terrain_y_inner = terrain_renderer.get_height_at([x_inner, z_inner]);
-                let inner_pos =
-                    glam::Vec3::new(x_inner, terrain_y_inner + strip.height + CLEARANCE, z_inner);
-                let x_outer = center.x + outer_r * cos_a;
-                let z_outer = center.z + outer_r * sin_a;
-                let terrain_y_outer = terrain_renderer.get_height_at([x_outer, z_outer]);
-                let outer_pos =
-                    glam::Vec3::new(x_outer, terrain_y_outer + strip.height + CLEARANCE, z_outer);
-
-                vertices.push(RoadVertex {
-                    position: inner_pos.to_array(),
-                    normal: [0.0, 1.0, 0.0],
-                    uv: [arc_len_inner * uv_scale_u, outer_r * uv_scale_v],
-                    material_id: strip.material_id,
-                });
-
-                vertices.push(RoadVertex {
-                    position: outer_pos.to_array(),
-                    normal: [0.0, 1.0, 0.0],
-                    uv: [arc_len_outer * uv_scale_u, outer_r * uv_scale_v],
-                    material_id: strip.material_id,
-                });
-            }
-
-            for i in 0..n_segments {
-                let i0 = base_vertex + (i * 2) as u32;
-                indices.extend_from_slice(&[i0, i0 + 2, i0 + 1, i0 + 1, i0 + 2, i0 + 3]);
-            }
-        }
-
-        build_circular_curb_faces(
-            terrain_renderer,
-            &center,
-            &strips,
-            half_width,
-            &angles,
-            uv_scale_u,
-            uv_scale_v,
-            vertices,
-            indices,
-        );
-    }
 }
 
 /// Build vertical curb faces between concentric radial strips
@@ -1809,7 +1693,8 @@ impl RoadMeshManager {
                     continue;
                 };
                 let node_connections = manager.segment_count_connected_to_node(node_id);
-                let cross_section = CrossSection::from_node(node, node_connections);
+                let cross_section =
+                    CrossSection::from_node(node, node_connections, node_geom.node_type());
                 build_node_mesh(
                     terrain_renderer,
                     &self.segment_ring_cache,

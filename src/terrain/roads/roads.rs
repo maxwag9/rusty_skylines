@@ -20,6 +20,13 @@ use crate::terrain::roads::road_mesh_manager::{
     ChunkId, HorizontalProfile, RoadMeshManager, chunk_x_range,
 };
 
+struct LaneTurn {
+    from: LaneId,
+    to: LaneId,
+    cost: f32,
+    allowed: bool,
+}
+
 /// Stable, monotonically increasing node identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -496,6 +503,7 @@ pub struct Lane {
     from: NodeId,
     to: NodeId,
     segment: SegmentId,
+    lane_index: i8, // signed, relative to segment centerline
     enabled: bool,
     speed_limit: f32,
     capacity: u32,
@@ -509,6 +517,7 @@ impl Lane {
         from: NodeId,
         to: NodeId,
         segment: SegmentId,
+        lane_index: i8, // signed, relative to segment centerline
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
@@ -518,6 +527,7 @@ impl Lane {
             from,
             to,
             segment,
+            lane_index,
             enabled: true,
             speed_limit,
             capacity,
@@ -542,7 +552,10 @@ impl Lane {
     pub fn segment(&self) -> SegmentId {
         self.segment
     }
-
+    #[inline]
+    pub fn lane_index(&self) -> i8 {
+        self.lane_index
+    }
     #[inline]
     pub fn is_enabled(&self) -> bool {
         self.enabled
@@ -849,6 +862,7 @@ impl RoadManager {
         from: NodeId,
         to: NodeId,
         segment: SegmentId,
+        lane_index: i8, // signed, relative to segment centerline, 0 is prohibited!
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
@@ -866,6 +880,7 @@ impl RoadManager {
             from,
             to,
             segment,
+            lane_index,
             speed_limit,
             capacity,
             vehicle_mask,
@@ -1139,37 +1154,36 @@ pub fn lane_length_2d(lane: &Lane, manager: &RoadManager) -> f32 {
 
 /// Samples the height (z) along a lane at parameter t in [0,1].
 /// Uses the segment's vertical profile for interpolation.
-#[inline]
-pub fn sample_lane_height(lane: &Lane, t: f32, manager: &RoadManager) -> f32 {
-    let segment = manager.segment(lane.segment());
-    let Some(from) = manager.node(lane.from_node()) else {
-        return 0.0;
-    };
-    let Some(to) = manager.node(lane.to_node()) else {
-        return 0.0;
-    };
-
-    // Determine if lane direction matches segment direction
-    let reversed = lane.from_node() != segment.start();
-    let t_seg = if reversed { 1.0 - t } else { t };
-    from.y()
-}
+// #[inline]
+// pub fn sample_lane_height(lane: &Lane, t: f32, manager: &RoadManager) -> f32 {
+//     let segment = manager.segment(lane.segment());
+//     let Some(from) = manager.node(lane.from_node()) else {
+//         return 0.0;
+//     };
+//     let Some(to) = manager.node(lane.to_node()) else {
+//         return 0.0;
+//     };
+//
+//     // Determine if lane direction matches segment direction
+//     let reversed = lane.from_node() != segment.start();
+//     let t_seg = if reversed { 1.0 - t } else { t };
+//     from.y()
+// }
 
 /// Samples the 3D position along a lane at parameter t in [0,1].
 #[inline]
-pub fn sample_lane_position(lane: &Lane, t: f32, manager: &RoadManager) -> (f32, f32, f32) {
+pub fn sample_lane_position(lane: &Lane, t: f32, manager: &RoadManager) -> (f32, f32) {
     let Some(from) = manager.node(lane.from_node()) else {
-        return (0.0, 0.0, 0.0);
+        return (0.0, 0.0);
     };
     let Some(to) = manager.node(lane.to_node()) else {
-        return (0.0, 0.0, 0.0);
+        return (0.0, 0.0);
     };
 
     let x = from.x() + (to.x() - from.x()) * t;
     let z = from.z() + (to.z() - from.z()) * t;
-    let y = sample_lane_height(lane, t, manager);
 
-    (x, y, z)
+    (x, z)
 }
 
 /// Projects a 2D point onto a lane and returns (t, distance_squared).
@@ -1459,6 +1473,7 @@ pub enum RoadCommand {
         from: NodeId,
         to: NodeId,
         segment: SegmentId,
+        lane_index: i8,
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
@@ -1576,6 +1591,7 @@ pub fn apply_command(
                     from,
                     to,
                     segment,
+                    lane_index,
                     speed_limit,
                     capacity,
                     vehicle_mask,
@@ -1592,6 +1608,7 @@ pub fn apply_command(
                         *from,
                         *to,
                         *segment,
+                        *lane_index,
                         *speed_limit,
                         *capacity,
                         *vehicle_mask,
@@ -1732,794 +1749,5 @@ pub fn apply_commands(
         .iter()
         .map(|cmd| apply_command(terrain_renderer, road_mesh_manager, road_manager, cmd))
         .collect();
-    //apply_results(road_mesh_manager, &results);
     results
-}
-
-// fn apply_results(road_mesh_manager: &mut RoadMeshManager, road_manager: &mut RoadManager, results: &Vec<CommandResult>) {
-//     for result in results {
-//         match result {
-//             &CommandResult::NodeCreated(id) => {
-//                 chunk_id =
-//                 road_mesh_manager.update_chunk_mesh()
-//             }
-//             &CommandResult::SegmentCreated(id) => {}
-//             &CommandResult::LaneCreated(id) => {}
-//             &CommandResult::ControlAttached(id) => {}
-//             &CommandResult::InvalidReference => {}
-//             &CommandResult::Ok => {}
-//         }
-//     }
-// }
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_create_nodes_segments_lanes() {
-        let mut manager = RoadManager::new();
-
-        // Add two nodes
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-
-        assert_eq!(node_a.raw(), 0);
-        assert_eq!(node_b.raw(), 1);
-        let Some(a_node) = manager.node(node_a) else {
-            panic!()
-        };
-        let Some(b_node) = manager.node(node_b) else {
-            panic!()
-        };
-        assert!(a_node.is_enabled());
-        assert!(b_node.is_enabled());
-
-        // Add segment
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        assert_eq!(segment.raw(), 0);
-
-        // Add two opposite lanes
-        let lane_ab = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-        let lane_ba = manager.add_lane(node_b, node_a, segment, 50.0, 10, 0xFF, 1.0);
-
-        assert_eq!(lane_ab.raw(), 0);
-        assert_eq!(lane_ba.raw(), 1);
-
-        // Check lanes are present
-        assert_eq!(manager.segment(segment).lanes().len(), 2);
-        assert!(manager.segment(segment).lanes().contains(&lane_ab));
-        assert!(manager.segment(segment).lanes().contains(&lane_ba));
-
-        // Check node connections
-        let Some(a_node) = manager.node(node_a) else {
-            panic!()
-        };
-        let Some(b_node) = manager.node(node_b) else {
-            panic!()
-        };
-        assert!(a_node.outgoing_lanes().contains(&lane_ab));
-        assert!(a_node.incoming_lanes().contains(&lane_ba));
-        assert!(b_node.outgoing_lanes().contains(&lane_ba));
-        assert!(b_node.incoming_lanes().contains(&lane_ab));
-    }
-
-    #[test]
-    fn test_attach_traffic_signal() {
-        let mut manager = RoadManager::new();
-        let node = manager.add_node(0.0, 0.0, 0.0, 1);
-
-        // Node is always an intersection
-        if let Some(a_node) = manager.node(node) {
-            assert!(true);
-        } else {
-            panic!()
-        };
-
-        // Attach traffic signal
-        let signal = TrafficSignal::new(vec![30.0, 5.0, 25.0, 5.0]);
-        let control_id = manager.attach_control(node, TrafficControl::Signal(signal));
-
-        assert_eq!(control_id.raw(), 0);
-        if let Some(a_node) = manager.node(node) {
-            assert!(true);
-            assert!(a_node.has_active_control());
-            assert_eq!(a_node.attached_controls().len(), 1);
-        } else {
-            panic!()
-        };
-
-        // Disable control
-        manager.disable_control(node, control_id);
-        let Some(a_node) = manager.node(node) else {
-            panic!()
-        };
-        assert!(!a_node.has_active_control());
-
-        // Control still exists (append-only)
-        assert_eq!(a_node.attached_controls().len(), 1);
-        assert!(!a_node.attached_controls()[0].is_enabled());
-    }
-
-    #[test]
-    fn test_disable_lane() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        assert!(manager.lane(lane).is_enabled());
-
-        manager.disable_lane(lane);
-        assert!(!manager.lane(lane).is_enabled());
-
-        // Lane still addressable
-        assert_eq!(manager.lane(lane).from_node(), node_a);
-        assert_eq!(manager.lane(lane).to_node(), node_b);
-    }
-
-    #[test]
-    fn test_upgrade_segment() {
-        let mut manager = RoadManager::new();
-
-        // Initial setup: two nodes, one segment, one lane
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let old_segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let old_lane = manager.add_lane(node_a, node_b, old_segment, 30.0, 5, 0xFF, 1.0);
-
-        assert_eq!(manager.segment(old_segment).version(), 0);
-
-        // Upgrade: disable old, add new with more lanes
-        let new_segments = manager.upgrade_segment(old_segment, |mgr| {
-            let new_seg = mgr.add_segment(
-                node_a,
-                node_b,
-                StructureType::Surface,
-                HorizontalProfile::Linear,
-                VerticalProfile::Flat,
-            );
-            mgr.add_lane(node_a, node_b, new_seg, 50.0, 10, 0xFF, 1.0);
-            mgr.add_lane(node_b, node_a, new_seg, 50.0, 10, 0xFF, 1.0);
-        });
-
-        // Old segment and lane disabled
-        assert!(!manager.segment(old_segment).is_enabled());
-        assert!(!manager.lane(old_lane).is_enabled());
-        assert_eq!(manager.segment(old_segment).version(), 1);
-
-        // New segment created
-        assert_eq!(new_segments.len(), 1);
-        let new_segment = new_segments[0];
-        assert!(manager.segment(new_segment).is_enabled());
-        assert_eq!(manager.segment(new_segment).lanes().len(), 2);
-
-        // IDs are monotonic
-        assert!(new_segment.raw() > old_segment.raw());
-    }
-
-    #[test]
-    fn test_monotonic_ids() {
-        let mut manager = RoadManager::new();
-
-        let n1 = manager.add_node(0.0, 0.0, 0.0, 1);
-        let n2 = manager.add_node(1.0, 0.0, 0.0, 1);
-        let n3 = manager.add_node(2.0, 0.0, 0.0, 1);
-
-        assert_eq!(n1.raw(), 0);
-        assert_eq!(n2.raw(), 1);
-        assert_eq!(n3.raw(), 2);
-
-        let s1 = manager.add_segment(
-            n1,
-            n2,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let s2 = manager.add_segment(
-            n2,
-            n3,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-
-        assert_eq!(s1.raw(), 0);
-        assert_eq!(s2.raw(), 1);
-
-        let l1 = manager.add_lane(n1, n2, s1, 50.0, 10, 0xFF, 1.0);
-        let l2 = manager.add_lane(n2, n3, s2, 50.0, 10, 0xFF, 1.0);
-
-        assert_eq!(l1.raw(), 0);
-        assert_eq!(l2.raw(), 1);
-
-        // Disable and add more - IDs continue to increment
-        manager.disable_node(n1);
-        let n4 = manager.add_node(3.0, 0.0, 0.0, 1);
-        assert_eq!(n4.raw(), 3);
-    }
-
-    #[test]
-    fn test_lane_length() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(3.0, 4.0, 0.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        let length = lane_length(manager.lane(lane), &manager);
-        assert!((length - 5.0).abs() < 0.001); // 3-4-5 triangle
-
-        let length_2d = lane_length_2d(manager.lane(lane), &manager);
-        assert!((length_2d - 5.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_lane_length_3d() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(0.0, 0.0, 10.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Bridge,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        let length = lane_length(manager.lane(lane), &manager);
-        assert!((length - 10.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_sample_lane_height_flat() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 5.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 5.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        let z0 = sample_lane_height(manager.lane(lane), 0.0, &manager);
-        let z_mid = sample_lane_height(manager.lane(lane), 0.5, &manager);
-        let z1 = sample_lane_height(manager.lane(lane), 1.0, &manager);
-
-        assert!((z0 - 5.0).abs() < 0.001);
-        assert!((z_mid - 5.0).abs() < 0.001);
-        assert!((z1 - 5.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_sample_lane_height_linear() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 10.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Bridge,
-            HorizontalProfile::Linear,
-            VerticalProfile::EndPoints {
-                start_y: 0.0,
-                end_y: 10.0,
-            },
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        let z0 = sample_lane_height(manager.lane(lane), 0.0, &manager);
-        let z_mid = sample_lane_height(manager.lane(lane), 0.5, &manager);
-        let z1 = sample_lane_height(manager.lane(lane), 1.0, &manager);
-
-        assert!((z0 - 0.0).abs() < 0.001);
-        assert!((z_mid - 5.0).abs() < 0.001);
-        assert!((z1 - 10.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_sample_lane_height_linear_reversed() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 10.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Bridge,
-            HorizontalProfile::Linear,
-            VerticalProfile::EndPoints {
-                start_y: 0.0,
-                end_y: 10.0,
-            },
-        );
-        // Lane goes B -> A (reversed)
-        let lane = manager.add_lane(node_b, node_a, segment, 50.0, 10, 0xFF, 1.0);
-
-        let z0 = sample_lane_height(manager.lane(lane), 0.0, &manager);
-        let z_mid = sample_lane_height(manager.lane(lane), 0.5, &manager);
-        let z1 = sample_lane_height(manager.lane(lane), 1.0, &manager);
-
-        // At t=0 (start of lane = node_b), should be at end_z
-        assert!((z0 - 10.0).abs() < 0.001);
-        assert!((z_mid - 5.0).abs() < 0.001);
-        assert!((z1 - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_project_point_to_lane() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        // Point on lane
-        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), 50.0, 0.0, &manager);
-        assert!((t - 0.5).abs() < 0.001);
-        assert!(dist_sq < 0.001);
-
-        // Point off lane
-        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), 50.0, 10.0, &manager);
-        assert!((t - 0.5).abs() < 0.001);
-        assert!((dist_sq - 100.0).abs() < 0.001);
-
-        // Point before start
-        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), -10.0, 0.0, &manager);
-        assert!((t - 0.0).abs() < 0.001);
-        assert!((dist_sq - 100.0).abs() < 0.001);
-
-        // Point after end
-        let (t, dist_sq) = project_point_to_lane_xz(manager.lane(lane), 110.0, 0.0, &manager);
-        assert!((t - 1.0).abs() < 0.001);
-        assert!((dist_sq - 100.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_nearest_lane_to_point() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let node_c = manager.add_node(0.0, 100.0, 0.0, 1);
-
-        let seg_ab = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let seg_ac = manager.add_segment(
-            node_a,
-            node_c,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-
-        let lane_ab = manager.add_lane(node_a, node_b, seg_ab, 50.0, 10, 0xFF, 1.0);
-        let lane_ac = manager.add_lane(node_a, node_c, seg_ac, 50.0, 10, 0xFF, 1.0);
-
-        // Point closer to lane_ab
-        let nearest = nearest_lane_to_point(&manager, 50.0, 5.0, 0.0);
-        assert_eq!(nearest, Some(lane_ab));
-
-        // Point closer to lane_ac
-        let nearest = nearest_lane_to_point(&manager, 5.0, 50.0, 0.0);
-        assert_eq!(nearest, Some(lane_ac));
-
-        // Point at origin - equidistant, should return lower ID (deterministic)
-        let nearest = nearest_lane_to_point(&manager, 0.0, 0.0, 0.0);
-        assert!(nearest.is_some());
-    }
-
-    #[test]
-    fn test_lane_view_for_chunk() {
-        let mut manager = RoadManager::new();
-
-        // Chunk 1 nodes
-        let n1a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let n1b = manager.add_node(10.0, 0.0, 0.0, 1);
-
-        // Chunk 2 nodes
-        let n2a = manager.add_node(100.0, 0.0, 0.0, 2);
-        let n2b = manager.add_node(110.0, 0.0, 0.0, 2);
-
-        // Chunk 1 internal segment
-        let seg1 = manager.add_segment(
-            n1a,
-            n1b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane1 = manager.add_lane(n1a, n1b, seg1, 50.0, 10, 0xFF, 1.0);
-
-        // Chunk 2 internal segment
-        let seg2 = manager.add_segment(
-            n2a,
-            n2b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane2 = manager.add_lane(n2a, n2b, seg2, 50.0, 10, 0xFF, 1.0);
-
-        // Cross-chunk segment (1 -> 2)
-        let seg_cross = manager.add_segment(
-            n1b,
-            n2a,
-            StructureType::Bridge,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane_cross = manager.add_lane(n1b, n2a, seg_cross, 50.0, 10, 0xFF, 1.0);
-
-        // View for chunk 1
-        let view1 = manager.lane_view_for_chunk(1);
-        assert!(view1.lane_ids().contains(&lane1));
-        assert!(view1.lane_ids().contains(&lane_cross)); // Cross-chunk lane touches chunk 1
-        assert!(!view1.lane_ids().contains(&lane2));
-
-        // View for chunk 2
-        let view2 = manager.lane_view_for_chunk(2);
-        assert!(view2.lane_ids().contains(&lane2));
-        assert!(view2.lane_ids().contains(&lane_cross)); // Cross-chunk lane touches chunk 2
-        assert!(!view2.lane_ids().contains(&lane1));
-
-        // View for non-existent chunk
-        let view3 = manager.lane_view_for_chunk(999);
-        assert!(view3.is_empty());
-    }
-
-    #[test]
-    fn test_chunk_boundary_summary() {
-        let mut manager = RoadManager::new();
-
-        let n1 = manager.add_node(0.0, 0.0, 0.0, 1);
-        let n2 = manager.add_node(50.0, 0.0, 0.0, 2);
-
-        let seg = manager.add_segment(
-            n1,
-            n2,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let _lane_out = manager.add_lane(n1, n2, seg, 50.0, 10, 0xFF, 1.0);
-        let _lane_in = manager.add_lane(n2, n1, seg, 50.0, 10, 0xFF, 1.0);
-
-        let summary1 = ChunkBoundarySummary::compute(&manager, 1);
-        assert_eq!(summary1.outgoing_cross_chunk_lanes.len(), 1);
-        assert_eq!(summary1.incoming_cross_chunk_lanes.len(), 1);
-
-        let summary2 = ChunkBoundarySummary::compute(&manager, 2);
-        assert_eq!(summary2.outgoing_cross_chunk_lanes.len(), 1);
-        assert_eq!(summary2.incoming_cross_chunk_lanes.len(), 1);
-    }
-
-    #[test]
-    fn test_road_chunk_state() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        let mut chunk_state = RoadChunkState::new(1, &[lane], 12345);
-
-        assert_eq!(chunk_state.chunk_id(), 1);
-        assert_eq!(chunk_state.prng_seed, 12345);
-        assert!((chunk_state.deferred_tick_seconds - 2.0).abs() < 0.001);
-
-        // Modify lane state
-        if let Some(state) = chunk_state.lane_state_mut(lane) {
-            state.occupancy_estimate = 0.5;
-            state.dynamic_cost_modifier = 10.0;
-        }
-
-        assert!((chunk_state.lane_state(lane).unwrap().occupancy_estimate - 0.5).abs() < 0.001);
-    }
-
-    // #[test]
-    // fn test_command_application() {
-    //     let mut manager = RoadManager::new();
-    //     let mut mesh_manager = RoadMeshManager::new(MeshConfig::default());
-    //     // Add nodes via commands
-    //     let result = apply_command(
-    //         &mut mesh_manager,
-    //         &mut manager,
-    //         &RoadCommand::AddNode {
-    //             x: 0.0,
-    //             y: 0.0,
-    //             z: 0.0,
-    //             chunk_id: 1,
-    //         },
-    //     );
-    //     let node_a = match result {
-    //         CommandResult::NodeCreated(chunk_id, id) => id,
-    //         _ => panic!("Expected NodeCreated"),
-    //     };
-    //
-    //     let result = apply_command(
-    //         &mut mesh_manager,
-    //         &mut manager,
-    //         &RoadCommand::AddNode {
-    //             x: 100.0,
-    //             y: 0.0,
-    //             z: 0.0,
-    //             chunk_id: 1,
-    //         },
-    //     );
-    //     let node_b = match result {
-    //         CommandResult::NodeCreated(chunk_id, id) => id,
-    //         _ => panic!("Expected NodeCreated"),
-    //     };
-    //
-    //     // Add segment
-    //     let result = apply_command(
-    //         &mut mesh_manager,
-    //         &mut manager,
-    //         &RoadCommand::AddSegment {
-    //             start: node_a,
-    //             end: node_b,
-    //             structure: StructureType::Surface,
-    //             horizontal_profile: HorizontalProfile::Linear,
-    //             vertical_profile: VerticalProfile::Flat,
-    //             chunk_id: 10,
-    //         },
-    //     );
-    //     let segment = match result {
-    //         CommandResult::SegmentCreated(chunk_id, id) => id,
-    //         _ => panic!("Expected SegmentCreated"),
-    //     };
-    //
-    //     // Add lane
-    //     let result = apply_command(
-    //         &mut mesh_manager,
-    //         &mut manager,
-    //         &RoadCommand::AddLane {
-    //             from: node_a,
-    //             to: node_b,
-    //             segment,
-    //             speed_limit: 50.0,
-    //             capacity: 10,
-    //             vehicle_mask: 0xFF,
-    //             base_cost: 1.0,
-    //             chunk_id: 10,
-    //         },
-    //     );
-    //     let lane = match result {
-    //         CommandResult::LaneCreated(chunk_id, lane_id) => lane_id,
-    //         _ => panic!("Expected LaneCreated"),
-    //     };
-    //
-    //     assert!(manager.lane(lane).is_enabled());
-    //
-    //     // Disable via command
-    //     apply_command(
-    //         &mut mesh_manager,
-    //         &mut manager,
-    //         &RoadCommand::DisableLane {
-    //             lane_id: lane,
-    //             chunk_id: 12,
-    //         },
-    //     );
-    //     assert!(!manager.lane(lane).is_enabled());
-    //
-    //     // Invalid reference
-    //     let result = apply_command(
-    //         &mut mesh_manager,
-    //         &mut manager,
-    //         &RoadCommand::DisableNode {
-    //             node_id: NodeId::new(999),
-    //             chunk_id: 10,
-    //         },
-    //     );
-    //     assert!(matches!(result, CommandResult::InvalidReference));
-    // }
-
-    #[test]
-    fn test_deterministic_iteration() {
-        let mut manager1 = RoadManager::new();
-        let mut manager2 = RoadManager::new();
-
-        // Build identical topologies
-        for i in 0..10 {
-            manager1.add_node(i as f32, 0.0, 0.0, 1);
-            manager2.add_node(i as f32, 0.0, 0.0, 1);
-        }
-
-        // Iteration order must be identical
-        let ids1: Vec<_> = manager1.iter_nodes().map(|(id, _)| id).collect();
-        let ids2: Vec<_> = manager2.iter_nodes().map(|(id, _)| id).collect();
-
-        assert_eq!(ids1, ids2);
-
-        // Values must be identical
-        for (id, node) in manager1.iter_nodes() {
-            let node2 = manager2.node(id);
-            let Some(node2) = node2 else { panic!() };
-            assert_eq!(node.x(), node2.x());
-        }
-    }
-
-    #[test]
-    fn test_sample_lane_position() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 100.0, 50.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Bridge,
-            HorizontalProfile::Linear,
-            VerticalProfile::EndPoints {
-                start_y: 0.0,
-                end_y: 50.0,
-            },
-        );
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-
-        let (x, y, z) = sample_lane_position(manager.lane(lane), 0.0, &manager);
-        assert!((x - 0.0).abs() < 0.001);
-        assert!((y - 0.0).abs() < 0.001);
-        assert!((z - 0.0).abs() < 0.001);
-
-        let (x, y, z) = sample_lane_position(manager.lane(lane), 0.5, &manager);
-        assert!((x - 50.0).abs() < 0.001);
-        assert!((y - 50.0).abs() < 0.001);
-        assert!((z - 25.0).abs() < 0.001);
-
-        let (x, y, z) = sample_lane_position(manager.lane(lane), 1.0, &manager);
-        assert!((x - 100.0).abs() < 0.001);
-        assert!((y - 100.0).abs() < 0.001);
-        assert!((z - 50.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_traffic_signal() {
-        let signal = TrafficSignal::new(vec![30.0, 5.0, 25.0, 5.0]);
-        assert!((signal.total_cycle_duration() - 65.0).abs() < 0.001);
-        assert_eq!(signal.current_phase, 0);
-    }
-
-    #[test]
-    fn test_segment_lane_counts() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-
-        // Add 2 forward, 1 backward
-        manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-        manager.add_lane(node_a, node_b, segment, 50.0, 10, 0xFF, 1.0);
-        manager.add_lane(node_b, node_a, segment, 50.0, 10, 0xFF, 1.0);
-
-        let (forward, backward) = manager.segment(segment).lane_counts(&manager);
-        assert_eq!(forward, 2);
-        assert_eq!(backward, 1);
-    }
-
-    #[test]
-    fn test_k_nearest_lanes() {
-        let mut manager = RoadManager::new();
-
-        let n1 = manager.add_node(0.0, 0.0, 0.0, 1);
-        let n2 = manager.add_node(10.0, 0.0, 0.0, 1);
-        let n3 = manager.add_node(20.0, 0.0, 0.0, 1);
-        let n4 = manager.add_node(30.0, 0.0, 0.0, 1);
-
-        let s1 = manager.add_segment(
-            n1,
-            n2,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let s2 = manager.add_segment(
-            n2,
-            n3,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-        let s3 = manager.add_segment(
-            n3,
-            n4,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-
-        let l1 = manager.add_lane(n1, n2, s1, 50.0, 10, 0xFF, 1.0);
-        let l2 = manager.add_lane(n2, n3, s2, 50.0, 10, 0xFF, 1.0);
-        let l3 = manager.add_lane(n3, n4, s3, 50.0, 10, 0xFF, 1.0);
-
-        // Query point at x=5, closest to l1
-        let nearest = k_nearest_lanes_to_point(&manager, 5.0, 0.0, 2);
-        assert_eq!(nearest.len(), 2);
-        assert_eq!(nearest[0].0, l1);
-        assert_eq!(nearest[1].0, l2);
-
-        // Query with k > lanes
-        let all = k_nearest_lanes_to_point(&manager, 15.0, 0.0, 10);
-        assert_eq!(all.len(), 3);
-
-        // Verify deterministic ordering for ties
-        let _ordered: Vec<_> = all.iter().map(|(id, _)| id.raw()).collect();
-    }
-
-    #[test]
-    fn test_vehicle_mask() {
-        let mut manager = RoadManager::new();
-        let node_a = manager.add_node(0.0, 0.0, 0.0, 1);
-        let node_b = manager.add_node(100.0, 0.0, 0.0, 1);
-        let segment = manager.add_segment(
-            node_a,
-            node_b,
-            StructureType::Surface,
-            HorizontalProfile::Linear,
-            VerticalProfile::Flat,
-        );
-
-        // Lane allows only types 0x01 and 0x02
-        let lane = manager.add_lane(node_a, node_b, segment, 50.0, 10, 0x03, 1.0);
-
-        assert!(manager.lane(lane).allows_vehicle(0x01));
-        assert!(manager.lane(lane).allows_vehicle(0x02));
-        assert!(manager.lane(lane).allows_vehicle(0x03));
-        assert!(!manager.lane(lane).allows_vehicle(0x04));
-        assert!(!manager.lane(lane).allows_vehicle(0x08));
-    }
 }

@@ -77,9 +77,9 @@ impl RoadRenderSubsystem {
         picked_point: &Option<PickedPoint>,
     ) {
         // Get commands from road editor
-        let road_commands = self
-            .road_editor
-            .update(&self.road_manager, input, picked_point);
+        let road_commands =
+            self.road_editor
+                .update(&self.road_manager, terrain_renderer, input, picked_point);
 
         // === NEW: Capture preview state before applying commands ===
         self.preview_state.ingest(&road_commands);
