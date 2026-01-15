@@ -295,6 +295,8 @@ impl RenderCore {
             input_state,
             &self.terrain_renderer.last_picked,
         );
+
+        self.gizmo.update(&self.road_renderer.road_manager);
     }
     pub(crate) fn render(
         &mut self,
@@ -530,7 +532,7 @@ fn render_gizmo(
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
-                depth_compare: CompareFunction::Less,
+                depth_compare: CompareFunction::Always,
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -833,10 +835,25 @@ fn render_terrain(
     camera: &Camera,
     aspect: f32,
 ) {
+    let grass_key = TextureCacheKey {
+        kind: MaterialKind::Grass,
+        params: Params {
+            seed: 3,
+            scale: 16.0,
+            roughness: 0.7,
+            _padding: 0,
+            color_primary: [0.02, 0.02, 0.02, 1.0],
+            color_secondary: [0.080, 0.080, 0.080, 1.0],
+        },
+        resolution: 512,
+    };
+    let terrain_material_keys = vec![
+        grass_key, // 0
+    ];
     pass.set_stencil_reference(0);
     let terrain_shader_path = shader_dir().join("terrain.wgsl");
     render_manager.render(
-        Vec::new(),
+        terrain_material_keys.clone(),
         "Terrain Pipeline (Above Water)",
         terrain_shader_path.as_path(), // file containing full vertex+fragment shader
         PipelineOptions {
@@ -879,7 +896,7 @@ fn render_terrain(
 
     pass.set_stencil_reference(1);
     render_manager.render(
-        Vec::new(),
+        terrain_material_keys,
         "Terrain Pipeline (Under Water)",
         terrain_shader_path.as_path(), // file containing full vertex+fragment shader
         PipelineOptions {

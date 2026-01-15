@@ -32,7 +32,7 @@ impl MaterialBindGroupManager {
             min_filter: FilterMode::Linear,
             mipmap_filter: MipmapFilterMode::Linear,
             lod_max_clamp: f32::MAX,
-            anisotropy_clamp: 8,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
 

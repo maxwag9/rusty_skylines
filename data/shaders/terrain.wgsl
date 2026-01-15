@@ -40,7 +40,8 @@ struct PickUniform {
     underwater: u32,
     color: vec3<f32>,
 }
-@group(0) @binding(0) var texture_sampler: sampler;
+@group(0) @binding(0) var grass_tex: texture_2d<f32>;
+@group(0) @binding(1) var material_sampler: sampler;
 @group(1) @binding(0)
 var<uniform> uniforms: Uniforms;
 
@@ -82,6 +83,8 @@ fn hash2(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
 }
 
+fn saturate(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
@@ -117,6 +120,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // Subtle green boost for lush grass look
     base_color.g *= 1.0 + grass_amount * 0.25;
+
+    // ---- Sample grass texture (group 0 binding 0) ----
+    // derive a tiled UV from world position; tweak scale to taste
+    let grass_uv_scale: f32 = 0.025; // world units -> texture space
+    let grass_uv = in.world_pos.xz * grass_uv_scale;
+    let grass_sample = textureSample(grass_tex, material_sampler, grass_uv).rgb;
+
+    // Blend between vertex color/procedural base and the grass texture using grass_amount.
+    // Slightly tint sampled texture by procedural shade for variety.
+    let grass_tint = grass_sample * (0.85 + 0.3 * grass_pattern);
+    base_color = mix(base_color, grass_tint, grass_amount);
     // ======================================
 
     let dist = distance(in.world_pos, uniforms.camera_pos);

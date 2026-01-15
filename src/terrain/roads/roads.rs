@@ -599,9 +599,9 @@ impl Lane {
 /// All ID allocation is monotonic and deterministic.
 /// Iteration order is stable and matches insertion order.
 pub struct RoadManager {
-    pub(crate) nodes: Vec<Node>,
-    pub(crate) segments: Vec<Segment>,
-    lanes: Vec<Lane>,
+    pub nodes: Vec<Node>,
+    pub segments: Vec<Segment>,
+    pub lanes: Vec<Lane>,
 }
 
 // Safety: RoadManager uses no interior mutability.

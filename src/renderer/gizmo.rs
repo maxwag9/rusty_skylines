@@ -1,3 +1,4 @@
+use crate::terrain::roads::roads::RoadManager;
 use crate::ui::vertex::LineVtx;
 use glam::Vec3;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
@@ -13,7 +14,24 @@ pub struct Gizmo {
 }
 
 impl Gizmo {
-    pub(crate) fn new(device: &Device) -> Self {
+    pub fn update(&mut self, road_manager: &RoadManager) {
+        for node_b in &road_manager.nodes {
+            self.render_circle([node_b.x, node_b.y, node_b.z], 2.0, [1.0, 0.0, 0.0]);
+            for lane_id in node_b.incoming_lanes.iter() {
+                let lane = road_manager.lane(*lane_id);
+                let Some(node_a) = road_manager.node(lane.from_node()) else {
+                    continue;
+                };
+                self.render_arrow(
+                    [node_a.x, node_a.y, node_a.z],
+                    [node_b.x, node_b.y, node_b.z],
+                    [0.0, 1.0, 0.0],
+                );
+            }
+        }
+    }
+
+    pub fn new(device: &Device) -> Self {
         let gizmo_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Ez Gizmo VB"),
             size: (size_of::<LineVtx>() * 2048) as u64,
