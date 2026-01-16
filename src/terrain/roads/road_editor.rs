@@ -1,8 +1,6 @@
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
 use crate::resources::InputState;
-use crate::terrain::roads::road_mesh_manager::{
-    CLEARANCE, ChunkId, ConnectedSegmentInfo, CrossSection, HorizontalProfile, SegmentGeometry,
-};
+use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId, HorizontalProfile};
 use crate::terrain::roads::roads::{
     LaneId, NodeId, RoadCommand, RoadManager, SegmentId, StructureType, VerticalProfile,
     nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
@@ -13,6 +11,11 @@ const NODE_SNAP_RADIUS: f32 = 8.0;
 const LANE_SNAP_RADIUS: f32 = 8.0;
 const ENDPOINT_T_EPS: f32 = 0.02;
 const MIN_SEGMENT_LENGTH: f32 = 1.0;
+const DEFAULT_LANE_WIDTH: f32 = 3.5;
+
+// ============================================================================
+// Types & Structs
+// ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoadType {
@@ -95,6 +98,14 @@ pub struct SnapPreview {
     pub world_pos: Vec3,
     pub kind: SnapKind,
     pub distance: f32,
+}
+
+/// Simplified connection info for previews, replacing the old MeshManager version
+#[derive(Debug, Clone)]
+pub struct ConnectedSegmentInfo {
+    pub direction_xz: [f32; 2],
+    pub node_is_start: bool,
+    pub segment_id: Option<SegmentId>,
 }
 
 #[derive(Debug, Clone)]
@@ -245,6 +256,10 @@ impl IdAllocator {
         id
     }
 }
+
+// ============================================================================
+// Road Editor Implementation
+// ============================================================================
 
 pub struct RoadEditor {
     state: EditorState,
@@ -676,27 +691,16 @@ impl RoadEditor {
                 let (in_lanes, out_lanes) = gather_node_lanes(manager, node_id);
                 let connected = manager.segments_connected_to_node(node_id);
                 let mut connections = Vec::new();
-                for segment_id in connected {
+
+                for &segment_id in &connected {
+                    let dir_xz = get_segment_direction_away_from_node(manager, segment_id, node_id);
                     let segment = manager.segment(segment_id);
-                    let Some(geom) = SegmentGeometry::from_segment(segment_id, segment, manager)
-                    else {
-                        continue;
-                    };
-                    let cross_section = CrossSection::from_segment(manager, segment);
-
                     let is_start = segment.start() == node_id;
-                    let (t_at_node, direction_sign) =
-                        if is_start { (0.0, 1.0) } else { (1.0, -1.0) };
-
-                    let tangent = geom.tangent_xz(t_at_node);
-                    let direction = [tangent[0] * direction_sign, tangent[1] * direction_sign];
 
                     connections.push(ConnectedSegmentInfo {
-                        direction_xz: direction,
-                        _tangent_xz: tangent,
-                        segment_id: None,
-                        cross_section,
+                        direction_xz: dir_xz,
                         node_is_start: is_start,
+                        segment_id: Some(segment_id),
                     });
                 }
                 (
@@ -1096,7 +1100,7 @@ impl RoadEditor {
                     to: new_node_id,
                     segment: seg1_id,
                     lane_index,
-                    lane_width: 2.5,
+                    lane_width: DEFAULT_LANE_WIDTH,
                     speed_limit: speed,
                     capacity: cap,
                     vehicle_mask: mask,
@@ -1108,7 +1112,7 @@ impl RoadEditor {
                     to: b_id,
                     segment: seg2_id,
                     lane_index,
-                    lane_width: 2.5,
+                    lane_width: DEFAULT_LANE_WIDTH,
                     speed_limit: speed,
                     capacity: cap,
                     vehicle_mask: mask,
@@ -1121,7 +1125,7 @@ impl RoadEditor {
                     to: new_node_id,
                     segment: seg2_id,
                     lane_index,
-                    lane_width: 2.5,
+                    lane_width: DEFAULT_LANE_WIDTH,
                     speed_limit: speed,
                     capacity: cap,
                     vehicle_mask: mask,
@@ -1133,7 +1137,7 @@ impl RoadEditor {
                     to: a_id,
                     segment: seg1_id,
                     lane_index,
-                    lane_width: 2.5,
+                    lane_width: DEFAULT_LANE_WIDTH,
                     speed_limit: speed,
                     capacity: cap,
                     vehicle_mask: mask,
@@ -1169,7 +1173,7 @@ impl RoadEditor {
                 to: end,
                 segment,
                 lane_index,
-                lane_width: 2.5,
+                lane_width: DEFAULT_LANE_WIDTH,
                 speed_limit: speed,
                 capacity,
                 vehicle_mask: mask,
@@ -1186,7 +1190,7 @@ impl RoadEditor {
                 to: start,
                 segment,
                 lane_index,
-                lane_width: 2.5,
+                lane_width: DEFAULT_LANE_WIDTH,
                 speed_limit: speed,
                 capacity,
                 vehicle_mask: mask,
@@ -1197,6 +1201,10 @@ impl RoadEditor {
     }
 }
 
+// ============================================================================
+// Helpers
+// ============================================================================
+
 fn sample_quadratic_bezier(p0: Vec3, p1: Vec3, p2: Vec3, segments: usize) -> Vec<Vec3> {
     let segments = segments.max(1);
     let mut points = Vec::with_capacity(segments + 1);
@@ -1204,12 +1212,9 @@ fn sample_quadratic_bezier(p0: Vec3, p1: Vec3, p2: Vec3, segments: usize) -> Vec
     for i in 0..=segments {
         let t = i as f32 / segments as f32;
         let one_minus_t = 1.0 - t;
-
         let point = p0 * (one_minus_t * one_minus_t) + p1 * (2.0 * one_minus_t * t) + p2 * (t * t);
-
         points.push(point);
     }
-
     points
 }
 
@@ -1234,7 +1239,6 @@ fn gather_node_lanes(manager: &RoadManager, node_id: NodeId) -> (Vec<LaneId>, Ve
     let Some(node) = manager.node(node_id) else {
         return (Vec::new(), Vec::new());
     };
-
     (
         node.incoming_lanes().to_vec(),
         node.outgoing_lanes().to_vec(),
@@ -1242,13 +1246,56 @@ fn gather_node_lanes(manager: &RoadManager, node_id: NodeId) -> (Vec<LaneId>, Ve
 }
 
 fn gather_split_lanes(manager: &RoadManager, lane_id: LaneId) -> (Vec<LaneId>, Vec<LaneId>) {
-    let lane = manager.lane(lane_id);
+    // At a split point: from → new_node is incoming, new_node → to is outgoing
+    (vec![lane_id], vec![lane_id])
+}
 
-    // At a split point:
-    // from → new_node is incoming
-    // new_node → to is outgoing
-    (
-        vec![lane_id], // incoming
-        vec![lane_id], // outgoing
-    )
+/// Computes the tangent of a segment at a node, pointing AWAY from the node.
+fn get_segment_direction_away_from_node(
+    manager: &RoadManager,
+    segment_id: SegmentId,
+    node_id: NodeId,
+) -> [f32; 2] {
+    let segment = manager.segment(segment_id);
+    let is_start = segment.start() == node_id;
+
+    let start_node = manager.node(segment.start()).unwrap();
+    let end_node = manager.node(segment.end()).unwrap();
+    let p0 = Vec3::new(start_node.x, 0.0, start_node.z);
+    let p3 = Vec3::new(end_node.x, 0.0, end_node.z);
+
+    // Get tangent vector in start->end direction
+    let dir_vec = match segment.horizontal_profile {
+        HorizontalProfile::Linear => (p3 - p0).normalize_or_zero(),
+        HorizontalProfile::QuadraticBezier { control } => {
+            let p1 = Vec3::new(control[0], 0.0, control[1]);
+            // derivative at t=0 is (p1-p0), at t=1 is (p3-p1)
+            if is_start {
+                (p1 - p0).normalize_or_zero()
+            } else {
+                (p3 - p1).normalize_or_zero()
+            }
+        }
+        HorizontalProfile::CubicBezier { control1, control2 } => {
+            let p1 = Vec3::new(control1[0], 0.0, control1[1]);
+            let p2 = Vec3::new(control2[0], 0.0, control2[1]);
+            if is_start {
+                (p1 - p0).normalize_or_zero()
+            } else {
+                (p3 - p2).normalize_or_zero()
+            }
+        }
+        HorizontalProfile::Arc { .. } => (p3 - p0).normalize_or_zero(),
+    };
+
+    let dir_2d = [dir_vec.x, dir_vec.z];
+
+    // If node is start, the vector p0->p1 points AWAY.
+    // If node is end, the vector p_prev->p_end points INTO.
+    // We want the vector pointing AWAY from the node.
+    if is_start {
+        dir_2d
+    } else {
+        [-dir_2d[0], -dir_2d[1]]
+    }
 }

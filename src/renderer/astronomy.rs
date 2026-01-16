@@ -21,13 +21,26 @@ pub struct TimeScales {
 }
 
 impl TimeScales {
-    pub fn from_game_time(total_game_time: f64) -> Self {
+    pub fn from_game_time(total_game_time: f64, always_day: bool) -> Self {
         let day_length: f32 = 960.0;
         let total_days: f32 = (total_game_time / day_length as f64) as f32;
-        let day_phase = total_days % 1.0;
+
+        let base_day_phase = total_days % 1.0;
+
+        let day_phase = if always_day {
+            // ping-pong between morning (0.25) and noon (0.5)
+            let t = (total_game_time as f32 / day_length) * TAU;
+            let ping_pong = t.sin().abs(); // 0 → 1 → 0
+            0.25 + 0.25 * ping_pong
+        } else {
+            base_day_phase
+        };
+
         let day_angle = day_phase * TAU;
+
         let year_phase = (total_days / 365.0) % 1.0;
         let year_angle = year_phase * TAU;
+
         let base_year = 2026.0;
         let current_year = base_year + total_days / 365.0;
 

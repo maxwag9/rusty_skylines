@@ -16,7 +16,7 @@ use crate::renderer::ui::UiRenderer;
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
-use crate::terrain::roads::road_mesh_manager::{CrossSection, CrossSectionRegion, RoadVertex};
+use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::terrain::water::SimpleVertex;
@@ -153,50 +153,6 @@ impl RenderCore {
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
             .expect("Failed to create UI pipelines");
         let world = TerrainRenderer::new(&device, settings);
-        let cross_section = CrossSection {
-            regions: vec![
-                CrossSectionRegion {
-                    width: 0.01,
-                    material_id: 0,
-                    height: 0.001,
-                },
-                // Left shoulder
-                CrossSectionRegion {
-                    width: 1.0,
-                    material_id: 0,
-                    height: 0.1,
-                },
-                // Left lane
-                CrossSectionRegion {
-                    width: 2.5,
-                    material_id: 2,
-                    height: 0.001,
-                },
-                // // Center line (thin for markings)
-                // CrossSectionRegion {
-                //     width: 0.08,
-                //     material_id: 0,
-                //     height: 0.002,
-                // },
-                // Right lane
-                CrossSectionRegion {
-                    width: 2.5,
-                    material_id: 2,
-                    height: 0.001,
-                },
-                // Right shoulder
-                CrossSectionRegion {
-                    width: 1.0,
-                    material_id: 0,
-                    height: 0.1,
-                },
-                CrossSectionRegion {
-                    width: 0.01,
-                    material_id: 0,
-                    height: 0.001,
-                },
-            ],
-        };
         let road_renderer = RoadRenderSubsystem::new(&device);
         let arena = GeneralMeshArena::new(
             &device,
@@ -250,7 +206,7 @@ impl RenderCore {
         let orbit_radius = camera.orbit_radius;
 
         // Compute time and astronomy
-        let time_scales = TimeScales::from_game_time(time.total_game_time);
+        let time_scales = TimeScales::from_game_time(time.total_game_time, settings.always_day);
         let observer = ObserverParams::new(time_scales.day_angle);
         let astronomy = compute_astronomy(&time_scales);
 

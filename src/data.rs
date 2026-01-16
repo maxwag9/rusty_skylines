@@ -47,6 +47,7 @@ struct PartialSettings {
     world_generation_benchmark_mode: Option<bool>,
     bend_mode: Option<BendMode>,
     show_world: Option<bool>,
+    always_day: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -64,6 +65,7 @@ pub struct Settings {
     pub world_generation_benchmark_mode: bool,
     pub bend_mode: BendMode,
     pub show_world: bool,
+    pub always_day: bool,
 }
 
 impl Default for Settings {
@@ -80,6 +82,7 @@ impl Default for Settings {
             world_generation_benchmark_mode: false,
             bend_mode: BendMode::Strict,
             show_world: true,
+            always_day: false,
         }
     }
 }
@@ -154,6 +157,9 @@ impl Settings {
         }
         if let Some(v) = p.show_world {
             s.show_world = v;
+        }
+        if let Some(v) = p.always_day {
+            s.always_day = v;
         }
         s
     }

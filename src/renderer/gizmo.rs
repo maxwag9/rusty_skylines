@@ -17,7 +17,8 @@ pub struct Gizmo {
 impl Gizmo {
     pub fn update(&mut self, total_game_time: f64, road_manager: &RoadManager) {
         self.total_game_time = total_game_time;
-
+        let render_disabled_lanes = false;
+        let render_arrow_lane_to_node = false;
         for node in &road_manager.nodes {
             // 1. Render the Node
             let node_color = if node.enabled {
@@ -42,23 +43,21 @@ impl Gizmo {
                         [0.2, 0.9, 0.0]
                     }
                 } else {
+                    if !render_disabled_lanes {
+                        continue;
+                    }
                     [1.0, 0.05, 0.0]
                 };
 
                 // 3. Safe Polyline Iteration
                 // .windows(2) gives [current, next] safely and stops before the overflow, such a cool function, you learn something new every day...!
-                for points in lane.polyline().windows(2) {
-                    let start = points[0];
-                    let end = points[1];
+                let poly: Vec<[f32; 3]> = lane.polyline().iter().map(|p| [p.x, p.y, p.z]).collect();
 
-                    self.render_arrow(
-                        [start.x, start.y, start.z],
-                        [end.x, end.y, end.z],
-                        lane_color,
-                        false,
-                    );
-                }
-                if let Some(end) = lane.polyline().last() {
+                self.render_polyline(&poly, lane_color, false);
+
+                if let Some(end) = lane.polyline().last()
+                    && render_arrow_lane_to_node
+                {
                     self.render_arrow(
                         [end.x, end.y, end.z],
                         [node.x, node.y, node.z],
@@ -176,6 +175,14 @@ impl Gizmo {
             vertices: circle_vertices,
         })
     }
+    pub fn render_line(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3]) {
+        let line_vertices = [LineVtx { pos: start, color }, LineVtx { pos: end, color }];
+
+        self.pending_renders.push(PendingGizmoRender {
+            vertices: line_vertices.to_vec(),
+        });
+    }
+
     pub fn render_arrow(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3], dashed: bool) {
         let mut vertices = Vec::<LineVtx>::new();
 
@@ -196,12 +203,12 @@ impl Gizmo {
         // Normalized dash parameters --------------------------------------------
 
         // Visual rule: about one arrow head every ~5 meters
-        let target_spacing = 5.0;
+        let target_spacing = 150.0;
         let steps = (len / target_spacing).ceil().max(1.0);
-        let step_len = len / steps;
+        let step_len = target_spacing;
 
         // Dash ratio
-        let dash_ratio = if dashed { 0.6 } else { 1.0 };
+        let dash_ratio = if dashed { 0.8 } else { 1.0 };
         let dash_len = step_len * dash_ratio;
 
         // Collect arrow-head positions (from END backwards)
@@ -268,7 +275,7 @@ impl Gizmo {
 
         // Arrow head params -----------------------------------------------------
 
-        let head_len = step_len * 0.15;
+        let head_len = 0.15;
         let head_width = 0.30;
 
         let spin_speed = 1.0;
@@ -285,7 +292,7 @@ impl Gizmo {
             let by = py - ny * head_len;
             let bz = pz - nz * head_len;
 
-            let angle = time * spin_speed + i as f32 * 0.6;
+            let angle = time * spin_speed + (i as f32 * 12.9898).sin() * 3.14;
             let c = angle.cos();
             let s = angle.sin();
 
@@ -320,6 +327,169 @@ impl Gizmo {
                 ],
                 color: flap_color,
             });
+        }
+
+        self.pending_renders.push(PendingGizmoRender { vertices });
+    }
+
+    pub fn render_polyline(&mut self, polyline: &[[f32; 3]], color: [f32; 3], dashed: bool) {
+        if polyline.len() < 2 {
+            return;
+        }
+
+        let mut vertices = Vec::<LineVtx>::new();
+
+        // ---------- draw full shaft first ----------
+
+        for i in 0..polyline.len() - 1 {
+            vertices.push(LineVtx {
+                pos: polyline[i],
+                color,
+            });
+            vertices.push(LineVtx {
+                pos: polyline[i + 1],
+                color,
+            });
+        }
+
+        // ---------- cumulative lengths ----------
+
+        let mut lengths = Vec::with_capacity(polyline.len());
+        lengths.push(0.0);
+
+        for i in 1..polyline.len() {
+            let dx = polyline[i][0] - polyline[i - 1][0];
+            let dy = polyline[i][1] - polyline[i - 1][1];
+            let dz = polyline[i][2] - polyline[i - 1][2];
+            lengths.push(lengths[i - 1] + (dx * dx + dy * dy + dz * dz).sqrt());
+        }
+
+        let total_len = *lengths.last().unwrap();
+        if total_len <= 0.0001 {
+            return;
+        }
+
+        // ---------- arrow parameters ----------
+
+        let spacing = 7.0;
+        let head_len = 0.30;
+        let head_width = 0.25;
+
+        let flap_color = [
+            (color[0] + 1.0) * 0.5,
+            (color[1] + 1.0) * 0.5,
+            (color[2] + 1.0) * 0.5,
+        ];
+
+        let time = self.total_game_time as f32;
+        let spin_speed = 1.0;
+
+        // ---------- helper: sample position + dir ----------
+
+        let sample_at = |t: f32| -> ([f32; 3], [f32; 3]) {
+            let mut i = 1;
+            while i < lengths.len() && lengths[i] < t {
+                i += 1;
+            }
+
+            let i0 = i - 1;
+            let i1 = i.min(polyline.len() - 1);
+
+            let l0 = lengths[i0];
+            let l1 = lengths[i1];
+            let s = if l1 > l0 { (t - l0) / (l1 - l0) } else { 0.0 };
+
+            let p0 = polyline[i0];
+            let p1 = polyline[i1];
+
+            let pos = [
+                p0[0] + (p1[0] - p0[0]) * s,
+                p0[1] + (p1[1] - p0[1]) * s,
+                p0[2] + (p1[2] - p0[2]) * s,
+            ];
+
+            let dx = p1[0] - p0[0];
+            let dy = p1[1] - p0[1];
+            let dz = p1[2] - p0[2];
+            let dl = (dx * dx + dy * dy + dz * dz).sqrt().max(0.0001);
+
+            (pos, [dx / dl, dy / dl, dz / dl])
+        };
+
+        // ---------- arrow heads only ----------
+
+        let mut i = 1;
+        let mut t = spacing;
+
+        while t < total_len {
+            let (p, dir) = sample_at(t);
+
+            // build frame
+            let up = if dir[1].abs() > 0.99 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+
+            let mut side = [
+                dir[1] * up[2] - dir[2] * up[1],
+                dir[2] * up[0] - dir[0] * up[2],
+                dir[0] * up[1] - dir[1] * up[0],
+            ];
+
+            let sl = (side[0] * side[0] + side[1] * side[1] + side[2] * side[2]).sqrt();
+            side[0] /= sl;
+            side[1] /= sl;
+            side[2] /= sl;
+
+            let up_perp = [
+                dir[1] * side[2] - dir[2] * side[1],
+                dir[2] * side[0] - dir[0] * side[2],
+                dir[0] * side[1] - dir[1] * side[0],
+            ];
+
+            let angle = time * spin_speed + i as f32 * 1.7;
+            let c = angle.cos();
+            let s = angle.sin();
+
+            let rx = side[0] * c + up_perp[0] * s;
+            let ry = side[1] * c + up_perp[1] * s;
+            let rz = side[2] * c + up_perp[2] * s;
+
+            let bx = p[0] - dir[0] * head_len;
+            let by = p[1] - dir[1] * head_len;
+            let bz = p[2] - dir[2] * head_len;
+
+            // left flap
+            vertices.push(LineVtx {
+                pos: p,
+                color: flap_color,
+            });
+            vertices.push(LineVtx {
+                pos: [
+                    bx + rx * head_width,
+                    by + ry * head_width,
+                    bz + rz * head_width,
+                ],
+                color: flap_color,
+            });
+
+            // right flap
+            vertices.push(LineVtx {
+                pos: p,
+                color: flap_color,
+            });
+            vertices.push(LineVtx {
+                pos: [
+                    bx - rx * head_width,
+                    by - ry * head_width,
+                    bz - rz * head_width,
+                ],
+                color: flap_color,
+            });
+
+            i += 1;
+            t += spacing;
         }
 
         self.pending_renders.push(PendingGizmoRender { vertices });

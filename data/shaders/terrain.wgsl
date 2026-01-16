@@ -116,7 +116,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // Simulate light/shadow variation between grass blades
     let shade = mix(0.58, 1.28, grass_pattern);
-    base_color *= mix(1.0, shade, grass_amount);
+    //base_color *= mix(1.0, shade, grass_amount);
 
     // Subtle green boost for lush grass look
     base_color.g *= 1.0 + grass_amount * 0.25;
@@ -129,7 +129,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // Blend between vertex color/procedural base and the grass texture using grass_amount.
     // Slightly tint sampled texture by procedural shade for variety.
-    let grass_tint = grass_sample * (0.85 + 0.3 * grass_pattern);
+    let grass_tint = grass_sample * (0.85 + 0.5 * grass_pattern);
     base_color = mix(base_color, grass_tint, grass_amount);
     // ======================================
 
