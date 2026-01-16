@@ -17,42 +17,25 @@ pub struct Gizmo {
 impl Gizmo {
     pub fn update(&mut self, total_game_time: f64, road_manager: &RoadManager) {
         self.total_game_time = total_game_time;
-        for node_b in &road_manager.nodes {
-            let color: [f32; 3] = if node_b.enabled {
+
+        for node in &road_manager.nodes {
+            // 1. Render the Node
+            let node_color = if node.enabled {
                 [0.0, 0.0, 0.9]
             } else {
                 [1.0, 0.0, 0.0]
             };
-            self.render_circle([node_b.x, node_b.y, node_b.z], 2.0, color);
-            for lane_id in node_b.incoming_lanes.iter() {
+            self.render_circle([node.x, node.y, node.z], 2.0, node_color);
+
+            // 2. Render Incoming Lane
+            for lane_id in &node.incoming_lanes {
                 let lane = road_manager.lane(*lane_id);
-                let Some(node_a) = road_manager.node(lane.from_node()) else {
-                    continue;
-                };
-                let lane_index = lane.lane_index();
                 let segment = road_manager.segment(lane.segment());
-                let seg_start = road_manager.node(segment.start()).unwrap();
-                let seg_end = road_manager.node(segment.end()).unwrap();
-
-                let seg_dir =
-                    Vec3::new(seg_end.x - seg_start.x, 0.0, seg_end.z - seg_start.z).normalize();
-
-                let seg_right = Vec3::new(seg_dir.z, 0.0, -seg_dir.x);
 
                 let lane_is_forward = lane.from_node() == segment.start();
 
-                let lane_width = 2.5;
-                let initial_offset = if lane_is_forward {
-                    lane_width * 0.5
-                } else {
-                    -lane_width * 0.5
-                };
-                let offset = seg_right * (lane_index as f32 * lane_width - initial_offset);
-                let a = Vec3::new(node_a.x, node_a.y, node_a.z);
-                let b = Vec3::new(node_b.x, node_b.y, node_b.z);
-                let start = a + offset;
-                let end = b + offset;
-                let color: [f32; 3] = if lane.is_enabled() {
+                // Determine lane color once
+                let lane_color = if lane.is_enabled() {
                     if lane_is_forward {
                         [0.0, 0.9, 0.0]
                     } else {
@@ -61,12 +44,28 @@ impl Gizmo {
                 } else {
                     [1.0, 0.05, 0.0]
                 };
-                self.render_arrow(
-                    [start.x, start.y, start.z],
-                    [end.x, end.y, end.z],
-                    color,
-                    true,
-                );
+
+                // 3. Safe Polyline Iteration
+                // .windows(2) gives [current, next] safely and stops before the overflow, such a cool function, you learn something new every day...!
+                for points in lane.polyline().windows(2) {
+                    let start = points[0];
+                    let end = points[1];
+
+                    self.render_arrow(
+                        [start.x, start.y, start.z],
+                        [end.x, end.y, end.z],
+                        lane_color,
+                        false,
+                    );
+                }
+                if let Some(end) = lane.polyline().last() {
+                    self.render_arrow(
+                        [end.x, end.y, end.z],
+                        [node.x, node.y, node.z],
+                        lane_color,
+                        false,
+                    );
+                }
             }
         }
     }

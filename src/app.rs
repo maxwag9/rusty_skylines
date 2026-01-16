@@ -335,7 +335,7 @@ impl ApplicationHandler for App {
                             let radius = world.camera(cam).unwrap().orbit_radius;
 
                             if let Some(controller) = world.camera_controller_mut(cam) {
-                                let zoom_factor = 4.5;
+                                let zoom_factor = 10.0;
                                 controller.zoom_velocity -= scroll.y * zoom_factor;
                             }
                         }

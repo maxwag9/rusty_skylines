@@ -80,7 +80,15 @@ impl RenderCore {
 
         // --- Configure surface ---
         let surface_caps = surface.get_capabilities(&adapter);
-        let format = surface_caps.formats[0];
+        let preferred_format = Rgba8UnormSrgb;
+        let format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| *f == preferred_format)
+            .unwrap_or(surface_caps.formats[0]);
+        println!("{:?}", format);
+
         let alpha_mode = surface_caps
             .alpha_modes
             .iter()

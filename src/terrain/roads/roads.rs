@@ -19,7 +19,9 @@ use crate::terrain::roads::road_editor::RoadEditorCommand;
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, HorizontalProfile, RoadMeshManager, chunk_x_range,
 };
+use glam::Vec3;
 
+pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
 struct LaneTurn {
     from: LaneId,
     to: LaneId,
@@ -358,8 +360,8 @@ impl Node {
     }
 
     #[inline]
-    pub fn position(&self) -> (f32, f32, f32) {
-        (self.x, self.y, self.z)
+    pub fn position(&self) -> [f32; 3] {
+        [self.x, self.y, self.z]
     }
 
     #[inline]
@@ -417,8 +419,8 @@ pub struct Segment {
     pub lanes: Vec<LaneId>,
     pub structure: StructureType,
     pub horizontal_profile: HorizontalProfile,
-    pub(crate) vertical_profile: VerticalProfile,
-    pub(crate) version: u32,
+    pub vertical_profile: VerticalProfile,
+    pub version: u32,
 }
 
 impl Segment {
@@ -510,6 +512,7 @@ pub struct Lane {
     vehicle_mask: u32,
     base_cost: f32,
     dynamic_cost: f32,
+    geometry: LaneGeometry,
 }
 
 impl Lane {
@@ -522,6 +525,7 @@ impl Lane {
         capacity: u32,
         vehicle_mask: u32,
         base_cost: f32,
+        geometry: LaneGeometry,
     ) -> Self {
         Self {
             from,
@@ -534,6 +538,7 @@ impl Lane {
             vehicle_mask,
             base_cost,
             dynamic_cost: 0.0,
+            geometry,
         }
     }
 
@@ -596,6 +601,134 @@ impl Lane {
     pub fn allows_vehicle(&self, vehicle_type: u32) -> bool {
         (self.vehicle_mask & vehicle_type) != 0
     }
+    pub fn polyline(&self) -> &Vec<Vec3> {
+        &self.geometry.points
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LaneGeometry {
+    pub points: Vec<Vec3>, // polyline
+    pub lengths: Vec<f32>, // cumulative arc length
+    pub total_len: f32,
+}
+
+impl LaneGeometry {
+    pub fn from_segment(
+        terrain_renderer: &TerrainRenderer,
+        road_manager: &RoadManager,
+        segment: &Segment,
+        lane_index: i8,
+        lane_width: f32,
+    ) -> LaneGeometry {
+        let initial_offset = lane_width * 0.5;
+        let (og_start_pos, og_end_pos) = if lane_index > 0 {
+            (
+                Vec3::from_array(road_manager.node(segment.start).unwrap().position()),
+                Vec3::from_array(road_manager.node(segment.end).unwrap().position()),
+            )
+        } else {
+            (
+                Vec3::from_array(road_manager.node(segment.end).unwrap().position()), // flipped, because left side!
+                Vec3::from_array(road_manager.node(segment.start).unwrap().position()),
+            ) // flipped
+        };
+
+        let estimated_len = estimate_segment_length(segment, og_start_pos, og_end_pos);
+
+        let samples =
+            ((estimated_len / METERS_PER_LANE_POLYLINE_STEP).ceil() as usize).clamp(2, 512);
+
+        let mut points = Vec::with_capacity(samples + 1);
+        let mut lengths = Vec::with_capacity(samples + 1);
+
+        // Direction in XZ
+        let dir = Vec3::new(
+            og_end_pos.x - og_start_pos.x,
+            0.0,
+            og_end_pos.z - og_start_pos.z,
+        );
+
+        let len_xz = (dir.x * dir.x + dir.z * dir.z).sqrt().max(0.0001);
+        let dir_xz = Vec3::new(dir.x / len_xz, 0.0, dir.z / len_xz);
+
+        let right = Vec3::new(dir_xz.z, 0.0, -dir_xz.x);
+
+        let lateral = right * (lane_index.abs() as f32 * lane_width - initial_offset);
+        println!("{} {} {}", lateral, lane_index, lane_width);
+        let mut total_len = 0.0;
+        lengths.push(0.0);
+
+        for i in 0..=samples {
+            let t = i as f32 / samples as f32;
+            let start_pos = og_start_pos - lateral;
+            let end_pos = og_end_pos - lateral;
+            let mut p: Vec3 = match segment.horizontal_profile {
+                HorizontalProfile::Linear => start_pos.lerp(end_pos, t),
+
+                HorizontalProfile::QuadraticBezier { control } => {
+                    let c = Vec3::new(control[0], start_pos.y, control[1]);
+                    bezier2(start_pos, c, end_pos, t)
+                }
+
+                HorizontalProfile::CubicBezier { control1, control2 } => {
+                    let c1 = Vec3::new(control1[0], start_pos.y, control1[1]);
+                    let c2 = Vec3::new(control2[0], start_pos.y, control2[1]);
+                    bezier3(start_pos, c1, c2, end_pos, t)
+                }
+
+                HorizontalProfile::Arc { .. } => start_pos.lerp(end_pos, t),
+            };
+
+            p.y = p.y.max(terrain_renderer.get_height_at([p.x, p.z]));
+
+            if let Some(&prev) = points.last() {
+                total_len += p.distance(prev);
+                lengths.push(total_len);
+            }
+
+            points.push(p);
+        }
+
+        LaneGeometry {
+            points,
+            lengths,
+            total_len,
+        }
+    }
+}
+
+fn estimate_segment_length(segment: &Segment, start: Vec3, end: Vec3) -> f32 {
+    const ESTIMATE_SAMPLES: usize = 8;
+
+    let mut len = 0.0;
+    let mut prev = start;
+
+    for i in 1..=ESTIMATE_SAMPLES {
+        let t = i as f32 / ESTIMATE_SAMPLES as f32;
+
+        let p = match segment.horizontal_profile {
+            HorizontalProfile::Linear => start.lerp(end, t),
+
+            HorizontalProfile::QuadraticBezier { control } => {
+                let c = Vec3::new(control[0], start.y, control[1]);
+                bezier2(start, c, end, t)
+            }
+
+            HorizontalProfile::CubicBezier { control1, control2 } => {
+                let c1 = Vec3::new(control1[0], start.y, control1[1]);
+                let c2 = Vec3::new(control2[0], start.y, control2[1]);
+                bezier3(start, c1, c2, end, t)
+            }
+
+            HorizontalProfile::Arc { .. } => start.lerp(end, t),
+        };
+
+        len += (p - prev).length();
+        prev = p;
+    }
+
+    len
 }
 
 // ============================================================================
@@ -859,10 +992,12 @@ impl RoadManager {
     /// The lane direction is from->to; must match segment endpoints.
     pub fn add_lane(
         &mut self,
+        terrain_renderer: &TerrainRenderer,
         from: NodeId,
         to: NodeId,
         segment: SegmentId,
         lane_index: i8, // signed, relative to segment centerline, 0 is prohibited!
+        lane_width: f32,
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
@@ -874,7 +1009,8 @@ impl RoadManager {
             (from == seg.start && to == seg.end) || (from == seg.end && to == seg.start),
             "Lane endpoints must match segment endpoints"
         );
-
+        let geometry =
+            LaneGeometry::from_segment(terrain_renderer, &self, seg, lane_index, lane_width);
         let id = LaneId::new(self.lanes.len() as u32);
         self.lanes.push(Lane::new(
             from,
@@ -885,6 +1021,7 @@ impl RoadManager {
             capacity,
             vehicle_mask,
             base_cost,
+            geometry,
         ));
 
         // Register lane with segment
@@ -1474,6 +1611,7 @@ pub enum RoadCommand {
         to: NodeId,
         segment: SegmentId,
         lane_index: i8,
+        lane_width: f32,
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
@@ -1592,6 +1730,7 @@ pub fn apply_command(
                     to,
                     segment,
                     lane_index,
+                    lane_width,
                     speed_limit,
                     capacity,
                     vehicle_mask,
@@ -1605,10 +1744,12 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
                     let id = manager.add_lane(
+                        terrain_renderer,
                         *from,
                         *to,
                         *segment,
                         *lane_index,
+                        *lane_width,
                         *speed_limit,
                         *capacity,
                         *vehicle_mask,
@@ -1750,4 +1891,16 @@ pub fn apply_commands(
         .map(|cmd| apply_command(terrain_renderer, road_mesh_manager, road_manager, cmd))
         .collect();
     results
+}
+
+#[inline]
+fn bezier2(a: Vec3, b: Vec3, c: Vec3, t: f32) -> Vec3 {
+    let u = 1.0 - t;
+    a * (u * u) + b * (2.0 * u * t) + c * (t * t)
+}
+
+#[inline]
+fn bezier3(a: Vec3, b: Vec3, c: Vec3, d: Vec3, t: f32) -> Vec3 {
+    let u = 1.0 - t;
+    a * (u * u * u) + b * (3.0 * u * u * t) + c * (3.0 * u * t * t) + d * (t * t * t)
 }
