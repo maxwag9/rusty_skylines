@@ -91,8 +91,8 @@ impl RoadRenderSubsystem {
             let _results = apply_commands(
                 terrain_renderer,
                 &mut self.mesh_manager,
-                &mut self.road_manager,
-                &road_commands,
+                &mut self.road_manager.roads,
+                road_commands,
             );
         }
 
@@ -110,11 +110,14 @@ impl RoadRenderSubsystem {
 
             let needs_rebuild = self
                 .mesh_manager
-                .chunk_needs_update(chunk_id, &self.road_manager);
+                .chunk_needs_update(chunk_id, &self.road_manager.roads);
 
             let mesh = if needs_rebuild {
-                self.mesh_manager
-                    .update_chunk_mesh(terrain_renderer, chunk_id, &self.road_manager)
+                self.mesh_manager.update_chunk_mesh(
+                    terrain_renderer,
+                    chunk_id,
+                    &self.road_manager.roads,
+                )
             } else {
                 match self.mesh_manager.get_chunk_mesh(chunk_id) {
                     Some(m) => m,

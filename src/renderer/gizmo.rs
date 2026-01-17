@@ -19,51 +19,55 @@ impl Gizmo {
         self.total_game_time = total_game_time;
         let render_disabled_lanes = false;
         let render_arrow_lane_to_node = false;
-        for node in &road_manager.nodes {
-            // 1. Render the Node
-            let node_color = if node.enabled {
-                [0.0, 0.0, 0.9]
-            } else {
-                [1.0, 0.0, 0.0]
-            };
-            self.render_circle([node.x, node.y, node.z], 2.0, node_color);
 
-            // 2. Render Incoming Lane
-            for lane_id in &node.incoming_lanes {
-                let lane = road_manager.lane(*lane_id);
-                let segment = road_manager.segment(lane.segment());
-
-                let lane_is_forward = lane.from_node() == segment.start();
-
-                // Determine lane color once
-                let lane_color = if lane.is_enabled() {
-                    if lane_is_forward {
-                        [0.0, 0.9, 0.0]
-                    } else {
-                        [0.2, 0.9, 0.0]
-                    }
+        // iterate both storages but resolve everything against the storage the node belongs to
+        for storage in [&road_manager.roads, &road_manager.preview_roads] {
+            for (_node_id, node) in storage.iter_nodes() {
+                // 1. Render the Node
+                let node_color = if node.is_enabled() {
+                    [0.0, 0.0, 0.9]
                 } else {
-                    if !render_disabled_lanes {
-                        continue;
-                    }
-                    [1.0, 0.05, 0.0]
+                    [1.0, 0.0, 0.0]
                 };
+                self.render_circle([node.x(), node.y(), node.z()], 2.0, node_color);
 
-                // 3. Safe Polyline Iteration
-                // .windows(2) gives [current, next] safely and stops before the overflow, such a cool function, you learn something new every day...!
-                let poly: Vec<[f32; 3]> = lane.polyline().iter().map(|p| [p.x, p.y, p.z]).collect();
+                // 2. Render Incoming Lane (resolve lanes/segments from the same storage)
+                for &lane_id in node.incoming_lanes().iter() {
+                    let lane = storage.lane(lane_id);
+                    let segment = storage.segment(lane.segment());
 
-                self.render_polyline(&poly, lane_color, false);
+                    let lane_is_forward = lane.from_node() == segment.start();
 
-                if let Some(end) = lane.polyline().last()
-                    && render_arrow_lane_to_node
-                {
-                    self.render_arrow(
-                        [end.x, end.y, end.z],
-                        [node.x, node.y, node.z],
-                        lane_color,
-                        false,
-                    );
+                    // Determine lane color once
+                    let lane_color = if lane.is_enabled() {
+                        if lane_is_forward {
+                            [0.0, 0.9, 0.0]
+                        } else {
+                            [0.2, 0.9, 0.0]
+                        }
+                    } else {
+                        if !render_disabled_lanes {
+                            continue;
+                        }
+                        [1.0, 0.05, 0.0]
+                    };
+
+                    // 3. Safe Polyline Iteration
+                    let poly: Vec<[f32; 3]> =
+                        lane.polyline().iter().map(|p| [p.x, p.y, p.z]).collect();
+
+                    self.render_polyline(&poly, lane_color, false);
+
+                    if render_arrow_lane_to_node {
+                        if let Some(end) = lane.polyline().last() {
+                            self.render_arrow(
+                                [end.x, end.y, end.z],
+                                [node.x(), node.y(), node.z()],
+                                lane_color,
+                                false,
+                            );
+                        }
+                    }
                 }
             }
         }

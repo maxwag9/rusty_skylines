@@ -5,9 +5,8 @@
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::road_editor::SegmentPreview;
 use crate::terrain::roads::road_preview::RoadPreviewState;
-use crate::terrain::roads::roads::{NodeId, RoadManager, Segment, SegmentId};
+use crate::terrain::roads::roads::{LaneGeometry, RoadStorage, SegmentId};
 use glam::Vec3;
 use std::collections::HashMap;
 
@@ -20,32 +19,6 @@ pub type ChunkId = u64;
 const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
 pub const CLEARANCE: f32 = 0.04;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
-
-// ============================================================================
-// Data Structures (Lane First)
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct Lane {
-    pub from: NodeId,
-    pub to: NodeId,
-    pub segment: SegmentId,
-    pub lane_index: i8, // signed, relative to segment centerline. -1 is left of center, +1 is right.
-    pub enabled: bool,
-    pub speed_limit: f32,
-    pub capacity: u32,
-    pub vehicle_mask: u32,
-    pub base_cost: f32,
-    pub dynamic_cost: f32,
-    pub geometry: LaneGeometry,
-}
-
-#[derive(Clone, Debug)]
-pub struct LaneGeometry {
-    pub points: Vec<Vec3>, // polyline
-    pub lengths: Vec<f32>, // cumulative arc length
-    pub total_len: f32,
-}
 
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
@@ -74,213 +47,6 @@ impl Default for RoadStyleParams {
             median_width: 0.25,
             median_height: 0.15,
             median_material_id: 0, // Concrete
-        }
-    }
-}
-
-// ============================================================================
-// Helper Math
-// ============================================================================
-
-fn bezier2(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
-    let mt = 1.0 - t;
-    p0 * mt * mt + p1 * 2.0 * mt * t + p2 * t * t
-}
-
-fn bezier3(p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, t: f32) -> Vec3 {
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-    let t2 = t * t;
-    p0 * mt2 * mt + p1 * 3.0 * mt2 * t + p2 * 3.0 * mt * t2 + p3 * t2 * t
-}
-
-fn estimate_segment_length(segment: &Segment, p0: Vec3, p1: Vec3) -> f32 {
-    // fast approximation
-    match segment.horizontal_profile {
-        HorizontalProfile::Linear => p0.distance(p1),
-        _ => p0.distance(p1) * 1.1,
-    }
-}
-
-// ============================================================================
-// Lane Geometry Implementation
-// ============================================================================
-
-impl LaneGeometry {
-    pub fn from_segment(
-        terrain_renderer: &TerrainRenderer,
-        road_manager: &RoadManager,
-        segment: &Segment,
-        lane_index: i8,
-        lane_width: f32,
-    ) -> LaneGeometry {
-        let initial_offset = lane_width * 0.5;
-        // Lane index logic: + is one direction, - is other.
-        // We assume standard right-hand traffic: + indices are right side (forward), - are left side (backward).
-        // The original code swaps start/end for negative indices to reverse the lane direction.
-        let (og_start_pos, og_end_pos) = if lane_index > 0 {
-            (
-                Vec3::from_array(road_manager.node(segment.start).unwrap().position()),
-                Vec3::from_array(road_manager.node(segment.end).unwrap().position()),
-            )
-        } else {
-            (
-                Vec3::from_array(road_manager.node(segment.end).unwrap().position()),
-                Vec3::from_array(road_manager.node(segment.start).unwrap().position()),
-            )
-        };
-
-        let estimated_len = estimate_segment_length(segment, og_start_pos, og_end_pos);
-        let samples =
-            ((estimated_len / METERS_PER_LANE_POLYLINE_STEP).ceil() as usize).clamp(2, 512);
-
-        let mut points = Vec::with_capacity(samples + 1);
-        let mut lengths = Vec::with_capacity(samples + 1);
-
-        // Direction in XZ for lateral calculation
-        // Note: For negative lanes, og_start/end are swapped, so 'dir' reverses.
-        // 'right' is perpendicular to 'dir'.
-        let dir = Vec3::new(
-            og_end_pos.x - og_start_pos.x,
-            0.0,
-            og_end_pos.z - og_start_pos.z,
-        );
-        let len_xz = (dir.x * dir.x + dir.z * dir.z).sqrt().max(0.0001);
-        let dir_xz = Vec3::new(dir.x / len_xz, 0.0, dir.z / len_xz);
-        let right = Vec3::new(dir_xz.z, 0.0, -dir_xz.x);
-
-        // Lateral offset:
-        // lane_index 1:  1 * w - 0.5w = 0.5w (Right)
-        // lane_index -1: 1 * w - 0.5w = 0.5w (Left, because 'right' vector is flipped due to start/end swap)
-        let lateral = right * (lane_index.abs() as f32 * lane_width - initial_offset);
-
-        let mut total_len = 0.0;
-        lengths.push(0.0);
-
-        for i in 0..=samples {
-            let t = i as f32 / samples as f32;
-
-            // Apply lateral offset to control points or linear mix
-            // Note: This logic effectively shifts the whole curve.
-            let start_pos = og_start_pos - lateral;
-            let end_pos = og_end_pos - lateral;
-
-            let mut p: Vec3 = match segment.horizontal_profile {
-                HorizontalProfile::Linear => start_pos.lerp(end_pos, t),
-
-                HorizontalProfile::QuadraticBezier { control } => {
-                    let c = Vec3::new(control[0], start_pos.y, control[1]);
-                    let c_offset = c - lateral;
-                    bezier2(start_pos, c_offset, end_pos, t)
-                }
-
-                HorizontalProfile::CubicBezier { control1, control2 } => {
-                    let c1 = Vec3::new(control1[0], start_pos.y, control1[1]);
-                    let c2 = Vec3::new(control2[0], start_pos.y, control2[1]);
-                    let c1_offset = c1 - lateral;
-                    let c2_offset = c2 - lateral;
-                    bezier3(start_pos, c1_offset, c2_offset, end_pos, t)
-                }
-
-                HorizontalProfile::Arc { .. } => start_pos.lerp(end_pos, t), // Arc support stubbed to linear for this function
-            };
-
-            p.y = terrain_renderer.get_height_at([p.x, p.z]).max(p.y);
-
-            if let Some(&prev) = points.last() {
-                total_len += p.distance(prev);
-                lengths.push(total_len);
-            }
-
-            points.push(p);
-        }
-
-        LaneGeometry {
-            points,
-            lengths,
-            total_len,
-        }
-    }
-    /// Generates geometry from a preview segment, mimicking the behavior of from_segment perfectly.
-    pub fn from_preview(
-        terrain_renderer: &TerrainRenderer,
-        segment: &SegmentPreview,
-        lane_index: i8,
-        lane_width: f32,
-    ) -> LaneGeometry {
-        let initial_offset = lane_width * 0.5;
-
-        // Determine start/end points based on lane direction (swapping for negative indices)
-        // For previews, we use the raw segment points.
-        let (og_start_pos, og_end_pos) = if lane_index > 0 {
-            (segment.start, segment.end)
-        } else {
-            (segment.end, segment.start)
-        };
-
-        // Estimate length for sampling
-        let dist = og_start_pos.distance(og_end_pos);
-        // Approximation for curves
-        let estimated_len = if segment.control.is_some() {
-            dist * 1.2
-        } else {
-            dist
-        };
-
-        let samples =
-            ((estimated_len / METERS_PER_LANE_POLYLINE_STEP).ceil() as usize).clamp(2, 512);
-
-        let mut points = Vec::with_capacity(samples + 1);
-        let mut lengths = Vec::with_capacity(samples + 1);
-
-        // Direction in XZ
-        let dir = Vec3::new(
-            og_end_pos.x - og_start_pos.x,
-            0.0,
-            og_end_pos.z - og_start_pos.z,
-        );
-        let len_xz = (dir.x * dir.x + dir.z * dir.z).sqrt().max(0.0001);
-        let dir_xz = Vec3::new(dir.x / len_xz, 0.0, dir.z / len_xz);
-
-        // Right vector (Lateral)
-        let right = Vec3::new(dir_xz.z, 0.0, -dir_xz.x);
-
-        // Calculate lateral offset
-        let lateral = right * (lane_index.abs() as f32 * lane_width - initial_offset);
-
-        let mut total_len = 0.0;
-        lengths.push(0.0);
-
-        for i in 0..=samples {
-            let t = i as f32 / samples as f32;
-            let start_pos = og_start_pos - lateral;
-            let end_pos = og_end_pos - lateral;
-
-            let mut p = match segment.control {
-                Some(ctrl) => {
-                    // Offset control point by lateral to keep curve parallel
-                    // Note: This assumes 'ctrl' is the raw control point of the centerline
-                    let c_offset = ctrl - lateral;
-                    bezier2(start_pos, c_offset, end_pos, t)
-                }
-                None => start_pos.lerp(end_pos, t),
-            };
-
-            // Snap Y to terrain
-            p.y = terrain_renderer.get_height_at([p.x, p.z]).max(p.y);
-
-            if let Some(&prev) = points.last() {
-                total_len += p.distance(prev);
-                lengths.push(total_len);
-            }
-
-            points.push(p);
-        }
-
-        LaneGeometry {
-            points,
-            lengths,
-            total_len,
         }
     }
 }
@@ -1114,37 +880,19 @@ impl RoadMeshManager {
         self.lane_geom_cache.clear();
     }
 
-    /// Retrieve or compute lane geometry.
-    fn get_lane_geometry(
-        &mut self,
-        terrain: &TerrainRenderer,
-        manager: &RoadManager,
-        segment: &Segment,
-        seg_id: SegmentId,
-        lane_idx: i8,
-    ) -> LaneGeometry {
-        if let Some(g) = self.lane_geom_cache.get(&(seg_id, lane_idx)) {
-            return g.clone();
-        }
-        let geom =
-            LaneGeometry::from_segment(terrain, manager, segment, lane_idx, self.style.lane_width);
-        self.lane_geom_cache
-            .insert((seg_id, lane_idx), geom.clone());
-        geom
-    }
-    pub fn chunk_needs_update(&self, chunk_id: ChunkId, manager: &RoadManager) -> bool {
+    pub fn chunk_needs_update(&self, chunk_id: ChunkId, storage: &RoadStorage) -> bool {
         match self.chunk_cache.get(&chunk_id) {
             None => true,
-            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, manager),
+            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage),
         }
     }
     pub fn update_chunk_mesh(
         &mut self,
         terrain_renderer: &TerrainRenderer,
         chunk_id: ChunkId,
-        manager: &RoadManager,
+        storage: &RoadStorage,
     ) -> &ChunkMesh {
-        let mesh = self.build_chunk_mesh(terrain_renderer, chunk_id, manager);
+        let mesh = self.build_chunk_mesh(terrain_renderer, chunk_id, storage);
         self.chunk_cache.insert(chunk_id, mesh);
         self.chunk_cache.get(&chunk_id).unwrap()
     }
@@ -1152,32 +900,34 @@ impl RoadMeshManager {
         &mut self,
         terrain_renderer: &TerrainRenderer,
         chunk_id: ChunkId,
-        manager: &RoadManager,
+        storage: &RoadStorage,
     ) -> ChunkMesh {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
-        let mut segment_ids = manager.segment_ids_touching_chunk(chunk_id);
+        // -------- Segments (really: lanes that belong to segments) --------
+        let mut segment_ids = storage.segment_ids_touching_chunk(chunk_id);
         segment_ids.sort_unstable();
 
-        // 1. Build Segments
         for seg_id in segment_ids {
-            let segment = manager.segment(seg_id);
+            let segment = storage.segment(seg_id);
             if !segment.enabled {
                 continue;
             }
-            let (left_count, right_count) = manager.lane_counts_for_segment(segment);
 
             let mut render_lanes = Vec::new();
-            for i in 1..=left_count {
-                let idx = -(i as i8);
-                let geom = self.get_lane_geometry(terrain_renderer, manager, segment, seg_id, idx);
-                render_lanes.push((idx, geom));
+
+            for &lane_id in segment.lanes() {
+                let lane = storage.lane(lane_id);
+                if !lane.is_enabled() {
+                    continue;
+                }
+
+                render_lanes.push((lane.lane_index(), lane.geometry().clone()));
             }
-            for i in 1..=right_count {
-                let idx = i as i8;
-                let geom = self.get_lane_geometry(terrain_renderer, manager, segment, seg_id, idx);
-                render_lanes.push((idx, geom));
+
+            if render_lanes.is_empty() {
+                continue;
             }
 
             draw_segment_geometry(
@@ -1191,40 +941,45 @@ impl RoadMeshManager {
             );
         }
 
-        // 2. Build Nodes
-        let node_ids = manager.nodes_in_chunk(chunk_id);
+        // -------- Nodes (lane-driven, not segment-driven) --------
+        let node_ids = storage.nodes_in_chunk(chunk_id);
         for node_id in node_ids {
-            let node = manager.node(node_id).unwrap();
+            let node = storage.node(node_id).unwrap();
             let center = Vec3::from_array(node.position());
-            let seg_ids = manager.segments_connected_to_node(node_id);
 
             let mut connected_lanes_info = Vec::new();
             let mut cap_direction = None;
 
-            // Cap logic: if 1 segment, face away from it
-            if seg_ids.len() == 1 {
-                let seg = manager.segment(seg_ids[0]);
-                let is_start = seg.start == node_id;
-                let other_node = if is_start {
-                    manager.node(seg.end)
-                } else {
-                    manager.node(seg.start)
-                };
-                if let Some(on) = other_node {
-                    cap_direction =
-                        Some((center - Vec3::from_array(on.position())).normalize_or_zero());
+            let incoming = node.incoming_lanes();
+            let outgoing = node.outgoing_lanes();
+
+            // Cap logic: dead end
+            if incoming.len() + outgoing.len() == 1 {
+                let lane_id = incoming
+                    .first()
+                    .copied()
+                    .or_else(|| outgoing.first().copied());
+
+                if let Some(lid) = lane_id {
+                    let lane = storage.lane(lid);
+                    let dir = if lane.from_node() == node_id {
+                        lane.geometry().points[1] - lane.geometry().points[0]
+                    } else {
+                        let pts = &lane.geometry().points;
+                        pts[pts.len() - 2] - pts[pts.len() - 1]
+                    };
+
+                    cap_direction = Some(dir.normalize_or_zero());
                 }
             }
 
-            for &sid in &seg_ids {
-                let seg = manager.segment(sid);
-                let (l, r) = manager.lane_counts_for_segment(seg);
-                for i in 1..=l {
-                    connected_lanes_info.push((-(i as i8), self.style.lane_width));
-                }
-                for i in 1..=r {
-                    connected_lanes_info.push((i as i8, self.style.lane_width));
-                }
+            for &lane_id in incoming.iter().chain(outgoing.iter()) {
+                let lane = storage.lane(lane_id);
+                connected_lanes_info.push((lane.lane_index(), self.style.lane_width));
+            }
+
+            if connected_lanes_info.is_empty() {
+                continue;
             }
 
             draw_node_geometry(
@@ -1242,7 +997,7 @@ impl RoadMeshManager {
         ChunkMesh {
             vertices,
             indices,
-            topo_version: compute_topo_version(chunk_id, manager),
+            topo_version: compute_topo_version(chunk_id, storage),
         }
     }
 
@@ -1251,28 +1006,18 @@ impl RoadMeshManager {
         terrain_renderer: &TerrainRenderer,
         preview_state: &RoadPreviewState,
     ) -> ChunkMesh {
+        //BROKEN///
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
-        // 1. Build Preview Segments
+        // -------- Preview Segments --------
         for seg in &preview_state.segments {
             if !seg.is_valid {
                 continue;
             }
-            let (left_count, right_count) = seg.lane_count_each_dir;
-
             let mut render_lanes = Vec::new();
-            for i in 1..=left_count {
-                let idx = -(i as i8);
-                let geom =
-                    LaneGeometry::from_preview(terrain_renderer, seg, idx, self.style.lane_width);
-                render_lanes.push((idx, geom));
-            }
-            for i in 1..=right_count {
-                let idx = i as i8;
-                let geom =
-                    LaneGeometry::from_preview(terrain_renderer, seg, idx, self.style.lane_width);
-                render_lanes.push((idx, geom));
+            if render_lanes.is_empty() {
+                continue;
             }
 
             draw_segment_geometry(
@@ -1286,7 +1031,7 @@ impl RoadMeshManager {
             );
         }
 
-        // 2. Build Preview Nodes
+        // -------- Preview Nodes --------
         for node in &preview_state.nodes {
             if !node.is_valid {
                 continue;
@@ -1295,20 +1040,14 @@ impl RoadMeshManager {
             let mut connected_lanes_info = Vec::new();
             let mut cap_direction = None;
 
-            if node.connected_segments.len() == 1 {
-                let conn = &node.connected_segments[0];
-                let dir_2d = conn.direction_xz;
-                cap_direction = Some(Vec3::new(dir_2d[0], 0.0, dir_2d[1]));
-            }
-
-            // Fallback lane info
-            if node.connected_segments.is_empty() {
+            if node.lane_count() == 0 {
                 connected_lanes_info.push((1, self.style.lane_width));
                 connected_lanes_info.push((-1, self.style.lane_width));
             } else {
-                for _ in &node.connected_segments {
-                    connected_lanes_info.push((1, self.style.lane_width));
-                    connected_lanes_info.push((-1, self.style.lane_width));
+                for i in 0..node.lane_count() {
+                    let idx = (i as i8) + 1;
+                    connected_lanes_info.push((idx, self.style.lane_width));
+                    connected_lanes_info.push((-idx, self.style.lane_width));
                 }
             }
 
@@ -1333,53 +1072,33 @@ impl RoadMeshManager {
 }
 
 // ============================================================================
-// Horizontal Profile
-// ============================================================================
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum HorizontalProfile {
-    Linear,
-    QuadraticBezier {
-        control: [f32; 2],
-    },
-    CubicBezier {
-        control1: [f32; 2],
-        control2: [f32; 2],
-    },
-    Arc {
-        radius: f32,
-        large_arc: bool,
-    },
-}
-
-// ============================================================================
 // Topo Version Hashing
 // ============================================================================
 
 const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 const FNV_PRIME: u64 = 1099511628211;
 
-fn compute_topo_version(chunk_id: ChunkId, manager: &RoadManager) -> u64 {
+fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
     let mut hash = FNV_OFFSET_BASIS;
-    let mut segs = manager.segment_ids_touching_chunk(chunk_id);
+    let mut segs = storage.segment_ids_touching_chunk(chunk_id);
     segs.sort_unstable();
     for seg_id in segs {
         hash ^= seg_id.0 as u64;
         hash = hash.wrapping_mul(FNV_PRIME);
-        let seg = manager.segment(seg_id);
+        let seg = storage.segment(seg_id);
         if seg.enabled {
             hash ^= 1;
         } else {
             hash ^= 0;
         }
         hash = hash.wrapping_mul(FNV_PRIME);
-        let (l, r) = manager.lane_counts_for_segment(seg);
+        let (l, r) = storage.lane_counts_for_segment(seg);
         hash ^= l as u64;
         hash = hash.wrapping_mul(FNV_PRIME);
         hash ^= r as u64;
         hash = hash.wrapping_mul(FNV_PRIME);
     }
-    let mut nodes = manager.nodes_in_chunk(chunk_id);
+    let mut nodes = storage.nodes_in_chunk(chunk_id);
     nodes.sort_unstable();
     for node_id in nodes {
         hash ^= node_id.0 as u64;
