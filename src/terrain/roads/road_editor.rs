@@ -2,11 +2,12 @@ use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
 use crate::resources::InputState;
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId, RoadStyleParams};
 use crate::terrain::roads::roads::{
-    Lane, LaneGeometry, LaneId, METERS_PER_LANE_POLYLINE_STEP, NodeId, RoadCommand, RoadManager,
-    RoadStorage, SegmentId, StructureType, nearest_lane_to_point, project_point_to_lane_xz,
-    sample_lane_position,
+    Lane, LaneGeometry, LaneId, LaneRef, METERS_PER_LANE_POLYLINE_STEP, NodeId, NodeLane,
+    NodeLaneId, PolyIdx, RoadCommand, RoadManager, RoadStorage, SegmentId, StructureType, bezier3,
+    nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
 use glam::Vec3;
+use std::cmp::PartialEq;
 
 const NODE_SNAP_RADIUS: f32 = 8.0;
 const LANE_SNAP_RADIUS: f32 = 8.0;
@@ -17,52 +18,84 @@ const MIN_SEGMENT_LENGTH: f32 = 1.0;
 // Types & Structs
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoadType {
-    SmallRoad,
-    MediumRoad,
-    Highway,
+#[derive(Debug, Clone)]
+pub struct RoadType {
+    pub name: &'static str,
+
+    pub lanes_each_direction: (usize, usize),
+
+    pub lane_width: f32,
+    pub lane_height: f32,
+    pub lane_material_id: u32,
+
+    pub sidewalk_width: f32,
+    pub sidewalk_height: f32,
+    pub sidewalk_material_id: u32,
+
+    pub median_width: f32,
+    pub median_height: f32,
+    pub median_material_id: u32,
+
+    pub speed_limit: f32,
+    pub vehicle_mask: u32,
+    pub structure: StructureType,
+}
+impl Default for RoadType {
+    fn default() -> Self {
+        Self {
+            name: "Medium Road",
+
+            lanes_each_direction: (1, 1),
+
+            lane_width: 2.75,
+            lane_height: 0.0,
+            lane_material_id: 2, // asphalt
+
+            sidewalk_width: 1.75,
+            sidewalk_height: 0.15,
+            sidewalk_material_id: 0, // concrete
+
+            median_width: 0.3,
+            median_height: 0.15,
+            median_material_id: 0, // concrete
+
+            speed_limit: 16.7,
+            vehicle_mask: 1,
+            structure: StructureType::Surface,
+        }
+    }
 }
 
 impl RoadType {
-    pub fn speed_limit(self) -> f32 {
-        match self {
-            RoadType::SmallRoad => 13.9,
-            RoadType::MediumRoad => 16.7,
-            RoadType::Highway => 33.3,
-        }
+    pub fn total_lanes(&self) -> usize {
+        self.lanes_each_direction.0 + self.lanes_each_direction.1
     }
 
-    pub fn capacity(self) -> u32 {
-        match self {
-            RoadType::SmallRoad => 2000,
-            RoadType::MediumRoad => 3000,
-            RoadType::Highway => 4000,
-        }
+    pub fn capacity(&self) -> u32 {
+        let lanes = self.total_lanes() as f32;
+        let base_per_lane = 900.0;
+        let speed_factor = (self.speed_limit / 13.9).clamp(0.5, 3.0);
+
+        (lanes * base_per_lane * speed_factor) as u32
+    }
+    pub fn speed_limit(&self) -> f32 {
+        self.speed_limit
     }
 
-    pub fn vehicle_mask(self) -> u32 {
-        1
+    pub fn vehicle_mask(&self) -> u32 {
+        self.vehicle_mask
     }
 
-    pub fn structure(self) -> StructureType {
-        StructureType::Surface
+    pub fn structure(&self) -> StructureType {
+        self.structure
     }
 
-    pub fn lanes_each_direction(self) -> (usize, usize) {
-        match self {
-            RoadType::SmallRoad => (1, 1),
-            RoadType::MediumRoad => (2, 2),
-            RoadType::Highway => (3, 3),
-        }
+    pub fn lanes_each_direction(&self) -> (usize, usize) {
+        self.lanes_each_direction
     }
 
-    pub fn name(self) -> &'static str {
-        match self {
-            RoadType::SmallRoad => "Small Road",
-            RoadType::MediumRoad => "Medium Road",
-            RoadType::Highway => "Highway",
-        }
+    pub fn name(&self) -> &'static str {
+        self.name
     }
 }
 
@@ -182,14 +215,14 @@ pub enum RoadEditorCommand {
 }
 
 #[derive(Debug, Clone)]
-enum PlannedNode {
+pub enum PlannedNode {
     Existing(NodeId),
     New { pos: Vec3 },
     Split { lane_id: LaneId, t: f32, pos: Vec3 },
 }
 
 impl PlannedNode {
-    fn position(&self, storage: &RoadStorage) -> Option<Vec3> {
+    pub fn position(&self, storage: &RoadStorage) -> Option<Vec3> {
         match self {
             PlannedNode::Existing(id) => {
                 let node = storage.node(*id)?;
@@ -220,13 +253,13 @@ impl PlannedNode {
 }
 
 #[derive(Debug, Clone)]
-struct Anchor {
-    snap: SnapResult,
-    planned_node: PlannedNode,
+pub struct Anchor {
+    pub snap: SnapResult,
+    pub planned_node: PlannedNode,
 }
 
 #[derive(Debug, Clone)]
-enum EditorState {
+pub enum EditorState {
     Idle,
     StraightPickEnd { start: Anchor },
     CurvePickControl { start: Anchor },
@@ -275,54 +308,21 @@ impl IdAllocator {
 // ============================================================================
 
 pub struct RoadEditor {
-    state: EditorState,
-    mode: BuildMode,
-    road_type: RoadType,
     allocator: IdAllocator,
 }
 
 impl RoadEditor {
     pub fn new() -> Self {
         Self {
-            state: EditorState::Idle,
-            mode: BuildMode::Straight,
-            road_type: RoadType::SmallRoad,
             allocator: IdAllocator::new(),
         }
-    }
-
-    pub fn set_mode(&mut self, mode: BuildMode) {
-        if self.mode != mode {
-            self.mode = mode;
-            self.state = EditorState::Idle;
-        }
-    }
-
-    pub fn set_road_type(&mut self, ty: RoadType) {
-        self.road_type = ty;
-    }
-
-    pub fn mode(&self) -> BuildMode {
-        self.mode
-    }
-
-    pub fn road_type(&self) -> RoadType {
-        self.road_type
-    }
-
-    pub fn is_idle(&self) -> bool {
-        matches!(self.state, EditorState::Idle)
-    }
-
-    pub fn cancel(&mut self) {
-        self.state = EditorState::Idle;
     }
 
     pub fn update(
         &mut self,
         road_manager: &RoadManager,
         terrain_renderer: &TerrainRenderer,
-        road_style_params: &RoadStyleParams,
+        road_style_params: &mut RoadStyleParams,
         input: &mut InputState,
         picked_point: &Option<PickedPoint>,
     ) -> Vec<RoadEditorCommand> {
@@ -331,7 +331,7 @@ impl RoadEditor {
         let mut output = Vec::new();
 
         if input.action_pressed_once("Cancel") {
-            self.state = EditorState::Idle;
+            road_style_params.set_to_idle();
             output.push(RoadEditorCommand::PreviewClear);
             return output;
         }
@@ -361,9 +361,15 @@ impl RoadEditor {
 
         let place_pressed = input.action_pressed_once("Place Road Node");
 
-        match self.state.clone() {
+        match road_style_params.state().clone() {
             EditorState::Idle => {
-                self.handle_idle(storage, &snap, place_pressed, &mut output);
+                self.handle_idle(
+                    road_style_params,
+                    storage,
+                    &snap,
+                    place_pressed,
+                    &mut output,
+                );
             }
             EditorState::StraightPickEnd { start } => {
                 self.handle_straight_pick_end(
@@ -378,7 +384,14 @@ impl RoadEditor {
                 );
             }
             EditorState::CurvePickControl { start } => {
-                self.handle_curve_pick_control(storage, &start, &snap, place_pressed, &mut output);
+                self.handle_curve_pick_control(
+                    road_style_params,
+                    storage,
+                    &start,
+                    &snap,
+                    place_pressed,
+                    &mut output,
+                );
             }
             EditorState::CurvePickEnd { start, control } => {
                 self.handle_curve_pick_end(
@@ -400,23 +413,23 @@ impl RoadEditor {
 
     fn handle_idle(
         &mut self,
+        road_style_params: &mut RoadStyleParams,
         storage: &RoadStorage,
         snap: &SnapResult,
         place_pressed: bool,
         output: &mut Vec<RoadEditorCommand>,
     ) {
         let node_preview = self.build_node_preview_from_snap(storage, snap);
-        println!("{:?}", node_preview);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed {
             let anchor = self.build_anchor_from_snap(snap);
-            match self.mode {
+            match road_style_params.mode() {
                 BuildMode::Straight => {
-                    self.state = EditorState::StraightPickEnd { start: anchor };
+                    road_style_params.set_state(EditorState::StraightPickEnd { start: anchor });
                 }
                 BuildMode::Curved => {
-                    self.state = EditorState::CurvePickControl { start: anchor };
+                    road_style_params.set_state(EditorState::CurvePickControl { start: anchor });
                 }
             }
         }
@@ -426,7 +439,7 @@ impl RoadEditor {
         &mut self,
         terrain_renderer: &TerrainRenderer,
         storage: &RoadStorage,
-        road_style_params: &RoadStyleParams,
+        road_style_params: &mut RoadStyleParams,
         start: &Anchor,
         snap: &SnapResult,
         place_pressed: bool,
@@ -437,7 +450,7 @@ impl RoadEditor {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
             ));
-            self.state = EditorState::Idle;
+            road_style_params.set_state(EditorState::Idle);
             return;
         };
 
@@ -449,8 +462,8 @@ impl RoadEditor {
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
         let seg_preview = SegmentPreview {
-            road_type: self.road_type,
-            mode: self.mode,
+            road_type: road_style_params.road_type().clone(),
+            mode: road_style_params.mode(),
             is_valid,
             reason_invalid: reason,
             start: start_pos,
@@ -461,7 +474,7 @@ impl RoadEditor {
             would_split_end: end_anchor.planned_node.split_info(),
             would_merge_start: start.planned_node.merged_node_id(),
             would_merge_end: end_anchor.planned_node.merged_node_id(),
-            lane_count_each_dir: self.road_type.lanes_each_direction(),
+            lane_count_each_dir: road_style_params.road_type().lanes_each_direction(),
             estimated_length,
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
@@ -483,7 +496,7 @@ impl RoadEditor {
             for cmd in road_cmds {
                 output.push(RoadEditorCommand::Road(cmd));
             }
-            self.state = EditorState::Idle;
+            road_style_params.set_to_idle();
         } else if place_pressed {
             if let Some(err) = seg_preview.reason_invalid {
                 output.push(RoadEditorCommand::PreviewError(err));
@@ -493,6 +506,7 @@ impl RoadEditor {
 
     fn handle_curve_pick_control(
         &mut self,
+        road_style_params: &mut RoadStyleParams,
         storage: &RoadStorage,
         start: &Anchor,
         snap: &SnapResult,
@@ -503,7 +517,7 @@ impl RoadEditor {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
             ));
-            self.state = EditorState::Idle;
+            road_style_params.set_to_idle();
             return;
         };
 
@@ -512,8 +526,8 @@ impl RoadEditor {
         let estimated_length = (control_pos - start_pos).length();
 
         let seg_preview = SegmentPreview {
-            road_type: self.road_type,
-            mode: self.mode,
+            road_type: road_style_params.road_type().clone(),
+            mode: road_style_params.mode(),
             is_valid: true,
             reason_invalid: None,
             start: start_pos,
@@ -524,16 +538,16 @@ impl RoadEditor {
             would_split_end: None,
             would_merge_start: start.planned_node.merged_node_id(),
             would_merge_end: None,
-            lane_count_each_dir: self.road_type.lanes_each_direction(),
+            lane_count_each_dir: road_style_params.road_type().lanes_each_direction(),
             estimated_length,
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview));
 
         if place_pressed {
-            self.state = EditorState::CurvePickEnd {
+            road_style_params.set_state(EditorState::CurvePickEnd {
                 start: start.clone(),
                 control: control_pos,
-            };
+            });
         }
     }
 
@@ -541,7 +555,7 @@ impl RoadEditor {
         &mut self,
         terrain_renderer: &TerrainRenderer,
         storage: &RoadStorage,
-        road_style_params: &RoadStyleParams,
+        road_style_params: &mut RoadStyleParams,
         start: &Anchor,
         control: Vec3,
         snap: &SnapResult,
@@ -553,7 +567,7 @@ impl RoadEditor {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
             ));
-            self.state = EditorState::Idle;
+            road_style_params.set_to_idle();
             return;
         };
 
@@ -567,8 +581,8 @@ impl RoadEditor {
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
         let seg_preview = SegmentPreview {
-            road_type: self.road_type,
-            mode: self.mode,
+            road_type: road_style_params.road_type().clone(),
+            mode: road_style_params.mode(),
             is_valid,
             reason_invalid: reason,
             start: start_pos,
@@ -579,7 +593,7 @@ impl RoadEditor {
             would_split_end: end_anchor.planned_node.split_info(),
             would_merge_start: start.planned_node.merged_node_id(),
             would_merge_end: end_anchor.planned_node.merged_node_id(),
-            lane_count_each_dir: self.road_type.lanes_each_direction(),
+            lane_count_each_dir: road_style_params.road_type().lanes_each_direction(),
             estimated_length,
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
@@ -601,7 +615,7 @@ impl RoadEditor {
             for cmd in road_cmds {
                 output.push(RoadEditorCommand::Road(cmd));
             }
-            self.state = EditorState::Idle;
+            road_style_params.set_to_idle()
         } else if place_pressed {
             if let Some(err) = seg_preview.reason_invalid {
                 output.push(RoadEditorCommand::PreviewError(err));
@@ -666,7 +680,7 @@ impl RoadEditor {
         pos: Vec3,
     ) -> Option<(LaneId, f32, Vec3, f32)> {
         let lane_id = nearest_lane_to_point(storage, pos.x, pos.y, pos.z)?;
-        let lane = storage.lane(lane_id);
+        let lane = storage.lane(&lane_id);
         let (t, dist_sq) = project_point_to_lane_xz(lane, pos.x, pos.z, storage);
         let dist = dist_sq.sqrt();
 
@@ -730,16 +744,16 @@ impl RoadEditor {
 
                 let node = storage.node(id).unwrap();
 
-                for &lane_id in node.incoming_lanes() {
+                for lane_id in node.incoming_lanes() {
                     let lane = storage.lane(lane_id);
                     let dir = lane_direction_at_node(lane, id);
-                    in_lanes.push((lane_id, dir));
+                    in_lanes.push((lane_id.clone(), dir));
                 }
 
-                for &lane_id in node.outgoing_lanes() {
+                for lane_id in node.outgoing_lanes() {
                     let lane = storage.lane(lane_id);
                     let dir = lane_direction_at_node(lane, id);
-                    out_lanes.push((lane_id, dir));
+                    out_lanes.push((lane_id.clone(), dir));
                 }
 
                 (
@@ -753,13 +767,13 @@ impl RoadEditor {
                 if t < ENDPOINT_T_EPS || t > 1.0 - ENDPOINT_T_EPS {
                     (NodePreviewResult::NewNode, Vec::new(), Vec::new())
                 } else {
-                    let lane = storage.lane(lane_id);
+                    let lane = storage.lane(&lane_id);
                     let dir = lane.geometry().points[1] - lane.geometry().points[0];
 
                     (
                         NodePreviewResult::SplitIntersection,
-                        vec![(lane_id, -dir.normalize())],
-                        vec![(lane_id, dir.normalize())],
+                        vec![(lane_id.clone(), -dir.normalize())],
+                        vec![(lane_id.clone(), dir.normalize())],
                     )
                 }
             }
@@ -783,7 +797,7 @@ impl RoadEditor {
         lane_id: LaneId,
         t: f32,
     ) -> Option<LanePreview> {
-        let lane = storage.lane(lane_id);
+        let lane = storage.lane(&lane_id);
         let (px, pz) = sample_lane_position(lane, t, storage);
 
         let sample_count = 11;
@@ -850,14 +864,19 @@ impl RoadEditor {
         let mut cmds = Vec::new();
 
         // Resolve anchors
-        let Some((start_id, start_pos)) =
-            self.resolve_anchor(storage, start, chunk_id, &mut cmds, output)
-        else {
+        let Some((start_id, start_pos)) = self.resolve_anchor(
+            storage,
+            road_style_params,
+            start,
+            chunk_id,
+            &mut cmds,
+            output,
+        ) else {
             return Vec::new();
         };
 
         let Some((end_id, end_pos)) =
-            self.resolve_anchor(storage, end, chunk_id, &mut cmds, output)
+            self.resolve_anchor(storage, road_style_params, end, chunk_id, &mut cmds, output)
         else {
             return cmds;
         };
@@ -886,7 +905,7 @@ impl RoadEditor {
         cmds.push(RoadCommand::AddSegment {
             start: start_id,
             end: end_id,
-            structure: self.road_type.structure(),
+            structure: road_style_params.road_type().structure(),
             chunk_id,
         });
 
@@ -901,6 +920,20 @@ impl RoadEditor {
             &centerline,
             chunk_id,
         );
+        push_intersection(
+            &mut cmds,
+            start_id,
+            &start.planned_node,
+            road_style_params,
+            chunk_id,
+        );
+        push_intersection(
+            &mut cmds,
+            end_id,
+            &end.planned_node,
+            road_style_params,
+            chunk_id,
+        );
 
         cmds
     }
@@ -908,6 +941,7 @@ impl RoadEditor {
     fn resolve_anchor(
         &mut self,
         storage: &RoadStorage,
+        road_style_params: &RoadStyleParams,
         anchor: &Anchor,
         chunk_id: ChunkId,
         cmds: &mut Vec<RoadCommand>,
@@ -929,22 +963,23 @@ impl RoadEditor {
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
-                let result = self.split(storage, *lane_id, *pos, chunk_id, output)?;
+                let result =
+                    self.plan_split(road_style_params, storage, *lane_id, *pos, chunk_id)?;
                 cmds.extend(result.0);
                 Some((result.1, *pos))
             }
         }
     }
 
-    fn split(
+    fn plan_split(
         &mut self,
+        road_style_params: &RoadStyleParams,
         storage: &RoadStorage,
         lane_id: LaneId,
         split_pos: Vec3,
         chunk_id: ChunkId,
-        output: &mut Vec<RoadEditorCommand>,
     ) -> Option<(Vec<RoadCommand>, NodeId)> {
-        let lane = storage.lane(lane_id);
+        let lane = storage.lane(&lane_id);
         let old_segment_id = lane.segment();
         let old_segment = storage.segment(old_segment_id);
 
@@ -954,6 +989,7 @@ impl RoadEditor {
         let mut cmds = Vec::new();
 
         cmds.push(RoadCommand::DisableSegment {
+            // diables segment and its lanes
             segment_id: old_segment_id,
             chunk_id,
         });
@@ -983,7 +1019,7 @@ impl RoadEditor {
             chunk_id,
         });
 
-        for &old_lane_id in old_segment.lanes() {
+        for old_lane_id in old_segment.lanes() {
             let old_lane = storage.lane(old_lane_id);
 
             let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
@@ -1024,11 +1060,11 @@ impl RoadEditor {
                     to: new_node_id,
                     segment: seg2_id,
                     lane_index: old_lane.lane_index(),
-                    geometry: geom2,
+                    geometry: geom1, // FIXED: was geom2
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost2,
+                    base_cost: cost1, // FIXED: was cost2
                     chunk_id,
                 });
 
@@ -1037,11 +1073,11 @@ impl RoadEditor {
                     to: a_id,
                     segment: seg1_id,
                     lane_index: old_lane.lane_index(),
-                    geometry: geom1,
+                    geometry: geom2, // FIXED: was geom1
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost1,
+                    base_cost: cost2, // FIXED: was cost1
                     chunk_id,
                 });
             }
@@ -1061,10 +1097,10 @@ impl RoadEditor {
         centerline: &[Vec3],
         chunk_id: ChunkId,
     ) {
-        let (left_lanes, right_lanes) = self.road_type.lanes_each_direction();
-        let speed = self.road_type.speed_limit();
-        let capacity = self.road_type.capacity();
-        let mask = self.road_type.vehicle_mask();
+        let (left_lanes, right_lanes) = road_style_params.road_type().lanes_each_direction();
+        let speed = road_style_params.road_type().speed_limit();
+        let capacity = road_style_params.road_type().capacity();
+        let mask = road_style_params.road_type().vehicle_mask();
         let lane_width = road_style_params.lane_width;
 
         // Right side lanes (start -> end)
@@ -1225,12 +1261,6 @@ fn gather_node_lanes(storage: &RoadStorage, node_id: NodeId) -> (Vec<LaneId>, Ve
         node.outgoing_lanes().to_vec(),
     )
 }
-
-fn gather_split_lanes(manager: &RoadManager, lane_id: LaneId) -> (Vec<LaneId>, Vec<LaneId>) {
-    // At a split point: from → new_node is incoming, new_node → to is outgoing
-    (vec![lane_id], vec![lane_id])
-}
-
 pub fn offset_polyline(
     terrain_renderer: &TerrainRenderer,
     center: &[Vec3],
@@ -1263,4 +1293,389 @@ pub fn offset_polyline(
     }
 
     out
+}
+#[derive(Clone, Debug)]
+pub struct IntersectionBuildParams {
+    /// Degrees: lanes with similar "arm direction" are grouped into the same approach arm.
+    pub arm_merge_angle_deg: f32,
+    /// Degrees: outgoing arm considered "straight" if within this angle of incoming heading.
+    pub straight_angle_deg: f32,
+    /// Bezier samples for NodeLane geometry.
+    pub turn_samples: usize,
+    /// If true: dedicate rightmost lane to right turn and leftmost to left turn (when possible).
+    pub dedicate_turn_lanes: bool,
+    pub max_turn_angle: f32,    // radians, eg 160° = 2.79 (kills u-turns)
+    pub min_turn_radius_m: f32, // eg 6.0
+    /// The radius of the "empty intersection area" around the node.
+    /// Incoming lanes are trimmed so their end lies on this radius,
+    /// outgoing lanes are trimmed so their start lies on this radius.
+    pub clearance_radius_m: f32,
+}
+
+impl IntersectionBuildParams {
+    pub fn from_style(style: &RoadStyleParams) -> Self {
+        // A decent default: enough to clear sidewalks + a bit of lane length for the curve start.
+        let r = style.sidewalk_width + style.lane_width * 1.8 + style.median_width;
+
+        Self {
+            arm_merge_angle_deg: 20.0,
+            straight_angle_deg: 25.0,
+            turn_samples: 12,
+            dedicate_turn_lanes: true,
+            max_turn_angle: 3.3,
+            min_turn_radius_m: 1.0,
+            clearance_radius_m: r.clamp(style.lane_width * 1.5, style.lane_width * 8.0),
+        }
+    }
+}
+impl Default for IntersectionBuildParams {
+    fn default() -> Self {
+        Self {
+            arm_merge_angle_deg: 20.0,
+            straight_angle_deg: 25.0,
+            turn_samples: 12,
+            dedicate_turn_lanes: true,
+            max_turn_angle: 3.4,
+            min_turn_radius_m: 2.0,
+            clearance_radius_m: 15.0,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug)]
+enum Move {
+    Right,
+    Straight,
+    Left,
+}
+pub fn build_intersection_at_node(
+    storage: &mut RoadStorage,
+    node_id: NodeId,
+    params: &IntersectionBuildParams,
+    clear: bool,
+) {
+    if clear {
+        let dynamic_clearance = params.clearance_radius_m;
+        carve_intersection_clearance(storage, node_id, dynamic_clearance);
+    }
+    // Clear node lanes (same as RoadCommand::ClearNodeLanes)
+    storage.node_mut(node_id).clear_node_lanes();
+
+    let node_pos = {
+        let Some(n) = storage.node(node_id) else {
+            return;
+        };
+        Vec3::new(n.x(), n.y(), n.z())
+    };
+
+    // Clone lane lists to avoid borrow issues
+    let (incoming_ids, outgoing_ids) = {
+        let Some(n) = storage.node(node_id) else {
+            return;
+        };
+        (n.incoming_lanes(), n.outgoing_lanes())
+    };
+    let up = Vec3::new(0.0, 1.0, 0.0);
+    let mut connections: Vec<(&LaneId, &LaneId)> = Vec::new();
+    for incoming_id in incoming_ids {
+        for outgoing_id in outgoing_ids {
+            let incoming_lane = storage.lane(incoming_id);
+            let outgoing_lane = storage.lane(outgoing_id);
+            if !incoming_lane.is_enabled() || !outgoing_lane.is_enabled() {
+                continue;
+            }
+
+            connections.push((incoming_id, outgoing_id));
+        }
+    }
+    let mut node_lanes: Vec<NodeLane> = Vec::new();
+    for (idx, (incoming_id, outgoing_id)) in connections.iter().enumerate() {
+        let incoming_lane = storage.lane(incoming_id);
+        let outgoing_lane = storage.lane(outgoing_id);
+
+        let in_poly = incoming_lane.polyline();
+        let out_poly = outgoing_lane.polyline();
+
+        let incoming_pos_before = in_poly[in_poly.len() - 2]; // Second-to-Last Vec3 Point of the incoming lane
+        let incoming_pos = in_poly[in_poly.len() - 1]; // Last Vec3 Point of the incoming lane
+        let incoming_dir = (incoming_pos - incoming_pos_before).normalize(); // Direction from the incoming lane
+
+        let outgoing_pos = out_poly[0]; // Second Vec3 Point of the outgoing lane
+        let outgoing_pos_after = out_poly[1]; // First Vec3 Point of the outgoing lane
+        let outgoing_dir = (outgoing_pos_after - outgoing_pos).normalize(); // Direction to the outgoing lane
+
+        let angle = incoming_dir.dot(outgoing_dir).clamp(-1.0, 1.0);
+        let turn_angle = angle.acos(); // radians, 0 = straight, PI = U-turn
+
+        if turn_angle > params.max_turn_angle {
+            println!("hi");
+            continue; // u-turn or near u-turn
+        }
+        let chord = incoming_pos.distance(outgoing_pos);
+        let turn_radius = if turn_angle < 0.01 {
+            f32::INFINITY
+        } else {
+            chord / (2.0 * (turn_angle * 0.5).sin())
+        };
+
+        if turn_radius < params.min_turn_radius_m {
+            continue; // too sharp, no space
+        }
+        let sharpness = (turn_angle / params.max_turn_angle).clamp(0.0, 1.0);
+        let geometry =
+            generate_turn_geometry(incoming_pos, incoming_dir, outgoing_pos, outgoing_dir, 12);
+
+        let length_cost = geometry.total_len; // or sum of segments
+        let curvature_cost = (params.min_turn_radius_m / turn_radius).powf(1.5);
+        let base_cost = length_cost * 0.1 + turn_angle * 2.0 + curvature_cost * 20.0;
+        let dynamic_cost = 0.0;
+        let node_lane = NodeLane::new(
+            idx as NodeLaneId,
+            vec![LaneRef::Segment(**incoming_id, 0 as PolyIdx)],
+            vec![LaneRef::Segment(
+                **outgoing_id,
+                (geometry.points.len() - 1) as PolyIdx,
+            )],
+            geometry,
+            base_cost,
+            dynamic_cost,
+            50.0,
+            0,
+        );
+        node_lanes.push(node_lane);
+    }
+
+    storage.node_mut(node_id).add_node_lanes(node_lanes);
+}
+
+/// Generates smooth turn geometry using a cubic Bezier curve.
+fn generate_turn_geometry(
+    start: Vec3,
+    start_dir: Vec3,
+    end: Vec3,
+    end_dir: Vec3,
+    samples: usize,
+) -> LaneGeometry {
+    let dist = start.distance(end);
+
+    // Handle degenerate case where start ≈ end
+    if dist < 0.001 {
+        return LaneGeometry::from_polyline(vec![start, end]);
+    }
+
+    // Control point distance scales with turn length
+    let control_len = (dist * 0.4).max(0.5);
+
+    // Cubic bezier control points
+    let ctrl1 = start + start_dir * control_len;
+    let ctrl2 = end - end_dir * control_len;
+
+    let n = samples.clamp(2, 32);
+    let mut points = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let t = i as f32 / (n - 1) as f32;
+        points.push(bezier3(start, ctrl1, ctrl2, end, t));
+    }
+
+    LaneGeometry::from_polyline(points)
+}
+fn seg_sphere_intersection_t(a: Vec3, b: Vec3, center: Vec3, r: f32) -> Option<f32> {
+    let d = b - a;
+    let f = a - center;
+
+    let aa = d.dot(d);
+    if aa < 1e-8 {
+        return None;
+    }
+
+    let bb = 2.0 * f.dot(d);
+    let cc = f.dot(f) - r * r;
+
+    let disc = bb * bb - 4.0 * aa * cc;
+    if disc < 0.0 {
+        return None;
+    }
+    let s = disc.sqrt();
+
+    let t1 = (-bb - s) / (2.0 * aa);
+    let t2 = (-bb + s) / (2.0 * aa);
+
+    // We want a valid intersection on the segment.
+    let in1 = (0.0..=1.0).contains(&t1);
+    let in2 = (0.0..=1.0).contains(&t2);
+
+    match (in1, in2) {
+        (true, true) => Some(t1.min(t2)),
+        (true, false) => Some(t1),
+        (false, true) => Some(t2),
+        (false, false) => None,
+    }
+}
+fn trim_polyline_end_to_radius(points: &[Vec3], center: Vec3, r: f32) -> Option<Vec<Vec3>> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let eps = 0.05;
+    let end_dist = points[points.len() - 1].distance(center);
+
+    // Already at/near radius or outside => don't shrink further (idempotent).
+    if end_dist >= r - eps {
+        return None;
+    }
+
+    // Walk backwards to find segment crossing radius (outside -> inside).
+    for i in (0..points.len() - 1).rev() {
+        let a = points[i];
+        let b = points[i + 1];
+        let da = a.distance(center);
+        let db = b.distance(center);
+
+        if da >= r && db <= r {
+            if let Some(t) = seg_sphere_intersection_t(a, b, center, r) {
+                let p = a + (b - a) * t;
+                let mut out = Vec::with_capacity(i + 2);
+                out.extend_from_slice(&points[..=i]);
+                out.push(p);
+                if out.len() >= 2 {
+                    return Some(out);
+                }
+                return None;
+            }
+        }
+    }
+
+    None
+}
+fn trim_polyline_start_to_radius(points: &[Vec3], center: Vec3, r: f32) -> Option<Vec<Vec3>> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let eps = 0.05;
+    let start_dist = points[0].distance(center);
+
+    // Already at/near radius or outside => don't shrink further (idempotent).
+    if start_dist >= r - eps {
+        return None;
+    }
+
+    // Walk forward to find segment crossing radius (inside -> outside).
+    for i in 0..points.len() - 1 {
+        let a = points[i];
+        let b = points[i + 1];
+        let da = a.distance(center);
+        let db = b.distance(center);
+
+        if da <= r && db >= r {
+            if let Some(t) = seg_sphere_intersection_t(a, b, center, r) {
+                let p = a + (b - a) * t;
+                let mut out = Vec::with_capacity(points.len() - i);
+                out.push(p);
+                out.extend_from_slice(&points[i + 1..]);
+                if out.len() >= 2 {
+                    return Some(out);
+                }
+                return None;
+            }
+        }
+    }
+
+    None
+}
+fn carve_intersection_clearance(storage: &mut RoadStorage, node_id: NodeId, r: f32) {
+    // Pull everything we need from the node as OWNED values (no references kept).
+    let (node_pos, incoming_ids, outgoing_ids) = {
+        let Some(n) = storage.node(node_id) else {
+            return;
+        };
+
+        let pos = Vec3::new(n.x(), n.y(), n.z());
+
+        // IMPORTANT: copy LaneId values out (no Vec<&LaneId>)
+        let incoming: Vec<LaneId> = n.incoming_lanes().iter().copied().collect();
+        let outgoing: Vec<LaneId> = n.outgoing_lanes().iter().copied().collect();
+
+        (pos, incoming, outgoing)
+    };
+
+    // Collect edits first (immutable reads only)
+    let mut edits: Vec<(LaneId, LaneGeometry, f32)> = Vec::new(); // (lane_id, new_geom, new_base_cost)
+
+    // Incoming: trim END
+    for lane_id in incoming_ids {
+        let (maybe_new_geom, maybe_new_cost) = {
+            let lane = storage.lane(&lane_id);
+            if !lane.is_enabled() {
+                (None, None)
+            } else {
+                let old = lane.geometry();
+                let old_len = old.total_len.max(0.001);
+                let old_cost = lane.base_cost();
+
+                let new_pts = trim_polyline_end_to_radius(&old.points, node_pos, r);
+                if let Some(pts) = new_pts {
+                    let new_geom = LaneGeometry::from_polyline(pts);
+                    let ratio = (new_geom.total_len / old_len).clamp(0.1, 1.0);
+                    (Some(new_geom), Some(old_cost * ratio))
+                } else {
+                    (None, None)
+                }
+            }
+        };
+
+        if let (Some(new_geom), Some(new_cost)) = (maybe_new_geom, maybe_new_cost) {
+            edits.push((lane_id, new_geom, new_cost));
+        }
+    }
+
+    // Outgoing: trim START
+    for lane_id in outgoing_ids {
+        let (maybe_new_geom, maybe_new_cost) = {
+            let lane = storage.lane(&lane_id);
+            if !lane.is_enabled() {
+                (None, None)
+            } else {
+                let old = lane.geometry();
+                let old_len = old.total_len.max(0.001);
+                let old_cost = lane.base_cost();
+
+                let new_pts = trim_polyline_start_to_radius(&old.points, node_pos, r);
+                if let Some(pts) = new_pts {
+                    let new_geom = LaneGeometry::from_polyline(pts);
+                    let ratio = (new_geom.total_len / old_len).clamp(0.1, 1.0);
+                    (Some(new_geom), Some(old_cost * ratio))
+                } else {
+                    (None, None)
+                }
+            }
+        };
+
+        if let (Some(new_geom), Some(new_cost)) = (maybe_new_geom, maybe_new_cost) {
+            edits.push((lane_id, new_geom, new_cost));
+        }
+    }
+
+    // Apply edits (mutable borrows only)
+    for (lane_id, new_geom, new_cost) in edits {
+        let lane = storage.lane_mut(lane_id);
+        lane.replace_geometry(new_geom);
+        lane.replace_base_cost(new_cost);
+    }
+}
+fn push_intersection(
+    cmds: &mut Vec<RoadCommand>,
+    node_id: NodeId,
+    planned: &PlannedNode,
+    road_style_params: &RoadStyleParams,
+    chunk_id: ChunkId,
+) {
+    let clear = !matches!(planned, PlannedNode::New { .. });
+
+    cmds.push(RoadCommand::MakeIntersection {
+        node_id,
+        params: IntersectionBuildParams::from_style(road_style_params),
+        chunk_id,
+        clear,
+    });
 }

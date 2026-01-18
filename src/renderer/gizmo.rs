@@ -1,3 +1,4 @@
+use crate::renderer::world_renderer::{TerrainRenderer, position_to_chunk_coords};
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::vertex::LineVtx;
 use glam::Vec3;
@@ -15,8 +16,39 @@ pub struct Gizmo {
 }
 
 impl Gizmo {
-    pub fn update(&mut self, total_game_time: f64, road_manager: &RoadManager) {
+    pub fn update(
+        &mut self,
+        terrain_renderer: &TerrainRenderer,
+        target_position: Vec3,
+        total_game_time: f64,
+        road_manager: &RoadManager,
+    ) {
         self.total_game_time = total_game_time;
+        let render_chunk = false;
+        if render_chunk {
+            let (cx, cz) = position_to_chunk_coords(target_position, terrain_renderer.chunk_size);
+
+            let Some(chunk) = terrain_renderer.chunks.get(&(cx, cz)) else {
+                return;
+            };
+
+            // render chunk bounds as a debug box
+            let cs = terrain_renderer.chunk_size as f32;
+            let x0 = cx as f32 * cs;
+            let z0 = cz as f32 * cs;
+            let x1 = x0 + cs;
+            let z1 = z0 + cs;
+            let y = target_position.y;
+
+            let c = [0.2, 0.8, 0.6];
+
+            self.render_line([x0, y, z0], [x1, y, z0], c);
+            self.render_line([x1, y, z0], [x1, y, z1], c);
+            self.render_line([x1, y, z1], [x0, y, z1], c);
+            self.render_line([x0, y, z1], [x0, y, z0], c);
+        }
+
+        // Roads down here
         let render_disabled_lanes = false;
         let render_arrow_lane_to_node = false;
 
@@ -31,8 +63,8 @@ impl Gizmo {
                 };
                 self.render_circle([node.x(), node.y(), node.z()], 2.0, node_color);
 
-                // 2. Render Incoming Lane (resolve lanes/segments from the same storage)
-                for &lane_id in node.incoming_lanes().iter() {
+                // 2. Render Incoming Lanes
+                for lane_id in node.incoming_lanes().iter() {
                     let lane = storage.lane(lane_id);
                     let segment = storage.segment(lane.segment());
 
@@ -56,10 +88,43 @@ impl Gizmo {
                     let poly: Vec<[f32; 3]> =
                         lane.polyline().iter().map(|p| [p.x, p.y, p.z]).collect();
 
-                    self.render_polyline(&poly, lane_color, false);
+                    self.render_polyline(&poly, lane_color, 7.0);
 
                     if render_arrow_lane_to_node {
                         if let Some(end) = lane.polyline().last() {
+                            self.render_arrow(
+                                [end.x, end.y, end.z],
+                                [node.x(), node.y(), node.z()],
+                                lane_color,
+                                false,
+                            );
+                        }
+                    }
+                }
+
+                // 3. Render NodeLanes
+                for node_lane in node.node_lanes().iter() {
+                    // Determine lane color once
+                    let lane_color = if node_lane.is_enabled() {
+                        [0.7, 0.5, 0.0]
+                    } else {
+                        if !render_disabled_lanes {
+                            continue;
+                        }
+                        [1.0, 0.05, 0.0]
+                    };
+
+                    // 3. Safe Polyline Iteration
+                    let poly: Vec<[f32; 3]> = node_lane
+                        .polyline()
+                        .iter()
+                        .map(|p| [p.x, p.y, p.z])
+                        .collect();
+
+                    self.render_polyline(&poly, lane_color, 2.0);
+
+                    if render_arrow_lane_to_node {
+                        if let Some(end) = node_lane.polyline().last() {
                             self.render_arrow(
                                 [end.x, end.y, end.z],
                                 [node.x(), node.y(), node.z()],
@@ -336,7 +401,7 @@ impl Gizmo {
         self.pending_renders.push(PendingGizmoRender { vertices });
     }
 
-    pub fn render_polyline(&mut self, polyline: &[[f32; 3]], color: [f32; 3], dashed: bool) {
+    pub fn render_polyline(&mut self, polyline: &[[f32; 3]], color: [f32; 3], spacing: f32) {
         if polyline.len() < 2 {
             return;
         }
@@ -374,8 +439,6 @@ impl Gizmo {
         }
 
         // ---------- arrow parameters ----------
-
-        let spacing = 7.0;
         let head_len = 0.30;
         let head_width = 0.25;
 

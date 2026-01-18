@@ -720,17 +720,19 @@ impl TerrainRenderer {
     }
 }
 
-fn pos_to_chunk_coord(pos: [f32; 2], chunk_size: f32) -> [i32; 2] {
+#[inline]
+pub fn pos_to_chunk_coord(pos: [f32; 2], chunk_size: f32) -> [i32; 2] {
     [
         (pos[0] / chunk_size).floor() as i32,
         (pos[1] / chunk_size).floor() as i32,
     ]
 }
-fn pos_to_chunk_local(pos: [f32; 2], chunk_size: f32) -> [f32; 2] {
-    [
-        pos[0] - (pos[0] / chunk_size).floor() * chunk_size,
-        pos[1] - (pos[1] / chunk_size).floor() * chunk_size,
-    ]
+#[inline]
+pub fn position_to_chunk_coords(pos: Vec3, chunk_size: usize) -> (i32, i32) {
+    let cs = chunk_size as f32;
+    let cx = (pos.x / cs).floor() as i32;
+    let cz = (pos.z / cs).floor() as i32;
+    (cx, cz)
 }
 
 #[derive(Clone, Copy)]

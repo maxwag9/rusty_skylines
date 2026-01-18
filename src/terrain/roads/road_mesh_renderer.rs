@@ -2,7 +2,9 @@
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer, VisibleChunk};
 use crate::resources::InputState;
 use crate::terrain::roads::road_editor::RoadEditor;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
+use crate::terrain::roads::road_mesh_manager::{
+    ChunkId, MeshConfig, RoadMeshManager, RoadStyleParams, RoadVertex,
+};
 use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
 
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
@@ -21,6 +23,7 @@ pub struct RoadRenderSubsystem {
     pub mesh_manager: RoadMeshManager,
     pub mesh_renderer: RoadMeshRenderer,
 
+    pub style: RoadStyleParams,
     pub road_gpu_storage: RoadGpuStorage,
     pub chunk_gpu: HashMap<ChunkId, ChunkGpuMesh>,
     pub visible_draw_list: Vec<ChunkId>,
@@ -48,6 +51,7 @@ impl RoadRenderSubsystem {
         Self {
             mesh_manager: RoadMeshManager::new(MeshConfig::default()),
             mesh_renderer: RoadMeshRenderer::new(),
+            style: RoadStyleParams::default(),
             road_gpu_storage: RoadGpuStorage::new(),
             chunk_gpu: Default::default(),
             visible_draw_list: vec![],
@@ -80,7 +84,7 @@ impl RoadRenderSubsystem {
         let road_commands = self.road_editor.update(
             &self.road_manager,
             terrain_renderer,
-            &self.mesh_manager.style,
+            &mut self.style,
             input,
             picked_point,
         );
@@ -89,6 +93,7 @@ impl RoadRenderSubsystem {
             terrain_renderer,
             &mut self.mesh_manager,
             &mut self.road_manager.preview_roads, // preview RoadStorage
+            &self.style,
             &road_commands,
         );
         self.preview_state.ingest(&road_commands);
@@ -101,14 +106,17 @@ impl RoadRenderSubsystem {
                 terrain_renderer,
                 &mut self.mesh_manager,
                 &mut self.road_manager.roads,
+                &self.style,
                 false,
                 road_commands,
             );
         }
 
-        let preview_mesh = self
-            .mesh_manager
-            .build_preview_mesh(terrain_renderer, &self.road_manager.preview_roads);
+        let preview_mesh = self.mesh_manager.build_preview_mesh(
+            terrain_renderer,
+            &self.road_manager.preview_roads,
+            &self.style,
+        );
 
         self.preview_gpu.upload(device, &preview_mesh);
 
@@ -127,6 +135,7 @@ impl RoadRenderSubsystem {
                     terrain_renderer,
                     chunk_id,
                     &self.road_manager.roads,
+                    &self.style,
                 )
             } else {
                 match self.mesh_manager.get_chunk_mesh(chunk_id) {

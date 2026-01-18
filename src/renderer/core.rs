@@ -260,8 +260,12 @@ impl RenderCore {
             &self.terrain_renderer.last_picked,
         );
 
-        self.gizmo
-            .update(time.total_game_time, &self.road_renderer.road_manager);
+        self.gizmo.update(
+            &self.terrain_renderer,
+            camera.target,
+            time.total_game_time,
+            &self.road_renderer.road_manager,
+        );
     }
     pub(crate) fn render(
         &mut self,

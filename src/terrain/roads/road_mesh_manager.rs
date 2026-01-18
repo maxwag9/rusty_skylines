@@ -5,6 +5,7 @@
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
 use crate::renderer::world_renderer::TerrainRenderer;
+use crate::terrain::roads::road_editor::{BuildMode, EditorState, RoadType};
 use crate::terrain::roads::roads::{LaneGeometry, NodeId, RoadStorage, SegmentId};
 use glam::Vec3;
 use std::collections::HashMap;
@@ -21,6 +22,9 @@ const NODE_ANGULAR_SEGMENTS: usize = 32;
 
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
+    state: EditorState,
+    mode: BuildMode,
+    road_type: RoadType,
     pub lane_width: f32,
     pub lane_height: f32,
     pub lane_material_id: u32,
@@ -33,10 +37,45 @@ pub struct RoadStyleParams {
     pub median_height: f32,
     pub median_material_id: u32,
 }
+impl RoadStyleParams {
+    pub fn set_mode(&mut self, mode: BuildMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.state = EditorState::Idle;
+        }
+    }
+    pub fn set_road_type(&mut self, ty: RoadType) {
+        self.road_type = ty;
+    }
+    pub fn set_state(&mut self, editor_state: EditorState) {
+        self.state = editor_state;
+    }
+    pub fn mode(&self) -> BuildMode {
+        self.mode
+    }
+    pub fn road_type(&self) -> &RoadType {
+        &self.road_type
+    }
+    pub fn state(&self) -> &EditorState {
+        &self.state
+    }
+    pub fn is_idle(&self) -> bool {
+        matches!(self.state, EditorState::Idle)
+    }
+    pub fn cancel(&mut self) {
+        self.set_to_idle();
+    }
+    pub fn set_to_idle(&mut self) {
+        self.state = EditorState::Idle;
+    }
+}
 
 impl Default for RoadStyleParams {
     fn default() -> Self {
         Self {
+            state: EditorState::Idle,
+            mode: BuildMode::Straight,
+            road_type: RoadType::default(),
             lane_width: 2.5,
             lane_height: 0.0,
             lane_material_id: 2, // Asphalt
@@ -479,27 +518,17 @@ fn build_ribbon_mesh(
     }
 
     // Generate indices (Corrected for CCW Face Back culling)
-    for k in 0..included_indices.len() - 1 {
-        let idx_curr = included_indices[k];
-        let idx_next = included_indices[k + 1];
+    for w in included_indices.windows(2) {
+        let a = w[0];
+        let b = w[1];
 
-        if idx_next != idx_curr + 1 {
-            continue;
-        }
+        let v_base = base_vertex + point_idx_to_vert_idx[&a];
+        let v_next = base_vertex + point_idx_to_vert_idx[&b];
 
-        let v_base = base_vertex + point_idx_to_vert_idx[&idx_curr];
-        let v_next = base_vertex + point_idx_to_vert_idx[&idx_next];
-
-        // Layout:
-        // v_base (Geom Right)   ----- v_next (Geom Right)
-        // v_base+1 (Geom Left)  ----- v_next+1 (Geom Left)
-        //
-        // Triangle 1: v_base -> v_base+1 -> v_next (Right -> Left -> NextRight) -> CCW Up
         indices.push(v_base);
         indices.push(v_base + 1);
         indices.push(v_next);
 
-        // Triangle 2: v_next -> v_base+1 -> v_next+1 (NextRight -> Left -> NextLeft) -> CCW Up
         indices.push(v_next);
         indices.push(v_base + 1);
         indices.push(v_next + 1);
@@ -995,7 +1024,6 @@ fn draw_node_geometry(
 pub struct RoadMeshManager {
     chunk_cache: HashMap<ChunkId, ChunkMesh>,
     pub config: MeshConfig,
-    pub style: RoadStyleParams,
 }
 
 impl RoadMeshManager {
@@ -1003,7 +1031,6 @@ impl RoadMeshManager {
         Self {
             chunk_cache: HashMap::new(),
             config,
-            style: RoadStyleParams::default(),
         }
     }
 
@@ -1032,6 +1059,7 @@ impl RoadMeshManager {
         terrain_renderer: &TerrainRenderer,
         chunk_id: Option<ChunkId>,
         storage: &RoadStorage,
+        style: &RoadStyleParams,
     ) -> ChunkMesh {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
@@ -1054,7 +1082,7 @@ impl RoadMeshManager {
 
             let mut render_lanes = Vec::new();
 
-            for &lane_id in segment.lanes() {
+            for lane_id in segment.lanes() {
                 let lane = storage.lane(lane_id);
                 if !lane.is_enabled() {
                     continue;
@@ -1070,7 +1098,7 @@ impl RoadMeshManager {
             draw_segment_geometry(
                 terrain_renderer,
                 &render_lanes,
-                &self.style,
+                style,
                 &self.config,
                 chunk_id, // Pass Option directly - None means no chunk clipping
                 &mut vertices,
@@ -1095,9 +1123,9 @@ impl RoadMeshManager {
             let incoming = node.incoming_lanes();
             let outgoing = node.outgoing_lanes();
 
-            for &lane_id in incoming.iter().chain(outgoing.iter()) {
+            for lane_id in incoming.iter().chain(outgoing.iter()) {
                 let lane = storage.lane(lane_id);
-                connected_lanes_info.push((lane.lane_index(), self.style.lane_width));
+                connected_lanes_info.push((lane.lane_index(), style.lane_width));
             }
 
             if connected_lanes_info.is_empty() {
@@ -1109,7 +1137,7 @@ impl RoadMeshManager {
                 let mut sum_dir = Vec3::ZERO;
                 let mut lane_count = 0u32;
 
-                for &lane_id in incoming.iter().chain(outgoing.iter()) {
+                for lane_id in incoming.iter().chain(outgoing.iter()) {
                     let lane = storage.lane(lane_id);
                     let pts = &lane.geometry().points;
 
@@ -1139,17 +1167,22 @@ impl RoadMeshManager {
                     None
                 }
             };
-
-            draw_node_geometry(
-                terrain_renderer,
-                center,
-                &connected_lanes_info,
-                cap_direction,
-                &self.style,
-                &self.config,
-                &mut vertices,
-                &mut indices,
-            );
+            let segment_count_connected_to_node =
+                storage.enabled_segment_count_connected_to_node(node_id);
+            if segment_count_connected_to_node < 2 {
+                draw_node_geometry(
+                    terrain_renderer,
+                    center,
+                    &connected_lanes_info,
+                    cap_direction,
+                    style,
+                    &self.config,
+                    &mut vertices,
+                    &mut indices,
+                );
+            } else {
+                //draw_intersection_geometry()
+            }
         }
 
         ChunkMesh {
@@ -1166,8 +1199,9 @@ impl RoadMeshManager {
         terrain_renderer: &TerrainRenderer,
         chunk_id: ChunkId,
         storage: &RoadStorage,
+        style: &RoadStyleParams,
     ) -> &ChunkMesh {
-        let mesh = self.build_mesh(terrain_renderer, Some(chunk_id), storage);
+        let mesh = self.build_mesh(terrain_renderer, Some(chunk_id), storage, style);
         self.chunk_cache.insert(chunk_id, mesh);
         self.chunk_cache.get(&chunk_id).unwrap()
     }
@@ -1177,8 +1211,9 @@ impl RoadMeshManager {
         &self,
         terrain_renderer: &TerrainRenderer,
         preview_storage: &RoadStorage,
+        style: &RoadStyleParams,
     ) -> ChunkMesh {
-        self.build_mesh(terrain_renderer, None, preview_storage)
+        self.build_mesh(terrain_renderer, None, preview_storage, style)
     }
 }
 

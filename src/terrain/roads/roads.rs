@@ -16,7 +16,8 @@
 
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_editor::{
-    LanePreview, NodePreview, RoadEditorCommand, SegmentPreview, SnapPreview, offset_polyline,
+    EditorState, IntersectionBuildParams, LanePreview, NodePreview, RoadEditorCommand,
+    SegmentPreview, SnapPreview, build_intersection_at_node, offset_polyline,
 };
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, RoadStyleParams, chunk_x_range,
@@ -303,7 +304,7 @@ impl Node {
         }
     }
 
-    pub(crate) fn version(&self) -> u64 {
+    pub fn version(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
 
         #[inline(always)]
@@ -362,7 +363,18 @@ impl Node {
     pub fn node_lanes(&self) -> &[NodeLane] {
         &self.node_lanes
     }
+    #[inline]
+    pub fn add_node_lanes<I>(&mut self, lanes: I)
+    where
+        I: IntoIterator<Item = NodeLane>,
+    {
+        self.node_lanes.extend(lanes);
+    }
 
+    #[inline]
+    pub fn clear_node_lanes(&mut self) {
+        self.node_lanes.clear()
+    }
     #[inline]
     pub fn incoming_lanes(&self) -> &[LaneId] {
         &self.incoming_lanes
@@ -454,7 +466,7 @@ impl Segment {
     pub fn lane_counts(&self, storage: &RoadStorage) -> (usize, usize) {
         let mut forward = 0;
         let mut backward = 0;
-        for &lane_id in &self.lanes {
+        for lane_id in &self.lanes {
             let lane = storage.lane(lane_id);
             if lane.from_node() == self.start {
                 forward += 1;
@@ -574,12 +586,20 @@ impl Lane {
         (self.vehicle_mask & vehicle_type) != 0
     }
     #[inline]
-    pub(crate) fn geometry(&self) -> &LaneGeometry {
+    pub fn geometry(&self) -> &LaneGeometry {
         &self.geometry
     }
     #[inline]
     pub fn polyline(&self) -> &Vec<Vec3> {
         &self.geometry.points
+    }
+    #[inline]
+    pub fn replace_base_cost(&mut self, base_cost: f32) {
+        self.base_cost = base_cost;
+    }
+    #[inline]
+    pub fn replace_geometry(&mut self, geometry: LaneGeometry) {
+        self.geometry = geometry;
     }
 }
 
@@ -591,7 +611,7 @@ pub enum LaneRef {
 
 /// Directed lane edge connecting two segments within a node.
 /// NodeLanes are the primary graph edges for pathfinding and simulation.
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct NodeLane {
     id: NodeLaneId,
     merging: Vec<LaneRef>,
@@ -682,7 +702,7 @@ impl NodeLane {
         (self.vehicle_mask & vehicle_type) != 0
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LaneGeometry {
     pub points: Vec<Vec3>, // polyline
     pub lengths: Vec<f32>, // cumulative arc length
@@ -797,7 +817,7 @@ impl RoadStorage {
         let seg_node_a_id = segment.start();
         let seg_node_b_id = segment.end();
         for lane_id in segment.lanes.iter() {
-            let lane = self.lane(*lane_id);
+            let lane = self.lane(lane_id);
             if lane.from == seg_node_a_id && lane.to == seg_node_b_id {
                 right_lanes += 1;
             } else {
@@ -816,16 +836,18 @@ impl RoadStorage {
         for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
             let lane = &self.lanes[lane_id.0 as usize];
             let seg = lane.segment();
-
-            // de-dup without HashSet (cheap, small N…)
-            if !segments.contains(&seg) {
-                segments.push(seg);
+            let segment = self.segment(seg);
+            if segment.is_enabled() {
+                // de-dup without HashSet (cheap, small N…)
+                if !segments.contains(&seg) {
+                    segments.push(seg);
+                }
             }
         }
 
         segments
     }
-    pub fn segment_count_connected_to_node(&self, node_id: NodeId) -> usize {
+    pub fn enabled_segment_count_connected_to_node(&self, node_id: NodeId) -> usize {
         let Some(node) = self.node(node_id) else {
             return 0;
         };
@@ -835,9 +857,12 @@ impl RoadStorage {
 
         for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
             let seg = self.lanes[lane_id.0 as usize].segment();
-            if !seen.contains(&seg) {
-                seen.push(seg);
-                count += 1;
+            let segment = self.segment(seg);
+            if segment.is_enabled() {
+                if !seen.contains(&seg) {
+                    seen.push(seg);
+                    count += 1;
+                }
             }
         }
 
@@ -1002,7 +1027,7 @@ impl RoadStorage {
 
     /// Returns a reference to the lane with the given ID.
     #[inline]
-    pub fn lane(&self, id: LaneId) -> &Lane {
+    pub fn lane(&self, id: &LaneId) -> &Lane {
         &self.lanes[id.0 as usize]
     }
 
@@ -1546,24 +1571,30 @@ pub enum RoadCommand {
     /// Add a new lane to a segment.
     AddNodeLane {
         node_id: NodeId,
-        id: NodeLaneId,
         merging: Vec<LaneRef>,
         splitting: Vec<LaneRef>,
         geometry: LaneGeometry,
         // Cached costs for pathfinding
-        length_m: f32,
-        lane_width: f32,
         speed_limit: f32,
-        capacity: u32,
         vehicle_mask: u32,
         base_cost: f32,
         dynamic_cost: f32,
         chunk_id: ChunkId,
     },
+    ClearNodeLanes {
+        node_id: NodeId,
+        chunk_id: ChunkId,
+    },
     /// Disable a node.
-    DisableNode { node_id: NodeId, chunk_id: ChunkId },
+    DisableNode {
+        node_id: NodeId,
+        chunk_id: ChunkId,
+    },
     /// Enable a node.
-    EnableNode { node_id: NodeId, chunk_id: ChunkId },
+    EnableNode {
+        node_id: NodeId,
+        chunk_id: ChunkId,
+    },
     /// Disable a segment and its lanes.
     DisableSegment {
         segment_id: SegmentId,
@@ -1575,9 +1606,15 @@ pub enum RoadCommand {
         chunk_id: ChunkId,
     },
     /// Disable a lane.
-    DisableLane { lane_id: LaneId, chunk_id: ChunkId },
+    DisableLane {
+        lane_id: LaneId,
+        chunk_id: ChunkId,
+    },
     /// Enable a lane.
-    EnableLane { lane_id: LaneId, chunk_id: ChunkId },
+    EnableLane {
+        lane_id: LaneId,
+        chunk_id: ChunkId,
+    },
     /// Attach a traffic control to a node.
     AttachControl {
         node_id: NodeId,
@@ -1595,6 +1632,13 @@ pub enum RoadCommand {
         node_id: NodeId,
         chunk_id: ChunkId,
         control_id: ControlId,
+    },
+    /// Procedurally rebuild node lanes using *current* incoming/outgoing segment lanes.
+    MakeIntersection {
+        node_id: NodeId,
+        params: IntersectionBuildParams,
+        chunk_id: ChunkId,
+        clear: bool,
     },
     /// Begin segment upgrade (disables old segment).
     UpgradeSegmentBegin {
@@ -1637,6 +1681,7 @@ pub fn apply_command(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
+    road_style_params: &RoadStyleParams,
     command: RoadEditorCommand,
     is_preview: bool,
 ) -> CommandResult {
@@ -1708,7 +1753,6 @@ pub fn apply_command(
                     base_cost,
                     dynamic_cost,
                     chunk_id,
-                    ..
                 } => {
                     let id = storage.add_node_lane(
                         node_id,
@@ -1722,6 +1766,12 @@ pub fn apply_command(
                     );
                     affected_chunk = Some(chunk_id);
                     CommandResult::NodeLaneCreated(chunk_id, id)
+                }
+                RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
+                    let node = storage.node_mut(node_id);
+                    node.node_lanes.clear();
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
                 RoadCommand::DisableNode { node_id, chunk_id } => {
                     if node_id.raw() as usize >= storage.node_count() {
@@ -1813,6 +1863,21 @@ pub fn apply_command(
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
+                RoadCommand::MakeIntersection {
+                    node_id,
+                    params,
+                    chunk_id,
+                    clear,
+                } => {
+                    if node_id.raw() as usize >= storage.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+
+                    build_intersection_at_node(storage, node_id, &params, clear);
+
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
+                }
                 RoadCommand::UpgradeSegmentBegin {
                     old_segment,
                     chunk_id,
@@ -1833,7 +1898,12 @@ pub fn apply_command(
             // Only update the mesh if this is not a preview and the command succeeded (chunk ID was set)
             if !is_preview {
                 if let Some(chunk_id) = affected_chunk {
-                    road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
+                    road_mesh_manager.update_chunk_mesh(
+                        terrain_renderer,
+                        chunk_id,
+                        storage,
+                        road_style_params,
+                    );
                 }
             }
 
@@ -1848,6 +1918,7 @@ pub fn apply_commands(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
+    road_style_params: &RoadStyleParams,
     is_preview: bool,
     commands: Vec<RoadEditorCommand>,
 ) -> Vec<CommandResult> {
@@ -1858,6 +1929,7 @@ pub fn apply_commands(
                 terrain_renderer,
                 road_mesh_manager,
                 storage,
+                road_style_params,
                 cmd,
                 is_preview,
             )
@@ -1871,9 +1943,9 @@ pub fn apply_preview_commands(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
+    road_style_params: &RoadStyleParams,
     commands: &[RoadEditorCommand],
 ) {
-    let road_style_params: &RoadStyleParams = &road_mesh_manager.style;
     preview_storage.clear();
 
     // Collect all preview data from this frame
@@ -1900,26 +1972,45 @@ pub fn apply_preview_commands(
     let mut allocator = PreviewIdAllocator::new();
 
     // Generate commands based on preview state
-    let road_commands = match segment_preview {
-        Some(seg) if seg.is_valid => {
-            // Full segment preview: create nodes, segment, and lanes
-            generate_segment_preview(
+    let road_commands = match (&road_style_params.state(), segment_preview) {
+        // Valid segment being drawn - full preview
+        (_, Some(seg)) if seg.is_valid => {
+            generate_segment_preview(terrain_renderer, &mut allocator, road_style_params, seg)
+        }
+
+        // Invalid segment - show both nodes with stubs
+        (_, Some(seg)) => generate_invalid_segment_preview(
+            terrain_renderer,
+            &mut allocator,
+            road_style_params,
+            seg,
+        ),
+
+        // Idle/hover state - show node with stub
+        (EditorState::Idle, None) => generate_hover_preview(
+            terrain_renderer,
+            &mut allocator,
+            road_style_params,
+            &node_previews,
+        ),
+
+        // Picking end point - show start node with stub, and cursor node
+        (EditorState::StraightPickEnd { .. }, None) | (EditorState::CurvePickEnd { .. }, None) => {
+            generate_hover_preview(
                 terrain_renderer,
                 &mut allocator,
                 road_style_params,
-                seg,
                 &node_previews,
-                chunk_id,
             )
         }
-        Some(_seg) => {
-            // Invalid segment - show nodes only to indicate why it's invalid
-            generate_nodes_only(&mut allocator, &node_previews, chunk_id)
-        }
-        None => {
-            // No segment being drawn - show hover state
-            generate_hover_preview(&mut allocator, &node_previews, lane_preview, chunk_id)
-        }
+
+        // Picking control point - just show cursor indicator
+        (EditorState::CurvePickControl { .. }, None) => generate_hover_preview(
+            terrain_renderer,
+            &mut allocator,
+            road_style_params,
+            &node_previews,
+        ),
     };
 
     // Apply all generated commands to create preview geometry
@@ -1928,6 +2019,7 @@ pub fn apply_preview_commands(
             terrain_renderer,
             road_mesh_manager,
             preview_storage,
+            road_style_params,
             RoadEditorCommand::Road(cmd),
             true,
         );
@@ -1968,38 +2060,60 @@ impl PreviewIdAllocator {
     }
 }
 
-/// Generate preview for hover state (no segment being drawn)
+/// Generate preview for hover state - creates node with stub lanes so it renders
 fn generate_hover_preview(
+    terrain_renderer: &TerrainRenderer,
     allocator: &mut PreviewIdAllocator,
+    road_style_params: &RoadStyleParams,
     node_previews: &[&NodePreview],
-    lane_preview: Option<&LanePreview>,
-    chunk_id: ChunkId,
 ) -> Vec<RoadCommand> {
     let mut commands = Vec::new();
 
-    // Create preview nodes for all node previews
     for node in node_previews {
-        allocator.alloc_node();
-        commands.push(RoadCommand::AddNode {
-            x: node.world_pos.x,
-            y: node.world_pos.y,
-            z: node.world_pos.z,
-            chunk_id,
-        });
+        generate_node_with_stub(
+            terrain_renderer,
+            allocator,
+            road_style_params,
+            node.world_pos,
+            &mut commands,
+        );
     }
-
-    // If hovering over a lane (potential split point), we could show that lane highlighted
-    // The lane already exists in real storage, so we don't recreate it in preview
-    // But we could create a marker/indicator
 
     commands
 }
+/// Generate preview for invalid segment - shows both endpoints with stubs
+fn generate_invalid_segment_preview(
+    terrain_renderer: &TerrainRenderer,
+    allocator: &mut PreviewIdAllocator,
+    road_style_params: &RoadStyleParams,
+    preview: &SegmentPreview,
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
 
+    // Start node with stub pointing toward end
+    generate_node_with_stub(
+        terrain_renderer,
+        allocator,
+        road_style_params,
+        preview.start,
+        &mut commands,
+    );
+
+    // End node with stub pointing toward start
+    generate_node_with_stub(
+        terrain_renderer,
+        allocator,
+        road_style_params,
+        preview.end,
+        &mut commands,
+    );
+
+    commands
+}
 /// Generate preview nodes only (for invalid segment states)
 fn generate_nodes_only(
     allocator: &mut PreviewIdAllocator,
     node_previews: &[&NodePreview],
-    chunk_id: ChunkId,
 ) -> Vec<RoadCommand> {
     let mut commands = Vec::new();
 
@@ -2009,39 +2123,36 @@ fn generate_nodes_only(
             x: node.world_pos.x,
             y: node.world_pos.y,
             z: node.world_pos.z,
-            chunk_id,
+            chunk_id: 0,
         });
     }
 
     commands
 }
 
-/// Generate full segment preview with nodes and lanes
-/// Lane-first: we compute lane geometries first, then wrap them in the required structure
+/// Generate full segment preview with both nodes and all lanes
 fn generate_segment_preview(
     terrain_renderer: &TerrainRenderer,
     allocator: &mut PreviewIdAllocator,
     road_style_params: &RoadStyleParams,
     preview: &SegmentPreview,
-    node_previews: &[&NodePreview],
-    chunk_id: ChunkId,
 ) -> Vec<RoadCommand> {
     let mut commands = Vec::new();
 
     // ========================================
     // STEP 1: Compute lane geometries (LANE-FIRST)
     // ========================================
-    let lane_geometries = compute_lane_geometries(terrain_renderer, road_style_params, preview);
+    let lane_defs = compute_lane_geometries(terrain_renderer, road_style_params, &preview.polyline);
 
     // ========================================
-    // STEP 2: Create nodes (derived from lane endpoints)
+    // STEP 2: Create nodes
     // ========================================
     let start_node_id = allocator.alloc_node();
     commands.push(RoadCommand::AddNode {
         x: preview.start.x,
         y: preview.start.y,
         z: preview.start.z,
-        chunk_id,
+        chunk_id: 0,
     });
 
     let end_node_id = allocator.alloc_node();
@@ -2049,18 +2160,18 @@ fn generate_segment_preview(
         x: preview.end.x,
         y: preview.end.y,
         z: preview.end.z,
-        chunk_id,
+        chunk_id: 0,
     });
 
     // ========================================
-    // STEP 3: Create segment (container for lanes)
+    // STEP 3: Create segment
     // ========================================
     let segment_id = allocator.alloc_segment();
     commands.push(RoadCommand::AddSegment {
         start: start_node_id,
         end: end_node_id,
         structure: preview.road_type.structure(),
-        chunk_id,
+        chunk_id: 0,
     });
 
     // ========================================
@@ -2070,7 +2181,7 @@ fn generate_segment_preview(
     let capacity = preview.road_type.capacity();
     let mask = preview.road_type.vehicle_mask();
 
-    for lane_def in lane_geometries {
+    for lane_def in lane_defs {
         allocator.alloc_lane();
 
         let (from, to) = if lane_def.is_forward {
@@ -2089,11 +2200,67 @@ fn generate_segment_preview(
             capacity,
             vehicle_mask: mask,
             base_cost: lane_def.base_cost,
-            chunk_id,
+            chunk_id: 0,
         });
     }
 
     commands
+}
+
+/// Creates a node with a short stub segment and lanes so it renders properly
+fn generate_node_with_stub(
+    terrain_renderer: &TerrainRenderer,
+    allocator: &mut PreviewIdAllocator,
+    road_style_params: &RoadStyleParams,
+    position: Vec3,
+    commands: &mut Vec<RoadCommand>,
+) {
+    let road_type = road_style_params.road_type();
+
+    // Main node at position
+    let main_node_id = allocator.alloc_node();
+    commands.push(RoadCommand::AddNode {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        chunk_id: 0,
+    });
+
+    // Segment connecting them
+    let segment_id = allocator.alloc_segment();
+    commands.push(RoadCommand::AddSegment {
+        start: main_node_id,
+        end: main_node_id,
+        structure: road_type.structure(),
+        chunk_id: 0,
+    });
+
+    // Compute and add lanes
+    let centerline = vec![position, position];
+    let lane_defs = compute_lane_geometries(terrain_renderer, road_style_params, &centerline);
+
+    let speed = road_type.speed_limit();
+    let capacity = road_type.capacity();
+    let mask = road_type.vehicle_mask();
+
+    for lane_def in lane_defs {
+        allocator.alloc_lane();
+
+        let (from, to) = (main_node_id, main_node_id);
+
+        commands.push(RoadCommand::AddLane {
+            from,
+            to,
+            segment: segment_id,
+            lane_index: lane_def.lane_index,
+            geometry: lane_def.geometry,
+            speed_limit: speed,
+            capacity,
+            vehicle_mask: mask,
+            base_cost: lane_def.base_cost,
+            chunk_id: 0,
+        });
+    }
 }
 
 /// Pre-computed lane definition
@@ -2104,20 +2271,20 @@ struct LaneDefinition {
     base_cost: f32,
 }
 
-/// Compute all lane geometries from the segment centerline (LANE-FIRST)
+/// Compute all lane geometries from a centerline polyline
 fn compute_lane_geometries(
     terrain_renderer: &TerrainRenderer,
     road_style_params: &RoadStyleParams,
-    preview: &SegmentPreview,
+    centerline: &[Vec3],
 ) -> Vec<LaneDefinition> {
     let mut lanes = Vec::new();
-    let (left_count, right_count) = preview.lane_count_each_dir;
+    let (left_count, right_count) = road_style_params.road_type().lanes_each_direction();
     let lane_width = road_style_params.lane_width;
 
     // Forward lanes (right side: travel from start to end)
     for i in 0..right_count {
         let lane_index = (i as i8) + 1;
-        let polyline = offset_polyline(terrain_renderer, &preview.polyline, lane_index, lane_width);
+        let polyline = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
         let geometry = LaneGeometry::from_polyline(polyline);
         let base_cost = geometry.total_len.max(0.1);
 
@@ -2132,9 +2299,8 @@ fn compute_lane_geometries(
     // Backward lanes (left side: travel from end to start)
     for i in 0..left_count {
         let lane_index = -((i as i8) + 1);
-        let mut polyline =
-            offset_polyline(terrain_renderer, &preview.polyline, lane_index, lane_width);
-        polyline.reverse(); // Reverse for opposite direction
+        let mut polyline = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
+        polyline.reverse();
         let geometry = LaneGeometry::from_polyline(polyline);
         let base_cost = geometry.total_len.max(0.1);
 
@@ -2156,7 +2322,7 @@ fn bezier2(a: Vec3, b: Vec3, c: Vec3, t: f32) -> Vec3 {
 }
 
 #[inline]
-fn bezier3(a: Vec3, b: Vec3, c: Vec3, d: Vec3, t: f32) -> Vec3 {
+pub fn bezier3(a: Vec3, b: Vec3, c: Vec3, d: Vec3, t: f32) -> Vec3 {
     let u = 1.0 - t;
     a * (u * u * u) + b * (3.0 * u * u * t) + c * (3.0 * u * t * t) + d * (t * t * t)
 }

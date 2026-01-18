@@ -312,7 +312,7 @@ impl UiButtonLoader {
         result: &mut EventProcessingResult,
         mouse: &MouseState,
     ) {
-        println!("handle_touch_event: {:?}", event);
+        //println!("handle_touch_event: {:?}", event);
 
         match event {
             // ----------------------------------------------------------------
