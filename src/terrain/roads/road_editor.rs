@@ -1,9 +1,10 @@
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
 use crate::resources::InputState;
-use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
+use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId, RoadStyleParams};
 use crate::terrain::roads::roads::{
-    Lane, LaneGeometry, LaneId, NodeId, RoadCommand, RoadManager, RoadStorage, SegmentId,
-    StructureType, nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
+    Lane, LaneGeometry, LaneId, METERS_PER_LANE_POLYLINE_STEP, NodeId, RoadCommand, RoadManager,
+    RoadStorage, SegmentId, StructureType, nearest_lane_to_point, project_point_to_lane_xz,
+    sample_lane_position,
 };
 use glam::Vec3;
 
@@ -11,7 +12,6 @@ const NODE_SNAP_RADIUS: f32 = 8.0;
 const LANE_SNAP_RADIUS: f32 = 8.0;
 const ENDPOINT_T_EPS: f32 = 0.02;
 const MIN_SEGMENT_LENGTH: f32 = 1.0;
-const DEFAULT_LANE_WIDTH: f32 = 3.5;
 
 // ============================================================================
 // Types & Structs
@@ -322,10 +322,11 @@ impl RoadEditor {
         &mut self,
         road_manager: &RoadManager,
         terrain_renderer: &TerrainRenderer,
+        road_style_params: &RoadStyleParams,
         input: &mut InputState,
         picked_point: &Option<PickedPoint>,
     ) -> Vec<RoadEditorCommand> {
-        self.allocator.update(&road_manager.preview_roads);
+        self.allocator.update(&road_manager.roads);
         let storage = &road_manager.roads;
         let mut output = Vec::new();
 
@@ -366,7 +367,9 @@ impl RoadEditor {
             }
             EditorState::StraightPickEnd { start } => {
                 self.handle_straight_pick_end(
+                    terrain_renderer,
                     storage,
+                    road_style_params,
                     &start,
                     &snap,
                     place_pressed,
@@ -379,7 +382,9 @@ impl RoadEditor {
             }
             EditorState::CurvePickEnd { start, control } => {
                 self.handle_curve_pick_end(
+                    terrain_renderer,
                     storage,
+                    road_style_params,
                     &start,
                     control,
                     &snap,
@@ -401,6 +406,7 @@ impl RoadEditor {
         output: &mut Vec<RoadEditorCommand>,
     ) {
         let node_preview = self.build_node_preview_from_snap(storage, snap);
+        println!("{:?}", node_preview);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed {
@@ -418,7 +424,9 @@ impl RoadEditor {
 
     fn handle_straight_pick_end(
         &mut self,
+        terrain_renderer: &TerrainRenderer,
         storage: &RoadStorage,
+        road_style_params: &RoadStyleParams,
         start: &Anchor,
         snap: &SnapResult,
         place_pressed: bool,
@@ -435,7 +443,7 @@ impl RoadEditor {
 
         let end_anchor = self.build_anchor_from_snap(snap);
         let end_pos = snap.world_pos;
-        let polyline = vec![start_pos, end_pos];
+        let polyline = make_straight_centerline(terrain_renderer, start_pos, end_pos);
         let estimated_length = (end_pos - start_pos).length();
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
@@ -462,7 +470,16 @@ impl RoadEditor {
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed && is_valid {
-            let road_cmds = self.commit_road(storage, start, &end_anchor, None, chunk_id, output);
+            let road_cmds = self.commit_road(
+                terrain_renderer,
+                storage,
+                road_style_params,
+                start,
+                &end_anchor,
+                None,
+                chunk_id,
+                output,
+            );
             for cmd in road_cmds {
                 output.push(RoadEditorCommand::Road(cmd));
             }
@@ -522,7 +539,9 @@ impl RoadEditor {
 
     fn handle_curve_pick_end(
         &mut self,
+        terrain_renderer: &TerrainRenderer,
         storage: &RoadStorage,
+        road_style_params: &RoadStyleParams,
         start: &Anchor,
         control: Vec3,
         snap: &SnapResult,
@@ -569,8 +588,16 @@ impl RoadEditor {
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed && is_valid {
-            let road_cmds =
-                self.commit_road(storage, start, &end_anchor, Some(control), chunk_id, output);
+            let road_cmds = self.commit_road(
+                terrain_renderer,
+                storage,
+                road_style_params,
+                start,
+                &end_anchor,
+                Some(control),
+                chunk_id,
+                output,
+            );
             for cmd in road_cmds {
                 output.push(RoadEditorCommand::Road(cmd));
             }
@@ -811,7 +838,9 @@ impl RoadEditor {
 
     fn commit_road(
         &mut self,
+        terrain_renderer: &TerrainRenderer,
         storage: &RoadStorage,
+        road_style_params: &RoadStyleParams,
         start: &Anchor,
         end: &Anchor,
         control: Option<Vec3>, // None = straight, Some = curve
@@ -845,7 +874,7 @@ impl RoadEditor {
                 let samples = compute_curve_segment_count(est_len);
                 sample_quadratic_bezier(start_pos, c, end_pos, samples)
             }
-            None => vec![start_pos, end_pos],
+            None => make_straight_centerline(terrain_renderer, start_pos, end_pos),
         };
 
         if centerline.len() < 2 {
@@ -863,7 +892,9 @@ impl RoadEditor {
 
         // Emit lanes from centerline
         self.emit_lanes_from_centerline(
+            terrain_renderer,
             &mut cmds,
+            road_style_params,
             segment_id,
             start_id,
             end_id,
@@ -1021,7 +1052,9 @@ impl RoadEditor {
 
     fn emit_lanes_from_centerline(
         &self,
+        terrain_renderer: &TerrainRenderer,
         cmds: &mut Vec<RoadCommand>,
+        road_style_params: &RoadStyleParams,
         segment: SegmentId,
         start: NodeId,
         end: NodeId,
@@ -1032,12 +1065,12 @@ impl RoadEditor {
         let speed = self.road_type.speed_limit();
         let capacity = self.road_type.capacity();
         let mask = self.road_type.vehicle_mask();
-        let lane_width = DEFAULT_LANE_WIDTH;
+        let lane_width = road_style_params.lane_width;
 
         // Right side lanes (start -> end)
         for i in 0..right_lanes {
             let lane_index = (i as i8) + 1;
-            let poly = offset_polyline(centerline, lane_index, lane_width);
+            let poly = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
             let geom = LaneGeometry::from_polyline(poly);
             let base_cost = geom.total_len.max(0.1);
             cmds.push(RoadCommand::AddLane {
@@ -1057,7 +1090,7 @@ impl RoadEditor {
         // Left side lanes (end -> start, reversed geometry)
         for i in 0..left_lanes {
             let lane_index = -((i as i8) + 1);
-            let mut poly = offset_polyline(centerline, lane_index.abs(), lane_width);
+            let mut poly = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
             poly.reverse();
             let geom = LaneGeometry::from_polyline(poly);
             let base_cost = geom.total_len.max(0.1);
@@ -1077,6 +1110,26 @@ impl RoadEditor {
     }
 }
 
+fn make_straight_centerline(
+    terrain_renderer: &TerrainRenderer,
+    start_pos: Vec3,
+    end_pos: Vec3,
+) -> Vec<Vec3> {
+    let length = (end_pos - start_pos).length();
+    let samples = (length / METERS_PER_LANE_POLYLINE_STEP).max(1.0) as usize;
+
+    (0..=samples)
+        .map(|i| {
+            let t = i as f32 / samples as f32;
+            let mut p = start_pos.lerp(end_pos, t);
+            let terrain_y = terrain_renderer.get_height_at([p.x, p.z]);
+            if p.y < terrain_y {
+                p.y = terrain_y;
+            }
+            p
+        })
+        .collect()
+}
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -1160,7 +1213,7 @@ fn polyline_length(points: &[Vec3]) -> f32 {
 }
 
 fn compute_curve_segment_count(arc_length: f32) -> usize {
-    ((arc_length / 6.0).ceil() as usize).clamp(4, 32)
+    ((arc_length / METERS_PER_LANE_POLYLINE_STEP).ceil() as usize).clamp(4, 32)
 }
 
 fn gather_node_lanes(storage: &RoadStorage, node_id: NodeId) -> (Vec<LaneId>, Vec<LaneId>) {
@@ -1178,8 +1231,18 @@ fn gather_split_lanes(manager: &RoadManager, lane_id: LaneId) -> (Vec<LaneId>, V
     (vec![lane_id], vec![lane_id])
 }
 
-fn offset_polyline(center: &[Vec3], lane_index: i8, lane_width: f32) -> Vec<Vec3> {
-    let offset = (lane_index as f32 - 0.5) * lane_width;
+pub fn offset_polyline(
+    terrain_renderer: &TerrainRenderer,
+    center: &[Vec3],
+    lane_index: i8,
+    lane_width: f32,
+) -> Vec<Vec3> {
+    let offset = if lane_index < 0 {
+        (lane_index as f32 + 0.5) * lane_width
+    } else {
+        (lane_index as f32 - 0.5) * lane_width
+    };
+    // println!("Lane Index: {} Lane Width: {} Offset: {}", lane_index, lane_width, offset);
     let mut out = Vec::with_capacity(center.len());
 
     for i in 0..center.len() {
@@ -1189,10 +1252,14 @@ fn offset_polyline(center: &[Vec3], lane_index: i8, lane_width: f32) -> Vec<Vec3
             center[i] - center[i - 1]
         };
 
-        let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-        let right = Vec3::new(dir_xz.z, 0.0, -dir_xz.x);
-
-        out.push(center[i] + right * offset);
+        let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize();
+        let right = Vec3::new(-dir_xz.z, 0.0, dir_xz.x);
+        let mut final_point = center[i] + right * offset;
+        final_point.y = final_point
+            .y
+            .max(terrain_renderer.get_height_at([final_point.x, final_point.z]))
+            + CLEARANCE;
+        out.push(final_point);
     }
 
     out

@@ -4,9 +4,7 @@
 //! Node preview for isolated nodes is a closed circular road loop (separate ring generation, same meshing).
 //! Multiple preview segments are supported (e.g. for showing connected existing roads during placement).
 
-use crate::terrain::roads::road_editor::{
-    LanePreview, NodePreview, PreviewError, RoadEditorCommand, SegmentPreview, SnapPreview,
-};
+use crate::terrain::roads::road_editor::{PreviewError, RoadEditorCommand, SnapPreview};
 use crate::terrain::roads::road_mesh_manager::ChunkMesh;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
@@ -42,10 +40,7 @@ impl RoadAppearanceUniform {
 // ============================================================================
 #[derive(Default, Debug, Clone)]
 pub struct RoadPreviewState {
-    pub segments: Vec<SegmentPreview>,
     pub snap: Option<SnapPreview>,
-    pub nodes: Vec<NodePreview>,
-    pub lanes: Vec<LanePreview>,
     pub error: Option<PreviewError>,
 }
 impl RoadPreviewState {
@@ -53,53 +48,24 @@ impl RoadPreviewState {
         Self::default()
     }
     pub fn ingest(&mut self, cmds: &[RoadEditorCommand]) {
-        self.segments.clear();
         self.snap = None;
-        self.nodes.clear();
-        self.lanes.clear();
         self.error = None;
         for cmd in cmds {
             match cmd {
                 RoadEditorCommand::PreviewClear => {
-                    self.segments.clear();
                     self.snap = None;
-                    self.nodes.clear();
-                    self.lanes.clear();
                     self.error = None;
-                }
-                RoadEditorCommand::PreviewSegment(seg) => {
-                    self.segments.push(seg.clone());
                 }
                 RoadEditorCommand::PreviewSnap(snap) => {
                     self.snap = Some(snap.clone());
                 }
-                RoadEditorCommand::PreviewNode(node) => {
-                    self.nodes.push(node.clone());
-                }
-                RoadEditorCommand::PreviewLane(lane) => {
-                    self.lanes.push(lane.clone());
-                }
                 RoadEditorCommand::PreviewError(err) => {
                     self.error = Some(err.clone());
                 }
-                RoadEditorCommand::Road(_) => {}
+                _ => {}
             }
         }
     }
-    pub fn has_segments(&self) -> bool {
-        !self.segments.is_empty()
-    }
-}
-
-// ============================================================================
-// Shared ring structure (identical layout/semantics to normal road rings)
-// ============================================================================
-#[derive(Clone, Debug)]
-pub struct Ring {
-    pub arc_length: f32,
-    pub position: [f32; 3],
-    pub tangent: [f32; 3],
-    pub lateral: [f32; 2],
 }
 
 pub struct PreviewGpuMesh {
@@ -172,10 +138,10 @@ impl RoadAppearanceGpu {
         }
     }
     pub fn update_preview_buffer(&mut self, queue: &Queue, preview_state: &RoadPreviewState) {
-        let mut new_preview = RoadAppearanceUniform::normal();
+        let new_preview: RoadAppearanceUniform;
         if preview_state.error.is_some() {
             new_preview = RoadAppearanceUniform::preview_error();
-        } else if !preview_state.segments.is_empty() || !preview_state.nodes.is_empty() {
+        } else {
             new_preview = RoadAppearanceUniform::preview();
         }
         queue.write_buffer(&self.preview_buffer, 0, bytemuck::bytes_of(&new_preview));

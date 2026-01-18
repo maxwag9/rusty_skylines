@@ -3,7 +3,7 @@ use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer, VisibleChunk
 use crate::resources::InputState;
 use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
-use crate::terrain::roads::roads::{RoadManager, apply_commands};
+use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
 
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use std::collections::{BTreeMap, HashMap};
@@ -77,28 +77,38 @@ impl RoadRenderSubsystem {
         picked_point: &Option<PickedPoint>,
     ) {
         // Get commands from road editor
-        let road_commands =
-            self.road_editor
-                .update(&self.road_manager, terrain_renderer, input, picked_point);
-
-        // === NEW: Capture preview state before applying commands ===
+        let road_commands = self.road_editor.update(
+            &self.road_manager,
+            terrain_renderer,
+            &self.mesh_manager.style,
+            input,
+            picked_point,
+        );
+        // Apply preview commands to create preview geometry
+        apply_preview_commands(
+            terrain_renderer,
+            &mut self.mesh_manager,
+            &mut self.road_manager.preview_roads, // preview RoadStorage
+            &road_commands,
+        );
         self.preview_state.ingest(&road_commands);
         self.road_appearance
             .update_preview_buffer(queue, &self.preview_state);
-        // Apply real topology commands (preview commands are no-ops)
+        // Apply real topology commands
         if !road_commands.is_empty() {
             //println!("{:?}", road_commands);
             let _results = apply_commands(
                 terrain_renderer,
                 &mut self.mesh_manager,
                 &mut self.road_manager.roads,
+                false,
                 road_commands,
             );
         }
 
         let preview_mesh = self
             .mesh_manager
-            .build_preview_mesh(terrain_renderer, &self.preview_state);
+            .build_preview_mesh(terrain_renderer, &self.road_manager.preview_roads);
 
         self.preview_gpu.upload(device, &preview_mesh);
 

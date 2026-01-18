@@ -4,7 +4,7 @@ mod app;
 mod components;
 mod data;
 mod events;
-mod hsv;
+pub mod hsv;
 mod mouse_ray;
 mod paths;
 mod renderer;

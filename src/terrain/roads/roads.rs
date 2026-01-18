@@ -15,8 +15,12 @@
 // ============================================================================
 
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::road_editor::RoadEditorCommand;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_x_range};
+use crate::terrain::roads::road_editor::{
+    LanePreview, NodePreview, RoadEditorCommand, SegmentPreview, SnapPreview, offset_polyline,
+};
+use crate::terrain::roads::road_mesh_manager::{
+    ChunkId, RoadMeshManager, RoadStyleParams, chunk_x_range,
+};
 use glam::Vec3;
 
 pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
@@ -284,7 +288,7 @@ pub struct Node {
 }
 
 impl Node {
-    fn new(x: f32, y: f32, z: f32, chunk_id: ChunkId) -> Self {
+    pub fn new(x: f32, y: f32, z: f32, chunk_id: ChunkId) -> Self {
         Self {
             x,
             y,
@@ -726,6 +730,11 @@ impl Default for RoadStorage {
     }
 }
 impl RoadStorage {
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.segments.clear();
+        self.lanes.clear();
+    }
     // ------------------------------------------------------------------------
     // Node operations
     // ------------------------------------------------------------------------
@@ -835,6 +844,22 @@ impl RoadStorage {
         count
     }
 
+    pub fn get_active_segment_ids(&self) -> Vec<SegmentId> {
+        self.segments
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.enabled)
+            .map(|(id, _)| SegmentId(id as u32))
+            .collect()
+    }
+    pub fn get_active_node_ids(&self) -> Vec<NodeId> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.enabled)
+            .map(|(id, _)| NodeId(id as u32))
+            .collect()
+    }
     // ------------------------------------------------------------------------
     // Segment operations
     // ------------------------------------------------------------------------
@@ -1613,48 +1638,35 @@ pub fn apply_command(
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
     command: RoadEditorCommand,
+    is_preview: bool,
 ) -> CommandResult {
     match command {
-        RoadEditorCommand::Road(road_command) => match road_command {
-            RoadCommand::AddNode { x, y, z, chunk_id } => {
-                let id = storage.add_node(x, y, z, chunk_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::NodeCreated(chunk_id, id)
-            }
-            RoadCommand::AddSegment {
-                start,
-                end,
-                structure,
-                chunk_id,
-            } => {
-                if start.raw() as usize >= storage.node_count()
-                    || end.raw() as usize >= storage.node_count()
-                {
-                    return CommandResult::InvalidReference;
+        RoadEditorCommand::Road(road_command) => {
+            // We store the chunk ID here if an operation succeeds
+            let affected_chunk: Option<ChunkId>;
+
+            let result = match road_command {
+                RoadCommand::AddNode { x, y, z, chunk_id } => {
+                    let id = storage.add_node(x, y, z, chunk_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::NodeCreated(chunk_id, id)
                 }
-                let id = storage.add_segment(start, end, structure);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::SegmentCreated(chunk_id, id)
-            }
-            RoadCommand::AddLane {
-                from,
-                to,
-                segment,
-                lane_index,
-                geometry,
-                speed_limit,
-                capacity,
-                vehicle_mask,
-                base_cost,
-                chunk_id,
-            } => {
-                if from.raw() as usize >= storage.node_count()
-                    || to.raw() as usize >= storage.node_count()
-                    || segment.raw() as usize >= storage.segment_count()
-                {
-                    return CommandResult::InvalidReference;
+                RoadCommand::AddSegment {
+                    start,
+                    end,
+                    structure,
+                    chunk_id,
+                } => {
+                    if start.raw() as usize >= storage.node_count()
+                        || end.raw() as usize >= storage.node_count()
+                    {
+                        return CommandResult::InvalidReference;
+                    }
+                    let id = storage.add_segment(start, end, structure);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::SegmentCreated(chunk_id, id)
                 }
-                let id = storage.add_lane(
+                RoadCommand::AddLane {
                     from,
                     to,
                     segment,
@@ -1664,144 +1676,169 @@ pub fn apply_command(
                     capacity,
                     vehicle_mask,
                     base_cost,
-                );
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::LaneCreated(chunk_id, id)
-            }
-            RoadCommand::AddNodeLane {
-                node_id,
-                id,
-                merging,
-                splitting,
-                geometry,
-                length_m,
-                lane_width,
-                speed_limit,
-                capacity,
-                vehicle_mask,
-                base_cost,
-                dynamic_cost,
-                chunk_id,
-            } => {
-                let id = storage.add_node_lane(
+                    chunk_id,
+                } => {
+                    if from.raw() as usize >= storage.node_count()
+                        || to.raw() as usize >= storage.node_count()
+                        || segment.raw() as usize >= storage.segment_count()
+                    {
+                        return CommandResult::InvalidReference;
+                    }
+                    let id = storage.add_lane(
+                        from,
+                        to,
+                        segment,
+                        lane_index,
+                        geometry,
+                        speed_limit,
+                        capacity,
+                        vehicle_mask,
+                        base_cost,
+                    );
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::LaneCreated(chunk_id, id)
+                }
+                RoadCommand::AddNodeLane {
                     node_id,
                     merging,
                     splitting,
                     geometry,
-                    base_cost,
                     speed_limit,
-                    dynamic_cost,
                     vehicle_mask,
-                );
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::NodeLaneCreated(chunk_id, id)
-            }
-            RoadCommand::DisableNode { node_id, chunk_id } => {
-                if node_id.raw() as usize >= storage.node_count() {
-                    return CommandResult::InvalidReference;
+                    base_cost,
+                    dynamic_cost,
+                    chunk_id,
+                    ..
+                } => {
+                    let id = storage.add_node_lane(
+                        node_id,
+                        merging,
+                        splitting,
+                        geometry,
+                        base_cost,
+                        speed_limit,
+                        dynamic_cost,
+                        vehicle_mask,
+                    );
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::NodeLaneCreated(chunk_id, id)
                 }
-                storage.disable_node(node_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::EnableNode { node_id, chunk_id } => {
-                if node_id.raw() as usize >= storage.node_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::DisableNode { node_id, chunk_id } => {
+                    if node_id.raw() as usize >= storage.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.disable_node(node_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.enable_node(node_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::DisableSegment {
-                segment_id,
-                chunk_id,
-            } => {
-                if segment_id.raw() as usize >= storage.segment_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::EnableNode { node_id, chunk_id } => {
+                    if node_id.raw() as usize >= storage.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.enable_node(node_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.disable_segment(segment_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::EnableSegment {
-                segment_id,
-                chunk_id,
-            } => {
-                if segment_id.raw() as usize >= storage.segment_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::DisableSegment {
+                    segment_id,
+                    chunk_id,
+                } => {
+                    if segment_id.raw() as usize >= storage.segment_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.disable_segment(segment_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.enable_segment(segment_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::DisableLane { lane_id, chunk_id } => {
-                if lane_id.raw() as usize >= storage.lane_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::EnableSegment {
+                    segment_id,
+                    chunk_id,
+                } => {
+                    if segment_id.raw() as usize >= storage.segment_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.enable_segment(segment_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.disable_lane(lane_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::EnableLane { lane_id, chunk_id } => {
-                if lane_id.raw() as usize >= storage.lane_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::DisableLane { lane_id, chunk_id } => {
+                    if lane_id.raw() as usize >= storage.lane_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.disable_lane(lane_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.enable_lane(lane_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::AttachControl {
-                node_id,
-                chunk_id,
-                control,
-            } => {
-                if node_id.raw() as usize >= storage.node_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::EnableLane { lane_id, chunk_id } => {
+                    if lane_id.raw() as usize >= storage.lane_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.enable_lane(lane_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                let id = storage.attach_control(node_id, control.clone());
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::ControlAttached(chunk_id, id)
-            }
-            RoadCommand::DisableControl {
-                node_id,
-                control_id,
-                chunk_id,
-            } => {
-                if node_id.raw() as usize >= storage.node_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::AttachControl {
+                    node_id,
+                    chunk_id,
+                    control,
+                } => {
+                    if node_id.raw() as usize >= storage.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    let id = storage.attach_control(node_id, control.clone());
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::ControlAttached(chunk_id, id)
                 }
-                storage.disable_control(node_id, control_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::EnableControl {
-                node_id,
-                control_id,
-                chunk_id,
-            } => {
-                if node_id.raw() as usize >= storage.node_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::DisableControl {
+                    node_id,
+                    control_id,
+                    chunk_id,
+                } => {
+                    if node_id.raw() as usize >= storage.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.disable_control(node_id, control_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.enable_control(node_id, control_id);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-            RoadCommand::UpgradeSegmentBegin {
-                old_segment,
-                chunk_id,
-            } => {
-                if old_segment.raw() as usize >= storage.segment_count() {
-                    return CommandResult::InvalidReference;
+                RoadCommand::EnableControl {
+                    node_id,
+                    control_id,
+                    chunk_id,
+                } => {
+                    if node_id.raw() as usize >= storage.node_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.enable_control(node_id, control_id);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
                 }
-                storage.disable_segment(old_segment);
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
+                RoadCommand::UpgradeSegmentBegin {
+                    old_segment,
+                    chunk_id,
+                } => {
+                    if old_segment.raw() as usize >= storage.segment_count() {
+                        return CommandResult::InvalidReference;
+                    }
+                    storage.disable_segment(old_segment);
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
+                }
+                RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
+                }
+            };
+
+            // Only update the mesh if this is not a preview and the command succeeded (chunk ID was set)
+            if !is_preview {
+                if let Some(chunk_id) = affected_chunk {
+                    road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
+                }
             }
-            RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
-                road_mesh_manager.update_chunk_mesh(terrain_renderer, chunk_id, storage);
-                CommandResult::Ok
-            }
-        },
+
+            result
+        }
         _ => CommandResult::Ok,
     }
 }
@@ -1811,12 +1848,305 @@ pub fn apply_commands(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
+    is_preview: bool,
     commands: Vec<RoadEditorCommand>,
 ) -> Vec<CommandResult> {
     commands
         .into_iter()
-        .map(|cmd| apply_command(terrain_renderer, road_mesh_manager, storage, cmd))
+        .map(|cmd| {
+            apply_command(
+                terrain_renderer,
+                road_mesh_manager,
+                storage,
+                cmd,
+                is_preview,
+            )
+        })
         .collect()
+}
+
+/// Processes preview commands and generates preview road geometry.
+/// Called every frame after RoadEditor::update().
+pub fn apply_preview_commands(
+    terrain_renderer: &TerrainRenderer,
+    road_mesh_manager: &mut RoadMeshManager,
+    preview_storage: &mut RoadStorage,
+    commands: &[RoadEditorCommand],
+) {
+    let road_style_params: &RoadStyleParams = &road_mesh_manager.style;
+    preview_storage.clear();
+
+    // Collect all preview data from this frame
+    let mut snap_preview: Option<&SnapPreview> = None;
+    let mut node_previews: Vec<&NodePreview> = Vec::new();
+    let mut lane_preview: Option<&LanePreview> = None;
+    let mut segment_preview: Option<&SegmentPreview> = None;
+
+    for cmd in commands {
+        match cmd {
+            RoadEditorCommand::PreviewSnap(s) => snap_preview = Some(s),
+            RoadEditorCommand::PreviewNode(n) => node_previews.push(n),
+            RoadEditorCommand::PreviewLane(l) => lane_preview = Some(l),
+            RoadEditorCommand::PreviewSegment(s) => segment_preview = Some(s),
+            RoadEditorCommand::PreviewClear => {
+                // Already cleared above
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    let chunk_id: ChunkId = 0;
+    let mut allocator = PreviewIdAllocator::new();
+
+    // Generate commands based on preview state
+    let road_commands = match segment_preview {
+        Some(seg) if seg.is_valid => {
+            // Full segment preview: create nodes, segment, and lanes
+            generate_segment_preview(
+                terrain_renderer,
+                &mut allocator,
+                road_style_params,
+                seg,
+                &node_previews,
+                chunk_id,
+            )
+        }
+        Some(_seg) => {
+            // Invalid segment - show nodes only to indicate why it's invalid
+            generate_nodes_only(&mut allocator, &node_previews, chunk_id)
+        }
+        None => {
+            // No segment being drawn - show hover state
+            generate_hover_preview(&mut allocator, &node_previews, lane_preview, chunk_id)
+        }
+    };
+
+    // Apply all generated commands to create preview geometry
+    for cmd in road_commands {
+        apply_command(
+            terrain_renderer,
+            road_mesh_manager,
+            preview_storage,
+            RoadEditorCommand::Road(cmd),
+            true,
+        );
+    }
+}
+
+struct PreviewIdAllocator {
+    next_node: u32,
+    next_segment: u32,
+    next_lane: u32,
+}
+
+impl PreviewIdAllocator {
+    fn new() -> Self {
+        Self {
+            next_node: 0,
+            next_segment: 0,
+            next_lane: 0,
+        }
+    }
+
+    fn alloc_node(&mut self) -> NodeId {
+        let id = NodeId::new(self.next_node);
+        self.next_node += 1;
+        id
+    }
+
+    fn alloc_segment(&mut self) -> SegmentId {
+        let id = SegmentId::new(self.next_segment);
+        self.next_segment += 1;
+        id
+    }
+
+    fn alloc_lane(&mut self) -> LaneId {
+        let id = LaneId::new(self.next_lane);
+        self.next_lane += 1;
+        id
+    }
+}
+
+/// Generate preview for hover state (no segment being drawn)
+fn generate_hover_preview(
+    allocator: &mut PreviewIdAllocator,
+    node_previews: &[&NodePreview],
+    lane_preview: Option<&LanePreview>,
+    chunk_id: ChunkId,
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
+
+    // Create preview nodes for all node previews
+    for node in node_previews {
+        allocator.alloc_node();
+        commands.push(RoadCommand::AddNode {
+            x: node.world_pos.x,
+            y: node.world_pos.y,
+            z: node.world_pos.z,
+            chunk_id,
+        });
+    }
+
+    // If hovering over a lane (potential split point), we could show that lane highlighted
+    // The lane already exists in real storage, so we don't recreate it in preview
+    // But we could create a marker/indicator
+
+    commands
+}
+
+/// Generate preview nodes only (for invalid segment states)
+fn generate_nodes_only(
+    allocator: &mut PreviewIdAllocator,
+    node_previews: &[&NodePreview],
+    chunk_id: ChunkId,
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
+
+    for node in node_previews {
+        allocator.alloc_node();
+        commands.push(RoadCommand::AddNode {
+            x: node.world_pos.x,
+            y: node.world_pos.y,
+            z: node.world_pos.z,
+            chunk_id,
+        });
+    }
+
+    commands
+}
+
+/// Generate full segment preview with nodes and lanes
+/// Lane-first: we compute lane geometries first, then wrap them in the required structure
+fn generate_segment_preview(
+    terrain_renderer: &TerrainRenderer,
+    allocator: &mut PreviewIdAllocator,
+    road_style_params: &RoadStyleParams,
+    preview: &SegmentPreview,
+    node_previews: &[&NodePreview],
+    chunk_id: ChunkId,
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
+
+    // ========================================
+    // STEP 1: Compute lane geometries (LANE-FIRST)
+    // ========================================
+    let lane_geometries = compute_lane_geometries(terrain_renderer, road_style_params, preview);
+
+    // ========================================
+    // STEP 2: Create nodes (derived from lane endpoints)
+    // ========================================
+    let start_node_id = allocator.alloc_node();
+    commands.push(RoadCommand::AddNode {
+        x: preview.start.x,
+        y: preview.start.y,
+        z: preview.start.z,
+        chunk_id,
+    });
+
+    let end_node_id = allocator.alloc_node();
+    commands.push(RoadCommand::AddNode {
+        x: preview.end.x,
+        y: preview.end.y,
+        z: preview.end.z,
+        chunk_id,
+    });
+
+    // ========================================
+    // STEP 3: Create segment (container for lanes)
+    // ========================================
+    let segment_id = allocator.alloc_segment();
+    commands.push(RoadCommand::AddSegment {
+        start: start_node_id,
+        end: end_node_id,
+        structure: preview.road_type.structure(),
+        chunk_id,
+    });
+
+    // ========================================
+    // STEP 4: Create lanes from pre-computed geometries
+    // ========================================
+    let speed = preview.road_type.speed_limit();
+    let capacity = preview.road_type.capacity();
+    let mask = preview.road_type.vehicle_mask();
+
+    for lane_def in lane_geometries {
+        allocator.alloc_lane();
+
+        let (from, to) = if lane_def.is_forward {
+            (start_node_id, end_node_id)
+        } else {
+            (end_node_id, start_node_id)
+        };
+
+        commands.push(RoadCommand::AddLane {
+            from,
+            to,
+            segment: segment_id,
+            lane_index: lane_def.lane_index,
+            geometry: lane_def.geometry,
+            speed_limit: speed,
+            capacity,
+            vehicle_mask: mask,
+            base_cost: lane_def.base_cost,
+            chunk_id,
+        });
+    }
+
+    commands
+}
+
+/// Pre-computed lane definition
+struct LaneDefinition {
+    lane_index: i8,
+    is_forward: bool,
+    geometry: LaneGeometry,
+    base_cost: f32,
+}
+
+/// Compute all lane geometries from the segment centerline (LANE-FIRST)
+fn compute_lane_geometries(
+    terrain_renderer: &TerrainRenderer,
+    road_style_params: &RoadStyleParams,
+    preview: &SegmentPreview,
+) -> Vec<LaneDefinition> {
+    let mut lanes = Vec::new();
+    let (left_count, right_count) = preview.lane_count_each_dir;
+    let lane_width = road_style_params.lane_width;
+
+    // Forward lanes (right side: travel from start to end)
+    for i in 0..right_count {
+        let lane_index = (i as i8) + 1;
+        let polyline = offset_polyline(terrain_renderer, &preview.polyline, lane_index, lane_width);
+        let geometry = LaneGeometry::from_polyline(polyline);
+        let base_cost = geometry.total_len.max(0.1);
+
+        lanes.push(LaneDefinition {
+            lane_index,
+            is_forward: true,
+            geometry,
+            base_cost,
+        });
+    }
+
+    // Backward lanes (left side: travel from end to start)
+    for i in 0..left_count {
+        let lane_index = -((i as i8) + 1);
+        let mut polyline =
+            offset_polyline(terrain_renderer, &preview.polyline, lane_index, lane_width);
+        polyline.reverse(); // Reverse for opposite direction
+        let geometry = LaneGeometry::from_polyline(polyline);
+        let base_cost = geometry.total_len.max(0.1);
+
+        lanes.push(LaneDefinition {
+            lane_index,
+            is_forward: false,
+            geometry,
+            base_cost,
+        });
+    }
+
+    lanes
 }
 
 #[inline]

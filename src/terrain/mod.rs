@@ -1,9 +1,9 @@
-pub(crate) mod sky;
+pub mod sky;
 
-pub(crate) mod terrain;
-pub(crate) mod threads;
+pub mod terrain;
+pub mod threads;
 
-pub(crate) mod chunk_builder;
+pub mod chunk_builder;
 pub mod roads;
 pub mod terrain_editing;
-pub(crate) mod water;
+pub mod water;

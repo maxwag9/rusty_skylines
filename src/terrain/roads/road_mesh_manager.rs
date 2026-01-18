@@ -5,8 +5,7 @@
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::road_preview::RoadPreviewState;
-use crate::terrain::roads::roads::{LaneGeometry, RoadStorage, SegmentId};
+use crate::terrain::roads::roads::{LaneGeometry, NodeId, RoadStorage, SegmentId};
 use glam::Vec3;
 use std::collections::HashMap;
 
@@ -474,7 +473,7 @@ fn build_ribbon_mesh(
             uv: [u, v_max],
             material_id,
         });
-
+        // println!("Final Vertex Height Left: {}, Right: {}; Terrain Height Left: {}, Right: {}", final_left.y, final_right.y, h_left, h_right);
         point_idx_to_vert_idx.insert(i, current_vert_idx);
         current_vert_idx += 2;
     }
@@ -654,194 +653,338 @@ fn build_vertical_face(
 // ============================================================================
 
 /// Shared logic to draw a node (intersection/end cap) with sidewalks and curbs.
+
+// compute triangle normal (not normalized)
+fn tri_normal(v0: Vec3, v1: Vec3, v2: Vec3) -> Vec3 {
+    (v1 - v0).cross(v2 - v0)
+}
+
+// push triangle ensuring top-facing normals point up (normal.y > 0)
+// triangles with normal.y < 0 will be flipped (swap i1 <-> i2)
+fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32, i1: u32, i2: u32) {
+    let v0 = Vec3::from(vertices[i0 as usize].position);
+    let v1 = Vec3::from(vertices[i1 as usize].position);
+    let v2 = Vec3::from(vertices[i2 as usize].position);
+    let n = tri_normal(v0, v1, v2);
+    let ok = n.y >= 0.0;
+    if ok {
+        indices.push(i0);
+        indices.push(i1);
+        indices.push(i2);
+    } else {
+        indices.push(i0);
+        indices.push(i2);
+        indices.push(i1);
+    }
+}
+
+// push triangle ensuring curb-face normals point outward from node_pos
+// we check dot(normal, centroid_dir) >= 0 (normal points roughly away from center), flip if not
+fn emit_tri_for_curb(
+    indices: &mut Vec<u32>,
+    vertices: &Vec<RoadVertex>,
+    i0: u32,
+    i1: u32,
+    i2: u32,
+    node_pos: Vec3,
+) {
+    let v0 = Vec3::from(vertices[i0 as usize].position);
+    let v1 = Vec3::from(vertices[i1 as usize].position);
+    let v2 = Vec3::from(vertices[i2 as usize].position);
+    let n = tri_normal(v0, v1, v2);
+    let centroid = (v0 + v1 + v2) / 3.0;
+    let centroid_dir = (centroid - node_pos).normalize_or_zero();
+    let dot = n.dot(centroid_dir);
+    let ok = dot >= 0.0;
+    if ok {
+        indices.push(i0);
+        indices.push(i1);
+        indices.push(i2);
+    } else {
+        indices.push(i0);
+        indices.push(i2);
+        indices.push(i1);
+    }
+}
+
+// Add this helper for inner curb (normal points INWARD toward center)
+fn emit_tri_for_inner_curb(
+    indices: &mut Vec<u32>,
+    vertices: &Vec<RoadVertex>,
+    i0: u32,
+    i1: u32,
+    i2: u32,
+    node_pos: Vec3,
+) {
+    let v0 = Vec3::from(vertices[i0 as usize].position);
+    let v1 = Vec3::from(vertices[i1 as usize].position);
+    let v2 = Vec3::from(vertices[i2 as usize].position);
+    let n = tri_normal(v0, v1, v2);
+    let centroid = (v0 + v1 + v2) / 3.0;
+    let centroid_dir = (centroid - node_pos).normalize_or_zero();
+    // Inner curb: normal should point TOWARD center (dot < 0)
+    if n.dot(centroid_dir) <= 0.0 {
+        indices.push(i0);
+        indices.push(i1);
+        indices.push(i2);
+    } else {
+        indices.push(i0);
+        indices.push(i2);
+        indices.push(i1);
+    }
+}
+
 fn draw_node_geometry(
     terrain_renderer: &TerrainRenderer,
     node_pos: Vec3,
-    connected_lanes_info: &[(i8, f32)], // (Lane Index, Lane Width)
-    cap_direction: Option<Vec3>,        // Direction pointing AWAY from the node (for end caps)
+    connected_lanes_info: &[(i8, f32)],
+    cap_direction: Option<Vec3>,
     style: &RoadStyleParams,
-    config: &MeshConfig, // Used for UV scaling
+    config: &MeshConfig,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
-    // 1. Calculate Radius
-    let mut max_radius = 2.0;
+    // --- Compute radii ---
+    let mut max_radius = 2.0_f32;
     for (idx, width) in connected_lanes_info {
-        // Approximate radius required to cover the widest lane offset
-        let r = idx.abs() as f32 * width + style.sidewalk_width;
-        if r > max_radius {
-            max_radius = r;
-        }
+        max_radius = max_radius.max(idx.abs() as f32 * width + style.sidewalk_width);
     }
 
-    // Radii
     let road_radius = max_radius - style.sidewalk_width;
-    let sidewalk_radius = max_radius;
+    let sw_inner = road_radius;
+    let sw_outer = max_radius;
 
-    // 2. Determine Angular Range
-    let mut start_angle = 0.0;
-    let mut end_angle = std::f32::consts::TAU;
-    let mut uv_rotation = 0.0;
+    // --- Angular setup ---
+    let (start_angle, end_angle, is_cap) = if let Some(dir) = cap_direction {
+        let forward = -dir.normalize();
+        let heading = forward.z.atan2(forward.x);
+        (
+            heading - std::f32::consts::FRAC_PI_2,
+            heading + std::f32::consts::FRAC_PI_2,
+            true,
+        )
+    } else {
+        (0.0_f32, std::f32::consts::TAU, false)
+    };
 
-    // Handle End Caps (Semicircles)
-    if let Some(dir) = cap_direction {
-        let heading = dir.z.atan2(dir.x);
-        start_angle = heading - std::f32::consts::FRAC_PI_2;
-        end_angle = heading + std::f32::consts::FRAC_PI_2;
-        uv_rotation = heading; // Rotate UVs to align with road
+    let segments = NODE_ANGULAR_SEGMENTS as usize;
+    // For cap: we need segments+1 vertices to span segments quads over half circle
+    // For full circle: we need segments vertices, last quad wraps to first
+    let num_verts = if is_cap { segments + 1 } else { segments };
+    let num_quads = segments;
+
+    if num_verts < 2 {
+        return;
     }
 
-    // 3. Setup Heights
-    // Fix Z-fighting: Raise node road surface slightly above segment clearance
-    let node_clearance = CLEARANCE;
+    let angle_span = end_angle - start_angle;
+    let step_angle = angle_span / num_quads as f32;
+
     let y_base = node_pos.y;
+    let up_normal = [0.0_f32, 1.0, 0.0];
 
-    // Heights
-    let h_road = y_base + style.lane_height + node_clearance;
-    let h_sw = y_base + style.sidewalk_height + node_clearance;
+    // Helper to get next vertex index (wraps for full circle, doesn't for cap)
+    let next_idx = |i: usize| -> usize { if is_cap { i + 1 } else { (i + 1) % num_verts } };
 
-    // 4. Build Meshes (Fan/Ring)
+    // =========================================================================
+    // 1) ROAD SURFACE - Filled disk using triangle fan from center
+    // =========================================================================
+
+    let center_terrain = terrain_renderer.get_height_at([node_pos.x, node_pos.z]);
+    let center_y = center_terrain.max(y_base) + style.lane_height + CLEARANCE;
     let center_idx = vertices.len() as u32;
 
-    // Center Vertex (Road)
     vertices.push(RoadVertex {
-        position: [node_pos.x, h_road, node_pos.z],
-        normal: [0.0, 1.0, 0.0],
-        uv: [0.0, 0.0],
+        position: [node_pos.x, center_y, node_pos.z],
+        normal: up_normal,
+        uv: [0.5, 0.5],
         material_id: style.lane_material_id,
     });
 
-    let step_angle = (end_angle - start_angle) / NODE_ANGULAR_SEGMENTS as f32;
-
-    // We generate a "spoke" of vertices for each angle step, then connect them
-    // Spoke indices relative to current loop iteration:
-    // 0: Road Rim
-    // 1: Sidewalk Inner (Top)
-    // 2: Sidewalk Outer (Top)
-    // 3: Sidewalk Outer (Bottom/Terrain)
-
-    let first_spoke_idx = vertices.len() as u32;
-
-    for i in 0..=NODE_ANGULAR_SEGMENTS {
+    let road_ring_first = vertices.len() as u32;
+    for i in 0..num_verts {
         let angle = start_angle + i as f32 * step_angle;
-        let (sin, cos) = angle.sin_cos();
-        let dir = Vec3::new(cos, 0.0, sin);
+        let (sin_a, cos_a) = angle.sin_cos();
+        let dir = Vec3::new(cos_a, 0.0, sin_a);
+        let pos = node_pos + dir * road_radius;
 
-        // UV Projection (Rotated)
-        // Project world offset onto rotation basis to align texture with road
-        let rel_x = cos;
-        let rel_z = sin;
-        let rot_cos = (-uv_rotation).cos();
-        let rot_sin = (-uv_rotation).sin();
-        let u_base = rel_x * rot_cos - rel_z * rot_sin;
-        let v_base = rel_x * rot_sin + rel_z * rot_cos;
+        let terrain_h = terrain_renderer.get_height_at([pos.x, pos.z]);
+        let y = terrain_h.max(y_base) + style.lane_height + CLEARANCE;
 
-        // --- Positions ---
-        let pos_road_rim = node_pos + dir * road_radius;
-        let pos_sw_outer = node_pos + dir * sidewalk_radius;
+        // Polar UVs for road disk
+        let uv_scale = road_radius / config.uv_scale_v;
+        let u = 0.5 + cos_a * uv_scale;
+        let v = 0.5 + sin_a * uv_scale;
 
-        let terrain_road = terrain_renderer.get_height_at([pos_road_rim.x, pos_road_rim.z]);
-        let terrain_sw = terrain_renderer.get_height_at([pos_sw_outer.x, pos_sw_outer.z]);
-
-        // Adjust heights to follow terrain but maintain flat node if desired.
-        // For intersections, usually flat is better, but edges should snap.
-        // Here we clamp to base Y to prevent the node from burying.
-        let y_road_rim = terrain_road.max(y_base) + style.lane_height + node_clearance;
-        let y_sw_top = terrain_road.max(y_base) + style.sidewalk_height + node_clearance; // Use road pos for inner sw height to keep curb vertical
-        let y_sw_outer_top = terrain_sw.max(y_base) + style.sidewalk_height + node_clearance;
-        let y_sw_outer_btm = terrain_sw.max(y_base) + CLEARANCE; // Down to ground
-
-        // 1. Road Rim Vertex
         vertices.push(RoadVertex {
-            position: [pos_road_rim.x, y_road_rim, pos_road_rim.z],
-            normal: [0.0, 1.0, 0.0],
-            uv: [cos * road_radius, 0.0],
+            position: [pos.x, y, pos.z],
+            normal: up_normal,
+            uv: [u, v],
             material_id: style.lane_material_id,
-        });
-
-        // 2. Sidewalk Inner (Top of inner curb)
-        vertices.push(RoadVertex {
-            position: [pos_road_rim.x, y_sw_top, pos_road_rim.z],
-            normal: [0.0, 1.0, 0.0],
-            uv: [cos * road_radius, sin * road_radius],
-            material_id: style.sidewalk_material_id,
-        });
-
-        // 3. Sidewalk Outer Top
-        vertices.push(RoadVertex {
-            position: [pos_sw_outer.x, y_sw_outer_top, pos_sw_outer.z],
-            normal: [0.0, 1.0, 0.0],
-            uv: [cos * sidewalk_radius, sin * sidewalk_radius],
-            material_id: style.sidewalk_material_id,
-        });
-
-        // 4. Sidewalk Outer Bottom (Terrain)
-        vertices.push(RoadVertex {
-            position: [pos_sw_outer.x, y_sw_outer_btm, pos_sw_outer.z],
-            normal: [dir.x, 0.0, dir.z], // Normal points out
-            uv: [cos * road_radius, 0.0],
-            material_id: style.sidewalk_material_id, // Or generic curb material
         });
     }
 
-    // Connect Spokes
-    // Spoke size = 4 vertices
-    for i in 0..NODE_ANGULAR_SEGMENTS {
-        let s1 = first_spoke_idx + (i as u32 * 4);
-        let s2 = first_spoke_idx + ((i + 1) as u32 * 4);
+    // Road fan triangles
+    for i in 0..num_quads {
+        let curr = road_ring_first + i as u32;
+        let next = road_ring_first + next_idx(i) as u32;
+        emit_tri_for_top(indices, vertices, center_idx, curr, next);
+    }
 
-        // Indices in spoke:
-        // 0: Road Rim
-        // 1: SW Inner
-        // 2: SW Outer Top
-        // 3: SW Outer Bottom
+    // =========================================================================
+    // 2) SIDEWALK TOP - Annular ring from sw_inner to sw_outer
+    // =========================================================================
 
-        // A. Road Fan (Center -> s1.0 -> s2.0)
-        // CCW
-        indices.push(center_idx);
-        indices.push(s2); // Road Rim next
-        indices.push(s1); // Road Rim curr
+    let sw_first_idx = vertices.len() as u32;
+    let sw_stride = 2u32;
 
-        // B. Inner Curb (Road Rim -> SW Inner)
-        // Face points IN towards center.
-        // Quad: s1.0, s1.1, s2.1, s2.0
-        // Counter-clockwise facing center: s1.0 -> s2.0 -> s2.1 -> s1.1
-        // Wait, normal points in (-dir).
-        // Let's visualize: 0 is low, 1 is high.
-        // We want face visible from road.
-        // Tri 1: s1.0 -> s2.0 -> s1.1 (LowLeft -> LowRight -> HighLeft)
-        indices.push(s1);
-        indices.push(s2);
-        indices.push(s1 + 1);
-        // Tri 2: s2.0 -> s2.1 -> s1.1 (LowRight -> HighRight -> HighLeft)
-        indices.push(s2);
-        indices.push(s2 + 1);
-        indices.push(s1 + 1);
+    for i in 0..num_verts {
+        let angle = start_angle + i as f32 * step_angle;
+        let (sin_a, cos_a) = angle.sin_cos();
+        let dir = Vec3::new(cos_a, 0.0, sin_a);
 
-        // C. Sidewalk Surface (Ring)
-        // s1.1, s1.2, s2.2, s2.1
-        // Upward facing. CCW.
-        // Tri 1: s1.1 -> s2.1 -> s1.2
-        indices.push(s1 + 1);
-        indices.push(s2 + 1);
-        indices.push(s1 + 2);
-        // Tri 2: s2.1 -> s2.2 -> s1.2
-        indices.push(s2 + 1);
-        indices.push(s2 + 2);
-        indices.push(s1 + 2);
+        let pos_inner = node_pos + dir * sw_inner;
+        let pos_outer = node_pos + dir * sw_outer;
 
-        // D. Outer Curb (Sidewalk Outer Top -> Bottom)
-        // Face points OUT.
-        // s1.2, s1.3, s2.3, s2.2
-        // Quad facing out.
-        // Tri 1: s1.2 -> s2.2 -> s1.3 (TopLeft -> TopRight -> BtmLeft)
-        indices.push(s1 + 2);
-        indices.push(s2 + 2);
-        indices.push(s1 + 3);
-        // Tri 2: s2.2 -> s2.3 -> s1.3 (TopRight -> BtmRight -> BtmLeft)
-        indices.push(s2 + 2);
-        indices.push(s2 + 3);
-        indices.push(s1 + 3);
+        let terrain_inner = terrain_renderer.get_height_at([pos_inner.x, pos_inner.z]);
+        let terrain_outer = terrain_renderer.get_height_at([pos_outer.x, pos_outer.z]);
+
+        let y_inner = terrain_inner.max(y_base) + style.sidewalk_height + CLEARANCE;
+        let y_outer = terrain_outer.max(y_base) + style.sidewalk_height + CLEARANCE;
+
+        let arc_u = (angle - start_angle) * ((sw_inner + sw_outer) * 0.5) / config.uv_scale_u;
+
+        // Inner edge of sidewalk
+        vertices.push(RoadVertex {
+            position: [pos_inner.x, y_inner, pos_inner.z],
+            normal: up_normal,
+            uv: [arc_u, 0.0],
+            material_id: style.sidewalk_material_id,
+        });
+
+        // Outer edge of sidewalk
+        vertices.push(RoadVertex {
+            position: [pos_outer.x, y_outer, pos_outer.z],
+            normal: up_normal,
+            uv: [arc_u, style.sidewalk_width / config.uv_scale_v],
+            material_id: style.sidewalk_material_id,
+        });
+    }
+
+    // Sidewalk top triangles
+    for i in 0..num_quads {
+        let ni = next_idx(i);
+        let inner_curr = sw_first_idx + (i as u32) * sw_stride;
+        let outer_curr = inner_curr + 1;
+        let inner_next = sw_first_idx + (ni as u32) * sw_stride;
+        let outer_next = inner_next + 1;
+
+        emit_tri_for_top(indices, vertices, inner_curr, outer_curr, inner_next);
+        emit_tri_for_top(indices, vertices, inner_next, outer_curr, outer_next);
+    }
+
+    // =========================================================================
+    // 3) INNER CURB - Vertical face at sw_inner (between road and sidewalk)
+    //    Normal faces INWARD (toward center)
+    // =========================================================================
+
+    let inner_curb_first = vertices.len() as u32;
+    let curb_stride = 2u32;
+
+    for i in 0..num_verts {
+        let angle = start_angle + i as f32 * step_angle;
+        let (sin_a, cos_a) = angle.sin_cos();
+        let dir = Vec3::new(cos_a, 0.0, sin_a);
+        let pos = node_pos + dir * sw_inner;
+
+        let terrain_h = terrain_renderer.get_height_at([pos.x, pos.z]);
+        let y_top = terrain_h.max(y_base) + style.sidewalk_height + CLEARANCE;
+        let y_bot = terrain_h.max(y_base) + style.lane_height + CLEARANCE;
+
+        // Normal points INWARD (toward center)
+        let inward_normal = [-dir.x, 0.0, -dir.z];
+
+        let arc_u = (angle - start_angle) * sw_inner / config.uv_scale_u;
+        let curb_height = style.sidewalk_height - style.lane_height;
+
+        // Top of inner curb
+        vertices.push(RoadVertex {
+            position: [pos.x, y_top, pos.z],
+            normal: inward_normal,
+            uv: [arc_u, curb_height / config.uv_scale_v],
+            material_id: style.sidewalk_material_id,
+        });
+
+        // Bottom of inner curb
+        vertices.push(RoadVertex {
+            position: [pos.x, y_bot, pos.z],
+            normal: inward_normal,
+            uv: [arc_u, 0.0],
+            material_id: style.sidewalk_material_id,
+        });
+    }
+
+    // Inner curb triangles (facing inward)
+    for i in 0..num_quads {
+        let ni = next_idx(i);
+        let top_curr = inner_curb_first + (i as u32) * curb_stride;
+        let bot_curr = top_curr + 1;
+        let top_next = inner_curb_first + (ni as u32) * curb_stride;
+        let bot_next = top_next + 1;
+
+        emit_tri_for_inner_curb(indices, vertices, top_curr, bot_curr, top_next, node_pos);
+        emit_tri_for_inner_curb(indices, vertices, top_next, bot_curr, bot_next, node_pos);
+    }
+
+    // =========================================================================
+    // 4) OUTER CURB - Vertical face at sw_outer (sidewalk edge to ground)
+    //    Normal faces OUTWARD (away from center)
+    // =========================================================================
+
+    let outer_curb_first = vertices.len() as u32;
+
+    for i in 0..num_verts {
+        let angle = start_angle + i as f32 * step_angle;
+        let (sin_a, cos_a) = angle.sin_cos();
+        let dir = Vec3::new(cos_a, 0.0, sin_a);
+        let pos = node_pos + dir * sw_outer;
+
+        let terrain_h = terrain_renderer.get_height_at([pos.x, pos.z]);
+        let y_top = terrain_h.max(y_base) + style.sidewalk_height + CLEARANCE;
+        let y_bot = terrain_h.max(y_base) + CLEARANCE;
+
+        // Normal points OUTWARD (away from center)
+        let outward_normal = [dir.x, 0.0, dir.z];
+
+        let arc_u = (angle - start_angle) * sw_outer / config.uv_scale_u;
+
+        // Top of outer curb
+        vertices.push(RoadVertex {
+            position: [pos.x, y_top, pos.z],
+            normal: outward_normal,
+            uv: [arc_u, style.sidewalk_height / config.uv_scale_v],
+            material_id: style.sidewalk_material_id,
+        });
+
+        // Bottom of outer curb
+        vertices.push(RoadVertex {
+            position: [pos.x, y_bot, pos.z],
+            normal: outward_normal,
+            uv: [arc_u, 0.0],
+            material_id: style.sidewalk_material_id,
+        });
+    }
+
+    // Outer curb triangles (facing outward)
+    for i in 0..num_quads {
+        let ni = next_idx(i);
+        let top_curr = outer_curb_first + (i as u32) * curb_stride;
+        let bot_curr = top_curr + 1;
+        let top_next = outer_curb_first + (ni as u32) * curb_stride;
+        let bot_next = top_next + 1;
+
+        emit_tri_for_curb(indices, vertices, top_curr, bot_curr, top_next, node_pos);
+        emit_tri_for_curb(indices, vertices, top_next, bot_curr, bot_next, node_pos);
     }
 }
 
@@ -851,8 +994,6 @@ fn draw_node_geometry(
 
 pub struct RoadMeshManager {
     chunk_cache: HashMap<ChunkId, ChunkMesh>,
-    // Cache LaneGeometry instead of Rings. Key: (SegmentId, LaneIndex)
-    lane_geom_cache: HashMap<(SegmentId, i8), LaneGeometry>,
     pub config: MeshConfig,
     pub style: RoadStyleParams,
 }
@@ -861,7 +1002,6 @@ impl RoadMeshManager {
     pub fn new(config: MeshConfig) -> Self {
         Self {
             chunk_cache: HashMap::new(),
-            lane_geom_cache: HashMap::new(),
             config,
             style: RoadStyleParams::default(),
         }
@@ -877,7 +1017,6 @@ impl RoadMeshManager {
 
     pub fn clear_cache(&mut self) {
         self.chunk_cache.clear();
-        self.lane_geom_cache.clear();
     }
 
     pub fn chunk_needs_update(&self, chunk_id: ChunkId, storage: &RoadStorage) -> bool {
@@ -886,28 +1025,26 @@ impl RoadMeshManager {
             Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage),
         }
     }
-    pub fn update_chunk_mesh(
-        &mut self,
+
+    /// Build mesh for a chunk (Some) or all geometry (None for previews)
+    pub fn build_mesh(
+        &self,
         terrain_renderer: &TerrainRenderer,
-        chunk_id: ChunkId,
-        storage: &RoadStorage,
-    ) -> &ChunkMesh {
-        let mesh = self.build_chunk_mesh(terrain_renderer, chunk_id, storage);
-        self.chunk_cache.insert(chunk_id, mesh);
-        self.chunk_cache.get(&chunk_id).unwrap()
-    }
-    pub fn build_chunk_mesh(
-        &mut self,
-        terrain_renderer: &TerrainRenderer,
-        chunk_id: ChunkId,
+        chunk_id: Option<ChunkId>,
         storage: &RoadStorage,
     ) -> ChunkMesh {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
         // -------- Segments (really: lanes that belong to segments) --------
-        let mut segment_ids = storage.segment_ids_touching_chunk(chunk_id);
-        segment_ids.sort_unstable();
+        let segment_ids: Vec<SegmentId> = match chunk_id {
+            Some(cid) => {
+                let mut ids = storage.segment_ids_touching_chunk(cid);
+                ids.sort_unstable();
+                ids
+            }
+            None => storage.get_active_segment_ids(), // For preview: get everything
+        };
 
         for seg_id in segment_ids {
             let segment = storage.segment(seg_id);
@@ -935,43 +1072,28 @@ impl RoadMeshManager {
                 &render_lanes,
                 &self.style,
                 &self.config,
-                Some(chunk_id),
+                chunk_id, // Pass Option directly - None means no chunk clipping
                 &mut vertices,
                 &mut indices,
             );
         }
 
-        // -------- Nodes (lane-driven, not segment-driven) --------
-        let node_ids = storage.nodes_in_chunk(chunk_id);
+        // -------- Nodes --------
+        let node_ids: Vec<NodeId> = match chunk_id {
+            Some(cid) => storage.nodes_in_chunk(cid),
+            None => storage.get_active_node_ids(), // For preview: get everything
+        };
         for node_id in node_ids {
-            let node = storage.node(node_id).unwrap();
+            let node = match storage.node(node_id) {
+                Some(n) => n,
+                None => continue,
+            };
             let center = Vec3::from_array(node.position());
 
             let mut connected_lanes_info = Vec::new();
-            let mut cap_direction = None;
 
             let incoming = node.incoming_lanes();
             let outgoing = node.outgoing_lanes();
-
-            // Cap logic: dead end
-            if incoming.len() + outgoing.len() == 1 {
-                let lane_id = incoming
-                    .first()
-                    .copied()
-                    .or_else(|| outgoing.first().copied());
-
-                if let Some(lid) = lane_id {
-                    let lane = storage.lane(lid);
-                    let dir = if lane.from_node() == node_id {
-                        lane.geometry().points[1] - lane.geometry().points[0]
-                    } else {
-                        let pts = &lane.geometry().points;
-                        pts[pts.len() - 2] - pts[pts.len() - 1]
-                    };
-
-                    cap_direction = Some(dir.normalize_or_zero());
-                }
-            }
 
             for &lane_id in incoming.iter().chain(outgoing.iter()) {
                 let lane = storage.lane(lane_id);
@@ -981,6 +1103,42 @@ impl RoadMeshManager {
             if connected_lanes_info.is_empty() {
                 continue;
             }
+
+            // Cap logic: dead end detection based on lane direction alignment
+            let cap_direction = {
+                let mut sum_dir = Vec3::ZERO;
+                let mut lane_count = 0u32;
+
+                for &lane_id in incoming.iter().chain(outgoing.iter()) {
+                    let lane = storage.lane(lane_id);
+                    let pts = &lane.geometry().points;
+
+                    let dir = if lane.from_node() == node_id {
+                        pts[1] - pts[0]
+                    } else {
+                        pts[pts.len() - 2] - pts[pts.len() - 1]
+                    };
+
+                    let normalized = dir.normalize_or_zero();
+                    if normalized.length_squared() > 0.01 {
+                        sum_dir += normalized;
+                        lane_count += 1;
+                    }
+                }
+
+                if lane_count > 0 {
+                    let avg_dir = sum_dir / lane_count as f32;
+                    let alignment = avg_dir.length();
+
+                    if alignment > 0.7 {
+                        Some(avg_dir.normalize_or_zero())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
 
             draw_node_geometry(
                 terrain_renderer,
@@ -997,77 +1155,30 @@ impl RoadMeshManager {
         ChunkMesh {
             vertices,
             indices,
-            topo_version: compute_topo_version(chunk_id, storage),
+            topo_version: chunk_id
+                .map(|cid| compute_topo_version(cid, storage))
+                .unwrap_or(0),
         }
     }
 
+    pub fn update_chunk_mesh(
+        &mut self,
+        terrain_renderer: &TerrainRenderer,
+        chunk_id: ChunkId,
+        storage: &RoadStorage,
+    ) -> &ChunkMesh {
+        let mesh = self.build_mesh(terrain_renderer, Some(chunk_id), storage);
+        self.chunk_cache.insert(chunk_id, mesh);
+        self.chunk_cache.get(&chunk_id).unwrap()
+    }
+
+    /// Convenience wrapper for building preview meshes (no chunking)
     pub fn build_preview_mesh(
         &self,
         terrain_renderer: &TerrainRenderer,
-        preview_state: &RoadPreviewState,
+        preview_storage: &RoadStorage,
     ) -> ChunkMesh {
-        //BROKEN///
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-
-        // -------- Preview Segments --------
-        for seg in &preview_state.segments {
-            if !seg.is_valid {
-                continue;
-            }
-            let mut render_lanes = Vec::new();
-            if render_lanes.is_empty() {
-                continue;
-            }
-
-            draw_segment_geometry(
-                terrain_renderer,
-                &render_lanes,
-                &self.style,
-                &self.config,
-                None,
-                &mut vertices,
-                &mut indices,
-            );
-        }
-
-        // -------- Preview Nodes --------
-        for node in &preview_state.nodes {
-            if !node.is_valid {
-                continue;
-            }
-
-            let mut connected_lanes_info = Vec::new();
-            let mut cap_direction = None;
-
-            if node.lane_count() == 0 {
-                connected_lanes_info.push((1, self.style.lane_width));
-                connected_lanes_info.push((-1, self.style.lane_width));
-            } else {
-                for i in 0..node.lane_count() {
-                    let idx = (i as i8) + 1;
-                    connected_lanes_info.push((idx, self.style.lane_width));
-                    connected_lanes_info.push((-idx, self.style.lane_width));
-                }
-            }
-
-            draw_node_geometry(
-                terrain_renderer,
-                node.world_pos,
-                &connected_lanes_info,
-                cap_direction,
-                &self.style,
-                &self.config,
-                &mut vertices,
-                &mut indices,
-            );
-        }
-
-        ChunkMesh {
-            vertices,
-            indices,
-            topo_version: 0,
-        }
+        self.build_mesh(terrain_renderer, None, preview_storage)
     }
 }
 
