@@ -14,9 +14,9 @@ impl Camera {
     pub fn new() -> Self {
         Self {
             target: Vec3::new(0.0, 10.0, 0.0),
-            orbit_radius: 50.0,
-            yaw: -230f32.to_radians(),
-            pitch: 52f32.to_radians(),
+            orbit_radius: 10.0,
+            yaw: 60f32.to_radians(),
+            pitch: 25f32.to_radians(),
         }
     }
 

@@ -2,12 +2,12 @@
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer, VisibleChunk};
 use crate::resources::InputState;
 use crate::terrain::roads::road_editor::RoadEditor;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
+use crate::terrain::roads::road_mesh_manager::{
+    ChunkId, MeshConfig, RoadMeshManager, RoadStyleParams, RoadVertex,
+};
 use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
 
-use crate::renderer::gizmo::Gizmo;
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
-use crate::terrain::roads::road_structs::RoadStyleParams;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use wgpu::util::DeviceExt;
@@ -79,7 +79,6 @@ impl RoadRenderSubsystem {
         queue: &Queue,
         input: &mut InputState,
         picked_point: &Option<PickedPoint>,
-        gizmo: &mut Gizmo,
     ) {
         // Get commands from road editor
         let road_commands = self.road_editor.update(
@@ -95,7 +94,6 @@ impl RoadRenderSubsystem {
             &mut self.mesh_manager,
             &mut self.road_manager.preview_roads, // preview RoadStorage
             &self.style,
-            gizmo,
             &road_commands,
         );
         self.preview_state.ingest(&road_commands);
@@ -110,7 +108,6 @@ impl RoadRenderSubsystem {
                 &mut self.road_manager.roads,
                 &self.style,
                 false,
-                gizmo,
                 road_commands,
             );
         }
@@ -119,7 +116,6 @@ impl RoadRenderSubsystem {
             terrain_renderer,
             &self.road_manager.preview_roads,
             &self.style,
-            gizmo,
         );
 
         self.preview_gpu.upload(device, &preview_mesh);
@@ -140,7 +136,6 @@ impl RoadRenderSubsystem {
                     chunk_id,
                     &self.road_manager.roads,
                     &self.style,
-                    gizmo,
                 )
             } else {
                 match self.mesh_manager.get_chunk_mesh(chunk_id) {

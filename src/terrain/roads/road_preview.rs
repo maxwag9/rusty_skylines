@@ -3,8 +3,9 @@
 //! Uses *exactly* the same geometry generation code as normal roads for perfect vertex-for-vertex compatibility.
 //! Node preview for isolated nodes is a closed circular road loop (separate ring generation, same meshing).
 //! Multiple preview segments are supported (e.g. for showing connected existing roads during placement).
+
+use crate::terrain::roads::road_editor::{PreviewError, RoadEditorCommand, SnapPreview};
 use crate::terrain::roads::road_mesh_manager::ChunkMesh;
-use crate::terrain::roads::road_structs::*;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
 

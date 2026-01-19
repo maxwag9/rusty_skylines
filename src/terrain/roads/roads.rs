@@ -14,16 +14,263 @@
 // ID Newtypes
 // ============================================================================
 
-use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_editor::{
-    IntersectionBuildParams, build_intersection_at_node, offset_polyline,
+    EditorState, IntersectionBuildParams, LanePreview, NodePreview, RoadEditorCommand,
+    SegmentPreview, SnapPreview, build_intersection_at_node, offset_polyline,
 };
-use crate::terrain::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_x_range};
-use crate::terrain::roads::road_structs::*;
+use crate::terrain::roads::road_mesh_manager::{
+    ChunkId, RoadMeshManager, RoadStyleParams, chunk_x_range,
+};
 use glam::Vec3;
 
 pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
+struct LaneTurn {
+    from: LaneId,
+    to: LaneId,
+    cost: f32,
+    allowed: bool,
+}
+
+/// Stable, monotonically increasing node identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct NodeId(pub u32);
+
+impl NodeId {
+    #[inline]
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for NodeId {
+    #[inline]
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl From<NodeId> for u32 {
+    #[inline]
+    fn from(id: NodeId) -> Self {
+        id.0
+    }
+}
+
+/// Stable, monotonically increasing segment identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct SegmentId(pub u32);
+
+impl SegmentId {
+    #[inline]
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for SegmentId {
+    #[inline]
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl From<SegmentId> for u32 {
+    #[inline]
+    fn from(id: SegmentId) -> Self {
+        id.0
+    }
+}
+
+/// Stable, monotonically increasing lane identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct LaneId(u32);
+
+impl LaneId {
+    #[inline]
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+impl From<u32> for LaneId {
+    #[inline]
+    fn from(id: u32) -> Self {
+        Self(id)
+    }
+}
+
+impl From<LaneId> for u32 {
+    #[inline]
+    fn from(id: LaneId) -> Self {
+        id.0
+    }
+}
+
+pub type NodeLaneId = u32;
+pub type PolyIdx = u16;
+
+/// Stable identifier for traffic control attachments within a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct ControlId(u32);
+
+impl ControlId {
+    #[inline]
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+// ============================================================================
+// Core Enums
+// ============================================================================
+
+/// Physical structure type of a road segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StructureType {
+    Surface,
+    Bridge,
+    Tunnel,
+}
+
+impl Default for StructureType {
+    fn default() -> Self {
+        Self::Surface
+    }
+}
+
+/// Traffic signal configuration (no ticking logic).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrafficSignal {
+    /// Duration of each phase in seconds.
+    pub phase_durations: Vec<f32>,
+    /// Current active phase index (updated by simulation, not by this module).
+    pub current_phase: u32,
+    /// Offset from global cycle start in seconds.
+    pub cycle_offset: f32,
+}
+
+impl TrafficSignal {
+    pub fn new(phase_durations: Vec<f32>) -> Self {
+        Self {
+            phase_durations,
+            current_phase: 0,
+            cycle_offset: 0.0,
+        }
+    }
+
+    #[inline]
+    pub fn total_cycle_duration(&self) -> f32 {
+        self.phase_durations.iter().sum()
+    }
+}
+
+/// Traffic control device attached to a node intersection.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrafficControl {
+    None,
+    Signal(TrafficSignal),
+    StopSign,
+    Yield,
+}
+
+impl Default for TrafficControl {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+/// Attached control with stable ID for removal/modification.
+#[derive(Debug, Clone)]
+pub struct AttachedControl {
+    id: ControlId,
+    control: TrafficControl,
+    enabled: bool,
+}
+
+impl AttachedControl {
+    #[inline]
+    pub fn id(&self) -> ControlId {
+        self.id
+    }
+
+    #[inline]
+    pub fn control(&self) -> &TrafficControl {
+        &self.control
+    }
+
+    #[inline]
+    pub fn control_mut(&mut self) -> &mut TrafficControl {
+        &mut self.control
+    }
+
+    #[inline]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RoadPreset {
+    pub forward_lanes: usize,
+    pub backward_lanes: usize,
+    pub speed_limit: f32,
+    pub capacity_per_lane: u32,
+    pub vehicle_mask: u32,
+    pub base_cost: f32,
+    pub structure: StructureType,
+}
+
+impl Default for RoadPreset {
+    fn default() -> Self {
+        Self {
+            // Default: basic 2-lane road (1 lane each direction) – feels like Cities: Skylines small roads
+            forward_lanes: 1,
+            backward_lanes: 1,
+            speed_limit: 50.0,
+            capacity_per_lane: 20,
+            vehicle_mask: 0xFF,
+            base_cost: 1.0,
+            structure: StructureType::Surface,
+        }
+    }
+}
+
+// Editing state – stored in RoadManager
+#[derive(Default)]
+struct EditingState {
+    active: bool,
+    preset: RoadPreset,
+    chain: Vec<NodeId>,              // Nodes placed in the current road chain
+    placed_segments: Vec<SegmentId>, // Segments created in the current road (for undo/cancel)
+}
+// ============================================================================
+// Node
+// ============================================================================
 
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
@@ -137,10 +384,7 @@ impl Node {
     pub fn outgoing_lanes(&self) -> &[LaneId] {
         &self.outgoing_lanes
     }
-    #[inline]
-    pub fn node_lane(&self, node_lane_id: NodeLaneId) -> &NodeLane {
-        &self.node_lanes.get(node_lane_id as usize).unwrap()
-    }
+
     #[inline]
     pub fn attached_controls(&self) -> &[AttachedControl] {
         &self.attached_controls
@@ -431,14 +675,7 @@ impl NodeLane {
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
-    #[inline]
-    pub fn disable(&mut self) {
-        self.enabled = false;
-    }
-    #[inline]
-    pub fn enable(&mut self) {
-        self.enabled = true;
-    }
+
     #[inline]
     pub fn speed_limit(&self) -> f32 {
         self.speed_limit
@@ -742,11 +979,6 @@ impl RoadStorage {
             })
             .map(|(idx, _)| SegmentId::new(idx as u32)) // Index == raw SegmentId because of append-only monotonic allocation
             .collect()
-    }
-
-    #[inline]
-    pub fn node_lane_count_for_node(&self, id: NodeId) -> usize {
-        self.nodes[id.raw() as usize].node_lanes.len()
     }
     // ------------------------------------------------------------------------
     // Lane operations
@@ -1452,7 +1684,6 @@ pub fn apply_command(
     road_style_params: &RoadStyleParams,
     command: RoadEditorCommand,
     is_preview: bool,
-    gizmo: &mut Gizmo,
 ) -> CommandResult {
     match command {
         RoadEditorCommand::Road(road_command) => {
@@ -1672,7 +1903,6 @@ pub fn apply_command(
                         chunk_id,
                         storage,
                         road_style_params,
-                        gizmo,
                     );
                 }
             }
@@ -1690,7 +1920,6 @@ pub fn apply_commands(
     storage: &mut RoadStorage,
     road_style_params: &RoadStyleParams,
     is_preview: bool,
-    gizmo: &mut Gizmo,
     commands: Vec<RoadEditorCommand>,
 ) -> Vec<CommandResult> {
     commands
@@ -1703,7 +1932,6 @@ pub fn apply_commands(
                 road_style_params,
                 cmd,
                 is_preview,
-                gizmo,
             )
         })
         .collect()
@@ -1716,7 +1944,6 @@ pub fn apply_preview_commands(
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
     road_style_params: &RoadStyleParams,
-    gizmo: &mut Gizmo,
     commands: &[RoadEditorCommand],
 ) {
     preview_storage.clear();
@@ -1795,7 +2022,6 @@ pub fn apply_preview_commands(
             road_style_params,
             RoadEditorCommand::Road(cmd),
             true,
-            gizmo,
         );
     }
 }

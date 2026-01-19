@@ -10,7 +10,6 @@ pub struct PendingGizmoRender {
     pub vertices: Vec<LineVtx>,
 }
 pub struct Gizmo {
-    pub persistent_renders: Vec<PendingGizmoRender>,
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
     total_game_time: f64,
@@ -50,7 +49,7 @@ impl Gizmo {
         }
 
         // Roads down here
-        let render_disabled_lanes = true;
+        let render_disabled_lanes = false;
         let render_arrow_lane_to_node = false;
 
         // iterate both storages but resolve everything against the storage the node belongs to
@@ -89,7 +88,7 @@ impl Gizmo {
                     let poly: Vec<[f32; 3]> =
                         lane.polyline().iter().map(|p| [p.x, p.y, p.z]).collect();
 
-                    self.render_polyline(&poly, lane_color, 7.0, false);
+                    self.render_polyline(&poly, lane_color, 7.0);
 
                     if render_arrow_lane_to_node {
                         if let Some(end) = lane.polyline().last() {
@@ -122,7 +121,7 @@ impl Gizmo {
                         .map(|p| [p.x, p.y, p.z])
                         .collect();
 
-                    self.render_polyline(&poly, lane_color, 2.0, false);
+                    self.render_polyline(&poly, lane_color, 2.0);
 
                     if render_arrow_lane_to_node {
                         if let Some(end) = node_lane.polyline().last() {
@@ -147,7 +146,6 @@ impl Gizmo {
             mapped_at_creation: false,
         });
         Self {
-            persistent_renders: Vec::new(),
             pending_renders: Vec::new(),
             gizmo_buffer,
             total_game_time: 0.0,
@@ -225,9 +223,6 @@ impl Gizmo {
     pub fn collect_vertices(&self) -> Vec<LineVtx> {
         let mut out = Vec::new();
         for draw in &self.pending_renders {
-            out.extend_from_slice(&draw.vertices);
-        }
-        for draw in &self.persistent_renders {
             out.extend_from_slice(&draw.vertices);
         }
         out
@@ -406,13 +401,7 @@ impl Gizmo {
         self.pending_renders.push(PendingGizmoRender { vertices });
     }
 
-    pub fn render_polyline(
-        &mut self,
-        polyline: &[[f32; 3]],
-        color: [f32; 3],
-        spacing: f32,
-        persistent: bool,
-    ) {
+    pub fn render_polyline(&mut self, polyline: &[[f32; 3]], color: [f32; 3], spacing: f32) {
         if polyline.len() < 2 {
             return;
         }
@@ -569,11 +558,7 @@ impl Gizmo {
             i += 1;
             t += spacing;
         }
-        if persistent {
-            self.persistent_renders
-                .push(PendingGizmoRender { vertices });
-        } else {
-            self.pending_renders.push(PendingGizmoRender { vertices });
-        }
+
+        self.pending_renders.push(PendingGizmoRender { vertices });
     }
 }

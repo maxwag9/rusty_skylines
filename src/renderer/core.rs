@@ -258,7 +258,6 @@ impl RenderCore {
             &self.queue,
             input_state,
             &self.terrain_renderer.last_picked,
-            &mut self.gizmo,
         );
 
         self.gizmo.update(
