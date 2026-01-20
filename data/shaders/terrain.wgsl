@@ -16,24 +16,6 @@ struct Uniforms {
     _pad0: f32,
 };
 
-struct FogUniforms {
-    screen_size: vec2<f32>,
-    proj_params: vec2<f32>,
-
-    fog_density: f32,
-    fog_height: f32,
-    cam_height: f32,
-    _pad0: f32,
-
-    fog_color: vec3<f32>,
-    _pad1: f32,
-
-    fog_sky_factor: f32,
-    fog_height_falloff: f32,
-    fog_start: f32,
-    fog_end: f32,
-};
-
 struct PickUniform {
     pos: vec3<f32>,
     radius: f32,
@@ -46,9 +28,6 @@ struct PickUniform {
 var<uniform> uniforms: Uniforms;
 
 @group(1) @binding(1)
-var<uniform> fog: FogUniforms;
-
-@group(1) @binding(2)
 var<uniform> pick: PickUniform;
 
 struct VertexIn {
@@ -131,38 +110,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Slightly tint sampled texture by procedural shade for variety.
     let grass_tint = grass_sample * (0.85 + 0.5 * grass_pattern);
     base_color = mix(base_color, grass_tint, grass_amount);
-    // ======================================
 
-    let dist = distance(in.world_pos, uniforms.camera_pos);
-
-    let f = fog_factor(dist, in.world_pos.y);
-
-    // slight desaturation improves realism
-    let gray = dot(base_color, vec3<f32>(0.3, 0.59, 0.11));
-    let desat = mix(base_color, vec3<f32>(gray), f * 0.05);
-
-    let final_color = mix(desat, fog.fog_color, f);
-
-    var color = final_color;
+    var final_color = base_color;
 
     if (pick.radius > 0.0) {
         let d = distance(in.world_pos, pick.pos);
 
         if (d < pick.radius) {
             let t = 1.0 - smoothstep(0.0, pick.radius, d);
-            color = color + pick.color * t;
+            final_color = final_color + pick.color * t;
         }
     }
 
-    return vec4<f32>(color, 1.0);
-}
-
-fn height_factor_at(pos_y: f32) -> f32 {
-    let dy = pos_y - fog.fog_height;
-    return exp(-dy * fog.fog_height_falloff);
-}
-
-fn fog_factor(dist: f32, pos_y: f32) -> f32 {
-    let h = height_factor_at(pos_y);
-    return 1.0 - exp(-dist * fog.fog_density * h);
+    return vec4<f32>(final_color, 1.0);
 }

@@ -6,7 +6,9 @@ use crate::renderer::astronomy::*;
 use crate::renderer::general_mesh_arena::GeneralMeshArena;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
-use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
+use crate::renderer::procedural_render_manager::{
+    PipelineOptions, RenderManager, create_color_attachment_load,
+};
 use crate::renderer::procedural_texture_manager::{MaterialKind, Params, TextureCacheKey};
 use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment,
@@ -321,8 +323,8 @@ impl RenderCore {
 
     fn execute_main_pass(
         &mut self,
-        encoder: &mut CommandEncoder,
-        surface_view: &TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
         config: &RenderPassConfig,
         camera: &Camera,
         aspect: f32,
@@ -331,80 +333,133 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         show_world: bool,
     ) {
-        let color_attachment = create_color_attachment(
-            &self.pipelines.msaa_view,
-            surface_view,
-            self.pipelines.msaa_samples,
-            config.background_color,
-        );
+        // -------- Pass 1: Main world pass (writes depth) --------
+        {
+            let color_attachment = create_color_attachment(
+                &self.pipelines.msaa_view,
+                surface_view,
+                self.pipelines.msaa_samples,
+                config.background_color,
+            );
 
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Main Pass"),
-            color_attachments: &[Some(color_attachment)],
-            depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Pass (World)"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
-        if show_world {
-            // Sky
-            render_sky(
+            if show_world {
+                // Sky
+                render_sky(
+                    &mut pass,
+                    &mut self.render_manager,
+                    &self.pipelines,
+                    self.msaa_samples,
+                );
+
+                // Terrain (also updates pick uniforms)
+                self.terrain_renderer
+                    .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
+
+                render_terrain(
+                    &mut pass,
+                    &mut self.render_manager,
+                    &self.terrain_renderer,
+                    &self.pipelines,
+                    self.msaa_samples,
+                    camera,
+                    aspect,
+                );
+
+                // Water
+                render_water(
+                    &mut pass,
+                    &mut self.render_manager,
+                    &self.pipelines,
+                    self.msaa_samples,
+                );
+            }
+
+            // Roads
+            render_roads(
                 &mut pass,
                 &mut self.render_manager,
+                &self.road_renderer,
                 &self.pipelines,
                 self.msaa_samples,
             );
 
-            // Terrain
-            self.terrain_renderer
-                .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
-
-            render_terrain(
+            // Gizmo (3D; gets fogged because fog is applied after)
+            render_gizmo(
                 &mut pass,
                 &mut self.render_manager,
-                &self.terrain_renderer,
                 &self.pipelines,
                 self.msaa_samples,
+                &mut self.gizmo,
                 camera,
-                aspect,
+                &self.device,
+                &self.queue,
+            );
+        } // pass 1 ends here (depth is now sampleable in pass 2)
+
+        // -------- Pass 2: Fog + UI (samples depth, no depth attachment) --------
+        {
+            let color_attachment = create_color_attachment_load(
+                &self.pipelines.msaa_view,
+                surface_view,
+                self.pipelines.msaa_samples,
             );
 
-            // Water
-            render_water(
-                &mut pass,
-                &mut self.render_manager,
-                &self.pipelines,
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Fog + UI Pass"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: None, // IMPORTANT: we sample depth
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            // Fog
+            let fog_shader_path = shader_dir().join(if self.msaa_samples > 1 {
+                "fog_msaa.wgsl"
+            } else {
+                "fog.wgsl"
+            });
+
+            self.render_manager.render_fog_fullscreen(
+                "Fog",
+                fog_shader_path.as_path(),
                 self.msaa_samples,
+                &self.pipelines.depth_sample_view,
+                &[
+                    &self.pipelines.uniforms.buffer,
+                    &self.pipelines.fog_uniforms.buffer,
+                    &self.pipelines.pick_uniforms.buffer,
+                ],
+                &mut pass,
             );
         }
-        render_roads(
-            &mut pass,
-            &mut self.render_manager,
-            &self.road_renderer,
-            &self.pipelines,
-            self.msaa_samples,
-        );
-
-        // Gizmo
-        render_gizmo(
-            &mut pass,
-            &mut self.render_manager,
-            &self.pipelines,
-            self.msaa_samples,
-            &mut self.gizmo,
-            camera,
-            &self.device,
-            &self.queue,
-        );
-
-        // UI
-        self.render_ui(&mut pass, ui_loader, time, input_state);
-
-        // let view = self.render_manager.procedural_texture_manager_mut().request_texture().clone();
-        // self.render_manager.render_fullscreen_preview(&view, "Road Preview", 4, &mut pass);
+        {
+            let color_attachment = create_color_attachment_load(
+                &self.pipelines.msaa_view,
+                surface_view,
+                self.pipelines.msaa_samples,
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Pass (UI)"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            // UI (NOT fogged, because it draws after fog) Logic!
+            self.render_ui(&mut pass, ui_loader, time, input_state);
+        }
     }
-
     fn render_ui(
         &self,
         pass: &mut RenderPass,
@@ -535,7 +590,7 @@ fn render_water(
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: false,
+                depth_write_enabled: true,
                 depth_compare: CompareFunction::Always,
                 stencil: StencilState {
                     front: StencilFaceState {
@@ -855,11 +910,7 @@ fn render_terrain(
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
         },
-        &[
-            &pipelines.uniforms.buffer,
-            &pipelines.fog_uniforms.buffer,
-            &pipelines.pick_uniforms.buffer,
-        ],
+        &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
     );
     terrain_renderer.render(pass, camera, aspect, false);
@@ -898,11 +949,7 @@ fn render_terrain(
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
         },
-        &[
-            &pipelines.uniforms.buffer,
-            &pipelines.fog_uniforms.buffer,
-            &pipelines.pick_uniforms.buffer,
-        ],
+        &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
     );
     terrain_renderer.render(pass, camera, aspect, true);

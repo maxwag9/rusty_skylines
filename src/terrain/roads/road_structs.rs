@@ -299,7 +299,7 @@ impl Default for RoadType {
         Self {
             name: "Medium Road",
 
-            lanes_each_direction: (2, 2),
+            lanes_each_direction: (1, 1),
 
             lane_width: 2.75,
             lane_height: 0.0,
@@ -316,7 +316,7 @@ impl Default for RoadType {
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.5,
+            turn_tightness: 1.8,
         }
     }
 }
@@ -445,6 +445,7 @@ pub struct SegmentPreview {
     pub would_merge_end: Option<NodeId>,
     pub lane_count_each_dir: (usize, usize),
     pub estimated_length: f32,
+    pub crossing_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -467,6 +468,7 @@ pub enum RoadEditorCommand {
     PreviewLane(LanePreview),
     PreviewSegment(SegmentPreview),
     PreviewError(PreviewError),
+    PreviewCrossing(CrossingPoint),
 }
 
 #[derive(Debug, Clone)]
@@ -558,11 +560,27 @@ impl IdAllocator {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct CrossingPoint {
+    /// Position along the new road from 0.0 (start) to 1.0 (end)
+    pub(crate) t: f32,
+    /// World position of the crossing
+    pub(crate) world_pos: Vec3,
+    /// What we're crossing
+    pub(crate) kind: CrossingKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum CrossingKind {
+    /// Crossing through an existing node
+    ExistingNode(NodeId),
+    /// Crossing through an existing lane segment
+    LaneCrossing { lane_id: LaneId, lane_t: f32 },
+}
+
 #[derive(Clone)]
-pub struct LaneEndInfo {
-    lane_id: LaneId,
-    is_incoming: bool,
-    dir: Vec3,      // approach direction at node
-    end_pos: Vec3,  // current (virtual) end position at node-side
-    outerness: f32, // 0 center-ish, 1 outermost
+pub struct ResolvedWaypoint {
+    pub(crate) node_id: NodeId,
+    pub(crate) pos: Vec3,
+    pub(crate) t: f32,
 }

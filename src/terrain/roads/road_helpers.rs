@@ -1,8 +1,9 @@
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::intersections::{OuterNodeLane, road_vertex};
-use crate::terrain::roads::road_mesh_manager::RoadVertex;
-use crate::terrain::roads::road_structs::SegmentId;
-use crate::terrain::roads::roads::{LaneRef, NodeLane, RoadStorage};
+use crate::terrain::roads::road_editor::IntersectionBuildParams;
+use crate::terrain::roads::road_mesh_manager::{ChunkId, RoadVertex};
+use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, SegmentId};
+use crate::terrain::roads::roads::{LaneRef, NodeLane, RoadCommand, RoadStorage};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -83,7 +84,8 @@ pub fn select_outermost_lanes(
             .max_by(|(a, _, _), (b, _, _)| {
                 let sa = right_turn_score(&a.polyline());
                 let sb = right_turn_score(&b.polyline());
-                sa.partial_cmp(&sb).unwrap()
+                let ordering = sa.partial_cmp(&sb);
+                ordering.unwrap()
             });
 
         if let Some((nl, _, _)) = winner {
@@ -110,7 +112,8 @@ pub fn right_turn_score(poly: &[Vec3]) -> f32 {
     let dot = dir_start.dot(dir_end);
 
     // atan2 gives signed angle, negative = right turn
-    -cross.y.atan2(dot)
+    let score = -cross.y.atan2(dot);
+    if score.is_nan() { 0.0 } else { score }
 }
 
 pub fn min_polyline_distance(a: &[Vec3], b: &[Vec3]) -> f32 {
@@ -928,4 +931,78 @@ pub fn furthest_hit_distance_from_start_xz(points: &[Vec3], poly: &[Vec3]) -> Op
     }
 
     best_dist.map(|d| (d, best_hit))
+}
+/// 2D line segment intersection in XZ plane
+/// Returns Some((t1, t2)) if segments intersect
+pub fn line_segment_intersection_2d(
+    ax1: f32,
+    az1: f32,
+    ax2: f32,
+    az2: f32,
+    bx1: f32,
+    bz1: f32,
+    bx2: f32,
+    bz2: f32,
+) -> Option<(f32, f32)> {
+    let d1x = ax2 - ax1;
+    let d1z = az2 - az1;
+    let d2x = bx2 - bx1;
+    let d2z = bz2 - bz1;
+
+    let cross = d1x * d2z - d1z * d2x;
+    if cross.abs() < 1e-10 {
+        return None; // Parallel or coincident
+    }
+
+    let dx = bx1 - ax1;
+    let dz = bz1 - az1;
+
+    let t1 = (dx * d2z - dz * d2x) / cross;
+    let t2 = (dx * d1z - dz * d1x) / cross;
+
+    // Check if intersection is within both segments
+    if t1 >= 0.0 && t1 <= 1.0 && t2 >= 0.0 && t2 <= 1.0 {
+        Some((t1, t2))
+    } else {
+        None
+    }
+}
+
+/// Subdivide a quadratic bezier to extract the section from t0 to t1
+pub fn subdivide_quadratic_bezier(
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+    t0: f32,
+    t1: f32,
+) -> (Vec3, Vec3, Vec3) {
+    fn eval_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
+        let omt = 1.0 - t;
+        p0 * (omt * omt) + p1 * (2.0 * omt * t) + p2 * (t * t)
+    }
+
+    let new_p0 = eval_bezier(p0, p1, p2, t0);
+    let new_p2 = eval_bezier(p0, p1, p2, t1);
+
+    // Compute new control point to preserve curve shape
+    let dt = t1 - t0;
+    let tangent_at_t0 = (p1 - p0) * (1.0 - t0) + (p2 - p1) * t0;
+    let new_p1 = new_p0 + tangent_at_t0 * dt;
+
+    (new_p0, new_p1, new_p2)
+}
+
+/// Helper to push intersection for a node
+pub fn push_intersection_for_node(
+    cmds: &mut Vec<RoadCommand>,
+    node_id: NodeId,
+    road_style_params: &RoadStyleParams,
+    chunk_id: ChunkId,
+) {
+    cmds.push(RoadCommand::MakeIntersection {
+        node_id,
+        params: IntersectionBuildParams::from_style(road_style_params),
+        chunk_id,
+        clear: true,
+    });
 }

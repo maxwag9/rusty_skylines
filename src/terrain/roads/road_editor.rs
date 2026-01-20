@@ -175,6 +175,17 @@ impl RoadEditor {
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
+        // Find crossings for preview
+        let crossings = self.find_all_crossings(
+            storage,
+            terrain_renderer,
+            start_pos,
+            end_pos,
+            None,
+            start,
+            &end_anchor,
+        );
+
         let seg_preview = SegmentPreview {
             road_type: road_style_params.road_type().clone(),
             mode: road_style_params.mode(),
@@ -190,14 +201,20 @@ impl RoadEditor {
             would_merge_end: end_anchor.planned_node.merged_node_id(),
             lane_count_each_dir: road_style_params.road_type().lanes_each_direction(),
             estimated_length,
+            crossing_count: crossings.len(),
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
 
         let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
+        // Preview crossing points
+        for crossing in crossings {
+            output.push(RoadEditorCommand::PreviewCrossing(crossing));
+        }
+
         if place_pressed && is_valid {
-            let road_cmds = self.commit_road(
+            let road_cmds = self.commit_road_with_crossings(
                 terrain_renderer,
                 storage,
                 road_style_params,
@@ -254,6 +271,7 @@ impl RoadEditor {
             would_merge_end: None,
             lane_count_each_dir: road_style_params.road_type().lanes_each_direction(),
             estimated_length,
+            crossing_count: 0,
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview));
 
@@ -294,6 +312,17 @@ impl RoadEditor {
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
+        // Find crossings for preview
+        let crossings = self.find_all_crossings(
+            storage,
+            terrain_renderer,
+            start_pos,
+            end_pos,
+            Some(control),
+            start,
+            &end_anchor,
+        );
+
         let seg_preview = SegmentPreview {
             road_type: road_style_params.road_type().clone(),
             mode: road_style_params.mode(),
@@ -309,14 +338,20 @@ impl RoadEditor {
             would_merge_end: end_anchor.planned_node.merged_node_id(),
             lane_count_each_dir: road_style_params.road_type().lanes_each_direction(),
             estimated_length,
+            crossing_count: crossings.len(),
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
 
         let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
+        // Preview crossing points
+        for crossing in crossings {
+            output.push(RoadEditorCommand::PreviewCrossing(crossing));
+        }
+
         if place_pressed && is_valid {
-            let road_cmds = self.commit_road(
+            let road_cmds = self.commit_road_with_crossings(
                 terrain_renderer,
                 storage,
                 road_style_params,
@@ -336,6 +371,470 @@ impl RoadEditor {
             }
         }
     }
+
+    // ==================== CROSSING DETECTION ====================
+
+    /// Find all points where the new road would cross existing infrastructure
+    fn find_all_crossings(
+        &self,
+        storage: &RoadStorage,
+        terrain_renderer: &TerrainRenderer,
+        start_pos: Vec3,
+        end_pos: Vec3,
+        control: Option<Vec3>,
+        start_anchor: &Anchor,
+        end_anchor: &Anchor,
+    ) -> Vec<CrossingPoint> {
+        let mut crossings = Vec::new();
+        let mut crossed_segments: HashSet<SegmentId> = HashSet::new();
+
+        // Build test polyline for intersection testing
+        let test_polyline = match control {
+            Some(c) => {
+                let est_len = estimate_bezier_arc_length(start_pos, c, end_pos);
+                let samples = compute_curve_segment_count(est_len).max(20);
+                sample_quadratic_bezier(start_pos, c, end_pos, samples)
+            }
+            None => vec![start_pos, end_pos],
+        };
+
+        // Get segments that are excluded (already being split at start/end)
+        let excluded_segments = self.get_excluded_segments(storage, start_anchor, end_anchor);
+
+        // Check lane crossings - only one crossing per segment
+        for (lane_id, _) in storage.iter_enabled_lanes() {
+            let lane = storage.lane(&lane_id);
+            let seg_id = lane.segment();
+
+            // Skip if we've already found a crossing on this segment
+            if crossed_segments.contains(&seg_id) {
+                continue;
+            }
+
+            // Skip excluded segments (being split at start/end)
+            if excluded_segments.contains(&seg_id) {
+                continue;
+            }
+
+            if let Some(crossing) = self.find_lane_crossing_point(
+                storage,
+                terrain_renderer,
+                &test_polyline,
+                start_pos,
+                end_pos,
+                control,
+                &lane_id,
+            ) {
+                // Check if not too close to our road's endpoints
+                if crossing.t > ENDPOINT_T_EPS && crossing.t < 1.0 - ENDPOINT_T_EPS {
+                    crossed_segments.insert(seg_id);
+                    crossings.push(crossing);
+                }
+            }
+        }
+
+        // Check for existing nodes close to our path (not start/end nodes)
+        for (node_id, node) in storage.iter_enabled_nodes() {
+            // Skip nodes that are our start or end
+            if self.is_node_in_anchor(node_id, start_anchor)
+                || self.is_node_in_anchor(node_id, end_anchor)
+            {
+                continue;
+            }
+
+            let node_pos = Vec3::new(node.x(), node.y(), node.z());
+            if let Some((t, dist)) =
+                self.project_point_to_path(start_pos, end_pos, control, node_pos)
+            {
+                if dist < NODE_SNAP_RADIUS && t > ENDPOINT_T_EPS && t < 1.0 - ENDPOINT_T_EPS {
+                    crossings.push(CrossingPoint {
+                        t,
+                        world_pos: node_pos,
+                        kind: CrossingKind::ExistingNode(node_id),
+                    });
+                }
+            }
+        }
+
+        // Sort by t (position along our road)
+        crossings.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Deduplicate crossings that are too close together
+        self.deduplicate_crossings(crossings)
+    }
+
+    fn get_excluded_segments(
+        &self,
+        storage: &RoadStorage,
+        start_anchor: &Anchor,
+        end_anchor: &Anchor,
+    ) -> HashSet<SegmentId> {
+        let mut excluded = HashSet::new();
+
+        if let PlannedNode::Split { lane_id, .. } = &start_anchor.planned_node {
+            let lane = storage.lane(lane_id);
+            excluded.insert(lane.segment());
+        }
+
+        if let PlannedNode::Split { lane_id, .. } = &end_anchor.planned_node {
+            let lane = storage.lane(lane_id);
+            excluded.insert(lane.segment());
+        }
+
+        excluded
+    }
+
+    fn is_node_in_anchor(&self, node_id: NodeId, anchor: &Anchor) -> bool {
+        match &anchor.planned_node {
+            PlannedNode::Existing(id) => *id == node_id,
+            _ => false,
+        }
+    }
+
+    fn find_lane_crossing_point(
+        &self,
+        storage: &RoadStorage,
+        terrain_renderer: &TerrainRenderer,
+        test_polyline: &[Vec3],
+        start_pos: Vec3,
+        end_pos: Vec3,
+        control: Option<Vec3>,
+        lane_id: &LaneId,
+    ) -> Option<CrossingPoint> {
+        let lane = storage.lane(lane_id);
+        let lane_points = &lane.geometry().points;
+
+        // For each segment in our test polyline
+        for i in 0..test_polyline.len() - 1 {
+            let p1 = test_polyline[i];
+            let p2 = test_polyline[i + 1];
+
+            // Check against each segment of the lane
+            for j in 0..lane_points.len() - 1 {
+                let q1 = lane_points[j];
+                let q2 = lane_points[j + 1];
+
+                if let Some((our_seg_t, lane_seg_t)) =
+                    line_segment_intersection_2d(p1.x, p1.z, p2.x, p2.z, q1.x, q1.z, q2.x, q2.z)
+                {
+                    // Convert segment-local t to global t for our path
+                    let polyline_len = test_polyline.len() as f32;
+                    let path_t = (i as f32 + our_seg_t) / (polyline_len - 1.0);
+
+                    // Convert to global t for the lane
+                    let lane_len = lane_points.len() as f32;
+                    let lane_t = (j as f32 + lane_seg_t) / (lane_len - 1.0);
+
+                    // Skip if lane intersection is too close to lane endpoints
+                    if lane_t < ENDPOINT_T_EPS || lane_t > 1.0 - ENDPOINT_T_EPS {
+                        continue;
+                    }
+
+                    // Calculate world position at crossing
+                    let world_pos = self.sample_path_at_t(
+                        terrain_renderer,
+                        start_pos,
+                        end_pos,
+                        control,
+                        path_t,
+                    );
+
+                    return Some(CrossingPoint {
+                        t: path_t,
+                        world_pos,
+                        kind: CrossingKind::LaneCrossing {
+                            lane_id: lane_id.clone(),
+                            lane_t,
+                        },
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    fn project_point_to_path(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        control: Option<Vec3>,
+        point: Vec3,
+    ) -> Option<(f32, f32)> {
+        // Returns (t, distance)
+        match control {
+            None => {
+                // Straight line projection
+                let dx = end.x - start.x;
+                let dz = end.z - start.z;
+                let len_sq = dx * dx + dz * dz;
+                if len_sq < 1e-6 {
+                    return None;
+                }
+
+                let px = point.x - start.x;
+                let pz = point.z - start.z;
+                let t = (px * dx + pz * dz) / len_sq;
+
+                if t < 0.0 || t > 1.0 {
+                    return None;
+                }
+
+                let proj_x = start.x + t * dx;
+                let proj_z = start.z + t * dz;
+                let dist = ((point.x - proj_x).powi(2) + (point.z - proj_z).powi(2)).sqrt();
+
+                Some((t, dist))
+            }
+            Some(c) => {
+                // Quadratic bezier - sample and find closest point
+                let samples = 100;
+                let mut best: Option<(f32, f32)> = None;
+
+                for i in 0..=samples {
+                    let t = i as f32 / samples as f32;
+                    let omt = 1.0 - t;
+                    let px = omt * omt * start.x + 2.0 * omt * t * c.x + t * t * end.x;
+                    let pz = omt * omt * start.z + 2.0 * omt * t * c.z + t * t * end.z;
+
+                    let dist = ((point.x - px).powi(2) + (point.z - pz).powi(2)).sqrt();
+
+                    if best.is_none() || dist < best.unwrap().1 {
+                        best = Some((t, dist));
+                    }
+                }
+
+                best
+            }
+        }
+    }
+
+    fn sample_path_at_t(
+        &self,
+        terrain_renderer: &TerrainRenderer,
+        start: Vec3,
+        end: Vec3,
+        control: Option<Vec3>,
+        t: f32,
+    ) -> Vec3 {
+        let (x, z) = match control {
+            Some(c) => {
+                let omt = 1.0 - t;
+                (
+                    omt * omt * start.x + 2.0 * omt * t * c.x + t * t * end.x,
+                    omt * omt * start.z + 2.0 * omt * t * c.z + t * t * end.z,
+                )
+            }
+            None => (
+                start.x + t * (end.x - start.x),
+                start.z + t * (end.z - start.z),
+            ),
+        };
+        let y = terrain_renderer.get_height_at([x, z]) + CLEARANCE;
+        Vec3::new(x, y, z)
+    }
+
+    fn deduplicate_crossings(&self, crossings: Vec<CrossingPoint>) -> Vec<CrossingPoint> {
+        const MIN_T_DISTANCE: f32 = 0.02;
+
+        let mut result = Vec::new();
+
+        for crossing in crossings {
+            if result.is_empty() {
+                result.push(crossing);
+                continue;
+            }
+
+            let last_t = result.last().unwrap().t;
+            if (crossing.t - last_t).abs() > MIN_T_DISTANCE {
+                result.push(crossing);
+            }
+        }
+
+        result
+    }
+
+    // ==================== ROAD COMMIT WITH CROSSINGS ====================
+
+    fn commit_road_with_crossings(
+        &mut self,
+        terrain_renderer: &TerrainRenderer,
+        storage: &RoadStorage,
+        road_style_params: &RoadStyleParams,
+        start: &Anchor,
+        end: &Anchor,
+        control: Option<Vec3>,
+        chunk_id: ChunkId,
+        output: &mut Vec<RoadEditorCommand>,
+    ) -> Vec<RoadCommand> {
+        let mut cmds = Vec::new();
+
+        // Get positions
+        let Some(start_pos) = start.planned_node.position(storage) else {
+            output.push(RoadEditorCommand::PreviewError(
+                PreviewError::MissingNodeData,
+            ));
+            return Vec::new();
+        };
+        let end_pos = end.snap.world_pos;
+
+        // Find all crossings along the path
+        let crossings = self.find_all_crossings(
+            storage,
+            terrain_renderer,
+            start_pos,
+            end_pos,
+            control,
+            start,
+            end,
+        );
+
+        // Build waypoint list
+        let mut waypoints: Vec<ResolvedWaypoint> = Vec::new();
+
+        // Resolve start anchor
+        let Some((start_node_id, start_node_pos)) = self.resolve_anchor(
+            storage,
+            road_style_params,
+            start,
+            chunk_id,
+            &mut cmds,
+            output,
+        ) else {
+            return Vec::new();
+        };
+
+        waypoints.push(ResolvedWaypoint {
+            node_id: start_node_id,
+            pos: start_node_pos,
+            t: 0.0,
+        });
+
+        // Process crossings in order
+        for crossing in crossings {
+            let node_id = match crossing.kind {
+                CrossingKind::ExistingNode(id) => id,
+                CrossingKind::LaneCrossing { lane_id, .. } => {
+                    let Some((split_cmds, new_node_id)) = self.plan_split(
+                        road_style_params,
+                        storage,
+                        lane_id,
+                        crossing.world_pos,
+                        chunk_id,
+                    ) else {
+                        continue;
+                    };
+                    cmds.extend(split_cmds);
+                    new_node_id
+                }
+            };
+
+            waypoints.push(ResolvedWaypoint {
+                node_id,
+                pos: crossing.world_pos,
+                t: crossing.t,
+            });
+        }
+
+        // Resolve end anchor
+        let Some((end_node_id, end_node_pos)) =
+            self.resolve_anchor(storage, road_style_params, end, chunk_id, &mut cmds, output)
+        else {
+            return cmds;
+        };
+
+        waypoints.push(ResolvedWaypoint {
+            node_id: end_node_id,
+            pos: end_node_pos,
+            t: 1.0,
+        });
+
+        // Remove duplicate consecutive nodes
+        waypoints.dedup_by(|a, b| a.node_id == b.node_id);
+
+        // Create segments between consecutive waypoints
+        for i in 0..waypoints.len() - 1 {
+            let from = &waypoints[i];
+            let to = &waypoints[i + 1];
+
+            if from.node_id == to.node_id {
+                continue;
+            }
+
+            // Calculate centerline for this segment
+            let segment_centerline = self.compute_segment_centerline(
+                terrain_renderer,
+                start_pos,
+                end_pos,
+                control,
+                from.t,
+                to.t,
+                from.pos,
+                to.pos,
+            );
+
+            if segment_centerline.len() < 2 {
+                continue;
+            }
+
+            let segment_id = self.allocator.alloc_segment();
+            cmds.push(RoadCommand::AddSegment {
+                start: from.node_id,
+                end: to.node_id,
+                structure: road_style_params.road_type().structure(),
+                chunk_id,
+            });
+
+            self.emit_lanes_from_centerline(
+                terrain_renderer,
+                &mut cmds,
+                road_style_params,
+                segment_id,
+                from.node_id,
+                to.node_id,
+                &segment_centerline,
+                chunk_id,
+            );
+        }
+
+        // Generate intersections for all waypoint nodes
+        for waypoint in &waypoints {
+            // Use a generic intersection push for intermediate nodes
+            push_intersection_for_node(&mut cmds, waypoint.node_id, road_style_params, chunk_id);
+        }
+
+        cmds
+    }
+
+    fn compute_segment_centerline(
+        &self,
+        terrain_renderer: &TerrainRenderer,
+        original_start: Vec3,
+        original_end: Vec3,
+        original_control: Option<Vec3>,
+        from_t: f32,
+        to_t: f32,
+        from_pos: Vec3,
+        to_pos: Vec3,
+    ) -> Vec<Vec3> {
+        match original_control {
+            None => {
+                // Straight segment
+                make_straight_centerline(terrain_renderer, from_pos, to_pos)
+            }
+            Some(c) => {
+                // Extract subsection of bezier curve
+                let (sub_start, sub_control, sub_end) =
+                    subdivide_quadratic_bezier(original_start, c, original_end, from_t, to_t);
+
+                let est_len = estimate_bezier_arc_length(sub_start, sub_control, sub_end);
+                let samples = compute_curve_segment_count(est_len);
+                sample_quadratic_bezier(sub_start, sub_control, sub_end, samples)
+            }
+        }
+    }
+
+    // ==================== EXISTING METHODS (unchanged) ====================
 
     fn find_best_snap(
         &self,
@@ -564,94 +1063,6 @@ impl RoadEditor {
         (true, None)
     }
 
-    fn commit_road(
-        &mut self,
-        terrain_renderer: &TerrainRenderer,
-        storage: &RoadStorage,
-        road_style_params: &RoadStyleParams,
-        start: &Anchor,
-        end: &Anchor,
-        control: Option<Vec3>, // None = straight, Some = curve
-        chunk_id: ChunkId,
-        output: &mut Vec<RoadEditorCommand>,
-    ) -> Vec<RoadCommand> {
-        let mut cmds = Vec::new();
-
-        // Resolve anchors
-        let Some((start_id, start_pos)) = self.resolve_anchor(
-            storage,
-            road_style_params,
-            start,
-            chunk_id,
-            &mut cmds,
-            output,
-        ) else {
-            return Vec::new();
-        };
-
-        let Some((end_id, end_pos)) =
-            self.resolve_anchor(storage, road_style_params, end, chunk_id, &mut cmds, output)
-        else {
-            return cmds;
-        };
-
-        if start_id == end_id {
-            output.push(RoadEditorCommand::PreviewError(PreviewError::SameNode));
-            return Vec::new();
-        }
-
-        // Build centerline polyline (EDITOR ONLY)
-        let centerline: Vec<Vec3> = match control {
-            Some(c) => {
-                let est_len = estimate_bezier_arc_length(start_pos, c, end_pos);
-                let samples = compute_curve_segment_count(est_len);
-                sample_quadratic_bezier(start_pos, c, end_pos, samples)
-            }
-            None => make_straight_centerline(terrain_renderer, start_pos, end_pos),
-        };
-
-        if centerline.len() < 2 {
-            return cmds;
-        }
-
-        // Allocate segment (topology only)
-        let segment_id = self.allocator.alloc_segment();
-        cmds.push(RoadCommand::AddSegment {
-            start: start_id,
-            end: end_id,
-            structure: road_style_params.road_type().structure(),
-            chunk_id,
-        });
-
-        // Emit lanes from centerline
-        self.emit_lanes_from_centerline(
-            terrain_renderer,
-            &mut cmds,
-            road_style_params,
-            segment_id,
-            start_id,
-            end_id,
-            &centerline,
-            chunk_id,
-        );
-        push_intersection(
-            &mut cmds,
-            start_id,
-            &start.planned_node,
-            road_style_params,
-            chunk_id,
-        );
-        push_intersection(
-            &mut cmds,
-            end_id,
-            &end.planned_node,
-            road_style_params,
-            chunk_id,
-        );
-
-        cmds
-    }
-
     fn resolve_anchor(
         &mut self,
         storage: &RoadStorage,
@@ -703,7 +1114,6 @@ impl RoadEditor {
         let mut cmds = Vec::new();
 
         cmds.push(RoadCommand::DisableSegment {
-            // diables segment and its lanes
             segment_id: old_segment_id,
             chunk_id,
         });
@@ -774,11 +1184,11 @@ impl RoadEditor {
                     to: new_node_id,
                     segment: seg2_id,
                     lane_index: old_lane.lane_index(),
-                    geometry: geom1, // FIXED: was geom2
+                    geometry: geom1,
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost1, // FIXED: was cost2
+                    base_cost: cost1,
                     chunk_id,
                 });
 
@@ -787,11 +1197,11 @@ impl RoadEditor {
                     to: a_id,
                     segment: seg1_id,
                     lane_index: old_lane.lane_index(),
-                    geometry: geom2, // FIXED: was geom1
+                    geometry: geom2,
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost2, // FIXED: was cost1
+                    base_cost: cost2,
                     chunk_id,
                 });
             }
@@ -1241,7 +1651,7 @@ fn initial_carve(
 
         // shift outward from intersection
         let dir = (p2 - center).normalize_or_zero();
-        let shift = 8.2 * params.side_walk_width;
+        let shift = 5.2 * params.side_walk_width;
         let v = p2 + dir * shift;
 
         cut_vertices.push(v);
@@ -1249,6 +1659,39 @@ fn initial_carve(
         // Debug: ray center->p2
         gizmo.render_line(center.to_array(), p2.to_array(), [1.0, 1.0, 1.0], true);
     }
+    let n = cut_vertices.len();
+    if n < 2 {
+        return;
+    }
+
+    let mut doubled: Vec<Vec3> = Vec::with_capacity(n * 2);
+
+    for i in 0..n {
+        let a = cut_vertices[i];
+        let b = cut_vertices[(i + 1) % n];
+
+        // keep original
+        doubled.push(a);
+
+        // midpoint
+        let mid = (a + b) * 0.5;
+
+        // edge direction
+        let dir = (b - a).normalize_or_zero();
+
+        // right tangent for CCW polygon (XZ plane)
+        let tangent = Vec3::new(-dir.z, 0.0, dir.x);
+
+        // half edge length
+        let offset = 0.5 * (b - a).length();
+
+        let new_v = mid + tangent * offset;
+        doubled.push(new_v);
+        // Debug draw between midpoint and new vertex
+        gizmo.render_line(mid.to_array(), new_v.to_array(), [0.0, 1.0, 1.0], true);
+    }
+
+    cut_vertices = doubled;
 
     if cut_vertices.len() < 3 {
         println!("initial_carve: cut polygon has <3 vertices, skipping");

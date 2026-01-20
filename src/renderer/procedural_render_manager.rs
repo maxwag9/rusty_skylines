@@ -5,10 +5,7 @@ use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use wgpu::{
-    BindGroup, BlendState, Buffer, CompareFunction, DepthStencilState, Device, Face, Queue,
-    Sampler, VertexBufferLayout,
-};
+use wgpu::*;
 
 const FULLSCREEN_SHADER_SOURCE: &str = r#"
 struct VertexOutput {
@@ -165,21 +162,32 @@ struct FullscreenPipelineKey {
     surface_format: wgpu::TextureFormat,
 }
 
+#[derive(Hash, PartialEq, Eq, Clone)]
+struct FogPipelineCacheKey {
+    shader_path: PathBuf,
+    msaa_samples: u32,
+    depth_multisampled: bool,
+    uniform_count: usize,
+}
 struct ShaderEntry {
     module: wgpu::ShaderModule,
     source_path: PathBuf,
 }
 
 pub struct PipelineManager {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Device,
+    queue: Queue,
     surface_format: wgpu::TextureFormat,
     shader_cache: HashMap<PathBuf, ShaderEntry>,
-    pipeline_cache: HashMap<PipelineCacheKey, wgpu::RenderPipeline>,
-    fullscreen_pipeline_cache: HashMap<FullscreenPipelineKey, wgpu::RenderPipeline>,
-    uniform_bind_group_layouts: HashMap<usize, wgpu::BindGroupLayout>,
-    fullscreen_bind_group_layout: wgpu::BindGroupLayout,
+    pipeline_cache: HashMap<PipelineCacheKey, RenderPipeline>,
+    fullscreen_pipeline_cache: HashMap<FullscreenPipelineKey, RenderPipeline>,
+    uniform_bind_group_layouts: HashMap<usize, BindGroupLayout>,
+    fullscreen_bind_group_layout: BindGroupLayout,
     fullscreen_shader: wgpu::ShaderModule,
+
+    fog_pipeline_cache: HashMap<FogPipelineCacheKey, RenderPipeline>,
+    fog_depth_layout: Option<BindGroupLayout>,
+    fog_depth_layout_msaa: Option<BindGroupLayout>,
 }
 
 impl PipelineManager {
@@ -226,11 +234,10 @@ impl PipelineManager {
             uniform_bind_group_layouts: HashMap::new(),
             fullscreen_bind_group_layout,
             fullscreen_shader,
+            fog_pipeline_cache: Default::default(),
+            fog_depth_layout: None,
+            fog_depth_layout_msaa: None,
         }
-    }
-
-    pub fn device(&self) -> &wgpu::Device {
-        &self.device
     }
 
     pub fn queue(&self) -> &wgpu::Queue {
@@ -492,6 +499,115 @@ impl PipelineManager {
             entries: &entries,
         })
     }
+    fn fog_depth_bind_group_layout(&mut self, depth_multisampled: bool) -> &BindGroupLayout {
+        let slot = if depth_multisampled {
+            &mut self.fog_depth_layout_msaa
+        } else {
+            &mut self.fog_depth_layout
+        };
+
+        slot.get_or_insert_with(|| {
+            self.device
+                .create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    label: Some(if depth_multisampled {
+                        "Fog Depth BGL (MSAA)"
+                    } else {
+                        "Fog Depth BGL"
+                    }),
+                    entries: &[BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Depth,
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: depth_multisampled,
+                        },
+                        count: None,
+                    }],
+                })
+        })
+    }
+
+    pub fn get_or_create_fog_pipeline(
+        &mut self,
+        shader_path: &Path,
+        msaa_samples: u32,
+        depth_multisampled: bool,
+        uniform_count: usize,
+    ) -> &RenderPipeline {
+        let key = FogPipelineCacheKey {
+            shader_path: shader_path.to_path_buf(),
+            msaa_samples,
+            depth_multisampled,
+            uniform_count,
+        };
+
+        if self.fog_pipeline_cache.contains_key(&key) {
+            return self.fog_pipeline_cache.get(&key).unwrap();
+        }
+
+        self.load_shader(shader_path);
+        self.ensure_uniform_bind_group_layout(uniform_count);
+
+        let depth_layout = self.fog_depth_bind_group_layout(depth_multisampled).clone();
+        let shader = &self.shader_cache.get(shader_path).unwrap().module;
+        let uniform_layout = self.uniform_bind_group_layouts.get(&uniform_count).unwrap();
+
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("Fog Pipeline Layout"),
+                bind_group_layouts: &[&depth_layout, uniform_layout],
+                immediate_size: 0,
+            });
+
+        let pipeline = self
+            .device
+            .create_render_pipeline(&RenderPipelineDescriptor {
+                label: Some("Fog Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: VertexState {
+                    module: shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: PipelineCompilationOptions::default(),
+                },
+                fragment: Some(FragmentState {
+                    module: shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(ColorTargetState {
+                        format: self.surface_format,
+                        blend: Some(BlendState::ALPHA_BLENDING),
+                        write_mask: ColorWrites::ALL,
+                    })],
+                    compilation_options: PipelineCompilationOptions::default(),
+                }),
+                primitive: PrimitiveState {
+                    topology: PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None, // IMPORTANT: we sample depth, so do not attach it here
+                multisample: MultisampleState {
+                    count: msaa_samples,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                cache: None,
+                multiview_mask: None,
+            });
+
+        self.fog_pipeline_cache.insert(key.clone(), pipeline);
+        self.fog_pipeline_cache.get(&key).unwrap()
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
 }
 
 /// Cache key for uniform bind groups using buffer addresses
@@ -647,6 +763,56 @@ impl RenderManager {
         pass.draw(0..4, 0..1);
     }
 
+    pub fn render_fog_fullscreen(
+        &mut self,
+        label: &str,
+        shader_path: &Path,
+        msaa_samples: u32,
+        depth_view: &TextureView,
+        uniforms: &[&Buffer], // must include: uniforms, fog_uniforms, pick_uniforms
+        pass: &mut RenderPass,
+    ) {
+        let depth_multisampled = msaa_samples > 1;
+
+        let depth_layout = self
+            .pipeline_manager
+            .fog_depth_bind_group_layout(depth_multisampled)
+            .clone();
+        let depth_bind_group =
+            self.pipeline_manager
+                .device()
+                .create_bind_group(&BindGroupDescriptor {
+                    label: Some(&format!("{label} Depth BindGroup")),
+                    layout: &depth_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(depth_view),
+                    }],
+                });
+
+        let pipeline = self.pipeline_manager.get_or_create_fog_pipeline(
+            shader_path,
+            msaa_samples,
+            depth_multisampled,
+            uniforms.len(),
+        );
+
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &depth_bind_group, &[]);
+
+        // Reuse your existing uniform bind group cache logic
+        let key = UniformBindGroupKey::from_buffers(uniforms);
+        let label_owned = format!("{label} Uniform BindGroup");
+
+        let bind_group = self.uniform_bind_groups.entry(key).or_insert_with(|| {
+            self.pipeline_manager
+                .create_uniform_bind_group(uniforms, &label_owned)
+        });
+
+        pass.set_bind_group(1, &*bind_group, &[]);
+
+        pass.draw(0..3, 0..1);
+    }
     pub fn create_uniform_buffer<T: bytemuck::Pod>(&self, data: &T, label: &str) -> wgpu::Buffer {
         use wgpu::util::DeviceExt;
         self.pipeline_manager
@@ -662,5 +828,33 @@ impl RenderManager {
         self.pipeline_manager
             .queue()
             .write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
+    }
+}
+
+pub fn create_color_attachment_load<'a>(
+    msaa_view: &'a TextureView,
+    surface_view: &'a TextureView,
+    msaa_samples: u32,
+) -> RenderPassColorAttachment<'a> {
+    if msaa_samples > 1 {
+        RenderPassColorAttachment {
+            view: msaa_view,
+            depth_slice: None,
+            resolve_target: Some(surface_view),
+            ops: Operations {
+                load: LoadOp::Load,
+                store: StoreOp::Store,
+            },
+        }
+    } else {
+        RenderPassColorAttachment {
+            view: surface_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations {
+                load: LoadOp::Load,
+                store: StoreOp::Store,
+            },
+        }
     }
 }

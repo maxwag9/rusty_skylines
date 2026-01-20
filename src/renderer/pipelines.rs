@@ -34,6 +34,24 @@ pub struct FogUniforms {
     pub fog_start: f32,
     pub fog_end: f32,
 }
+impl Default for FogUniforms {
+    fn default() -> Self {
+        Self {
+            screen_size: [1920.0, 1080.0],
+            proj_params: [0.1, 1000.0],
+            fog_density: 1.0,
+            fog_height: 10.0, // Fog is thickest below y=10
+            cam_height: 50.0,
+            _pad0: 0.0,
+            fog_color: [0.7, 0.75, 0.8], // Light gray-blue
+            _pad1: 0.0,
+            fog_sky_factor: 0.3,
+            fog_height_falloff: 0.05, // How quickly fog thins above fog_height
+            fog_start: 1000.0,
+            fog_end: 10000.0,
+        }
+    }
+}
 
 pub struct RenderPipelineState {
     pub shader: ShaderAsset,
@@ -69,8 +87,9 @@ pub struct Pipelines {
 
     pub depth_texture: Texture,
     pub depth_view: TextureView,
+    pub depth_sample_view: TextureView, // sampling (DepthOnly)
 
-    pub(crate) msaa_samples: u32,
+    pub msaa_samples: u32,
 
     pub config: SurfaceConfiguration,
 
@@ -96,7 +115,8 @@ impl Pipelines {
     ) -> anyhow::Result<Self> {
         // Create render targets
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
-        let (depth_texture, depth_view) = create_depth_texture(&device, &config, msaa_samples);
+        let (depth_texture, depth_view, depth_sample_view) =
+            create_depth_texture(device, config, msaa_samples);
         // Load all shaders
         let shaders = load_all_shaders(device, shader_dir)?;
 
@@ -117,6 +137,7 @@ impl Pipelines {
             msaa_view,
             depth_texture,
             depth_view,
+            depth_sample_view,
             msaa_samples,
             config: config.clone(),
 
@@ -144,7 +165,7 @@ impl Pipelines {
         self.config = config.clone();
         (self.msaa_texture, self.msaa_view) =
             create_msaa_targets(&self.device, &self.config, msaa_samples);
-        (self.depth_texture, self.depth_view) =
+        (self.depth_texture, self.depth_view, self.depth_sample_view) =
             create_depth_texture(&self.device, &self.config, msaa_samples);
     }
 }
@@ -198,28 +219,36 @@ pub fn create_msaa_targets(
 pub const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth24PlusStencil8;
 
 fn create_depth_texture(
-    device: &Device,
-    config: &SurfaceConfiguration,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
     msaa_samples: u32,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Depth Texture"),
-        size: Extent3d {
+        size: wgpu::Extent3d {
             width: config.width,
             height: config.height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: msaa_samples,
-
-        dimension: TextureDimension::D2,
+        dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
+    // For using as depth-stencil attachment (can include stencil aspect)
+    let attachment_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    // For sampling in fog shader: MUST be DepthOnly for Depth24PlusStencil8
+    let depth_only_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("Depth Texture View (DepthOnly)"),
+        aspect: wgpu::TextureAspect::DepthOnly,
+        ..Default::default()
+    });
+
+    (texture, attachment_view, depth_only_view)
 }
 
 pub fn create_grass_texture(

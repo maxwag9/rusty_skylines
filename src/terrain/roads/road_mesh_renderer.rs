@@ -94,6 +94,7 @@ impl RoadRenderSubsystem {
             terrain_renderer,
             &mut self.mesh_manager,
             &mut self.road_manager.preview_roads, // preview RoadStorage
+            &self.road_manager.roads,
             &self.style,
             gizmo,
             &road_commands,

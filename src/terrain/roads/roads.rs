@@ -798,7 +798,10 @@ impl RoadStorage {
     pub fn lane(&self, id: &LaneId) -> &Lane {
         &self.lanes[id.0 as usize]
     }
-
+    #[inline]
+    pub fn lane_exists(&self, id: &LaneId) -> bool {
+        self.lanes.get(id.raw() as usize).is_some()
+    }
     /// Returns a mutable reference to the lane.
     #[inline]
     pub fn lane_mut(&mut self, id: LaneId) -> &mut Lane {
@@ -1709,84 +1712,102 @@ pub fn apply_commands(
         .collect()
 }
 
+enum PreviewIntent<'a> {
+    Segment(&'a SegmentPreview),
+    InvalidSegment(&'a SegmentPreview),
+    HoverNodes(&'a [&'a NodePreview]),
+    Crossing(&'a [&'a CrossingPoint]),
+    Nothing,
+}
+
 /// Processes preview commands and generates preview road geometry.
 /// Called every frame after RoadEditor::update().
 pub fn apply_preview_commands(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
+    real_storage: &RoadStorage,
     road_style_params: &RoadStyleParams,
     gizmo: &mut Gizmo,
     commands: &[RoadEditorCommand],
 ) {
     preview_storage.clear();
 
-    // Collect all preview data from this frame
-    let mut snap_preview: Option<&SnapPreview> = None;
+    // 1) Apply explicit Road commands immediately
+    for cmd in commands {
+        if let RoadEditorCommand::Road(_) = cmd {
+            apply_command(
+                terrain_renderer,
+                road_mesh_manager,
+                preview_storage,
+                road_style_params,
+                cmd.clone(),
+                true,
+                gizmo,
+            );
+        }
+    }
+
+    // 2) Collect preview inputs
     let mut node_previews: Vec<&NodePreview> = Vec::new();
-    let mut lane_preview: Option<&LanePreview> = None;
+    let mut crossing_previews: Vec<&CrossingPoint> = Vec::new();
     let mut segment_preview: Option<&SegmentPreview> = None;
 
     for cmd in commands {
         match cmd {
-            RoadEditorCommand::PreviewSnap(s) => snap_preview = Some(s),
             RoadEditorCommand::PreviewNode(n) => node_previews.push(n),
-            RoadEditorCommand::PreviewLane(l) => lane_preview = Some(l),
             RoadEditorCommand::PreviewSegment(s) => segment_preview = Some(s),
-            RoadEditorCommand::PreviewClear => {
-                // Already cleared above
-                return;
-            }
+            RoadEditorCommand::PreviewCrossing(c) => crossing_previews.push(c),
+            RoadEditorCommand::PreviewClear => return,
             _ => {}
         }
     }
 
-    let chunk_id: ChunkId = 0;
     let mut allocator = PreviewIdAllocator::new();
+    let mut road_commands: Vec<RoadCommand> = Vec::new();
 
-    // Generate commands based on preview state
-    let road_commands = match (&road_style_params.state(), segment_preview) {
-        // Valid segment being drawn - full preview
-        (_, Some(seg)) if seg.is_valid => {
-            generate_segment_preview(terrain_renderer, &mut allocator, road_style_params, seg)
-        }
-
-        // Invalid segment - show both nodes with stubs
-        (_, Some(seg)) => generate_invalid_segment_preview(
+    // 3) Crossing preview (independent)
+    if !crossing_previews.is_empty() {
+        road_commands.extend(generate_intersection_preview(
             terrain_renderer,
+            preview_storage,
+            real_storage,
             &mut allocator,
             road_style_params,
-            seg,
-        ),
+            &crossing_previews,
+        ));
+    }
 
-        // Idle/hover state - show node with stub
-        (EditorState::Idle, None) => generate_hover_preview(
-            terrain_renderer,
-            &mut allocator,
-            road_style_params,
-            &node_previews,
-        ),
-
-        // Picking end point - show start node with stub, and cursor node
-        (EditorState::StraightPickEnd { .. }, None) | (EditorState::CurvePickEnd { .. }, None) => {
-            generate_hover_preview(
+    // 4) Segment preview (independent)
+    if let Some(seg) = segment_preview {
+        if seg.is_valid {
+            road_commands.extend(generate_segment_preview(
                 terrain_renderer,
                 &mut allocator,
                 road_style_params,
-                &node_previews,
-            )
+                seg,
+            ));
+        } else {
+            road_commands.extend(generate_invalid_segment_preview(
+                terrain_renderer,
+                &mut allocator,
+                road_style_params,
+                seg,
+            ));
         }
+    }
 
-        // Picking control point - just show cursor indicator
-        (EditorState::CurvePickControl { .. }, None) => generate_hover_preview(
+    // 5) Hover nodes (independent, lower priority visually)
+    if segment_preview.is_none() && !node_previews.is_empty() {
+        road_commands.extend(generate_hover_preview(
             terrain_renderer,
             &mut allocator,
             road_style_params,
             &node_previews,
-        ),
-    };
+        ));
+    }
 
-    // Apply all generated commands to create preview geometry
+    // 6) Apply all generated preview commands
     for cmd in road_commands {
         apply_command(
             terrain_renderer,
@@ -1797,6 +1818,66 @@ pub fn apply_preview_commands(
             true,
             gizmo,
         );
+    }
+}
+
+fn generate_intersection_preview(
+    terrain_renderer: &TerrainRenderer,
+    preview_storage: &mut RoadStorage,
+    real_storage: &RoadStorage,
+    allocator: &mut PreviewIdAllocator,
+    road_style_params: &RoadStyleParams,
+    crossings: &[&CrossingPoint],
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
+    for &crossing in crossings {
+        match crossing.kind {
+            CrossingKind::ExistingNode(n) => {
+                // copy_real_node_to_preview(n, preview_storage, real_storage);
+                // println!("hi");
+                // commands.push(RoadCommand::MakeIntersection {
+                //     node_id: n,
+                //     chunk_id: 0,
+                //     params: IntersectionBuildParams::from_style(road_style_params),
+                //     clear: true,
+                // });
+            }
+            CrossingKind::LaneCrossing { .. } => {}
+        }
+    }
+
+    commands
+}
+
+fn copy_real_node_to_preview(
+    node_id: NodeId,
+    preview_storage: &mut RoadStorage,
+    real_storage: &RoadStorage,
+) {
+    if let Some(node) = real_storage.node(node_id) {
+        if preview_storage.node(node_id).is_some() {
+            return;
+        }
+        for lane_id in node.incoming_lanes.iter().chain(node.outgoing_lanes.iter()) {
+            if !real_storage.lane_exists(lane_id) {
+                return;
+            }
+            let lane = real_storage.lane(lane_id);
+            let segment = real_storage.segment(lane.segment);
+            if segment.lanes().contains(lane_id) {
+                preview_storage.lanes.push(lane.clone());
+                preview_storage.segments.push(segment.clone());
+                let node_b = if segment.start() == node_id {
+                    real_storage.node(segment.end()).unwrap()
+                } else {
+                    real_storage.node(segment.start()).unwrap()
+                };
+                preview_storage.nodes.push(node_b.clone());
+            } else {
+                return;
+            }
+        }
+        preview_storage.nodes.push(node.clone());
     }
 }
 

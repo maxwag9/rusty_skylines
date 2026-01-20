@@ -51,16 +51,16 @@ impl<'a> UniformUpdater<'a> {
         let fog_uniforms = FogUniforms {
             screen_size: [config.width as f32, config.height as f32],
             proj_params,
-            fog_density: 0.0000,
+            fog_density: 0.15,
             fog_height: 0.0,
             cam_height,
             _pad0: 0.0,
             fog_color: [0.55, 0.55, 0.6],
             _pad1: 0.0,
-            fog_sky_factor: 0.4,
-            fog_height_falloff: 0.12,
+            fog_sky_factor: 0.41,
+            fog_height_falloff: 0.0,
             fog_start: 1000.0,
-            fog_end: 10000.0,
+            fog_end: 5000.0,
         };
 
         self.queue.write_buffer(

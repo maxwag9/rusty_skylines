@@ -6,9 +6,7 @@
 
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::intersections::{
-    LaneBoundaries, LaneBoundaryInfo, build_intersection_mesh,
-};
+use crate::terrain::roads::intersections::{LaneBoundaries, build_intersection_mesh};
 use crate::terrain::roads::road_structs::*;
 use crate::terrain::roads::roads::{LaneGeometry, Node, RoadStorage};
 use glam::Vec3;
@@ -1032,19 +1030,6 @@ impl RoadMeshManager {
                     &mut indices,
                     gizmo,
                 );
-
-                // Merge lane boundaries into master map
-                // for (lane_id, boundary) in result.lane_boundaries {
-                //     let lane = storage.lane(&lane_id);
-                //     let is_from_node = lane.from_node() == *node_id;
-                //
-                //     let entry = all_lane_boundaries.entry(lane_id).or_insert((None, None));
-                //     if is_from_node {
-                //         entry.0 = Some(boundary);
-                //     } else {
-                //         entry.1 = Some(boundary);
-                //     }
-                // }
             } else {
                 // Dead end or single connection - use existing node geometry
                 let center = Vec3::from_array(node.position());
@@ -1093,40 +1078,6 @@ impl RoadMeshManager {
         for seg_id in segment_ids {
             let segment = storage.segment(seg_id);
             if !segment.enabled {
-                continue;
-            }
-
-            // Collect lanes with their boundaries
-            let mut lane_data: Vec<(
-                LaneId,
-                i8,
-                LaneGeometry,
-                Option<LaneBoundaryInfo>,
-                Option<LaneBoundaryInfo>,
-            )> = Vec::new();
-
-            for lane_id in segment.lanes() {
-                let lane = storage.lane(lane_id);
-                if !lane.is_enabled() {
-                    continue;
-                }
-
-                let boundaries = all_lane_boundaries.get(&lane_id);
-                let (start_bound, end_bound) = match boundaries {
-                    Some((s, e)) => (s.clone(), e.clone()),
-                    None => (None, None),
-                };
-
-                lane_data.push((
-                    *lane_id,
-                    lane.lane_index(),
-                    lane.geometry().clone(),
-                    start_bound,
-                    end_bound,
-                ));
-            }
-
-            if lane_data.is_empty() {
                 continue;
             }
 
