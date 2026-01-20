@@ -43,10 +43,10 @@ impl Gizmo {
 
             let c = [0.2, 0.8, 0.6];
 
-            self.render_line([x0, y, z0], [x1, y, z0], c);
-            self.render_line([x1, y, z0], [x1, y, z1], c);
-            self.render_line([x1, y, z1], [x0, y, z1], c);
-            self.render_line([x0, y, z1], [x0, y, z0], c);
+            self.render_line([x0, y, z0], [x1, y, z0], c, false);
+            self.render_line([x1, y, z0], [x1, y, z1], c, false);
+            self.render_line([x1, y, z1], [x0, y, z1], c, false);
+            self.render_line([x0, y, z1], [x0, y, z0], c, false);
         }
 
         // Roads down here
@@ -249,12 +249,24 @@ impl Gizmo {
             vertices: circle_vertices,
         })
     }
-    pub fn render_line(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3]) {
+    pub fn render_line(
+        &mut self,
+        start: [f32; 3],
+        end: [f32; 3],
+        color: [f32; 3],
+        persistent: bool,
+    ) {
         let line_vertices = [LineVtx { pos: start, color }, LineVtx { pos: end, color }];
 
-        self.pending_renders.push(PendingGizmoRender {
-            vertices: line_vertices.to_vec(),
-        });
+        if persistent {
+            self.persistent_renders.push(PendingGizmoRender {
+                vertices: line_vertices.to_vec(),
+            });
+        } else {
+            self.pending_renders.push(PendingGizmoRender {
+                vertices: line_vertices.to_vec(),
+            });
+        }
     }
 
     pub fn render_arrow(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3], dashed: bool) {
@@ -406,13 +418,17 @@ impl Gizmo {
         self.pending_renders.push(PendingGizmoRender { vertices });
     }
 
-    pub fn render_polyline(
+    pub fn render_polyline<P, V>(
         &mut self,
-        polyline: &[[f32; 3]],
+        polyline: P,
         color: [f32; 3],
         spacing: f32,
         persistent: bool,
-    ) {
+    ) where
+        P: AsRef<[V]>,
+        V: Vec3Like,
+    {
+        let polyline = polyline.as_ref();
         if polyline.len() < 2 {
             return;
         }
@@ -423,11 +439,11 @@ impl Gizmo {
 
         for i in 0..polyline.len() - 1 {
             vertices.push(LineVtx {
-                pos: polyline[i],
+                pos: polyline[i].to_array(),
                 color,
             });
             vertices.push(LineVtx {
-                pos: polyline[i + 1],
+                pos: polyline[i + 1].to_array(),
                 color,
             });
         }
@@ -438,9 +454,9 @@ impl Gizmo {
         lengths.push(0.0);
 
         for i in 1..polyline.len() {
-            let dx = polyline[i][0] - polyline[i - 1][0];
-            let dy = polyline[i][1] - polyline[i - 1][1];
-            let dz = polyline[i][2] - polyline[i - 1][2];
+            let dx = polyline[i].to_array()[0] - polyline[i - 1].to_array()[0];
+            let dy = polyline[i].to_array()[1] - polyline[i - 1].to_array()[1];
+            let dz = polyline[i].to_array()[2] - polyline[i - 1].to_array()[2];
             lengths.push(lengths[i - 1] + (dx * dx + dy * dy + dz * dz).sqrt());
         }
 
@@ -477,8 +493,8 @@ impl Gizmo {
             let l1 = lengths[i1];
             let s = if l1 > l0 { (t - l0) / (l1 - l0) } else { 0.0 };
 
-            let p0 = polyline[i0];
-            let p1 = polyline[i1];
+            let p0 = polyline[i0].to_array();
+            let p1 = polyline[i1].to_array();
 
             let pos = [
                 p0[0] + (p1[0] - p0[0]) * s,
@@ -575,5 +591,161 @@ impl Gizmo {
         } else {
             self.pending_renders.push(PendingGizmoRender { vertices });
         }
+    }
+    pub fn render_digit(
+        &mut self,
+        digit: u8,
+        position: [f32; 3],
+        scale: f32,
+        color: [f32; 3],
+        persistent: bool,
+    ) {
+        let segments: &[([f32; 2], [f32; 2])] = match digit {
+            0 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([1.0, 0.0], [1.0, 2.0]), // right
+                ([1.0, 2.0], [0.0, 2.0]), // top
+                ([0.0, 2.0], [0.0, 0.0]), // left
+            ],
+            1 => &[
+                ([1.0, 0.0], [1.0, 2.0]), // right
+            ],
+            2 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([1.0, 0.0], [1.0, 1.0]), // bottom-right
+                ([1.0, 1.0], [0.0, 1.0]), // middle
+                ([0.0, 1.0], [0.0, 2.0]), // top-left
+                ([0.0, 2.0], [1.0, 2.0]), // top
+            ],
+            3 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([1.0, 0.0], [1.0, 2.0]), // right
+                ([1.0, 2.0], [0.0, 2.0]), // top
+                ([0.0, 1.0], [1.0, 1.0]), // middle
+            ],
+            4 => &[
+                ([0.0, 0.0], [0.0, 1.0]), // bottom-left
+                ([0.0, 1.0], [1.0, 1.0]), // middle
+                ([1.0, 0.0], [1.0, 2.0]), // right
+            ],
+            5 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([0.0, 0.0], [0.0, 1.0]), // bottom-left
+                ([0.0, 1.0], [1.0, 1.0]), // middle
+                ([1.0, 1.0], [1.0, 2.0]), // top-right
+                ([1.0, 2.0], [0.0, 2.0]), // top
+            ],
+            6 => &[
+                ([1.0, 0.0], [0.0, 0.0]), // bottom
+                ([0.0, 0.0], [0.0, 2.0]), // left
+                ([0.0, 2.0], [1.0, 2.0]), // top
+                ([1.0, 2.0], [1.0, 1.0]), // top-right
+                ([1.0, 1.0], [0.0, 1.0]), // middle
+            ],
+            7 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([1.0, 0.0], [1.0, 2.0]), // right
+            ],
+            8 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([1.0, 0.0], [1.0, 2.0]), // right
+                ([1.0, 2.0], [0.0, 2.0]), // top
+                ([0.0, 2.0], [0.0, 0.0]), // left
+                ([0.0, 1.0], [1.0, 1.0]), // middle
+            ],
+            9 => &[
+                ([0.0, 0.0], [1.0, 0.0]), // bottom
+                ([1.0, 0.0], [1.0, 2.0]), // right
+                ([1.0, 2.0], [0.0, 2.0]), // top
+                ([0.0, 1.0], [0.0, 0.0]), // left
+                ([0.0, 1.0], [1.0, 1.0]), // middle
+            ],
+            _ => &[],
+        };
+
+        let mut verts = Vec::new();
+        for &([x0, y0], [x1, y1]) in segments {
+            verts.push(LineVtx {
+                pos: [
+                    position[0] + x0 * scale,
+                    position[1],
+                    position[2] + y0 * scale,
+                ],
+                color,
+            });
+            verts.push(LineVtx {
+                pos: [
+                    position[0] + x1 * scale,
+                    position[1],
+                    position[2] + y1 * scale,
+                ],
+                color,
+            });
+        }
+        if persistent {
+            self.persistent_renders
+                .push(PendingGizmoRender { vertices: verts });
+        } else {
+            self.pending_renders
+                .push(PendingGizmoRender { vertices: verts });
+        }
+    }
+
+    /// Render a whole number (multi-digit) centered at `position`.
+    /// Digits are placed left-to-right. `spacing` is computed from `scale`.
+    pub fn render_number(
+        &mut self,
+        mut value: usize,
+        position: [f32; 3],
+        scale: f32,
+        color: [f32; 3],
+        persistent: bool,
+    ) {
+        // produce digits (0 -> "0")
+        let mut digits: Vec<u8> = if value == 0 {
+            vec![0]
+        } else {
+            let mut ds = Vec::new();
+            while value > 0 {
+                ds.push((value % 10) as u8);
+                value /= 10;
+            }
+            ds.reverse();
+            ds
+        };
+
+        let spacing = scale * 1.2;
+        let total_width = (digits.len() as f32 - 1.0) * spacing;
+        let start_x = position[0] - total_width * 0.5;
+
+        for (i, &d) in digits.iter().enumerate() {
+            let x = start_x + i as f32 * spacing;
+            // keep same y,z baseline; shift only X
+            let pos = [x, position[1], position[2]];
+            self.render_digit(d, pos, scale, color, persistent);
+        }
+    }
+    pub fn draw_cross(&mut self, p: Vec3, size: f32, color: [f32; 3]) {
+        let dx = Vec3::new(size, 0.0, 0.0);
+        let dz = Vec3::new(0.0, 0.0, size);
+        self.render_line((p - dx).to_array(), (p + dx).to_array(), color, true);
+        self.render_line((p - dz).to_array(), (p + dz).to_array(), color, true);
+    }
+}
+pub trait Vec3Like {
+    fn to_array(&self) -> [f32; 3];
+    fn to_vec3(&self) -> Vec3 {
+        Vec3::from_array(self.to_array())
+    }
+}
+impl Vec3Like for Vec3 {
+    fn to_array(&self) -> [f32; 3] {
+        [self.x, self.y, self.z]
+    }
+}
+
+impl Vec3Like for [f32; 3] {
+    fn to_array(&self) -> [f32; 3] {
+        *self
     }
 }

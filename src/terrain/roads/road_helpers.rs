@@ -3,7 +3,7 @@ use crate::terrain::roads::intersections::{OuterNodeLane, road_vertex};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_structs::SegmentId;
 use crate::terrain::roads::roads::{LaneRef, NodeLane, RoadStorage};
-use glam::Vec3;
+use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::f32::consts::PI;
@@ -137,6 +137,30 @@ fn min_polyline_point_distance(poly: &[Vec3], p: Vec3) -> f32 {
     }
 
     min_d
+}
+pub fn right_normal(dir: Vec3) -> Vec3 {
+    Vec3::new(dir.z, 0.0, -dir.x)
+}
+
+pub fn left_normal(dir: Vec3) -> Vec3 {
+    Vec3::new(-dir.z, 0.0, dir.x)
+}
+pub fn intersect_rays_2d(p: Vec3, r: Vec3, q: Vec3, s: Vec3) -> Option<Vec3> {
+    let p2 = p.xz();
+    let r2 = r.xz();
+    let q2 = q.xz();
+    let s2 = s.xz();
+
+    let cross = |a: Vec2, b: Vec2| a.x * b.y - a.y * b.x;
+
+    let rxs = cross(r2, s2);
+    if rxs.abs() < 1e-5 {
+        return None;
+    }
+
+    let t = cross(q2 - p2, s2) / rxs;
+
+    Some(p + r * t)
 }
 
 pub fn point_segment_distance(p: Vec3, a: Vec3, b: Vec3) -> f32 {
@@ -364,4 +388,544 @@ pub fn build_strip_polyline(
         indices.extend_from_slice(&[v0, v1, v2]);
         indices.extend_from_slice(&[v2, v1, v3]);
     }
+}
+fn cross2(a: Vec2, b: Vec2) -> f32 {
+    a.x * b.y - a.y * b.x
+}
+
+pub fn point_in_polygon_xz(p: Vec3, poly: &[Vec3]) -> bool {
+    // Ray-casting in XZ plane.
+    // poly is treated as closed (edge i -> (i+1)%n).
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+
+    let x = p.x;
+    let z = p.z;
+
+    let mut inside = false;
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+
+        let (x1, z1) = (a.x, a.z);
+        let (x2, z2) = (b.x, b.z);
+
+        // Check if the horizontal ray crosses edge (a,b)
+        let intersects =
+            ((z1 > z) != (z2 > z)) && (x < (x2 - x1) * (z - z1) / ((z2 - z1).max(1e-12)) + x1);
+
+        if intersects {
+            inside = !inside;
+        }
+    }
+    inside
+}
+/// Returns intersections as (s_along_polyline_from_start, intersection_point_world)
+pub fn polyline_polygon_intersections_xz(points: &[Vec3], poly: &[Vec3]) -> Vec<(f32, Vec3)> {
+    let mut out = Vec::new();
+    if points.len() < 2 || poly.len() < 3 {
+        return out;
+    }
+
+    let mut s_acc = 0.0f32;
+
+    for i in 0..(points.len() - 1) {
+        let p0 = points[i];
+        let p1 = points[i + 1];
+        let a0 = p0.xz();
+        let a1 = p1.xz();
+
+        let seg_len = (p1 - p0).length();
+        if seg_len < 1e-6 {
+            continue;
+        }
+
+        for j in 0..poly.len() {
+            let q0 = poly[j];
+            let q1 = poly[(j + 1) % poly.len()];
+            let b0 = q0.xz();
+            let b1 = q1.xz();
+
+            if let Some((hit2, t)) = seg_seg_intersection_2d(a0, a1, b0, b1) {
+                // Lift back to 3D by interpolating the original 3D segment
+                let hit3 = p0 + (p1 - p0) * t;
+                let s_hit = s_acc + seg_len * t;
+
+                out.push((s_hit, Vec3::new(hit2.x, hit3.y, hit2.y)));
+            }
+        }
+
+        s_acc += seg_len;
+    }
+
+    // Dedup very-close hits (common when intersecting exactly at a polygon vertex)
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-3);
+
+    out
+}
+pub fn segment_polygon_intersection_xz(a: Vec3, b: Vec3, poly: &[Vec3]) -> Option<(Vec3, f32)> {
+    let n = poly.len();
+    if n < 3 {
+        return None;
+    }
+
+    let a0 = a.xz();
+    let a1 = b.xz();
+
+    let mut best_t: Option<f32> = None;
+    let mut best_hit2: Vec2 = Vec2::ZERO;
+
+    for i in 0..n {
+        let q0 = poly[i].xz();
+        let q1 = poly[(i + 1) % n].xz();
+
+        if let Some((hit2, t)) = seg_seg_intersection_2d(a0, a1, q0, q1) {
+            match best_t {
+                None => {
+                    best_t = Some(t);
+                    best_hit2 = hit2;
+                }
+                Some(bt) if t < bt => {
+                    best_t = Some(t);
+                    best_hit2 = hit2;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let t = best_t?;
+    let hit3 = a + (b - a) * t;
+    Some((Vec3::new(best_hit2.x, hit3.y, best_hit2.y), t))
+}
+pub fn carve_polyline_outside_polygon(
+    points: &[Vec3],
+    cut_poly: &[Vec3],
+    node_at_start: bool,
+) -> Option<(Vec<Vec3>, Vec<Vec3>, Vec3)> {
+    // returns (kept_points, removed_points_for_debug, boundary_point)
+
+    if points.len() < 2 || cut_poly.len() < 3 {
+        return None;
+    }
+
+    // Convenience closures
+    let is_inside = |p: Vec3| point_in_polygon_xz(p, cut_poly);
+
+    if node_at_start {
+        // Remove from the START while inside; keep the first outside segment onward.
+        if !is_inside(points[0]) {
+            // Already outside -> nothing to carve
+            return Some((points.to_vec(), Vec::new(), points[0]));
+        }
+
+        // Find first index that is outside
+        let mut i_out = None;
+        for i in 1..points.len() {
+            if !is_inside(points[i]) {
+                i_out = Some(i);
+                break;
+            }
+        }
+        let i_out = i_out?; // entire polyline inside -> obliterated
+
+        // Crossing occurs between i_out-1 (inside) and i_out (outside)
+        let a = points[i_out - 1];
+        let b = points[i_out];
+        let (hit, _t) = segment_polygon_intersection_xz(a, b, cut_poly)?;
+
+        // removed: from start to hit
+        let mut removed = Vec::new();
+        removed.extend_from_slice(&points[..i_out]); // includes b(outside) but that's OK for debug; we’ll adjust below
+        // kept: hit + remainder outside
+        let mut kept = Vec::new();
+        kept.push(hit);
+        kept.extend_from_slice(&points[i_out..]);
+
+        // Make removed nicer: show up to hit only
+        removed.truncate(i_out); // points[..i_out] ends at inside point; fine
+        removed.push(hit);
+
+        Some((kept, removed, hit))
+    } else {
+        // Remove from the END while inside; keep up to the last outside point.
+        let last = points[points.len() - 1];
+        if !is_inside(last) {
+            return Some((points.to_vec(), Vec::new(), last));
+        }
+
+        // Find last index that is outside (walking backward)
+        let mut i_out = None;
+        for i in (0..points.len() - 1).rev() {
+            if !is_inside(points[i]) {
+                i_out = Some(i);
+                break;
+            }
+        }
+        let i_out = i_out?; // entire polyline inside -> obliterated
+
+        // Crossing between i_out (outside) and i_out+1 (inside)
+        let a = points[i_out];
+        let b = points[i_out + 1];
+        let (hit, _t) = segment_polygon_intersection_xz(a, b, cut_poly)?;
+
+        let mut kept = Vec::new();
+        kept.extend_from_slice(&points[..=i_out]);
+        kept.push(hit);
+
+        let mut removed = Vec::new();
+        removed.push(hit);
+        removed.extend_from_slice(&points[i_out + 1..]);
+
+        Some((kept, removed, hit))
+    }
+}
+fn dist2_point_to_segment_2d(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-12)).clamp(0.0, 1.0);
+    let q = a + ab * t;
+    (p - q).length_squared()
+}
+
+pub fn point_on_polygon_edge_xz(p: Vec3, poly: &[Vec3], eps: f32) -> bool {
+    if poly.len() < 2 {
+        return false;
+    }
+    let pp = p.xz();
+    for i in 0..poly.len() {
+        let a = poly[i].xz();
+        let b = poly[(i + 1) % poly.len()].xz();
+        if dist2_point_to_segment_2d(pp, a, b) <= eps * eps {
+            return true;
+        }
+    }
+    false
+}
+
+/// Ray-cast point-in-polygon in XZ.
+/// IMPORTANT: points ON the edge are treated as OUTSIDE (so boundary points are kept).
+pub fn point_in_polygon_xz_exclusive(p: Vec3, poly: &[Vec3]) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+
+    if point_on_polygon_edge_xz(p, poly, 1e-4) {
+        return false;
+    }
+
+    let x = p.x;
+    let z = p.z;
+
+    let mut inside = false;
+    for i in 0..n {
+        let a = poly[i];
+        let b = poly[(i + 1) % n];
+        let (x1, z1) = (a.x, a.z);
+        let (x2, z2) = (b.x, b.z);
+
+        // does horizontal ray to +X cross edge?
+        if ((z1 > z) != (z2 > z)) {
+            let x_at_z = (x2 - x1) * (z - z1) / ((z2 - z1).max(1e-12)) + x1;
+            if x < x_at_z {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
+/// 2D segment-segment intersection. Returns t on (a0->a1) in [0,1] if hit.
+pub fn seg_seg_intersection_2d(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> Option<(Vec2, f32)> {
+    let r = a1 - a0;
+    let s = b1 - b0;
+    let denom = cross2(r, s);
+
+    const EPS: f32 = 1e-6;
+    if denom.abs() < EPS {
+        return None; // parallel
+    }
+
+    let qp = b0 - a0;
+    let t = cross2(qp, s) / denom;
+    let u = cross2(qp, r) / denom;
+
+    if t >= -1e-4 && t <= 1.0 + 1e-4 && u >= -1e-4 && u <= 1.0 + 1e-4 {
+        let tt = t.clamp(0.0, 1.0);
+        let p = a0 + r * tt;
+        return Some((p, tt));
+    }
+    None
+}
+
+/// Returns the FIRST intersection along segment a->b with the polygon boundary.
+pub fn segment_polygon_first_intersection_xz(
+    a: Vec3,
+    b: Vec3,
+    poly: &[Vec3],
+) -> Option<(Vec3, f32)> {
+    if poly.len() < 3 {
+        return None;
+    }
+
+    let a0 = a.xz();
+    let a1 = b.xz();
+
+    let mut best_t: Option<f32> = None;
+    let mut best_hit2 = Vec2::ZERO;
+
+    for i in 0..poly.len() {
+        let q0 = poly[i].xz();
+        let q1 = poly[(i + 1) % poly.len()].xz();
+
+        if let Some((hit2, t)) = seg_seg_intersection_2d(a0, a1, q0, q1) {
+            match best_t {
+                None => {
+                    best_t = Some(t);
+                    best_hit2 = hit2;
+                }
+                Some(bt) if t < bt => {
+                    best_t = Some(t);
+                    best_hit2 = hit2;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let t = best_t?;
+    let y = (a + (b - a) * t).y;
+    Some((Vec3::new(best_hit2.x, y, best_hit2.y), t))
+}
+
+/// Carve polyline against polygon: KEEP OUTSIDE, DELETE INSIDE.
+/// Returns:
+/// - outside pieces (can be multiple)
+/// - inside pieces (debug)
+/// - all intersection points used (debug)
+pub fn carve_polyline_keep_outside_xz(
+    points: &[Vec3],
+    poly: &[Vec3],
+) -> (Vec<Vec<Vec3>>, Vec<Vec<Vec3>>, Vec<Vec3>) {
+    let mut outside_parts: Vec<Vec<Vec3>> = Vec::new();
+    let mut inside_parts: Vec<Vec<Vec3>> = Vec::new();
+    let mut hits: Vec<Vec3> = Vec::new();
+
+    if points.len() < 2 || poly.len() < 3 {
+        return (outside_parts, inside_parts, hits);
+    }
+
+    let inside = |p: Vec3| point_in_polygon_xz_exclusive(p, poly);
+
+    let mut cur_out: Vec<Vec3> = Vec::new();
+    let mut cur_in: Vec<Vec3> = Vec::new();
+
+    let mut prev = points[0];
+    let mut prev_inside = inside(prev);
+
+    if prev_inside {
+        cur_in.push(prev);
+    } else {
+        cur_out.push(prev);
+    }
+
+    for &next in &points[1..] {
+        let next_inside = inside(next);
+
+        match (prev_inside, next_inside) {
+            (false, false) => {
+                // outside -> outside
+                cur_out.push(next);
+            }
+            (true, true) => {
+                // inside -> inside
+                cur_in.push(next);
+            }
+            (false, true) => {
+                // entering polygon: outside -> inside
+                if let Some((hit, _t)) = segment_polygon_first_intersection_xz(prev, next, poly) {
+                    hits.push(hit);
+
+                    cur_out.push(hit);
+                    if cur_out.len() >= 2 {
+                        outside_parts.push(std::mem::take(&mut cur_out));
+                    }
+
+                    cur_in.push(hit);
+                    cur_in.push(next);
+                } else {
+                    // Shouldn't happen for simple polygon; keep debug visible
+                    cur_out.push(next);
+                    if cur_out.len() >= 2 {
+                        outside_parts.push(std::mem::take(&mut cur_out));
+                    }
+                    cur_in.push(next);
+                }
+            }
+            (true, false) => {
+                // leaving polygon: inside -> outside
+                if let Some((hit, _t)) = segment_polygon_first_intersection_xz(prev, next, poly) {
+                    hits.push(hit);
+
+                    cur_in.push(hit);
+                    if cur_in.len() >= 2 {
+                        inside_parts.push(std::mem::take(&mut cur_in));
+                    }
+
+                    cur_out.push(hit);
+                    cur_out.push(next);
+                } else {
+                    cur_in.push(next);
+                    if cur_in.len() >= 2 {
+                        inside_parts.push(std::mem::take(&mut cur_in));
+                    }
+                    cur_out.push(next);
+                }
+            }
+        }
+
+        prev = next;
+        prev_inside = next_inside;
+    }
+
+    if cur_out.len() >= 2 {
+        outside_parts.push(cur_out);
+    }
+    if cur_in.len() >= 2 {
+        inside_parts.push(cur_in);
+    }
+
+    (outside_parts, inside_parts, hits)
+}
+
+/// From multiple outside pieces, pick the one that continues AWAY from the node.
+/// We do that by choosing the piece that contains the "far end" of the original polyline.
+pub fn pick_outside_piece_away_from_node(
+    outside_parts: Vec<Vec<Vec3>>,
+    original: &[Vec3],
+    node_at_start: bool,
+) -> Option<Vec<Vec3>> {
+    if outside_parts.is_empty() {
+        return None;
+    }
+    if original.is_empty() {
+        return None;
+    }
+
+    let far_end = if node_at_start {
+        *original.last().unwrap()
+    } else {
+        original[0]
+    };
+    let eps2 = 1e-4f32 * 1e-4f32;
+
+    // Prefer a part whose endpoint matches far_end (typical case)
+    for part in &outside_parts {
+        if (part[0] - far_end).length_squared() <= eps2
+            || (part[part.len() - 1] - far_end).length_squared() <= eps2
+        {
+            return Some(part.clone());
+        }
+    }
+
+    // Fallback: pick the part whose closest point to far_end is smallest (or longest if you prefer)
+    let mut best_i = 0usize;
+    let mut best_d2 = f32::INFINITY;
+
+    for (i, part) in outside_parts.iter().enumerate() {
+        for &p in part {
+            let d2 = (p - far_end).length_squared();
+            if d2 < best_d2 {
+                best_d2 = d2;
+                best_i = i;
+            }
+        }
+    }
+
+    Some(outside_parts[best_i].clone())
+}
+// Returns t along a0->a1 where it intersects b0->b1 (if any). t in [0,1]
+pub fn seg_seg_intersection_t(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> Option<f32> {
+    let r = a1 - a0;
+    let s = b1 - b0;
+    let denom = cross2(r, s);
+
+    const EPS: f32 = 1e-6;
+    if denom.abs() < EPS {
+        return None; // parallel
+    }
+
+    let qp = b0 - a0;
+    let t = cross2(qp, s) / denom;
+    let u = cross2(qp, r) / denom;
+
+    if t >= -1e-4 && t <= 1.0 + 1e-4 && u >= -1e-4 && u <= 1.0 + 1e-4 {
+        Some(t.clamp(0.0, 1.0))
+    } else {
+        None
+    }
+}
+
+/// Returns (distance_from_start, hit_point) for the *furthest* hit when
+/// walking points[0]->points[1]->...
+pub fn furthest_hit_distance_from_start_xz(points: &[Vec3], poly: &[Vec3]) -> Option<(f32, Vec3)> {
+    if points.len() < 2 || poly.len() < 3 {
+        return None;
+    }
+
+    let mut acc = 0.0f32;
+    let mut best_dist: Option<f32> = None;
+    let mut best_hit: Vec3 = Vec3::ZERO;
+
+    for i in 0..points.len() - 1 {
+        let a = points[i];
+        let b = points[i + 1];
+        let seg = b - a;
+        let seg_len = seg.length();
+        if seg_len < 1e-6 {
+            continue;
+        }
+
+        let a0 = a.xz();
+        let a1 = b.xz();
+
+        // Find *latest* intersection on this segment (largest t) with ANY polygon edge
+        let mut best_t_on_seg: Option<f32> = None;
+
+        for j in 0..poly.len() {
+            let p0 = poly[j].xz();
+            let p1 = poly[(j + 1) % poly.len()].xz();
+
+            if let Some(t) = seg_seg_intersection_t(a0, a1, p0, p1) {
+                best_t_on_seg = Some(match best_t_on_seg {
+                    None => t,
+                    Some(bt) => bt.max(t), // furthest along this segment
+                });
+            }
+        }
+
+        if let Some(t) = best_t_on_seg {
+            let hit = a + seg * t;
+            let dist = acc + seg_len * t;
+
+            match best_dist {
+                None => {
+                    best_dist = Some(dist);
+                    best_hit = hit;
+                }
+                Some(cur) if dist > cur => {
+                    best_dist = Some(dist);
+                    best_hit = hit;
+                }
+                _ => {}
+            }
+        }
+
+        acc += seg_len;
+    }
+
+    best_dist.map(|d| (d, best_hit))
 }

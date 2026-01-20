@@ -589,7 +589,7 @@ impl RoadStorage {
         }
         (left_lanes, right_lanes)
     }
-    pub fn segments_connected_to_node(&self, node_id: NodeId) -> Vec<SegmentId> {
+    pub fn enabled_segments_connected_to_node(&self, node_id: NodeId) -> Vec<SegmentId> {
         let Some(node) = self.node(node_id) else {
             return Vec::new();
         };
@@ -1642,7 +1642,7 @@ pub fn apply_command(
                         return CommandResult::InvalidReference;
                     }
 
-                    build_intersection_at_node(storage, node_id, &params, clear);
+                    build_intersection_at_node(storage, node_id, &params, clear, gizmo);
 
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok

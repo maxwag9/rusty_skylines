@@ -10,7 +10,7 @@ background_color = [
     0.01,
     1.0,
 ]
-total_game_time = 29958.71997136064
+total_game_time = 31090.2915613465
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true

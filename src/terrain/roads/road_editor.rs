@@ -1,13 +1,16 @@
+use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
 use crate::resources::InputState;
+use crate::terrain::roads::road_helpers::*;
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::terrain::roads::road_structs::*;
 use crate::terrain::roads::roads::{
     Lane, LaneGeometry, LaneRef, METERS_PER_LANE_POLYLINE_STEP, NodeLane, RoadCommand, RoadManager,
-    RoadStorage, bezier3, nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
+    RoadStorage, Segment, bezier3, nearest_lane_to_point, project_point_to_lane_xz,
+    sample_lane_position,
 };
-use glam::Vec3;
-use std::collections::HashMap;
+use glam::{Vec2, Vec3, Vec3Swizzles};
+use std::collections::{HashMap, HashSet};
 
 const NODE_SNAP_RADIUS: f32 = 8.0;
 const LANE_SNAP_RADIUS: f32 = 8.0;
@@ -1020,13 +1023,11 @@ pub struct IntersectionBuildParams {
     pub clearance_length_m: f32,
     pub lane_width_m: f32,
     pub turn_tightness: f32,
+    pub side_walk_width: f32,
 }
 
 impl IntersectionBuildParams {
     pub fn from_style(style: &RoadStyleParams) -> Self {
-        // A decent default: enough to clear sidewalks + a bit of lane length for the curve start.
-        let r = style.sidewalk_width + style.lane_width * 3.0 + style.median_width;
-
         Self {
             arm_merge_angle_deg: 20.0,
             straight_angle_deg: 25.0,
@@ -1037,24 +1038,11 @@ impl IntersectionBuildParams {
             clearance_length_m: 0.0,
             lane_width_m: style.lane_width,
             turn_tightness: style.turn_tightness(),
+            side_walk_width: style.sidewalk_width,
         }
     }
 }
-impl Default for IntersectionBuildParams {
-    fn default() -> Self {
-        Self {
-            arm_merge_angle_deg: 20.0,
-            straight_angle_deg: 25.0,
-            turn_samples: 12,
-            dedicate_turn_lanes: true,
-            max_turn_angle: 2.74,
-            min_turn_radius_m: 5.0,
-            clearance_length_m: 0.0,
-            lane_width_m: 3.5,
-            turn_tightness: 0.5,
-        }
-    }
-}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TurnType {
     Straight,
@@ -1083,11 +1071,13 @@ pub fn build_intersection_at_node(
     node_id: NodeId,
     params: &IntersectionBuildParams,
     recalc_clearance: bool,
+    gizmo: &mut Gizmo,
 ) {
     if recalc_clearance {
-        // Phase 1: Probe and adjust geometry
-        let demands = probe_intersection_node_lanes(storage, node_id, params);
-        carve_intersection_clearance_per_lane(storage, node_id, &demands);
+        carve_intersection_clearance(storage, node_id, 1.0);
+        initial_carve(storage, node_id, params, gizmo);
+        // let demands = probe_intersection_node_lanes(storage, node_id, params);
+        // carve_intersection_clearance_per_lane(storage, node_id, &demands);
     }
 
     // Phase 2: Build actual intersection paths
@@ -1178,6 +1168,608 @@ pub fn build_intersection_at_node(
     storage.node_mut(node_id).add_node_lanes(node_lanes);
 }
 
+fn initial_carve(
+    storage: &mut RoadStorage,
+    node_id: NodeId,
+    params: &IntersectionBuildParams,
+    gizmo: &mut Gizmo,
+) {
+    let Some(node) = storage.node(node_id) else {
+        return;
+    };
+    let center = Vec3::from_array(node.position());
+
+    // Needed to decide whether to trim START or END (same logic as your code)
+    let incoming: HashSet<LaneId> = node.incoming_lanes().iter().copied().collect();
+
+    // 1) Build ordered segments
+    let segs = segment_ids_sorted_left_to_right(
+        storage.enabled_segments_connected_to_node(node_id),
+        storage,
+        node_id,
+    );
+    if segs.len() < 2 {
+        return;
+    }
+
+    // 2) Build cut polygon vertices (your logic)
+    let mut cut_vertices: Vec<Vec3> = Vec::new();
+    let n = segs.len();
+
+    for i in 0..n {
+        let left_seg = storage.segment(segs[i]);
+        let right_seg = storage.segment(segs[(i + 1) % n]);
+
+        // rightmost lane of left segment (relative to node orientation)
+        let l_lane = {
+            let pts_to_node = left_seg.end() == node_id;
+            left_seg
+                .lanes()
+                .iter()
+                .copied()
+                .max_by_key(|id| {
+                    let idx = storage.lane(id).lane_index();
+                    if pts_to_node { idx } else { -idx }
+                })
+                .unwrap()
+        };
+
+        // leftmost lane of right segment (relative to node orientation)
+        let r_lane = {
+            let pts_to_node = right_seg.end() == node_id;
+            right_seg
+                .lanes()
+                .iter()
+                .copied()
+                .min_by_key(|id| {
+                    let idx = storage.lane(id).lane_index();
+                    if pts_to_node { idx } else { -idx }
+                })
+                .unwrap()
+        };
+
+        let lp = storage.lane(&l_lane).polyline();
+        let rp = storage.lane(&r_lane).polyline();
+
+        // Debug: show boundary lanes used for the corner
+        gizmo.render_polyline(lp, [0.8, 0.0, 0.2], 3.0, true);
+        gizmo.render_polyline(rp, [0.8, 0.2, 0.0], 3.0, true);
+
+        let Some(p2) = polyline_intersection_xz(&lp, &rp) else {
+            continue;
+        };
+
+        // shift outward from intersection
+        let dir = (p2 - center).normalize_or_zero();
+        let shift = 8.2 * params.side_walk_width;
+        let v = p2 + dir * shift;
+
+        cut_vertices.push(v);
+
+        // Debug: ray center->p2
+        gizmo.render_line(center.to_array(), p2.to_array(), [1.0, 1.0, 1.0], true);
+    }
+
+    if cut_vertices.len() < 3 {
+        println!("initial_carve: cut polygon has <3 vertices, skipping");
+        return;
+    }
+
+    // Debug: draw CLOSED polygon
+    let mut cut_dbg = cut_vertices.clone();
+    cut_dbg.push(cut_vertices[0]);
+    gizmo.render_polyline(&cut_dbg, [0.0, 0.0, 0.0], 5.0, true);
+
+    // Debug: label polygon vertices
+    for (i, v) in cut_vertices.iter().enumerate() {
+        gizmo.render_number(i, v.to_array(), 1.6, [0.0, 0.0, 0.0], true);
+        gizmo.draw_cross(*v, 0.25, [0.0, 0.0, 0.0]);
+    }
+
+    // 3) Trim every connected lane: first boundary hit from node-side end
+    let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
+
+    for seg_id in segs.iter().copied() {
+        let seg = storage.segment(seg_id);
+
+        for lane_id in seg.lanes().iter().copied() {
+            let lane = storage.lane(&lane_id);
+            if !lane.is_enabled() {
+                continue;
+            }
+
+            let pts = lane.polyline();
+            if pts.len() < 2 {
+                continue;
+            }
+
+            let is_incoming = incoming.contains(&lane_id);
+
+            // Debug: original lane (yellow)
+            gizmo.render_polyline(pts, [0.95, 0.95, 0.10], 2.0, true);
+
+            // We always compute hit distance from the node-side end:
+            // - outgoing: node is at START -> use forward polyline
+            // - incoming: node is at END   -> use reversed view
+            let (amount, hit) = if is_incoming {
+                // node-side is END => reverse
+                let rev: Vec<Vec3> = pts.iter().copied().rev().collect();
+                furthest_hit_distance_from_start_xz(&rev, &cut_vertices).map(|(d, h)| (d, h))
+            } else {
+                furthest_hit_distance_from_start_xz(pts, &cut_vertices)
+            }
+            .unwrap_or_else(|| {
+                // No hit => don't touch lane
+                println!("lane {:?}: no polygon intersection, skipping", lane_id);
+                return (0.0, Vec3::ZERO);
+            });
+
+            if amount <= 0.001 || hit == Vec3::ZERO {
+                continue;
+            }
+
+            // Debug: show hit (red cross)
+            gizmo.draw_cross(hit, 0.5, [1.0, 0.0, 0.0]);
+
+            // Apply trim using YOUR functions
+            let new_pts = if is_incoming {
+                modify_polyline_end(pts, amount) // trim at END
+            } else {
+                modify_polyline_start(pts, amount) // trim at START
+            };
+
+            let Some(new_pts) = new_pts else {
+                println!(
+                    "lane {:?}: trim removed whole polyline (amount={:.3})",
+                    lane_id, amount
+                );
+                continue;
+            };
+
+            // Debug: removed portion (magenta) + kept (cyan)
+            let total = lane.geometry().total_len;
+            if amount < total {
+                let removed = if is_incoming {
+                    // last `amount` meters (near END)
+                    trim_polyline_start_by_distance(pts, total - amount)
+                } else {
+                    // first `amount` meters (near START)
+                    trim_polyline_end_by_distance(pts, total - amount)
+                };
+                if let Some(rem) = removed {
+                    gizmo.render_polyline(&rem, [1.0, 0.0, 1.0], 3.0, true); // magenta = deleted
+                }
+            }
+
+            gizmo.render_polyline(&new_pts, [0.1, 0.7, 1.0], 8.0, true); // cyan = final kept
+
+            println!(
+                "trim lane {:?}: incoming={} amount={:.3}m",
+                lane_id, is_incoming, amount
+            );
+
+            edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
+        }
+    }
+
+    // 4) Commit edits
+    for (lane_id, geom) in edits {
+        storage.lane_mut(lane_id).replace_geometry(geom);
+    }
+}
+/// Trims or Extends a polyline from the START.
+fn modify_polyline_start(points: &[Vec3], amount: f32) -> Option<Vec<Vec3>> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    if amount.abs() < 0.001 {
+        return Some(points.to_vec());
+    }
+
+    if amount > 0.0 {
+        return trim_polyline_start_by_distance(points, amount);
+    }
+
+    // -- Extension Logic --
+    let extend_len = amount.abs();
+    let first = points[0];
+    let second = points[1];
+    let dir = (first - second).normalize_or_zero(); // Direction pointing AWAY from line
+
+    if dir == Vec3::ZERO {
+        return Some(points.to_vec());
+    }
+
+    let new_pos = first + (dir * extend_len);
+    let mut out = Vec::with_capacity(points.len() + 1);
+    out.push(new_pos);
+    out.extend_from_slice(points);
+    Some(out)
+}
+/// Trims or Extends a polyline from the END.
+/// Positive amount: Trim. Negative amount: Extend (linearly).
+fn modify_polyline_end(points: &[Vec3], amount: f32) -> Option<Vec<Vec3>> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    if amount.abs() < 0.001 {
+        return Some(points.to_vec());
+    }
+
+    // -- Trimming Logic --
+    if amount > 0.0 {
+        return trim_polyline_end_by_distance(points, amount);
+    }
+
+    // -- Extension Logic --
+    // Extends the last segment linearly by abs(amount)
+    let extend_len = amount.abs();
+    let last = points[points.len() - 1];
+    let prev = points[points.len() - 2];
+    let dir = (last - prev).normalize_or_zero();
+
+    if dir == Vec3::ZERO {
+        return Some(points.to_vec());
+    }
+
+    let new_pos = last + (dir * extend_len);
+    let mut out = points.to_vec();
+    out.push(new_pos);
+    Some(out)
+}
+fn polyline_intersection_xz(a: &[Vec3], b: &[Vec3]) -> Option<Vec3> {
+    for i in 0..a.len() - 1 {
+        for j in 0..b.len() - 1 {
+            if let Some(p) = segment_intersection_xz(a[i], a[i + 1], b[j], b[j + 1]) {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn segment_intersection_xz(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> Option<Vec3> {
+    let p = a0.xz();
+    let r = (a1 - a0).xz();
+    let q = b0.xz();
+    let s = (b1 - b0).xz();
+
+    let cross = |u: Vec2, v: Vec2| u.x * v.y - u.y * v.x;
+    let rxs = cross(r, s);
+    if rxs.abs() < 1e-6 {
+        return None;
+    }
+
+    let t = cross(q - p, s) / rxs;
+    let u = cross(q - p, r) / rxs;
+
+    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+        Some(a0 + (a1 - a0) * t)
+    } else {
+        None
+    }
+}
+
+fn rightmost_lane_id(segment: &Segment, storage: &RoadStorage, node_id: NodeId) -> LaneId {
+    let points_to_node = segment.end() == node_id;
+
+    segment
+        .lanes()
+        .iter()
+        .copied()
+        .max_by_key(|id| {
+            let idx = storage.lane(id).lane_index();
+            if points_to_node { idx } else { -idx }
+        })
+        .unwrap()
+}
+
+fn leftmost_lane_id(segment: &Segment, storage: &RoadStorage, node_id: NodeId) -> LaneId {
+    let points_to_node = segment.end() == node_id;
+
+    segment
+        .lanes()
+        .iter()
+        .copied()
+        .min_by_key(|id| {
+            let idx = storage.lane(id).lane_index();
+            if points_to_node { idx } else { -idx }
+        })
+        .unwrap()
+}
+
+fn segment_right_hand_width(
+    segment: &Segment,
+    storage: &RoadStorage,
+    params: &IntersectionBuildParams,
+) -> f32 {
+    let mut right_hand_width: f32 = 0.0;
+    for lane_id in segment.lanes().iter() {
+        let lane = storage.lane(lane_id);
+        if lane.lane_index() > 0 {
+            right_hand_width += params.lane_width_m;
+        }
+    }
+    right_hand_width += params.side_walk_width;
+    right_hand_width
+}
+fn segment_left_hand_width(
+    segment: &Segment,
+    storage: &RoadStorage,
+    params: &IntersectionBuildParams,
+) -> f32 {
+    let mut left_hand_width: f32 = 0.0;
+    for lane_id in segment.lanes().iter() {
+        let lane = storage.lane(lane_id);
+        if lane.lane_index() < 0 {
+            left_hand_width += params.lane_width_m;
+        }
+    }
+    left_hand_width += params.side_walk_width;
+    left_hand_width
+}
+fn segment_dir_at_node(segment: &Segment, storage: &RoadStorage, node_id: NodeId) -> Vec3 {
+    let lane_id = segment.lanes()[0]; // any lane is fine for direction
+    let lane = storage.lane(&lane_id);
+    let poly = lane.polyline();
+
+    let node_pos = {
+        let n = storage.node(node_id).unwrap();
+        Vec3::from_array(n.position())
+    };
+
+    let dir = if segment.end() == node_id {
+        // segment points INTO node, so direction is reversed
+        node_pos - poly[poly.len() - 2]
+    } else {
+        poly[1] - node_pos
+    };
+
+    dir.normalize()
+}
+
+fn segment_ids_paired(segment_ids_sorted: Vec<SegmentId>) -> Vec<(SegmentId, SegmentId)> {
+    let n = segment_ids_sorted.len();
+    if n < 2 {
+        return Vec::new();
+    }
+
+    let mut pairs = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let a = segment_ids_sorted[i];
+        let b = segment_ids_sorted[(i + 1) % n];
+        pairs.push((a, b));
+    }
+
+    pairs
+}
+
+fn segment_ids_sorted_left_to_right(
+    segment_ids: Vec<SegmentId>,
+    storage: &RoadStorage,
+    node_id: NodeId,
+) -> Vec<SegmentId> {
+    let node = storage.node(node_id).expect("node missing");
+    let node_pos = Vec3::from_array(node.position());
+
+    let mut with_angles: Vec<(SegmentId, f32)> = segment_ids
+        .into_iter()
+        .map(|segment_id| {
+            let segment = storage.segment(segment_id);
+            let points_to_node = segment.end() == node_id;
+
+            // Pick rightmost lane depending on orientation
+            let mut chosen_lane_id = None;
+            let mut best_index: i8 = if points_to_node { i8::MIN } else { i8::MAX };
+
+            for lane_id in segment.lanes() {
+                let lane = storage.lane(lane_id);
+                let idx = lane.lane_index();
+
+                if points_to_node {
+                    if idx > best_index {
+                        best_index = idx;
+                        chosen_lane_id = Some(lane_id);
+                    }
+                } else {
+                    if idx < best_index {
+                        best_index = idx;
+                        chosen_lane_id = Some(lane_id);
+                    }
+                }
+            }
+
+            let lane_id = chosen_lane_id.expect("segment without lanes");
+            let lane = storage.lane(lane_id);
+            let polyline = lane.polyline();
+
+            // IMPORTANT: direction should be consistent (here: AWAY from node)
+            let dir = if points_to_node {
+                // node is at end -> step from node to the previous point (away from node)
+                polyline[polyline.len() - 2] - node_pos
+            } else {
+                // node is at start -> step from node to the next point (away from node)
+                polyline[1] - node_pos
+            };
+
+            let v = dir.xz(); // Vec2 (x, z)
+            let mut angle = v.y.atan2(v.x); // [-pi, pi]
+
+            // Normalize to [0, 2pi)
+            if angle < 0.0 {
+                angle += std::f32::consts::TAU;
+            }
+
+            // Optional: rotate so "left" (-x) is near 0 instead of the wrap point.
+            // This prevents "left-ish" segments from splitting across the boundary.
+            angle = (angle - std::f32::consts::PI + std::f32::consts::TAU) % std::f32::consts::TAU;
+
+            (segment_id, angle)
+        })
+        .collect();
+
+    with_angles.sort_by(|(id_a, ang_a), (id_b, ang_b)| {
+        ang_b.total_cmp(ang_a).then_with(|| id_a.cmp(id_b))
+    }); // Descending sort with tiebreaker, ccw left to right!
+
+    with_angles.into_iter().map(|(id, _)| id).collect()
+}
+
+fn carve_intersection_clearance(storage: &mut RoadStorage, node_id: NodeId, r: f32) {
+    // Pull everything we need from the node as OWNED values (no references kept).
+    let (node_pos, incoming_ids, outgoing_ids) = {
+        let Some(n) = storage.node(node_id) else {
+            return;
+        };
+
+        let pos = Vec3::new(n.x(), n.y(), n.z());
+
+        // IMPORTANT: copy LaneId values out (no Vec<&LaneId>)
+        let incoming: Vec<LaneId> = n.incoming_lanes().iter().copied().collect();
+        let outgoing: Vec<LaneId> = n.outgoing_lanes().iter().copied().collect();
+
+        (pos, incoming, outgoing)
+    };
+
+    // Collect edits first (immutable reads only)
+    let mut edits: Vec<(LaneId, LaneGeometry, f32)> = Vec::new(); // (lane_id, new_geom, new_base_cost)
+
+    // Incoming: trim END
+    for lane_id in incoming_ids.iter() {
+        let (maybe_new_geom, maybe_new_cost) = {
+            let lane = storage.lane(lane_id);
+            if !lane.is_enabled() {
+                (None, None)
+            } else {
+                let old = lane.geometry();
+                let old_len = old.total_len.max(0.001);
+                let old_cost = lane.base_cost();
+
+                let new_pts = trim_polyline_end_to_radius(&old.points, node_pos, r);
+                if let Some(pts) = new_pts {
+                    let new_geom = LaneGeometry::from_polyline(pts);
+                    let ratio = (new_geom.total_len / old_len).clamp(0.1, 1.0);
+                    (Some(new_geom), Some(old_cost * ratio))
+                } else {
+                    (None, None)
+                }
+            }
+        };
+
+        if let (Some(new_geom), Some(new_cost)) = (maybe_new_geom, maybe_new_cost) {
+            edits.push((*lane_id, new_geom, new_cost));
+        }
+    }
+
+    // Outgoing: trim START
+    for lane_id in outgoing_ids.iter() {
+        let (maybe_new_geom, maybe_new_cost) = {
+            let lane = storage.lane(lane_id);
+            if !lane.is_enabled() {
+                (None, None)
+            } else {
+                let old = lane.geometry();
+                let old_len = old.total_len.max(0.001);
+                let old_cost = lane.base_cost();
+
+                let new_pts = trim_polyline_start_to_radius(&old.points, node_pos, r);
+                if let Some(pts) = new_pts {
+                    let new_geom = LaneGeometry::from_polyline(pts);
+                    let ratio = (new_geom.total_len / old_len).clamp(0.1, 1.0);
+                    (Some(new_geom), Some(old_cost * ratio))
+                } else {
+                    (None, None)
+                }
+            }
+        };
+
+        if let (Some(new_geom), Some(new_cost)) = (maybe_new_geom, maybe_new_cost) {
+            edits.push((*lane_id, new_geom, new_cost));
+        }
+    }
+
+    // Apply edits (mutable borrows only)
+    for (lane_id, new_geom, new_cost) in edits {
+        let lane = storage.lane_mut(lane_id);
+        lane.replace_geometry(new_geom);
+        lane.replace_base_cost(new_cost);
+    }
+}
+fn trim_polyline_start_to_radius(points: &[Vec3], center: Vec3, r: f32) -> Option<Vec<Vec3>> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let eps = 0.05;
+    let start_dist = points[0].distance(center);
+
+    // Already at/near radius or outside => don't shrink further (idempotent).
+    if start_dist >= r - eps {
+        return None;
+    }
+
+    // Walk forward to find segment crossing radius (inside -> outside).
+    for i in 0..points.len() - 1 {
+        let a = points[i];
+        let b = points[i + 1];
+        let da = a.distance(center);
+        let db = b.distance(center);
+
+        if da <= r && db >= r {
+            if let Some(t) = seg_sphere_intersection_t(a, b, center, r) {
+                let p = a + (b - a) * t;
+                let mut out = Vec::with_capacity(points.len() - i);
+                out.push(p);
+                out.extend_from_slice(&points[i + 1..]);
+                if out.len() >= 2 {
+                    return Some(out);
+                }
+                return None;
+            }
+        }
+    }
+
+    None
+}
+fn trim_polyline_end_to_radius(points: &[Vec3], center: Vec3, r: f32) -> Option<Vec<Vec3>> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let eps = 0.05;
+    let end_dist = points[points.len() - 1].distance(center);
+
+    // Already at/near radius or outside => don't shrink further (idempotent).
+    if end_dist >= r - eps {
+        return None;
+    }
+
+    // Walk backwards to find segment crossing radius (outside -> inside).
+    for i in (0..points.len() - 1).rev() {
+        let a = points[i];
+        let b = points[i + 1];
+        let da = a.distance(center);
+        let db = b.distance(center);
+
+        if da >= r && db <= r {
+            if let Some(t) = seg_sphere_intersection_t(a, b, center, r) {
+                let p = a + (b - a) * t;
+                let mut out = Vec::with_capacity(i + 2);
+                out.extend_from_slice(&points[..=i]);
+                out.push(p);
+                if out.len() >= 2 {
+                    return Some(out);
+                }
+                return None;
+            }
+        }
+    }
+
+    None
+}
 /// Generates smooth turn geometry using a cubic Bézier curve.
 /// `tightness` < 1.0 makes turns tighter, > 1.0 makes them wider.
 fn generate_turn_geometry(
@@ -1394,111 +1986,7 @@ pub fn probe_intersection_node_lanes(
 
     lane_demands
 }
-fn carve_intersection_clearance_per_lane(
-    storage: &mut RoadStorage,
-    _node_id: NodeId,
-    lane_demands: &HashMap<LaneId, f32>,
-) {
-    let mut edits = Vec::new();
 
-    for (lane_id, amount) in lane_demands {
-        // Filter out negligible changes to prevent mesh jitter
-        if amount.abs() < 0.05 {
-            continue;
-        }
-
-        let lane = storage.lane(lane_id);
-        if !lane.is_enabled() {
-            continue;
-        }
-
-        let is_incoming = storage
-            .node(_node_id)
-            .unwrap()
-            .incoming_lanes()
-            .contains(lane_id);
-
-        let new_pts = if is_incoming {
-            // Incoming lanes get modified at the END
-            modify_polyline_end(&lane.geometry().points, *amount)
-        } else {
-            // Outgoing lanes get modified at the START
-            modify_polyline_start(&lane.geometry().points, *amount)
-        };
-
-        if let Some(pts) = new_pts {
-            edits.push((*lane_id, LaneGeometry::from_polyline(pts)));
-        }
-    }
-
-    for (id, geom) in edits {
-        storage.lane_mut(id).replace_geometry(geom);
-    }
-}
-
-/// Trims or Extends a polyline from the END.
-/// Positive `amount`: Trim. Negative `amount`: Extend (linearly).
-fn modify_polyline_end(points: &[Vec3], amount: f32) -> Option<Vec<Vec3>> {
-    if points.len() < 2 {
-        return None;
-    }
-
-    if amount.abs() < 0.001 {
-        return Some(points.to_vec());
-    }
-
-    // -- Trimming Logic --
-    if amount > 0.0 {
-        return trim_polyline_end_by_distance(points, amount);
-    }
-
-    // -- Extension Logic --
-    // Extends the last segment linearly by abs(amount)
-    let extend_len = amount.abs();
-    let last = points[points.len() - 1];
-    let prev = points[points.len() - 2];
-    let dir = (last - prev).normalize_or_zero();
-
-    if dir == Vec3::ZERO {
-        return Some(points.to_vec());
-    }
-
-    let new_pos = last + (dir * extend_len);
-    let mut out = points.to_vec();
-    out.push(new_pos);
-    Some(out)
-}
-
-/// Trims or Extends a polyline from the START.
-fn modify_polyline_start(points: &[Vec3], amount: f32) -> Option<Vec<Vec3>> {
-    if points.len() < 2 {
-        return None;
-    }
-
-    if amount.abs() < 0.001 {
-        return Some(points.to_vec());
-    }
-
-    if amount > 0.0 {
-        return trim_polyline_start_by_distance(points, amount);
-    }
-
-    // -- Extension Logic --
-    let extend_len = amount.abs();
-    let first = points[0];
-    let second = points[1];
-    let dir = (first - second).normalize_or_zero(); // Direction pointing AWAY from line
-
-    if dir == Vec3::ZERO {
-        return Some(points.to_vec());
-    }
-
-    let new_pos = first + (dir * extend_len);
-    let mut out = Vec::with_capacity(points.len() + 1);
-    out.push(new_pos);
-    out.extend_from_slice(points);
-    Some(out)
-}
 fn trim_polyline_end_by_distance(points: &[Vec3], trim_len: f32) -> Option<Vec<Vec3>> {
     if points.len() < 2 || trim_len <= 0.0 {
         return None;

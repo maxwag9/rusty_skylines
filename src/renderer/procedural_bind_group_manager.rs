@@ -30,9 +30,9 @@ impl MaterialBindGroupManager {
             address_mode_w: AddressMode::Repeat,
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
-            mipmap_filter: MipmapFilterMode::Nearest,
-            lod_max_clamp: 0.0,
-            anisotropy_clamp: 1,
+            mipmap_filter: MipmapFilterMode::Linear,
+            lod_max_clamp: f32::MAX,
+            anisotropy_clamp: 16,
             ..Default::default()
         });
 
