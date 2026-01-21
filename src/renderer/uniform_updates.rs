@@ -4,7 +4,7 @@ use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
 use crate::renderer::shadows::compute_light_matrix;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use wgpu::Queue;
 
 pub struct UniformUpdater<'a> {
@@ -23,20 +23,21 @@ impl<'a> UniformUpdater<'a> {
         proj: Mat4,
         view_proj: Mat4,
         astronomy: &AstronomyState,
-        cam_pos: Vec3,
-        target_pos: Vec3,
-        orbit_radius: f32,
+        camera: &Camera,
         total_time: f32,
+        aspect: f32,
     ) {
-        let light_matrix = compute_light_matrix(target_pos, astronomy.sun_dir);
+        // let light_matrix = compute_light_matrix_fit_to_camera(camera.position(), camera.target, camera.fov.to_radians(), aspect,
+        //                                                       camera.near,250.0, astronomy.sun_dir, 2048.0, true, true);
+        let light_matrix = compute_light_matrix(camera.target, astronomy.sun_dir);
         let new_uniforms = make_new_uniforms(
             view,
             proj,
             view_proj,
             astronomy.sun_dir,
             astronomy.moon_dir,
-            cam_pos,
-            orbit_radius,
+            camera.position(),
+            camera.orbit_radius,
             total_time,
             light_matrix,
         );

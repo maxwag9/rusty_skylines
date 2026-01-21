@@ -968,6 +968,31 @@ pub fn line_segment_intersection_2d(
         None
     }
 }
+/// Intersect two rays, returns None if parallel
+pub fn ray_ray_intersection_xz(p1: Vec3, d1: Vec3, p2: Vec3, d2: Vec3) -> Option<Vec3> {
+    // Cross product in 2D (XZ plane)
+    let cross = d1.x * d2.z - d1.z * d2.x;
+
+    if cross.abs() < 1e-6 {
+        return None; // Parallel rays
+    }
+
+    let diff = p2 - p1;
+    let t = (diff.x * d2.z - diff.z * d2.x) / cross;
+    let u = (diff.x * d1.z - diff.z * d1.x) / cross;
+
+    // Both parameters should be >= 0 (intersection ahead of both ray origins)
+    // Allow small negative for numerical tolerance
+    if t >= -0.5 && u >= -0.5 {
+        Some(Vec3::new(
+            p1.x + t * d1.x,
+            (p1.y + p2.y) * 0.5, // Average Y
+            p1.z + t * d1.z,
+        ))
+    } else {
+        None
+    }
+}
 
 /// Subdivide a quadratic bezier to extract the section from t0 to t1
 pub fn subdivide_quadratic_bezier(

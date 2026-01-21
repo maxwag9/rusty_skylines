@@ -34,12 +34,16 @@ impl MaterialKind {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Params {
+    pub color_primary: [f32; 4],
+    pub color_secondary: [f32; 4],
     pub seed: u32,
     pub scale: f32,
     pub roughness: f32,
-    pub _padding: u32,
-    pub color_primary: [f32; 4],
-    pub color_secondary: [f32; 4],
+    pub moisture: f32,
+    pub shadow_strength: f32,
+    pub sheen_strength: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
 }
 
 impl Default for Params {
@@ -48,9 +52,13 @@ impl Default for Params {
             seed: 0,
             scale: 1.0,
             roughness: 0.5,
-            _padding: 0,
             color_primary: [1.0, 1.0, 1.0, 1.0],
             color_secondary: [0.0, 0.0, 0.0, 1.0],
+            moisture: 0.5,
+            shadow_strength: 0.5,
+            sheen_strength: 0.5,
+            _pad0: 0.0,
+            _pad1: 0.0,
         }
     }
 }
@@ -269,8 +277,8 @@ impl ProceduralTextureManager {
                 //   mip1 => scale/2, mip2 => scale/4, ...
                 // If you want the *opposite* behavior, use `*` instead of `/`.
                 let scale_div = (1u32 << mip) as f32;
-                let mut mip_params = key.params;
-                mip_params.scale = key.params.scale / scale_div;
+                let mip_params = key.params;
+                // mip_params.scale = key.params.scale * scale_div;
 
                 // per-mip storage view (compute writes into THIS mip)
                 let dst_view = texture.create_view(&wgpu::TextureViewDescriptor {

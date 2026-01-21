@@ -157,23 +157,18 @@ fn fs_main(input : VertexOutput) -> @location(0) vec4<f32> {
 }
 
 fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
-    let pos_from_light = uniforms.lighting_view_proj * vec4<f32>(world_pos, 1.0);
+    let pos = uniforms.lighting_view_proj * vec4(world_pos, 1.0);
+    let ndc = pos.xyz / pos.w;
 
-    // Perspective divide (w=1 for ortho, but good practice)
-    let ndc = pos_from_light.xyz / pos_from_light.w;
+    let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5, 0.5);
 
-    // Clip space to UV space
-    let shadow_coords = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
-
-    // Clamp to valid range (points outside shadow map should be lit)
-    if (shadow_coords.x < 0.0 || shadow_coords.x > 1.0 ||
-        shadow_coords.y < 0.0 || shadow_coords.y > 1.0 ||
-        ndc.z < 0.0 || ndc.z > 1.0) {
-        return 1.0; // Lit (outside shadow frustum)
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
     }
 
-    // Slope-scaled bias: more bias when surface is nearly parallel to light
-    let bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
+    // slope-scaled receiver bias (tune)
+    let ndotl = saturate(dot(N, L));
+    let bias = max(0.0005, 0.003 * (1.0 - ndotl));
 
-    return textureSampleCompare(t_shadow, s_shadow, shadow_coords, ndc.z - bias);
+    return textureSampleCompare(t_shadow, s_shadow, uv, ndc.z - bias);
 }

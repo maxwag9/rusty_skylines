@@ -91,8 +91,6 @@ pub struct Pipelines {
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
     pub shadow_map_view: TextureView,
 
-    pub msaa_samples: u32,
-
     pub config: SurfaceConfiguration,
 
     pub uniforms: GpuResourceSet,
@@ -119,7 +117,7 @@ impl Pipelines {
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
-        let shadow_map_view = create_shadow_texture(device, 1024);
+        let shadow_map_view = create_shadow_texture(device, 2048);
         // Load all shaders
         let shaders = load_all_shaders(device, shader_dir)?;
 
@@ -142,7 +140,6 @@ impl Pipelines {
             depth_view,
             depth_sample_view,
             shadow_map_view,
-            msaa_samples,
             config: config.clone(),
 
             uniforms,

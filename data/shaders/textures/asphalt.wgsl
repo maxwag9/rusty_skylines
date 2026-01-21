@@ -1,12 +1,17 @@
 // asphalt.wgsl
 struct Params {
+    color_primary: vec4<f32>,
+    color_secondary: vec4<f32>,
     seed: u32,
     scale: f32,
     roughness: f32,
-    _padding: u32,
-    color_primary: vec4<f32>,
-    color_secondary: vec4<f32>,
+    moisture: f32,
+    shadow_strength: f32,
+    sheen_strength: f32,
+    _pad0: f32,
+    _pad1: f32,
 }
+
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<uniform> params: Params;

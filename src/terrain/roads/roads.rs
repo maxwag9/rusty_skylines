@@ -424,6 +424,10 @@ impl NodeLane {
         &self.geometry.points
     }
     #[inline]
+    pub fn geometry(&self) -> &LaneGeometry {
+        &self.geometry
+    }
+    #[inline]
     pub fn total_length(&self) -> f32 {
         self.geometry.total_len
     }

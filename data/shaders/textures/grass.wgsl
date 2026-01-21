@@ -1,76 +1,103 @@
 struct Params {
+    color_primary: vec4<f32>,   // Healthy grass color
+    color_secondary: vec4<f32>, // Dry grass
     seed: u32,
-    scale: f32,       // Controls tuft size: Lower = larger grass clumps, Higher = smaller, tighter tufts
-    roughness: f32,   // Now controls dryness: 0 = fully healthy green, 1 = mostly yellow/dry grass
-    _padding: u32,
-    color_primary: vec4<f32>,   // Healthy grass base color (use a deep natural green)
-    color_secondary: vec4<f32>, // Dry/yellow grass color for sparse patches
+    scale: f32,                 // Tuft density: lower = big clumps, higher = fine grass
+    roughness: f32,             // Dryness bias: 0 = lush, 1 = dead
+    moisture: f32,              // Counteracts roughness, adds saturation and sheen
+    shadow_strength: f32,       // How dark dense clumps get
+    sheen_strength: f32,        // Blade light reflection amount
+    _pad0: f32,
+    _pad1: f32,
 }
 
 @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<uniform> params: Params;
 
-// Simple 2d->1d hash function for consistent noise
+// High-quality hash
 fn hash21(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// Smooth value noise with cubic interpolation for natural gradients
+// Quintic fade for ultra-smooth interpolation
+fn fade(t: f32) -> f32 {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+// Value noise with quintic interpolation
 fn value_noise(p: vec2<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
-    let u = f * f * (3.0 - 2.0 * f); // Cubic curve for smooth transitions between noise cells
-    return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-               mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
+    let ux = fade(f.x);
+    let uy = fade(f.y);
+
+    let a = hash21(i);
+    let b = hash21(i + vec2(1.0, 0.0));
+    let c = hash21(i + vec2(0.0, 1.0));
+    let d = hash21(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, ux), mix(c, d, ux), uy);
 }
 
-// 4-octave FBM for layered, natural grass clumping detail
-fn fbm(p: vec2<f32>) -> f32 {
-    var result: f32 = 0.0;
-    var amplitude: f32 = 0.5;
-    var frequency: f32 = 1.0;
+// 8-octave FBM with domain rotation for isotropy
+fn fbm(p_in: vec2<f32>) -> f32 {
+    let ROT = mat2x2<f32>(vec2(0.8, 0.6), vec2(-0.6, 0.8));
+    var acc: f32 = 0.0;
+    var amp: f32 = 0.5;
+    var p = p_in;
 
-    for (var i = 0; i < 4; i++) {
-        result += amplitude * value_noise(p * frequency);
-        frequency *= 2.0;
-        amplitude *= 0.5;
+    for (var i: i32 = 0; i < 8; i = i + 1) {
+        acc += amp * value_noise(p);
+        p = ROT * p * 2.0;
+        amp *= 0.5;
     }
-
-    return result;
+    return acc;
 }
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = textureDimensions(output);
-    if (gid.x >= size.x || gid.y >= size.y) {
-        return;
-    }
+    if (gid.x >= size.x || gid.y >= size.y) { return; }
 
-    // Normalize UVs and apply seed offset for random texture placement
     let uv = vec2<f32>(f32(gid.x), f32(gid.y)) / f32(min(size.x, size.y));
     let seed_offset = vec2<f32>(f32(params.seed) * 3.14159, f32(params.seed) * 2.71828);
     let p = (uv + seed_offset) * params.scale;
 
-    // Base grass clump noise - pow sharpens transitions between dense tufts and sparse areas
-    let clump_noise = pow(fbm(p), 2.2);
+    // Domain warping for organic clump shapes
+    let warp_strength = 2.5;
+    let warp_freq = 2.0;
+    let wp = p * warp_freq;
+    let wx = value_noise(wp);
+    let wy = value_noise(wp + vec2(13.37, 9.42));
+    let warp = (vec2(wx, wy) - 0.5) * warp_strength;
+    let warped_p = p + warp;
 
-    // High-frequency noise to simulate subtle individual grass blade detail
-    let blade_detail = (value_noise(p * 60.0) - 0.5) * 0.04;
+    // Base clump noise
+    let clump_raw = fbm(warped_p);
+    let clump_noise = pow(clump_raw, 2.4); // Softer contrast than 2.2
 
-    // Apply dry grass color only to the most sparse areas
-    let dryness = smoothstep(0.65, 0.95, clump_noise) * params.roughness;
+    // High-frequency blade detail
+    let blade_detail = (value_noise(warped_p * 80.0) - 0.5) * 0.1;
 
-    // Subtle shadowing in dense clumps to add depth and make tufts look more volumetric
-    let clump_shadow = smoothstep(0.1, 0.35, clump_noise) * 0.18;
+    // Dryness in sparser areas
+    let dryness = smoothstep(0.5, 0.9, clump_noise) * params.roughness * (1.0 - params.moisture);
 
-    // Very subtle specular sheen to simulate light reflecting off grass blades
-    let sheen = pow(clump_noise, 8.0) * 0.08 * (1.0 - params.roughness);
+    // Shadowing in dense clumps for volume
+    let clump_shadow = smoothstep(0.3, 0.7, clump_noise) * params.shadow_strength;
 
-    // Final color mixing pipeline
-    let base_color = mix(params.color_primary.rgb, params.color_secondary.rgb, dryness);
-    let final_color = base_color * (1.0 - clump_shadow) + blade_detail + sheen;
+    // Subtle specular sheen on blades
+    let sheen = pow(clump_noise, 7.0) * params.sheen_strength * params.moisture;
 
-    textureStore(output, vec2<i32>(gid.xy), vec4(final_color, 1.0));
+    // Subtle color variation (greener in moist spots)
+    let color_var = (value_noise(warped_p * 40.0) - 0.5) * 0.08;
+    let tint = vec3(color_var * -0.1, color_var * 0.2, color_var * -0.05);
+
+    // Final color pipeline
+    var base_color = mix(params.color_primary.rgb, params.color_secondary.rgb, dryness) + tint;
+    var lit_color = base_color * (1.0 - clump_shadow);
+    var final_color = lit_color + vec3(blade_detail + sheen);
+
+    final_color = clamp(final_color, vec3(0.0), vec3(1.0));
+
+    textureStore(output, vec2<i32>(gid.xy), vec4<f32>(final_color, 1.0));
 }

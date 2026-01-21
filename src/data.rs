@@ -48,6 +48,7 @@ struct PartialSettings {
     bend_mode: Option<BendMode>,
     show_world: Option<bool>,
     always_day: Option<bool>,
+    msaa_samples: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -66,6 +67,7 @@ pub struct Settings {
     pub bend_mode: BendMode,
     pub show_world: bool,
     pub always_day: bool,
+    pub msaa_samples: u32,
 }
 
 impl Default for Settings {
@@ -83,6 +85,7 @@ impl Default for Settings {
             bend_mode: BendMode::Strict,
             show_world: true,
             always_day: false,
+            msaa_samples: 4,
         }
     }
 }
@@ -160,6 +163,9 @@ impl Settings {
         }
         if let Some(v) = p.always_day {
             s.always_day = v;
+        }
+        if let Some(v) = p.msaa_samples {
+            s.msaa_samples = v;
         }
         s
     }

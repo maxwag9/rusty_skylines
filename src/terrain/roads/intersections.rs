@@ -5,7 +5,7 @@ use crate::terrain::roads::road_helpers::{
     triangulate_center_fan,
 };
 use crate::terrain::roads::road_mesh_manager::{
-    CLEARANCE, ChunkId, MeshConfig, RoadVertex, chunk_x_range, chunk_z_range,
+    CLEARANCE, ChunkId, MeshConfig, RoadVertex, build_vertical_face, chunk_x_range, chunk_z_range,
 };
 use crate::terrain::roads::road_structs::*;
 use crate::terrain::roads::roads::*;
@@ -105,7 +105,7 @@ pub fn build_intersection_mesh(
     node: &Node,
     storage: &RoadStorage,
     style: &RoadStyleParams,
-    _config: &MeshConfig,
+    config: &MeshConfig,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
     gizmo: &mut Gizmo,
@@ -194,7 +194,10 @@ pub fn build_intersection_mesh(
                 &node_lane.polyline(),
                 style.lane_width * 0.5 * lane.outward_sign as f32,
             );
-            let sidewalk_outer = offset_polyline_f32(&asphalt_edge, style.sidewalk_width);
+            let sidewalk_outer = offset_polyline_f32(
+                &node_lane.polyline(),
+                style.lane_width * 0.5 * lane.outward_sign as f32 + style.sidewalk_width,
+            );
 
             build_strip_polyline(
                 terrain,
@@ -202,6 +205,32 @@ pub fn build_intersection_mesh(
                 &sidewalk_outer,
                 style.sidewalk_height,
                 style.sidewalk_material_id,
+                vertices,
+                indices,
+            );
+            build_vertical_face(
+                terrain,
+                node_lane.geometry(),
+                style.lane_width * 0.5,
+                style.lane_height,
+                style.sidewalk_height,
+                style.sidewalk_material_id,
+                None,
+                (config.uv_scale_u, config.uv_scale_v),
+                Some(-1f32),
+                vertices,
+                indices,
+            );
+            build_vertical_face(
+                terrain,
+                node_lane.geometry(),
+                style.lane_width * 0.5 + style.sidewalk_width,
+                style.lane_height,
+                style.sidewalk_height,
+                style.sidewalk_material_id,
+                None,
+                (config.uv_scale_u, config.uv_scale_v),
+                Some(1f32),
                 vertices,
                 indices,
             );

@@ -181,7 +181,7 @@ impl Default for TerrainParams {
             origin_island_strength: 0.75,
             origin_min_height: 50.0,
             pull_one_continent_to_origin: true,
-            origin_pull_strength: 0.50,
+            origin_pull_strength: 0.90,
 
             warp_large_scale: 0.00042,
             warp_small_scale: 0.0040,

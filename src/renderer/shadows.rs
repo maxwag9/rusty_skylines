@@ -6,7 +6,7 @@ use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::ui::vertex::Vertex;
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4Swizzles};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
 use wgpu::{
@@ -63,6 +63,108 @@ pub fn compute_light_matrix(target_pos: Vec3, sun_direction: Vec3) -> Mat4 {
     projection * view
 }
 
+pub fn compute_light_matrix_fit_to_camera(
+    eye: Vec3,
+    target: Vec3,
+    fov_y_radians: f32,
+    aspect: f32,
+    cam_near: f32,
+    shadow_far: f32,     // choose something like 200.0, not 10_000
+    light_dir: Vec3,     // direction FROM surface TO sun (your convention)
+    shadow_map_res: f32, // e.g. 2048.0
+    make_square: bool,
+    stabilize: bool,
+) -> Mat4 {
+    // Camera basis
+    let forward = (target - eye).normalize();
+    let right = forward.cross(Vec3::Y).normalize();
+    let up = right.cross(forward).normalize();
+
+    // Build frustum corners (world space) for near and shadow_far
+    let tan_half = (fov_y_radians * 0.5).tan();
+
+    let nh = tan_half * cam_near;
+    let nw = nh * aspect;
+
+    let fh = tan_half * shadow_far;
+    let fw = fh * aspect;
+
+    let nc = eye + forward * cam_near;
+    let fc = eye + forward * shadow_far;
+
+    let corners = [
+        // near plane
+        nc + up * nh - right * nw,
+        nc + up * nh + right * nw,
+        nc - up * nh - right * nw,
+        nc - up * nh + right * nw,
+        // far plane
+        fc + up * fh - right * fw,
+        fc + up * fh + right * fw,
+        fc - up * fh - right * fw,
+        fc - up * fh + right * fw,
+    ];
+
+    // Frustum center for positioning the light
+    let frustum_center = corners.iter().copied().reduce(|a, b| a + b).unwrap() / 8.0;
+
+    // Light view (directional): put light "behind" the frustum along -light_dir
+    // distance can be arbitrary as long as it’s not inside; near/far will be computed from bounds anyway.
+    let light_dir_n = light_dir.normalize();
+    let light_pos = frustum_center + light_dir_n * 500.0;
+    let light_view = Mat4::look_at_rh(light_pos, frustum_center, Vec3::Y);
+
+    // Transform corners into light space and compute bounds
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(-f32::INFINITY);
+
+    for &c in &corners {
+        let ls = (light_view * c.extend(1.0)).xyz();
+        min = min.min(ls);
+        max = max.max(ls);
+    }
+
+    // Optional: make XY square (recommended with square shadow maps)
+    if make_square {
+        let size_x = max.x - min.x;
+        let size_y = max.y - min.y;
+        let size = size_x.max(size_y);
+        let center = (min + max) * 0.5;
+        min.x = center.x - size * 0.5;
+        max.x = center.x + size * 0.5;
+        min.y = center.y - size * 0.5;
+        max.y = center.y + size * 0.5;
+    }
+
+    // Stabilize: snap light-space center to texel grid to stop shimmering
+    if stabilize {
+        let size_x = max.x - min.x;
+        let size_y = max.y - min.y;
+        let texel_x = size_x / shadow_map_res;
+        let texel_y = size_y / shadow_map_res;
+
+        let center = (min + max) * 0.5;
+        let snapped = Vec3::new(
+            (center.x / texel_x).floor() * texel_x,
+            (center.y / texel_y).floor() * texel_y,
+            center.z,
+        );
+
+        let half = (max - min) * 0.5;
+        min = snapped - half;
+        max = snapped + half;
+    }
+
+    // Light-space Z bounds
+    // In RH view space, forward is -Z, so points in front typically have negative z.
+    // We want positive near/far distances, so convert:
+    let z_near = -max.z - 10.0; // add padding
+    let z_far = -min.z + 10.0;
+
+    let light_proj = Mat4::orthographic_rh(min.x, max.x, min.y, max.y, z_near, z_far);
+
+    light_proj * light_view
+}
 pub fn render_roads_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
@@ -70,8 +172,8 @@ pub fn render_roads_shadows(
     pipelines: &Pipelines,
 ) {
     let bias = DepthBiasState {
-        constant: -3, // Positive pushes geometry away from light
-        slope_scale: -2.0,
+        constant: 1000, // for Depth32Float, constants often need to be “large”
+        slope_scale: 2.0,
         clamp: 0.0,
     };
     // This sets the road pipeline + texture array bind group (bind group 0)
@@ -116,8 +218,8 @@ pub fn render_roads_shadows(
     };
 
     let nudge_bias = DepthBiasState {
-        constant: -4,
-        slope_scale: -2.0,
+        constant: 1010,
+        slope_scale: 2.0,
         clamp: 0.0,
     };
     render_manager.render(
@@ -155,6 +257,11 @@ pub fn render_terrain_shadows(
     camera: &Camera,
     aspect: f32,
 ) {
+    let bias = DepthBiasState {
+        constant: 1000, // for Depth32Float, constants often need to be “large”
+        slope_scale: 2.0,
+        clamp: 0.0,
+    };
     let shadows_shader_path = shader_dir().join("shadows.wgsl");
     render_manager.render(
         Vec::new(),
@@ -167,11 +274,11 @@ pub fn render_terrain_shadows(
                 depth_write_enabled: true,
                 depth_compare: CompareFunction::LessEqual,
                 stencil: StencilState::default(),
-                bias: Default::default(),
+                bias,
             }),
             msaa_samples: 1,
             vertex_layouts: Vec::from([Vertex::desc()]),
-            blend: Some(BlendState::REPLACE),
+            blend: Some(BlendState::ALPHA_BLENDING),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
         },
@@ -192,11 +299,11 @@ pub fn render_terrain_shadows(
                 depth_write_enabled: true,
                 depth_compare: CompareFunction::LessEqual,
                 stencil: StencilState::default(),
-                bias: Default::default(),
+                bias,
             }),
             msaa_samples: 1,
             vertex_layouts: Vec::from([Vertex::desc()]),
-            blend: Some(BlendState::REPLACE),
+            blend: Some(BlendState::ALPHA_BLENDING),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
         },

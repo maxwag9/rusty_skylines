@@ -282,6 +282,19 @@ fn mesh_segment_with_boundaries(
                 vertices,
                 indices,
             );
+            build_vertical_face(
+                terrain_renderer,
+                geom,
+                style.lane_width * 0.5 + style.sidewalk_width,
+                style.lane_height,
+                style.sidewalk_height,
+                0,
+                chunk_filter,
+                (config.uv_scale_u, config.uv_scale_v),
+                Some(1f32),
+                vertices,
+                indices,
+            );
         }
     }
 
@@ -317,6 +330,19 @@ fn mesh_segment_with_boundaries(
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
                 None,
+                vertices,
+                indices,
+            );
+            build_vertical_face(
+                terrain_renderer,
+                geom,
+                style.lane_width * 0.5 + style.sidewalk_width,
+                style.lane_height,
+                style.sidewalk_height,
+                0,
+                chunk_filter,
+                (config.uv_scale_u, config.uv_scale_v),
+                Some(1f32),
                 vertices,
                 indices,
             );
@@ -881,7 +907,7 @@ fn compute_ribbon_override(
 /// Builds vertical faces between two parallel strips (e.g., Curb).
 /// `explicit_normal_sign`: If Some(1.0), normal points along +Lateral. If Some(-1.0), along -Lateral.
 /// If None, it infers based on offset (heuristic for simple curbs).
-fn build_vertical_face(
+pub fn build_vertical_face(
     terrain_renderer: &TerrainRenderer,
     ref_geom: &LaneGeometry,
     offset_lateral: f32,
