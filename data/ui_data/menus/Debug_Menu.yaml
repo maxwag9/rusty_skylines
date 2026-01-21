@@ -64,6 +64,7 @@ layers:
           - 0.0
       - !Polygon
         id: '566'
+        action: '_set_roads_four_lanes(16, 16)'
         vertices:
           - pos:
               - 0.8578537

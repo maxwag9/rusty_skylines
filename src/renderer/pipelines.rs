@@ -1,5 +1,6 @@
 use crate::components::camera::Camera;
 use crate::renderer::pipelines_outsource::*;
+use crate::renderer::shadows::create_shadow_texture;
 use crate::resources::Uniforms;
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -88,6 +89,7 @@ pub struct Pipelines {
     pub depth_texture: Texture,
     pub depth_view: TextureView,
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
+    pub shadow_map_view: TextureView,
 
     pub msaa_samples: u32,
 
@@ -117,6 +119,7 @@ impl Pipelines {
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
+        let shadow_map_view = create_shadow_texture(device, 1024);
         // Load all shaders
         let shaders = load_all_shaders(device, shader_dir)?;
 
@@ -138,6 +141,7 @@ impl Pipelines {
             depth_texture,
             depth_view,
             depth_sample_view,
+            shadow_map_view,
             msaa_samples,
             config: config.clone(),
 
@@ -283,6 +287,7 @@ pub fn make_new_uniforms(
     cam_pos: Vec3,
     orbit_radius: f32,
     total_time: f32,
+    light_view_proj: Mat4,
 ) -> Uniforms {
     Uniforms {
         view: view.to_cols_array_2d(),
@@ -291,6 +296,7 @@ pub fn make_new_uniforms(
         inv_proj: proj.inverse().to_cols_array_2d(),
         view_proj: view_proj.to_cols_array_2d(),
         inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+        light_view_proj: light_view_proj.to_cols_array_2d(),
 
         sun_direction: sun.to_array(),
         time: total_time,

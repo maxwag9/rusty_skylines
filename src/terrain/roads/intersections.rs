@@ -61,14 +61,32 @@ pub struct LaneBoundaryInfo {
     pub direction: Vec3,
 }
 
+// In your structures/types file
+
 #[derive(Clone, Debug, Default)]
 pub struct IntersectionMeshResult {
-    pub lane_boundaries: LaneBoundaries,
+    /// Maps segment IDs to their boundary data at this intersection
+    pub segment_boundaries: HashMap<SegmentId, SegmentBoundaryAtNode>,
 }
 
-/// Collected boundary info for a segment: (from_node_boundary, to_node_boundary)
-pub type SegmentBoundaries =
-    HashMap<SegmentId, (Option<LaneBoundaryInfo>, Option<LaneBoundaryInfo>)>;
+#[derive(Clone, Debug, Default)]
+pub struct SegmentBoundaryAtNode {
+    /// Per-lane boundary edges (keyed by lane_index)
+    pub lane_edges: HashMap<i8, LaneBoundaryEdge>,
+    /// Outer left edge of the entire segment at this boundary
+    pub outer_left: Vec3,
+    /// Outer right edge of the entire segment at this boundary
+    pub outer_right: Vec3,
+    /// Direction pointing outward from intersection (into segment)
+    pub outward_direction: Vec3,
+}
+
+#[derive(Clone, Debug, Default, Copy)]
+pub struct LaneBoundaryEdge {
+    pub left: Vec3,
+    pub center: Vec3,
+    pub right: Vec3,
+}
 
 /// Per-lane boundaries: lane_id -> (start_boundary, end_boundary)
 pub type LaneBoundaries = HashMap<LaneId, (Option<LaneBoundaryInfo>, Option<LaneBoundaryInfo>)>;
@@ -77,8 +95,9 @@ pub type LaneBoundaries = HashMap<LaneId, (Option<LaneBoundaryInfo>, Option<Lane
 // Intersection Mesh Builder
 // ============================================================================
 pub struct OuterNodeLane {
-    pub(crate) node_lane: NodeLaneId,
-    pub(crate) outward_sign: i8,
+    pub node_lane: NodeLaneId,
+    pub outward_sign: i8,
+    pub segment_id: SegmentId,
 }
 pub fn build_intersection_mesh(
     terrain: &TerrainRenderer,
@@ -92,71 +111,67 @@ pub fn build_intersection_mesh(
     gizmo: &mut Gizmo,
 ) -> IntersectionMeshResult {
     let center = Vec3::from_array(node.position());
-
-    // 1. Collect node lane polylines (towards node)
     let node_lanes = node.node_lanes();
+
     if node_lanes.len() < 2 {
         return IntersectionMeshResult::default();
     }
 
-    // 2. Pick outermost lanes per approach
     let outer_lanes = select_outermost_lanes(node_lanes, storage);
 
-    // 3. Offset outer lanes outward to form asphalt boundary polylines
+    // Build polylines AND track segment ownership
     let mut asphalt_polylines = Vec::new();
+    let mut polyline_segment_info: Vec<(SegmentId, i8)> = Vec::new(); // (segment_id, outward_sign)
+
     for lane in &outer_lanes {
         let offset = style.lane_width * 0.5 * lane.outward_sign as f32;
-        //println!("node lane id: {}, length: {}", lane.node_lane, node_lanes.len());
         let node_lane = node.node_lane(lane.node_lane);
-        //println!("Polyline length: {}", node_lane.polyline().len());
+
         gizmo.render_polyline(
             &node_lane
                 .polyline()
                 .iter()
                 .map(|v| [v.x, v.y, v.z])
-                .collect::<Vec<[f32; 3]>>(),
+                .collect::<Vec<_>>(),
             [1.0, 0.0, 1.0],
-            2.0,
+            4.0,
             true,
         );
 
         let poly = offset_polyline_f32(&node_lane.polyline(), offset);
         asphalt_polylines.push(poly);
+        polyline_segment_info.push((lane.segment_id, lane.outward_sign));
     }
-    // for polyline in &asphalt_polylines {
-    //     gizmo.render_polyline(
-    //         &polyline.iter().map(|v| [v.x, v.y, v.z]).collect::<Vec<[f32; 3]>>(),
-    //         [1.0, 0.0, 1.0],
-    //         0.5,
-    //         true,
-    //     );
-    // }
 
-    // 4. Merge polylines into a single CCW ring
-    let mut asphalt_ring = merge_polylines_ccw(center, asphalt_polylines);
-    // gizmo.render_polyline(
-    //     &asphalt_ring.iter().map(|v| [v.x, v.y, v.z]).collect::<Vec<[f32; 3]>>(),
-    //     [0.0, 0.0, 1.0],
-    //     0.5, true
-    // );
+    let asphalt_ring = merge_polylines_ccw(center, asphalt_polylines.clone());
+
     if asphalt_ring.len() < 3 {
         return IntersectionMeshResult::default();
     }
 
-    // 5a. Push the Center Vertex (Pivot)
-    // This prevents long sliver triangles and improves lighting/terrain conformity
+    // === Build segment boundary data ===
+    let segment_boundaries = extract_segment_boundaries(
+        node_id,
+        node,
+        &outer_lanes,
+        &asphalt_polylines,
+        storage,
+        style,
+    );
+
+    // === Build mesh vertices ===
     let asphalt_base = vertices.len() as u32;
     let center_h = terrain.get_height_at([center.x, center.z]);
+
     vertices.push(road_vertex(
         center.x,
         center_h + style.lane_height,
         center.z,
         style.lane_material_id,
-        0.5, // UVs for center
+        0.5,
         0.5,
     ));
 
-    // 5b. Push Ring Vertices
     for p in asphalt_ring.iter().rev() {
         let h = terrain.get_height_at([p.x, p.z]);
         vertices.push(road_vertex(
@@ -164,25 +179,21 @@ pub fn build_intersection_mesh(
             h + style.lane_height,
             p.z,
             style.lane_material_id,
-            // Simple planar mapping or distance based UVs could go here
             (p.x - center.x) * 0.1,
             (p.z - center.z) * 0.1,
         ));
     }
 
-    // 6. Triangulate (Triangle Fan around Center)
     triangulate_center_fan(asphalt_base, asphalt_ring.len() as u32, indices);
 
-    // 6. Build sidewalks (simple offset)
+    // Sidewalks
     if style.sidewalk_width > 0.01 {
         for lane in &outer_lanes {
             let node_lane = node.node_lane(lane.node_lane);
-
             let asphalt_edge = offset_polyline_f32(
                 &node_lane.polyline(),
                 style.lane_width * 0.5 * lane.outward_sign as f32,
             );
-
             let sidewalk_outer = offset_polyline_f32(&asphalt_edge, style.sidewalk_width);
 
             build_strip_polyline(
@@ -197,16 +208,105 @@ pub fn build_intersection_mesh(
         }
     }
 
-    // 7. Export exact lane boundary info for segments
-    // let lane_boundaries = extract_lane_boundaries(
-    //     node_id,
-    //     &outer_lanes,
-    //     &asphalt_ring,
-    // );
+    IntersectionMeshResult { segment_boundaries }
+}
 
-    IntersectionMeshResult {
-        lane_boundaries: LaneBoundaries::new(),
+/// Extract boundary data for each segment at this intersection
+fn extract_segment_boundaries(
+    node_id: NodeId,
+    node: &Node,
+    outer_lanes: &[OuterNodeLane],
+    asphalt_polylines: &[Vec<Vec3>],
+    storage: &RoadStorage,
+    style: &RoadStyleParams,
+) -> HashMap<SegmentId, SegmentBoundaryAtNode> {
+    let mut result: HashMap<SegmentId, SegmentBoundaryAtNode> = HashMap::new();
+
+    // First pass: collect boundary positions from outer lane polylines
+    for (i, outer_lane) in outer_lanes.iter().enumerate() {
+        let seg_id = outer_lane.segment_id;
+        let polyline = &asphalt_polylines[i];
+
+        if polyline.len() < 2 {
+            continue;
+        }
+
+        // The FIRST point of the polyline is at the segment end (away from intersection)
+        // The LAST point is at the intersection boundary
+        let boundary_point = polyline.last().copied().unwrap_or_default();
+        let prev_point = polyline
+            .get(polyline.len().saturating_sub(2))
+            .copied()
+            .unwrap_or(boundary_point);
+
+        // Direction pointing outward from intersection (into the segment)
+        let outward_dir = (prev_point - boundary_point).normalize_or_zero();
+
+        let entry = result.entry(seg_id).or_default();
+        entry.outward_direction = outward_dir;
+
+        // This is an outer edge, determine if left or right based on outward_sign
+        if outer_lane.outward_sign > 0 {
+            entry.outer_right = boundary_point;
+        } else {
+            entry.outer_left = boundary_point;
+        }
     }
+
+    // Second pass: compute per-lane boundaries
+    for lane_id in node
+        .incoming_lanes()
+        .iter()
+        .chain(node.outgoing_lanes().iter())
+    {
+        let lane = storage.lane(lane_id);
+        let seg_id = lane.segment();
+        let lane_idx = lane.lane_index();
+
+        if let Some(boundary) = result.get_mut(&seg_id) {
+            // Interpolate lane position between outer_left and outer_right
+            let segment = storage.segment(seg_id);
+            let lane_count = segment.lanes().len() as f32;
+
+            // Get lane's endpoint position
+            let polyline = lane.polyline();
+            let is_at_start = segment.start() == node_id;
+
+            let (lane_center, direction) = if is_at_start {
+                let pos = polyline.first().copied().unwrap_or_default();
+                let dir = if polyline.len() >= 2 {
+                    (polyline[1] - polyline[0]).normalize_or_zero()
+                } else {
+                    boundary.outward_direction
+                };
+                (pos, dir)
+            } else {
+                let pos = polyline.last().copied().unwrap_or_default();
+                let dir = if polyline.len() >= 2 {
+                    let n = polyline.len();
+                    (polyline[n - 2] - polyline[n - 1]).normalize_or_zero()
+                } else {
+                    boundary.outward_direction
+                };
+                (pos, dir)
+            };
+
+            // Compute lateral vector (perpendicular in XZ plane)
+            let lateral = Vec3::new(-direction.z, 0.0, direction.x).normalize_or_zero();
+            let half_lane = style.lane_width * 0.5;
+
+            boundary.lane_edges.insert(
+                lane_idx,
+                LaneBoundaryEdge {
+                    left: lane_center - lateral * half_lane,
+                    center: lane_center,
+                    right: lane_center + lateral * half_lane,
+                },
+            );
+        }
+    }
+
+    result
 }
 // ============================================================================
 // Helper Functions

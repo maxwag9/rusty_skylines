@@ -7,6 +7,7 @@ use crate::hsv::{HSV, rgb_to_hsv};
 use crate::paths::data_dir;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
+use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::actions::{ActionSystem, activate_action, execute_action};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::MouseState;
@@ -172,6 +173,7 @@ impl UiButtonLoader {
         time_system: &TimeSystem,
         world_renderer: &mut TerrainRenderer,
         window_size: PhysicalSize<u32>,
+        road_style_params: &mut RoadStyleParams,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
@@ -232,6 +234,7 @@ impl UiButtonLoader {
             time_system,
             world_renderer,
             window_size,
+            road_style_params,
         );
 
         execute_action(
@@ -243,6 +246,7 @@ impl UiButtonLoader {
             time_system,
             world_renderer,
             window_size,
+            road_style_params,
         );
     }
 

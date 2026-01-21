@@ -10,7 +10,7 @@ use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::{SimpleVertex, WaterUniform};
 use crate::ui::vertex::LineVtx;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use std::fs;
 use std::path::Path;
 use wgpu::TextureFormat::Rgba8Unorm;
@@ -61,6 +61,7 @@ pub fn create_camera_uniforms(
         cam_pos,
         camera.orbit_radius,
         0.0,
+        Mat4::ZERO,
     );
 
     let buffer = device.create_buffer_init(&BufferInitDescriptor {

@@ -61,7 +61,7 @@ impl Default for RoadStyleParams {
             state: EditorState::Idle,
             mode: BuildMode::Straight,
             road_type: RoadType::default(),
-            lane_width: 2.5,
+            lane_width: 2.4,
             lane_height: 0.0,
             lane_material_id: 2, // Asphalt
             sidewalk_width: 1.25,

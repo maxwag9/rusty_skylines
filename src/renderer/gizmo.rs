@@ -24,6 +24,7 @@ impl Gizmo {
         total_game_time: f64,
         road_manager: &RoadManager,
     ) {
+        //return;
         self.total_game_time = total_game_time;
         let render_chunk = false;
         if render_chunk {
@@ -182,6 +183,7 @@ impl Gizmo {
         target: Vec3,
         orbit_radius: f32,
         scale_with_orbit: bool,
+        sun_direction: Vec3,
     ) {
         let t = target;
 
@@ -221,6 +223,15 @@ impl Gizmo {
         self.pending_renders.push(PendingGizmoRender {
             vertices: axes.to_vec(),
         });
+        let arrow_length = s * 2.0; // adjust length multiplier if needed
+        let sun_end = t + sun_direction.normalize() * arrow_length;
+
+        self.render_arrow(
+            [t.x, t.y, t.z],                   // start at gizmo center
+            [sun_end.x, sun_end.y, sun_end.z], // end in sun direction
+            [1.0, 1.0, 0.0],                   // yellow
+            false,                             // solid arrow
+        );
     }
     pub fn collect_vertices(&self) -> Vec<LineVtx> {
         let mut out = Vec::new();

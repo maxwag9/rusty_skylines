@@ -11,5 +11,6 @@ pub fn ui_system(_world: &mut World, resources: &mut Resources) {
         &resources.time,
         &mut resources.renderer.core.terrain_renderer,
         resources.window.inner_size(),
+        &mut resources.renderer.core.road_renderer.style,
     );
 }

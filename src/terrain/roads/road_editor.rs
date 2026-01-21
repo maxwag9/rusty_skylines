@@ -1484,8 +1484,20 @@ pub fn build_intersection_at_node(
     gizmo: &mut Gizmo,
 ) {
     if recalc_clearance {
-        carve_intersection_clearance(storage, node_id, 1.0);
+        let Some(node) = storage.node(node_id) else {
+            return;
+        };
+        // if storage.enabled_segment_count_connected_to_node(node_id) == 2 {
+        //     let segment_ids = storage.enabled_segments_connected_to_node(node_id);
+        //     let mut angle = 180.0f32.to_radians();
+        //     for segment_id in segment_ids {
+        //         let segment = storage.segment(segment_id);
+        //         segment.
+        //     }
+        //     carve_intersection_clearance(storage, node_id, node.connection_count() as f32 * 0.7);
+        // } else {
         initial_carve(storage, node_id, params, gizmo);
+        //};
         // let demands = probe_intersection_node_lanes(storage, node_id, params);
         // carve_intersection_clearance_per_lane(storage, node_id, &demands);
     }
@@ -1642,8 +1654,8 @@ fn initial_carve(
         let rp = storage.lane(&r_lane).polyline();
 
         // Debug: show boundary lanes used for the corner
-        gizmo.render_polyline(lp, [0.8, 0.0, 0.2], 3.0, true);
-        gizmo.render_polyline(rp, [0.8, 0.2, 0.0], 3.0, true);
+        // gizmo.render_polyline(lp, [0.8, 0.0, 0.2], 3.0, true);
+        // gizmo.render_polyline(rp, [0.8, 0.2, 0.0], 3.0, true);
 
         let Some(p2) = polyline_intersection_xz(&lp, &rp) else {
             continue;
@@ -1688,7 +1700,7 @@ fn initial_carve(
         let new_v = mid + tangent * offset;
         doubled.push(new_v);
         // Debug draw between midpoint and new vertex
-        gizmo.render_line(mid.to_array(), new_v.to_array(), [0.0, 1.0, 1.0], true);
+        gizmo.render_arrow(mid.to_array(), new_v.to_array(), [0.0, 1.0, 1.0], true);
     }
 
     cut_vertices = doubled;
@@ -1701,13 +1713,13 @@ fn initial_carve(
     // Debug: draw CLOSED polygon
     let mut cut_dbg = cut_vertices.clone();
     cut_dbg.push(cut_vertices[0]);
-    gizmo.render_polyline(&cut_dbg, [0.0, 0.0, 0.0], 5.0, true);
+    gizmo.render_polyline(&cut_dbg, [0.0, 0.0, 0.0], 10.0, true);
 
     // Debug: label polygon vertices
-    for (i, v) in cut_vertices.iter().enumerate() {
-        gizmo.render_number(i, v.to_array(), 1.6, [0.0, 0.0, 0.0], true);
-        gizmo.draw_cross(*v, 0.25, [0.0, 0.0, 0.0]);
-    }
+    // for (i, v) in cut_vertices.iter().enumerate() {
+    //     gizmo.render_number(i, v.to_array(), 1.6, [0.0, 0.0, 0.0], true);
+    //     gizmo.draw_cross(*v, 0.25, [0.0, 0.0, 0.0]);
+    // }
 
     // 3) Trim every connected lane: first boundary hit from node-side end
     let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
@@ -1729,7 +1741,7 @@ fn initial_carve(
             let is_incoming = incoming.contains(&lane_id);
 
             // Debug: original lane (yellow)
-            gizmo.render_polyline(pts, [0.95, 0.95, 0.10], 2.0, true);
+            // gizmo.render_polyline(pts, [0.95, 0.95, 0.10], 2.0, true);
 
             // We always compute hit distance from the node-side end:
             // - outgoing: node is at START -> use forward polyline
@@ -1752,9 +1764,9 @@ fn initial_carve(
             }
 
             // Debug: show hit (red cross)
-            gizmo.draw_cross(hit, 0.5, [1.0, 0.0, 0.0]);
+            gizmo.draw_cross(hit, 0.2, [1.0, 0.0, 0.0]);
 
-            // Apply trim using YOUR functions
+            // Apply trim
             let new_pts = if is_incoming {
                 modify_polyline_end(pts, amount) // trim at END
             } else {
@@ -1780,16 +1792,16 @@ fn initial_carve(
                     trim_polyline_end_by_distance(pts, total - amount)
                 };
                 if let Some(rem) = removed {
-                    gizmo.render_polyline(&rem, [1.0, 0.0, 1.0], 3.0, true); // magenta = deleted
+                    gizmo.render_polyline(&rem, [1.0, 0.0, 0.4], 5.0, true); // magenta = deleted
                 }
             }
 
-            gizmo.render_polyline(&new_pts, [0.1, 0.7, 1.0], 8.0, true); // cyan = final kept
+            // gizmo.render_polyline(&new_pts, [0.1, 0.7, 1.0], 8.0, true); // cyan = final kept
 
-            println!(
-                "trim lane {:?}: incoming={} amount={:.3}m",
-                lane_id, is_incoming, amount
-            );
+            // println!(
+            //     "trim lane {:?}: incoming={} amount={:.3}m",
+            //     lane_id, is_incoming, amount
+            // );
 
             edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
         }
@@ -1863,6 +1875,7 @@ fn modify_polyline_end(points: &[Vec3], amount: f32) -> Option<Vec<Vec3>> {
     Some(out)
 }
 fn polyline_intersection_xz(a: &[Vec3], b: &[Vec3]) -> Option<Vec3> {
+    // 1. Check for physical intersection on existing segments (Original Logic)
     for i in 0..a.len() - 1 {
         for j in 0..b.len() - 1 {
             if let Some(p) = segment_intersection_xz(a[i], a[i + 1], b[j], b[j + 1]) {
@@ -1870,6 +1883,70 @@ fn polyline_intersection_xz(a: &[Vec3], b: &[Vec3]) -> Option<Vec3> {
             }
         }
     }
+
+    // 2. No intersection found? Try projecting the ends!
+    // We need at least 2 vertices in each polyline to determine a direction.
+    if a.len() < 2 || b.len() < 2 {
+        return None;
+    }
+
+    // Get the last two vertices to determine direction
+    let a_prev = a[a.len() - 2];
+    let a_last = a[a.len() - 1];
+
+    let b_prev = b[b.len() - 2];
+    let b_last = b[b.len() - 1];
+
+    // Calculate the intersection of the two imaginary rays extending from the ends
+    get_projected_intersection_xz(a_prev, a_last, b_prev, b_last)
+}
+
+/// Helper function to calculate the intersection of two rays on the XZ plane.
+/// Ray A starts at `a_last` and goes in direction (a_last - a_prev).
+/// Ray B starts at `b_last` and goes in direction (b_last - b_prev).
+fn get_projected_intersection_xz(
+    a_prev: Vec3,
+    a_last: Vec3,
+    b_prev: Vec3,
+    b_last: Vec3,
+) -> Option<Vec3> {
+    // Direction vectors
+    let da_x = a_last.x - a_prev.x;
+    let da_z = a_last.z - a_prev.z;
+
+    let db_x = b_last.x - b_prev.x;
+    let db_z = b_last.z - b_prev.z;
+
+    // Determinant (Cross product of directions in 2D)
+    let det = da_x * db_z - da_z * db_x;
+
+    // If det is 0, the lines are parallel and will never intersect
+    if det.abs() < 1e-6 {
+        return None;
+    }
+
+    // Vector from Ray A start to Ray B start
+    let diff_x = b_last.x - a_last.x;
+    let diff_z = b_last.z - a_last.z;
+
+    // Calculate 't' (distance along Ray A) and 'u' (distance along Ray B)
+    // Using Cramer's rule for linear systems
+    let t = (diff_x * db_z - diff_z * db_x) / det;
+    let u = (diff_x * da_z - diff_z * da_x) / det;
+
+    // Check if the intersection is actually "in front" of the polylines.
+    // t >= 0 means the intersection is ahead of polyline A.
+    // u >= 0 means the intersection is ahead of polyline B.
+    // small epsilon to handle pesky floating point imprecision.
+    if t >= -1e-4 && u >= -1e-4 {
+        return Some(Vec3 {
+            x: a_last.x + t * da_x,
+            y: a_last.y, // Preserving Y height of polyline A's end
+            z: a_last.z + t * da_z,
+        });
+    }
+
+    // If t or u are negative, the lines diverge away from each other (intersection is behind them)
     None
 }
 
@@ -2535,5 +2612,46 @@ fn seg_sphere_intersection_t(a: Vec3, b: Vec3, center: Vec3, r: f32) -> Option<f
         (true, false) => Some(t1),
         (false, true) => Some(t2),
         (false, false) => None,
+    }
+}
+fn carve_intersection_clearance_per_lane(
+    storage: &mut RoadStorage,
+    _node_id: NodeId,
+    lane_demands: &HashMap<LaneId, f32>,
+) {
+    let mut edits = Vec::new();
+
+    for (lane_id, amount) in lane_demands {
+        // Filter out negligible changes to prevent mesh jitter
+        if amount.abs() < 0.05 {
+            continue;
+        }
+
+        let lane = storage.lane(lane_id);
+        if !lane.is_enabled() {
+            continue;
+        }
+
+        let is_incoming = storage
+            .node(_node_id)
+            .unwrap()
+            .incoming_lanes()
+            .contains(lane_id);
+
+        let new_pts = if is_incoming {
+            // Incoming lanes get modified at the END
+            modify_polyline_end(&lane.geometry().points, *amount)
+        } else {
+            // Outgoing lanes get modified at the START
+            modify_polyline_start(&lane.geometry().points, *amount)
+        };
+
+        if let Some(pts) = new_pts {
+            edits.push((*lane_id, LaneGeometry::from_polyline(pts)));
+        }
+    }
+
+    for (id, geom) in edits {
+        storage.lane_mut(id).replace_geometry(geom);
     }
 }

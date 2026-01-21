@@ -4,6 +4,7 @@ use crate::data::BendMode;
 use crate::hsv::{HSV, hsv_to_rgb, rgb_to_hsv};
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem};
+use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::MouseState;
 use crate::ui::ui_edit_manager::DeselectAllCommand;
@@ -200,6 +201,7 @@ pub struct ActionContext<'a> {
     pub world_renderer: &'a mut TerrainRenderer,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
+    pub road_style_params: &'a mut RoadStyleParams,
 }
 
 // ==================== ACTION HANDLER TYPE ====================
@@ -699,7 +701,18 @@ impl ActionSystem {
                     .insert("Drag Hue Point".to_string(), state);
                 ActionResult::Ok
             }
-
+            "set_roads_four_lanes" => {
+                //println!("Set road to 4 lane 2 hin 2 zurück!");
+                let lanes_each_direction = (
+                    action.arg_int(0).unwrap_or(1) as usize,
+                    action.arg_int(1).unwrap_or(1) as usize,
+                );
+                //println!("{:#?}", lanes_each_direction);
+                let mut road_type = ctx.road_style_params.road_type().clone();
+                road_type.lanes_each_direction = lanes_each_direction;
+                ctx.road_style_params.set_road_type(road_type);
+                ActionResult::Ok
+            }
             // ===== NO-OP =====
             "none" | "noop" | "" => ActionResult::Ok,
 
@@ -856,6 +869,7 @@ pub fn execute_action(
     time: &TimeSystem,
     world_renderer: &mut TerrainRenderer,
     window_size: PhysicalSize<u32>,
+    road_style_params: &mut RoadStyleParams,
 ) {
     let mut ctx = ActionContext {
         loader,
@@ -865,6 +879,7 @@ pub fn execute_action(
         world_renderer,
         hit: top_hit,
         window_size,
+        road_style_params,
     };
 
     // Process delayed actions
@@ -901,13 +916,13 @@ pub fn activate_action(
     time: &TimeSystem,
     world_renderer: &mut TerrainRenderer,
     window_size: PhysicalSize<u32>,
+    road_style_params: &mut RoadStyleParams,
 ) {
     if let Some(hit) = top_hit {
         let action_str = hit.action.clone().unwrap_or_default();
         if action_str.is_empty() || action_str == "None" {
             return;
         }
-
         let mut ctx = ActionContext {
             loader,
             mouse_state,
@@ -916,6 +931,7 @@ pub fn activate_action(
             world_renderer,
             hit: top_hit,
             window_size,
+            road_style_params,
         };
 
         action_system.run(&action_str, &mut ctx);

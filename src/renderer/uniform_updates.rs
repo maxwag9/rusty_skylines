@@ -1,28 +1,34 @@
+use crate::components::camera::Camera;
 use crate::renderer::astronomy::AstronomyState;
 use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
+use crate::renderer::shadows::compute_light_matrix;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
+use glam::{Mat4, Vec3};
+use wgpu::Queue;
 
 pub struct UniformUpdater<'a> {
-    queue: &'a wgpu::Queue,
+    queue: &'a Queue,
     pipelines: &'a Pipelines,
 }
 
 impl<'a> UniformUpdater<'a> {
-    pub fn new(queue: &'a wgpu::Queue, pipelines: &'a Pipelines) -> Self {
+    pub fn new(queue: &'a Queue, pipelines: &'a Pipelines) -> Self {
         Self { queue, pipelines }
     }
 
     pub fn update_camera_uniforms(
         &self,
-        view: glam::Mat4,
-        proj: glam::Mat4,
-        view_proj: glam::Mat4,
+        view: Mat4,
+        proj: Mat4,
+        view_proj: Mat4,
         astronomy: &AstronomyState,
-        cam_pos: glam::Vec3,
+        cam_pos: Vec3,
+        target_pos: Vec3,
         orbit_radius: f32,
         total_time: f32,
     ) {
+        let light_matrix = compute_light_matrix(target_pos, astronomy.sun_dir);
         let new_uniforms = make_new_uniforms(
             view,
             proj,
@@ -32,6 +38,7 @@ impl<'a> UniformUpdater<'a> {
             cam_pos,
             orbit_radius,
             total_time,
+            light_matrix,
         );
         self.queue.write_buffer(
             &self.pipelines.uniforms.buffer,
@@ -40,20 +47,13 @@ impl<'a> UniformUpdater<'a> {
         );
     }
 
-    pub fn update_fog_uniforms(
-        &self,
-        config: &wgpu::SurfaceConfiguration,
-        view: glam::Mat4,
-        cam_height: f32,
-    ) {
-        let proj_params = [view.col(2).z, view.col(3).z];
-
+    pub fn update_fog_uniforms(&self, config: &wgpu::SurfaceConfiguration, camera: &Camera) {
         let fog_uniforms = FogUniforms {
             screen_size: [config.width as f32, config.height as f32],
-            proj_params,
+            proj_params: [camera.near, camera.far],
             fog_density: 0.15,
             fog_height: 0.0,
-            cam_height,
+            cam_height: camera.position().y,
             _pad0: 0.0,
             fog_color: [0.55, 0.55, 0.6],
             _pad1: 0.0,

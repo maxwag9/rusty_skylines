@@ -11,6 +11,7 @@ mod procedural_render_manager;
 pub mod procedural_texture_manager;
 pub(crate) mod render_passes;
 pub(crate) mod shader_watcher;
+mod shadows;
 pub(crate) mod textures;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;

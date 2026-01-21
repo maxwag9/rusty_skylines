@@ -4,5 +4,5 @@ mod road_helpers;
 pub mod road_mesh_manager;
 pub mod road_mesh_renderer;
 mod road_preview;
-mod road_structs;
+pub mod road_structs;
 pub mod roads;

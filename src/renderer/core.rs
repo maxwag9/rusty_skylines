@@ -14,6 +14,7 @@ use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment,
 };
 use crate::renderer::shader_watcher::ShaderWatcher;
+use crate::renderer::shadows::{render_roads_shadows, render_terrain_shadows};
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
@@ -110,7 +111,7 @@ impl RenderCore {
             desired_maximum_frame_latency: 2,
         };
 
-        let mut msaa_samples = 4;
+        let mut msaa_samples = 1;
         let caps = adapter.get_texture_format_features(config.format);
         let supported = caps.flags.intersects(
             TextureFormatFeatureFlags::MULTISAMPLE_X8
@@ -234,13 +235,13 @@ impl RenderCore {
             view_proj,
             &astronomy,
             cam_pos,
+            camera.target,
             orbit_radius,
             time.total_time as f32,
         );
-        uniform_updater.update_fog_uniforms(&self.config, view, camera.position().y);
+        uniform_updater.update_fog_uniforms(&self.config, camera);
         uniform_updater.update_sky_uniforms(astronomy.moon_phase);
         uniform_updater.update_water_uniforms();
-
         // Update world
         self.terrain_renderer.update(
             &self.device,
@@ -268,6 +269,12 @@ impl RenderCore {
             camera.target,
             time.total_game_time,
             &self.road_renderer.road_manager,
+        );
+        self.gizmo.update_gizmo_vertices(
+            camera.target,
+            camera.orbit_radius,
+            false,
+            astronomy.sun_dir,
         );
     }
     pub(crate) fn render(
@@ -303,7 +310,7 @@ impl RenderCore {
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-
+        self.execute_shadow_pass(&mut encoder, camera, aspect);
         let pass_config = RenderPassConfig::from_settings(settings);
         self.execute_main_pass(
             &mut encoder,
@@ -320,11 +327,45 @@ impl RenderCore {
         self.queue.submit(Some(encoder.finish()));
         frame.present();
     }
+    fn execute_shadow_pass(&mut self, encoder: &mut CommandEncoder, camera: &Camera, aspect: f32) {
+        // Clear the shadow map to 1.0 (far depth)
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Shadow Pass"),
+            color_attachments: &[], // <--- No color, depth only!
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: &self.pipelines.shadow_map_view, // The texture from step 1
+                depth_ops: Some(Operations {
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
 
+        // Terrain
+        render_terrain_shadows(
+            &mut pass,
+            &mut self.render_manager,
+            &self.terrain_renderer,
+            &self.pipelines,
+            camera,
+            aspect,
+        );
+        // Roads
+        render_roads_shadows(
+            &mut pass,
+            &mut self.render_manager,
+            &self.road_renderer,
+            &self.pipelines,
+        );
+    }
     fn execute_main_pass(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        surface_view: &wgpu::TextureView,
+        encoder: &mut CommandEncoder,
+        surface_view: &TextureView,
         config: &RenderPassConfig,
         camera: &Camera,
         aspect: f32,
@@ -405,7 +446,7 @@ impl RenderCore {
             );
         } // pass 1 ends here (depth is now sampleable in pass 2)
 
-        // -------- Pass 2: Fog + UI (samples depth, no depth attachment) --------
+        // -------- Pass 2: Fog (samples depth, no depth attachment) --------
         {
             let color_attachment = create_color_attachment_load(
                 &self.pipelines.msaa_view,
@@ -414,7 +455,7 @@ impl RenderCore {
             );
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Fog + UI Pass"),
+                label: Some("Fog Pass"),
                 color_attachments: &[Some(color_attachment)],
                 depth_stencil_attachment: None, // IMPORTANT: we sample depth
                 timestamp_writes: None,
@@ -458,6 +499,22 @@ impl RenderCore {
             });
             // UI (NOT fogged, because it draws after fog) Logic!
             self.render_ui(&mut pass, ui_loader, time, input_state);
+        }
+        {
+            let color_attachment = create_color_attachment_load(
+                &self.pipelines.msaa_view,
+                surface_view,
+                self.pipelines.msaa_samples,
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Depth View Fullscreen Preview Pass"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            //self.render_manager.render_fullscreen_preview(&self.pipelines.depth_sample_view, "Shadow Map Fullscreen Render", self.msaa_samples, &mut pass);
         }
     }
     fn render_ui(
@@ -565,11 +622,12 @@ fn render_gizmo(
             vertex_layouts: Vec::from([LineVtx::layout()]),
             cull_mode: None,
             blend: Some(BlendState::REPLACE),
+            shadow_pass: false,
         },
         &[&pipelines.uniforms.buffer],
         pass,
+        pipelines,
     );
-    gizmo.update_gizmo_vertices(camera.target, camera.orbit_radius, false);
     let vertex_count = gizmo.update_buffer(device, queue);
     pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
     pass.draw(0..vertex_count, 0..1);
@@ -614,6 +672,7 @@ fn render_water(
             vertex_layouts: Vec::from([SimpleVertex::layout()]),
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
+            shadow_pass: false,
         },
         &[
             &pipelines.uniforms.buffer,
@@ -621,6 +680,7 @@ fn render_water(
             &pipelines.sky_uniforms.buffer,
         ],
         pass,
+        pipelines,
     );
     pass.set_stencil_reference(1);
     pass.set_vertex_buffer(0, pipelines.water_mesh_buffers.vertex.slice(..));
@@ -654,9 +714,11 @@ fn render_sky(
             vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
+            shadow_pass: false,
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
+        pipelines,
     );
     pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
     pass.draw(0..4, 0..STAR_COUNT); // 4 verts, STAR_COUNT instances
@@ -679,9 +741,11 @@ fn render_sky(
             vertex_layouts: Vec::new(),
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
+            shadow_pass: false,
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
+        pipelines,
     );
     pass.draw(0..3, 0..1);
 }
@@ -774,7 +838,11 @@ fn render_roads(
         orange_asphalt_key,      // 4
         gray_asphalt_key,        // 5
     ];
-
+    let bias = DepthBiasState {
+        constant: -3, // Positive pushes geometry away from light
+        slope_scale: -2.0,
+        clamp: 0.0,
+    };
     // This sets the road pipeline + texture array bind group (bind group 0)
     let road_shader_path = shader_dir().join("road.wgsl");
     render_manager.render(
@@ -788,18 +856,20 @@ fn render_roads(
                 depth_write_enabled: true,
                 depth_compare: CompareFunction::LessEqual,
                 stencil: Default::default(),
-                bias: Default::default(),
+                bias,
             }),
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
             blend: Some(BlendState::ALPHA_BLENDING),
+            shadow_pass: false,
         },
         &[
             &pipelines.uniforms.buffer,
             &road_renderer.road_appearance.normal_buffer,
         ],
         pass,
+        pipelines,
     );
 
     for chunk_id in &road_renderer.visible_draw_list {
@@ -839,12 +909,14 @@ fn render_roads(
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
             blend: Some(BlendState::ALPHA_BLENDING),
+            shadow_pass: false,
         },
         &[
             &pipelines.uniforms.buffer,
             &road_renderer.road_appearance.preview_buffer,
         ],
         pass,
+        pipelines,
     );
     pass.set_vertex_buffer(0, vb.slice(..));
     pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
@@ -909,9 +981,11 @@ fn render_terrain(
             vertex_layouts: Vec::from([Vertex::desc()]),
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
+            shadow_pass: false,
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
+        pipelines,
     );
     terrain_renderer.render(pass, camera, aspect, false);
 
@@ -948,9 +1022,11 @@ fn render_terrain(
             vertex_layouts: Vec::from([Vertex::desc()]),
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
+            shadow_pass: false,
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
+        pipelines,
     );
     terrain_renderer.render(pass, camera, aspect, true);
 }

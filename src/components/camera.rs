@@ -8,6 +8,8 @@ pub struct Camera {
     pub orbit_radius: f32,
     pub yaw: f32,
     pub pitch: f32,
+    pub near: f32,
+    pub far: f32,
 }
 
 impl Camera {
@@ -17,6 +19,8 @@ impl Camera {
             orbit_radius: 50.0,
             yaw: -230f32.to_radians(),
             pitch: 52f32.to_radians(),
+            near: 0.5,
+            far: 10_000.0,
         }
     }
 
@@ -38,7 +42,7 @@ impl Camera {
 
         let view = glam::Mat4::look_at_rh(eye, self.target, Vec3::Y);
 
-        let proj = glam::Mat4::perspective_rh(80f32.to_radians(), aspect, 0.5, 10_000.0);
+        let proj = glam::Mat4::perspective_rh(80f32.to_radians(), aspect, self.near, self.far);
 
         let view_proj = proj * view;
 

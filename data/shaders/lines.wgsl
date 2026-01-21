@@ -5,7 +5,7 @@ struct Uniforms {
     inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
-
+    lighting_view_proj: mat4x4<f32>,
     sun_direction: vec3<f32>,
     time: f32,
 

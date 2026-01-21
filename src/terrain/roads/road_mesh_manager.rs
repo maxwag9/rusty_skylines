@@ -6,9 +6,11 @@
 
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::intersections::{LaneBoundaries, build_intersection_mesh};
+use crate::terrain::roads::intersections::{
+    IntersectionMeshResult, SegmentBoundaryAtNode, build_intersection_mesh,
+};
 use crate::terrain::roads::road_structs::*;
-use crate::terrain::roads::roads::{LaneGeometry, Node, RoadStorage};
+use crate::terrain::roads::roads::{LaneGeometry, Node, RoadStorage, Segment};
 use glam::Vec3;
 use std::collections::HashMap;
 
@@ -163,41 +165,70 @@ impl Default for MeshConfig {
 // Mesh Builders (Lane First)
 // ============================================================================
 
-/// Shared logic to draw a full segment (lanes, sidewalks, medians)
-/// `lanes`: List of (Lane Index, Geometry) pairs.
-fn mesh_segment_geometry(
+/// Mesh a segment, morphing endpoints to match intersection boundaries
+fn mesh_segment_with_boundaries(
     terrain_renderer: &TerrainRenderer,
-    lanes: &[(i8, LaneGeometry)],
+    seg_id: SegmentId,
+    segment: &Segment,
+    storage: &RoadStorage,
     style: &RoadStyleParams,
     config: &MeshConfig,
     chunk_filter: Option<ChunkId>,
+    start_boundary: Option<&SegmentBoundaryAtNode>,
+    end_boundary: Option<&SegmentBoundaryAtNode>,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
-    if lanes.is_empty() {
+    let lane_ids = segment.lanes();
+    if lane_ids.is_empty() {
         return;
     }
 
-    let mut min_lane_idx = 0;
-    let mut max_lane_idx = 0;
+    let mut lane_data: Vec<(i8, LaneGeometry)> = Vec::new();
+    let mut min_lane_idx: i8 = i8::MAX;
+    let mut max_lane_idx: i8 = i8::MIN;
     let mut has_left = false;
     let mut has_right = false;
 
-    // 1. Draw Lanes
-    for (idx, geom) in lanes {
-        let i = *idx;
-        if i < min_lane_idx {
-            min_lane_idx = i;
+    for lane_id in lane_ids {
+        let lane = storage.lane(lane_id);
+        let lane_idx = lane.lane_index();
+        let original_polyline = lane.polyline();
+
+        if original_polyline.is_empty() {
+            continue;
         }
-        if i > max_lane_idx {
-            max_lane_idx = i;
+
+        let modified_polyline = adjust_polyline_to_boundaries(
+            &original_polyline,
+            lane_idx,
+            start_boundary,
+            end_boundary,
+            style,
+        );
+
+        let geom = LaneGeometry::from_polyline(modified_polyline);
+        lane_data.push((lane_idx, geom));
+
+        if lane_idx < min_lane_idx {
+            min_lane_idx = lane_idx;
         }
-        if i < 0 {
+        if lane_idx > max_lane_idx {
+            max_lane_idx = lane_idx;
+        }
+        if lane_idx < 0 {
             has_left = true;
         }
-        if i > 0 {
+        if lane_idx > 0 {
             has_right = true;
         }
+    }
+
+    // 1. Draw lane surfaces
+    for (idx, geom) in &lane_data {
+        let half_width = style.lane_width * 0.5;
+        let start_ovr = compute_ribbon_override(start_boundary, *idx, 0.0, half_width);
+        let end_ovr = compute_ribbon_override(end_boundary, *idx, 0.0, half_width);
 
         build_ribbon_mesh(
             terrain_renderer,
@@ -208,15 +239,22 @@ fn mesh_segment_geometry(
             style.lane_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
+            start_ovr,
+            end_ovr,
             vertices,
             indices,
         );
     }
 
-    // 2. Draw Sidewalks
+    // 2. Draw sidewalks on outer edges
     if has_left {
-        if let Some((_, geom)) = lanes.iter().find(|(i, _)| *i == min_lane_idx) {
+        if let Some((lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == min_lane_idx) {
             let offset = style.lane_width * 0.5 + style.sidewalk_width * 0.5;
+            let half_sw = style.sidewalk_width * 0.5;
+
+            let start_ovr = compute_ribbon_override(start_boundary, *lane_idx, offset, half_sw);
+            let end_ovr = compute_ribbon_override(end_boundary, *lane_idx, offset, half_sw);
+
             build_ribbon_mesh(
                 terrain_renderer,
                 geom,
@@ -226,6 +264,8 @@ fn mesh_segment_geometry(
                 style.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
+                start_ovr,
+                end_ovr,
                 vertices,
                 indices,
             );
@@ -246,8 +286,13 @@ fn mesh_segment_geometry(
     }
 
     if has_right {
-        if let Some((_, geom)) = lanes.iter().find(|(i, _)| *i == max_lane_idx) {
+        if let Some((lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == max_lane_idx) {
             let offset = style.lane_width * 0.5 + style.sidewalk_width * 0.5;
+            let half_sw = style.sidewalk_width * 0.5;
+
+            let start_ovr = compute_ribbon_override(start_boundary, *lane_idx, offset, half_sw);
+            let end_ovr = compute_ribbon_override(end_boundary, *lane_idx, offset, half_sw);
+
             build_ribbon_mesh(
                 terrain_renderer,
                 geom,
@@ -257,6 +302,8 @@ fn mesh_segment_geometry(
                 style.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
+                start_ovr,
+                end_ovr,
                 vertices,
                 indices,
             );
@@ -276,11 +323,14 @@ fn mesh_segment_geometry(
         }
     }
 
-    // 3. Draw Median
+    // 3. Draw median if needed
     if has_left && has_right && style.median_width > 0.1 {
-        // Use Lane 1 as reference
-        if let Some((_, geom)) = lanes.iter().find(|(i, _)| *i == 1) {
+        if let Some((lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == 1) {
             let offset = -style.lane_width * 0.5;
+            let half_med = style.median_width * 0.5;
+
+            let start_ovr = compute_ribbon_override(start_boundary, *lane_idx, offset, half_med);
+            let end_ovr = compute_ribbon_override(end_boundary, *lane_idx, offset, half_med);
 
             build_ribbon_mesh(
                 terrain_renderer,
@@ -291,12 +341,12 @@ fn mesh_segment_geometry(
                 style.median_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
+                start_ovr,
+                end_ovr,
                 vertices,
                 indices,
             );
 
-            // Right Curb (Facing Lane 1)
-            // Points to Lane 1 (+Lateral relative to Lane 1)
             let curb_offset_right = -style.lane_width * 0.5 + style.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
@@ -312,8 +362,6 @@ fn mesh_segment_geometry(
                 indices,
             );
 
-            // Left Curb (Facing Lane -1)
-            // Points to Lane -1 (-Lateral relative to Lane 1)
             let curb_offset_left = -style.lane_width * 0.5 - style.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
@@ -330,6 +378,66 @@ fn mesh_segment_geometry(
             );
         }
     }
+}
+
+/// Adjust polyline endpoints to match intersection boundary positions
+fn adjust_polyline_to_boundaries(
+    original: &[Vec3],
+    lane_idx: i8,
+    start_boundary: Option<&SegmentBoundaryAtNode>,
+    end_boundary: Option<&SegmentBoundaryAtNode>,
+    style: &RoadStyleParams,
+) -> Vec<Vec3> {
+    if original.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = original.to_vec();
+
+    // Adjust start point
+    if let Some(boundary) = start_boundary {
+        if let Some(lane_edge) = boundary.lane_edges.get(&lane_idx) {
+            // Use the lane's center position from boundary
+            result[0] = lane_edge.center;
+        } else {
+            // Fallback: interpolate between outer edges
+            let t = compute_lane_t(lane_idx, boundary);
+            result[0] = boundary.outer_left.lerp(boundary.outer_right, t);
+        }
+    }
+
+    // Adjust end point
+    if let Some(boundary) = end_boundary {
+        let last = result.len() - 1;
+        if let Some(lane_edge) = boundary.lane_edges.get(&lane_idx) {
+            result[last] = lane_edge.center;
+        } else {
+            let t = compute_lane_t(lane_idx, boundary);
+            result[last] = boundary.outer_left.lerp(boundary.outer_right, t);
+        }
+    }
+
+    result
+}
+
+/// Compute interpolation factor for a lane within the segment width
+fn compute_lane_t(lane_idx: i8, boundary: &SegmentBoundaryAtNode) -> f32 {
+    // Simple linear mapping based on lane indices present
+    if boundary.lane_edges.is_empty() {
+        return 0.5;
+    }
+
+    let min_idx = boundary.lane_edges.keys().copied().min().unwrap_or(0);
+    let max_idx = boundary.lane_edges.keys().copied().max().unwrap_or(0);
+
+    if min_idx == max_idx {
+        return 0.5;
+    }
+
+    let range = (max_idx - min_idx) as f32;
+    let offset = (lane_idx - min_idx) as f32;
+
+    (offset + 0.5) / (range + 1.0)
 }
 
 fn draw_node_geometry(
@@ -586,6 +694,12 @@ fn draw_node_geometry(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RibbonEndOverride {
+    pub left: Vec3,
+    pub right: Vec3,
+}
+
 /// Builds a ribbon mesh for a single lane or strip.
 fn build_ribbon_mesh(
     terrain_renderer: &TerrainRenderer,
@@ -595,7 +709,9 @@ fn build_ribbon_mesh(
     offset_from_center: f32,
     material_id: u32,
     chunk_filter: Option<ChunkId>,
-    uv_config: (f32, f32), // scale_u, scale_v
+    uv_config: (f32, f32),
+    start_override: Option<RibbonEndOverride>,
+    end_override: Option<RibbonEndOverride>,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
@@ -605,6 +721,7 @@ fn build_ribbon_mesh(
 
     let half_width = width * 0.5;
     let base_vertex = vertices.len() as u32;
+    let last_point_idx = lane_geom.points.len() - 1;
 
     let mut included_indices = Vec::new();
 
@@ -651,60 +768,75 @@ fn build_ribbon_mesh(
     for &i in &included_indices {
         let p = lane_geom.points[i];
 
-        let tangent = if i + 1 < lane_geom.points.len() {
-            (lane_geom.points[i + 1] - p).normalize_or_zero()
-        } else if i > 0 {
-            (p - lane_geom.points[i - 1]).normalize_or_zero()
+        // Check if we have an override for this endpoint
+        let maybe_override = if i == 0 {
+            start_override
+        } else if i == last_point_idx {
+            end_override
         } else {
-            Vec3::X
+            None
         };
 
-        // Lateral points LEFT relative to forward tangent (Y-up)
-        // Tangent=(0,0,1) -> Lateral=(-1,0,0)
-        let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
+        let (final_left, final_right) = if let Some(ovr) = maybe_override {
+            // Use override positions directly (XZ from override, Y from terrain)
+            let h_left = terrain_renderer.get_height_at([ovr.left.x, ovr.left.z]);
+            let h_right = terrain_renderer.get_height_at([ovr.right.x, ovr.right.z]);
+            (
+                Vec3::new(ovr.left.x, h_left + height + CLEARANCE, ovr.left.z),
+                Vec3::new(ovr.right.x, h_right + height + CLEARANCE, ovr.right.z),
+            )
+        } else {
+            // Original tangent-based calculation
+            let tangent = if i + 1 < lane_geom.points.len() {
+                (lane_geom.points[i + 1] - p).normalize_or_zero()
+            } else if i > 0 {
+                (p - lane_geom.points[i - 1]).normalize_or_zero()
+            } else {
+                Vec3::X
+            };
 
-        let center_pos = p + lateral * offset_from_center;
+            let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
+            let center_pos = p + lateral * offset_from_center;
+            let left_pos_raw = center_pos - lateral * half_width;
+            let right_pos_raw = center_pos + lateral * half_width;
 
-        // "Left" here means index 0 (v_base), which is center - lateral (Geometrically Right)
-        // "Right" here means index 1 (v_base+1), which is center + lateral (Geometrically Left)
-        let left_pos_raw = center_pos - lateral * half_width;
-        let right_pos_raw = center_pos + lateral * half_width;
+            let h_left = terrain_renderer.get_height_at([left_pos_raw.x, left_pos_raw.z]);
+            let h_right = terrain_renderer.get_height_at([right_pos_raw.x, right_pos_raw.z]);
 
-        let h_left = terrain_renderer.get_height_at([left_pos_raw.x, left_pos_raw.z]);
-        let h_right = terrain_renderer.get_height_at([right_pos_raw.x, right_pos_raw.z]);
+            (
+                Vec3::new(left_pos_raw.x, h_left + height + CLEARANCE, left_pos_raw.z),
+                Vec3::new(
+                    right_pos_raw.x,
+                    h_right + height + CLEARANCE,
+                    right_pos_raw.z,
+                ),
+            )
+        };
 
-        let final_left = Vec3::new(left_pos_raw.x, h_left + height + CLEARANCE, left_pos_raw.z);
-        let final_right = Vec3::new(
-            right_pos_raw.x,
-            h_right + height + CLEARANCE,
-            right_pos_raw.z,
-        );
-
-        let normal = Vec3::Y;
-
+        // UV calculation: u based on arc length, v spans the width
         let u = lane_geom.lengths[i] * uv_config.0;
         let v_min = 0.0;
         let v_max = width * uv_config.1;
 
         vertices.push(RoadVertex {
             position: final_left.to_array(),
-            normal: normal.to_array(),
+            normal: [0.0, 1.0, 0.0],
             uv: [u, v_min],
             material_id,
         });
 
         vertices.push(RoadVertex {
             position: final_right.to_array(),
-            normal: normal.to_array(),
+            normal: [0.0, 1.0, 0.0],
             uv: [u, v_max],
             material_id,
         });
-        // println!("Final Vertex Height Left: {}, Right: {}; Terrain Height Left: {}, Right: {}", final_left.y, final_right.y, h_left, h_right);
+
         point_idx_to_vert_idx.insert(i, current_vert_idx);
         current_vert_idx += 2;
     }
 
-    // Generate indices (Corrected for CCW Face Back culling)
+    // Generate indices (CCW for back-face culling)
     for w in included_indices.windows(2) {
         let a = w[0];
         let b = w[1];
@@ -720,6 +852,30 @@ fn build_ribbon_mesh(
         indices.push(v_base + 1);
         indices.push(v_next + 1);
     }
+}
+
+/// Compute ribbon edge override from boundary data
+fn compute_ribbon_override(
+    boundary: Option<&SegmentBoundaryAtNode>,
+    lane_idx: i8,
+    offset_from_center: f32,
+    half_width: f32,
+) -> Option<RibbonEndOverride> {
+    let boundary = boundary?;
+    let lane_edge = boundary.lane_edges.get(&lane_idx)?;
+
+    // outward_direction points from intersection into segment
+    // lateral is perpendicular, pointing left when facing outward
+    let outward = boundary.outward_direction;
+    let lateral = Vec3::new(-outward.z, 0.0, outward.x);
+
+    // Ribbon center at this boundary
+    let center = lane_edge.center + lateral * offset_from_center;
+
+    Some(RibbonEndOverride {
+        left: center - lateral * half_width,
+        right: center + lateral * half_width,
+    })
 }
 
 /// Builds vertical faces between two parallel strips (e.g., Curb).
@@ -998,17 +1154,15 @@ impl RoadMeshManager {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
 
-        // ════════════════════════════════════════════════════════════════════
-        // Phase 1: Build all intersection meshes and collect lane boundaries
-        // ═══════════════════════════════════════════════════════════ ═ ════
-
-        let mut all_lane_boundaries: LaneBoundaries = HashMap::new();
+        // Store intersection results for segment meshing
+        let mut intersection_results: HashMap<NodeId, IntersectionMeshResult> = HashMap::new();
 
         let node_ids: Vec<NodeId> = match chunk_id {
             Some(cid) => storage.nodes_in_chunk(cid),
             None => storage.get_active_node_ids(),
         };
 
+        // === PASS 1: Build intersection meshes and collect boundary data ===
         for node_id in &node_ids {
             let node = match storage.node(*node_id) {
                 Some(n) => n,
@@ -1018,7 +1172,6 @@ impl RoadMeshManager {
             let segment_count = storage.enabled_segment_count_connected_to_node(*node_id);
 
             if segment_count >= 2 {
-                // This is an intersection - build mesh and get boundaries
                 let result = build_intersection_mesh(
                     terrain_renderer,
                     *node_id,
@@ -1030,15 +1183,17 @@ impl RoadMeshManager {
                     &mut indices,
                     gizmo,
                 );
+                intersection_results.insert(*node_id, result);
             } else {
-                // Dead end or single connection - use existing node geometry
+                // Dead end or single connection
                 let center = Vec3::from_array(node.position());
                 let mut connected_lanes_info = Vec::new();
 
-                let incoming = node.incoming_lanes();
-                let outgoing = node.outgoing_lanes();
-
-                for lane_id in incoming.iter().chain(outgoing.iter()) {
+                for lane_id in node
+                    .incoming_lanes()
+                    .iter()
+                    .chain(node.outgoing_lanes().iter())
+                {
                     let lane = storage.lane(lane_id);
                     connected_lanes_info.push((lane.lane_index(), style.lane_width));
                 }
@@ -1062,10 +1217,7 @@ impl RoadMeshManager {
             }
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // Phase 2: Build segment meshes with intersection trimming
-        // ════════════════════════════════════════════════════════════════════
-
+        // === PASS 2: Build segment meshes using intersection boundary data ===
         let segment_ids: Vec<SegmentId> = match chunk_id {
             Some(cid) => {
                 let mut ids = storage.segment_ids_touching_chunk(cid);
@@ -1081,15 +1233,27 @@ impl RoadMeshManager {
                 continue;
             }
 
-            // draw_segment_geometry_with_trim(
-            //     terrain_renderer,
-            //     &lane_data,
-            //     style,
-            //     &self.config,
-            //     chunk_id,
-            //     &mut vertices,
-            //     &mut indices,
-            // );
+            // Get boundary data from start and end nodes
+            let start_boundary = intersection_results
+                .get(&segment.start())
+                .and_then(|r| r.segment_boundaries.get(&seg_id));
+            let end_boundary = intersection_results
+                .get(&segment.end())
+                .and_then(|r| r.segment_boundaries.get(&seg_id));
+
+            mesh_segment_with_boundaries(
+                terrain_renderer,
+                seg_id,
+                segment,
+                storage,
+                style,
+                &self.config,
+                chunk_id,
+                start_boundary,
+                end_boundary,
+                &mut vertices,
+                &mut indices,
+            );
         }
 
         ChunkMesh {
@@ -1100,7 +1264,6 @@ impl RoadMeshManager {
                 .unwrap_or(0),
         }
     }
-
     pub fn update_chunk_mesh(
         &mut self,
         terrain_renderer: &TerrainRenderer,

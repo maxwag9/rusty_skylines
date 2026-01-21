@@ -44,7 +44,7 @@ pub fn select_outermost_lanes(
     node_lanes: &[NodeLane],
     storage: &RoadStorage,
 ) -> Vec<OuterNodeLane> {
-    let mut by_src: HashMap<SegmentId, Vec<(&NodeLane, i8, i8)>> = HashMap::new();
+    let mut by_src: HashMap<SegmentId, Vec<(&NodeLane, i8, i8, SegmentId)>> = HashMap::new();
 
     for nl in node_lanes {
         let Some(&LaneRef::Segment(src_id, _)) = nl.merging().first() else {
@@ -65,6 +65,7 @@ pub fn select_outermost_lanes(
             nl,
             src.lane_index().abs(),
             dst.lane_index().abs(),
+            src.segment(), // Track segment ID
         ));
     }
 
@@ -75,23 +76,23 @@ pub fn select_outermost_lanes(
             continue;
         }
 
-        let max_src = entries.iter().map(|&(_, s, _)| s).max().unwrap();
-        let max_dst = entries.iter().map(|&(_, _, d)| d).max().unwrap();
+        let max_src = entries.iter().map(|&(_, s, _, _)| s).max().unwrap();
+        let max_dst = entries.iter().map(|&(_, _, d, _)| d).max().unwrap();
 
         let winner = entries
             .into_iter()
-            .filter(|&(_, s, d)| s == max_src && d == max_dst)
-            .max_by(|(a, _, _), (b, _, _)| {
+            .filter(|&(_, s, d, _)| s == max_src && d == max_dst)
+            .max_by(|(a, _, _, _), (b, _, _, _)| {
                 let sa = right_turn_score(&a.polyline());
                 let sb = right_turn_score(&b.polyline());
-                let ordering = sa.partial_cmp(&sb);
-                ordering.unwrap()
+                sa.partial_cmp(&sb).unwrap()
             });
 
-        if let Some((nl, _, _)) = winner {
+        if let Some((nl, _, _, seg_id)) = winner {
             result.push(OuterNodeLane {
                 node_lane: nl.id(),
                 outward_sign: 1,
+                segment_id: seg_id,
             });
         }
     }

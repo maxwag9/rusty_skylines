@@ -140,7 +140,7 @@ pub struct Uniforms {
     pub inv_proj: [[f32; 4]; 4],
     pub view_proj: [[f32; 4]; 4],
     pub inv_view_proj: [[f32; 4]; 4],
-
+    pub light_view_proj: [[f32; 4]; 4],
     pub sun_direction: [f32; 3],
     pub time: f32,
 
