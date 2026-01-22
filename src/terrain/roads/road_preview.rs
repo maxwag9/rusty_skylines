@@ -42,6 +42,7 @@ pub struct RoadPreviewState {
     pub snap: Option<SnapPreview>,
     pub error: Option<PreviewError>,
 }
+
 impl RoadPreviewState {
     pub fn new() -> Self {
         Self::default()
@@ -136,13 +137,26 @@ impl RoadAppearanceGpu {
             normal_buffer,
         }
     }
-    pub fn update_preview_buffer(&mut self, queue: &Queue, preview_state: &RoadPreviewState) {
-        let new_preview: RoadAppearanceUniform;
+    pub fn update_preview_buffer(
+        &mut self,
+        queue: &Queue,
+        preview_state: &RoadPreviewState,
+        orbit_radius: f32,
+    ) {
+        let mut new_preview: RoadAppearanceUniform;
         if preview_state.error.is_some() {
             new_preview = RoadAppearanceUniform::preview_error();
         } else {
             new_preview = RoadAppearanceUniform::preview();
         }
+        // Fade alpha from 1.0 at radius = 0 to 0.0 at radius = 5.0.
+        // Use smoothstep for a nicer curve: smooth = 3t^2 - 2t^3, then invert.
+        if orbit_radius < 50.0 {
+            let t = (orbit_radius / 100.0).clamp(0.0, 1.0);
+            let alpha = t * t * (3.0 - 2.0 * t); // inverted smoothstep
+            new_preview.tint[3] = alpha;
+        };
+
         queue.write_buffer(&self.preview_buffer, 0, bytemuck::bytes_of(&new_preview));
     }
 }

@@ -1,7 +1,8 @@
 use crate::components::camera::Camera;
 use crate::renderer::astronomy::AstronomyState;
-use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms};
-use crate::renderer::shadows::compute_light_matrix;
+use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms_csm};
+use crate::renderer::shadows::{CSM_CASCADES, compute_csm_matrices};
+use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
 use glam::Mat4;
@@ -24,13 +25,24 @@ impl<'a> UniformUpdater<'a> {
         view_proj: Mat4,
         astronomy: &AstronomyState,
         camera: &Camera,
-        total_time: f32,
+        total_time: f64,
         aspect: f32,
-    ) {
-        // let light_matrix = compute_light_matrix_fit_to_camera(camera.position(), camera.target, camera.fov.to_radians(), aspect,
-        //                                                       camera.near,250.0, astronomy.sun_dir, 2048.0, true, true);
-        let light_matrix = compute_light_matrix(camera.target, astronomy.sun_dir);
-        let new_uniforms = make_new_uniforms(
+    ) -> (Uniforms, [Mat4; CSM_CASCADES], [f32; 4]) {
+        // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
+        let (light_mats, splits) = compute_csm_matrices(
+            camera.position(),
+            view,
+            camera.fov.to_radians(),
+            aspect,
+            camera.near,
+            camera.far,
+            astronomy.sun_dir,
+            /*shadow_map_size:*/ 2048, // or the actual CSM texture size
+            /*stabilize:*/ true,
+        );
+
+        // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
+        let new_uniforms = make_new_uniforms_csm(
             view,
             proj,
             view_proj,
@@ -39,13 +51,17 @@ impl<'a> UniformUpdater<'a> {
             camera.position(),
             camera.orbit_radius,
             total_time,
-            light_matrix,
+            light_mats,
+            splits,
+            0,
         );
+
         self.queue.write_buffer(
             &self.pipelines.uniforms.buffer,
             0,
             bytemuck::bytes_of(&new_uniforms),
         );
+        (new_uniforms, light_mats, splits)
     }
 
     pub fn update_fog_uniforms(&self, config: &wgpu::SurfaceConfiguration, camera: &Camera) {

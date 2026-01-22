@@ -5,12 +5,13 @@ use glam::Vec3;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 const CIRCLE_SEGMENT_COUNT: usize = 16;
-
+pub const DEBUG_DRAW_DURATION: f32 = 10.0; // Seconds
 pub struct PendingGizmoRender {
     pub vertices: Vec<LineVtx>,
+    pub duration: f32,
+    pub start_time: f64,
 }
 pub struct Gizmo {
-    pub persistent_renders: Vec<PendingGizmoRender>,
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
     total_game_time: f64,
@@ -24,8 +25,8 @@ impl Gizmo {
         total_game_time: f64,
         road_manager: &RoadManager,
     ) {
-        //return;
         self.total_game_time = total_game_time;
+        return;
         let render_chunk = false;
         if render_chunk {
             let (cx, cz) = position_to_chunk_coords(target_position, terrain_renderer.chunk_size);
@@ -44,16 +45,15 @@ impl Gizmo {
 
             let c = [0.2, 0.8, 0.6];
 
-            self.render_line([x0, y, z0], [x1, y, z0], c, false);
-            self.render_line([x1, y, z0], [x1, y, z1], c, false);
-            self.render_line([x1, y, z1], [x0, y, z1], c, false);
-            self.render_line([x0, y, z1], [x0, y, z0], c, false);
+            self.render_line([x0, y, z0], [x1, y, z0], c, 0.0);
+            self.render_line([x1, y, z0], [x1, y, z1], c, 0.0);
+            self.render_line([x1, y, z1], [x0, y, z1], c, 0.0);
+            self.render_line([x0, y, z1], [x0, y, z0], c, 0.0);
         }
 
         // Roads down here
-        let render_disabled_lanes = true;
+        let render_disabled_lanes = false;
         let render_arrow_lane_to_node = false;
-
         // iterate both storages but resolve everything against the storage the node belongs to
         for storage in [&road_manager.roads, &road_manager.preview_roads] {
             for (_node_id, node) in storage.iter_nodes() {
@@ -63,7 +63,7 @@ impl Gizmo {
                 } else {
                     [1.0, 0.0, 0.0]
                 };
-                self.render_circle([node.x(), node.y(), node.z()], 2.0, node_color);
+                self.render_circle([node.x(), node.y(), node.z()], 2.0, node_color, 0.0);
 
                 // 2. Render Incoming Lanes
                 for lane_id in node.incoming_lanes().iter() {
@@ -90,7 +90,7 @@ impl Gizmo {
                     let poly: Vec<[f32; 3]> =
                         lane.polyline().iter().map(|p| [p.x, p.y, p.z]).collect();
 
-                    self.render_polyline(&poly, lane_color, 7.0, false);
+                    self.render_polyline(&poly, lane_color, 15.0, 0.0);
 
                     if render_arrow_lane_to_node {
                         if let Some(end) = lane.polyline().last() {
@@ -99,6 +99,7 @@ impl Gizmo {
                                 [node.x(), node.y(), node.z()],
                                 lane_color,
                                 false,
+                                0.0,
                             );
                         }
                     }
@@ -123,7 +124,7 @@ impl Gizmo {
                         .map(|p| [p.x, p.y, p.z])
                         .collect();
 
-                    self.render_polyline(&poly, lane_color, 2.0, false);
+                    self.render_polyline(&poly, lane_color, 4.0, 0.0);
 
                     if render_arrow_lane_to_node {
                         if let Some(end) = node_lane.polyline().last() {
@@ -132,6 +133,7 @@ impl Gizmo {
                                 [node.x(), node.y(), node.z()],
                                 lane_color,
                                 false,
+                                0.0,
                             );
                         }
                     }
@@ -148,15 +150,17 @@ impl Gizmo {
             mapped_at_creation: false,
         });
         Self {
-            persistent_renders: Vec::new(),
             pending_renders: Vec::new(),
             gizmo_buffer,
             total_game_time: 0.0,
         }
     }
     pub fn clear(&mut self) {
-        self.pending_renders.clear();
+        let now = self.total_game_time;
+        self.pending_renders
+            .retain(|d| now - d.start_time < d.duration as f64);
     }
+
     pub fn update_buffer(&mut self, device: &Device, queue: &Queue) -> u32 {
         let vertices = self.collect_vertices();
 
@@ -222,8 +226,10 @@ impl Gizmo {
         ];
         self.pending_renders.push(PendingGizmoRender {
             vertices: axes.to_vec(),
+            duration: 0.0,
+            start_time: self.total_game_time,
         });
-        let arrow_length = s * 2.0; // adjust length multiplier if needed
+        let arrow_length = s * 1.0;
         let sun_end = t + sun_direction.normalize() * arrow_length;
 
         self.render_arrow(
@@ -231,6 +237,7 @@ impl Gizmo {
             [sun_end.x, sun_end.y, sun_end.z], // end in sun direction
             [1.0, 1.0, 0.0],                   // yellow
             false,                             // solid arrow
+            0.0,
         );
     }
     pub fn collect_vertices(&self) -> Vec<LineVtx> {
@@ -238,12 +245,15 @@ impl Gizmo {
         for draw in &self.pending_renders {
             out.extend_from_slice(&draw.vertices);
         }
-        for draw in &self.persistent_renders {
-            out.extend_from_slice(&draw.vertices);
-        }
         out
     }
-    pub fn render_circle(&mut self, position: [f32; 3], radius: f32, color: [f32; 3]) {
+    pub fn render_circle(
+        &mut self,
+        position: [f32; 3],
+        radius: f32,
+        color: [f32; 3],
+        duration: f32,
+    ) {
         let mut circle_vertices = Vec::<LineVtx>::new();
         let (cx, cy, cz) = (position[0], position[1], position[2]);
         for i in 0..CIRCLE_SEGMENT_COUNT {
@@ -258,35 +268,47 @@ impl Gizmo {
         }
         self.pending_renders.push(PendingGizmoRender {
             vertices: circle_vertices,
-        })
+            duration,
+            start_time: self.total_game_time,
+        });
     }
-    pub fn render_line(
+    pub fn render_line<V>(&mut self, start: V, end: V, color: [f32; 3], duration: f32)
+    where
+        V: Vec3Like,
+    {
+        let line_vertices = [
+            LineVtx {
+                pos: start.to_array(),
+                color,
+            },
+            LineVtx {
+                pos: end.to_array(),
+                color,
+            },
+        ];
+        self.pending_renders.push(PendingGizmoRender {
+            vertices: line_vertices.to_vec(),
+            duration,
+            start_time: self.total_game_time,
+        });
+    }
+
+    pub fn render_arrow<V>(
         &mut self,
-        start: [f32; 3],
-        end: [f32; 3],
+        start: V,
+        end: V,
         color: [f32; 3],
-        persistent: bool,
-    ) {
-        let line_vertices = [LineVtx { pos: start, color }, LineVtx { pos: end, color }];
-
-        if persistent {
-            self.persistent_renders.push(PendingGizmoRender {
-                vertices: line_vertices.to_vec(),
-            });
-        } else {
-            self.pending_renders.push(PendingGizmoRender {
-                vertices: line_vertices.to_vec(),
-            });
-        }
-    }
-
-    pub fn render_arrow(&mut self, start: [f32; 3], end: [f32; 3], color: [f32; 3], dashed: bool) {
+        dashed: bool,
+        duration: f32,
+    ) where
+        V: Vec3Like,
+    {
         let mut vertices = Vec::<LineVtx>::new();
 
         // Direction + length
-        let dx = end[0] - start[0];
-        let dy = end[1] - start[1];
-        let dz = end[2] - start[2];
+        let dx = end.to_array()[0] - start.to_array()[0];
+        let dy = end.to_array()[1] - start.to_array()[1];
+        let dz = end.to_array()[2] - start.to_array()[2];
         let len = (dx * dx + dy * dy + dz * dz).sqrt();
         if len <= 0.0001 {
             return;
@@ -327,8 +349,16 @@ impl Gizmo {
             let t0 = (t_head - dash_len).max(0.0);
             let t1 = t_head;
 
-            let p0 = [start[0] + nx * t0, start[1] + ny * t0, start[2] + nz * t0];
-            let p1 = [start[0] + nx * t1, start[1] + ny * t1, start[2] + nz * t1];
+            let p0 = [
+                start.to_array()[0] + nx * t0,
+                start.to_array()[1] + ny * t0,
+                start.to_array()[2] + nz * t0,
+            ];
+            let p1 = [
+                start.to_array()[0] + nx * t1,
+                start.to_array()[1] + ny * t1,
+                start.to_array()[2] + nz * t1,
+            ];
 
             vertices.push(LineVtx { pos: p0, color });
             vertices.push(LineVtx { pos: p1, color });
@@ -381,9 +411,9 @@ impl Gizmo {
         // Arrow heads -----------------------------------------------------------
 
         for (i, &t) in head_positions.iter().enumerate() {
-            let px = start[0] + nx * t;
-            let py = start[1] + ny * t;
-            let pz = start[2] + nz * t;
+            let px = start.to_array()[0] + nx * t;
+            let py = start.to_array()[1] + ny * t;
+            let pz = start.to_array()[2] + nz * t;
 
             let bx = px - nx * head_len;
             let by = py - ny * head_len;
@@ -426,7 +456,11 @@ impl Gizmo {
             });
         }
 
-        self.pending_renders.push(PendingGizmoRender { vertices });
+        self.pending_renders.push(PendingGizmoRender {
+            vertices,
+            duration,
+            start_time: self.total_game_time,
+        });
     }
 
     pub fn render_polyline<P, V>(
@@ -434,7 +468,7 @@ impl Gizmo {
         polyline: P,
         color: [f32; 3],
         spacing: f32,
-        persistent: bool,
+        duration: f32,
     ) where
         P: AsRef<[V]>,
         V: Vec3Like,
@@ -596,12 +630,11 @@ impl Gizmo {
             i += 1;
             t += spacing;
         }
-        if persistent {
-            self.persistent_renders
-                .push(PendingGizmoRender { vertices });
-        } else {
-            self.pending_renders.push(PendingGizmoRender { vertices });
-        }
+        self.pending_renders.push(PendingGizmoRender {
+            vertices,
+            duration,
+            start_time: self.total_game_time,
+        });
     }
     pub fn render_digit(
         &mut self,
@@ -609,7 +642,7 @@ impl Gizmo {
         position: [f32; 3],
         scale: f32,
         color: [f32; 3],
-        persistent: bool,
+        duration: f32,
     ) {
         let segments: &[([f32; 2], [f32; 2])] = match digit {
             0 => &[
@@ -693,13 +726,11 @@ impl Gizmo {
                 color,
             });
         }
-        if persistent {
-            self.persistent_renders
-                .push(PendingGizmoRender { vertices: verts });
-        } else {
-            self.pending_renders
-                .push(PendingGizmoRender { vertices: verts });
-        }
+        self.pending_renders.push(PendingGizmoRender {
+            vertices: verts,
+            duration,
+            start_time: self.total_game_time,
+        });
     }
 
     /// Render a whole number (multi-digit) centered at `position`.
@@ -710,7 +741,7 @@ impl Gizmo {
         position: [f32; 3],
         scale: f32,
         color: [f32; 3],
-        persistent: bool,
+        duration: f32,
     ) {
         // produce digits (0 -> "0")
         let mut digits: Vec<u8> = if value == 0 {
@@ -733,14 +764,14 @@ impl Gizmo {
             let x = start_x + i as f32 * spacing;
             // keep same y,z baseline; shift only X
             let pos = [x, position[1], position[2]];
-            self.render_digit(d, pos, scale, color, persistent);
+            self.render_digit(d, pos, scale, color, duration);
         }
     }
-    pub fn draw_cross(&mut self, p: Vec3, size: f32, color: [f32; 3]) {
+    pub fn draw_cross(&mut self, p: Vec3, size: f32, color: [f32; 3], duration: f32) {
         let dx = Vec3::new(size, 0.0, 0.0);
         let dz = Vec3::new(0.0, 0.0, size);
-        self.render_line((p - dx).to_array(), (p + dx).to_array(), color, true);
-        self.render_line((p - dz).to_array(), (p + dz).to_array(), color, true);
+        self.render_line((p - dx).to_array(), (p + dx).to_array(), color, duration);
+        self.render_line((p - dz).to_array(), (p + dz).to_array(), color, duration);
     }
 }
 pub trait Vec3Like {

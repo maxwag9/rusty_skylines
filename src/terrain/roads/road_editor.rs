@@ -1,4 +1,4 @@
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
 use crate::resources::InputState;
 use crate::terrain::roads::road_helpers::*;
@@ -16,7 +16,7 @@ const NODE_SNAP_RADIUS: f32 = 8.0;
 const LANE_SNAP_RADIUS: f32 = 8.0;
 const ENDPOINT_T_EPS: f32 = 0.02;
 const MIN_SEGMENT_LENGTH: f32 = 1.0;
-
+const CROSSING_SNAP_TO_NODE_RADIUS: f32 = 20.0;
 // ============================================================================
 // Road Editor Implementation
 // ============================================================================
@@ -371,7 +371,6 @@ impl RoadEditor {
             }
         }
     }
-
     // ==================== CROSSING DETECTION ====================
 
     /// Find all points where the new road would cross existing infrastructure
@@ -425,6 +424,45 @@ impl RoadEditor {
                 control,
                 &lane_id,
             ) {
+                let lane = storage.lane(&lane_id);
+                let seg_id = lane.segment();
+                let segment = storage.segment(seg_id);
+
+                let start_node = storage.node(segment.start).unwrap();
+                let start_node_pos = Vec3::new(start_node.x(), start_node.y(), start_node.z());
+
+                let end_node = storage.node(segment.end).unwrap();
+                let end_node_pos = Vec3::new(end_node.x(), end_node.y(), end_node.z());
+
+                let dist_to_start = (crossing.world_pos - start_node_pos).length();
+                let dist_to_end = (crossing.world_pos - end_node_pos).length();
+
+                if dist_to_start < CROSSING_SNAP_TO_NODE_RADIUS
+                    || dist_to_end < CROSSING_SNAP_TO_NODE_RADIUS
+                {
+                    // Snap to the closest endpoint node
+                    let (closest_node_id, closest_pos) = if dist_to_start <= dist_to_end {
+                        (segment.start, start_node_pos)
+                    } else {
+                        (segment.end, end_node_pos)
+                    };
+
+                    // Project the node position back onto our new road to get an accurate t
+                    if let Some((new_t, _proj_dist)) =
+                        self.project_point_to_path(start_pos, end_pos, control, closest_pos)
+                    {
+                        // Only add if the new t is still in valid range (should almost always be true)
+                        if new_t > ENDPOINT_T_EPS && new_t < 1.0 - ENDPOINT_T_EPS {
+                            crossings.push(CrossingPoint {
+                                t: new_t,
+                                world_pos: closest_pos,
+                                kind: CrossingKind::ExistingNode(closest_node_id),
+                            });
+                            crossed_segments.insert(seg_id);
+                            continue; // skip adding a lane crossing split
+                        }
+                    }
+                }
                 // Check if not too close to our road's endpoints
                 if crossing.t > ENDPOINT_T_EPS && crossing.t < 1.0 - ENDPOINT_T_EPS {
                     crossed_segments.insert(seg_id);
@@ -1658,12 +1696,13 @@ fn initial_carve(
             continue;
         };
 
-        let lp = storage.lane(&l_lane).polyline();
-        let rp = storage.lane(&r_lane).polyline();
-
+        let lp_og = storage.lane(&l_lane).polyline();
+        let rp_og = storage.lane(&r_lane).polyline();
+        let lp = &offset_polyline_f32(lp_og, params.lane_width_m * 2.0 + params.side_walk_width);
+        let rp = &offset_polyline_f32(rp_og, params.lane_width_m * 2.0 + params.side_walk_width);
         // Debug: show which lanes we're trying to intersect
-        gizmo.render_polyline(lp, [0.8, 0.0, 0.2], 2.0, true);
-        gizmo.render_polyline(rp, [0.2, 0.0, 0.8], 2.0, true);
+        gizmo.render_polyline(lp, [0.8, 0.0, 0.2], 2.0, DEBUG_DRAW_DURATION);
+        gizmo.render_polyline(rp, [0.2, 0.0, 0.8], 2.0, DEBUG_DRAW_DURATION);
 
         let intersection = polyline_intersection_xz_best(lp, rp, center);
 
@@ -1687,7 +1726,7 @@ fn initial_carve(
             if dir != Vec3::ZERO {
                 let shift = 5.2 * params.side_walk_width;
                 cut_vertices.push(fallback + dir * shift);
-                gizmo.draw_cross(fallback, 0.3, [1.0, 0.5, 0.0]); // orange = fallback
+                gizmo.draw_cross(fallback, 0.3, [1.0, 0.5, 0.0], DEBUG_DRAW_DURATION); // orange = fallback
             }
             continue;
         };
@@ -1698,8 +1737,13 @@ fn initial_carve(
 
         cut_vertices.push(v);
 
-        gizmo.render_line(center.to_array(), p2.to_array(), [1.0, 1.0, 1.0], true);
-        gizmo.draw_cross(p2, 0.25, [0.0, 1.0, 0.0]); // green = found intersection
+        gizmo.render_line(
+            center.to_array(),
+            p2.to_array(),
+            [1.0, 1.0, 1.0],
+            DEBUG_DRAW_DURATION,
+        );
+        gizmo.draw_cross(p2, 0.25, [0.0, 1.0, 0.2], DEBUG_DRAW_DURATION); // green = found intersection
     }
 
     if cut_vertices.len() < 3 {
@@ -1731,7 +1775,7 @@ fn initial_carve(
 
     let mut cut_dbg = cut_vertices.clone();
     cut_dbg.push(cut_vertices[0]);
-    gizmo.render_polyline(&cut_dbg, [0.0, 0.0, 0.0], 10.0, true);
+    gizmo.render_polyline(&cut_dbg, [0.0, 0.0, 0.0], 10.0, DEBUG_DRAW_DURATION);
 
     let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
 
@@ -1763,7 +1807,7 @@ fn initial_carve(
                 _ => continue,
             };
 
-            gizmo.draw_cross(hit, 0.2, [1.0, 0.0, 0.0]);
+            gizmo.draw_cross(hit, 0.2, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
 
             let new_pts = if is_incoming {
                 modify_polyline_end(pts, amount)
@@ -1927,7 +1971,7 @@ fn trim_all_lanes_to_polygon(
                 continue;
             }
 
-            gizmo.draw_cross(hit, 0.3, [1.0, 0.0, 0.0]);
+            gizmo.draw_cross(hit, 0.3, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
 
             let new_pts = if is_incoming {
                 modify_polyline_end(pts, amount)
@@ -3190,7 +3234,7 @@ fn circle_carve_lanes(
                 continue;
             }
 
-            gizmo.draw_cross(hit, 0.2, [0.0, 1.0, 0.0]);
+            gizmo.draw_cross(hit, 0.2, [0.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
 
             let new_pts = if is_incoming {
                 modify_polyline_end(pts, amount)

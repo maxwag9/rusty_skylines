@@ -6,18 +6,96 @@ use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::ui::vertex::Vertex;
-use glam::{Mat4, Vec3, Vec4Swizzles};
+use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
 use wgpu::{
-    BlendState, CompareFunction, DepthBiasState, DepthStencilState, Face, IndexFormat, RenderPass,
-    StencilState,
+    BlendState, Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face,
+    IndexFormat, RenderPass, StencilState, Texture, TextureView,
 };
 
-// Helper to create the shadow texture
-pub fn create_shadow_texture(device: &wgpu::Device, size: u32) -> wgpu::TextureView {
+pub const CSM_CASCADES: usize = 4;
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ShadowMatUniform {
+    pub light_view_proj: [[f32; 4]; 4],
+}
+pub struct CascadedShadowMap {
+    pub texture: Texture,
+    pub array_view: TextureView,
+    pub layer_views: [TextureView; CSM_CASCADES],
+    pub size: u32,
+
+    pub light_mats: [Mat4; 4],
+    pub splits: [f32; 4],
+
+    pub shadow_mat_buffers: [Buffer; CSM_CASCADES], // <- NEW
+}
+pub fn create_shadow_mat_uniform_buffer(device: &Device) -> Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("CSM Shadow Mat Buffer"),
+        size: std::mem::size_of::<ShadowMatUniform>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+pub fn create_csm_shadow_texture(
+    device: &wgpu::Device,
+    size: u32,
+    label: &str,
+) -> CascadedShadowMap {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Shadow Map"),
+        label: Some(&format!(
+            "CSM Shadow Map Array ({CSM_CASCADES} layers). {label}"
+        )),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: CSM_CASCADES as u32,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    // Array view for sampling
+    let array_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("CSM Shadow Array View"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        base_array_layer: 0,
+        array_layer_count: Some(CSM_CASCADES as u32),
+        ..Default::default()
+    });
+
+    // Per-layer views for rendering
+    let layer_views = std::array::from_fn(|i| {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some(&format!("CSM Shadow Layer View {i}")),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: i as u32,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    });
+
+    CascadedShadowMap {
+        texture,
+        array_view,
+        layer_views,
+        size,
+        light_mats: [Mat4::IDENTITY; 4],
+        splits: [1.0; 4],
+        shadow_mat_buffers: std::array::from_fn(|_| create_shadow_mat_uniform_buffer(device)),
+    }
+}
+// Helper to create the shadow texture
+pub fn create_shadow_texture(device: &wgpu::Device, size: u32, label: &str) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(format!("Shadow Map. Size: {size}, Label: {label}").as_str()),
         size: wgpu::Extent3d {
             width: size,
             height: size,
@@ -26,150 +104,205 @@ pub fn create_shadow_texture(device: &wgpu::Device, size: u32) -> wgpu::TextureV
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        // DEPTH32 is standard for shadows.
-        // TEXTURE_BINDING allows reading it in the main pass.
-        // RENDER_ATTACHMENT allows writing to it in the shadow pass.
-        format: wgpu::TextureFormat::Depth32Float,
+        format: Depth32Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
-    // Create a "comparison" sampler for PCF (Soft Shadows)
-    // You likely need to store this sampler alongside the texture view
-    // or in your global resource bind group.
-
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
-pub fn compute_light_matrix(target_pos: Vec3, sun_direction: Vec3) -> Mat4 {
-    let center = target_pos;
-    let box_size = 10.0;
 
-    // sun_direction points FROM surface TO sun
-    // So light position is center + sun_direction * distance
-    let light_pos = center + sun_direction * box_size;
+// Defaults (tweak later)
+pub const DEFAULT_SHADOW_DISTANCE: f32 = 250.0; // how far from camera to cast shadows
+pub const DEFAULT_SPLIT_LAMBDA: f32 = 0.65; // 0 = uniform, 1 = logarithmic
+pub const DEFAULT_Z_PADDING: f32 = 100.0; // extra depth range in light space
+pub const DEFAULT_XY_PAD_RATIO: f32 = 0.02; // expand xy bounds by 2%
 
-    let view = Mat4::look_at_rh(light_pos, center, Vec3::Y);
+pub fn compute_cascade_splits(near: f32, far: f32, lambda: f32) -> [f32; 4] {
+    let n = near.max(1e-3);
+    let f = far.max(n + 1e-3);
+    let l = lambda.clamp(0.0, 1.0);
 
-    // Make sure near/far encompasses your scene
-    let projection = Mat4::orthographic_rh(
-        -box_size,
-        box_size,
-        -box_size,
-        box_size,
-        0.1,
-        box_size * 2.1, // Adjusted for better depth precision
-    );
-
-    projection * view
+    let mut splits = [0.0; 4];
+    for i in 1..=4 {
+        let p = i as f32 / 4.0;
+        let log = n * (f / n).powf(p);
+        let uni = n + (f - n) * p;
+        splits[i - 1] = log * l + uni * (1.0 - l);
+    }
+    splits
 }
 
-pub fn compute_light_matrix_fit_to_camera(
+fn camera_basis_from_view(view: Mat4) -> (Vec3, Vec3, Vec3, Vec3) {
+    // inv_view transforms view-space axes into world-space axes.
+    let inv = view.inverse();
+
+    let eye = inv.w_axis.truncate();
+    let right = inv.x_axis.truncate().normalize();
+    let up = inv.y_axis.truncate().normalize();
+
+    // view space forward is -Z, so world forward = -(inv_view * +Z)
+    let forward = (-inv.z_axis.truncate()).normalize();
+
+    (eye, right, up, forward)
+}
+
+fn frustum_slice_corners_ws(
     eye: Vec3,
-    target: Vec3,
+    right: Vec3,
+    up: Vec3,
+    forward: Vec3,
     fov_y_radians: f32,
     aspect: f32,
-    cam_near: f32,
-    shadow_far: f32,     // choose something like 200.0, not 10_000
-    light_dir: Vec3,     // direction FROM surface TO sun (your convention)
-    shadow_map_res: f32, // e.g. 2048.0
-    make_square: bool,
-    stabilize: bool,
-) -> Mat4 {
-    // Camera basis
-    let forward = (target - eye).normalize();
-    let right = forward.cross(Vec3::Y).normalize();
-    let up = right.cross(forward).normalize();
-
-    // Build frustum corners (world space) for near and shadow_far
+    slice_near: f32,
+    slice_far: f32,
+) -> [Vec3; 8] {
     let tan_half = (fov_y_radians * 0.5).tan();
 
-    let nh = tan_half * cam_near;
+    let nh = tan_half * slice_near;
     let nw = nh * aspect;
 
-    let fh = tan_half * shadow_far;
+    let fh = tan_half * slice_far;
     let fw = fh * aspect;
 
-    let nc = eye + forward * cam_near;
-    let fc = eye + forward * shadow_far;
+    let nc = eye + forward * slice_near;
+    let fc = eye + forward * slice_far;
 
-    let corners = [
-        // near plane
-        nc + up * nh - right * nw,
-        nc + up * nh + right * nw,
-        nc - up * nh - right * nw,
-        nc - up * nh + right * nw,
-        // far plane
-        fc + up * fh - right * fw,
-        fc + up * fh + right * fw,
-        fc - up * fh - right * fw,
-        fc - up * fh + right * fw,
-    ];
+    // Near plane corners
+    let ntl = nc + up * nh - right * nw;
+    let ntr = nc + up * nh + right * nw;
+    let nbl = nc - up * nh - right * nw;
+    let nbr = nc - up * nh + right * nw;
 
-    // Frustum center for positioning the light
-    let frustum_center = corners.iter().copied().reduce(|a, b| a + b).unwrap() / 8.0;
+    // Far plane corners
+    let ftl = fc + up * fh - right * fw;
+    let ftr = fc + up * fh + right * fw;
+    let fbl = fc - up * fh - right * fw;
+    let fbr = fc - up * fh + right * fw;
 
-    // Light view (directional): put light "behind" the frustum along -light_dir
-    // distance can be arbitrary as long as it’s not inside; near/far will be computed from bounds anyway.
-    let light_dir_n = light_dir.normalize();
-    let light_pos = frustum_center + light_dir_n * 500.0;
-    let light_view = Mat4::look_at_rh(light_pos, frustum_center, Vec3::Y);
+    [ntl, ntr, nbl, nbr, ftl, ftr, fbl, fbr]
+}
 
-    // Transform corners into light space and compute bounds
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(-f32::INFINITY);
+pub fn compute_light_matrix_fit_frustum_slice_stable(
+    frustum_corners_ws: &[Vec3; 8],
+    sun_dir_surface_to_sun: Vec3,
+    shadow_map_size: u32,
+    stabilize: bool,
+) -> Mat4 {
+    let sun_dir = sun_dir_surface_to_sun.normalize_or_zero();
 
-    for &c in &corners {
-        let ls = (light_view * c.extend(1.0)).xyz();
-        min = min.min(ls);
-        max = max.max(ls);
+    // Pick a stable "up"
+    let up = if sun_dir.dot(Vec3::Y).abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+
+    // Compute slice center + radius (bounding sphere)
+    let mut center = Vec3::ZERO;
+    for &c in frustum_corners_ws.iter() {
+        center += c;
+    }
+    center *= 1.0 / 8.0;
+
+    let mut radius = 0.0f32;
+    for &c in frustum_corners_ws.iter() {
+        radius = radius.max((c - center).length());
     }
 
-    // Optional: make XY square (recommended with square shadow maps)
-    if make_square {
-        let size_x = max.x - min.x;
-        let size_y = max.y - min.y;
-        let size = size_x.max(size_y);
-        let center = (min + max) * 0.5;
-        min.x = center.x - size * 0.5;
-        max.x = center.x + size * 0.5;
-        min.y = center.y - size * 0.5;
-        max.y = center.y + size * 0.5;
+    // Slight pad to avoid clipping due to floating error
+    radius *= 1.05;
+
+    // Light view: place the light "behind" the slice along sun_dir, looking at center.
+    let light_eye = center + sun_dir * (radius * 3.0 + 10.0);
+    let light_view = Mat4::look_at_rh(light_eye, center, up);
+
+    // Center in light space
+    let center_ls = (light_view * Vec4::new(center.x, center.y, center.z, 1.0)).truncate();
+
+    // Snap center to texel grid (in LIGHT SPACE)
+    let mut snapped_center = center_ls;
+    if stabilize && shadow_map_size > 0 {
+        let diameter = 2.0 * radius;
+        let texel = diameter / shadow_map_size as f32;
+        snapped_center.x = (snapped_center.x / texel).round() * texel;
+        snapped_center.y = (snapped_center.y / texel).round() * texel;
     }
 
-    // Stabilize: snap light-space center to texel grid to stop shimmering
-    if stabilize {
-        let size_x = max.x - min.x;
-        let size_y = max.y - min.y;
-        let texel_x = size_x / shadow_map_res;
-        let texel_y = size_y / shadow_map_res;
+    // XY bounds are fixed by radius (stable)
+    let min_x = snapped_center.x - radius;
+    let max_x = snapped_center.x + radius;
+    let min_y = snapped_center.y - radius;
+    let max_y = snapped_center.y + radius;
 
-        let center = (min + max) * 0.5;
-        let snapped = Vec3::new(
-            (center.x / texel_x).floor() * texel_x,
-            (center.y / texel_y).floor() * texel_y,
-            center.z,
+    // Z bounds must still cover all corners (in light space)
+    let mut min_z = f32::INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+    for &c in frustum_corners_ws.iter() {
+        let p = (light_view * Vec4::new(c.x, c.y, c.z, 1.0)).truncate();
+        min_z = min_z.min(p.z);
+        max_z = max_z.max(p.z);
+    }
+
+    // Convert light-space z extents to positive near/far distances for orthographic_rh().
+    // In RH view space, visible points typically have negative z, so distances are -z.
+    const Z_PAD: f32 = 150.0;
+    let near = (-max_z - Z_PAD).max(0.1);
+    let far = (-min_z + Z_PAD).max(near + 0.1);
+
+    let light_proj = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near, far);
+    light_proj * light_view
+}
+
+pub fn compute_csm_matrices(
+    cam_pos: Vec3,
+    camera_view: Mat4,
+    camera_fov_y_radians: f32,
+    aspect: f32,
+    camera_near: f32,
+    camera_far: f32,
+    sun_dir_surface_to_sun: Vec3,
+    shadow_map_size: u32,
+    stabilize: bool,
+) -> ([Mat4; CSM_CASCADES], [f32; 4]) {
+    let shadow_far = camera_far
+        .min(DEFAULT_SHADOW_DISTANCE)
+        .max(camera_near + 1.0);
+    let splits = compute_cascade_splits(camera_near, shadow_far, DEFAULT_SPLIT_LAMBDA);
+
+    let (eye, right, up, forward) = camera_basis_from_view(camera_view);
+
+    let matrices: [Mat4; CSM_CASCADES] = std::array::from_fn(|i| {
+        let slice_near = if i == 0 { camera_near } else { splits[i - 1] };
+        let slice_far = splits[i];
+
+        let corners = frustum_slice_corners_ws(
+            cam_pos,
+            right,
+            up,
+            forward, // <-- correct
+            camera_fov_y_radians,
+            aspect,
+            slice_near,
+            slice_far,
         );
 
-        let half = (max - min) * 0.5;
-        min = snapped - half;
-        max = snapped + half;
-    }
+        compute_light_matrix_fit_frustum_slice_stable(
+            &corners,
+            sun_dir_surface_to_sun,
+            shadow_map_size,
+            stabilize,
+        )
+    });
 
-    // Light-space Z bounds
-    // In RH view space, forward is -Z, so points in front typically have negative z.
-    // We want positive near/far distances, so convert:
-    let z_near = -max.z - 10.0; // add padding
-    let z_far = -min.z + 10.0;
-
-    let light_proj = Mat4::orthographic_rh(min.x, max.x, min.y, max.y, z_near, z_far);
-
-    light_proj * light_view
+    (matrices, splits)
 }
 pub fn render_roads_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     road_renderer: &RoadRenderSubsystem,
     pipelines: &Pipelines,
+    shadow_mat_buffer: &wgpu::Buffer,
 ) {
     let bias = DepthBiasState {
         constant: 0, // for Depth32Float, constants often need to be “large”
@@ -197,7 +330,7 @@ pub fn render_roads_shadows(
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: true,
         },
-        &[&pipelines.uniforms.buffer],
+        &[&shadow_mat_buffer],
         pass,
         pipelines,
     );
@@ -241,7 +374,7 @@ pub fn render_roads_shadows(
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: true,
         },
-        &[&pipelines.uniforms.buffer],
+        &[&shadow_mat_buffer],
         pass,
         pipelines,
     );
@@ -256,6 +389,7 @@ pub fn render_terrain_shadows(
     pipelines: &Pipelines,
     camera: &Camera,
     aspect: f32,
+    shadow_mat_buffer: &wgpu::Buffer,
 ) {
     let bias = DepthBiasState {
         constant: 0, // for Depth32Float, constants often need to be “large”
@@ -282,7 +416,7 @@ pub fn render_terrain_shadows(
             cull_mode: Some(Face::Back),
             shadow_pass: true,
         },
-        &[&pipelines.uniforms.buffer],
+        &[&shadow_mat_buffer],
         pass,
         pipelines,
     );
@@ -307,7 +441,7 @@ pub fn render_terrain_shadows(
             cull_mode: Some(Face::Back),
             shadow_pass: true,
         },
-        &[&pipelines.uniforms.buffer],
+        &[&shadow_mat_buffer],
         pass,
         pipelines,
     );

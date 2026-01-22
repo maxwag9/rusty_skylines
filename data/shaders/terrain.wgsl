@@ -5,13 +5,17 @@ struct Uniforms {
     inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
-    lighting_view_proj: mat4x4<f32>,
+    lighting_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
+
     sun_direction: vec3<f32>,
     time: f32,
+
     camera_pos: vec3<f32>,
     orbit_radius: f32,
+
     moon_direction: vec3<f32>,
-    _pad0: f32,
+    shadow_cascade_index: u32,     // used only during shadow rendering
 };
 
 struct PickUniform {
@@ -24,7 +28,7 @@ struct PickUniform {
 @group(0) @binding(0) var grass_tex: texture_2d<f32>;
 @group(0) @binding(1) var grass_tex2: texture_2d<f32>;
 @group(0) @binding(2) var material_sampler: sampler;
-@group(0) @binding(3) var t_shadow: texture_depth_2d;
+@group(0) @binding(3) var t_shadow: texture_depth_2d_array;
 @group(0) @binding(4) var s_shadow: sampler_comparison;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
@@ -57,10 +61,6 @@ fn vs_main(in: VertexIn) -> VertexOut {
 // Cheap high-quality hash
 fn hash2(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
-}
-
-fn saturate(x: f32) -> f32 {
-    return clamp(x, 0.0, 1.0);
 }
 
 // Quintic smoothstep for buttery noise
@@ -169,19 +169,112 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(final_color, 1.0);
 }
 
-fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
-    let pos = uniforms.lighting_view_proj * vec4(world_pos, 1.0);
-    let ndc = pos.xyz / pos.w;
-    let uv = ndc.xy * vec2(0.5, -0.5) + vec2(0.5, 0.5);
+fn saturate(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
 
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+fn select_cascade(view_depth: f32) -> u32 {
+    if (view_depth < uniforms.cascade_splits.x) { return 0u; }
+    if (view_depth < uniforms.cascade_splits.y) { return 1u; }
+    if (view_depth < uniforms.cascade_splits.z) { return 2u; }
+    return 3u;
+}
+
+struct CascadeBlend {
+    i0: u32,
+    i1: u32,
+    t: f32, // 0 -> use i0, 1 -> use i1
+};
+
+fn select_cascade_with_blend(view_depth: f32) -> CascadeBlend {
+    let i0 = select_cascade(view_depth);
+
+    // Fade size: choose something stable-ish in view units.
+    // Start with 5% of the current cascade length, clamped.
+    var start: f32 = 0.0;
+    var end: f32 = uniforms.cascade_splits.x;
+
+    if (i0 == 0u) {
+        start = 0.0;
+        end = uniforms.cascade_splits.x;
+    } else if (i0 == 1u) {
+        start = uniforms.cascade_splits.x;
+        end = uniforms.cascade_splits.y;
+    } else if (i0 == 2u) {
+        start = uniforms.cascade_splits.y;
+        end = uniforms.cascade_splits.z;
+    } else {
+        start = uniforms.cascade_splits.z;
+        end = uniforms.cascade_splits.w;
+    }
+
+    let len = max(end - start, 1.0);
+    let fade = clamp(len * 0.05, 5.0, 50.0); // tweak later
+
+    // Blend only near the END of cascade i0 into i1
+    let i1 = min(i0 + 1u, 3u);
+    var t = 0.0;
+    if (i0 < 3u) {
+        t = saturate((view_depth - (end - fade)) / fade);
+    } else {
+        t = 0.0;
+    };
+
+    return CascadeBlend(i0, i1, t);
+}
+
+fn project_to_shadow(cascade: u32, world_pos: vec3<f32>) -> vec3<f32> {
+    let p = uniforms.lighting_view_proj[cascade] * vec4<f32>(world_pos, 1.0);
+    let ndc = p.xyz / p.w;
+
+    // NDC -> UV (flip Y to match texture space)
+    let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    return vec3<f32>(uv, ndc.z);
+}
+
+// 3x3 PCF
+fn shadow_pcf_3x3(cascade: u32, uv: vec2<f32>, depth: f32) -> f32 {
+    let dims = vec2<f32>(textureDimensions(t_shadow, 0));
+    let texel = 1.0 / dims;
+
+    var sum = 0.0;
+    for (var y = -1; y <= 1; y = y + 1) {
+        for (var x = -1; x <= 1; x = x + 1) {
+            let offset = vec2<f32>(f32(x), f32(y)) * texel;
+            sum += textureSampleCompare(t_shadow, s_shadow, uv + offset, i32(cascade), depth);
+        }
+    }
+    return sum / 9.0;
+}
+
+fn shadow_for_cascade(cascade: u32, world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
+    let proj = project_to_shadow(cascade, world_pos);
+    let uv = proj.xy;
+    let z  = proj.z;
+
+    // Outside shadow frustum => lit
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z < 0.0 || z > 1.0) {
         return 1.0;
     }
 
+    // Bias (still basic; good enough to start)
     let ndotl = saturate(dot(N, L));
+    let bias = max(0.00002, 0.00025 * (1.0 - ndotl));
 
-    // much smaller depth bias (in NDC depth units)
-    let bias = max(0.00002, 0.0002 * (1.0 - ndotl));
+    // PCF
+    return shadow_pcf_3x3(cascade, uv, z - bias);
+}
 
-    return textureSampleCompare(t_shadow, s_shadow, uv, ndc.z - bias);
+fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
+    // view-space depth (RH camera looking down -Z)
+    let vpos = uniforms.view * vec4<f32>(world_pos, 1.0);
+    let view_depth = -vpos.z;
+
+    let cb = select_cascade_with_blend(view_depth);
+
+    let s0 = shadow_for_cascade(cb.i0, world_pos, N, L);
+    if (cb.i0 == cb.i1) {
+        return s0;
+    }
+    let s1 = shadow_for_cascade(cb.i1, world_pos, N, L);
+
+    return mix(s0, s1, cb.t);
 }

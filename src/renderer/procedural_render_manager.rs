@@ -906,7 +906,7 @@ impl RenderManager {
         let material_bind_group = self.material_manager.request_bind_group(
             &materials,
             views,
-            &pipelines.shadow_map_view,
+            &pipelines.cascaded_shadow_map.array_view,
             options.shadow_pass,
         );
 

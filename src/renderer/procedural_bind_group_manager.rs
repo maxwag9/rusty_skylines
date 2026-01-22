@@ -74,7 +74,7 @@ impl MaterialBindGroupManager {
         &mut self,
         materials: &Vec<TextureCacheKey>,
         views: Vec<&TextureView>,
-        shadow_view: &TextureView,
+        shadow_array_view: &TextureView,
         shadow_pass: bool,
     ) -> &BindGroup {
         assert_eq!(materials.len(), views.len());
@@ -92,7 +92,8 @@ impl MaterialBindGroupManager {
         }
 
         if !self.bind_group_cache.contains_key(&key) {
-            let bind_group = self.build_bind_group(material_count, views, shadow_view, shadow_pass);
+            let bind_group =
+                self.build_bind_group(material_count, views, shadow_array_view, shadow_pass);
             self.bind_group_cache.insert(key.clone(), bind_group);
         }
 
@@ -122,13 +123,13 @@ impl MaterialBindGroupManager {
                 ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             });
-            // Binding N+1: The Shadow Map Texture (NEW)
+            // Binding N+1: The Shadow Map Texture
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: (material_count + 1) as u32,
                 visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Texture {
                     sample_type: TextureSampleType::Depth,
-                    view_dimension: TextureViewDimension::D2,
+                    view_dimension: TextureViewDimension::D2Array,
                     multisampled: false,
                 },
                 count: None,
@@ -153,7 +154,7 @@ impl MaterialBindGroupManager {
         &self,
         material_count: usize,
         views: Vec<&TextureView>,
-        shadow_view: &TextureView,
+        shadow_array_view: &TextureView,
         shadow_pass: bool,
     ) -> BindGroup {
         let layout = self
@@ -180,7 +181,7 @@ impl MaterialBindGroupManager {
             // Bind Shadow Map Texture
             entries.push(wgpu::BindGroupEntry {
                 binding: (material_count + 1) as u32,
-                resource: BindingResource::TextureView(shadow_view),
+                resource: BindingResource::TextureView(shadow_array_view),
             });
 
             // Bind Shadow Comparison Sampler

@@ -5,6 +5,7 @@ use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
 use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
 
+use crate::components::camera::Camera;
 use crate::renderer::gizmo::Gizmo;
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::terrain::roads::road_structs::RoadStyleParams;
@@ -79,6 +80,7 @@ impl RoadRenderSubsystem {
         queue: &Queue,
         input: &mut InputState,
         picked_point: &Option<PickedPoint>,
+        camera: &Camera,
         gizmo: &mut Gizmo,
     ) {
         // Get commands from road editor
@@ -101,7 +103,7 @@ impl RoadRenderSubsystem {
         );
         self.preview_state.ingest(&road_commands);
         self.road_appearance
-            .update_preview_buffer(queue, &self.preview_state);
+            .update_preview_buffer(queue, &self.preview_state, camera.orbit_radius);
         // Apply real topology commands
         if !road_commands.is_empty() {
             //println!("{:?}", road_commands);

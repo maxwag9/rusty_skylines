@@ -14,11 +14,13 @@ use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment,
 };
 use crate::renderer::shader_watcher::ShaderWatcher;
-use crate::renderer::shadows::{render_roads_shadows, render_terrain_shadows};
+use crate::renderer::shadows::{
+    CSM_CASCADES, ShadowMatUniform, render_roads_shadows, render_terrain_shadows,
+};
 use crate::renderer::ui::UiRenderer;
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::resources::{InputState, TimeSystem};
+use crate::resources::{InputState, TimeSystem, Uniforms};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
@@ -27,6 +29,7 @@ use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
 use crate::ui::vertex::{LineVtx, Vertex};
 use crate::world::CameraBundle;
+use glam::Mat4;
 use std::sync::Arc;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -50,6 +53,7 @@ pub struct RenderCore {
     arena: GeneralMeshArena,
     render_manager: RenderManager,
     pub gizmo: Gizmo,
+    astronomy: AstronomyState,
 }
 
 impl RenderCore {
@@ -88,6 +92,7 @@ impl RenderCore {
             arena,
             render_manager,
             gizmo,
+            astronomy: AstronomyState::default(),
         }
     }
 
@@ -133,7 +138,7 @@ impl RenderCore {
                 label: Some("Render Encoder"),
             });
 
-        self.execute_shadow_pass(&mut encoder, camera, aspect);
+        self.execute_shadow_pass(&mut encoder, camera, aspect, time);
         self.execute_main_pass(
             &mut encoder,
             &surface_view,
@@ -178,7 +183,24 @@ impl RenderCore {
         );
         self.terrain_renderer.pick_terrain_point(ray);
 
-        self.update_uniforms(camera, view, proj, view_proj, &astronomy, time, aspect);
+        let (new_uniforms, light_mats, splits) =
+            self.update_uniforms(camera, view, proj, view_proj, &astronomy, time, aspect);
+        self.pipelines.uniforms_cpu = new_uniforms;
+        self.pipelines.cascaded_shadow_map.light_mats = light_mats;
+        self.pipelines.cascaded_shadow_map.splits = splits;
+
+        // upload per-cascade shadow uniforms ONCE (outside encoder)
+        for i in 0..CSM_CASCADES {
+            let smu = ShadowMatUniform {
+                light_view_proj: self.pipelines.cascaded_shadow_map.light_mats[i]
+                    .to_cols_array_2d(),
+            };
+            self.queue.write_buffer(
+                &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[i],
+                0,
+                bytemuck::bytes_of(&smu),
+            );
+        }
         self.update_subsystems(
             camera,
             aspect,
@@ -188,10 +210,11 @@ impl RenderCore {
             ui_loader,
             &astronomy,
         );
+        self.astronomy = astronomy;
     }
 
     fn update_uniforms(
-        &self,
+        &mut self,
         camera: &Camera,
         view: glam::Mat4,
         proj: glam::Mat4,
@@ -199,20 +222,21 @@ impl RenderCore {
         astronomy: &AstronomyState,
         time: &TimeSystem,
         aspect: f32,
-    ) {
+    ) -> (Uniforms, [Mat4; CSM_CASCADES], [f32; 4]) {
         let updater = UniformUpdater::new(&self.queue, &self.pipelines);
-        updater.update_camera_uniforms(
+        let (new_uniforms, light_mats, splits) = updater.update_camera_uniforms(
             view,
             proj,
             view_proj,
             astronomy,
             camera,
-            time.total_time as f32,
+            time.total_time,
             aspect,
         );
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy.moon_phase);
         updater.update_water_uniforms();
+        (new_uniforms, light_mats, splits)
     }
 
     fn update_subsystems(
@@ -242,6 +266,7 @@ impl RenderCore {
             &self.queue,
             input_state,
             &self.terrain_renderer.last_picked,
+            camera,
             &mut self.gizmo,
         );
         self.gizmo.update(
@@ -258,37 +283,50 @@ impl RenderCore {
         );
     }
 
-    fn execute_shadow_pass(&mut self, encoder: &mut CommandEncoder, camera: &Camera, aspect: f32) {
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Shadow Pass"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                view: &self.pipelines.shadow_map_view,
-                depth_ops: Some(Operations {
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
+    fn execute_shadow_pass(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        camera: &Camera,
+        aspect: f32,
+        _time: &TimeSystem,
+    ) {
+        for cascade in 0..CSM_CASCADES {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("CSM Shadow Pass"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.pipelines.cascaded_shadow_map.layer_views[cascade],
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
-        render_terrain_shadows(
-            &mut pass,
-            &mut self.render_manager,
-            &self.terrain_renderer,
-            &self.pipelines,
-            camera,
-            aspect,
-        );
-        render_roads_shadows(
-            &mut pass,
-            &mut self.render_manager,
-            &self.road_renderer,
-            &self.pipelines,
-        );
+            let shadow_buf = &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[cascade];
+
+            render_terrain_shadows(
+                &mut pass,
+                &mut self.render_manager,
+                &self.terrain_renderer,
+                &self.pipelines,
+                camera,
+                aspect,
+                shadow_buf,
+            );
+
+            render_roads_shadows(
+                &mut pass,
+                &mut self.render_manager,
+                &self.road_renderer,
+                &self.pipelines,
+                shadow_buf,
+            );
+        }
     }
 
     fn execute_main_pass(
@@ -470,7 +508,7 @@ impl RenderCore {
         });
 
         self.render_manager.render_fullscreen_preview(
-            &self.pipelines.shadow_map_view,
+            &self.pipelines.cascaded_shadow_map.layer_views[0],
             "Shadow Map Fullscreen Render",
             self.msaa_samples,
             &mut pass,

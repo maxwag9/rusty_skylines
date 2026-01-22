@@ -2,6 +2,7 @@ use crate::data::Settings;
 use crate::events::Events;
 use crate::paths::data_dir;
 use crate::renderer::Renderer;
+use crate::renderer::shadows::CSM_CASCADES;
 use crate::simulation::Simulation;
 use crate::ui::actions::{ActionSystem, make_actions};
 pub(crate) use crate::ui::input::InputState;
@@ -140,7 +141,8 @@ pub struct Uniforms {
     pub inv_proj: [[f32; 4]; 4],
     pub view_proj: [[f32; 4]; 4],
     pub inv_view_proj: [[f32; 4]; 4],
-    pub light_view_proj: [[f32; 4]; 4],
+    pub light_view_proj: [[[f32; 4]; 4]; CSM_CASCADES],
+    pub cascade_splits: [f32; 4], // end distance of each cascade in view-space units
     pub sun_direction: [f32; 3],
     pub time: f32,
 
@@ -148,7 +150,8 @@ pub struct Uniforms {
     pub orbit_radius: f32,
 
     pub moon_direction: [f32; 3],
-    pub _pad0: f32,
+    pub shadow_cascade_index: u32, // used only during shadow rendering
+    pub _pad_shadow: [u32; 2],     // keep 16-byte alignment
 }
 
 fn default_keybinds() -> HashMap<PhysicalKey, String> {

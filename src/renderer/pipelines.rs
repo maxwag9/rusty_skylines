@@ -1,6 +1,6 @@
 use crate::components::camera::Camera;
 use crate::renderer::pipelines_outsource::*;
-use crate::renderer::shadows::create_shadow_texture;
+use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::resources::Uniforms;
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -89,7 +89,7 @@ pub struct Pipelines {
     pub depth_texture: Texture,
     pub depth_view: TextureView,
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
-    pub shadow_map_view: TextureView,
+    pub cascaded_shadow_map: CascadedShadowMap,
 
     pub config: SurfaceConfiguration,
 
@@ -103,6 +103,7 @@ pub struct Pipelines {
     pub stars_mesh_buffers: MeshBuffers,
     pub gizmo_mesh_buffers: MeshBuffers,
     pub grass_texture_resources: GpuResourceSet,
+    pub uniforms_cpu: Uniforms,
 }
 
 impl Pipelines {
@@ -117,11 +118,12 @@ impl Pipelines {
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
-        let shadow_map_view = create_shadow_texture(device, 4096);
+        //let shadow_map_view = create_shadow_texture(device, 4096, "Main Shadow map");
+        let csm = create_csm_shadow_texture(device, 2048, "Sun CSM"); // 2048 or 4096
         // Load all shaders
         let shaders = load_all_shaders(device, shader_dir)?;
 
-        let uniforms = create_camera_uniforms(device, camera, config);
+        let (uniforms_set, uniforms_cpu) = create_camera_uniforms(device, camera, config);
         let sky_uniforms = create_sky_uniforms(device);
         let fog_uniforms = create_fog_uniforms(device);
         let pick_uniforms = create_pick_uniforms(device);
@@ -139,10 +141,10 @@ impl Pipelines {
             depth_texture,
             depth_view,
             depth_sample_view,
-            shadow_map_view,
+            cascaded_shadow_map: csm,
             config: config.clone(),
 
-            uniforms,
+            uniforms: uniforms_set,
             sky_uniforms,
             water_uniforms,
             fog_uniforms,
@@ -154,6 +156,7 @@ impl Pipelines {
             stars_mesh_buffers: stars_mesh,
 
             grass_texture_resources,
+            uniforms_cpu,
         };
 
         Ok(this)
@@ -275,7 +278,7 @@ pub fn create_grass_texture(
     (texture, view)
 }
 
-pub fn make_new_uniforms(
+pub fn make_new_uniforms_csm(
     view: Mat4,
     proj: Mat4,
     view_proj: Mat4,
@@ -283,8 +286,10 @@ pub fn make_new_uniforms(
     moon: Vec3,
     cam_pos: Vec3,
     orbit_radius: f32,
-    total_time: f32,
-    light_view_proj: Mat4,
+    total_time: f64,
+    light_view_proj: [Mat4; CSM_CASCADES],
+    cascade_splits: [f32; 4],
+    shadow_cascade_index: u32,
 ) -> Uniforms {
     Uniforms {
         view: view.to_cols_array_2d(),
@@ -293,19 +298,21 @@ pub fn make_new_uniforms(
         inv_proj: proj.inverse().to_cols_array_2d(),
         view_proj: view_proj.to_cols_array_2d(),
         inv_view_proj: view_proj.inverse().to_cols_array_2d(),
-        light_view_proj: light_view_proj.to_cols_array_2d(),
+
+        light_view_proj: light_view_proj.map(|m| m.to_cols_array_2d()),
+        cascade_splits,
 
         sun_direction: sun.to_array(),
-        time: total_time,
+        time: total_time as f32,
 
         camera_pos: cam_pos.to_array(),
         orbit_radius,
 
         moon_direction: moon.to_array(),
-        _pad0: 0.0,
+        shadow_cascade_index,
+        _pad_shadow: [0, 0],
     }
 }
-
 pub fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
     let shader = device.create_shader_module(ShaderModuleDescriptor {
         label: Some("dummy shader"),

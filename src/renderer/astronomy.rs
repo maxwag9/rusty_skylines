@@ -9,6 +9,18 @@ pub struct AstronomyState {
     pub current_year: f32,
 }
 
+impl Default for AstronomyState {
+    fn default() -> Self {
+        Self {
+            sun_dir: Default::default(),
+            moon_dir: Default::default(),
+            moon_phase: 0.0,
+            sun_declination: 0.0,
+            day_phase: 0.0,
+            current_year: 0.0,
+        }
+    }
+}
 pub struct TimeScales {
     pub day_length: f32,
     pub total_days: f32,

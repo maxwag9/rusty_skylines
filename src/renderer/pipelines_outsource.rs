@@ -3,14 +3,15 @@ use crate::mouse_ray::PickUniform;
 use crate::paths::data_dir;
 use crate::renderer::pipelines::{
     FogUniforms, GpuResourceSet, MeshBuffers, ShaderAsset, create_grass_texture, load_shader,
-    make_dummy_buf, make_new_uniforms,
+    make_dummy_buf, make_new_uniforms_csm,
 };
+use crate::renderer::shadows::compute_csm_matrices;
 use crate::renderer::textures::grass::{GrassParams, generate_noise};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::{SimpleVertex, WaterUniform};
 use crate::ui::vertex::LineVtx;
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 use std::fs;
 use std::path::Path;
 use wgpu::TextureFormat::Rgba8Unorm;
@@ -46,22 +47,37 @@ pub fn create_camera_uniforms(
     device: &Device,
     camera: &Camera,
     config: &SurfaceConfiguration,
-) -> GpuResourceSet {
+) -> (GpuResourceSet, Uniforms) {
     let aspect = config.width as f32 / config.height as f32;
     let sun = Vec3::new(0.3, 1.0, 0.6).normalize();
     let cam_pos = camera.position();
     let (view, proj, view_proj) = camera.matrices(aspect);
+    // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
+    let (light_mats, splits) = compute_csm_matrices(
+        cam_pos,
+        view,
+        camera.fov.to_radians(),
+        aspect,
+        camera.near,
+        camera.far,
+        Vec3::ONE,
+        /*shadow_map_size:*/ 2048, // or the actual CSM texture size
+        /*stabilize:*/ true,
+    );
 
-    let uniforms = make_new_uniforms(
+    // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
+    let uniforms = make_new_uniforms_csm(
         view,
         proj,
         view_proj,
-        sun,
-        Vec3::new(0.0, 0.0, 0.0),
-        cam_pos,
+        Vec3::ONE,
+        Vec3::ONE,
+        camera.position(),
         camera.orbit_radius,
         0.0,
-        Mat4::ZERO,
+        light_mats,
+        splits,
+        0,
     );
 
     let buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -93,11 +109,14 @@ pub fn create_camera_uniforms(
         }],
     });
 
-    GpuResourceSet {
-        bind_group_layout,
-        bind_group,
-        buffer,
-    }
+    (
+        GpuResourceSet {
+            bind_group_layout,
+            bind_group,
+            buffer,
+        },
+        uniforms,
+    )
 }
 
 pub fn create_sky_uniforms(device: &Device) -> GpuResourceSet {
