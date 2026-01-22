@@ -42,7 +42,7 @@ pub fn create_shadow_texture(device: &wgpu::Device, size: u32) -> wgpu::TextureV
 }
 pub fn compute_light_matrix(target_pos: Vec3, sun_direction: Vec3) -> Mat4 {
     let center = target_pos;
-    let box_size = 100.0;
+    let box_size = 10.0;
 
     // sun_direction points FROM surface TO sun
     // So light position is center + sun_direction * distance
@@ -57,7 +57,7 @@ pub fn compute_light_matrix(target_pos: Vec3, sun_direction: Vec3) -> Mat4 {
         -box_size,
         box_size,
         0.1,
-        box_size * 3.0, // Adjusted for better depth precision
+        box_size * 2.1, // Adjusted for better depth precision
     );
 
     projection * view
@@ -172,7 +172,7 @@ pub fn render_roads_shadows(
     pipelines: &Pipelines,
 ) {
     let bias = DepthBiasState {
-        constant: 1000, // for Depth32Float, constants often need to be “large”
+        constant: 0, // for Depth32Float, constants often need to be “large”
         slope_scale: 2.0,
         clamp: 0.0,
     };
@@ -218,7 +218,7 @@ pub fn render_roads_shadows(
     };
 
     let nudge_bias = DepthBiasState {
-        constant: 1010,
+        constant: 1,
         slope_scale: 2.0,
         clamp: 0.0,
     };
@@ -258,7 +258,7 @@ pub fn render_terrain_shadows(
     aspect: f32,
 ) {
     let bias = DepthBiasState {
-        constant: 1000, // for Depth32Float, constants often need to be “large”
+        constant: 0, // for Depth32Float, constants often need to be “large”
         slope_scale: 2.0,
         clamp: 0.0,
     };

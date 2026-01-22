@@ -1,11 +1,11 @@
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_helpers::{
-    build_strip_polyline, merge_polylines_ccw, offset_polyline_f32, select_outermost_lanes,
-    triangulate_center_fan,
+    merge_polylines_ccw, offset_polyline_f32, select_outermost_lanes, triangulate_center_fan,
 };
 use crate::terrain::roads::road_mesh_manager::{
-    CLEARANCE, ChunkId, MeshConfig, RoadVertex, build_vertical_face, chunk_x_range, chunk_z_range,
+    CLEARANCE, ChunkId, MeshConfig, RoadVertex, build_ribbon_mesh, build_vertical_face,
+    chunk_x_range, chunk_z_range,
 };
 use crate::terrain::roads::road_structs::*;
 use crate::terrain::roads::roads::*;
@@ -160,27 +160,54 @@ pub fn build_intersection_mesh(
     );
 
     // === Build mesh vertices ===
+    // base index of the center vertex
     let asphalt_base = vertices.len() as u32;
-    let center_h = terrain.get_height_at([center.x, center.z]);
 
+    // center vertex (UV at texture center)
+    let center_h = terrain.get_height_at([center.x, center.z]);
     vertices.push(road_vertex(
         center.x,
         center_h + style.lane_height,
         center.z,
         style.lane_material_id,
-        0.5,
-        0.5,
+        0.5, // u
+        0.5, // v
     ));
 
-    for p in asphalt_ring.iter().rev() {
+    // radial uv mapping using separate U/V scales
+    let radial_uv = |pt: Vec3| -> (f32, f32) {
+        let dx = pt.x - center.x;
+        let dz = pt.z - center.z;
+        let dist = (dx * dx + dz * dz).sqrt();
+
+        if dist <= 1e-6 {
+            return (0.5, 0.5);
+        }
+
+        let nx = dx / dist;
+        let nz = dz / dist;
+
+        // map world radius to uv radius: different scales for U and V
+        let ru = dist * config.uv_scale_u;
+        let rv = dist * config.uv_scale_v;
+
+        let u = 0.5 + nx * ru;
+        let v = 0.5 + nz * rv;
+
+        (u, v)
+    };
+
+    // push ring in the same order triangulator expects (CCW)
+    for p in asphalt_ring.iter() {
         let h = terrain.get_height_at([p.x, p.z]);
+        let (u, v) = radial_uv(*p);
         vertices.push(road_vertex(
             p.x,
             h + style.lane_height,
             p.z,
             style.lane_material_id,
-            (p.x - center.x) * 0.1,
-            (p.z - center.z) * 0.1,
+            u,
+            v,
         ));
     }
 
@@ -198,13 +225,17 @@ pub fn build_intersection_mesh(
                 &node_lane.polyline(),
                 style.lane_width * 0.5 * lane.outward_sign as f32 + style.sidewalk_width,
             );
-
-            build_strip_polyline(
+            build_ribbon_mesh(
                 terrain,
-                &asphalt_edge,
-                &sidewalk_outer,
+                node_lane.geometry(),
+                style.sidewalk_width,
                 style.sidewalk_height,
+                style.lane_width * 0.5 + style.sidewalk_width * 0.5,
                 style.sidewalk_material_id,
+                None,
+                (config.uv_scale_u, config.uv_scale_v),
+                None,
+                None,
                 vertices,
                 indices,
             );

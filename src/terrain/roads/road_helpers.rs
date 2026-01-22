@@ -354,8 +354,8 @@ pub fn triangulate_center_fan(base_index: u32, ring_count: u32, indices: &mut Ve
         // (Swap Next/Current if your engine uses CW culling, but usually standard is CCW)
         // Since our ring is sorted CCW, Center->Current->Next should be the correct order (Right-Hand Rule)
         indices.push(center);
-        indices.push(current);
         indices.push(next);
+        indices.push(current);
     }
 }
 
@@ -393,10 +393,23 @@ pub fn build_strip_polyline(
         indices.extend_from_slice(&[v2, v1, v3]);
     }
 }
-fn cross2(a: Vec2, b: Vec2) -> f32 {
+pub fn cross2(a: Vec2, b: Vec2) -> f32 {
     a.x * b.y - a.y * b.x
 }
+pub fn trim_polyline_both_ends(points: &[Vec3], cut: usize) -> Vec<Vec3> {
+    let len = points.len();
 
+    // Need at least 2 points to be meaningful
+    if len <= 2 {
+        return points.to_vec();
+    }
+
+    // Maximum we are allowed to cut per side
+    let max_cut = (len - 2) / 2;
+    let cut = cut.min(max_cut);
+
+    points[cut..(len - cut)].to_vec()
+}
 pub fn point_in_polygon_xz(p: Vec3, poly: &[Vec3]) -> bool {
     // Ray-casting in XZ plane.
     // poly is treated as closed (edge i -> (i+1)%n).
@@ -851,22 +864,48 @@ pub fn pick_outside_piece_away_from_node(
 
     Some(outside_parts[best_i].clone())
 }
-// Returns t along a0->a1 where it intersects b0->b1 (if any). t in [0,1]
+/// Returns t along a0->a1 where it intersects b0->b1 (if any). t in [0,1].
+/// Handles proper intersections AND collinear overlap (returns the first overlap t).
 pub fn seg_seg_intersection_t(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> Option<f32> {
     let r = a1 - a0;
     let s = b1 - b0;
+
     let denom = cross2(r, s);
 
     const EPS: f32 = 1e-6;
+    const EPS_T: f32 = 1e-4;
+
+    // Parallel (or collinear)
     if denom.abs() < EPS {
-        return None; // parallel
+        // If not collinear, no intersection.
+        let qp = b0 - a0;
+        if cross2(qp, r).abs() >= EPS {
+            return None;
+        }
+
+        // Collinear: project b endpoints onto a's param t and see if overlap exists.
+        let rr = r.dot(r);
+        if rr < EPS {
+            return None; // a0==a1 degenerate
+        }
+
+        let t0 = (b0 - a0).dot(r) / rr;
+        let t1 = (b1 - a0).dot(r) / rr;
+
+        let lo = t0.min(t1).max(0.0);
+        let hi = t0.max(t1).min(1.0);
+
+        if lo <= hi {
+            return Some(lo.clamp(0.0, 1.0));
+        }
+        return None;
     }
 
     let qp = b0 - a0;
     let t = cross2(qp, s) / denom;
     let u = cross2(qp, r) / denom;
 
-    if t >= -1e-4 && t <= 1.0 + 1e-4 && u >= -1e-4 && u <= 1.0 + 1e-4 {
+    if t >= -EPS_T && t <= 1.0 + EPS_T && u >= -EPS_T && u <= 1.0 + EPS_T {
         Some(t.clamp(0.0, 1.0))
     } else {
         None

@@ -166,9 +166,10 @@ fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
         return 1.0;
     }
 
-    // slope-scaled receiver bias (tune)
     let ndotl = saturate(dot(N, L));
-    let bias = max(0.0005, 0.003 * (1.0 - ndotl));
+
+    // much smaller depth bias (in NDC depth units)
+    let bias = max(0.00002, 0.0002 * (1.0 - ndotl));
 
     return textureSampleCompare(t_shadow, s_shadow, uv, ndc.z - bias);
 }

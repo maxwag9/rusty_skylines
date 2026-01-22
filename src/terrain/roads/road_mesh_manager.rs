@@ -727,7 +727,7 @@ pub struct RibbonEndOverride {
 }
 
 /// Builds a ribbon mesh for a single lane or strip.
-fn build_ribbon_mesh(
+pub(crate) fn build_ribbon_mesh(
     terrain_renderer: &TerrainRenderer,
     lane_geom: &LaneGeometry,
     width: f32,

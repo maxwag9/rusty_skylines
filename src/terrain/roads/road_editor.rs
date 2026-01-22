@@ -772,7 +772,6 @@ impl RoadEditor {
                 from.pos,
                 to.pos,
             );
-
             if segment_centerline.len() < 2 {
                 continue;
             }
@@ -823,7 +822,7 @@ impl RoadEditor {
                 make_straight_centerline(terrain_renderer, from_pos, to_pos)
             }
             Some(c) => {
-                // Extract subsection of bezier curve
+                // Extract subsection of Bézier curve
                 let (sub_start, sub_control, sub_end) =
                     subdivide_quadratic_bezier(original_start, c, original_end, from_t, to_t);
 
@@ -832,6 +831,7 @@ impl RoadEditor {
                 sample_quadratic_bezier(sub_start, sub_control, sub_end, samples)
             }
         }
+        // trim_polyline_both_ends(segment_centerline.as_slice(), 3)
     }
 
     // ==================== EXISTING METHODS (unchanged) ====================
@@ -1601,12 +1601,18 @@ fn initial_carve(
     };
     let center = Vec3::from_array(node.position());
 
+    let incoming: HashSet<LaneId> = node.incoming_lanes().iter().copied().collect();
+
     let segs = segment_ids_sorted_left_to_right(
         storage.enabled_segments_connected_to_node(node_id),
         storage,
         node_id,
     );
+
     if segs.len() < 2 {
+        // Single segment - just do circle carve NO DON'T DO ANYTHING
+        // let fallback_radius = params.side_walk_width * 4.0;
+        // circle_carve_lanes(storage, node_id, &incoming, center, fallback_radius, gizmo);
         return;
     }
 
@@ -1617,163 +1623,115 @@ fn initial_carve(
         let left_seg = storage.segment(segs[i]);
         let right_seg = storage.segment(segs[(i + 1) % n]);
 
-        let left_ends_at_node = left_seg.end() == node_id;
-        let right_ends_at_node = right_seg.end() == node_id;
-
-        // Get boundary lanes (your existing logic is correct)
-        let l_lane_id = {
+        let l_lane = {
+            let pts_to_node = left_seg.end() == node_id;
             left_seg
                 .lanes()
                 .iter()
                 .copied()
+                .filter(|id| storage.lane(id).is_enabled())
                 .max_by_key(|id| {
                     let idx = storage.lane(id).lane_index();
-                    if left_ends_at_node { idx } else { -idx }
+                    if pts_to_node { idx } else { -idx }
                 })
-                .unwrap()
         };
 
-        let r_lane_id = {
+        let r_lane = {
+            let pts_to_node = right_seg.end() == node_id;
             right_seg
                 .lanes()
                 .iter()
                 .copied()
+                .filter(|id| storage.lane(id).is_enabled())
                 .min_by_key(|id| {
                     let idx = storage.lane(id).lane_index();
-                    if right_ends_at_node { idx } else { -idx }
+                    if pts_to_node { idx } else { -idx }
                 })
-                .unwrap()
         };
 
-        let half_width = params.lane_width_m * 0.5 + params.side_walk_width;
+        let (Some(l_lane), Some(r_lane)) = (l_lane, r_lane) else {
+            println!(
+                "initial_carve: segment pair {}/{} missing boundary lanes",
+                i,
+                (i + 1) % n
+            );
+            continue;
+        };
 
-        // Use the new corner finding function
-        if let Some(corner) = find_corner_vertex_from_edges(
-            storage,
-            &l_lane_id,
-            &r_lane_id,
-            left_ends_at_node,  // l_incoming
-            right_ends_at_node, // r_incoming
-            half_width,
-        ) {
-            cut_vertices.push(corner);
-            gizmo.render_line(center.to_array(), corner.to_array(), [1.0, 1.0, 1.0], true);
-        } else {
-            // Fallback: use midpoint with outward offset
-            let lp = storage.lane(&l_lane_id).polyline();
-            let rp = storage.lane(&r_lane_id).polyline();
-            let l_pt = if left_ends_at_node {
-                *lp.last().unwrap()
-            } else {
-                lp[0]
-            };
-            let r_pt = if right_ends_at_node {
-                *rp.last().unwrap()
-            } else {
-                rp[0]
-            };
-            let mid = (l_pt + r_pt) * 0.5;
-            let dir = (mid - center).normalize_or_zero();
-            cut_vertices.push(mid + dir * half_width * 2.0);
-        }
+        let lp = storage.lane(&l_lane).polyline();
+        let rp = storage.lane(&r_lane).polyline();
+
+        // Debug: show which lanes we're trying to intersect
+        gizmo.render_polyline(lp, [0.8, 0.0, 0.2], 2.0, true);
+        gizmo.render_polyline(rp, [0.2, 0.0, 0.8], 2.0, true);
+
+        let intersection = polyline_intersection_xz_best(lp, rp, center);
+
+        let Some(p2) = intersection else {
+            println!(
+                "initial_carve: no intersection found for segment pair {}/{} (lanes {:?}/{:?}, {} pts / {} pts)",
+                i,
+                (i + 1) % n,
+                l_lane,
+                r_lane,
+                lp.len(),
+                rp.len()
+            );
+
+            // Fallback: use midpoint between lane endpoints as corner approximation
+            let (l_node_pt, _) = get_node_side_end(lp, center);
+            let (r_node_pt, _) = get_node_side_end(rp, center);
+            let fallback = (l_node_pt + r_node_pt) * 0.5;
+
+            let dir = (fallback - center).normalize_or_zero();
+            if dir != Vec3::ZERO {
+                let shift = 5.2 * params.side_walk_width;
+                cut_vertices.push(fallback + dir * shift);
+                gizmo.draw_cross(fallback, 0.3, [1.0, 0.5, 0.0]); // orange = fallback
+            }
+            continue;
+        };
+
+        let dir = (p2 - center).normalize_or_zero();
+        let shift = 5.2 * params.side_walk_width;
+        let v = p2 + dir * shift;
+
+        cut_vertices.push(v);
+
+        gizmo.render_line(center.to_array(), p2.to_array(), [1.0, 1.0, 1.0], true);
+        gizmo.draw_cross(p2, 0.25, [0.0, 1.0, 0.0]); // green = found intersection
     }
 
     if cut_vertices.len() < 3 {
+        println!(
+            "initial_carve: cut polygon has {} vertices (<3), falling back to circle",
+            cut_vertices.len()
+        );
+        let fallback_radius = params.side_walk_width * 7.0;
+        circle_carve_lanes(storage, node_id, &incoming, center, fallback_radius, gizmo);
         return;
     }
 
-    // OPTIONAL: Add midpoint vertices for curved corners
-    // But do it more carefully:
-    let smoothed = smooth_polygon_corners(&cut_vertices, center, 0.3);
+    cut_vertices = enforce_ccw_winding(&cut_vertices);
 
-    // Debug draw
-    let mut dbg = smoothed.clone();
-    dbg.push(smoothed[0]);
-    gizmo.render_polyline(&dbg, [0.0, 0.0, 0.0], 10.0, true);
+    let is_simple = is_simple_polygon(&cut_vertices);
+    let contains_center = point_in_polygon_xz(center, &cut_vertices);
 
-    // Trim lanes using smoothed polygon
-    trim_lanes_to_polygon(storage, node_id, &smoothed, gizmo);
-}
-/// Finds corner vertex by computing where lane outer edges would meet
-fn find_corner_vertex_from_edges(
-    storage: &RoadStorage,
-    l_lane_id: &LaneId,
-    r_lane_id: &LaneId,
-    l_incoming: bool,
-    r_incoming: bool,
-    half_width: f32,
-) -> Option<Vec3> {
-    let lp = storage.lane(l_lane_id).polyline();
-    let rp = storage.lane(r_lane_id).polyline();
-
-    if lp.len() < 2 || rp.len() < 2 {
-        return None;
+    if !is_simple || !contains_center {
+        println!(
+            "initial_carve: polygon invalid (simple={}, contains_center={}), falling back to circle",
+            is_simple, contains_center
+        );
+        let fallback_radius = params.side_walk_width * 6.0;
+        circle_carve_lanes(storage, node_id, &incoming, center, fallback_radius, gizmo);
+        return;
     }
 
-    // Get node-side endpoint and TRAVEL direction for each lane
-    let (l_pt, l_travel_dir) = if l_incoming {
-        // Lane ends at node - end of polyline is near node
-        let end = lp[lp.len() - 1];
-        let prev = lp[lp.len() - 2];
-        (end, (end - prev).normalize_or_zero())
-    } else {
-        // Lane starts at node - start of polyline is near node
-        let start = lp[0];
-        let next = lp[1];
-        (start, (next - start).normalize_or_zero())
-    };
+    cut_vertices = add_edge_midpoints(&cut_vertices);
 
-    let (r_pt, r_travel_dir) = if r_incoming {
-        let end = rp[rp.len() - 1];
-        let prev = rp[rp.len() - 2];
-        (end, (end - prev).normalize_or_zero())
-    } else {
-        let start = rp[0];
-        let next = rp[1];
-        (start, (next - start).normalize_or_zero())
-    };
-
-    // Offset directions to get outer edges:
-    // - Left segment's rightmost lane: outer edge on RIGHT of travel (CW rotation)
-    // - Right segment's leftmost lane: outer edge on LEFT of travel (CCW rotation)
-    let l_offset = Vec3::new(l_travel_dir.z, 0.0, -l_travel_dir.x); // CW 90°
-    let r_offset = Vec3::new(-r_travel_dir.z, 0.0, r_travel_dir.x); // CCW 90°
-
-    let l_edge_pt = l_pt + l_offset * half_width;
-    let r_edge_pt = r_pt + r_offset * half_width;
-
-    // Extension direction: AWAY from node (toward the corner)
-    // - Incoming lane: travel points toward node, so extend OPPOSITE
-    // - Outgoing lane: travel points away from node, so extend SAME direction
-    let l_extend = if l_incoming {
-        -l_travel_dir
-    } else {
-        l_travel_dir
-    };
-    let r_extend = if r_incoming {
-        -r_travel_dir
-    } else {
-        r_travel_dir
-    };
-
-    ray_ray_intersection_xz(l_edge_pt, l_extend, r_edge_pt, r_extend)
-}
-fn trim_lanes_to_polygon(
-    storage: &mut RoadStorage,
-    node_id: NodeId,
-    polygon: &[Vec3],
-    gizmo: &mut Gizmo,
-) {
-    let Some(node) = storage.node(node_id) else {
-        return;
-    };
-    let incoming: HashSet<LaneId> = node.incoming_lanes().iter().copied().collect();
-
-    let segs = segment_ids_sorted_left_to_right(
-        storage.enabled_segments_connected_to_node(node_id),
-        storage,
-        node_id,
-    );
+    let mut cut_dbg = cut_vertices.clone();
+    cut_dbg.push(cut_vertices[0]);
+    gizmo.render_polyline(&cut_dbg, [0.0, 0.0, 0.0], 10.0, true);
 
     let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
 
@@ -1793,20 +1751,183 @@ fn trim_lanes_to_polygon(
 
             let is_incoming = incoming.contains(&lane_id);
 
-            // Find hit from node-side
-            let (amount, hit) = if is_incoming {
+            let result = if is_incoming {
+                let rev: Vec<Vec3> = pts.iter().copied().rev().collect();
+                closest_hit_distance_from_start_xz(&rev, &cut_vertices)
+            } else {
+                closest_hit_distance_from_start_xz(pts, &cut_vertices)
+            };
+
+            let (amount, hit) = match result {
+                Some((a, h)) if a > 0.001 => (a, h),
+                _ => continue,
+            };
+
+            gizmo.draw_cross(hit, 0.2, [1.0, 0.0, 0.0]);
+
+            let new_pts = if is_incoming {
+                modify_polyline_end(pts, amount)
+            } else {
+                modify_polyline_start(pts, amount)
+            };
+
+            let Some(new_pts) = new_pts else {
+                continue;
+            };
+
+            edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
+        }
+    }
+
+    for (lane_id, geom) in edits {
+        storage.lane_mut(lane_id).replace_geometry(geom);
+    }
+}
+/// Computes corner vertex where outer edges of two adjacent lanes would meet.
+/// All math done in XZ plane, Y is taken from center.
+fn compute_corner_from_lane_edges(
+    l_poly: &[Vec3],
+    r_poly: &[Vec3],
+    l_ends_at_node: bool,
+    r_ends_at_node: bool,
+    margin: f32,
+    center: Vec3,
+    max_dist: f32,
+) -> Vec3 {
+    if l_poly.len() < 2 || r_poly.len() < 2 {
+        return center;
+    }
+
+    // Get node-side position and road direction for each lane
+    // Road direction = direction the lane travels (toward or away from node)
+    let (l_pos, l_dir) = if l_ends_at_node {
+        let p = l_poly[l_poly.len() - 1];
+        let prev = l_poly[l_poly.len() - 2];
+        (
+            Vec2::new(p.x, p.z),
+            Vec2::new(p.x - prev.x, p.z - prev.z).normalize_or_zero(),
+        )
+    } else {
+        let p = l_poly[0];
+        let next = l_poly[1];
+        (
+            Vec2::new(p.x, p.z),
+            Vec2::new(next.x - p.x, next.z - p.z).normalize_or_zero(),
+        )
+    };
+
+    let (r_pos, r_dir) = if r_ends_at_node {
+        let p = r_poly[r_poly.len() - 1];
+        let prev = r_poly[r_poly.len() - 2];
+        (
+            Vec2::new(p.x, p.z),
+            Vec2::new(p.x - prev.x, p.z - prev.z).normalize_or_zero(),
+        )
+    } else {
+        let p = r_poly[0];
+        let next = r_poly[1];
+        (
+            Vec2::new(p.x, p.z),
+            Vec2::new(next.x - p.x, next.z - p.z).normalize_or_zero(),
+        )
+    };
+
+    // Perpendicular offsets to get outer edges:
+    // Left lane's outer edge is on its RIGHT (rotate CW: (x,z) -> (z,-x))
+    // Right lane's outer edge is on its LEFT (rotate CCW: (x,z) -> (-z,x))
+    let l_perp = Vec2::new(l_dir.y, -l_dir.x); // CW 90°
+    let r_perp = Vec2::new(-r_dir.y, r_dir.x); // CCW 90°
+
+    // Edge line positions
+    let l_edge = l_pos + l_perp * margin;
+    let r_edge = r_pos + r_perp * margin;
+
+    // Line-line intersection (infinite lines, not rays!)
+    let cross = l_dir.x * r_dir.y - l_dir.y * r_dir.x;
+
+    if cross.abs() < 1e-5 {
+        // Nearly parallel - fallback to midpoint pushed outward
+        return fallback_corner(l_edge, r_edge, center, margin);
+    }
+
+    let diff = r_edge - l_edge;
+    let t = (diff.x * r_dir.y - diff.y * r_dir.x) / cross;
+
+    let corner_2d = l_edge + l_dir * t;
+
+    // Sanity check: corner shouldn't be too far from center
+    let center_2d = Vec2::new(center.x, center.z);
+    let dist = corner_2d.distance(center_2d);
+
+    if dist > max_dist || dist < 0.5 {
+        return fallback_corner(l_edge, r_edge, center, margin);
+    }
+
+    // Also check that corner is generally "outward" from center
+    let to_corner = (corner_2d - center_2d).normalize_or_zero();
+    let mid_edge = (l_edge + r_edge) * 0.5;
+    let to_mid = (mid_edge - center_2d).normalize_or_zero();
+
+    if to_corner.dot(to_mid) < 0.0 {
+        // Corner is on wrong side of center
+        return fallback_corner(l_edge, r_edge, center, margin);
+    }
+
+    Vec3::new(corner_2d.x, center.y, corner_2d.y)
+}
+
+fn fallback_corner(l_edge: Vec2, r_edge: Vec2, center: Vec3, margin: f32) -> Vec3 {
+    let mid = (l_edge + r_edge) * 0.5;
+    let center_2d = Vec2::new(center.x, center.z);
+    let outward = (mid - center_2d).normalize_or_zero();
+    let corner = mid + outward * margin;
+    Vec3::new(corner.x, center.y, corner.y)
+}
+fn trim_all_lanes_to_polygon(
+    storage: &mut RoadStorage,
+    node_id: NodeId,
+    incoming: &HashSet<LaneId>,
+    segs: &[SegmentId],
+    polygon: &[Vec3],
+    gizmo: &mut Gizmo,
+) {
+    let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
+
+    for seg_id in segs.iter().copied() {
+        let seg = storage.segment(seg_id);
+
+        for lane_id in seg.lanes().iter().copied() {
+            let lane = storage.lane(&lane_id);
+            if !lane.is_enabled() {
+                continue;
+            }
+
+            let pts = lane.polyline();
+            if pts.len() < 2 {
+                continue;
+            }
+
+            let is_incoming = incoming.contains(&lane_id);
+
+            // Find furthest hit from node-side
+            let hit_result = if is_incoming {
                 let rev: Vec<Vec3> = pts.iter().copied().rev().collect();
                 furthest_hit_distance_from_start_xz(&rev, polygon)
             } else {
                 furthest_hit_distance_from_start_xz(pts, polygon)
-            }
-            .unwrap_or((0.0, Vec3::ZERO));
+            };
 
-            if amount <= 0.001 || hit == Vec3::ZERO {
+            let Some((amount, hit)) = hit_result else {
+                // No intersection - lane might be entirely inside or outside
+                // Try a simpler approach: find distance from node-side endpoint to polygon
+                continue;
+            };
+
+            if amount <= 0.01 {
                 continue;
             }
 
-            gizmo.draw_cross(hit, 0.2, [1.0, 0.0, 0.0]);
+            gizmo.draw_cross(hit, 0.3, [1.0, 0.0, 0.0]);
 
             let new_pts = if is_incoming {
                 modify_polyline_end(pts, amount)
@@ -2701,4 +2822,389 @@ fn smooth_polygon_corners(vertices: &[Vec3], center: Vec3, bulge_factor: f32) ->
     }
 
     result
+}
+/// Find the intersection of two polylines, preferring the closest valid intersection
+/// that is not trivially at the node center.
+fn polyline_intersection_xz_best(a: &[Vec3], b: &[Vec3], center: Vec3) -> Option<Vec3> {
+    const MIN_VALID_DIST: f32 = 0.05; // Reduced from 2.0 - some tight junctions have close corners
+    const MAX_VALID_DIST: f32 = 50.0;
+
+    let mut candidates: Vec<(f32, Vec3)> = Vec::new();
+
+    // Collect all physical intersections
+    for i in 0..a.len().saturating_sub(1) {
+        for j in 0..b.len().saturating_sub(1) {
+            if let Some(p) = segment_intersection_xz(a[i], a[i + 1], b[j], b[j + 1]) {
+                let d = p.distance(center);
+                if d >= MIN_VALID_DIST && d <= MAX_VALID_DIST {
+                    candidates.push((d, p));
+                }
+            }
+        }
+    }
+
+    // Pick the closest valid intersection to center
+    if let Some((_, p)) = candidates
+        .iter()
+        .min_by(|(d1, _), (d2, _)| d1.partial_cmp(d2).unwrap())
+    {
+        return Some(*p);
+    }
+
+    // No valid physical intersection - try ray projection
+    if a.len() >= 2 && b.len() >= 2 {
+        let (a_origin, a_toward) = get_node_side_end(a, center);
+        let (b_origin, b_toward) = get_node_side_end(b, center);
+
+        if let Some(p) = project_rays_intersection_xz(a_origin, a_toward, b_origin, b_toward) {
+            let d = p.distance(center);
+            if d >= MIN_VALID_DIST && d <= MAX_VALID_DIST {
+                return Some(p);
+            }
+        }
+    }
+
+    None
+}
+/// Returns (node-side point, next point going away from node)
+/// Uses more points for a stable direction if available
+fn get_node_side_end(points: &[Vec3], center: Vec3) -> (Vec3, Vec3) {
+    if points.len() < 2 {
+        let p = if points.is_empty() {
+            Vec3::ZERO
+        } else {
+            points[0]
+        };
+        return (p, p);
+    }
+
+    let d_start = points[0].distance(center);
+    let d_end = points[points.len() - 1].distance(center);
+
+    if d_start <= d_end {
+        // Node at start - pick a point further along for stable direction
+        let toward_idx = (points.len() / 4).max(1).min(points.len() - 1);
+        (points[0], points[toward_idx])
+    } else {
+        // Node at end - pick a point further back for stable direction
+        let toward_idx =
+            points.len().saturating_sub(1) - (points.len() / 4).max(1).min(points.len() - 1);
+        (points[points.len() - 1], points[toward_idx])
+    }
+}
+
+/// Project two rays and find their intersection in XZ plane.
+/// Ray A: from a_origin in direction (a_toward - a_origin)
+/// Ray B: from b_origin in direction (b_toward - b_origin)
+fn project_rays_intersection_xz(
+    a_origin: Vec3,
+    a_toward: Vec3,
+    b_origin: Vec3,
+    b_toward: Vec3,
+) -> Option<Vec3> {
+    let da = a_toward - a_origin;
+    let db = b_toward - b_origin;
+
+    let da_len = (da.x * da.x + da.z * da.z).sqrt();
+    let db_len = (db.x * db.x + db.z * db.z).sqrt();
+
+    if da_len < 1e-6 || db_len < 1e-6 {
+        return None;
+    }
+
+    // Normalize to unit vectors
+    let da_x = da.x / da_len;
+    let da_z = da.z / da_len;
+    let db_x = db.x / db_len;
+    let db_z = db.z / db_len;
+
+    // Determinant (cross product of unit direction vectors)
+    let det = da_x * db_z - da_z * db_x;
+
+    if det.abs() < 1e-6 {
+        return None; // parallel or nearly parallel
+    }
+
+    let diff_x = b_origin.x - a_origin.x;
+    let diff_z = b_origin.z - a_origin.z;
+
+    // t and u are arc-length distances since we're using unit vectors
+    let t = (diff_x * db_z - diff_z * db_x) / det;
+    let u = (diff_x * da_z - diff_z * da_x) / det;
+
+    // Check if intersection is ahead of both ray origins
+    // Use small negative epsilon to handle floating point edge cases
+    if t >= -1e-4 && u >= -1e-4 {
+        // BUG FIX: Don't multiply by da_len!
+        // t is already in world units (meters) because we divided by det of unit vectors
+        Some(Vec3::new(
+            a_origin.x + t * da_x,
+            (a_origin.y + b_origin.y) * 0.5,
+            a_origin.z + t * da_z,
+        ))
+    } else {
+        None
+    }
+}
+
+/// Returns (distance_from_start, hit_point) for the *closest* hit when
+/// walking from points[0] along the polyline, crossing the polygon boundary.
+pub fn closest_hit_distance_from_start_xz(points: &[Vec3], poly: &[Vec3]) -> Option<(f32, Vec3)> {
+    if points.len() < 2 || poly.len() < 3 {
+        return None;
+    }
+
+    let mut acc = 0.0f32;
+
+    for i in 0..points.len() - 1 {
+        let a = points[i];
+        let b = points[i + 1];
+        let seg = b - a;
+        let seg_len = seg.length();
+        if seg_len < 1e-6 {
+            continue;
+        }
+
+        let a0 = a.xz();
+        let a1 = b.xz();
+
+        let mut best_t_on_seg: Option<f32> = None;
+
+        for j in 0..poly.len() {
+            let p0 = poly[j].xz();
+            let p1 = poly[(j + 1) % poly.len()].xz();
+
+            if let Some(t) = seg_seg_intersection_t(a0, a1, p0, p1) {
+                best_t_on_seg = Some(match best_t_on_seg {
+                    None => t,
+                    Some(bt) => bt.min(t),
+                });
+            }
+        }
+
+        if let Some(t) = best_t_on_seg {
+            let hit = a + seg * t;
+            let dist = acc + seg_len * t;
+            return Some((dist, hit));
+        }
+
+        acc += seg_len;
+    }
+
+    None
+}
+
+/// Enforce counter-clockwise winding for polygon vertices (in XZ plane)
+fn enforce_ccw_winding(vertices: &[Vec3]) -> Vec<Vec3> {
+    if vertices.len() < 3 {
+        return vertices.to_vec();
+    }
+
+    let mut signed_area_2x = 0.0f32;
+    let n = vertices.len();
+    for i in 0..n {
+        let v0 = vertices[i];
+        let v1 = vertices[(i + 1) % n];
+        signed_area_2x += (v1.x - v0.x) * (v1.z + v0.z);
+    }
+
+    if signed_area_2x > 0.0 {
+        vertices.iter().copied().rev().collect()
+    } else {
+        vertices.to_vec()
+    }
+}
+
+/// Check if polygon is simple (no self-intersections)
+fn is_simple_polygon(vertices: &[Vec3]) -> bool {
+    let n = vertices.len();
+    if n < 3 {
+        return false;
+    }
+
+    for i in 0..n {
+        let a0 = vertices[i].xz();
+        let a1 = vertices[(i + 1) % n].xz();
+
+        for j in (i + 2)..n {
+            if (i == 0) && (j == n - 1) {
+                continue;
+            }
+
+            let b0 = vertices[j].xz();
+            let b1 = vertices[(j + 1) % n].xz();
+
+            if segments_intersect_proper(a0, a1, b0, b1) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+fn segments_intersect_proper(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2) -> bool {
+    let r = a1 - a0;
+    let s = b1 - b0;
+    let denom = cross2(r, s);
+
+    if denom.abs() < 1e-6 {
+        return false;
+    }
+
+    let qp = b0 - a0;
+    let t = cross2(qp, s) / denom;
+    let u = cross2(qp, r) / denom;
+
+    const EPS: f32 = 1e-4;
+    t > EPS && t < 1.0 - EPS && u > EPS && u < 1.0 - EPS
+}
+
+fn point_in_polygon_xz(point: Vec3, polygon: &[Vec3]) -> bool {
+    let n = polygon.len();
+    if n < 3 {
+        return false;
+    }
+
+    let px = point.x;
+    let pz = point.z;
+
+    let mut inside = false;
+    let mut j = n - 1;
+
+    for i in 0..n {
+        let vi = polygon[i];
+        let vj = polygon[j];
+
+        if ((vi.z > pz) != (vj.z > pz)) && (px < (vj.x - vi.x) * (pz - vi.z) / (vj.z - vi.z) + vi.x)
+        {
+            inside = !inside;
+        }
+
+        j = i;
+    }
+
+    inside
+}
+
+fn add_edge_midpoints(vertices: &[Vec3]) -> Vec<Vec3> {
+    let n = vertices.len();
+    let mut result = Vec::with_capacity(n * 2);
+
+    for i in 0..n {
+        let a = vertices[i];
+        let b = vertices[(i + 1) % n];
+
+        result.push(a);
+        result.push((a + b) * 0.5);
+    }
+
+    result
+}
+
+fn find_circle_intersection_distance(
+    points: &[Vec3],
+    center: Vec3,
+    radius: f32,
+) -> Option<(f32, Vec3)> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let mut acc = 0.0f32;
+
+    for i in 0..points.len() - 1 {
+        let a = points[i];
+        let b = points[i + 1];
+        let seg = b - a;
+        let seg_len = seg.length();
+
+        if seg_len < 1e-6 {
+            continue;
+        }
+
+        let d = seg / seg_len;
+        let f = a - center;
+
+        let a_coef = d.x * d.x + d.z * d.z;
+        let b_coef = 2.0 * (f.x * d.x + f.z * d.z);
+        let c_coef = f.x * f.x + f.z * f.z - radius * radius;
+
+        let discriminant = b_coef * b_coef - 4.0 * a_coef * c_coef;
+
+        if discriminant >= 0.0 {
+            let sqrt_disc = discriminant.sqrt();
+            let t1 = (-b_coef - sqrt_disc) / (2.0 * a_coef);
+            let t2 = (-b_coef + sqrt_disc) / (2.0 * a_coef);
+
+            for t in [t1, t2] {
+                if t >= 0.0 && t <= seg_len {
+                    let hit = a + d * t;
+                    return Some((acc + t, hit));
+                }
+            }
+        }
+
+        acc += seg_len;
+    }
+
+    None
+}
+
+fn circle_carve_lanes(
+    storage: &mut RoadStorage,
+    node_id: NodeId,
+    incoming: &HashSet<LaneId>,
+    center: Vec3,
+    radius: f32,
+    gizmo: &mut Gizmo,
+) {
+    let segs = storage.enabled_segments_connected_to_node(node_id);
+    let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
+
+    for seg_id in segs {
+        let seg = storage.segment(seg_id);
+
+        for lane_id in seg.lanes().iter().copied() {
+            let lane = storage.lane(&lane_id);
+            if !lane.is_enabled() {
+                continue;
+            }
+
+            let pts = lane.polyline();
+            if pts.len() < 2 {
+                continue;
+            }
+
+            let is_incoming = incoming.contains(&lane_id);
+
+            let (amount, hit) = if is_incoming {
+                let rev: Vec<Vec3> = pts.iter().copied().rev().collect();
+                find_circle_intersection_distance(&rev, center, radius)
+            } else {
+                find_circle_intersection_distance(pts, center, radius)
+            }
+            .unwrap_or((0.0, Vec3::ZERO));
+
+            if amount <= 0.001 || hit == Vec3::ZERO {
+                continue;
+            }
+
+            gizmo.draw_cross(hit, 0.2, [0.0, 1.0, 0.0]);
+
+            let new_pts = if is_incoming {
+                modify_polyline_end(pts, amount)
+            } else {
+                modify_polyline_start(pts, amount)
+            };
+
+            if let Some(new_pts) = new_pts {
+                edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
+            }
+        }
+    }
+
+    for (lane_id, geom) in edits {
+        storage.lane_mut(lane_id).replace_geometry(geom);
+    }
 }

@@ -299,7 +299,7 @@ impl Default for RoadType {
         Self {
             name: "Medium Road",
 
-            lanes_each_direction: (1, 1),
+            lanes_each_direction: (2, 2),
 
             lane_width: 2.75,
             lane_height: 0.0,

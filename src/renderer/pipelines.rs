@@ -117,7 +117,7 @@ impl Pipelines {
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
-        let shadow_map_view = create_shadow_texture(device, 2048);
+        let shadow_map_view = create_shadow_texture(device, 4096);
         // Load all shaders
         let shaders = load_all_shaders(device, shader_dir)?;
 
