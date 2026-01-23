@@ -6,8 +6,7 @@ use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::terrain::roads::road_structs::*;
 use crate::terrain::roads::roads::{
     Lane, LaneGeometry, LaneRef, METERS_PER_LANE_POLYLINE_STEP, NodeLane, RoadCommand, RoadManager,
-    RoadStorage, Segment, bezier3, nearest_lane_to_point, project_point_to_lane_xz,
-    sample_lane_position,
+    RoadStorage, bezier3, nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::{HashMap, HashSet};
@@ -170,7 +169,12 @@ impl RoadEditor {
 
         let end_anchor = self.build_anchor_from_snap(snap);
         let end_pos = snap.world_pos;
-        let polyline = make_straight_centerline(terrain_renderer, start_pos, end_pos);
+        let polyline = make_straight_centerline(
+            terrain_renderer,
+            start_pos,
+            end_pos,
+            road_style_params.road_type().structure,
+        );
         let estimated_length = (end_pos - start_pos).length();
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
@@ -179,6 +183,7 @@ impl RoadEditor {
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
+            road_style_params.road_type().structure(),
             start_pos,
             end_pos,
             None,
@@ -306,9 +311,22 @@ impl RoadEditor {
         let end_anchor = self.build_anchor_from_snap(snap);
         let end_pos = snap.world_pos;
 
-        let estimated_length = estimate_bezier_arc_length(start_pos, control, end_pos);
+        let estimated_length = estimate_bezier_arc_length(
+            terrain_renderer,
+            road_style_params.road_type().structure(),
+            start_pos,
+            control,
+            end_pos,
+        );
         let segment_count = compute_curve_segment_count(estimated_length);
-        let polyline = sample_quadratic_bezier(start_pos, control, end_pos, segment_count);
+        let polyline = sample_quadratic_bezier(
+            terrain_renderer,
+            road_style_params.road_type().structure(),
+            start_pos,
+            control,
+            end_pos,
+            segment_count,
+        );
 
         let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
@@ -316,6 +334,7 @@ impl RoadEditor {
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
+            road_style_params.road_type().structure(),
             start_pos,
             end_pos,
             Some(control),
@@ -378,6 +397,7 @@ impl RoadEditor {
         &self,
         storage: &RoadStorage,
         terrain_renderer: &TerrainRenderer,
+        structure_type: StructureType,
         start_pos: Vec3,
         end_pos: Vec3,
         control: Option<Vec3>,
@@ -390,9 +410,22 @@ impl RoadEditor {
         // Build test polyline for intersection testing
         let test_polyline = match control {
             Some(c) => {
-                let est_len = estimate_bezier_arc_length(start_pos, c, end_pos);
+                let est_len = estimate_bezier_arc_length(
+                    terrain_renderer,
+                    structure_type,
+                    start_pos,
+                    c,
+                    end_pos,
+                );
                 let samples = compute_curve_segment_count(est_len).max(20);
-                sample_quadratic_bezier(start_pos, c, end_pos, samples)
+                sample_quadratic_bezier(
+                    terrain_renderer,
+                    structure_type,
+                    start_pos,
+                    c,
+                    end_pos,
+                    samples,
+                )
             }
             None => vec![start_pos, end_pos],
         };
@@ -720,6 +753,7 @@ impl RoadEditor {
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
+            road_style_params.road_type().structure(),
             start_pos,
             end_pos,
             control,
@@ -802,6 +836,7 @@ impl RoadEditor {
             // Calculate centerline for this segment
             let segment_centerline = self.compute_segment_centerline(
                 terrain_renderer,
+                road_style_params.road_type().structure(),
                 start_pos,
                 end_pos,
                 control,
@@ -846,6 +881,7 @@ impl RoadEditor {
     fn compute_segment_centerline(
         &self,
         terrain_renderer: &TerrainRenderer,
+        structure_type: StructureType,
         original_start: Vec3,
         original_end: Vec3,
         original_control: Option<Vec3>,
@@ -857,16 +893,29 @@ impl RoadEditor {
         match original_control {
             None => {
                 // Straight segment
-                make_straight_centerline(terrain_renderer, from_pos, to_pos)
+                make_straight_centerline(terrain_renderer, from_pos, to_pos, structure_type)
             }
             Some(c) => {
                 // Extract subsection of Bézier curve
                 let (sub_start, sub_control, sub_end) =
                     subdivide_quadratic_bezier(original_start, c, original_end, from_t, to_t);
 
-                let est_len = estimate_bezier_arc_length(sub_start, sub_control, sub_end);
+                let est_len = estimate_bezier_arc_length(
+                    terrain_renderer,
+                    structure_type,
+                    sub_start,
+                    sub_control,
+                    sub_end,
+                );
                 let samples = compute_curve_segment_count(est_len);
-                sample_quadratic_bezier(sub_start, sub_control, sub_end, samples)
+                sample_quadratic_bezier(
+                    terrain_renderer,
+                    structure_type,
+                    sub_start,
+                    sub_control,
+                    sub_end,
+                    samples,
+                )
             }
         }
         // trim_polyline_both_ends(segment_centerline.as_slice(), 3)
@@ -1268,7 +1317,13 @@ impl RoadEditor {
         // Right side lanes (start -> end)
         for i in 0..right_lanes {
             let lane_index = (i as i8) + 1;
-            let poly = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
+            let poly = offset_polyline(
+                terrain_renderer,
+                centerline,
+                lane_index,
+                lane_width,
+                road_style_params.road_type().structure,
+            );
             let geom = LaneGeometry::from_polyline(poly);
             let base_cost = geom.total_len.max(0.1);
             cmds.push(RoadCommand::AddLane {
@@ -1288,7 +1343,13 @@ impl RoadEditor {
         // Left side lanes (end -> start, reversed geometry)
         for i in 0..left_lanes {
             let lane_index = -((i as i8) + 1);
-            let mut poly = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
+            let mut poly = offset_polyline(
+                terrain_renderer,
+                centerline,
+                lane_index,
+                lane_width,
+                road_style_params.road_type().structure,
+            );
             poly.reverse();
             let geom = LaneGeometry::from_polyline(poly);
             let base_cost = geom.total_len.max(0.1);
@@ -1312,6 +1373,7 @@ fn make_straight_centerline(
     terrain_renderer: &TerrainRenderer,
     start_pos: Vec3,
     end_pos: Vec3,
+    structure_type: StructureType,
 ) -> Vec<Vec3> {
     let length = (end_pos - start_pos).length();
     let samples = (length / METERS_PER_LANE_POLYLINE_STEP).max(1.0) as usize;
@@ -1321,13 +1383,12 @@ fn make_straight_centerline(
             let t = i as f32 / samples as f32;
             let mut p = start_pos.lerp(end_pos, t);
             let terrain_y = terrain_renderer.get_height_at([p.x, p.z]);
-            if p.y < terrain_y {
-                p.y = terrain_y;
-            }
+            set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
             p
         })
         .collect()
 }
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -1384,21 +1445,35 @@ fn lane_direction_at_node(lane: &Lane, node: NodeId) -> Vec3 {
     }
 }
 
-fn sample_quadratic_bezier(p0: Vec3, p1: Vec3, p2: Vec3, segments: usize) -> Vec<Vec3> {
+fn sample_quadratic_bezier(
+    terrain_renderer: &TerrainRenderer,
+    structure_type: StructureType,
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+    segments: usize,
+) -> Vec<Vec3> {
     let segments = segments.max(1);
     let mut points = Vec::with_capacity(segments + 1);
 
     for i in 0..=segments {
         let t = i as f32 / segments as f32;
         let one_minus_t = 1.0 - t;
-        let point = p0 * (one_minus_t * one_minus_t) + p1 * (2.0 * one_minus_t * t) + p2 * (t * t);
-        points.push(point);
+        let mut p = p0 * (one_minus_t * one_minus_t) + p1 * (2.0 * one_minus_t * t) + p2 * (t * t);
+        set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
+        points.push(p);
     }
     points
 }
 
-fn estimate_bezier_arc_length(p0: Vec3, p1: Vec3, p2: Vec3) -> f32 {
-    let samples = sample_quadratic_bezier(p0, p1, p2, 16);
+fn estimate_bezier_arc_length(
+    terrain_renderer: &TerrainRenderer,
+    structure_type: StructureType,
+    p0: Vec3,
+    p1: Vec3,
+    p2: Vec3,
+) -> f32 {
+    let samples = sample_quadratic_bezier(terrain_renderer, structure_type, p0, p1, p2, 16);
     polyline_length(&samples)
 }
 
@@ -1414,20 +1489,12 @@ fn compute_curve_segment_count(arc_length: f32) -> usize {
     ((arc_length / METERS_PER_LANE_POLYLINE_STEP).ceil() as usize).clamp(4, 32)
 }
 
-fn gather_node_lanes(storage: &RoadStorage, node_id: NodeId) -> (Vec<LaneId>, Vec<LaneId>) {
-    let Some(node) = storage.node(node_id) else {
-        return (Vec::new(), Vec::new());
-    };
-    (
-        node.incoming_lanes().to_vec(),
-        node.outgoing_lanes().to_vec(),
-    )
-}
 pub fn offset_polyline(
     terrain_renderer: &TerrainRenderer,
     center: &[Vec3],
     lane_index: i8,
     lane_width: f32,
+    structure_type: StructureType,
 ) -> Vec<Vec3> {
     let offset = if lane_index < 0 {
         (lane_index as f32 + 0.5) * lane_width
@@ -1446,20 +1513,15 @@ pub fn offset_polyline(
 
         let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize();
         let right = Vec3::new(-dir_xz.z, 0.0, dir_xz.x);
-        let mut final_point = center[i] + right * offset;
-        final_point.y = final_point
-            .y
-            .max(terrain_renderer.get_height_at([final_point.x, final_point.z]))
-            + CLEARANCE;
-        out.push(final_point);
+        let mut p = center[i] + right * offset;
+        set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
+        out.push(p);
     }
 
     out
 }
 #[derive(Clone, Debug)]
 pub struct IntersectionBuildParams {
-    /// Degrees: lanes with similar "arm direction" are grouped into the same approach arm.
-    pub arm_merge_angle_deg: f32,
     /// Degrees: outgoing arm considered "straight" if within this angle of incoming heading.
     pub straight_angle_deg: f32,
     /// Bezier samples for NodeLane geometry.
@@ -1477,7 +1539,6 @@ pub struct IntersectionBuildParams {
 impl IntersectionBuildParams {
     pub fn from_style(style: &RoadStyleParams) -> Self {
         Self {
-            arm_merge_angle_deg: 20.0,
             straight_angle_deg: 25.0,
             turn_samples: 12,
             dedicate_turn_lanes: true,
@@ -1499,21 +1560,6 @@ enum TurnType {
     UTurn,
 }
 
-#[derive(Debug, Clone)]
-struct LaneClearanceDemand {
-    // Positive = Carve (Trim), Negative = Extend (Add geometry)
-    pub demand_m: f32,
-    pub reason: String, // For debugging
-}
-
-impl Default for LaneClearanceDemand {
-    fn default() -> Self {
-        Self {
-            demand_m: 0.0,
-            reason: "Baseline".into(),
-        }
-    }
-}
 pub fn build_intersection_at_node(
     storage: &mut RoadStorage,
     node_id: NodeId,
@@ -1532,12 +1578,12 @@ pub fn build_intersection_at_node(
         //         let segment = storage.segment(segment_id);
         //         segment.
         //     }
-        //     carve_intersection_clearance(storage, node_id, node.connection_count() as f32 * 0.7);
+        carve_intersection_clearance(storage, node_id, node.connection_count() as f32 * 0.7);
         // } else {
         initial_carve(storage, node_id, params, gizmo);
         //};
-        // let demands = probe_intersection_node_lanes(storage, node_id, params);
-        // carve_intersection_clearance_per_lane(storage, node_id, &demands);
+        let demands = probe_intersection_node_lanes(storage, node_id, params);
+        carve_intersection_clearance_per_lane(storage, node_id, &demands);
     }
 
     // Phase 2: Build actual intersection paths
@@ -1724,7 +1770,7 @@ fn initial_carve(
 
             let dir = (fallback - center).normalize_or_zero();
             if dir != Vec3::ZERO {
-                let shift = 5.2 * params.side_walk_width;
+                let shift = 2.2 * params.side_walk_width;
                 cut_vertices.push(fallback + dir * shift);
                 gizmo.draw_cross(fallback, 0.3, [1.0, 0.5, 0.0], DEBUG_DRAW_DURATION); // orange = fallback
             }
@@ -1732,7 +1778,7 @@ fn initial_carve(
         };
 
         let dir = (p2 - center).normalize_or_zero();
-        let shift = 5.2 * params.side_walk_width;
+        let shift = 2.2 * params.side_walk_width;
         let v = p2 + dir * shift;
 
         cut_vertices.push(v);
@@ -1771,7 +1817,7 @@ fn initial_carve(
         return;
     }
 
-    cut_vertices = add_edge_midpoints(&cut_vertices);
+    cut_vertices = smooth_polygon_edges(&cut_vertices, center, 0.5);
 
     let mut cut_dbg = cut_vertices.clone();
     cut_dbg.push(cut_vertices[0]);
@@ -1820,170 +1866,6 @@ fn initial_carve(
             };
 
             edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
-        }
-    }
-
-    for (lane_id, geom) in edits {
-        storage.lane_mut(lane_id).replace_geometry(geom);
-    }
-}
-/// Computes corner vertex where outer edges of two adjacent lanes would meet.
-/// All math done in XZ plane, Y is taken from center.
-fn compute_corner_from_lane_edges(
-    l_poly: &[Vec3],
-    r_poly: &[Vec3],
-    l_ends_at_node: bool,
-    r_ends_at_node: bool,
-    margin: f32,
-    center: Vec3,
-    max_dist: f32,
-) -> Vec3 {
-    if l_poly.len() < 2 || r_poly.len() < 2 {
-        return center;
-    }
-
-    // Get node-side position and road direction for each lane
-    // Road direction = direction the lane travels (toward or away from node)
-    let (l_pos, l_dir) = if l_ends_at_node {
-        let p = l_poly[l_poly.len() - 1];
-        let prev = l_poly[l_poly.len() - 2];
-        (
-            Vec2::new(p.x, p.z),
-            Vec2::new(p.x - prev.x, p.z - prev.z).normalize_or_zero(),
-        )
-    } else {
-        let p = l_poly[0];
-        let next = l_poly[1];
-        (
-            Vec2::new(p.x, p.z),
-            Vec2::new(next.x - p.x, next.z - p.z).normalize_or_zero(),
-        )
-    };
-
-    let (r_pos, r_dir) = if r_ends_at_node {
-        let p = r_poly[r_poly.len() - 1];
-        let prev = r_poly[r_poly.len() - 2];
-        (
-            Vec2::new(p.x, p.z),
-            Vec2::new(p.x - prev.x, p.z - prev.z).normalize_or_zero(),
-        )
-    } else {
-        let p = r_poly[0];
-        let next = r_poly[1];
-        (
-            Vec2::new(p.x, p.z),
-            Vec2::new(next.x - p.x, next.z - p.z).normalize_or_zero(),
-        )
-    };
-
-    // Perpendicular offsets to get outer edges:
-    // Left lane's outer edge is on its RIGHT (rotate CW: (x,z) -> (z,-x))
-    // Right lane's outer edge is on its LEFT (rotate CCW: (x,z) -> (-z,x))
-    let l_perp = Vec2::new(l_dir.y, -l_dir.x); // CW 90°
-    let r_perp = Vec2::new(-r_dir.y, r_dir.x); // CCW 90°
-
-    // Edge line positions
-    let l_edge = l_pos + l_perp * margin;
-    let r_edge = r_pos + r_perp * margin;
-
-    // Line-line intersection (infinite lines, not rays!)
-    let cross = l_dir.x * r_dir.y - l_dir.y * r_dir.x;
-
-    if cross.abs() < 1e-5 {
-        // Nearly parallel - fallback to midpoint pushed outward
-        return fallback_corner(l_edge, r_edge, center, margin);
-    }
-
-    let diff = r_edge - l_edge;
-    let t = (diff.x * r_dir.y - diff.y * r_dir.x) / cross;
-
-    let corner_2d = l_edge + l_dir * t;
-
-    // Sanity check: corner shouldn't be too far from center
-    let center_2d = Vec2::new(center.x, center.z);
-    let dist = corner_2d.distance(center_2d);
-
-    if dist > max_dist || dist < 0.5 {
-        return fallback_corner(l_edge, r_edge, center, margin);
-    }
-
-    // Also check that corner is generally "outward" from center
-    let to_corner = (corner_2d - center_2d).normalize_or_zero();
-    let mid_edge = (l_edge + r_edge) * 0.5;
-    let to_mid = (mid_edge - center_2d).normalize_or_zero();
-
-    if to_corner.dot(to_mid) < 0.0 {
-        // Corner is on wrong side of center
-        return fallback_corner(l_edge, r_edge, center, margin);
-    }
-
-    Vec3::new(corner_2d.x, center.y, corner_2d.y)
-}
-
-fn fallback_corner(l_edge: Vec2, r_edge: Vec2, center: Vec3, margin: f32) -> Vec3 {
-    let mid = (l_edge + r_edge) * 0.5;
-    let center_2d = Vec2::new(center.x, center.z);
-    let outward = (mid - center_2d).normalize_or_zero();
-    let corner = mid + outward * margin;
-    Vec3::new(corner.x, center.y, corner.y)
-}
-fn trim_all_lanes_to_polygon(
-    storage: &mut RoadStorage,
-    node_id: NodeId,
-    incoming: &HashSet<LaneId>,
-    segs: &[SegmentId],
-    polygon: &[Vec3],
-    gizmo: &mut Gizmo,
-) {
-    let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
-
-    for seg_id in segs.iter().copied() {
-        let seg = storage.segment(seg_id);
-
-        for lane_id in seg.lanes().iter().copied() {
-            let lane = storage.lane(&lane_id);
-            if !lane.is_enabled() {
-                continue;
-            }
-
-            let pts = lane.polyline();
-            if pts.len() < 2 {
-                continue;
-            }
-
-            let is_incoming = incoming.contains(&lane_id);
-
-            // Find furthest hit from node-side
-            let hit_result = if is_incoming {
-                let rev: Vec<Vec3> = pts.iter().copied().rev().collect();
-                furthest_hit_distance_from_start_xz(&rev, polygon)
-            } else {
-                furthest_hit_distance_from_start_xz(pts, polygon)
-            };
-
-            let Some((amount, hit)) = hit_result else {
-                // No intersection - lane might be entirely inside or outside
-                // Try a simpler approach: find distance from node-side endpoint to polygon
-                continue;
-            };
-
-            if amount <= 0.01 {
-                continue;
-            }
-
-            gizmo.draw_cross(hit, 0.3, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
-
-            let new_pts = if is_incoming {
-                modify_polyline_end(pts, amount)
-            } else {
-                modify_polyline_start(pts, amount)
-            };
-
-            if let Some(new_pts) = new_pts {
-                if new_pts.len() >= 2 {
-                    edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
-                }
-            }
         }
     }
 
@@ -2054,81 +1936,6 @@ fn modify_polyline_end(points: &[Vec3], amount: f32) -> Option<Vec<Vec3>> {
     out.push(new_pos);
     Some(out)
 }
-fn polyline_intersection_xz(a: &[Vec3], b: &[Vec3]) -> Option<Vec3> {
-    // 1. Check for physical intersection on existing segments (Original Logic)
-    for i in 0..a.len() - 1 {
-        for j in 0..b.len() - 1 {
-            if let Some(p) = segment_intersection_xz(a[i], a[i + 1], b[j], b[j + 1]) {
-                return Some(p);
-            }
-        }
-    }
-
-    // 2. No intersection found? Try projecting the ends!
-    // We need at least 2 vertices in each polyline to determine a direction.
-    if a.len() < 2 || b.len() < 2 {
-        return None;
-    }
-
-    // Get the last two vertices to determine direction
-    let a_prev = a[a.len() - 2];
-    let a_last = a[a.len() - 1];
-
-    let b_prev = b[b.len() - 2];
-    let b_last = b[b.len() - 1];
-
-    // Calculate the intersection of the two imaginary rays extending from the ends
-    get_projected_intersection_xz(a_prev, a_last, b_prev, b_last)
-}
-
-/// Helper function to calculate the intersection of two rays on the XZ plane.
-/// Ray A starts at `a_last` and goes in direction (a_last - a_prev).
-/// Ray B starts at `b_last` and goes in direction (b_last - b_prev).
-fn get_projected_intersection_xz(
-    a_prev: Vec3,
-    a_last: Vec3,
-    b_prev: Vec3,
-    b_last: Vec3,
-) -> Option<Vec3> {
-    // Direction vectors
-    let da_x = a_last.x - a_prev.x;
-    let da_z = a_last.z - a_prev.z;
-
-    let db_x = b_last.x - b_prev.x;
-    let db_z = b_last.z - b_prev.z;
-
-    // Determinant (Cross product of directions in 2D)
-    let det = da_x * db_z - da_z * db_x;
-
-    // If det is 0, the lines are parallel and will never intersect
-    if det.abs() < 1e-6 {
-        return None;
-    }
-
-    // Vector from Ray A start to Ray B start
-    let diff_x = b_last.x - a_last.x;
-    let diff_z = b_last.z - a_last.z;
-
-    // Calculate 't' (distance along Ray A) and 'u' (distance along Ray B)
-    // Using Cramer's rule for linear systems
-    let t = (diff_x * db_z - diff_z * db_x) / det;
-    let u = (diff_x * da_z - diff_z * da_x) / det;
-
-    // Check if the intersection is actually "in front" of the polylines.
-    // t >= 0 means the intersection is ahead of polyline A.
-    // u >= 0 means the intersection is ahead of polyline B.
-    // small epsilon to handle pesky floating point imprecision.
-    if t >= -1e-4 && u >= -1e-4 {
-        return Some(Vec3 {
-            x: a_last.x + t * da_x,
-            y: a_last.y, // Preserving Y height of polyline A's end
-            z: a_last.z + t * da_z,
-        });
-    }
-
-    // If t or u are negative, the lines diverge away from each other (intersection is behind them)
-    None
-}
 
 fn segment_intersection_xz(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> Option<Vec3> {
     let p = a0.xz();
@@ -2150,101 +1957,6 @@ fn segment_intersection_xz(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> Option<Vec
     } else {
         None
     }
-}
-
-fn rightmost_lane_id(segment: &Segment, storage: &RoadStorage, node_id: NodeId) -> LaneId {
-    let points_to_node = segment.end() == node_id;
-
-    segment
-        .lanes()
-        .iter()
-        .copied()
-        .max_by_key(|id| {
-            let idx = storage.lane(id).lane_index();
-            if points_to_node { idx } else { -idx }
-        })
-        .unwrap()
-}
-
-fn leftmost_lane_id(segment: &Segment, storage: &RoadStorage, node_id: NodeId) -> LaneId {
-    let points_to_node = segment.end() == node_id;
-
-    segment
-        .lanes()
-        .iter()
-        .copied()
-        .min_by_key(|id| {
-            let idx = storage.lane(id).lane_index();
-            if points_to_node { idx } else { -idx }
-        })
-        .unwrap()
-}
-
-fn segment_right_hand_width(
-    segment: &Segment,
-    storage: &RoadStorage,
-    params: &IntersectionBuildParams,
-) -> f32 {
-    let mut right_hand_width: f32 = 0.0;
-    for lane_id in segment.lanes().iter() {
-        let lane = storage.lane(lane_id);
-        if lane.lane_index() > 0 {
-            right_hand_width += params.lane_width_m;
-        }
-    }
-    right_hand_width += params.side_walk_width;
-    right_hand_width
-}
-fn segment_left_hand_width(
-    segment: &Segment,
-    storage: &RoadStorage,
-    params: &IntersectionBuildParams,
-) -> f32 {
-    let mut left_hand_width: f32 = 0.0;
-    for lane_id in segment.lanes().iter() {
-        let lane = storage.lane(lane_id);
-        if lane.lane_index() < 0 {
-            left_hand_width += params.lane_width_m;
-        }
-    }
-    left_hand_width += params.side_walk_width;
-    left_hand_width
-}
-fn segment_dir_at_node(segment: &Segment, storage: &RoadStorage, node_id: NodeId) -> Vec3 {
-    let lane_id = segment.lanes()[0]; // any lane is fine for direction
-    let lane = storage.lane(&lane_id);
-    let poly = lane.polyline();
-
-    let node_pos = {
-        let n = storage.node(node_id).unwrap();
-        Vec3::from_array(n.position())
-    };
-
-    let dir = if segment.end() == node_id {
-        // segment points INTO node, so direction is reversed
-        node_pos - poly[poly.len() - 2]
-    } else {
-        poly[1] - node_pos
-    };
-
-    dir.normalize()
-}
-
-fn segment_ids_paired(segment_ids_sorted: Vec<SegmentId>) -> Vec<(SegmentId, SegmentId)> {
-    let n = segment_ids_sorted.len();
-    if n < 2 {
-        return Vec::new();
-    }
-
-    let mut pairs = Vec::with_capacity(n);
-
-    for i in 0..n {
-        let a = segment_ids_sorted[i];
-        let b = segment_ids_sorted[(i + 1) % n];
-        pairs.push((a, b));
-    }
-
-    pairs
 }
 
 fn segment_ids_sorted_left_to_right(
@@ -2504,8 +2216,6 @@ fn generate_turn_geometry(
 
     LaneGeometry::from_polyline(points)
 }
-
-type NodeLaneKey = (LaneId, LaneId);
 
 fn classify_turn(in_dir: Vec3, out_dir: Vec3) -> TurnType {
     let dot = in_dir.dot(out_dir);
@@ -2837,7 +2547,7 @@ fn carve_intersection_clearance_per_lane(
 }
 
 /// Smooth polygon by adding midpoints that curve outward slightly
-fn smooth_polygon_corners(vertices: &[Vec3], center: Vec3, bulge_factor: f32) -> Vec<Vec3> {
+fn smooth_polygon_edges(vertices: &[Vec3], center: Vec3, bulge_factor: f32) -> Vec<Vec3> {
     let n = vertices.len();
     if n < 3 {
         return vertices.to_vec();
@@ -3129,21 +2839,6 @@ fn point_in_polygon_xz(point: Vec3, polygon: &[Vec3]) -> bool {
     }
 
     inside
-}
-
-fn add_edge_midpoints(vertices: &[Vec3]) -> Vec<Vec3> {
-    let n = vertices.len();
-    let mut result = Vec::with_capacity(n * 2);
-
-    for i in 0..n {
-        let a = vertices[i];
-        let b = vertices[(i + 1) % n];
-
-        result.push(a);
-        result.push((a + b) * 0.5);
-    }
-
-    result
 }
 
 fn find_circle_intersection_distance(

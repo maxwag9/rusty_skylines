@@ -983,57 +983,6 @@ impl Default for RoadManager {
     }
 }
 
-// ============================================================================
-// Spatial Helpers
-// ============================================================================
-
-/// Computes the 3D length of a lane using linear distance between node anchors.
-#[inline]
-pub fn lane_length(lane: &Lane, storage: &RoadStorage) -> f32 {
-    let Some(from) = storage.node(lane.from_node()) else {
-        return 0.0;
-    };
-    let Some(to) = storage.node(lane.to_node()) else {
-        return 0.0;
-    };
-    let dx = to.x() - from.x();
-    let dy = to.y() - from.y();
-    let dz = to.z() - from.z();
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-/// Computes the 2D (XY) length of a lane.
-#[inline]
-pub fn lane_length_2d(lane: &Lane, storage: &RoadStorage) -> f32 {
-    let Some(from) = storage.node(lane.from_node()) else {
-        return 0.0;
-    };
-    let Some(to) = storage.node(lane.to_node()) else {
-        return 0.0;
-    };
-    let dx = to.x() - from.x();
-    let dz = to.z() - from.z();
-    (dx * dx + dz * dz).sqrt()
-}
-
-/// Samples the height (z) along a lane at parameter t in [0,1].
-/// Uses the segment's vertical profile for interpolation.
-// #[inline]
-// pub fn sample_lane_height(lane: &Lane, t: f32, manager: &RoadManager) -> f32 {
-//     let segment = manager.segment(lane.segment());
-//     let Some(from) = manager.node(lane.from_node()) else {
-//         return 0.0;
-//     };
-//     let Some(to) = manager.node(lane.to_node()) else {
-//         return 0.0;
-//     };
-//
-//     // Determine if lane direction matches segment direction
-//     let reversed = lane.from_node() != segment.start();
-//     let t_seg = if reversed { 1.0 - t } else { t };
-//     from.y()
-// }
-
 /// Samples the 3D position along a lane at parameter t in [0,1].
 #[inline]
 pub fn sample_lane_position(lane: &Lane, t: f32, storage: &RoadStorage) -> (f32, f32) {
@@ -1112,35 +1061,6 @@ pub fn nearest_lane_to_point(storage: &RoadStorage, x: f32, _y: f32, z: f32) -> 
     }
 
     best_id
-}
-
-/// Finds the k nearest enabled lanes to a point (brute force).
-/// Returns lanes sorted by distance, closest first.
-pub fn k_nearest_lanes_to_point(
-    storage: &RoadStorage,
-    x: f32,
-    z: f32,
-    k: usize,
-) -> Vec<(LaneId, f32)> {
-    let mut candidates: Vec<(LaneId, f32)> = Vec::with_capacity(storage.lane_count());
-
-    for (id, lane) in storage.iter_lanes() {
-        if !lane.is_enabled() {
-            continue;
-        }
-        let (_, dist_sq) = project_point_to_lane_xz(lane, x, z, storage);
-        candidates.push((id, dist_sq));
-    }
-
-    // Sort by distance (deterministic: stable sort by dist, then by id for ties)
-    candidates.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.raw().cmp(&b.0.raw()))
-    });
-
-    candidates.truncate(k);
-    candidates
 }
 
 // ============================================================================
@@ -1716,14 +1636,6 @@ pub fn apply_commands(
         .collect()
 }
 
-enum PreviewIntent<'a> {
-    Segment(&'a SegmentPreview),
-    InvalidSegment(&'a SegmentPreview),
-    HoverNodes(&'a [&'a NodePreview]),
-    Crossing(&'a [&'a CrossingPoint]),
-    Nothing,
-}
-
 /// Processes preview commands and generates preview road geometry.
 /// Called every frame after RoadEditor::update().
 pub fn apply_preview_commands(
@@ -1969,25 +1881,6 @@ fn generate_invalid_segment_preview(
 
     commands
 }
-/// Generate preview nodes only (for invalid segment states)
-fn generate_nodes_only(
-    allocator: &mut PreviewIdAllocator,
-    node_previews: &[&NodePreview],
-) -> Vec<RoadCommand> {
-    let mut commands = Vec::new();
-
-    for node in node_previews {
-        allocator.alloc_node();
-        commands.push(RoadCommand::AddNode {
-            x: node.world_pos.x,
-            y: node.world_pos.y,
-            z: node.world_pos.z,
-            chunk_id: 0,
-        });
-    }
-
-    commands
-}
 
 /// Generate full segment preview with both nodes and all lanes
 fn generate_segment_preview(
@@ -2143,7 +2036,13 @@ fn compute_lane_geometries(
     // Forward lanes (right side: travel from start to end)
     for i in 0..right_count {
         let lane_index = (i as i8) + 1;
-        let polyline = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
+        let polyline = offset_polyline(
+            terrain_renderer,
+            centerline,
+            lane_index,
+            lane_width,
+            road_style_params.road_type().structure,
+        );
         let geometry = LaneGeometry::from_polyline(polyline);
         let base_cost = geometry.total_len.max(0.1);
 
@@ -2158,7 +2057,13 @@ fn compute_lane_geometries(
     // Backward lanes (left side: travel from end to start)
     for i in 0..left_count {
         let lane_index = -((i as i8) + 1);
-        let mut polyline = offset_polyline(terrain_renderer, centerline, lane_index, lane_width);
+        let mut polyline = offset_polyline(
+            terrain_renderer,
+            centerline,
+            lane_index,
+            lane_width,
+            road_style_params.road_type().structure,
+        );
         polyline.reverse();
         let geometry = LaneGeometry::from_polyline(polyline);
         let base_cost = geometry.total_len.max(0.1);
@@ -2172,12 +2077,6 @@ fn compute_lane_geometries(
     }
 
     lanes
-}
-
-#[inline]
-fn bezier2(a: Vec3, b: Vec3, c: Vec3, t: f32) -> Vec3 {
-    let u = 1.0 - t;
-    a * (u * u) + b * (2.0 * u * t) + c * (t * t)
 }
 
 #[inline]

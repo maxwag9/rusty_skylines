@@ -12,7 +12,9 @@ struct Uniforms {
     inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
-    lighting_view_proj: mat4x4<f32>,
+    lighting_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
+
     sun_direction: vec3<f32>,
     time: f32,
 
@@ -20,7 +22,7 @@ struct Uniforms {
     orbit_radius: f32,
 
     moon_direction: vec3<f32>,
-    _pad0: f32,
+    shadow_cascade_index: u32,     // used only during shadow rendering
 };
 
 struct SkyUniform {
@@ -183,7 +185,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let detail_lod = x * x * x;
 
     let hf = clamp(dist / 1200.0, 0.0, 1.0);
-    let tile_lod = mix(tiling, tiling * 0.03, hf);
+    let tile_lod = mix(tiling, tiling * 0.09, hf);
     let eps_scale = mix(1.0, 0.25, hf);
 
     let n_near = layered_wave_normal(in.world.xz, tiling, strength, t, 1.0);

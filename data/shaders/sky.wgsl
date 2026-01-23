@@ -1,6 +1,4 @@
-// ----------------------------------------
-// SKY UNIFORMS
-// ----------------------------------------
+// sky.wgsl
 struct Uniforms {
     view: mat4x4<f32>,
     inv_view: mat4x4<f32>,
@@ -8,7 +6,9 @@ struct Uniforms {
     inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
-    lighting_view_proj: mat4x4<f32>,
+    lighting_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
+
     sun_direction: vec3<f32>,
     time: f32,
 
@@ -16,7 +16,7 @@ struct Uniforms {
     orbit_radius: f32,
 
     moon_direction: vec3<f32>,
-    _pad0: f32,
+    shadow_cascade_index: u32,     // used only during shadow rendering
 };
 
 @group(1) @binding(0)
@@ -231,10 +231,8 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
     let up = vec3<f32>(0.0, 1.0, 0.0);
     var col = vec3<f32>(0.0);
 
-    let sun_dir = normalize(u.sun_direction);
-    let sun_pos_world = sun_dir * 1000000.0;
-    let sun_clip = u.view_proj * vec4<f32>(sun_pos_world, 1.0);
-
+    let sun_dir = u.sun_direction;
+    let sun_clip = u.view_proj * vec4<f32>(sun_dir, 0.0);
     var sun_ndc = vec2<f32>(9999.0);
     let sun_visible = sun_clip.w > 0.0;
 
@@ -283,8 +281,7 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
 
                 let halo = tight * 0.9 + soft * 0.35;
 
-                let sun_alt = clamp(dot(sun_dir, vec3<f32>(0.0, 1.0, 0.0)), -1.0, 1.0);
-                let sun_lum = 2.8 * sky.sun_intensity * clamp(sun_alt + 0.05, 0.0, 1.0);
+                let sun_lum = 2.8 * sky.sun_intensity * clamp(alt + 0.05, 0.0, 1.0);
 
                 let corona_low  = vec3<f32>(1.2, 0.7, 0.35);
                 let corona_high = vec3<f32>(0.7, 0.85, 1.1);
@@ -357,11 +354,9 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
                 N_local.z * forward;
 
             let N = normalize(N_world);
-
-            let L = normalize(u.sun_direction);
             let V = normalize(-view_ray);
 
-            let raw_light = dot(N, L);
+            let raw_light = dot(N, sun_dir);
 
             let phase = smoothstep(-0.2, 0.2, raw_light);
             let limb = mix(1.0, 0.50, r);

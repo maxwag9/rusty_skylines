@@ -5,7 +5,9 @@ struct Uniforms {
     inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
-    lighting_view_proj: mat4x4<f32>,
+    lighting_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
+
     sun_direction: vec3<f32>,
     time: f32,
 
@@ -13,7 +15,7 @@ struct Uniforms {
     orbit_radius: f32,
 
     moon_direction: vec3<f32>,
-    _pad0: f32,
+    shadow_cascade_index: u32,     // used only during shadow rendering
 };
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 

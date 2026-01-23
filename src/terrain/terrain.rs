@@ -161,27 +161,27 @@ pub struct TerrainParams {
 impl Default for TerrainParams {
     fn default() -> Self {
         Self {
-            seed: 201035458,
-            world_scale: 0.1,
+            seed: 0,
+            world_scale: 0.05,
 
-            height_scale: 2000.0,
+            height_scale: 1000.0,
             sea_level: 0.0,
 
             lat_extent: 140_000.0,
-            continent_radius: 30_000.0,
-            ring_radius: 85_000.0,
-            coast_noise_scale: 0.00035,
+            continent_radius: 70_000.0,
+            ring_radius: 8_000.0,
+            coast_noise_scale: 0.0035,
             coast_noise_amp: 0.45,
             island_threshold0: 0.74,
             island_threshold1: 0.92,
-            island_amp: 0.65,
+            island_amp: 0.55,
 
-            force_land_at_origin: true,
+            force_land_at_origin: false,
             origin_island_radius: 12_000.0,
             origin_island_strength: 0.75,
             origin_min_height: 50.0,
             pull_one_continent_to_origin: true,
-            origin_pull_strength: 0.90,
+            origin_pull_strength: 0.85,
 
             warp_large_scale: 0.00042,
             warp_small_scale: 0.0040,
@@ -192,7 +192,7 @@ impl Default for TerrainParams {
 
             macro_freq: 0.0006,
             hills_freq: 0.0045,
-            mountains_freq: 0.0090,
+            mountains_freq: 0.0070,
             _belts_freq: 0.00162,
             moisture_freq: 0.0012,
 
@@ -200,10 +200,10 @@ impl Default for TerrainParams {
             macro_persistence: 0.50,
             hills_octaves: 6,
             hills_persistence: 0.52,
-            mountains_octaves: 7,
-            mountains_persistence: 0.50,
+            mountains_octaves: 0,
+            mountains_persistence: 0.0,
             continent_octaves: 4,
-            continent_persistence: 0.75,
+            continent_persistence: 0.85,
             moisture_octaves: 5,
             moisture_persistence: 0.60,
             warp_large_octaves: 4,
@@ -212,30 +212,30 @@ impl Default for TerrainParams {
             warp_small_persistence: 0.52,
 
             ocean_floor: -1.10,
-            inland_plateau: 0.28,
-            macro_amp: 0.55,
+            inland_plateau: 0.88,
+            macro_amp: 0.2,
             hills_amp: 0.95,
-            mountains_amp: 0.6,
+            mountains_amp: 0.1,
             belt_amp: 0.5,
 
             coast_soften_width: 0.22,
-            coast_soften_strength: 0.22,
+            coast_soften_strength: 0.1,
             interior_lo: 0.38,
             interior_hi: 0.92,
             belt_lo: 0.50,
-            belt_hi: 0.88,
+            belt_hi: 0.78,
 
-            flatten: 0.45,
+            flatten: 0.20,
             flatten_curve: 1.8,
-            mountain_smooth: 0.45,
-            hills_detail: 0.28,
-            micro_flatten: 0.5,
+            mountain_smooth: 0.55,
+            hills_detail: 0.18,
+            micro_flatten: 0.20,
 
-            plate_freq: 0.00022,
+            plate_freq: 0.0022,
             plate_sharpness: 4.2,
             plate_mountain_amp: 1.8,
 
-            erosion_strength: 0.55,
+            erosion_strength: 0.20,
             erosion_iters: 24,
 
             river_freq: 0.0011,
@@ -303,58 +303,53 @@ impl TerrainGenerator {
     pub fn with_params(mut p: TerrainParams) -> Self {
         let seed = p.seed;
         p.world_scale = p.world_scale.max(0.000001);
-        let ws = p.world_scale;
 
-        let macro_elev = make_fbm(
-            seed,
-            p.macro_freq * ws,
-            p.macro_octaves,
-            p.macro_persistence,
-        );
+        let macro_elev = make_fbm(seed, p.macro_freq, p.macro_octaves, p.macro_persistence);
         let hills = make_fbm(
             seed.wrapping_add(10),
-            p.hills_freq * ws,
+            p.hills_freq,
             p.hills_octaves,
             p.hills_persistence,
         );
         let mountains = make_fbm(
             seed.wrapping_add(1),
-            p.mountains_freq * ws,
+            p.mountains_freq,
             p.mountains_octaves,
             p.mountains_persistence,
         );
-        let plates = make_fbm(seed.wrapping_add(42), p.plate_freq * ws, 3, 0.5);
-        let rivers = make_fbm(seed.wrapping_add(77), p.river_freq.max(0.0) * ws, 4, 0.55);
+        let plates = make_fbm(seed.wrapping_add(42), p.plate_freq, 3, 0.5);
+        let rivers = make_fbm(seed.wrapping_add(77), p.river_freq.max(0.0), 4, 0.55);
 
         let continent_noise = make_fbm(
             seed.wrapping_add(2),
-            0.0003 * ws,
+            0.0003,
             p.continent_octaves,
             p.continent_persistence,
         );
         let moisture_noise = make_fbm(
             seed,
-            p.moisture_freq * ws,
+            p.moisture_freq,
             p.moisture_octaves,
             p.moisture_persistence,
         );
 
         let warp_large = make_fbm(
             seed.wrapping_add(4),
-            p.warp_large_scale * ws,
+            p.warp_large_scale,
             p.warp_large_octaves,
             p.warp_large_persistence,
         );
         let warp_small = make_fbm(
             seed.wrapping_add(5),
-            p.warp_small_scale * ws,
+            p.warp_small_scale,
             p.warp_small_octaves,
             p.warp_small_persistence,
         );
 
-        let detail = make_fbm(seed.wrapping_add(9001), 0.020 * ws, 4, 0.55);
-        let rock = make_fbm(seed.wrapping_add(9002), 0.012 * ws, 3, 0.55);
+        let detail = make_fbm(seed.wrapping_add(9001), 0.020, 4, 0.55);
+        let rock = make_fbm(seed.wrapping_add(9002), 0.012, 3, 0.55);
 
+        let ws = p.world_scale;
         let mut centers = [(0.0f32, 0.0f32); 6];
         for i in 0..6 {
             let base_angle = (i as f32) / 6.0 * TAU;
@@ -362,7 +357,7 @@ impl TerrainGenerator {
             let angle = base_angle + jitter;
 
             let radial_jitter = (hash01(seed.wrapping_add(100 + i as u32)) - 0.5) * 0.25;
-            let r = p.ring_radius * (1.0 + radial_jitter);
+            let r = p.ring_radius * ws * (1.0 + radial_jitter);
 
             let lat_band = if i < 2 {
                 let sign = if i == 0 { 1.0 } else { -1.0 };
@@ -372,8 +367,8 @@ impl TerrainGenerator {
                 let raw = hash01(seed.wrapping_add(200 + i as u32));
                 (raw * 0.9) - 0.45
             };
-
-            centers[i] = (angle.cos() * r, lat_band * p.lat_extent);
+            let lat_ext = p.lat_extent * ws;
+            centers[i] = (angle.cos() * r, lat_band * lat_ext);
         }
 
         if p.pull_one_continent_to_origin {
@@ -434,8 +429,9 @@ impl TerrainGenerator {
 
         let mut best = 0.0f32;
         for &(cx, cz) in &self.continent_centers {
-            let dx = (wx - cx) / self.p.continent_radius;
-            let dz = (wz - cz) / (self.p.continent_radius * 0.6);
+            let cr = self.p.continent_radius * self.p.world_scale;
+            let dx = (wx - cx) / cr;
+            let dz = (wz - cz) / (cr * 0.6);
             let dist = (dx * dx + dz * dz).sqrt();
             let v = (1.0 - dist).clamp(0.0, 1.0);
             let shaped = v * v * (3.0 - 2.0 * v);
@@ -482,8 +478,8 @@ impl TerrainGenerator {
 
     fn latitude_factor(&self, wz: f32) -> f32 {
         let (_, wz) = self.scaled_coords(0.0, wz);
-        let t = (wz / self.p.lat_extent).abs();
-        t.min(1.0)
+        let lat_ext = self.p.lat_extent * self.p.world_scale;
+        (wz / lat_ext).abs().min(1.0)
     }
 
     #[inline]
@@ -550,10 +546,10 @@ impl TerrainGenerator {
         let interior = smootherstep(self.p.interior_lo, self.p.interior_hi, cont);
         let mountain_mask = belt_mask * interior;
 
-        // plates and uplift (single plate sample)
-        let plate_raw = self.plates.get_noise_2d(wx2 * 0.70, wz2 * 0.70);
-        // plate_edges used to be powf a lot; keep but clamp exponent to avoid huge cost
-        let plate_edges = (1.0 - plate_raw.abs()).powf(self.p.plate_sharpness.max(0.0001));
+        let eps = 1.0;
+        let (pgx, pgz) = grad2(&self.plates, wx2 * 0.70, wz2 * 0.70, eps);
+        let g = (pgx * pgx + pgz * pgz).sqrt();
+        let plate_edges = smoothstep(0.02, 0.08, g); // tune thresholds
         let uplift = (plate_edges * 0.65 + mountain_mask * 0.55).clamp(0.0, 1.0);
 
         // compose rel with macro & hills

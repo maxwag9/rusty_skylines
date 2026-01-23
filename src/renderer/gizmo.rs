@@ -1,3 +1,4 @@
+use crate::data::Settings;
 use crate::renderer::world_renderer::{TerrainRenderer, position_to_chunk_coords};
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::vertex::LineVtx;
@@ -24,9 +25,12 @@ impl Gizmo {
         target_position: Vec3,
         total_game_time: f64,
         road_manager: &RoadManager,
+        settings: &Settings,
     ) {
         self.total_game_time = total_game_time;
-        return;
+        if !settings.render_lanes_gizmo {
+            return;
+        };
         let render_chunk = false;
         if render_chunk {
             let (cx, cz) = position_to_chunk_coords(target_position, terrain_renderer.chunk_size);
@@ -230,7 +234,7 @@ impl Gizmo {
             start_time: self.total_game_time,
         });
         let arrow_length = s * 1.0;
-        let sun_end = t + sun_direction.normalize() * arrow_length;
+        let sun_end = t + sun_direction * arrow_length;
 
         self.render_arrow(
             [t.x, t.y, t.z],                   // start at gizmo center

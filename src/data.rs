@@ -9,6 +9,13 @@ use wgpu::*;
 pub enum BendMode {
     Strict,
     Bent,
+    #[serde(other)]
+    Unknown,
+}
+impl Default for BendMode {
+    fn default() -> Self {
+        BendMode::Strict
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")] // "fifo", "mailbox", ...
@@ -16,6 +23,8 @@ pub enum PresentModeSetting {
     Immediate,
     Mailbox,
     Fifo,
+    #[serde(other)]
+    Unknown,
 }
 
 impl PresentModeSetting {
@@ -24,6 +33,7 @@ impl PresentModeSetting {
             PresentModeSetting::Immediate => PresentMode::Immediate,
             PresentModeSetting::Mailbox => PresentMode::Mailbox,
             PresentModeSetting::Fifo => PresentMode::Fifo,
+            _ => PresentMode::Mailbox,
         }
     }
 }
@@ -34,40 +44,41 @@ impl Default for PresentModeSetting {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct PartialSettings {
-    target_fps: Option<f32>,
-    target_tps: Option<f32>,
-    present_mode: Option<PresentModeSetting>,
-    editor_mode: Option<bool>,
-    override_mode: Option<bool>,
-    show_gui: Option<bool>,
-    background_color: Option<[f32; 4]>,
-    total_game_time: Option<f64>,
-    world_generation_benchmark_mode: Option<bool>,
-    bend_mode: Option<BendMode>,
-    show_world: Option<bool>,
-    always_day: Option<bool>,
-    msaa_samples: Option<u32>,
-}
-
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default)]
     pub target_fps: f32,
+    #[serde(default)]
     pub target_tps: f32,
-
+    #[serde(default)]
     pub present_mode: PresentModeSetting,
+    #[serde(default)]
     pub editor_mode: bool,
+    #[serde(default)]
     pub override_mode: bool,
+    #[serde(default)]
     pub show_gui: bool,
+    #[serde(default)]
     pub background_color: [f32; 4],
+    #[serde(default)]
     pub total_game_time: f64,
+    #[serde(default)]
     pub world_generation_benchmark_mode: bool,
+    #[serde(default)]
     pub bend_mode: BendMode,
+    #[serde(default)]
     pub show_world: bool,
+    #[serde(default)]
     pub always_day: bool,
+    #[serde(default)]
     pub msaa_samples: u32,
+    #[serde(default)]
+    pub shadow_map_size: u32,
+    #[serde(default)]
+    pub zoom_speed: f32,
+    #[serde(default)]
+    pub render_lanes_gizmo: bool,
 }
 
 impl Default for Settings {
@@ -86,6 +97,9 @@ impl Default for Settings {
             show_world: true,
             always_day: false,
             msaa_samples: 4,
+            shadow_map_size: 4096,
+            zoom_speed: 10.0,
+            render_lanes_gizmo: false,
         }
     }
 }
@@ -95,8 +109,8 @@ impl Settings {
         let path = path.as_ref();
 
         match fs::read_to_string(path) {
-            Ok(content) => match toml::from_str::<PartialSettings>(&content) {
-                Ok(partial) => Settings::from_partial(partial),
+            Ok(content) => match toml::from_str::<Settings>(&content) {
+                Ok(settings) => settings,
                 Err(err) => {
                     eprintln!("Error parsing {:?}: {err}", path);
                     Self::default()
@@ -124,49 +138,5 @@ impl Settings {
         fs::write(path, toml_str)?;
 
         Ok(())
-    }
-    fn from_partial(p: PartialSettings) -> Self {
-        let mut s = Self::default();
-
-        if let Some(v) = p.target_fps {
-            s.target_fps = v;
-        }
-        if let Some(v) = p.target_tps {
-            s.target_tps = v;
-        }
-        if let Some(v) = p.present_mode {
-            s.present_mode = v;
-        }
-        if let Some(v) = p.editor_mode {
-            s.editor_mode = v;
-        }
-        if let Some(v) = p.override_mode {
-            s.override_mode = v;
-        }
-        if let Some(v) = p.show_gui {
-            s.show_gui = v;
-        }
-        if let Some(v) = p.background_color {
-            s.background_color = v;
-        }
-        if let Some(v) = p.total_game_time {
-            s.total_game_time = v;
-        }
-        if let Some(v) = p.world_generation_benchmark_mode {
-            s.world_generation_benchmark_mode = v;
-        }
-        if let Some(v) = p.bend_mode {
-            s.bend_mode = v;
-        }
-        if let Some(v) = p.show_world {
-            s.show_world = v;
-        }
-        if let Some(v) = p.always_day {
-            s.always_day = v;
-        }
-        if let Some(v) = p.msaa_samples {
-            s.msaa_samples = v;
-        }
-        s
     }
 }

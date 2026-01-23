@@ -2,7 +2,7 @@ use crate::data::BendMode;
 use crate::ui::vertex::*;
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Simple deterministic PRNG based on splitmix64.
 struct SimpleRng {
@@ -77,21 +77,20 @@ pub fn load_legacy_gui_layout_legacy(path: &PathBuf, mode: &BendMode) -> Vec<Men
 }
 
 /// Legacy single-file loader
-pub fn load_gui_from_file_legacy(
-    path: PathBuf,
+pub fn load_gui_from_file_legacy<P: AsRef<Path>>(
+    path: P,
     mode: &BendMode,
 ) -> Result<GuiLayout, Box<dyn Error>> {
-    let bytes = fs::read(&path)?;
+    let bytes = fs::read(path)?;
     match mode {
-        BendMode::Strict => {
-            let parsed: GuiLayout = serde_yaml::from_slice(&bytes)?;
+        BendMode::Strict | BendMode::Unknown => {
+            let parsed = serde_yaml::from_slice::<GuiLayout>(&bytes)?;
             Ok(parsed)
         }
         BendMode::Bent => {
             let seed = fnv1a_64(&bytes);
             let mut rng = SimpleRng::new(seed);
-            let layout = synthesize_layout_from_bytes(&bytes, &mut rng);
-            Ok(layout)
+            Ok(synthesize_layout_from_bytes(&bytes, &mut rng))
         }
     }
 }
@@ -139,7 +138,7 @@ pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, 
     let bytes = fs::read(path)?;
 
     match mode {
-        BendMode::Strict => {
+        BendMode::Strict | BendMode::Unknown => {
             let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
             let parsed: MenuYaml = match extension {
                 "Yaml" => serde_yaml::from_slice(&bytes)?,

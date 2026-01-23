@@ -68,7 +68,7 @@ impl Default for RoadStyleParams {
             sidewalk_height: 0.15,
             sidewalk_material_id: 0, // Concrete or Pavement
             median_width: 0.25,
-            median_height: 0.15,
+            median_height: 3.15,
             median_material_id: 0, // Concrete
         }
     }
@@ -299,7 +299,7 @@ impl Default for RoadType {
         Self {
             name: "Medium Road",
 
-            lanes_each_direction: (2, 2),
+            lanes_each_direction: (1, 1),
 
             lane_width: 2.75,
             lane_height: 0.0,
@@ -316,7 +316,7 @@ impl Default for RoadType {
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.8,
+            turn_tightness: 1.6,
         }
     }
 }

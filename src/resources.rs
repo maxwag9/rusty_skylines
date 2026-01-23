@@ -141,7 +141,7 @@ pub struct Uniforms {
     pub inv_proj: [[f32; 4]; 4],
     pub view_proj: [[f32; 4]; 4],
     pub inv_view_proj: [[f32; 4]; 4],
-    pub light_view_proj: [[[f32; 4]; 4]; CSM_CASCADES],
+    pub lighting_view_proj: [[[f32; 4]; 4]; CSM_CASCADES],
     pub cascade_splits: [f32; 4], // end distance of each cascade in view-space units
     pub sun_direction: [f32; 3],
     pub time: f32,

@@ -66,14 +66,21 @@ impl RenderCore {
         let shader_dir = shader_dir();
         let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
 
-        let pipelines = Pipelines::new(&device, &config, msaa_samples, &shader_dir, camera)
-            .expect("Failed to create render pipelines");
+        let pipelines = Pipelines::new(
+            &device,
+            &config,
+            msaa_samples,
+            &shader_dir,
+            camera,
+            settings.shadow_map_size,
+        )
+        .expect("Failed to create render pipelines");
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderer::new(&device, settings);
         let road_renderer = RoadRenderSubsystem::new(&device);
         let arena = GeneralMeshArena::new(&device, 256 * 1024 * 1024, 128 * 1024 * 1024);
-        let render_manager = RenderManager::new(&device, &queue, Rgba8UnormSrgb, texture_dir());
+        let render_manager = RenderManager::new(&device, &queue, config.format, texture_dir());
         let gizmo = Gizmo::new(&device);
 
         Self {
@@ -249,6 +256,10 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         astronomy: &AstronomyState,
     ) {
+        println!("{}", camera.target);
+        ui_loader.variables.set_f32("target_pos_x", camera.target.x);
+        ui_loader.variables.set_f32("target_pos_y", camera.target.y);
+        ui_loader.variables.set_f32("target_pos_z", camera.target.z);
         self.terrain_renderer.update(
             &self.device,
             &self.queue,
@@ -274,6 +285,7 @@ impl RenderCore {
             camera.target,
             time.total_game_time,
             &self.road_renderer.road_manager,
+            settings,
         );
         self.gizmo.update_gizmo_vertices(
             camera.target,
@@ -309,15 +321,17 @@ impl RenderCore {
 
             let shadow_buf = &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[cascade];
 
-            render_terrain_shadows(
-                &mut pass,
-                &mut self.render_manager,
-                &self.terrain_renderer,
-                &self.pipelines,
-                camera,
-                aspect,
-                shadow_buf,
-            );
+            if cascade != 0 && cascade != 1 {
+                render_terrain_shadows(
+                    &mut pass,
+                    &mut self.render_manager,
+                    &self.terrain_renderer,
+                    &self.pipelines,
+                    camera,
+                    aspect,
+                    shadow_buf,
+                );
+            }
 
             render_roads_shadows(
                 &mut pass,

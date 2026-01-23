@@ -17,6 +17,54 @@ use std::sync::Arc;
 use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
+#[derive(Debug, Clone)]
+pub struct ChunkCoord {
+    x: i32,
+    z: i32,
+}
+#[derive(Debug, Clone)]
+pub struct LocalPos {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+#[derive(Debug, Clone)]
+pub struct WorldPos {
+    chunk: ChunkCoord,
+    local: LocalPos,
+}
+pub fn to_render_pos(pos: &WorldPos, cam: &WorldPos, chunk_size: f32) -> Vec3 {
+    let dx = (pos.chunk.x - cam.chunk.x) as f32 * chunk_size + (pos.local.x - cam.local.x);
+
+    let dy = pos.local.y - cam.local.y;
+
+    let dz = (pos.chunk.z - cam.chunk.z) as f32 * chunk_size + (pos.local.z - cam.local.z);
+
+    Vec3::new(dx, dy, dz)
+}
+fn world_to_chunk(pos: Vec3, chunk_size: f32) -> WorldPos {
+    let cx = (pos.x / chunk_size).floor() as i32;
+    let cz = (pos.z / chunk_size).floor() as i32;
+
+    WorldPos {
+        chunk: ChunkCoord { x: cx, z: cz },
+        local: LocalPos {
+            x: pos.x - cx as f32 * chunk_size,
+            y: pos.y,
+            z: pos.z - cz as f32 * chunk_size,
+        },
+    }
+}
+
+pub struct ChunkCoords {
+    x: i32,
+    z: i32, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
+    dist2: i32,
+}
+pub struct VisibleChunk {
+    pub coords: ChunkCoords,
+    pub id: ChunkId,
+}
 pub struct PickedPoint {
     pub pos: Vec3,
     pub chunk: VisibleChunk,
@@ -31,15 +79,7 @@ struct FrameState {
     r2_render: i32,
     r2_gen: i32,
 }
-pub struct ChunkCoords {
-    x: i32,
-    z: i32, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
-    dist2: i32,
-}
-pub struct VisibleChunk {
-    pub coords: ChunkCoords,
-    pub id: ChunkId,
-}
+
 pub struct TerrainRenderer {
     pub arena: TerrainMeshArena,
 
@@ -77,9 +117,9 @@ impl TerrainRenderer {
         terrain_params.seed = 144;
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
-        let chunk_size = 64;
+        let chunk_size = 256;
         let view_radius_render = 128;
-        let view_radius_generate = 64;
+        let view_radius_generate = 128;
 
         let arena = TerrainMeshArena::new(
             device,

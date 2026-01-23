@@ -58,11 +58,15 @@ pub struct CameraController {
     pub zoom_velocity: f32,
     pub target_yaw: f32,
     pub target_pitch: f32,
+    pub target_smoothed: Vec3,
     pub orbit_smoothness: f32,
     pub yaw_velocity: f32,
     pub pitch_velocity: f32,
     pub orbit_damping_release: f32,
     pub zoom_damping: f32,
+    pub base_fov: f32,
+    pub follow_vel: Vec3, // spring state for target follow
+    pub fov_vel: f32,     // optional (nice) spring state for fov
 }
 
 impl CameraController {
@@ -72,11 +76,15 @@ impl CameraController {
             zoom_velocity: 0.0,
             target_yaw: camera.yaw,
             target_pitch: camera.pitch,
+            target_smoothed: camera.target,
             orbit_smoothness: 0.25,
             yaw_velocity: 0.0,
             pitch_velocity: 0.0,
-            orbit_damping_release: 4.0,
+            orbit_damping_release: 2.0,
             zoom_damping: 12.0,
+            base_fov: camera.fov,
+            follow_vel: Default::default(),
+            fov_vel: 0.0,
         }
     }
 }

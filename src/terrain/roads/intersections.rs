@@ -1,7 +1,8 @@
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_helpers::{
-    merge_polylines_ccw, offset_polyline_f32, select_outermost_lanes, triangulate_center_fan,
+    merge_polylines_ccw, offset_polyline_f32, select_outermost_lanes,
+    set_point_height_with_structure_type, triangulate_center_fan,
 };
 use crate::terrain::roads::road_mesh_manager::{
     CLEARANCE, ChunkId, MeshConfig, RoadVertex, build_ribbon_mesh, build_vertical_face,
@@ -162,11 +163,12 @@ pub fn build_intersection_mesh(
     let asphalt_base = vertices.len() as u32;
 
     // center vertex (UV at texture center)
-    let center_h = terrain.get_height_at([center.x, center.z]);
+    let mut point = Vec3::from_array(node.position());
+    set_point_height_with_structure_type(terrain, style.road_type().structure(), &mut point);
     vertices.push(road_vertex(
-        center.x,
-        center_h + style.lane_height,
-        center.z,
+        point.x,
+        point.y + style.lane_height,
+        point.z,
         style.lane_material_id,
         0.5, // u
         0.5, // v
@@ -197,11 +199,12 @@ pub fn build_intersection_mesh(
 
     // push ring in the same order triangulator expects (CCW)
     for p in asphalt_ring.iter() {
-        let h = terrain.get_height_at([p.x, p.z]);
+        let mut point = p.clone();
+        set_point_height_with_structure_type(terrain, style.road_type().structure(), &mut point);
         let (u, v) = radial_uv(*p);
         vertices.push(road_vertex(
             p.x,
-            h + style.lane_height,
+            p.y + style.lane_height,
             p.z,
             style.lane_material_id,
             u,
@@ -226,6 +229,7 @@ pub fn build_intersection_mesh(
             build_ribbon_mesh(
                 terrain,
                 gizmo,
+                style,
                 node_lane.geometry(),
                 style.sidewalk_width,
                 style.sidewalk_height,
@@ -241,6 +245,7 @@ pub fn build_intersection_mesh(
 
             build_vertical_face(
                 terrain,
+                style,
                 node_lane.geometry(),
                 curb_inner_offset,
                 style.lane_height,
@@ -257,6 +262,7 @@ pub fn build_intersection_mesh(
 
             build_vertical_face(
                 terrain,
+                style,
                 node_lane.geometry(),
                 curb_outer_offset,
                 style.lane_height,

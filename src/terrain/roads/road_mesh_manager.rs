@@ -4,7 +4,7 @@
 //! Produces deterministic, chunked CPU mesh buffers from immutable road topology.
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::{Gizmo, Vec3Like};
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::intersections::{
     IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh,
@@ -22,7 +22,7 @@ pub type ChunkId = u64;
 // ============================================================================
 
 const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
-pub const CLEARANCE: f32 = 0.04;
+pub const CLEARANCE: f32 = 0.03;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
 // ============================================================================
@@ -239,6 +239,7 @@ fn mesh_segment_with_boundaries(
         build_ribbon_mesh(
             terrain_renderer,
             gizmo,
+            style,
             geom,
             style.lane_width,
             style.lane_height,
@@ -261,6 +262,7 @@ fn mesh_segment_with_boundaries(
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
+                style,
                 geom,
                 style.sidewalk_width,
                 style.sidewalk_height,
@@ -277,6 +279,7 @@ fn mesh_segment_with_boundaries(
             let inner_offset = style.lane_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
+                style,
                 geom,
                 inner_offset,
                 style.lane_height,
@@ -294,6 +297,7 @@ fn mesh_segment_with_boundaries(
             let outer_offset = style.lane_width * 0.5 + style.sidewalk_width;
             build_vertical_face(
                 terrain_renderer,
+                style,
                 geom,
                 outer_offset,
                 style.lane_height,
@@ -317,6 +321,7 @@ fn mesh_segment_with_boundaries(
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
+                style,
                 geom,
                 style.sidewalk_width,
                 style.sidewalk_height,
@@ -333,6 +338,7 @@ fn mesh_segment_with_boundaries(
             let inner_offset = style.lane_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
+                style,
                 geom,
                 inner_offset,
                 style.lane_height,
@@ -350,6 +356,7 @@ fn mesh_segment_with_boundaries(
             let outer_offset = style.lane_width * 0.5 + style.sidewalk_width;
             build_vertical_face(
                 terrain_renderer,
+                style,
                 geom,
                 outer_offset,
                 style.lane_height,
@@ -374,6 +381,7 @@ fn mesh_segment_with_boundaries(
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
+                style,
                 geom,
                 style.median_width,
                 style.median_height,
@@ -390,6 +398,7 @@ fn mesh_segment_with_boundaries(
             let curb_offset_right = -style.lane_width * 0.5 + style.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
+                style,
                 geom,
                 curb_offset_right,
                 style.lane_height,
@@ -407,6 +416,7 @@ fn mesh_segment_with_boundaries(
             let curb_offset_left = -style.lane_width * 0.5 - style.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
+                style,
                 geom,
                 curb_offset_left,
                 style.lane_height,
@@ -479,13 +489,17 @@ fn draw_node_geometry(
     // =========================================================================
     // 1) ROAD SURFACE - Filled disk using triangle fan from center
     // =========================================================================
-
-    let center_terrain = terrain_renderer.get_height_at([node_pos.x, node_pos.z]);
-    let center_y = center_terrain.max(y_base) + style.lane_height + CLEARANCE;
+    let mut center_p = Vec3::from(node_pos);
+    set_point_height_with_structure_type(
+        terrain_renderer,
+        style.road_type().structure(),
+        &mut center_p,
+    );
+    center_p.y += style.lane_height;
     let center_idx = vertices.len() as u32;
 
     vertices.push(RoadVertex {
-        position: [node_pos.x, center_y, node_pos.z],
+        position: center_p.to_array(),
         normal: up_normal,
         uv: [0.5, 0.5],
         material_id: style.lane_material_id,
@@ -497,9 +511,13 @@ fn draw_node_geometry(
         let (sin_a, cos_a) = angle.sin_cos();
         let dir = Vec3::new(cos_a, 0.0, sin_a);
         let pos = node_pos + dir * road_radius;
-
-        let terrain_h = terrain_renderer.get_height_at([pos.x, pos.z]);
-        let y = terrain_h.max(y_base) + style.lane_height + CLEARANCE;
+        let mut outer_p = Vec3::from(pos);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut outer_p,
+        );
+        outer_p.y += style.lane_height;
 
         // Polar UVs for road disk
         let uv_scale = road_radius / config.uv_scale_v;
@@ -507,7 +525,7 @@ fn draw_node_geometry(
         let v = 0.5 + sin_a * uv_scale;
 
         vertices.push(RoadVertex {
-            position: [pos.x, y, pos.z],
+            position: outer_p.to_array(),
             normal: up_normal,
             uv: [u, v],
             material_id: style.lane_material_id,
@@ -536,17 +554,26 @@ fn draw_node_geometry(
         let pos_inner = node_pos + dir * sw_inner;
         let pos_outer = node_pos + dir * sw_outer;
 
-        let terrain_inner = terrain_renderer.get_height_at([pos_inner.x, pos_inner.z]);
-        let terrain_outer = terrain_renderer.get_height_at([pos_outer.x, pos_outer.z]);
-
-        let y_inner = terrain_inner.max(y_base) + style.sidewalk_height + CLEARANCE;
-        let y_outer = terrain_outer.max(y_base) + style.sidewalk_height + CLEARANCE;
+        let mut inner_p = Vec3::from(pos_inner);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut inner_p,
+        );
+        inner_p.y += style.sidewalk_height;
+        let mut outer_p = Vec3::from(pos_outer);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut outer_p,
+        );
+        outer_p.y += style.sidewalk_height;
 
         let arc_u = (angle - start_angle) * ((sw_inner + sw_outer) * 0.5) / config.uv_scale_u;
 
         // Inner edge of sidewalk
         vertices.push(RoadVertex {
-            position: [pos_inner.x, y_inner, pos_inner.z],
+            position: inner_p.to_array(),
             normal: up_normal,
             uv: [arc_u, 0.0],
             material_id: style.sidewalk_material_id,
@@ -554,7 +581,7 @@ fn draw_node_geometry(
 
         // Outer edge of sidewalk
         vertices.push(RoadVertex {
-            position: [pos_outer.x, y_outer, pos_outer.z],
+            position: outer_p.to_array(),
             normal: up_normal,
             uv: [arc_u, style.sidewalk_width / config.uv_scale_v],
             material_id: style.sidewalk_material_id,
@@ -587,9 +614,20 @@ fn draw_node_geometry(
         let dir = Vec3::new(cos_a, 0.0, sin_a);
         let pos = node_pos + dir * sw_inner;
 
-        let terrain_h = terrain_renderer.get_height_at([pos.x, pos.z]);
-        let y_top = terrain_h.max(y_base) + style.sidewalk_height + CLEARANCE;
-        let y_bot = terrain_h.max(y_base) + style.lane_height + CLEARANCE;
+        let mut top_p = Vec3::from(pos);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut top_p,
+        );
+        top_p.y += style.sidewalk_height;
+        let mut bottom_p = Vec3::from(pos);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut bottom_p,
+        );
+        bottom_p.y += style.lane_height;
 
         // Normal points INWARD (toward center)
         let inward_normal = [-dir.x, 0.0, -dir.z];
@@ -599,7 +637,7 @@ fn draw_node_geometry(
 
         // Top of inner curb
         vertices.push(RoadVertex {
-            position: [pos.x, y_top, pos.z],
+            position: top_p.to_array(),
             normal: inward_normal,
             uv: [arc_u, curb_height / config.uv_scale_v],
             material_id: style.sidewalk_material_id,
@@ -607,7 +645,7 @@ fn draw_node_geometry(
 
         // Bottom of inner curb
         vertices.push(RoadVertex {
-            position: [pos.x, y_bot, pos.z],
+            position: bottom_p.to_array(),
             normal: inward_normal,
             uv: [arc_u, 0.0],
             material_id: style.sidewalk_material_id,
@@ -639,9 +677,19 @@ fn draw_node_geometry(
         let dir = Vec3::new(cos_a, 0.0, sin_a);
         let pos = node_pos + dir * sw_outer;
 
-        let terrain_h = terrain_renderer.get_height_at([pos.x, pos.z]);
-        let y_top = terrain_h.max(y_base) + style.sidewalk_height + CLEARANCE;
-        let y_bot = terrain_h.max(y_base) + CLEARANCE;
+        let mut top_p = Vec3::from(pos);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut top_p,
+        );
+        top_p.y += style.sidewalk_height;
+        let mut bottom_p = Vec3::from(pos);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut bottom_p,
+        );
 
         // Normal points OUTWARD (away from center)
         let outward_normal = [dir.x, 0.0, dir.z];
@@ -650,7 +698,7 @@ fn draw_node_geometry(
 
         // Top of outer curb
         vertices.push(RoadVertex {
-            position: [pos.x, y_top, pos.z],
+            position: top_p.to_array(),
             normal: outward_normal,
             uv: [arc_u, style.sidewalk_height / config.uv_scale_v],
             material_id: style.sidewalk_material_id,
@@ -658,7 +706,7 @@ fn draw_node_geometry(
 
         // Bottom of outer curb
         vertices.push(RoadVertex {
-            position: [pos.x, y_bot, pos.z],
+            position: bottom_p.to_array(),
             normal: outward_normal,
             uv: [arc_u, 0.0],
             material_id: style.sidewalk_material_id,
@@ -682,6 +730,7 @@ fn draw_node_geometry(
 pub(crate) fn build_ribbon_mesh(
     terrain_renderer: &TerrainRenderer,
     gizmo: &mut Gizmo,
+    style: &RoadStyleParams,
     lane_geom: &LaneGeometry,
     width: f32,
     height: f32,
@@ -774,13 +823,21 @@ pub(crate) fn build_ribbon_mesh(
     let mut current_vert_idx = 0;
 
     for &i in &included_indices {
-        let (left_pos, right_pos) = edges[i];
+        let (mut left_pos, mut right_pos) = edges[i];
 
-        let h_left = terrain_renderer.get_height_at([left_pos.x, left_pos.z]);
-        let h_right = terrain_renderer.get_height_at([right_pos.x, right_pos.z]);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut left_pos,
+        );
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut right_pos,
+        );
 
-        let final_left = Vec3::new(left_pos.x, h_left + height + CLEARANCE, left_pos.z);
-        let final_right = Vec3::new(right_pos.x, h_right + height + CLEARANCE, right_pos.z);
+        let final_left = Vec3::new(left_pos.x, left_pos.y + height, left_pos.z);
+        let final_right = Vec3::new(right_pos.x, right_pos.y + height, right_pos.z);
 
         // UV calculation: u based on arc length, v spans the width
         let u = lane_geom.lengths[i] * uv_config.0;
@@ -827,6 +884,7 @@ pub(crate) fn build_ribbon_mesh(
 /// Updated to accept start/end overrides to snap to intersection boundaries.
 pub fn build_vertical_face(
     terrain_renderer: &TerrainRenderer,
+    style: &RoadStyleParams,
     ref_geom: &LaneGeometry,
     offset_lateral: f32,
     bottom_height: f32,
@@ -920,18 +978,26 @@ pub fn build_vertical_face(
             let raw = p + lateral * offset_lateral;
             (raw.x, raw.z, lateral * normal_sign)
         };
-
-        let terrain_y = terrain_renderer.get_height_at([face_pos_x, face_pos_z]);
+        let mut p_bottom = Vec3::new(face_pos_x, 0.0, face_pos_z);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut p_bottom,
+        );
+        p_bottom.y += bottom_height;
+        let mut p_top = Vec3::new(face_pos_x, 0.0, face_pos_z);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            style.road_type().structure(),
+            &mut p_top,
+        );
+        p_top.y += top_height;
         let u = ref_geom.lengths[i] * uv_config.0;
         let v_h = (top_height - bottom_height).abs() * uv_config.1;
 
         // Bottom vertex
         vertices.push(RoadVertex {
-            position: [
-                face_pos_x,
-                terrain_y + bottom_height + CLEARANCE,
-                face_pos_z,
-            ],
+            position: p_bottom.to_array(),
             normal: normal.to_array(),
             uv: [u, 0.0],
             material_id,
@@ -939,7 +1005,7 @@ pub fn build_vertical_face(
 
         // Top vertex
         vertices.push(RoadVertex {
-            position: [face_pos_x, terrain_y + top_height + CLEARANCE, face_pos_z],
+            position: p_top.to_array(),
             normal: normal.to_array(),
             uv: [u, v_h],
             material_id,

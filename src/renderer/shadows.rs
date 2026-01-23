@@ -113,9 +113,9 @@ pub fn create_shadow_texture(device: &wgpu::Device, size: u32, label: &str) -> w
 }
 
 // Defaults (tweak later)
-pub const DEFAULT_SHADOW_DISTANCE: f32 = 250.0; // how far from camera to cast shadows
-pub const DEFAULT_SPLIT_LAMBDA: f32 = 0.65; // 0 = uniform, 1 = logarithmic
-pub const DEFAULT_Z_PADDING: f32 = 100.0; // extra depth range in light space
+pub const DEFAULT_SHADOW_DISTANCE: f32 = 200.0; // how far from camera to cast shadows
+pub const DEFAULT_SPLIT_LAMBDA: f32 = 0.5; // 0 = uniform, 1 = logarithmic
+pub const DEFAULT_Z_PADDING: f32 = 50.0; // extra depth range in light space
 pub const DEFAULT_XY_PAD_RATIO: f32 = 0.02; // expand xy bounds by 2%
 
 pub fn compute_cascade_splits(near: f32, far: f32, lambda: f32) -> [f32; 4] {
@@ -189,7 +189,12 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     shadow_map_size: u32,
     stabilize: bool,
 ) -> Mat4 {
-    let sun_dir = sun_dir_surface_to_sun.normalize_or_zero();
+    let sun_dir_raw = sun_dir_surface_to_sun;
+    let sun_dir = if sun_dir_raw.length_squared() < 1e-8 {
+        Vec3::new(0.3, 1.0, 0.2).normalize()
+    } else {
+        sun_dir_raw.normalize()
+    };
 
     // Pick a stable "up"
     let up = if sun_dir.dot(Vec3::Y).abs() > 0.99 {
@@ -253,7 +258,15 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     let light_proj = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near, far);
     light_proj * light_view
 }
-
+pub fn cascade_splits_from_ratios(near: f32, far: f32, ratios: [f32; 4]) -> [f32; 4] {
+    let range = (far - near).max(1.0);
+    [
+        near + range * ratios[0],
+        near + range * ratios[1],
+        near + range * ratios[2],
+        near + range * ratios[3],
+    ]
+}
 pub fn compute_csm_matrices(
     cam_pos: Vec3,
     camera_view: Mat4,
@@ -268,7 +281,7 @@ pub fn compute_csm_matrices(
     let shadow_far = camera_far
         .min(DEFAULT_SHADOW_DISTANCE)
         .max(camera_near + 1.0);
-    let splits = compute_cascade_splits(camera_near, shadow_far, DEFAULT_SPLIT_LAMBDA);
+    let splits = cascade_splits_from_ratios(camera_near, shadow_far, [0.05, 0.15, 0.55, 1.0]);
 
     let (eye, right, up, forward) = camera_basis_from_view(camera_view);
 
@@ -306,7 +319,7 @@ pub fn render_roads_shadows(
 ) {
     let bias = DepthBiasState {
         constant: 0, // for Depth32Float, constants often need to be “large”
-        slope_scale: 2.0,
+        slope_scale: 0.5,
         clamp: 0.0,
     };
     // This sets the road pipeline + texture array bind group (bind group 0)
@@ -352,7 +365,7 @@ pub fn render_roads_shadows(
 
     let nudge_bias = DepthBiasState {
         constant: 1,
-        slope_scale: 2.0,
+        slope_scale: 0.5,
         clamp: 0.0,
     };
     render_manager.render(
@@ -389,11 +402,11 @@ pub fn render_terrain_shadows(
     pipelines: &Pipelines,
     camera: &Camera,
     aspect: f32,
-    shadow_mat_buffer: &wgpu::Buffer,
+    shadow_mat_buffer: &Buffer,
 ) {
     let bias = DepthBiasState {
         constant: 0, // for Depth32Float, constants often need to be “large”
-        slope_scale: 2.0,
+        slope_scale: 0.5,
         clamp: 0.0,
     };
     let shadows_shader_path = shader_dir().join("shadows.wgsl");
@@ -421,29 +434,4 @@ pub fn render_terrain_shadows(
         pipelines,
     );
     terrain_renderer.render(pass, camera, aspect, false);
-
-    render_manager.render(
-        Vec::new(),
-        "Terrain Pipeline (Under Water) Shadows",
-        shadows_shader_path.as_path(), // file containing vertex shader
-        PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(DepthStencilState {
-                format: Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
-                stencil: StencilState::default(),
-                bias,
-            }),
-            msaa_samples: 1,
-            vertex_layouts: Vec::from([Vertex::desc()]),
-            blend: Some(BlendState::ALPHA_BLENDING),
-            cull_mode: Some(Face::Back),
-            shadow_pass: true,
-        },
-        &[&shadow_mat_buffer],
-        pass,
-        pipelines,
-    );
-    terrain_renderer.render(pass, camera, aspect, true);
 }

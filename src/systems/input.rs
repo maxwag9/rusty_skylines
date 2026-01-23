@@ -75,7 +75,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
         // Adaptive zoom step
         let base_step = 0.05; // meters, allows crawling near 1 m
-        let scale_step = r * 0.25; // exponential feel at distance
+        let scale_step = r * 0.45; // exponential feel at distance
         let zoom_step = (base_step + scale_step) * cam_ctrl.zoom_velocity * dt;
 
         camera.orbit_radius = (r + zoom_step).clamp(1.0, 100_000.0);

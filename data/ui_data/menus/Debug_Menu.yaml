@@ -25,6 +25,17 @@ layers:
           - 1.0
           - 1.0
         text: "Game Time Speed: {time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, \n Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees"
+      - !Text
+        id: player_info_text
+        x: 0.001895523
+        y: 0.042415771
+        px: 0.013205536
+        color:
+          - 0.0
+          - 0.5
+          - 1.0
+          - 1.0
+        text: "Player Pos: {target_pos_x:.2}X {target_pos_y}Y {target_pos_z}Z"
       - !Circle
         id: '967'
         x: 0.9281143

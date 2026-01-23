@@ -1,8 +1,9 @@
 use crate::renderer::gizmo::Gizmo;
+use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::intersections::{IntersectionPolygon, OuterNodeLane};
 use crate::terrain::roads::road_editor::IntersectionBuildParams;
-use crate::terrain::roads::road_mesh_manager::ChunkId;
-use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, SegmentId};
+use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
+use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, SegmentId, StructureType};
 use crate::terrain::roads::roads::{LaneRef, NodeLane, RoadCommand, RoadStorage};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::cmp::Ordering;
@@ -108,13 +109,6 @@ pub fn right_turn_score(poly: &[Vec3]) -> f32 {
     // atan2 gives signed angle, negative = right turn
     let score = -cross.y.atan2(dot);
     if score.is_nan() { 0.0 } else { score }
-}
-pub fn right_normal(dir: Vec3) -> Vec3 {
-    Vec3::new(dir.z, 0.0, -dir.x)
-}
-
-pub fn left_normal(dir: Vec3) -> Vec3 {
-    Vec3::new(-dir.z, 0.0, dir.x)
 }
 
 /// Merges disjoint polylines into a single CCW ring sorted by angle around the center.
@@ -236,20 +230,6 @@ pub fn triangulate_center_fan(base_index: u32, ring_count: u32, indices: &mut Ve
 }
 pub fn cross2(a: Vec2, b: Vec2) -> f32 {
     a.x * b.y - a.y * b.x
-}
-pub fn trim_polyline_both_ends(points: &[Vec3], cut: usize) -> Vec<Vec3> {
-    let len = points.len();
-
-    // Need at least 2 points to be meaningful
-    if len <= 2 {
-        return points.to_vec();
-    }
-
-    // Maximum we are allowed to cut per side
-    let max_cut = (len - 2) / 2;
-    let cut = cut.min(max_cut);
-
-    points[cut..(len - cut)].to_vec()
 }
 
 /// Returns t along a0->a1 where it intersects b0->b1 (if any). t in [0,1].
@@ -518,11 +498,11 @@ fn ray_to_polygon(
             ));
         }
     }
-    if let Some(hit) = best_hit {
-        // Uncomment to debug:
-        println!("from={:?} through={:?} hit={:?}", from, through, hit);
-        gizmo.draw_cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0)
-    }
+    // if let Some(hit) = best_hit {
+    //     // Uncomment to debug:
+    //     println!("from={:?} through={:?} hit={:?}", from, through, hit);
+    //     gizmo.draw_cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0)
+    // }
     best_hit
 }
 
@@ -801,4 +781,21 @@ pub fn ray_polygon_intersection(from: Vec3, to: Vec3, poly: &IntersectionPolygon
     }
 
     best_t.map(|t| from.lerp(to, t))
+}
+pub fn set_point_height_with_structure_type(
+    terrain_renderer: &TerrainRenderer,
+    structure_type: StructureType,
+    p: &mut Vec3,
+) {
+    match structure_type {
+        StructureType::Surface => {
+            p.y = terrain_renderer.get_height_at([p.x, p.z]) + CLEARANCE;
+        }
+        StructureType::Bridge => {
+            p.y = p.y.max(terrain_renderer.get_height_at([p.x, p.z])) + CLEARANCE;
+        }
+        StructureType::Tunnel => {
+            p.y = p.y + CLEARANCE;
+        }
+    }
 }

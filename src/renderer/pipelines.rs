@@ -113,13 +113,13 @@ impl Pipelines {
         msaa_samples: u32,
         shader_dir: &Path,
         camera: &Camera,
+        shadow_map_size: u32,
     ) -> anyhow::Result<Self> {
         // Create render targets
         let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
-        //let shadow_map_view = create_shadow_texture(device, 4096, "Main Shadow map");
-        let csm = create_csm_shadow_texture(device, 2048, "Sun CSM"); // 2048 or 4096
+        let csm = create_csm_shadow_texture(device, shadow_map_size, "Sun CSM"); // 2048 or 4096
         // Load all shaders
         let shaders = load_all_shaders(device, shader_dir)?;
 
@@ -299,7 +299,7 @@ pub fn make_new_uniforms_csm(
         view_proj: view_proj.to_cols_array_2d(),
         inv_view_proj: view_proj.inverse().to_cols_array_2d(),
 
-        light_view_proj: light_view_proj.map(|m| m.to_cols_array_2d()),
+        lighting_view_proj: light_view_proj.map(|m| m.to_cols_array_2d()),
         cascade_splits,
 
         sun_direction: sun.to_array(),
@@ -311,114 +311,5 @@ pub fn make_new_uniforms_csm(
         moon_direction: moon.to_array(),
         shadow_cascade_index,
         _pad_shadow: [0, 0],
-    }
-}
-pub fn make_dummy_render_pipeline(device: &Device, format: TextureFormat) -> RenderPipeline {
-    let shader = device.create_shader_module(ShaderModuleDescriptor {
-        label: Some("dummy shader"),
-        source: ShaderSource::Wgsl(
-            "
-            @vertex
-            fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
-                // fullscreen triangle
-                let x = f32(idx == 1u) * 4.0 - 1.0;
-                let y = f32(idx == 2u) * 4.0 - 1.0;
-                return vec4<f32>(x, y, 0.0, 1.0);
-            }
-
-            @fragment
-            fn fs_main() -> @location(0) vec4<f32> {
-                return vec4<f32>(1.0, 0.0, 0.0, 1.0); // red
-            }
-        "
-            .into(),
-        ),
-    });
-
-    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-        label: Some("dummy layout"),
-        bind_group_layouts: &[],
-        immediate_size: 0,
-    });
-
-    device.create_render_pipeline(&RenderPipelineDescriptor {
-        label: Some("dummy pipeline"),
-        layout: Some(&layout),
-
-        vertex: VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-
-        fragment: Some(FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(ColorTargetState {
-                format,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-
-        primitive: PrimitiveState::default(),
-        depth_stencil: None,
-
-        multisample: MultisampleState {
-            count: 1,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        cache: None,
-        multiview_mask: None,
-    })
-}
-
-fn make_dummy_render_pipeline_state(
-    device: &Device,
-    format: TextureFormat,
-    shader: ShaderAsset,
-) -> RenderPipelineState {
-    RenderPipelineState {
-        shader,
-        pipeline: make_dummy_render_pipeline(device, format),
-    }
-}
-fn make_dummy_compute_pipeline(device: &Device) -> ComputePipeline {
-    let shader = device.create_shader_module(ShaderModuleDescriptor {
-        label: Some("dummy compute shader"),
-        source: ShaderSource::Wgsl(
-            "
-            @compute @workgroup_size(1)
-            fn main() {
-                // do nothing
-            }
-            "
-            .into(),
-        ),
-    });
-
-    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-        label: Some("dummy compute layout"),
-        bind_group_layouts: &[],
-        immediate_size: 0,
-    });
-
-    device.create_compute_pipeline(&ComputePipelineDescriptor {
-        label: Some("dummy compute pipeline"),
-        layout: Some(&layout),
-        module: &shader,
-        entry_point: Some("main"),
-        compilation_options: Default::default(),
-        cache: None,
-    })
-}
-
-fn make_dummy_compute_pipeline_state(device: &Device, shader: ShaderAsset) -> ComputePipelineState {
-    ComputePipelineState {
-        shader,
-        pipeline: make_dummy_compute_pipeline(device),
     }
 }

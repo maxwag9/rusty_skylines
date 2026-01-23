@@ -7,7 +7,9 @@ struct Uniforms {
     inv_proj: mat4x4<f32>,
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
-    lighting_view_proj: mat4x4<f32>,
+    lighting_view_proj: array<mat4x4<f32>, 4>,
+    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
+
     sun_direction: vec3<f32>,
     time: f32,
 
@@ -15,7 +17,7 @@ struct Uniforms {
     orbit_radius: f32,
 
     moon_direction: vec3<f32>,
-    _pad0: f32,
+    shadow_cascade_index: u32,     // used only during shadow rendering
 };
 
 struct FogUniforms {
@@ -43,7 +45,6 @@ struct PickUniform {
     color: vec3<f32>,
     // implicit padding in WGSL
 };
-
 @group(0) @binding(0) var depth_tex: texture_depth_2d;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
@@ -54,53 +55,77 @@ fn saturate(x: f32) -> f32 {
     return clamp(x, 0.0, 1.0);
 }
 
+// ----------------------------
+// Reconstruct world position
+// ----------------------------
 fn reconstruct_world(pixel_xy: vec2<f32>, depth: f32) -> vec3<f32> {
-    // pixel_xy is in pixels (origin top-left)
-    let uv = pixel_xy / fog.screen_size; // 0..1, origin top-left
-
-    // NDC x,y in [-1,1], y flipped for typical clip space
+    let uv = pixel_xy / fog.screen_size;
     let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
-
-    // For wgpu/Vulkan-style depth range, NDC z is 0..1
     let ndc = vec4<f32>(ndc_xy, depth, 1.0);
 
     let world_h = uniforms.inv_view_proj * ndc;
     return world_h.xyz / world_h.w;
 }
 
-fn fog_amount(world_pos: vec3<f32>, view_dist: f32) -> f32 {
-    let dist01 = saturate((view_dist - fog.fog_start) / max(0.0001, (fog.fog_end - fog.fog_start)));
-
-    // More fog at LOWER heights:
-    // height_term grows as world_pos.y goes below fog.fog_height
-    let height_delta = (fog.fog_height - world_pos.y);
-    let height_term = exp(height_delta * fog.fog_height_falloff);
-
-    // Combine into a smooth-ish exponential fog
-    let x = fog.fog_density * dist01 * height_term;
-    return saturate(1.0 - exp(-x));
+// ----------------------------
+// View-space distance (linear)
+// ----------------------------
+fn view_distance(world_pos: vec3<f32>) -> f32 {
+    let view_pos = uniforms.view * vec4<f32>(world_pos, 1.0);
+    return abs(view_pos.z);
 }
 
-fn fog_color_tinted(world_pos: vec3<f32>) -> vec3<f32> {
+// ----------------------------
+// Distance fog (guaranteed 0..1)
+// ----------------------------
+fn distance_fog_factor(view_dist: f32) -> f32 {
+    return saturate(
+        (view_dist - fog.fog_start) /
+        max(0.001, fog.fog_end - fog.fog_start)
+    );
+}
+
+// ----------------------------
+// Atmospheric scattering-lite
+// ----------------------------
+fn scattering_color(ray_dir: vec3<f32>) -> vec3<f32> {
+    // Horizon boost
+    let horizon = saturate(1.0 - abs(ray_dir.y));
+
+    // Sun forward scatter
+    let sun_dot = saturate(dot(ray_dir, normalize(uniforms.sun_direction)));
+    let sun_scatter = pow(sun_dot, 8.0);
+
+    let sky_tint = fog.fog_color;
+    let sun_tint = vec3<f32>(1.0, 0.95, 0.85);
+
+    return sky_tint
+        + horizon * 0.25 * sky_tint
+        + sun_scatter * 0.35 * sun_tint;
+}
+
+// ----------------------------
+// Fog color with pick tint
+// ----------------------------
+fn fog_color_tinted(world_pos: vec3<f32>, base_col: vec3<f32>) -> vec3<f32> {
     let r = max(pick.radius, 0.0001);
     let d = distance(world_pos, pick.pos);
 
-    // 1.0 at center, 0.0 outside radius
-    let tint = saturate(1.0 - d / r);
+    let t = saturate(1.0 - d / r);
+    let smoothed = t * t * (3.0 - 2.0 * t);
 
-    // Slightly softer edge
-    let tint_smooth = tint * tint * (3.0 - 2.0 * tint);
-
-    return mix(fog.fog_color, pick.color, tint_smooth);
+    return mix(base_col, pick.color, smoothed);
 }
 
+// ----------------------------
+// Vertex
+// ----------------------------
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
 };
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
-    // Fullscreen triangle
     var positions = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>( 3.0, -1.0),
@@ -112,31 +137,42 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 
+// ----------------------------
+// Fragment
+// ----------------------------
 @fragment
 fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let pixel_i = vec2<i32>(frag_pos.xy);
-    let depth = textureLoad(depth_tex, pixel_i, 0);
+    let pixel = vec2<i32>(frag_pos.xy);
+    let depth = textureLoad(depth_tex, pixel, 0);
 
-    // If depth is 1.0, treat as sky/no-geometry. Apply a subtle sky fog.
+    let uv = frag_pos.xy / fog.screen_size;
+    let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
+
+    // View ray for sky + scattering
+    let far_h = uniforms.inv_view_proj * vec4<f32>(ndc_xy, 1.0, 1.0);
+    let far_pos = far_h.xyz / far_h.w;
+    let ray_dir = normalize(far_pos - uniforms.camera_pos);
+
+    // Sky = pretend depth at fog_end
+    var world_pos: vec3<f32>;
+    var view_dist: f32;
+
     if (depth >= 0.999999) {
-        // Approximate more fog near horizon using view ray "verticalness"
-        let uv = frag_pos.xy / fog.screen_size;
-        let ndc_xy = vec2<f32>(uv.x * 2.0 - 1.0, (1.0 - uv.y) * 2.0 - 1.0);
-        let far_h = uniforms.inv_view_proj * vec4<f32>(ndc_xy, 1.0, 1.0);
-        let far_pos = far_h.xyz / far_h.w;
-        let ray_dir = normalize(far_pos - uniforms.camera_pos);
-
-        let horizon = saturate(1.0 - abs(ray_dir.y));
-        let a = saturate(fog.fog_sky_factor * horizon);
-
-        return vec4<f32>(fog.fog_color, a);
+        return vec4<f32>(fog_col, 0.0);
+//        view_dist = fog.fog_start;
+//        world_pos = uniforms.camera_pos + ray_dir * view_dist;
+    } else {
+        world_pos = reconstruct_world(frag_pos.xy, depth);
+        view_dist = view_distance(world_pos);
     }
 
-    let world_pos = reconstruct_world(frag_pos.xy, depth);
-    let view_dist = distance(uniforms.camera_pos, world_pos);
+    // Fog factors
+    let dist_fog = saturate(distance_fog_factor(view_dist));
+    let fog_amt = dist_fog;
 
-    let a = fog_amount(world_pos, view_dist);
-    let col = fog_color_tinted(world_pos);
+    // Fog color
+    let scatter_col = scattering_color(ray_dir);
+    let fog_col = fog_color_tinted(world_pos, scatter_col);
 
-    return vec4<f32>(col, a);
+    return vec4<f32>(fog_col, fog_amt);
 }

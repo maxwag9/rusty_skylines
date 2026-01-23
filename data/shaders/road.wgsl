@@ -165,103 +165,89 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
-struct CascadeBlend {
-    i0: u32,
-    i1: u32,
-    t: f32, // 0 -> use i0, 1 -> use i1
-};
-
-fn select_cascade_with_blend(view_depth: f32) -> CascadeBlend {
-    let i0 = select_cascade(view_depth);
-
-    // Fade size: choose something stable-ish in view units.
-    // Start with 5% of the current cascade length, clamped.
-    var start: f32 = 0.0;
-    var end: f32 = uniforms.cascade_splits.x;
-
-    if (i0 == 0u) {
-        start = 0.0;
-        end = uniforms.cascade_splits.x;
-    } else if (i0 == 1u) {
-        start = uniforms.cascade_splits.x;
-        end = uniforms.cascade_splits.y;
-    } else if (i0 == 2u) {
-        start = uniforms.cascade_splits.y;
-        end = uniforms.cascade_splits.z;
-    } else {
-        start = uniforms.cascade_splits.z;
-        end = uniforms.cascade_splits.w;
-    }
-
-    let len = max(end - start, 1.0);
-    let fade = clamp(len * 0.05, 5.0, 50.0); // tweak later
-
-    // Blend only near the END of cascade i0 into i1
-    let i1 = min(i0 + 1u, 3u);
-    var t = 0.0;
-    if (i0 < 3u) {
-        t = saturate((view_depth - (end - fade)) / fade);
-    } else {
-        t = 0.0;
-    };
-
-    return CascadeBlend(i0, i1, t);
-}
-
 fn project_to_shadow(cascade: u32, world_pos: vec3<f32>) -> vec3<f32> {
     let p = uniforms.lighting_view_proj[cascade] * vec4<f32>(world_pos, 1.0);
     let ndc = p.xyz / p.w;
-
-    // NDC -> UV (flip Y to match texture space)
     let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
     return vec3<f32>(uv, ndc.z);
 }
 
-// 3x3 PCF
-fn shadow_pcf_3x3(cascade: u32, uv: vec2<f32>, depth: f32) -> f32 {
+
+fn shadow_pcf(cascade: u32, uv: vec2<f32>, depth: f32) -> f32 {
     let dims = vec2<f32>(textureDimensions(t_shadow, 0));
     let texel = 1.0 / dims;
 
     var sum = 0.0;
     for (var y = -1; y <= 1; y = y + 1) {
         for (var x = -1; x <= 1; x = x + 1) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel;
-            sum += textureSampleCompare(t_shadow, s_shadow, uv + offset, i32(cascade), depth);
+            let offset = vec2<f32>(f32(x), f32(y)) * texel * PCF_RADIUS;
+            sum += textureSampleCompare(
+                t_shadow,
+                s_shadow,
+                uv + offset,
+                i32(cascade),
+                depth
+            );
         }
     }
     return sum / 9.0;
 }
 
-fn shadow_for_cascade(cascade: u32, world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
+fn shadow_for_cascade(
+    cascade: u32,
+    world_pos: vec3<f32>,
+    N: vec3<f32>,
+    L: vec3<f32>
+) -> f32 {
     let proj = project_to_shadow(cascade, world_pos);
     let uv = proj.xy;
     let z  = proj.z;
 
-    // Outside shadow frustum => lit
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z < 0.0 || z > 1.0) {
         return 1.0;
     }
 
-    // Bias (still basic; good enough to start)
     let ndotl = saturate(dot(N, L));
-    let bias = max(0.00002, 0.00025 * (1.0 - ndotl));
+    let bias = BASE_BIAS + SLOPE_BIAS * (1.0 - ndotl);
 
-    // PCF
-    return shadow_pcf_3x3(cascade, uv, z - bias);
+    return shadow_pcf(cascade, uv, z - bias);
+}
+
+fn cascade_edge_fade(cascade: u32, world_pos: vec3<f32>) -> f32 {
+    let proj = project_to_shadow(cascade, world_pos);
+    let uv = proj.xy;
+
+    let edge = min(
+        min(uv.x, 1.0 - uv.x),
+        min(uv.y, 1.0 - uv.y)
+    );
+
+    return saturate(edge / SHADOW_FADE_UV);
 }
 
 fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
-    // view-space depth (RH camera looking down -Z)
     let vpos = uniforms.view * vec4<f32>(world_pos, 1.0);
     let view_depth = -vpos.z;
 
-    let cb = select_cascade_with_blend(view_depth);
+    let c0 = select_cascade(view_depth);
+    let s0 = shadow_for_cascade(c0, world_pos, N, L);
 
-    let s0 = shadow_for_cascade(cb.i0, world_pos, N, L);
-    if (cb.i0 == cb.i1) {
+    if (c0 == 3u) {
         return s0;
     }
-    let s1 = shadow_for_cascade(cb.i1, world_pos, N, L);
 
-    return mix(s0, s1, cb.t);
+    let fade = cascade_edge_fade(c0, world_pos);
+    if (fade >= 0.999) {
+        return s0;
+    }
+
+    let c1 = c0 + 1u;
+    let s1 = shadow_for_cascade(c1, world_pos, N, L);
+
+    // one-sided blend: never brighten
+    return mix(min(s0, s1), s0, fade);
 }
+const SHADOW_FADE_UV: f32 = 0.05;   // how wide the blend band is near cascade edge
+const PCF_RADIUS: f32 = 1.5;       // in texels, consistent across cascades
+const BASE_BIAS: f32 = 0.000002;
+const SLOPE_BIAS: f32 = 0.0005;

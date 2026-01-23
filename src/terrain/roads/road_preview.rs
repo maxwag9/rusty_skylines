@@ -151,8 +151,8 @@ impl RoadAppearanceGpu {
         }
         // Fade alpha from 1.0 at radius = 0 to 0.0 at radius = 5.0.
         // Use smoothstep for a nicer curve: smooth = 3t^2 - 2t^3, then invert.
-        if orbit_radius < 50.0 {
-            let t = (orbit_radius / 100.0).clamp(0.0, 1.0);
+        if orbit_radius < 20.0 {
+            let t = (orbit_radius / 20.0).clamp(0.0, 1.0);
             let alpha = t * t * (3.0 - 2.0 * t); // inverted smoothstep
             new_preview.tint[3] = alpha;
         };

@@ -37,7 +37,7 @@ impl<'a> UniformUpdater<'a> {
             camera.near,
             camera.far,
             astronomy.sun_dir,
-            /*shadow_map_size:*/ 2048, // or the actual CSM texture size
+            /*shadow_map_size:*/ self.pipelines.cascaded_shadow_map.size,
             /*stabilize:*/ true,
         );
 
@@ -68,16 +68,16 @@ impl<'a> UniformUpdater<'a> {
         let fog_uniforms = FogUniforms {
             screen_size: [config.width as f32, config.height as f32],
             proj_params: [camera.near, camera.far],
-            fog_density: 0.15,
-            fog_height: 0.0,
+            fog_density: 1.0,
+            fog_height: 200.0,
             cam_height: camera.position().y,
             _pad0: 0.0,
-            fog_color: [0.55, 0.55, 0.6],
+            fog_color: [0.55, 0.55, 0.7],
             _pad1: 0.0,
-            fog_sky_factor: 0.41,
+            fog_sky_factor: 0.35,
             fog_height_falloff: 0.0,
-            fog_start: 1000.0,
-            fog_end: 5000.0,
+            fog_start: camera.far * 0.70,
+            fog_end: camera.far * 1.05,
         };
 
         self.queue.write_buffer(
