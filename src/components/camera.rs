@@ -1,54 +1,71 @@
+use crate::positions::*;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::terrain::TerrainGenerator;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 #[derive(Debug, Clone)]
 pub struct Camera {
-    pub target: Vec3,
+    pub target: WorldPos,
     pub orbit_radius: f32,
     pub yaw: f32,
     pub pitch: f32,
     pub near: f32,
     pub far: f32,
     pub fov: f32,
+    pub(crate) chunk_size: ChunkSize,
 }
 
 impl Camera {
     pub fn new() -> Self {
         Self {
-            target: Vec3::new(0.0, 10.0, 0.0),
+            target: WorldPos::zero(),
             orbit_radius: 50.0,
             yaw: -230f32.to_radians(),
             pitch: 52f32.to_radians(),
-            near: 0.5,
+            near: 5.5,
             far: 10_000.0,
             fov: 80.0,
+            chunk_size: 256,
         }
     }
-
-    pub fn position(&self) -> Vec3 {
+    #[inline]
+    pub fn orbit_offset(&self) -> Vec3 {
         let cp = self.pitch.cos();
         let sp = self.pitch.sin();
         let cy = self.yaw.cos();
         let sy = self.yaw.sin();
-        let offset = Vec3::new(
+
+        Vec3::new(
             self.orbit_radius * cp * cy,
             self.orbit_radius * sp,
             self.orbit_radius * cp * sy,
-        );
-        self.target + offset
+        )
     }
 
-    pub fn matrices(&self, aspect: f32) -> (glam::Mat4, glam::Mat4, glam::Mat4) {
-        let eye = self.position();
+    pub fn matrices(&self, aspect: f32) -> (Mat4, Mat4, Mat4) {
+        let eye = Vec3::ZERO;
+        let target = -self.orbit_offset();
 
-        let view = glam::Mat4::look_at_rh(eye, self.target, Vec3::Y);
+        let view = Mat4::look_at_rh(eye, target, Vec3::Y);
+        let proj = Mat4::perspective_rh(self.fov.to_radians(), aspect, self.near, self.far);
 
-        let proj = glam::Mat4::perspective_rh(self.fov.to_radians(), aspect, self.near, self.far);
+        (view, proj, proj * view)
+    }
+    #[inline]
+    pub fn eye_world(&self) -> WorldPos {
+        self.target
+            .add_render_offset(self.orbit_offset(), self.chunk_size)
+    }
 
-        let view_proj = proj * view;
+    #[inline]
+    pub fn world_to_render(&self, pos: WorldPos) -> Vec3 {
+        let eye = self.eye_world();
+        pos.to_render_pos(eye, self.chunk_size) // subtract eye, not target
+    }
 
-        (view, proj, view_proj)
+    #[inline]
+    pub fn render_to_world(&self, render_pos: Vec3) -> WorldPos {
+        self.eye_world()
+            .add_render_offset(render_pos, self.chunk_size)
     }
 }
 
@@ -58,7 +75,6 @@ pub struct CameraController {
     pub zoom_velocity: f32,
     pub target_yaw: f32,
     pub target_pitch: f32,
-    pub target_smoothed: Vec3,
     pub orbit_smoothness: f32,
     pub yaw_velocity: f32,
     pub pitch_velocity: f32,
@@ -76,7 +92,6 @@ impl CameraController {
             zoom_velocity: 0.0,
             target_yaw: camera.yaw,
             target_pitch: camera.pitch,
-            target_smoothed: camera.target,
             orbit_smoothness: 0.25,
             yaw_velocity: 0.0,
             pitch_velocity: 0.0,
@@ -91,18 +106,14 @@ impl CameraController {
 pub fn ground_camera_target(
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    terrain: &TerrainGenerator,
+    terrain: &TerrainRenderer,
     min_clearance: f32,
 ) {
-    let x = camera.target.x;
-    let z = camera.target.z;
-
-    let ground_y = terrain.height(x, z);
-
-    let penetration = (ground_y + min_clearance) - camera.target.y;
+    let ground_y = terrain.get_height_at(camera.target);
+    let penetration = (ground_y + min_clearance) - camera.target.local.y;
 
     if penetration > 0.0 {
-        camera.target.y += penetration;
+        camera.target.local.y += penetration;
         camera_controller.velocity.y = camera_controller.velocity.y.max(0.0);
     }
 }
@@ -114,20 +125,23 @@ pub fn resolve_pitch_by_search(
     let target = camera.target;
     let orbit_radius = camera.orbit_radius;
 
-    let samples = 1; // number of points along the orbit line
+    let samples = 8;
     let mut max_terrain_y = f32::MIN;
+
+    let offset = camera.orbit_offset(); // Vec3 in meters
 
     for i in 0..=samples {
         let t = i as f32 / samples as f32;
-        let cam_pos = camera.position() * t + target * (1.0 - t); // interpolate along line
-        let terrain_y = world_renderer.terrain_gen.height(cam_pos.x, cam_pos.z);
+        let sample_pos: WorldPos = target.add_vec3(offset * t, world_renderer.chunk_size); // uses WorldPos + Vec3
+
+        let terrain_y = world_renderer.get_height_at(sample_pos);
         max_terrain_y = max_terrain_y.max(terrain_y);
     }
 
-    let min_clearance = 1.0; // small extra buffer
+    let min_clearance = 1.0;
     let desired_y = max_terrain_y + min_clearance;
 
-    let dy = desired_y - target.y;
+    let dy = desired_y - target.local.y;
     let horizontal_dist = orbit_radius;
 
     let new_pitch = (dy / horizontal_dist)
@@ -142,17 +156,19 @@ pub fn resolve_pitch_by_search(
 }
 
 // Stricter version: checks multiple points along orbit for terrain collision
-fn is_clear_strict(camera: &Camera, world: &TerrainRenderer, pitch: f32) -> bool {
+fn is_clear_strict(camera: &Camera, terrain: &TerrainRenderer, pitch: f32) -> bool {
     let mut tmp = camera.clone();
     tmp.pitch = pitch;
 
     let orbit_samples = 16;
+    let offset = tmp.orbit_offset();
+
     for i in 0..=orbit_samples {
         let t = i as f32 / orbit_samples as f32;
-        let pos = tmp.position() * t + tmp.target * (1.0 - t);
-        let ground_y = world.terrain_gen.height(pos.x, pos.z);
-        if pos.y < ground_y + 2.0 {
-            // a small clearance buffer
+        let pos: WorldPos = tmp.target.add_vec3(offset * t, terrain.chunk_size);
+
+        let ground_y = terrain.get_height_at(pos);
+        if pos.local.y < ground_y + 2.0 {
             return false;
         }
     }

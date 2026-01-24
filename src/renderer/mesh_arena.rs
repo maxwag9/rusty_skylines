@@ -289,9 +289,9 @@ fn clip_single_triangle<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
 ) {
     let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
 
-    let ya = scratch.new_vertices[a].position()[1];
-    let yb = scratch.new_vertices[b].position()[1];
-    let yc = scratch.new_vertices[c].position()[1];
+    let ya = scratch.new_vertices[a].local_position()[1];
+    let yb = scratch.new_vertices[b].local_position()[1];
+    let yc = scratch.new_vertices[c].local_position()[1];
 
     let above = [ya >= 0.0, yb >= 0.0, yc >= 0.0];
     let above_count = above.iter().filter(|&&x| x).count();
@@ -381,8 +381,8 @@ fn create_intersection_vertex<V: bytemuck::Pod + VertexWithPosition + Clone + Co
     let vi = scratch.new_vertices[i];
     let vj = scratch.new_vertices[j];
 
-    let yi = vi.position()[1];
-    let yj = vj.position()[1];
+    let yi = vi.local_position()[1];
+    let yj = vj.local_position()[1];
 
     let t = if (yj - yi).abs() < f32::EPSILON {
         0.5

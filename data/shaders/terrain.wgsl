@@ -6,16 +6,15 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     lighting_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
-
+    cascade_splits: vec4<f32>,
     sun_direction: vec3<f32>,
     time: f32,
-
-    camera_pos: vec3<f32>,
-    orbit_radius: f32,
-
+    camera_local: vec3<f32>, // eye_world.local (x,y,z) where x/z are within chunk
+    chunk_size: f32,
+    camera_chunk: vec2<i32>, // eye_world.chunk (x,z)
+    _pad_cam: vec2<i32>,     // padding to 16 bytes
     moon_direction: vec3<f32>,
-    shadow_cascade_index: u32,     // used only during shadow rendering
+    orbit_radius: f32,
 };
 
 struct PickUniform {
@@ -38,23 +37,36 @@ struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
+    @location(3) chunk_xz: vec2<i32>, // NEW
 };
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) world_normal: vec3<f32>,
     @location(1) color: vec3<f32>,
+
+    // This is now *render-space* position (relative to camera eye)
     @location(2) world_pos: vec3<f32>,
 };
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
-    let world_pos = in.position;
-    out.position = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
+
+    // ----- render-space position (WorldPos - EyeWorldPos) -----
+    let dc: vec2<i32> = in.chunk_xz - uniforms.camera_chunk;
+
+    let rx = f32(dc.x) * uniforms.chunk_size + (in.position.x - uniforms.camera_local.x);
+    let ry = in.position.y - uniforms.camera_local.y;
+    let rz = f32(dc.y) * uniforms.chunk_size + (in.position.z - uniforms.camera_local.z);
+
+    let render_pos = vec3<f32>(rx, ry, rz);
+
+    out.position = uniforms.view_proj * vec4<f32>(render_pos, 1.0);
+    out.world_pos = render_pos;
+
     out.world_normal = normalize(in.normal);
     out.color = in.color;
-    out.world_pos = world_pos;
     return out;
 }
 

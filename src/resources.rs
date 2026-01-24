@@ -145,13 +145,12 @@ pub struct Uniforms {
     pub cascade_splits: [f32; 4], // end distance of each cascade in view-space units
     pub sun_direction: [f32; 3],
     pub time: f32,
-
-    pub camera_pos: [f32; 3],
-    pub orbit_radius: f32,
-
+    pub camera_local: [f32; 3], // eye_world.local (x,y,z) where x/z are within chunk
+    pub chunk_size: f32,
+    pub camera_chunk: [i32; 2], // eye_world.chunk (x,z)
+    pub _pad_cam: [i32; 2],     // padding to 16 bytes
     pub moon_direction: [f32; 3],
-    pub shadow_cascade_index: u32, // used only during shadow rendering
-    pub _pad_shadow: [u32; 2],     // keep 16-byte alignment
+    pub orbit_radius: f32,
 }
 
 fn default_keybinds() -> HashMap<PhysicalKey, String> {

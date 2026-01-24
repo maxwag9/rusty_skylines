@@ -1,3 +1,4 @@
+use crate::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
@@ -9,22 +10,26 @@ use winit::dpi::PhysicalSize;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct LineVtx {
+pub(crate) struct LineVtxRender {
     pub(crate) pos: [f32; 3],
     pub(crate) color: [f32; 3],
 }
 
-impl LineVtx {
+impl LineVtxRender {
     pub(crate) fn layout<'a>() -> VertexBufferLayout<'a> {
         const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         VertexBufferLayout {
-            array_stride: size_of::<LineVtx>() as u64,
+            array_stride: size_of::<LineVtxRender>() as u64,
             step_mode: VertexStepMode::Vertex,
             attributes: ATTRS,
         }
     }
 }
-
+#[derive(Clone)]
+pub struct LineVtxWorld {
+    pub pos: WorldPos,
+    pub color: [f32; 3],
+}
 #[derive(Debug)]
 pub struct LayerGpu {
     pub circle_ssbo: Option<Buffer>,
@@ -544,9 +549,11 @@ pub struct ButtonRuntime {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Vertex {
-    pub(crate) position: [f32; 3],
+    /// @location(0) chunk-local position
+    pub(crate) local_position: [f32; 3],
     pub normal: [f32; 3],
     pub(crate) color: [f32; 3],
+    pub(crate) chunk_xz: [i32; 2], // NEW
 }
 
 impl Vertex {
@@ -556,7 +563,7 @@ impl Vertex {
             array_stride: size_of::<Vertex>() as BufferAddress,
             step_mode: VertexStepMode::Vertex,
             attributes: &[
-                // @location(0) position
+                // @location(0) chunk-local position
                 VertexAttribute {
                     shader_location: 0,
                     offset: 0,
@@ -574,18 +581,24 @@ impl Vertex {
                     offset: 24,
                     format: VertexFormat::Float32x3,
                 },
+                // loc3 chunk_xz
+                VertexAttribute {
+                    shader_location: 3,
+                    offset: 36,
+                    format: VertexFormat::Sint32x2,
+                },
             ],
         }
     }
 }
 pub trait VertexWithPosition {
-    fn position(&self) -> [f32; 3];
+    fn local_position(&self) -> [f32; 3];
     fn lerp(a: &Self, b: &Self, t: f32) -> Self;
 }
 
 impl VertexWithPosition for Vertex {
-    fn position(&self) -> [f32; 3] {
-        self.position
+    fn local_position(&self) -> [f32; 3] {
+        self.local_position
     }
 
     // produce a vertex that is a linear interpolation between a and b with factor t in [0,1]
@@ -600,7 +613,7 @@ impl VertexWithPosition for Vertex {
             ]
         }
 
-        let position = mix(a.position, b.position, t);
+        let position = mix(a.local_position, b.local_position, t);
         let mut normal = mix(a.normal, b.normal, t);
         let color = mix(a.color, b.color, t);
 
@@ -611,11 +624,12 @@ impl VertexWithPosition for Vertex {
             normal[1] /= len;
             normal[2] /= len;
         }
-
+        let chunk_xz = if t <= 0.5 { a.chunk_xz } else { b.chunk_xz };
         Vertex {
-            position,
+            local_position: position,
             normal,
             color,
+            chunk_xz,
         }
     }
 }

@@ -2,6 +2,7 @@ use crate::components::camera::*;
 use crate::data::Settings;
 use crate::mouse_ray::*;
 use crate::paths::{shader_dir, texture_dir};
+use crate::positions::WorldPos;
 use crate::renderer::astronomy::*;
 use crate::renderer::general_mesh_arena::GeneralMeshArena;
 use crate::renderer::gizmo::Gizmo;
@@ -27,7 +28,7 @@ use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::terrain::water::SimpleVertex;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
-use crate::ui::vertex::{LineVtx, Vertex};
+use crate::ui::vertex::{LineVtxRender, Vertex};
 use crate::world::CameraBundle;
 use glam::Mat4;
 use std::sync::Arc;
@@ -81,7 +82,7 @@ impl RenderCore {
         let road_renderer = RoadRenderSubsystem::new(&device);
         let arena = GeneralMeshArena::new(&device, 256 * 1024 * 1024, 128 * 1024 * 1024);
         let render_manager = RenderManager::new(&device, &queue, config.format, texture_dir());
-        let gizmo = Gizmo::new(&device);
+        let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
 
         Self {
             surface,
@@ -145,7 +146,7 @@ impl RenderCore {
                 label: Some("Render Encoder"),
             });
 
-        self.execute_shadow_pass(&mut encoder, camera, aspect, time);
+        // self.execute_shadow_pass(&mut encoder, camera, aspect, time);
         self.execute_main_pass(
             &mut encoder,
             &surface_view,
@@ -181,12 +182,14 @@ impl RenderCore {
         update_ui_variables(ui_loader, &time_scales, &astronomy, observer.obliquity);
 
         let (view, proj, view_proj) = camera.matrices(aspect);
-        let ray = ray_from_mouse_pixels(
+        let ray = WorldRay::from_mouse(
             glam::Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
             self.config.width as f32,
             self.config.height as f32,
             view,
             proj,
+            camera.eye_world(),
+            self.terrain_renderer.chunk_size,
         );
         self.terrain_renderer.pick_terrain_point(ray);
 
@@ -223,9 +226,9 @@ impl RenderCore {
     fn update_uniforms(
         &mut self,
         camera: &Camera,
-        view: glam::Mat4,
-        proj: glam::Mat4,
-        view_proj: glam::Mat4,
+        view: Mat4,
+        proj: Mat4,
+        view_proj: Mat4,
         astronomy: &AstronomyState,
         time: &TimeSystem,
         aspect: f32,
@@ -256,10 +259,24 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         astronomy: &AstronomyState,
     ) {
-        println!("{}", camera.target);
-        ui_loader.variables.set_f32("target_pos_x", camera.target.x);
-        ui_loader.variables.set_f32("target_pos_y", camera.target.y);
-        ui_loader.variables.set_f32("target_pos_z", camera.target.z);
+        let eye = camera.eye_world();
+        let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
+        println!("{}", target_pos_render);
+        ui_loader
+            .variables
+            .set_i32("target_pos_cx", camera.target.chunk.x);
+        ui_loader
+            .variables
+            .set_i32("target_pos_cz", camera.target.chunk.z);
+        ui_loader
+            .variables
+            .set_f32("target_pos_x", target_pos_render.x);
+        ui_loader
+            .variables
+            .set_f32("target_pos_y", target_pos_render.y);
+        ui_loader
+            .variables
+            .set_f32("target_pos_z", target_pos_render.z);
         self.terrain_renderer.update(
             &self.device,
             &self.queue,
@@ -292,6 +309,7 @@ impl RenderCore {
             camera.orbit_radius,
             false,
             astronomy.sun_dir,
+            self.terrain_renderer.chunk_size,
         );
     }
 
@@ -303,14 +321,14 @@ impl RenderCore {
         _time: &TimeSystem,
     ) {
         for cascade in 0..CSM_CASCADES {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("CSM Shadow Pass"),
                 color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                     view: &self.pipelines.cascaded_shadow_map.layer_views[cascade],
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
@@ -384,7 +402,7 @@ impl RenderCore {
             config.background_color,
         );
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (World)"),
             color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
@@ -401,8 +419,12 @@ impl RenderCore {
                 self.msaa_samples,
             );
 
-            self.terrain_renderer
-                .make_pick_uniforms(&self.queue, &self.pipelines.pick_uniforms.buffer);
+            self.terrain_renderer.make_pick_uniforms(
+                &self.queue,
+                &self.pipelines.pick_uniforms.buffer,
+                camera,
+                self.terrain_renderer.chunk_size,
+            );
             render_terrain(
                 &mut pass,
                 &mut self.render_manager,
@@ -447,7 +469,7 @@ impl RenderCore {
             self.msaa_samples,
         );
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Fog Pass"),
             color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: None,
@@ -489,7 +511,7 @@ impl RenderCore {
             self.msaa_samples,
         );
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (UI)"),
             color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
@@ -512,7 +534,7 @@ impl RenderCore {
             self.msaa_samples,
         );
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Depth View Fullscreen Preview Pass"),
             color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: None,
@@ -762,13 +784,13 @@ fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32) -> u32 {
         .contains(TextureFormatFeatureFlags::MULTISAMPLE_X2);
 
     if supports_8 {
-        if requested < 8 {
+        return if requested < 8 {
             println!("8x MSAA supported, but using {}x!", requested);
-            return requested;
+            requested
         } else {
             println!("8x MSAA supported, using {}x!", requested);
-            return 8;
-        }
+            8
+        };
     }
 
     if supports_4 {
@@ -793,7 +815,7 @@ fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32) -> u32 {
         return requested;
     }
 
-    println!("MSAA not supported, falling back to 1x");
+    println!("MSAA not supported, falling back to 1x (WTF is this GPU huh?)");
     1
 }
 
@@ -992,7 +1014,7 @@ fn render_gizmo(
                 bias: Default::default(),
             }),
             msaa_samples,
-            vertex_layouts: Vec::from([LineVtx::layout()]),
+            vertex_layouts: Vec::from([LineVtxRender::layout()]),
             cull_mode: None,
             blend: Some(BlendState::REPLACE),
             shadow_pass: false,
@@ -1002,7 +1024,7 @@ fn render_gizmo(
         pipelines,
     );
 
-    let vertex_count = gizmo.update_buffer(device, queue);
+    let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
     pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
     pass.draw(0..vertex_count, 0..1);
     gizmo.clear();

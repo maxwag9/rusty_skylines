@@ -1,3 +1,4 @@
+use crate::positions::WorldPos;
 use crate::terrain::roads::roads::{RoadCommand, RoadStorage};
 use glam::Vec3;
 
@@ -68,7 +69,7 @@ impl Default for RoadStyleParams {
             sidewalk_height: 0.15,
             sidewalk_material_id: 0, // Concrete or Pavement
             median_width: 0.25,
-            median_height: 3.15,
+            median_height: 0.15,
             median_material_id: 0, // Concrete
         }
     }
@@ -271,11 +272,13 @@ impl AttachedControl {
     }
 }
 
+pub type LeftLaneCount = usize;
+pub type RightLaneCount = usize;
 #[derive(Debug, Clone)]
 pub struct RoadType {
     pub name: &'static str,
 
-    pub lanes_each_direction: (usize, usize),
+    pub lanes_each_direction: (LeftLaneCount, RightLaneCount),
 
     pub lane_width: f32,
     pub lane_height: f32,
@@ -345,7 +348,7 @@ impl RoadType {
         self.structure
     }
 
-    pub fn lanes_each_direction(&self) -> (usize, usize) {
+    pub fn lanes_each_direction(&self) -> (LeftLaneCount, RightLaneCount) {
         self.lanes_each_direction
     }
 
@@ -369,7 +372,7 @@ pub enum SnapKind {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SnapResult {
-    pub world_pos: Vec3,
+    pub world_pos: WorldPos,
     pub kind: SnapKind,
     pub distance: f32,
 }
@@ -383,7 +386,7 @@ pub enum NodePreviewResult {
 
 #[derive(Debug, Clone)]
 pub struct SnapPreview {
-    pub world_pos: Vec3,
+    pub world_pos: WorldPos,
     pub kind: SnapKind,
     pub distance: f32,
 }
@@ -398,7 +401,7 @@ pub struct ConnectedSegmentInfo {
 
 #[derive(Debug, Clone)]
 pub struct NodePreview {
-    pub world_pos: Vec3,
+    pub world_pos: WorldPos,
     pub result: NodePreviewResult,
     pub is_valid: bool,
     pub incoming_lanes: Vec<(LaneId, Vec3)>,
@@ -418,15 +421,15 @@ impl NodePreview {
 pub struct LanePreview {
     pub lane_id: LaneId,
     pub projected_t: f32,
-    pub projected_point: Vec3,
-    pub sample_points: Vec<Vec3>,
+    pub projected_point: WorldPos,
+    pub sample_points: Vec<WorldPos>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SplitInfo {
     pub lane_id: LaneId,
     pub t: f32,
-    pub split_pos: Vec3,
+    pub split_pos: WorldPos,
 }
 
 #[derive(Debug, Clone)]
@@ -435,15 +438,15 @@ pub struct SegmentPreview {
     pub mode: BuildMode,
     pub is_valid: bool,
     pub reason_invalid: Option<PreviewError>,
-    pub start: Vec3,
-    pub end: Vec3,
-    pub control: Option<Vec3>,
-    pub polyline: Vec<Vec3>,
+    pub start: WorldPos,
+    pub end: WorldPos,
+    pub control: Option<WorldPos>,
+    pub polyline: Vec<WorldPos>,
     pub would_split_start: Option<SplitInfo>,
     pub would_split_end: Option<SplitInfo>,
     pub would_merge_start: Option<NodeId>,
     pub would_merge_end: Option<NodeId>,
-    pub lane_count_each_dir: (usize, usize),
+    pub lane_count_each_dir: (LeftLaneCount, RightLaneCount),
     pub estimated_length: f32,
     pub crossing_count: usize,
 }
@@ -474,16 +477,22 @@ pub enum RoadEditorCommand {
 #[derive(Debug, Clone)]
 pub enum PlannedNode {
     Existing(NodeId),
-    New { pos: Vec3 },
-    Split { lane_id: LaneId, t: f32, pos: Vec3 },
+    New {
+        pos: WorldPos,
+    },
+    Split {
+        lane_id: LaneId,
+        t: f32,
+        pos: WorldPos,
+    },
 }
 
 impl PlannedNode {
-    pub fn position(&self, storage: &RoadStorage) -> Option<Vec3> {
+    pub fn position(&self, storage: &RoadStorage) -> Option<WorldPos> {
         match self {
             PlannedNode::Existing(id) => {
                 let node = storage.node(*id)?;
-                Some(Vec3::new(node.x(), node.y(), node.z()))
+                Some(node.position())
             }
             PlannedNode::New { pos } => Some(*pos),
             PlannedNode::Split { pos, .. } => Some(*pos),
@@ -520,7 +529,7 @@ pub enum EditorState {
     Idle,
     StraightPickEnd { start: Anchor },
     CurvePickControl { start: Anchor },
-    CurvePickEnd { start: Anchor, control: Vec3 },
+    CurvePickEnd { start: Anchor, control: WorldPos },
 }
 
 pub struct IdAllocator {
@@ -565,7 +574,7 @@ pub struct CrossingPoint {
     /// Position along the new road from 0.0 (start) to 1.0 (end)
     pub(crate) t: f32,
     /// World position of the crossing
-    pub(crate) world_pos: Vec3,
+    pub(crate) world_pos: WorldPos,
     /// What we're crossing
     pub(crate) kind: CrossingKind,
 }
@@ -581,6 +590,6 @@ pub enum CrossingKind {
 #[derive(Clone)]
 pub struct ResolvedWaypoint {
     pub(crate) node_id: NodeId,
-    pub(crate) pos: Vec3,
+    pub(crate) pos: WorldPos,
     pub(crate) t: f32,
 }

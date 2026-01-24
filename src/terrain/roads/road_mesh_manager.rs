@@ -4,16 +4,18 @@
 //! Produces deterministic, chunked CPU mesh buffers from immutable road topology.
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
-use crate::renderer::gizmo::{Gizmo, Vec3Like};
+use crate::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::intersections::{
-    IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh,
+    IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh, road_vertex,
 };
 use crate::terrain::roads::road_helpers::*;
 use crate::terrain::roads::road_structs::*;
 use crate::terrain::roads::roads::{LaneGeometry, Node, RoadStorage, Segment};
 use glam::Vec3;
 use std::collections::HashMap;
+use wgpu::{VertexAttribute, VertexFormat};
 
 pub type ChunkId = u64;
 
@@ -47,6 +49,10 @@ fn part1by1(n: u32) -> u64 {
 pub fn chunk_coord_to_id(cx: i32, cz: i32) -> ChunkId {
     part1by1(zigzag_i32(cx)) | (part1by1(zigzag_i32(cz)) << 1)
 }
+#[inline(always)]
+pub fn world_pos_chunk_to_id(world_pos: WorldPos) -> ChunkId {
+    part1by1(zigzag_i32(world_pos.chunk.x)) | (part1by1(zigzag_i32(world_pos.chunk.z)) << 1)
+}
 #[inline]
 fn unzigzag_u32(v: u32) -> i32 {
     ((v >> 1) as i32) ^ -((v & 1) as i32)
@@ -62,20 +68,20 @@ fn compact1by1(x: u64) -> u32 {
     x as u32
 }
 #[inline]
-pub fn chunk_id_to_coord(id: ChunkId) -> (i32, i32) {
-    (
+pub fn chunk_id_to_coord(id: ChunkId) -> ChunkCoord {
+    ChunkCoord::new(
         unzigzag_u32(compact1by1(id)),
         unzigzag_u32(compact1by1(id >> 1)),
     )
 }
 pub fn chunk_x_range(chunk_id: ChunkId) -> (f32, f32) {
-    let (cx, _) = chunk_id_to_coord(chunk_id);
-    let min_x = cx as f32 * 64.0;
+    let chunk_coord = chunk_id_to_coord(chunk_id);
+    let min_x = chunk_coord.x as f32 * 64.0;
     (min_x, min_x + 64.0)
 }
 pub fn chunk_z_range(chunk_id: ChunkId) -> (f32, f32) {
-    let (_, cz) = chunk_id_to_coord(chunk_id);
-    let min_z = cz as f32 * 64.0;
+    let chunk_coord = chunk_id_to_coord(chunk_id);
+    let min_z = chunk_coord.z as f32 * 64.0;
     (min_z, min_z + 64.0)
 }
 
@@ -86,16 +92,17 @@ pub fn chunk_z_range(chunk_id: ChunkId) -> (f32, f32) {
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct RoadVertex {
-    pub position: [f32; 3],
+    pub local_position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub material_id: u32,
+    pub chunk_xz: [i32; 2], // NEW
 }
 
 impl RoadVertex {
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<RoadVertex>() as wgpu::BufferAddress,
+            array_stride: size_of::<RoadVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -117,6 +124,12 @@ impl RoadVertex {
                     offset: 32,
                     shader_location: 3,
                     format: wgpu::VertexFormat::Uint32,
+                },
+                // loc4 chunk_xz
+                VertexAttribute {
+                    shader_location: 4,
+                    offset: 36,
+                    format: VertexFormat::Sint32x2,
                 },
             ],
         }
@@ -191,15 +204,15 @@ fn mesh_segment_with_boundaries(
         .filter(|p| p.ring.len() >= 3);
     let end_clip = end_result.map(|r| &r.polygon).filter(|p| p.ring.len() >= 3);
     if let Some(start_clip) = start_clip {
-        gizmo.render_polyline(&start_clip.ring, [0.2, 0.1, 0.8], 10.0, 25.0);
+        gizmo.polyline(&start_clip.ring, [0.2, 0.1, 0.8], 10.0, 25.0);
         for p in start_clip.ring.iter() {
-            gizmo.draw_cross(*p, 0.3, [0.2, 0.1, 0.8], 25.0);
+            gizmo.cross(*p, 0.3, [0.2, 0.1, 0.8], 25.0);
         }
     }
     if let Some(end_clip) = end_clip {
-        gizmo.render_polyline(&end_clip.ring, [0.8, 0.1, 0.2], 5.0, 25.0);
+        gizmo.polyline(&end_clip.ring, [0.8, 0.1, 0.2], 5.0, 25.0);
         for p in end_clip.ring.iter() {
-            gizmo.draw_cross(*p, 0.2, [0.8, 0.1, 0.2], 25.0);
+            gizmo.cross(*p, 0.2, [0.8, 0.1, 0.2], 25.0);
         }
     }
     let mut lane_data: Vec<(i8, LaneGeometry)> = Vec::new();
@@ -217,7 +230,7 @@ fn mesh_segment_with_boundaries(
             continue;
         }
 
-        let geom = LaneGeometry::from_polyline(polyline.to_vec());
+        let geom = LaneGeometry::from_polyline(polyline.to_vec(), terrain_renderer.chunk_size);
         lane_data.push((lane_idx, geom));
 
         if lane_idx < min_lane_idx {
@@ -436,7 +449,7 @@ fn mesh_segment_with_boundaries(
 
 fn draw_node_geometry(
     terrain_renderer: &TerrainRenderer,
-    node_pos: Vec3,
+    node_pos: WorldPos,
     connected_lanes_info: &[(i8, f32)],
     cap_direction: Option<Vec3>,
     style: &RoadStyleParams,
@@ -444,6 +457,7 @@ fn draw_node_geometry(
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
+    let chunk_size = terrain_renderer.chunk_size;
     // --- Compute radii ---
     let mut max_radius = 2.0_f32;
     for (idx, width) in connected_lanes_info {
@@ -467,7 +481,7 @@ fn draw_node_geometry(
         (0.0_f32, std::f32::consts::TAU, false)
     };
 
-    let segments = NODE_ANGULAR_SEGMENTS as usize;
+    let segments = NODE_ANGULAR_SEGMENTS;
     // For cap: we need segments+1 vertices to span segments quads over half circle
     // For full circle: we need segments vertices, last quad wraps to first
     let num_verts = if is_cap { segments + 1 } else { segments };
@@ -480,7 +494,7 @@ fn draw_node_geometry(
     let angle_span = end_angle - start_angle;
     let step_angle = angle_span / num_quads as f32;
 
-    let y_base = node_pos.y;
+    let y_base = node_pos.local.y;
     let up_normal = [0.0_f32, 1.0, 0.0];
 
     // Helper to get next vertex index (wraps for full circle, doesn't for cap)
@@ -489,47 +503,49 @@ fn draw_node_geometry(
     // =========================================================================
     // 1) ROAD SURFACE - Filled disk using triangle fan from center
     // =========================================================================
-    let mut center_p = Vec3::from(node_pos);
+    let mut center_p = node_pos;
     set_point_height_with_structure_type(
         terrain_renderer,
         style.road_type().structure(),
         &mut center_p,
     );
-    center_p.y += style.lane_height;
+    center_p.local.y += style.lane_height;
     let center_idx = vertices.len() as u32;
 
-    vertices.push(RoadVertex {
-        position: center_p.to_array(),
-        normal: up_normal,
-        uv: [0.5, 0.5],
-        material_id: style.lane_material_id,
-    });
+    vertices.push(road_vertex(
+        center_p,
+        up_normal,
+        style.lane_material_id,
+        0.5,
+        0.5,
+    ));
 
     let road_ring_first = vertices.len() as u32;
     for i in 0..num_verts {
         let angle = start_angle + i as f32 * step_angle;
         let (sin_a, cos_a) = angle.sin_cos();
         let dir = Vec3::new(cos_a, 0.0, sin_a);
-        let pos = node_pos + dir * road_radius;
-        let mut outer_p = Vec3::from(pos);
+        let pos = node_pos.add_vec3(dir * road_radius, chunk_size);
+        let mut outer_p = pos;
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
             &mut outer_p,
         );
-        outer_p.y += style.lane_height;
+        outer_p.local.y += style.lane_height;
 
         // Polar UVs for road disk
         let uv_scale = road_radius / config.uv_scale_v;
         let u = 0.5 + cos_a * uv_scale;
         let v = 0.5 + sin_a * uv_scale;
 
-        vertices.push(RoadVertex {
-            position: outer_p.to_array(),
-            normal: up_normal,
-            uv: [u, v],
-            material_id: style.lane_material_id,
-        });
+        vertices.push(road_vertex(
+            outer_p,
+            up_normal,
+            style.lane_material_id,
+            u,
+            v,
+        ));
     }
 
     // Road fan triangles
@@ -551,41 +567,41 @@ fn draw_node_geometry(
         let (sin_a, cos_a) = angle.sin_cos();
         let dir = Vec3::new(cos_a, 0.0, sin_a);
 
-        let pos_inner = node_pos + dir * sw_inner;
-        let pos_outer = node_pos + dir * sw_outer;
+        let mut pos_inner = node_pos.add_vec3(dir * sw_inner, chunk_size);
+        let mut pos_outer = node_pos.add_vec3(dir * sw_outer, chunk_size);
 
-        let mut inner_p = Vec3::from(pos_inner);
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
-            &mut inner_p,
+            &mut pos_inner,
         );
-        inner_p.y += style.sidewalk_height;
-        let mut outer_p = Vec3::from(pos_outer);
+        pos_inner.local.y += style.sidewalk_height;
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
-            &mut outer_p,
+            &mut pos_outer,
         );
-        outer_p.y += style.sidewalk_height;
+        pos_outer.local.y += style.sidewalk_height;
 
         let arc_u = (angle - start_angle) * ((sw_inner + sw_outer) * 0.5) / config.uv_scale_u;
 
         // Inner edge of sidewalk
-        vertices.push(RoadVertex {
-            position: inner_p.to_array(),
-            normal: up_normal,
-            uv: [arc_u, 0.0],
-            material_id: style.sidewalk_material_id,
-        });
+        vertices.push(road_vertex(
+            pos_inner,
+            up_normal,
+            style.sidewalk_material_id,
+            arc_u,
+            0.0,
+        ));
 
         // Outer edge of sidewalk
-        vertices.push(RoadVertex {
-            position: outer_p.to_array(),
-            normal: up_normal,
-            uv: [arc_u, style.sidewalk_width / config.uv_scale_v],
-            material_id: style.sidewalk_material_id,
-        });
+        vertices.push(road_vertex(
+            pos_inner,
+            up_normal,
+            style.sidewalk_material_id,
+            arc_u,
+            style.sidewalk_width / config.uv_scale_v,
+        ));
     }
 
     // Sidewalk top triangles
@@ -612,44 +628,37 @@ fn draw_node_geometry(
         let angle = start_angle + i as f32 * step_angle;
         let (sin_a, cos_a) = angle.sin_cos();
         let dir = Vec3::new(cos_a, 0.0, sin_a);
-        let pos = node_pos + dir * sw_inner;
 
-        let mut top_p = Vec3::from(pos);
+        let mut pos = node_pos.add_vec3(dir * sw_inner, chunk_size);
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
-            &mut top_p,
+            &mut pos,
         );
-        top_p.y += style.sidewalk_height;
-        let mut bottom_p = Vec3::from(pos);
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            style.road_type().structure(),
-            &mut bottom_p,
-        );
-        bottom_p.y += style.lane_height;
 
-        // Normal points INWARD (toward center)
+        let mut top_p = pos;
+        top_p.local.y += style.sidewalk_height;
+        let mut bottom_p = pos;
+        bottom_p.local.y += style.lane_height;
+
         let inward_normal = [-dir.x, 0.0, -dir.z];
-
         let arc_u = (angle - start_angle) * sw_inner / config.uv_scale_u;
         let curb_height = style.sidewalk_height - style.lane_height;
 
-        // Top of inner curb
-        vertices.push(RoadVertex {
-            position: top_p.to_array(),
-            normal: inward_normal,
-            uv: [arc_u, curb_height / config.uv_scale_v],
-            material_id: style.sidewalk_material_id,
-        });
-
-        // Bottom of inner curb
-        vertices.push(RoadVertex {
-            position: bottom_p.to_array(),
-            normal: inward_normal,
-            uv: [arc_u, 0.0],
-            material_id: style.sidewalk_material_id,
-        });
+        vertices.push(road_vertex(
+            top_p,
+            inward_normal,
+            style.sidewalk_material_id,
+            arc_u,
+            curb_height / config.uv_scale_v,
+        ));
+        vertices.push(road_vertex(
+            bottom_p,
+            inward_normal,
+            style.sidewalk_material_id,
+            arc_u,
+            0.0,
+        ));
     }
 
     // Inner curb triangles (facing inward)
@@ -660,8 +669,12 @@ fn draw_node_geometry(
         let top_next = inner_curb_first + (ni as u32) * curb_stride;
         let bot_next = top_next + 1;
 
-        emit_tri_for_inner_curb(indices, vertices, top_curr, bot_curr, top_next, node_pos);
-        emit_tri_for_inner_curb(indices, vertices, top_next, bot_curr, bot_next, node_pos);
+        emit_tri_for_inner_curb(
+            indices, vertices, top_curr, bot_curr, top_next, node_pos, chunk_size,
+        );
+        emit_tri_for_inner_curb(
+            indices, vertices, top_next, bot_curr, bot_next, node_pos, chunk_size,
+        );
     }
 
     // =========================================================================
@@ -675,42 +688,36 @@ fn draw_node_geometry(
         let angle = start_angle + i as f32 * step_angle;
         let (sin_a, cos_a) = angle.sin_cos();
         let dir = Vec3::new(cos_a, 0.0, sin_a);
-        let pos = node_pos + dir * sw_outer;
 
-        let mut top_p = Vec3::from(pos);
+        let mut pos = node_pos.add_vec3(dir * sw_outer, chunk_size);
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
-            &mut top_p,
-        );
-        top_p.y += style.sidewalk_height;
-        let mut bottom_p = Vec3::from(pos);
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            style.road_type().structure(),
-            &mut bottom_p,
+            &mut pos,
         );
 
-        // Normal points OUTWARD (away from center)
+        let mut top_p = pos;
+        top_p.local.y += style.sidewalk_height;
+        let mut bottom_p = pos;
+        bottom_p.local.y += style.lane_height;
+
         let outward_normal = [dir.x, 0.0, dir.z];
-
         let arc_u = (angle - start_angle) * sw_outer / config.uv_scale_u;
 
-        // Top of outer curb
-        vertices.push(RoadVertex {
-            position: top_p.to_array(),
-            normal: outward_normal,
-            uv: [arc_u, style.sidewalk_height / config.uv_scale_v],
-            material_id: style.sidewalk_material_id,
-        });
-
-        // Bottom of outer curb
-        vertices.push(RoadVertex {
-            position: bottom_p.to_array(),
-            normal: outward_normal,
-            uv: [arc_u, 0.0],
-            material_id: style.sidewalk_material_id,
-        });
+        vertices.push(road_vertex(
+            top_p,
+            outward_normal,
+            style.sidewalk_material_id,
+            arc_u,
+            style.sidewalk_height / config.uv_scale_v,
+        ));
+        vertices.push(road_vertex(
+            bottom_p,
+            outward_normal,
+            style.sidewalk_material_id,
+            arc_u,
+            0.0,
+        ));
     }
 
     // Outer curb triangles (facing outward)
@@ -721,8 +728,12 @@ fn draw_node_geometry(
         let top_next = outer_curb_first + (ni as u32) * curb_stride;
         let bot_next = top_next + 1;
 
-        emit_tri_for_curb(indices, vertices, top_curr, bot_curr, top_next, node_pos);
-        emit_tri_for_curb(indices, vertices, top_next, bot_curr, bot_next, node_pos);
+        emit_tri_for_curb(
+            indices, vertices, top_curr, bot_curr, top_next, node_pos, chunk_size,
+        );
+        emit_tri_for_curb(
+            indices, vertices, top_next, bot_curr, bot_next, node_pos, chunk_size,
+        );
     }
 }
 
@@ -746,27 +757,30 @@ pub(crate) fn build_ribbon_mesh(
     if lane_geom.points.len() < 2 {
         return;
     }
-
+    let chunk_size = terrain_renderer.chunk_size;
     let half_width = width * 0.5;
     let base_vertex = vertices.len() as u32;
 
     // === Pre-calculate all edge positions in XZ ===
-    let mut edges: Vec<(Vec3, Vec3)> = Vec::with_capacity(lane_geom.points.len());
+    let mut edges: Vec<(WorldPos, WorldPos)> = Vec::with_capacity(lane_geom.points.len());
 
     for i in 0..lane_geom.points.len() {
         let p = lane_geom.points[i];
         let tangent = if i + 1 < lane_geom.points.len() {
-            (lane_geom.points[i + 1] - p).normalize_or_zero()
+            p.delta_to(lane_geom.points[i + 1], chunk_size)
+                .normalize_or_zero()
         } else if i > 0 {
-            (p - lane_geom.points[i - 1]).normalize_or_zero()
+            lane_geom.points[i - 1]
+                .delta_to(p, chunk_size)
+                .normalize_or_zero()
         } else {
             Vec3::X
         };
 
         let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
-        let center_pos = p + lateral * offset_from_center;
-        let left_pos = center_pos - lateral * half_width;
-        let right_pos = center_pos + lateral * half_width;
+        let center_pos = p.sub_vec3(lateral * offset_from_center, chunk_size);
+        let left_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
+        let right_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
         edges.push((left_pos, right_pos));
     }
 
@@ -783,23 +797,20 @@ pub(crate) fn build_ribbon_mesh(
 
     match chunk_filter {
         Some(cid) => {
-            let (min_x, max_x) = chunk_x_range(cid);
-            let (min_z, max_z) = chunk_z_range(cid);
-
             for i in 0..lane_geom.points.len() {
                 let p = lane_geom.points[i];
-                let in_chunk = p.x >= min_x && p.x < max_x && p.z >= min_z && p.z < max_z;
+                let in_chunk = world_pos_chunk_to_id(p) == cid;
 
                 let prev_in = i > 0 && {
                     let pp = lane_geom.points[i - 1];
-                    pp.x >= min_x && pp.x < max_x && pp.z >= min_z && pp.z < max_z
+                    world_pos_chunk_to_id(pp) == cid
                 };
 
                 if in_chunk || prev_in {
                     included_indices.push(i);
                 } else if i + 1 < lane_geom.points.len() {
                     let pn = lane_geom.points[i + 1];
-                    let next_in = pn.x >= min_x && pn.x < max_x && pn.z >= min_z && pn.z < max_z;
+                    let next_in = world_pos_chunk_to_id(pn) == cid;
                     if next_in {
                         included_indices.push(i);
                     }
@@ -836,27 +847,29 @@ pub(crate) fn build_ribbon_mesh(
             &mut right_pos,
         );
 
-        let final_left = Vec3::new(left_pos.x, left_pos.y + height, left_pos.z);
-        let final_right = Vec3::new(right_pos.x, right_pos.y + height, right_pos.z);
+        left_pos.local.y += height;
+        right_pos.local.y += height;
 
         // UV calculation: u based on arc length, v spans the width
         let u = lane_geom.lengths[i] * uv_config.0;
         let v_min = 0.0;
         let v_max = width * uv_config.1;
 
-        vertices.push(RoadVertex {
-            position: final_left.to_array(),
-            normal: [0.0, 1.0, 0.0],
-            uv: [u, v_min],
+        vertices.push(road_vertex(
+            left_pos,
+            [0.0, 1.0, 0.0],
             material_id,
-        });
+            u,
+            v_min,
+        ));
 
-        vertices.push(RoadVertex {
-            position: final_right.to_array(),
-            normal: [0.0, 1.0, 0.0],
-            uv: [u, v_max],
+        vertices.push(road_vertex(
+            right_pos,
+            [0.0, 1.0, 0.0],
             material_id,
-        });
+            u,
+            v_max,
+        ));
 
         point_idx_to_vert_idx.insert(i, current_vert_idx);
         current_vert_idx += 2;
@@ -870,13 +883,13 @@ pub(crate) fn build_ribbon_mesh(
         let v_base = base_vertex + point_idx_to_vert_idx[&a];
         let v_next = base_vertex + point_idx_to_vert_idx[&b];
 
-        indices.push(v_base);
         indices.push(v_base + 1);
+        indices.push(v_base);
         indices.push(v_next);
 
-        indices.push(v_next);
-        indices.push(v_base + 1);
         indices.push(v_next + 1);
+        indices.push(v_base + 1);
+        indices.push(v_next);
     }
 }
 
@@ -893,8 +906,8 @@ pub fn build_vertical_face(
     chunk_filter: Option<ChunkId>,
     uv_config: (f32, f32),
     explicit_normal_sign: Option<f32>,
-    start_override: Option<Vec3>, // NEW
-    end_override: Option<Vec3>,   // NEW
+    start_override: Option<WorldPos>,
+    end_override: Option<WorldPos>,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
@@ -904,7 +917,7 @@ pub fn build_vertical_face(
     if ref_geom.points.len() < 2 {
         return;
     }
-
+    let chunk_size = terrain_renderer.chunk_size;
     let base_vertex = vertices.len() as u32;
     let mut included_indices = Vec::new();
     let last_idx = ref_geom.points.len() - 1;
@@ -912,16 +925,13 @@ pub fn build_vertical_face(
     // (Chunk filter logic remains the same, omitted for brevity but implied included)
     match chunk_filter {
         Some(cid) => {
-            // ... existing chunk logic ...
-            let (min_x, max_x) = chunk_x_range(cid);
-            let (min_z, max_z) = chunk_z_range(cid);
             for i in 0..ref_geom.points.len() {
                 let p = ref_geom.points[i];
-                if p.x >= min_x && p.x < max_x && p.z >= min_z && p.z < max_z {
+                if world_pos_chunk_to_id(p) == cid {
                     included_indices.push(i);
                 } else if i + 1 < ref_geom.points.len() {
                     let pn = ref_geom.points[i + 1];
-                    if pn.x >= min_x && pn.x < max_x && pn.z >= min_z && pn.z < max_z {
+                    if world_pos_chunk_to_id(pn) == cid {
                         included_indices.push(i);
                     }
                 }
@@ -954,62 +964,66 @@ pub fn build_vertical_face(
             None
         };
 
-        let (face_pos_x, face_pos_z, normal) = if let Some(ovr) = override_pos {
+        let (face_pos, normal) = if let Some(ovr) = override_pos {
             // If overridden, use the exact position provided
             // We still need a normal. Use the tangent of the geometry near the end.
             let tangent = if i == 0 {
-                (ref_geom.points[1] - ref_geom.points[0]).normalize_or_zero()
+                ref_geom.points[1]
+                    .delta_to(ref_geom.points[0], chunk_size)
+                    .normalize_or_zero()
             } else {
-                (ref_geom.points[i] - ref_geom.points[i - 1]).normalize_or_zero()
+                ref_geom.points[i]
+                    .delta_to(ref_geom.points[i - 1], chunk_size)
+                    .normalize_or_zero()
             };
+
             let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
-            (ovr.x, ovr.z, lateral * normal_sign)
+            (ovr, lateral * normal_sign)
         } else {
             // Standard tangent based calculation
             let tangent = if i + 1 < ref_geom.points.len() {
-                (ref_geom.points[i + 1] - p).normalize_or_zero()
+                ref_geom.points[i + 1]
+                    .delta_to(p, chunk_size)
+                    .normalize_or_zero()
             } else if i > 0 {
-                (p - ref_geom.points[i - 1]).normalize_or_zero()
+                p.delta_to(ref_geom.points[i - 1], chunk_size)
+                    .normalize_or_zero()
             } else {
                 Vec3::X
             };
 
             let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
-            let raw = p + lateral * offset_lateral;
-            (raw.x, raw.z, lateral * normal_sign)
+            let raw = p.add_vec3(lateral * offset_lateral, chunk_size);
+            (raw, lateral * normal_sign)
         };
-        let mut p_bottom = Vec3::new(face_pos_x, 0.0, face_pos_z);
+        let mut p_bottom = face_pos;
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
             &mut p_bottom,
         );
-        p_bottom.y += bottom_height;
-        let mut p_top = Vec3::new(face_pos_x, 0.0, face_pos_z);
+        p_bottom.local.y += bottom_height;
+        let mut p_top = face_pos;
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
             &mut p_top,
         );
-        p_top.y += top_height;
+        p_top.local.y += top_height;
         let u = ref_geom.lengths[i] * uv_config.0;
         let v_h = (top_height - bottom_height).abs() * uv_config.1;
 
         // Bottom vertex
-        vertices.push(RoadVertex {
-            position: p_bottom.to_array(),
-            normal: normal.to_array(),
-            uv: [u, 0.0],
+        vertices.push(road_vertex(
+            p_bottom,
+            normal.to_array(),
             material_id,
-        });
+            u,
+            0.0,
+        ));
 
         // Top vertex
-        vertices.push(RoadVertex {
-            position: p_top.to_array(),
-            normal: normal.to_array(),
-            uv: [u, v_h],
-            material_id,
-        });
+        vertices.push(road_vertex(p_top, normal.to_array(), material_id, u, v_h));
 
         point_idx_to_vert_idx.insert(i, current_vert_idx);
         current_vert_idx += 2;
@@ -1058,9 +1072,9 @@ fn tri_normal(v0: Vec3, v1: Vec3, v2: Vec3) -> Vec3 {
 // push triangle ensuring top-facing normals point up (normal.y > 0)
 // triangles with normal.y < 0 will be flipped (swap i1 <-> i2)
 fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32, i1: u32, i2: u32) {
-    let v0 = Vec3::from(vertices[i0 as usize].position);
-    let v1 = Vec3::from(vertices[i1 as usize].position);
-    let v2 = Vec3::from(vertices[i2 as usize].position);
+    let v0 = Vec3::from(vertices[i0 as usize].local_position);
+    let v1 = Vec3::from(vertices[i1 as usize].local_position);
+    let v2 = Vec3::from(vertices[i2 as usize].local_position);
     let n = tri_normal(v0, v1, v2);
     let ok = n.y >= 0.0;
     if ok {
@@ -1082,17 +1096,20 @@ fn emit_tri_for_curb(
     i0: u32,
     i1: u32,
     i2: u32,
-    node_pos: Vec3,
+    node_pos: WorldPos,
+    chunk_size: ChunkSize,
 ) {
-    let v0 = Vec3::from(vertices[i0 as usize].position);
-    let v1 = Vec3::from(vertices[i1 as usize].position);
-    let v2 = Vec3::from(vertices[i2 as usize].position);
+    let v0 = Vec3::from(vertices[i0 as usize].local_position);
+    let v1 = Vec3::from(vertices[i1 as usize].local_position);
+    let v2 = Vec3::from(vertices[i2 as usize].local_position);
+
     let n = tri_normal(v0, v1, v2);
     let centroid = (v0 + v1 + v2) / 3.0;
-    let centroid_dir = (centroid - node_pos).normalize_or_zero();
-    let dot = n.dot(centroid_dir);
-    let ok = dot >= 0.0;
-    if ok {
+
+    let node_render = node_pos.to_render_pos(WorldPos::zero(), chunk_size);
+    let centroid_dir = (centroid - node_render).normalize_or_zero();
+
+    if n.dot(centroid_dir) >= 0.0 {
         indices.push(i0);
         indices.push(i1);
         indices.push(i2);
@@ -1110,14 +1127,21 @@ fn emit_tri_for_inner_curb(
     i0: u32,
     i1: u32,
     i2: u32,
-    node_pos: Vec3,
+    node_pos: WorldPos,
+    chunk_size: ChunkSize,
 ) {
-    let v0 = Vec3::from(vertices[i0 as usize].position);
-    let v1 = Vec3::from(vertices[i1 as usize].position);
-    let v2 = Vec3::from(vertices[i2 as usize].position);
+    let v0 = Vec3::from(vertices[i0 as usize].local_position);
+    let v1 = Vec3::from(vertices[i1 as usize].local_position);
+    let v2 = Vec3::from(vertices[i2 as usize].local_position);
+
     let n = tri_normal(v0, v1, v2);
+
     let centroid = (v0 + v1 + v2) / 3.0;
-    let centroid_dir = (centroid - node_pos).normalize_or_zero();
+
+    // Compute centroid_dir in render space relative to node_pos
+    let node_render = node_pos.to_render_pos(WorldPos::zero(), chunk_size);
+    let centroid_dir = (centroid - node_render).normalize_or_zero();
+
     // Inner curb: normal should point TOWARD center (dot < 0)
     if n.dot(centroid_dir) <= 0.0 {
         indices.push(i0);
@@ -1159,10 +1183,15 @@ impl RoadMeshManager {
         self.chunk_cache.clear();
     }
 
-    pub fn chunk_needs_update(&self, chunk_id: ChunkId, storage: &RoadStorage) -> bool {
+    pub fn chunk_needs_update(
+        &self,
+        chunk_id: ChunkId,
+        storage: &RoadStorage,
+        chunk_size: ChunkSize,
+    ) -> bool {
         match self.chunk_cache.get(&chunk_id) {
             None => true,
-            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage),
+            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage, chunk_size),
         }
     }
 
@@ -1210,7 +1239,7 @@ impl RoadMeshManager {
                 intersection_results.insert(*node_id, result);
             } else {
                 // Dead end or single connection
-                let center = Vec3::from_array(node.position());
+                let center = node.position();
                 let mut connected_lanes_info = Vec::new();
 
                 for lane_id in node
@@ -1226,7 +1255,8 @@ impl RoadMeshManager {
                     continue;
                 }
 
-                let cap_direction = compute_cap_direction(*node_id, node, storage);
+                let cap_direction =
+                    compute_cap_direction(*node_id, node, storage, terrain_renderer.chunk_size);
 
                 draw_node_geometry(
                     terrain_renderer,
@@ -1244,7 +1274,10 @@ impl RoadMeshManager {
         // === PASS 2: Build segment meshes using intersection boundary data ===
         let segment_ids: Vec<SegmentId> = match chunk_id {
             Some(cid) => {
-                let mut ids = storage.segment_ids_touching_chunk(cid);
+                let mut ids = storage.segment_ids_touching_chunk(
+                    chunk_id_to_coord(cid),
+                    terrain_renderer.chunk_size,
+                );
                 ids.sort_unstable();
                 ids
             }
@@ -1281,7 +1314,7 @@ impl RoadMeshManager {
             vertices,
             indices,
             topo_version: chunk_id
-                .map(|cid| compute_topo_version(cid, storage))
+                .map(|cid| compute_topo_version(cid, storage, terrain_renderer.chunk_size))
                 .unwrap_or(0),
         }
     }
@@ -1310,7 +1343,12 @@ impl RoadMeshManager {
     }
 }
 
-fn compute_cap_direction(node_id: NodeId, node: &Node, storage: &RoadStorage) -> Option<Vec3> {
+fn compute_cap_direction(
+    node_id: NodeId,
+    node: &Node,
+    storage: &RoadStorage,
+    chunk_size: ChunkSize,
+) -> Option<Vec3> {
     let cap_direction = {
         let mut sum_dir = Vec3::ZERO;
         let mut lane_count = 0u32;
@@ -1324,9 +1362,9 @@ fn compute_cap_direction(node_id: NodeId, node: &Node, storage: &RoadStorage) ->
             let pts = &lane.geometry().points;
 
             let dir = if lane.from_node() == node_id {
-                pts[1] - pts[0]
+                pts[0].delta_to(pts[1], chunk_size)
             } else {
-                pts[pts.len() - 2] - pts[pts.len() - 1]
+                pts[pts.len() - 1].delta_to(pts[pts.len() - 2], chunk_size)
             };
 
             let normalized = dir.normalize_or_zero();
@@ -1358,9 +1396,13 @@ fn compute_cap_direction(node_id: NodeId, node: &Node, storage: &RoadStorage) ->
 const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 const FNV_PRIME: u64 = 1099511628211;
 
-pub(crate) fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
+pub(crate) fn compute_topo_version(
+    chunk_id: ChunkId,
+    storage: &RoadStorage,
+    chunk_size: ChunkSize,
+) -> u64 {
     let mut hash = FNV_OFFSET_BASIS;
-    let mut segs = storage.segment_ids_touching_chunk(chunk_id);
+    let mut segs = storage.segment_ids_touching_chunk(chunk_id_to_coord(chunk_id), chunk_size);
     segs.sort_unstable();
     for seg_id in segs {
         hash ^= seg_id.0 as u64;

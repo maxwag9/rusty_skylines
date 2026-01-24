@@ -10,7 +10,7 @@ use crate::renderer::textures::grass::{GrassParams, generate_noise};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::{SimpleVertex, WaterUniform};
-use crate::ui::vertex::LineVtx;
+use crate::ui::vertex::LineVtxRender;
 use glam::Vec3;
 use std::fs;
 use std::path::Path;
@@ -50,11 +50,9 @@ pub fn create_camera_uniforms(
 ) -> (GpuResourceSet, Uniforms) {
     let aspect = config.width as f32 / config.height as f32;
     let sun = Vec3::new(0.3, 1.0, 0.6).normalize();
-    let cam_pos = camera.position();
     let (view, proj, view_proj) = camera.matrices(aspect);
     // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
     let (light_mats, splits) = compute_csm_matrices(
-        cam_pos,
         view,
         camera.fov.to_radians(),
         aspect,
@@ -72,12 +70,10 @@ pub fn create_camera_uniforms(
         view_proj,
         Vec3::ONE,
         Vec3::ONE,
-        camera.position(),
-        camera.orbit_radius,
         0.0,
         light_mats,
         splits,
-        0,
+        camera,
     );
 
     let buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -372,7 +368,7 @@ pub fn create_water_mesh(device: &Device) -> MeshBuffers {
 pub fn create_gizmo_mesh(device: &Device) -> MeshBuffers {
     let vertex = device.create_buffer(&BufferDescriptor {
         label: Some("Gizmo VB"),
-        size: (size_of::<LineVtx>() * 6) as u64,
+        size: (size_of::<LineVtxRender>() * 6) as u64,
         usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });

@@ -30,7 +30,6 @@ impl<'a> UniformUpdater<'a> {
     ) -> (Uniforms, [Mat4; CSM_CASCADES], [f32; 4]) {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
         let (light_mats, splits) = compute_csm_matrices(
-            camera.position(),
             view,
             camera.fov.to_radians(),
             aspect,
@@ -48,12 +47,10 @@ impl<'a> UniformUpdater<'a> {
             view_proj,
             astronomy.sun_dir,
             astronomy.moon_dir,
-            camera.position(),
-            camera.orbit_radius,
             total_time,
             light_mats,
             splits,
-            0,
+            camera,
         );
 
         self.queue.write_buffer(
@@ -70,7 +67,7 @@ impl<'a> UniformUpdater<'a> {
             proj_params: [camera.near, camera.far],
             fog_density: 1.0,
             fog_height: 200.0,
-            cam_height: camera.position().y,
+            cam_height: camera.target.local.y,
             _pad0: 0.0,
             fog_color: [0.55, 0.55, 0.7],
             _pad1: 0.0,

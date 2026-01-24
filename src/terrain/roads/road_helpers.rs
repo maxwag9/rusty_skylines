@@ -1,42 +1,42 @@
+use crate::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::intersections::{IntersectionPolygon, OuterNodeLane};
-use crate::terrain::roads::road_editor::IntersectionBuildParams;
+use crate::terrain::roads::road_editor::{
+    IntersectionBuildParams, polyline_cumulative_lengths, sample_polyline_at,
+};
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, SegmentId, StructureType};
-use crate::terrain::roads::roads::{LaneRef, NodeLane, RoadCommand, RoadStorage};
+use crate::terrain::roads::roads::{
+    LaneRef, NodeLane, RoadCommand, RoadStorage, project_point_to_segment_xz,
+};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 
-/// Offset an entire polyline by a fixed distance
-/// Positive offset = right side of travel direction
-/// Negative offset = left side of travel direction
-pub fn offset_polyline_f32(poly: &[Vec3], offset: f32) -> Vec<Vec3> {
+/// Offset an entire polyline by a fixed distance.
+/// Positive offset = right side of travel direction.
+/// Negative offset = left side of travel direction.
+pub fn offset_polyline_f32(poly: &[WorldPos], offset: f32, chunk_size: ChunkSize) -> Vec<WorldPos> {
     if poly.len() < 2 {
         return poly.to_vec();
     }
 
-    let mut result = Vec::with_capacity(poly.len());
-
-    for i in 0..poly.len() {
-        let dir = if i + 1 < poly.len() {
-            (poly[i + 1] - poly[i]).normalize()
-        } else {
-            (poly[i] - poly[i - 1]).normalize()
-        };
-
-        let normal = dir.cross(Vec3::Y).normalize();
-        result.push(poly[i] + normal * offset);
-    }
-
-    result
+    poly.iter()
+        .enumerate()
+        .map(|(i, &pt)| {
+            let dir = polyline_direction_at(poly, i, chunk_size);
+            let normal = dir.cross(Vec3::Y).normalize_or_zero();
+            pt.add_vec3(normal * offset, chunk_size)
+        })
+        .collect()
 }
 
 pub fn select_outermost_lanes(
     node_lanes: &[NodeLane],
     storage: &RoadStorage,
+    chunk_size: ChunkSize,
 ) -> Vec<OuterNodeLane> {
     let mut by_src: HashMap<SegmentId, Vec<(&NodeLane, i8, i8, SegmentId)>> = HashMap::new();
 
@@ -77,8 +77,8 @@ pub fn select_outermost_lanes(
             .into_iter()
             .filter(|&(_, s, d, _)| s == max_src && d == max_dst)
             .max_by(|(a, _, _, _), (b, _, _, _)| {
-                let sa = right_turn_score(&a.polyline());
-                let sb = right_turn_score(&b.polyline());
+                let sa = right_turn_score(a.polyline(), chunk_size);
+                let sb = right_turn_score(b.polyline(), chunk_size);
                 sa.partial_cmp(&sb).unwrap()
             });
 
@@ -94,15 +94,22 @@ pub fn select_outermost_lanes(
     result
 }
 
-pub fn right_turn_score(poly: &[Vec3]) -> f32 {
+/// Calculate a right turn score for a polyline.
+/// Positive = right turn, negative = left turn.
+/// Magnitude indicates turn sharpness.
+pub fn right_turn_score(poly: &[WorldPos], chunk_size: ChunkSize) -> f32 {
     if poly.len() < 3 {
         return 0.0;
     }
 
-    let dir_start = (poly[1] - poly[0]).normalize();
-    let dir_end = (poly[poly.len() - 1] - poly[poly.len() - 2]).normalize();
+    let dir_start = poly[1]
+        .to_render_pos(poly[0], chunk_size)
+        .normalize_or_zero();
+    let dir_end = poly[poly.len() - 1]
+        .to_render_pos(poly[poly.len() - 2], chunk_size)
+        .normalize_or_zero();
 
-    // signed turn around Y axis
+    // Signed turn around Y axis
     let cross = dir_start.cross(dir_end);
     let dot = dir_start.dot(dir_end);
 
@@ -113,16 +120,22 @@ pub fn right_turn_score(poly: &[Vec3]) -> f32 {
 
 /// Merges disjoint polylines into a single CCW ring sorted by angle around the center.
 /// Ensures that individual segments also flow in the CCW direction.
-pub fn merge_polylines_ccw(center: Vec3, mut polylines: Vec<Vec<Vec3>>) -> Vec<Vec3> {
+pub fn merge_polylines_ccw(
+    center: WorldPos,
+    mut polylines: Vec<Vec<WorldPos>>,
+    chunk_size: ChunkSize,
+) -> Vec<WorldPos> {
     if polylines.is_empty() {
         return Vec::new();
     }
 
-    // Helper to calculate angle in radians (-PI to PI)
-    let get_angle = |p: Vec3| -> f32 { (p.z - center.z).atan2(p.x - center.x) };
+    // Helper to calculate angle in radians (-PI to PI) relative to center
+    let get_angle = |p: WorldPos| -> f32 {
+        let rel = p.to_render_pos(center, chunk_size);
+        rel.z.atan2(rel.x)
+    };
 
-    // 1. Sort the chunks radially based on their midpoint
-    // This organizes the unconnected strips into a circle.
+    // 1. Sort the chunks radially based on their endpoint
     polylines.sort_by(|a, b| {
         if a.is_empty() || b.is_empty() {
             return Ordering::Equal;
@@ -136,11 +149,14 @@ pub fn merge_polylines_ccw(center: Vec3, mut polylines: Vec<Vec<Vec3>>) -> Vec<V
         angle_a.partial_cmp(&angle_b).unwrap_or(Ordering::Equal)
     });
 
-    let mut result_ring: Vec<Vec3> = Vec::with_capacity(polylines.len() * 10);
+    let mut result_ring: Vec<WorldPos> = Vec::with_capacity(polylines.len() * 10);
 
     // 2. Process each polyline
     for poly in &mut polylines {
         if poly.len() < 2 {
+            if !poly.is_empty() {
+                result_ring.push(poly[0]);
+            }
             continue;
         }
 
@@ -153,7 +169,7 @@ pub fn merge_polylines_ccw(center: Vec3, mut polylines: Vec<Vec<Vec3>>) -> Vec<V
         // Calculate angular delta to determine direction
         let mut diff = angle_end - angle_start;
 
-        // Normalize diff to -PI..PI to handle the wrap-around case (e.g. 179 deg to -179 deg)
+        // Normalize diff to -PI..PI to handle the wrap-around case
         while diff <= -PI {
             diff += 2.0 * PI;
         }
@@ -168,12 +184,12 @@ pub fn merge_polylines_ccw(center: Vec3, mut polylines: Vec<Vec<Vec3>>) -> Vec<V
         }
 
         // 3. Append to result
-        // Optional: Simple threshold to avoid duplicate vertices if ends touch exactly
-        if let Some(last_pt) = result_ring.last() {
+        // Skip duplicate vertices if ends touch exactly
+        if let Some(&last_pt) = result_ring.last() {
             let first_new = &poly[0];
-            let dist_sq = (last_pt.x - first_new.x).powi(2) + (last_pt.z - first_new.z).powi(2);
+            let dist_sq = last_pt.distance_squared(*first_new, chunk_size);
 
-            // If points are virtually identical, skip the first one to avoid zero-area triangles
+            // If points are virtually identical, skip the first one
             if dist_sq < 0.01 {
                 result_ring.extend_from_slice(&poly[1..]);
                 continue;
@@ -182,19 +198,6 @@ pub fn merge_polylines_ccw(center: Vec3, mut polylines: Vec<Vec<Vec3>>) -> Vec<V
 
         result_ring.extend_from_slice(poly);
     }
-
-    // 4. Close the loop (Optional depending on your mesh builder)
-    // If your triangulation function expects the first point repeated at the end:
-    /*
-    if let Some(first) = result_ring.first().cloned() {
-        // Only push if the last point isn't already the first point
-        let last = result_ring.last().unwrap();
-        let dist_sq = (last.x - first.x).powi(2) + (last.y - first.y).powi(2);
-        if dist_sq > 0.01 {
-            result_ring.push(first);
-        }
-    }
-    */
 
     result_ring
 }
@@ -376,26 +379,37 @@ pub fn line_segment_intersection_2d(
     }
 }
 
-/// Subdivide a quadratic bezier to extract the section from t0 to t1
+/// Subdivide a quadratic bezier to extract the section from t0 to t1.
+/// Returns (new_p0, new_p1, new_p2) control points for the sub-curve.
 pub fn subdivide_quadratic_bezier(
-    p0: Vec3,
-    p1: Vec3,
-    p2: Vec3,
+    p0: WorldPos,
+    p1: WorldPos,
+    p2: WorldPos,
     t0: f32,
     t1: f32,
-) -> (Vec3, Vec3, Vec3) {
-    fn eval_bezier(p0: Vec3, p1: Vec3, p2: Vec3, t: f32) -> Vec3 {
+    chunk_size: ChunkSize,
+) -> (WorldPos, WorldPos, WorldPos) {
+    /// Evaluate quadratic bezier at parameter t.
+    fn eval_bezier(p0: WorldPos, p1: WorldPos, p2: WorldPos, t: f32, cs: ChunkSize) -> WorldPos {
+        let v1 = p1.to_render_pos(p0, cs);
+        let v2 = p2.to_render_pos(p0, cs);
+
         let omt = 1.0 - t;
-        p0 * (omt * omt) + p1 * (2.0 * omt * t) + p2 * (t * t)
+        // B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
+        let blend = v1 * (2.0 * omt * t) + v2 * (t * t);
+        p0.add_vec3(blend, cs)
     }
 
-    let new_p0 = eval_bezier(p0, p1, p2, t0);
-    let new_p2 = eval_bezier(p0, p1, p2, t1);
+    let new_p0 = eval_bezier(p0, p1, p2, t0, chunk_size);
+    let new_p2 = eval_bezier(p0, p1, p2, t1, chunk_size);
 
     // Compute new control point to preserve curve shape
+    // Derivative: B'(t) = 2(1-t)(P1-P0) + 2t(P2-P1)
     let dt = t1 - t0;
-    let tangent_at_t0 = (p1 - p0) * (1.0 - t0) + (p2 - p1) * t0;
-    let new_p1 = new_p0 + tangent_at_t0 * dt;
+    let v01 = p1.to_render_pos(p0, chunk_size);
+    let v12 = p2.to_render_pos(p1, chunk_size);
+    let tangent_at_t0 = v01 * (1.0 - t0) + v12 * t0;
+    let new_p1 = new_p0.add_vec3(tangent_at_t0 * dt, chunk_size);
 
     (new_p0, new_p1, new_p2)
 }
@@ -416,7 +430,7 @@ pub fn push_intersection_for_node(
 }
 
 pub fn clip_ribbon_edges_to_polygon(
-    edges: &mut [(Vec3, Vec3)],
+    edges: &mut [(WorldPos, WorldPos)],
     poly: &IntersectionPolygon,
     at_start: bool,
     gizmo: &mut Gizmo,
@@ -444,309 +458,146 @@ pub fn clip_ribbon_edges_to_polygon(
     edges[idx_near] = (new_left, new_right);
 }
 
-/// Cast ray from `from` through `through` and beyond, find first polygon intersection
-fn ray_to_polygon(
-    from: Vec3,
-    through: Vec3,
+/// Cast ray from `from` through `through` and beyond, find first polygon intersection.
+/// Ray extends far beyond 'through' to find distant intersections.
+pub fn ray_to_polygon(
+    from: WorldPos,
+    through: WorldPos,
     poly: &IntersectionPolygon,
     gizmo: &mut Gizmo,
-) -> Option<Vec3> {
-    let dx = through.x - from.x;
-    let dz = through.z - from.z;
-    let len = (dx * dx + dz * dz).sqrt();
-
-    if len < 0.001 {
+) -> Option<WorldPos> {
+    let n = poly.ring.len();
+    if n < 3 {
         return None;
     }
 
-    // Extend ray far beyond 'through'
-    let ray_end_x = from.x + dx / len * 2000.0;
-    let ray_end_z = from.z + dz / len * 2000.0;
+    // Direction from 'from' to 'through'
+    let dir = through.to_render_pos(from, gizmo.chunk_size);
+    let len_sq = dir.x * dir.x + dir.z * dir.z;
 
-    let ray_dx = ray_end_x - from.x;
-    let ray_dz = ray_end_z - from.z;
+    if len_sq < 1e-6 {
+        return None;
+    }
+
+    let len = len_sq.sqrt();
+    let ray_dir = Vec3::new(dir.x / len, 0.0, dir.z / len);
+
+    // Extend ray far beyond 'through' (2km)
+    let max_dist = 2000.0;
 
     let mut best_t = f32::MAX;
-    let mut best_hit = None;
+    let mut best_hit: Option<WorldPos> = None;
 
-    for i in 0..poly.ring.len() {
+    for i in 0..n {
         let a = poly.ring[i];
-        let b = poly.ring[(i + 1) % poly.ring.len()];
+        let b = poly.ring[(i + 1) % n];
 
-        let seg_dx = b.x - a.x;
-        let seg_dz = b.z - a.z;
+        // Edge vector relative to 'a'
+        let edge = b.to_render_pos(a, gizmo.chunk_size);
 
-        let cross = ray_dx * seg_dz - ray_dz * seg_dx;
+        // Vector from 'from' to edge start
+        let to_seg = a.to_render_pos(from, gizmo.chunk_size);
+
+        let cross = ray_dir.x * edge.z - ray_dir.z * edge.x;
         if cross.abs() < 1e-10 {
             continue;
         }
 
-        let to_seg_x = a.x - from.x;
-        let to_seg_z = a.z - from.z;
-
-        let t = (to_seg_x * seg_dz - to_seg_z * seg_dx) / cross;
-        let u = (to_seg_x * ray_dz - to_seg_z * ray_dx) / cross;
+        let t = (to_seg.x * edge.z - to_seg.z * edge.x) / cross;
+        let u = (to_seg.x * ray_dir.z - to_seg.z * ray_dir.x) / cross;
 
         // t > 0: intersection is ahead of 'from'
         // u in [0,1]: intersection is on the polygon segment
-        if t > 0.0 && u >= 0.0 && u <= 1.0 && t < best_t {
+        if t > 0.0 && t < max_dist && u >= 0.0 && u <= 1.0 && t < best_t {
             best_t = t;
-            best_hit = Some(Vec3::new(
-                from.x + ray_dx * t,
-                through.y,
-                from.z + ray_dz * t,
-            ));
-        }
-    }
-    // if let Some(hit) = best_hit {
-    //     // Uncomment to debug:
-    //     println!("from={:?} through={:?} hit={:?}", from, through, hit);
-    //     gizmo.draw_cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0)
-    // }
-    best_hit
-}
-
-/// points[0] = target (near intersection), points[1..] = going into lane
-fn find_polygon_boundary_point(points: &[Vec3], poly: &IntersectionPolygon) -> Vec3 {
-    if points.len() < 2 {
-        return points.get(0).copied().unwrap_or(Vec3::ZERO);
-    }
-
-    let target = points[0];
-    let target_inside = poly.contains_xz(target);
-
-    if target_inside {
-        // === TARGET INSIDE: Trace outward along edge to find exit ===
-        for i in 0..points.len() - 1 {
-            let a = points[i];
-            let b = points[i + 1];
-
-            if poly.contains_xz(a) && !poly.contains_xz(b) {
-                if let Some(hit) = segment_poly_intersection(a, b, poly) {
-                    return hit;
-                }
-            }
-        }
-
-        // Still inside at end of polyline - extend outward
-        let last = points.len() - 1;
-        let dir = (points[last] - points[0]).normalize_or_zero();
-        let extended = points[last] + dir * 200.0;
-
-        if let Some(hit) = segment_poly_intersection(points[last], extended, poly) {
-            return hit;
-        }
-    } else {
-        // === TARGET OUTSIDE: Extend toward intersection to find entry ===
-        let dir = (points[0] - points[1]).normalize_or_zero();
-        let extended = points[0] + dir * 200.0;
-
-        if let Some(hit) = segment_poly_intersection(points[0], extended, poly) {
-            return hit;
-        }
-    }
-
-    target
-}
-
-fn segment_poly_intersection(a: Vec3, b: Vec3, poly: &IntersectionPolygon) -> Option<Vec3> {
-    let mut best_t = f32::MAX;
-    let mut hit = None;
-
-    let dx = b.x - a.x;
-    let dz = b.z - a.z;
-
-    for i in 0..poly.ring.len() {
-        let p1 = poly.ring[i];
-        let p2 = poly.ring[(i + 1) % poly.ring.len()];
-
-        let ex = p2.x - p1.x;
-        let ez = p2.z - p1.z;
-
-        let cross = dx * ez - dz * ex;
-        if cross.abs() < 1e-10 {
-            continue;
-        }
-
-        let fx = p1.x - a.x;
-        let fz = p1.z - a.z;
-
-        let t = (fx * ez - fz * ex) / cross;
-        let u = (fx * dz - fz * dx) / cross;
-
-        if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 && t < best_t {
-            best_t = t;
-            hit = Some(Vec3::new(a.x + dx * t, a.y, a.z + dz * t));
-        }
-    }
-
-    hit
-}
-
-fn find_edge_polygon_intersection(
-    edge_line: &[Vec3],
-    poly: &IntersectionPolygon,
-    at_start: bool,
-    gizmo: &mut Gizmo,
-    debug_color: [f32; 3],
-) -> Vec3 {
-    let n = edge_line.len();
-    if n < 2 {
-        return edge_line.get(0).copied().unwrap_or(Vec3::ZERO);
-    }
-
-    let target_idx = if at_start { 0 } else { n - 1 };
-    let target = edge_line[target_idx];
-
-    // === METHOD 1: Check each edge segment for polygon crossing ===
-    let segments: Box<dyn Iterator<Item = (usize, usize)>> = if at_start {
-        Box::new((0..n - 1).map(|i| (i, i + 1)))
-    } else {
-        Box::new((0..n - 1).rev().map(|i| (i + 1, i)))
-    };
-
-    for (i, j) in segments {
-        let a = edge_line[i];
-        let b = edge_line[j];
-
-        let a_inside = poly.contains_xz(a);
-        let b_inside = poly.contains_xz(b);
-
-        if a_inside != b_inside {
-            // This segment crosses the boundary!
-            if let Some(hit) = find_segment_polygon_hit(a, b, poly) {
-                return hit;
-            }
-        }
-    }
-
-    // === METHOD 2: No crossing found, use ray projection ===
-    // Compute direction from multiple points for robustness
-    let dir = compute_robust_direction(edge_line, at_start);
-
-    // DEBUG: Show the computed direction
-    gizmo.render_arrow(target, target + dir * 10.0, [1.0, 1.0, 0.0], true, 50.0); // Yellow = direction
-
-    // Cast ray from FAR inside the lane, through target, to FAR outside
-    let ray_inside = target + dir * 200.0;
-    let ray_outside = target - dir * 200.0;
-
-    // Find ALL intersections and pick closest to target
-    let mut best_hit: Option<Vec3> = None;
-    let mut best_dist = f32::MAX;
-
-    for i in 0..poly.ring.len() {
-        let pa = poly.ring[i];
-        let pb = poly.ring[(i + 1) % poly.ring.len()];
-
-        if let Some(hit) = segment_intersection_xz(ray_outside, ray_inside, pa, pb) {
-            let dist = (hit - target).length();
-
-            if dist < best_dist {
-                best_dist = dist;
-                best_hit = Some(hit);
-            }
+            let offset = Vec3::new(ray_dir.x * t, through.local.y - from.local.y, ray_dir.z * t);
+            best_hit = Some(from.add_vec3(offset, gizmo.chunk_size));
         }
     }
 
     if let Some(hit) = best_hit {
-        return hit;
+        gizmo.cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0);
     }
 
-    // === METHOD 3: Nothing worked, return original ===
-    gizmo.draw_cross(target, 5.5, [1.0, 0.0, 0.0], 10.0); // Red = failed
-    target
+    best_hit
 }
 
-fn compute_robust_direction(edge_line: &[Vec3], at_start: bool) -> Vec3 {
-    let n = edge_line.len();
+/// Find intersection point of two segments (XZ plane).
+pub fn segment_intersection_xz(
+    a1: WorldPos,
+    a2: WorldPos,
+    b1: WorldPos,
+    b2: WorldPos,
+    chunk_size: ChunkSize,
+) -> Option<(f32, f32)> {
+    let d1 = a2.to_render_pos(a1, chunk_size);
+    let d2 = b2.to_render_pos(b1, chunk_size);
+    let d12 = b1.to_render_pos(a1, chunk_size);
 
-    let target_idx = if at_start { 0 } else { n - 1 };
-    let target = edge_line[target_idx];
+    let cross = d1.x * d2.z - d1.z * d2.x;
+    if cross.abs() < 1e-10 {
+        return None;
+    }
 
-    // Try to find a point at least 2 meters away for a reliable direction
-    let indices: Vec<usize> = if at_start {
-        (1..n).collect()
+    let t = (d12.x * d2.z - d12.z * d2.x) / cross;
+    let u = (d12.x * d1.z - d12.z * d1.x) / cross;
+
+    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+        Some((t, u))
     } else {
-        (0..n - 1).rev().collect()
-    };
-
-    for i in indices {
-        let delta = edge_line[i] - target;
-        let len_sq = delta.x * delta.x + delta.z * delta.z; // XZ only
-        if len_sq > 4.0 {
-            // 2 meters squared
-            return Vec3::new(delta.x, 0.0, delta.z).normalize();
-        }
+        None
     }
-
-    // Fallback: use adjacent point
-    let adj_idx = if at_start {
-        1.min(n - 1)
-    } else {
-        (n - 1).saturating_sub(1)
-    };
-    let delta = edge_line[adj_idx] - target;
-    Vec3::new(delta.x, 0.0, delta.z).normalize_or_zero()
 }
 
-fn find_segment_polygon_hit(a: Vec3, b: Vec3, poly: &IntersectionPolygon) -> Option<Vec3> {
-    let mut best_t = f32::MAX;
-    let mut hit = None;
-
-    for i in 0..poly.ring.len() {
-        let pa = poly.ring[i];
-        let pb = poly.ring[(i + 1) % poly.ring.len()];
-
-        if let Some((t, point)) = segment_intersection_xz_with_t(a, b, pa, pb) {
-            if t < best_t {
-                best_t = t;
-                hit = Some(point);
-            }
-        }
-    }
-
-    hit
-}
-
-fn segment_intersection_xz(p1: Vec3, p2: Vec3, p3: Vec3, p4: Vec3) -> Option<Vec3> {
-    segment_intersection_xz_with_t(p1, p2, p3, p4).map(|(_, p)| p)
-}
-
-fn segment_intersection_xz_with_t(p1: Vec3, p2: Vec3, p3: Vec3, p4: Vec3) -> Option<(f32, Vec3)> {
-    let d1x = p2.x - p1.x;
-    let d1z = p2.z - p1.z;
-    let d2x = p4.x - p3.x;
-    let d2z = p4.z - p3.z;
+/// Find intersection between two line segments in XZ plane.
+/// Returns (t, intersection_point) where t is the parameter along segment p1->p2.
+pub fn segment_intersection_xz_with_t(
+    p1: WorldPos,
+    p2: WorldPos,
+    p3: WorldPos,
+    p4: WorldPos,
+    chunk_size: ChunkSize,
+) -> Option<(f32, WorldPos)> {
+    // Compute everything relative to p1 for precision
+    let d1 = p2.to_render_pos(p1, chunk_size);
+    let d2 = p4.to_render_pos(p3, chunk_size);
+    let d3 = p3.to_render_pos(p1, chunk_size);
 
     // Cross product in 2D (XZ plane)
-    let cross = d1x * d2z - d1z * d2x;
+    let cross = d1.x * d2.z - d1.z * d2.x;
 
     if cross.abs() < 1e-10 {
         return None; // Parallel or collinear
     }
 
-    let d3x = p3.x - p1.x;
-    let d3z = p3.z - p1.z;
-
-    let t = (d3x * d2z - d3z * d2x) / cross;
-    let u = (d3x * d1z - d3z * d1x) / cross;
+    let t = (d3.x * d2.z - d3.z * d2.x) / cross;
+    let u = (d3.x * d1.z - d3.z * d1.x) / cross;
 
     // Both parameters must be in [0, 1] for segments to intersect
     if t >= -1e-6 && t <= 1.0 + 1e-6 && u >= -1e-6 && u <= 1.0 + 1e-6 {
         let t_clamped = t.clamp(0.0, 1.0);
-        let point = Vec3::new(
-            p1.x + d1x * t_clamped,
-            (p1.y + p2.y) * 0.5,
-            p1.z + d1z * t_clamped,
-        );
+
+        // Interpolate Y as average of the two segments at intersection
+        let y1 = p1.local.y + (p2.local.y - p1.local.y) * t_clamped;
+        let y2 = p3.local.y + (p4.local.y - p3.local.y) * u.clamp(0.0, 1.0);
+        let avg_y = (y1 + y2) * 0.5;
+
+        // Compute intersection point
+        let offset = Vec3::new(d1.x * t_clamped, avg_y - p1.local.y, d1.z * t_clamped);
+        let point = p1.add_vec3(offset, chunk_size);
+
         Some((t_clamped, point))
     } else {
         None
     }
 }
-/// Find the intersection point of a ray with a polygon (closest to 'from')
-pub fn ray_polygon_intersection(from: Vec3, to: Vec3, poly: &IntersectionPolygon) -> Option<Vec3> {
+/// Find the intersection point of a ray with a polygon (closest to 'from').
+pub fn ray_polygon_intersection(
+    from: WorldPos,
+    to: WorldPos,
+    poly: &IntersectionPolygon,
+    chunk_size: ChunkSize,
+) -> Option<WorldPos> {
     let n = poly.ring.len();
     if n < 3 {
         return None;
@@ -754,22 +605,30 @@ pub fn ray_polygon_intersection(from: Vec3, to: Vec3, poly: &IntersectionPolygon
 
     let mut best_t: Option<f32> = None;
 
-    let d1 = Vec2::new(to.x - from.x, to.z - from.z);
+    // Ray direction relative to 'from'
+    let d1 = to.to_render_pos(from, chunk_size);
+    let d1_xz = glam::Vec2::new(d1.x, d1.z);
 
     for i in 0..n {
         let a = poly.ring[i];
         let b = poly.ring[(i + 1) % n];
 
-        let d2 = Vec2::new(b.x - a.x, b.z - a.z);
-        let denom = d1.x * d2.y - d1.y * d2.x;
+        // Edge vector
+        let edge = b.to_render_pos(a, chunk_size);
+        let d2 = glam::Vec2::new(edge.x, edge.z);
+
+        let denom = d1_xz.x * d2.y - d1_xz.y * d2.x;
 
         if denom.abs() < 1e-10 {
             continue;
         }
 
-        let d3 = Vec2::new(a.x - from.x, a.z - from.z);
-        let t = (d3.x * d2.y - d3.y * d2.x) / denom;
-        let u = (d3.x * d1.y - d3.y * d1.x) / denom;
+        // Vector from 'from' to edge start
+        let d3 = a.to_render_pos(from, chunk_size);
+        let d3_xz = glam::Vec2::new(d3.x, d3.z);
+
+        let t = (d3_xz.x * d2.y - d3_xz.y * d2.x) / denom;
+        let u = (d3_xz.x * d1_xz.y - d3_xz.y * d1_xz.x) / denom;
 
         // t must be positive (in direction of ray) and u must be on the edge segment
         if t > 1e-6 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
@@ -780,22 +639,333 @@ pub fn ray_polygon_intersection(from: Vec3, to: Vec3, poly: &IntersectionPolygon
         }
     }
 
-    best_t.map(|t| from.lerp(to, t))
+    best_t.map(|t| from.lerp(to, t, chunk_size))
 }
+
 pub fn set_point_height_with_structure_type(
     terrain_renderer: &TerrainRenderer,
     structure_type: StructureType,
-    p: &mut Vec3,
+    p: &mut WorldPos,
 ) {
     match structure_type {
         StructureType::Surface => {
-            p.y = terrain_renderer.get_height_at([p.x, p.z]) + CLEARANCE;
+            p.local.y = terrain_renderer.get_height_at(*p) + CLEARANCE;
         }
         StructureType::Bridge => {
-            p.y = p.y.max(terrain_renderer.get_height_at([p.x, p.z])) + CLEARANCE;
+            p.local.y = p.local.y.max(terrain_renderer.get_height_at(*p)) + CLEARANCE;
         }
         StructureType::Tunnel => {
-            p.y = p.y + CLEARANCE;
+            p.local.y = p.local.y + CLEARANCE;
         }
     }
+}
+/// More precise segment-chunk intersection test.
+fn segment_intersects_chunk_precise(
+    start: WorldPos,
+    end: WorldPos,
+    chunk: ChunkCoord,
+    chunk_size: ChunkSize,
+) -> bool {
+    let cs = chunk_size as f32;
+
+    // Chunk bounds as WorldPos
+    let chunk_min = WorldPos::new(chunk, LocalPos::new(0.0, 0.0, 0.0));
+    let chunk_max = WorldPos::new(chunk, LocalPos::new(cs, 0.0, cs));
+
+    // Convert segment to chunk-local coordinates
+    let a = start.to_render_pos(chunk_min, chunk_size);
+    let b = end.to_render_pos(chunk_min, chunk_size);
+
+    // 2D line-box intersection in XZ plane
+    line_intersects_box_2d(
+        Vec2::new(a.x, a.z),
+        Vec2::new(b.x, b.z),
+        Vec2::ZERO,
+        Vec2::new(cs, cs),
+    )
+}
+
+/// 2D line-box intersection test.
+fn line_intersects_box_2d(a: Vec2, b: Vec2, box_min: Vec2, box_max: Vec2) -> bool {
+    let d = b - a;
+    let mut t_min = 0.0f32;
+    let mut t_max = 1.0f32;
+
+    for i in 0..2 {
+        let (a_i, d_i, min_i, max_i) = match i {
+            0 => (a.x, d.x, box_min.x, box_max.x),
+            _ => (a.y, d.y, box_min.y, box_max.y),
+        };
+
+        if d_i.abs() < 1e-10 {
+            if a_i < min_i || a_i > max_i {
+                return false;
+            }
+        } else {
+            let inv_d = 1.0 / d_i;
+            let mut t1 = (min_i - a_i) * inv_d;
+            let mut t2 = (max_i - a_i) * inv_d;
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            t_min = t_min.max(t1);
+            t_max = t_max.min(t2);
+            if t_min > t_max {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Resample a polyline to have approximately equal segment lengths.
+pub fn resample_polyline(
+    poly: &[WorldPos],
+    target_segment_length: f32,
+    chunk_size: ChunkSize,
+) -> Vec<WorldPos> {
+    if poly.len() < 2 {
+        return poly.to_vec();
+    }
+
+    let lengths = polyline_cumulative_lengths(poly, chunk_size);
+    let total_len = *lengths.last().unwrap();
+
+    if total_len < target_segment_length {
+        return poly.to_vec();
+    }
+
+    let num_segments = (total_len / target_segment_length).ceil() as usize;
+    let actual_segment_len = total_len / num_segments as f32;
+
+    let mut result = Vec::with_capacity(num_segments + 1);
+
+    for i in 0..=num_segments {
+        let t = i as f32 * actual_segment_len;
+        let (pos, _) = sample_polyline_at(poly, &lengths, t, chunk_size);
+        result.push(pos);
+    }
+
+    result
+}
+
+/// Smooth a polyline using Chaikin's algorithm.
+pub fn smooth_polyline_chaikin(
+    poly: &[WorldPos],
+    iterations: usize,
+    chunk_size: ChunkSize,
+) -> Vec<WorldPos> {
+    if poly.len() < 3 || iterations == 0 {
+        return poly.to_vec();
+    }
+
+    let mut current = poly.to_vec();
+
+    for _ in 0..iterations {
+        let n = current.len();
+        let mut next = Vec::with_capacity(n * 2);
+
+        // Keep first point
+        next.push(current[0]);
+
+        for i in 0..n - 1 {
+            let a = current[i];
+            let b = current[i + 1];
+
+            // Q = 0.75*A + 0.25*B
+            let q = a.lerp(b, 0.25, chunk_size);
+            // R = 0.25*A + 0.75*B
+            let r = a.lerp(b, 0.75, chunk_size);
+
+            next.push(q);
+            next.push(r);
+        }
+
+        // Keep last point
+        next.push(current[n - 1]);
+
+        current = next;
+    }
+
+    current
+}
+
+/// Simplify a polyline using Douglas-Peucker algorithm.
+pub fn simplify_polyline_dp(
+    poly: &[WorldPos],
+    tolerance: f32,
+    chunk_size: ChunkSize,
+) -> Vec<WorldPos> {
+    if poly.len() < 3 {
+        return poly.to_vec();
+    }
+
+    fn dp_recursive(
+        poly: &[WorldPos],
+        start: usize,
+        end: usize,
+        tolerance_sq: f32,
+        keep: &mut Vec<bool>,
+        chunk_size: ChunkSize,
+    ) {
+        if end <= start + 1 {
+            return;
+        }
+
+        let mut max_dist_sq = 0.0f32;
+        let mut max_idx = start;
+
+        let line_start = poly[start];
+        let line_end = poly[end];
+
+        for i in start + 1..end {
+            let (_, dist_sq) =
+                project_point_to_segment_xz(poly[i], line_start, line_end, chunk_size);
+            if dist_sq > max_dist_sq {
+                max_dist_sq = dist_sq;
+                max_idx = i;
+            }
+        }
+
+        if max_dist_sq > tolerance_sq {
+            keep[max_idx] = true;
+            dp_recursive(poly, start, max_idx, tolerance_sq, keep, chunk_size);
+            dp_recursive(poly, max_idx, end, tolerance_sq, keep, chunk_size);
+        }
+    }
+
+    let n = poly.len();
+    let mut keep = vec![false; n];
+    keep[0] = true;
+    keep[n - 1] = true;
+
+    dp_recursive(poly, 0, n - 1, tolerance * tolerance, &mut keep, chunk_size);
+
+    poly.iter()
+        .enumerate()
+        .filter(|(i, _)| keep[*i])
+        .map(|(_, &p)| p)
+        .collect()
+}
+
+/// Reverse a polyline.
+pub fn reverse_polyline(poly: &[WorldPos]) -> Vec<WorldPos> {
+    poly.iter().copied().rev().collect()
+}
+
+/// Concatenate two polylines, removing duplicate junction point if present.
+pub fn concat_polylines(a: &[WorldPos], b: &[WorldPos], chunk_size: ChunkSize) -> Vec<WorldPos> {
+    if a.is_empty() {
+        return b.to_vec();
+    }
+    if b.is_empty() {
+        return a.to_vec();
+    }
+
+    let mut result = a.to_vec();
+
+    // Check if last point of a is same as first point of b
+    let dist = a
+        .last()
+        .unwrap()
+        .distance_to(*b.first().unwrap(), chunk_size);
+
+    if dist < 0.01 {
+        // Skip first point of b (duplicate)
+        result.extend_from_slice(&b[1..]);
+    } else {
+        result.extend_from_slice(b);
+    }
+
+    result
+}
+
+/// Compute robust direction with configurable minimum distance.
+pub fn compute_robust_direction_with_min_dist(
+    edge_line: &[WorldPos],
+    at_start: bool,
+    min_dist: f32,
+    chunk_size: ChunkSize,
+) -> Vec3 {
+    let n = edge_line.len();
+    if n < 2 {
+        return Vec3::ZERO;
+    }
+
+    let target_idx = if at_start { 0 } else { n - 1 };
+    let target = edge_line[target_idx];
+
+    let min_dist_sq = min_dist * min_dist;
+
+    // Try to find a point at least min_dist meters away for a reliable direction
+    let indices: Box<dyn Iterator<Item = usize>> = if at_start {
+        Box::new(1..n)
+    } else {
+        Box::new((0..n - 1).rev())
+    };
+
+    for i in indices {
+        let delta = edge_line[i].to_render_pos(target, chunk_size);
+        let len_sq = delta.x * delta.x + delta.z * delta.z; // XZ only
+
+        if len_sq > min_dist_sq {
+            let sign = if at_start { 1.0 } else { -1.0 };
+            return Vec3::new(delta.x * sign, 0.0, delta.z * sign).normalize();
+        }
+    }
+
+    // Fallback: use adjacent point
+    let adj_idx = if at_start {
+        1.min(n - 1)
+    } else {
+        (n - 1).saturating_sub(1)
+    };
+
+    let delta = edge_line[adj_idx].to_render_pos(target, chunk_size);
+    let sign = if at_start { 1.0 } else { -1.0 };
+    Vec3::new(delta.x * sign, 0.0, delta.z * sign).normalize_or_zero()
+}
+
+/// Get direction at a specific index along a polyline.
+pub fn polyline_direction_at(poly: &[WorldPos], index: usize, chunk_size: ChunkSize) -> Vec3 {
+    if poly.len() < 2 {
+        return Vec3::ZERO;
+    }
+
+    let dir = if index + 1 < poly.len() {
+        poly[index].delta_to(poly[index + 1], chunk_size)
+    } else {
+        poly[index - 1].delta_to(poly[index], chunk_size)
+    };
+
+    dir.normalize_or_zero()
+}
+
+/// Get tangent direction at a polyline point (average of incoming/outgoing).
+pub fn polyline_tangent_at(poly: &[WorldPos], index: usize, chunk_size: ChunkSize) -> Vec3 {
+    if poly.len() < 2 {
+        return Vec3::ZERO;
+    }
+
+    let n = poly.len();
+
+    if index == 0 {
+        return poly[1]
+            .to_render_pos(poly[0], chunk_size)
+            .normalize_or_zero();
+    }
+    if index >= n - 1 {
+        return poly[n - 1]
+            .to_render_pos(poly[n - 2], chunk_size)
+            .normalize_or_zero();
+    }
+
+    let d_prev = poly[index]
+        .to_render_pos(poly[index - 1], chunk_size)
+        .normalize_or_zero();
+    let d_next = poly[index + 1]
+        .to_render_pos(poly[index], chunk_size)
+        .normalize_or_zero();
+
+    ((d_prev + d_next) * 0.5).normalize_or_zero()
 }

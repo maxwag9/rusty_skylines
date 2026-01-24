@@ -133,9 +133,11 @@ impl RoadRenderSubsystem {
         for v in &terrain_renderer.visible {
             let chunk_id = v.id;
 
-            let needs_rebuild = self
-                .mesh_manager
-                .chunk_needs_update(chunk_id, &self.road_manager.roads);
+            let needs_rebuild = self.mesh_manager.chunk_needs_update(
+                chunk_id,
+                &self.road_manager.roads,
+                terrain_renderer.chunk_size,
+            );
 
             let mesh = if needs_rebuild {
                 self.mesh_manager.update_chunk_mesh(

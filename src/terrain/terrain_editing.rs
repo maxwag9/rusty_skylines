@@ -1,3 +1,4 @@
+use crate::positions::{ChunkCoord, ChunkSize, LodStep, WorldPos};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, gather_neighbor_edge_heights,
@@ -5,7 +6,6 @@ use crate::terrain::chunk_builder::{
 };
 use crate::terrain::terrain::TerrainGenerator;
 use crate::ui::vertex::Vertex;
-use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -24,7 +24,7 @@ struct PersistedChunk {
 struct EditFile {
     version: u32,
     timestamp_unix: u64,
-    edits: HashMap<(i32, i32), PersistedChunk>,
+    edits: HashMap<ChunkCoord, PersistedChunk>,
 }
 
 pub trait Falloff {
@@ -53,12 +53,37 @@ impl BrushOp for Raise {
     }
 }
 
-pub fn affected_chunks(center: Vec3, radius: f32, chunk_size: f32) -> (i32, i32, i32, i32) {
-    let min_x = ((center.x - radius) / chunk_size).floor() as i32;
-    let max_x = ((center.x + radius) / chunk_size).floor() as i32;
-    let min_z = ((center.z - radius) / chunk_size).floor() as i32;
-    let max_z = ((center.z + radius) / chunk_size).floor() as i32;
+/// Calculate which chunks are affected by a brush centered at `center` with given `radius`.
+/// Returns (min_chunk_x, max_chunk_x, min_chunk_z, max_chunk_z).
+pub fn affected_chunks(
+    center: WorldPos,
+    radius: f32,
+    chunk_size: ChunkSize,
+) -> (i32, i32, i32, i32) {
+    let chunk_size_f64 = chunk_size as f64;
+    let radius_f64 = radius as f64;
+
+    // Compute world coordinates in f64 for precision
+    let wx = center.chunk.x as f64 * chunk_size_f64 + center.local.x as f64;
+    let wz = center.chunk.z as f64 * chunk_size_f64 + center.local.z as f64;
+
+    let min_x = ((wx - radius_f64) / chunk_size_f64).floor() as i32;
+    let max_x = ((wx + radius_f64) / chunk_size_f64).floor() as i32;
+    let min_z = ((wz - radius_f64) / chunk_size_f64).floor() as i32;
+    let max_z = ((wz + radius_f64) / chunk_size_f64).floor() as i32;
+
     (min_x, max_x, min_z, max_z)
+}
+
+/// Iterator-friendly version that returns an iterator over affected ChunkCoords.
+pub fn affected_chunks_iter(
+    center: WorldPos,
+    radius: f32,
+    chunk_size: ChunkSize,
+) -> impl Iterator<Item = ChunkCoord> {
+    let (min_x, max_x, min_z, max_z) = affected_chunks(center, radius, chunk_size);
+
+    (min_x..=max_x).flat_map(move |cx| (min_z..=max_z).map(move |cz| ChunkCoord::new(cx, cz)))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -87,7 +112,7 @@ impl Default for EditedChunk {
 }
 
 pub struct TerrainEditor {
-    pub(crate) edited_chunks: HashMap<(i32, i32), EditedChunk>,
+    pub(crate) edited_chunks: HashMap<ChunkCoord, EditedChunk>,
 }
 
 impl Default for TerrainEditor {
@@ -106,7 +131,7 @@ impl TerrainEditor {
         }
         let tmp = path.with_extension("tmp");
 
-        let mut edits: HashMap<(i32, i32), PersistedChunk> = HashMap::new();
+        let mut edits: HashMap<ChunkCoord, PersistedChunk> = HashMap::new();
         for (chunk_coord, chunk) in &self.edited_chunks {
             if chunk.accumulated_deltas.is_empty() && !chunk.dirty {
                 continue;
@@ -196,17 +221,17 @@ impl TerrainEditor {
 
     pub fn apply_brush<F: Falloff, B: BrushOp>(
         &mut self,
-        center: Vec3,
+        center: WorldPos,
         radius: f32,
         strength: f32,
-        chunk_size: f32,
-        chunks: &HashMap<(i32, i32), ChunkMeshLod>,
+        chunk_size: ChunkSize,
+        chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) {
         let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, radius, chunk_size);
         let r2 = radius * radius;
 
-        let target_coords: Vec<_> = (min_cx..=max_cx)
-            .flat_map(|cx| (min_cz..=max_cz).map(move |cz| (cx, cz)))
+        let target_coords: Vec<ChunkCoord> = (min_cx..=max_cx)
+            .flat_map(|cx| (min_cz..=max_cz).map(move |cz| ChunkCoord::new(cx, cz)))
             .collect();
 
         for &coord in &target_coords {
@@ -218,14 +243,16 @@ impl TerrainEditor {
         }
     }
 
+    /// Compute deltas for a chunk based on brush application.
+    /// `center` is the brush center as a WorldPos.
     fn compute_deltas_for_chunk<F: Falloff, B: BrushOp>(
         &mut self,
-        coord: (i32, i32),
-        center: Vec3,
+        coord: ChunkCoord,
+        center: WorldPos,
         radius: f32,
         r2: f32,
         strength: f32,
-        chunks: &HashMap<(i32, i32), ChunkMeshLod>,
+        chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) {
         let chunk = match chunks.get(&coord) {
             Some(c) => c,
@@ -233,37 +260,53 @@ impl TerrainEditor {
         };
 
         let hg = &*chunk.height_grid;
-        let step = chunk.step;
+        let step = chunk.step as usize;
+        let chunk_size = hg.chunk_size as f64;
 
         // Calculate base (step=1) resolution parameters
-        let base_cell = hg.cell / step as f32;
+        let base_cell = hg.cell_f32() / step as f32;
+        let base_cell_f64 = base_cell as f64;
         let base_nx = (hg.nx - 1) * step + 1;
         let base_nz = (hg.nz - 1) * step + 1;
 
-        // Grid bounds at base resolution
-        let min_base_gx = (((center.x - radius) - hg.base_x) / base_cell)
+        // Compute chunk offset from center's chunk in f64 for precision
+        let chunk_offset_x = (coord.x - center.chunk.x) as f64 * chunk_size;
+        let chunk_offset_z = (coord.z - center.chunk.z) as f64 * chunk_size;
+        let center_local_x = center.local.x as f64;
+        let center_local_z = center.local.z as f64;
+
+        // Grid bounds at base resolution (in local coordinates of this chunk)
+        let radius_f64 = radius as f64;
+
+        // Transform center to this chunk's local space for bounds calculation
+        let center_in_local_x = -chunk_offset_x + center_local_x;
+        let center_in_local_z = -chunk_offset_z + center_local_z;
+
+        let min_base_gx = ((center_in_local_x - radius_f64) / base_cell_f64)
             .floor()
             .max(0.0) as usize;
-        let max_base_gx = (((center.x + radius) - hg.base_x) / base_cell)
+        let max_base_gx = ((center_in_local_x + radius_f64) / base_cell_f64)
             .ceil()
-            .min((base_nx - 1) as f32) as usize;
-        let min_base_gz = (((center.z - radius) - hg.base_z) / base_cell)
+            .min((base_nx - 1) as f64) as usize;
+        let min_base_gz = ((center_in_local_z - radius_f64) / base_cell_f64)
             .floor()
             .max(0.0) as usize;
-        let max_base_gz = (((center.z + radius) - hg.base_z) / base_cell)
+        let max_base_gz = ((center_in_local_z + radius_f64) / base_cell_f64)
             .ceil()
-            .min((base_nz - 1) as f32) as usize;
+            .min((base_nz - 1) as f64) as usize;
 
         let edited = self.edited_chunks.get_mut(&coord).unwrap();
         let mut changed = false;
 
         for base_gx in min_base_gx..=max_base_gx {
             for base_gz in min_base_gz..=max_base_gz {
-                let wx = hg.base_x + (base_gx as f32) * base_cell;
-                let wz = hg.base_z + (base_gz as f32) * base_cell;
+                // Local position within this chunk
+                let local_x = (base_gx as f64) * base_cell_f64;
+                let local_z = (base_gz as f64) * base_cell_f64;
 
-                let dx = wx - center.x;
-                let dz = wz - center.z;
+                // Distance from brush center (computed in f64 then converted)
+                let dx = (chunk_offset_x + local_x - center_local_x) as f32;
+                let dz = (chunk_offset_z + local_z - center_local_z) as f32;
                 let d2 = dx * dx + dz * dz;
 
                 if d2 >= r2 {
@@ -276,7 +319,7 @@ impl TerrainEditor {
                 }
 
                 // Sample current height using bilinear interpolation from actual grid
-                let current_h = sample_height_at_world(hg, wx, wz);
+                let current_h = sample_height_at_local(hg, local_x as f32, local_z as f32);
 
                 let mut new_h = current_h;
                 B::apply(&mut new_h, strength, w);
@@ -314,7 +357,7 @@ impl TerrainEditor {
         device: &Device,
         queue: &Queue,
         arena: &mut TerrainMeshArena,
-        chunks: &mut HashMap<(i32, i32), ChunkMeshLod>,
+        chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
         scratch: &mut GeometryScratch<Vertex>,
         _finalize: bool,
@@ -341,11 +384,11 @@ impl TerrainEditor {
 
     fn upload_single_chunk(
         &mut self,
-        coord: (i32, i32),
+        coord: ChunkCoord,
         device: &Device,
         queue: &Queue,
         arena: &mut TerrainMeshArena,
-        chunks: &mut HashMap<(i32, i32), ChunkMeshLod>,
+        chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
         scratch: &mut GeometryScratch<Vertex>,
     ) -> Option<GpuChunkHandle> {
@@ -407,14 +450,17 @@ impl TerrainEditor {
         old_handle
     }
 }
+/// Sample height at local position using bilinear interpolation.
+/// `local_x` and `local_z` should be in range [0, chunk_size].
+#[inline]
+fn sample_height_at_local(hg: &ChunkHeightGrid, local_x: f32, local_z: f32) -> f32 {
+    let cell = hg.cell_f32();
 
-/// Sample height at world position using bilinear interpolation
-fn sample_height_at_world(hg: &ChunkHeightGrid, wx: f32, wz: f32) -> f32 {
-    let gx_f = (wx - hg.base_x) / hg.cell;
-    let gz_f = (wz - hg.base_z) / hg.cell;
+    let gx_f = local_x / cell;
+    let gz_f = local_z / cell;
 
-    let gx0 = (gx_f.floor() as usize).min(hg.nx - 1);
-    let gz0 = (gz_f.floor() as usize).min(hg.nz - 1);
+    let gx0 = (gx_f.floor() as usize).min(hg.nx.saturating_sub(1));
+    let gz0 = (gz_f.floor() as usize).min(hg.nz.saturating_sub(1));
     let gx1 = (gx0 + 1).min(hg.nx - 1);
     let gz1 = (gz0 + 1).min(hg.nz - 1);
 
@@ -430,6 +476,20 @@ fn sample_height_at_world(hg: &ChunkHeightGrid, wx: f32, wz: f32) -> f32 {
     let h1 = h01 + tx * (h11 - h01);
 
     h0 + tz * (h1 - h0)
+}
+/// Sample height at a WorldPos. Returns the height if the position is within or near this grid.
+#[inline]
+pub fn sample_height_at_world(hg: &ChunkHeightGrid, pos: &WorldPos) -> f32 {
+    let chunk_size = hg.chunk_size as f32;
+
+    // Convert WorldPos to local coordinates relative to this grid's chunk
+    let chunk_offset_x = (pos.chunk.x - hg.chunk_coord.x) as f32 * chunk_size;
+    let chunk_offset_z = (pos.chunk.z - hg.chunk_coord.z) as f32 * chunk_size;
+
+    let local_x = chunk_offset_x + pos.local.x;
+    let local_z = chunk_offset_z + pos.local.z;
+
+    sample_height_at_local(hg, local_x, local_z)
 }
 
 pub fn recompute_patch_minmax(grid: &mut ChunkHeightGrid) {
@@ -464,13 +524,13 @@ pub fn recompute_patch_minmax(grid: &mut ChunkHeightGrid) {
     }
 }
 
-/// Apply accumulated deltas and handle LOD stitching correctly
+/// Apply accumulated deltas and handle LOD stitching correctly.
 pub fn apply_accumulated_deltas_with_stitching(
     height_grid: &ChunkHeightGrid,
-    coord: (i32, i32),
-    edited_chunks: &HashMap<(i32, i32), EditedChunk>,
-    loaded_chunks: &HashMap<(i32, i32), ChunkMeshLod>,
-    own_step: usize,
+    coord: ChunkCoord,
+    edited_chunks: &HashMap<ChunkCoord, EditedChunk>,
+    loaded_chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
+    own_step: LodStep,
 ) -> ChunkHeightGrid {
     let mut grid = height_grid.clone();
 
@@ -481,16 +541,13 @@ pub fn apply_accumulated_deltas_with_stitching(
     // Apply THIS chunk's accumulated deltas
     if let Some(edit) = edited_chunks.get(&coord) {
         for (&(base_x, base_z), &delta) in &edit.accumulated_deltas {
-            let base_gx = base_x as usize;
-            let base_gz = base_z as usize;
-
             // Check if this base coordinate aligns with current LOD grid
-            if base_gx % own_step != 0 || base_gz % own_step != 0 {
+            if base_x as u16 % own_step != 0 || base_z as u16 % own_step != 0 {
                 continue;
             }
 
-            let gx = base_gx / own_step;
-            let gz = base_gz / own_step;
+            let gx = (base_x as u16 / own_step) as usize;
+            let gz = (base_z as u16 / own_step) as usize;
 
             if gx < grid.nx && gz < grid.nz {
                 grid.heights[gx * grid.nz + gz] += delta;
@@ -505,10 +562,10 @@ pub fn apply_accumulated_deltas_with_stitching(
 
     // Only stitch specific edges where neighbor is STRICTLY coarser and has no edits
     let neighbors = [
-        ((coord.0 - 1, coord.1), Edge::XNeg),
-        ((coord.0 + 1, coord.1), Edge::XPos),
-        ((coord.0, coord.1 - 1), Edge::ZNeg),
-        ((coord.0, coord.1 + 1), Edge::ZPos),
+        (coord.offset(-1, 0), Edge::XNeg),
+        (coord.offset(1, 0), Edge::XPos),
+        (coord.offset(0, -1), Edge::ZNeg),
+        (coord.offset(0, 1), Edge::ZPos),
     ];
 
     for (neighbor_coord, edge) in neighbors {
@@ -532,30 +589,23 @@ pub fn apply_accumulated_deltas_with_stitching(
     grid
 }
 
-/// Stitch one edge of this grid to match a coarser neighbor's edge
-fn stitch_edge_to_neighbor(
-    grid: &mut ChunkHeightGrid,
-    neighbor_grid: &ChunkHeightGrid,
-    edge: Edge,
-) {
-    match edge {
-        Edge::XNeg => stitch_x_edge(grid, neighbor_grid, 0, neighbor_grid.nx - 1),
-        Edge::XPos => stitch_x_edge(grid, neighbor_grid, grid.nx - 1, 0),
-        Edge::ZNeg => stitch_z_edge(grid, neighbor_grid, 0, neighbor_grid.nz - 1),
-        Edge::ZPos => stitch_z_edge(grid, neighbor_grid, grid.nz - 1, 0),
-    }
-}
-
+/// Stitch our X edge to match a neighbor's X edge.
+/// Both grids use local coordinates [0, chunk_size].
 fn stitch_x_edge(
     grid: &mut ChunkHeightGrid,
     neighbor_grid: &ChunkHeightGrid,
     our_gx: usize,
     neighbor_gx: usize,
 ) {
-    for our_gz in 0..grid.nz {
-        let world_z = grid.base_z + our_gz as f32 * grid.cell;
+    let our_cell = grid.cell_f32();
+    let neighbor_cell = neighbor_grid.cell_f32();
 
-        let neighbor_gz_f = (world_z - neighbor_grid.base_z) / neighbor_grid.cell;
+    for our_gz in 0..grid.nz {
+        // Our local Z at this grid position
+        let local_z = our_gz as f32 * our_cell;
+
+        // Convert to neighbor's grid coordinates
+        let neighbor_gz_f = local_z / neighbor_cell;
         let neighbor_gz_lo = (neighbor_gz_f.floor() as usize).min(neighbor_grid.nz - 1);
         let neighbor_gz_hi = (neighbor_gz_lo + 1).min(neighbor_grid.nz - 1);
         let t = (neighbor_gz_f - neighbor_gz_lo as f32).clamp(0.0, 1.0);
@@ -567,16 +617,22 @@ fn stitch_x_edge(
     }
 }
 
+/// Stitch our Z edge to match a neighbor's Z edge.
 fn stitch_z_edge(
     grid: &mut ChunkHeightGrid,
     neighbor_grid: &ChunkHeightGrid,
     our_gz: usize,
     neighbor_gz: usize,
 ) {
-    for our_gx in 0..grid.nx {
-        let world_x = grid.base_x + our_gx as f32 * grid.cell;
+    let our_cell = grid.cell_f32();
+    let neighbor_cell = neighbor_grid.cell_f32();
 
-        let neighbor_gx_f = (world_x - neighbor_grid.base_x) / neighbor_grid.cell;
+    for our_gx in 0..grid.nx {
+        // Our local X at this grid position
+        let local_x = our_gx as f32 * our_cell;
+
+        // Convert to neighbor's grid coordinates
+        let neighbor_gx_f = local_x / neighbor_cell;
         let neighbor_gx_lo = (neighbor_gx_f.floor() as usize).min(neighbor_grid.nx - 1);
         let neighbor_gx_hi = (neighbor_gx_lo + 1).min(neighbor_grid.nx - 1);
         let t = (neighbor_gx_f - neighbor_gx_lo as f32).clamp(0.0, 1.0);
@@ -585,5 +641,31 @@ fn stitch_z_edge(
         let h_hi = neighbor_grid.heights[neighbor_gx_hi * neighbor_grid.nz + neighbor_gz];
 
         grid.heights[our_gx * grid.nz + our_gz] = h_lo + t * (h_hi - h_lo);
+    }
+}
+
+/// Stitch a specific edge to match the neighbor's corresponding edge.
+fn stitch_edge_to_neighbor(
+    grid: &mut ChunkHeightGrid,
+    neighbor_grid: &ChunkHeightGrid,
+    edge: Edge,
+) {
+    match edge {
+        Edge::XNeg => {
+            // Our -X edge (gx=0) should match neighbor's +X edge (gx=nx-1)
+            stitch_x_edge(grid, neighbor_grid, 0, neighbor_grid.nx - 1);
+        }
+        Edge::XPos => {
+            // Our +X edge (gx=nx-1) should match neighbor's -X edge (gx=0)
+            stitch_x_edge(grid, neighbor_grid, grid.nx - 1, 0);
+        }
+        Edge::ZNeg => {
+            // Our -Z edge (gz=0) should match neighbor's +Z edge (gz=nz-1)
+            stitch_z_edge(grid, neighbor_grid, 0, neighbor_grid.nz - 1);
+        }
+        Edge::ZPos => {
+            // Our +Z edge (gz=nz-1) should match neighbor's -Z edge (gz=0)
+            stitch_z_edge(grid, neighbor_grid, grid.nz - 1, 0);
+        }
     }
 }

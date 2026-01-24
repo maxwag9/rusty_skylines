@@ -268,7 +268,6 @@ pub fn cascade_splits_from_ratios(near: f32, far: f32, ratios: [f32; 4]) -> [f32
     ]
 }
 pub fn compute_csm_matrices(
-    cam_pos: Vec3,
     camera_view: Mat4,
     camera_fov_y_radians: f32,
     aspect: f32,
@@ -290,7 +289,7 @@ pub fn compute_csm_matrices(
         let slice_far = splits[i];
 
         let corners = frustum_slice_corners_ws(
-            cam_pos,
+            eye,
             right,
             up,
             forward, // <-- correct

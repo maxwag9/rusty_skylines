@@ -1,3 +1,4 @@
+use crate::positions::{ChunkCoord, ChunkSize, LodStep};
 use crate::terrain::chunk_builder::{ChunkBuilder, CpuChunkMesh};
 use crate::terrain::terrain::TerrainGenerator;
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -8,15 +9,14 @@ use std::sync::{Arc, RwLock};
 // threads.rs
 #[derive(Clone, Debug)]
 pub struct ChunkJob {
-    /// (cx, cz, self_step, neg_x_step, pos_x_step, neg_z_step, pos_z_step, version, version again?)
+    /// (ChunkCoord, LodStep, neg_x_step, pos_x_step, neg_z_step, pos_z_step, version, version again?)
     pub chunks: Vec<(
-        i32,
-        i32,
-        usize,
-        usize,
-        usize,
-        usize,
-        usize,
+        ChunkCoord,
+        LodStep,
+        LodStep,
+        LodStep,
+        LodStep,
+        LodStep,
         u64,
         Arc<AtomicU64>,
     )>,
@@ -26,11 +26,11 @@ pub struct ChunkWorkerPool {
     pub job_tx: Sender<ChunkJob>,
     pub result_rx: Receiver<CpuChunkMesh>,
 
-    versions: Arc<RwLock<HashMap<(i32, i32), Arc<AtomicU64>>>>,
+    versions: Arc<RwLock<HashMap<ChunkCoord, Arc<AtomicU64>>>>,
 }
 
 impl ChunkWorkerPool {
-    pub fn new(worker_count: usize, terrain_gen: TerrainGenerator, chunk_size: u32) -> Self {
+    pub fn new(worker_count: usize, terrain_gen: TerrainGenerator, chunk_size: ChunkSize) -> Self {
         let (job_tx, job_rx) = unbounded::<ChunkJob>();
         let (result_tx, result_rx) = unbounded::<CpuChunkMesh>();
 
@@ -46,8 +46,7 @@ impl ChunkWorkerPool {
                     match job_rx.recv() {
                         Ok(job) => {
                             for (
-                                cx,
-                                cz,
+                                chunk_coord,
                                 self_step,
                                 nx_neg,
                                 nx_pos,
@@ -63,8 +62,7 @@ impl ChunkWorkerPool {
                                 }
 
                                 if let Some(cpu) = ChunkBuilder::build_chunk_cpu(
-                                    cx,
-                                    cz,
+                                    chunk_coord,
                                     chunk_size,
                                     self_step,
                                     nx_neg,
@@ -94,7 +92,7 @@ impl ChunkWorkerPool {
         }
     }
 
-    pub fn is_current_version(&self, coord: (i32, i32), version: u64) -> bool {
+    pub fn is_current_version(&self, coord: ChunkCoord, version: u64) -> bool {
         let guard = self.versions.read().unwrap();
         match guard.get(&coord) {
             Some(v_atomic) => v_atomic.load(Ordering::Relaxed) == version,
@@ -107,7 +105,7 @@ impl ChunkWorkerPool {
         v.load(Ordering::Relaxed) == expected
     }
 
-    pub fn new_version_for(&self, coord: (i32, i32)) -> (u64, Arc<AtomicU64>) {
+    pub fn new_version_for(&self, coord: ChunkCoord) -> (u64, Arc<AtomicU64>) {
         let atomic = {
             let mut g = self.versions.write().unwrap();
             g.entry(coord)
@@ -119,7 +117,7 @@ impl ChunkWorkerPool {
         (v, atomic)
     }
 
-    pub fn forget_chunk(&self, coord: (i32, i32)) {
+    pub fn forget_chunk(&self, coord: ChunkCoord) {
         let mut guard = self.versions.write().unwrap();
         guard.remove(&coord);
     }

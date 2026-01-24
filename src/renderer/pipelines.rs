@@ -284,13 +284,12 @@ pub fn make_new_uniforms_csm(
     view_proj: Mat4,
     sun: Vec3,
     moon: Vec3,
-    cam_pos: Vec3,
-    orbit_radius: f32,
     total_time: f64,
     light_view_proj: [Mat4; CSM_CASCADES],
     cascade_splits: [f32; 4],
-    shadow_cascade_index: u32,
+    camera: &Camera,
 ) -> Uniforms {
+    let eye = camera.eye_world();
     Uniforms {
         view: view.to_cols_array_2d(),
         inv_view: view.inverse().to_cols_array_2d(),
@@ -298,18 +297,17 @@ pub fn make_new_uniforms_csm(
         inv_proj: proj.inverse().to_cols_array_2d(),
         view_proj: view_proj.to_cols_array_2d(),
         inv_view_proj: view_proj.inverse().to_cols_array_2d(),
-
         lighting_view_proj: light_view_proj.map(|m| m.to_cols_array_2d()),
         cascade_splits,
-
         sun_direction: sun.to_array(),
         time: total_time as f32,
 
-        camera_pos: cam_pos.to_array(),
-        orbit_radius,
+        camera_local: [eye.local.x, eye.local.y, eye.local.z],
+        chunk_size: camera.chunk_size as f32,
+        camera_chunk: [eye.chunk.x, eye.chunk.z],
 
+        _pad_cam: [1, 1],
         moon_direction: moon.to_array(),
-        shadow_cascade_index,
-        _pad_shadow: [0, 0],
+        orbit_radius: camera.orbit_radius,
     }
 }

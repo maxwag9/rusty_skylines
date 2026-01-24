@@ -16,8 +16,10 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     };
     let camera = &mut camera_bundle.camera;
     let cam_ctrl = &mut camera_bundle.controller;
-    let eye = camera.position();
-    let mut fwd3d = camera.target - eye;
+    let eye = camera.eye_world();
+    let mut fwd3d = camera
+        .target
+        .delta_to(eye, resources.renderer.core.terrain_renderer.chunk_size);
     if fwd3d.length_squared() > 0.0 {
         fwd3d = fwd3d.normalize();
     }
@@ -96,11 +98,14 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
         cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
     }
-    camera.target += cam_ctrl.velocity * dt;
+    camera.target = camera.target.add_vec3(
+        cam_ctrl.velocity * dt,
+        resources.renderer.core.terrain_renderer.chunk_size,
+    );
     ground_camera_target(
         camera,
         cam_ctrl,
-        &resources.renderer.core.terrain_renderer.terrain_gen,
+        &resources.renderer.core.terrain_renderer,
         0.1,
     );
     resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.terrain_renderer);

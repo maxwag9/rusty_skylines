@@ -14,6 +14,7 @@ mod systems;
 mod ui;
 mod world;
 
+pub mod positions;
 mod terrain;
 
 use app::App;

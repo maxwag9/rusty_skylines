@@ -2,6 +2,7 @@ use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::mouse_ray::*;
 use crate::paths::data_dir;
+use crate::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::resources::{InputState, TimeSystem};
@@ -11,54 +12,14 @@ use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
 use crate::ui::vertex::Vertex;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
-#[derive(Debug, Clone)]
-pub struct ChunkCoord {
-    x: i32,
-    z: i32,
-}
-#[derive(Debug, Clone)]
-pub struct LocalPos {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-#[derive(Debug, Clone)]
-pub struct WorldPos {
-    chunk: ChunkCoord,
-    local: LocalPos,
-}
-pub fn to_render_pos(pos: &WorldPos, cam: &WorldPos, chunk_size: f32) -> Vec3 {
-    let dx = (pos.chunk.x - cam.chunk.x) as f32 * chunk_size + (pos.local.x - cam.local.x);
-
-    let dy = pos.local.y - cam.local.y;
-
-    let dz = (pos.chunk.z - cam.chunk.z) as f32 * chunk_size + (pos.local.z - cam.local.z);
-
-    Vec3::new(dx, dy, dz)
-}
-fn world_to_chunk(pos: Vec3, chunk_size: f32) -> WorldPos {
-    let cx = (pos.x / chunk_size).floor() as i32;
-    let cz = (pos.z / chunk_size).floor() as i32;
-
-    WorldPos {
-        chunk: ChunkCoord { x: cx, z: cz },
-        local: LocalPos {
-            x: pos.x - cx as f32 * chunk_size,
-            y: pos.y,
-            z: pos.z - cz as f32 * chunk_size,
-        },
-    }
-}
-
 pub struct ChunkCoords {
-    x: i32,
-    z: i32, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
+    chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
     dist2: i32,
 }
 pub struct VisibleChunk {
@@ -66,15 +27,14 @@ pub struct VisibleChunk {
     pub id: ChunkId,
 }
 pub struct PickedPoint {
-    pub pos: Vec3,
+    pub pos: WorldPos,
     pub chunk: VisibleChunk,
 }
 
 #[derive(Clone, Copy)]
 struct FrameState {
-    cs: f32,
-    cam_cx: i32,
-    cam_cz: i32,
+    cs: ChunkSize,
+    cam_chunk_coord: ChunkCoord,
     planes: [Plane; 6],
     r2_render: i32,
     r2_gen: i32,
@@ -83,12 +43,12 @@ struct FrameState {
 pub struct TerrainRenderer {
     pub arena: TerrainMeshArena,
 
-    pub chunks: HashMap<(i32, i32), ChunkMeshLod>,
-    pub pending: HashMap<(i32, i32), (u64, usize)>,
+    pub chunks: HashMap<ChunkCoord, ChunkMeshLod>,
+    pub pending: HashMap<ChunkCoord, (u64, LodStep)>,
     pub terrain_editor: TerrainEditor,
 
     pub terrain_gen: TerrainGenerator,
-    pub chunk_size: usize,
+    pub chunk_size: ChunkSize,
     pub view_radius_generate: usize,
     pub view_radius_render: usize,
 
@@ -98,8 +58,8 @@ pub struct TerrainRenderer {
     pub max_far_chunks_per_batch: usize,
     pub max_far_jobs_per_frame: usize,
 
-    pub spiral: Vec<(i32, i32)>,
-    pub lod_map: HashMap<(i32, i32), usize>,
+    pub spiral: Vec<ChunkCoord>,
+    pub lod_map: HashMap<ChunkCoord, LodStep>,
 
     pub pick_radius_m: f32,
     pub last_picked: Option<PickedPoint>,
@@ -117,7 +77,7 @@ impl TerrainRenderer {
         terrain_params.seed = 144;
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
-        let chunk_size = 256;
+        let chunk_size: ChunkSize = 256;
         let view_radius_render = 128;
         let view_radius_generate = 128;
 
@@ -130,7 +90,7 @@ impl TerrainRenderer {
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
 
-        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size as u32);
+        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size);
         let terrain_editor: TerrainEditor;
         if settings.show_world {
             terrain_editor = match TerrainEditor::load_edits(data_dir("edited_chunks")) {
@@ -205,7 +165,7 @@ impl TerrainRenderer {
         self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.visible = self.collect_visible(&frame);
+        self.visible = self.collect_visible(camera, &frame);
         self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -264,7 +224,7 @@ impl TerrainRenderer {
             pos,
             self.pick_radius_m,
             strength,
-            self.chunk_size as f32,
+            self.chunk_size,
             &self.chunks,
         );
 
@@ -285,13 +245,11 @@ impl TerrainRenderer {
     }
 
     fn frame_state(&self, camera: &Camera, aspect: f32) -> FrameState {
-        let cs = self.chunk_size as f32;
+        let cs = self.chunk_size;
 
-        // IMPORTANT: use the same reference point everywhere.
-        // position() is what you use in render; use it here too.
         let cam_pos = camera.target;
-        let cam_cx = (cam_pos.x / cs).floor() as i32;
-        let cam_cz = (cam_pos.z / cs).floor() as i32;
+        let cam_cx = cam_pos.chunk.x;
+        let cam_cz = cam_pos.chunk.z;
 
         let (_, _, view_proj) = camera.matrices(aspect);
         let planes = extract_frustum_planes(view_proj);
@@ -301,8 +259,7 @@ impl TerrainRenderer {
 
         FrameState {
             cs,
-            cam_cx,
-            cam_cz,
+            cam_chunk_coord: ChunkCoord::new(cam_cx, cam_cz),
             planes,
             r2_render: r_render * r_render,
             r2_gen: r_gen * r_gen,
@@ -311,7 +268,7 @@ impl TerrainRenderer {
 
     pub fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
         while let Ok(cpu) = self.workers.result_rx.try_recv() {
-            let coord = (cpu.cx, cpu.cz);
+            let coord = cpu.chunk_coord;
 
             if !self.workers.is_current_version(coord, cpu.version) {
                 continue;
@@ -382,7 +339,7 @@ impl TerrainRenderer {
             );
         }
     }
-    fn remove_chunk(&mut self, coord: (i32, i32)) {
+    fn remove_chunk(&mut self, coord: ChunkCoord) {
         // remove pending job
         self.pending.remove(&coord);
         // remove GPU chunk
@@ -393,23 +350,22 @@ impl TerrainRenderer {
         self.workers.forget_chunk(coord);
     }
 
-    fn collect_visible(&self, frame: &FrameState) -> Vec<VisibleChunk> {
+    fn collect_visible(&self, camera: &Camera, frame: &FrameState) -> Vec<VisibleChunk> {
         let mut visible = Vec::new();
-        for &(dx, dz) in &self.spiral {
+        for &chunk_coord in &self.spiral {
+            let (dx, dz) = (chunk_coord.x, chunk_coord.z);
             let dist2 = dx * dx + dz * dz;
             if dist2 > frame.r2_render {
                 continue;
             }
+            let cx = frame.cam_chunk_coord.x + dx;
+            let cz = frame.cam_chunk_coord.z + dz;
 
-            let cx = frame.cam_cx + dx;
-            let cz = frame.cam_cz + dz;
-
-            let (min, max) = chunk_aabb_world(cx, cz, frame.cs);
+            let (min, max) = chunk_aabb_render(cx, cz, frame.cs, camera.eye_world());
             if aabb_in_frustum(&frame.planes, min, max) {
                 visible.push(VisibleChunk {
                     coords: ChunkCoords {
-                        x: cx,
-                        z: cz,
+                        chunk_coord: ChunkCoord::new(cx, cz),
                         dist2,
                     },
                     id: chunk_coord_to_id(cx, cz),
@@ -428,35 +384,47 @@ impl TerrainRenderer {
             } else {
                 lod_step_for_distance(v.coords.dist2)
             };
-            self.lod_map.insert((v.coords.x, v.coords.z), step);
+            self.lod_map.insert(v.coords.chunk_coord, step);
         }
 
         // Smooth within visible set.
         for _ in 0..2 {
             let current = self.lod_map.clone();
             for v in self.visible.iter() {
-                let s = *current.get(&(v.coords.x, v.coords.z)).unwrap_or(&1);
+                let s = *current.get(&v.coords.chunk_coord).unwrap_or(&1);
 
                 // Neighbors default to s if not visible, to keep edges stable.
                 let n0 = current
-                    .get(&(v.coords.x - 1, v.coords.z))
+                    .get(&ChunkCoord::new(
+                        v.coords.chunk_coord.x - 1,
+                        v.coords.chunk_coord.z,
+                    ))
                     .copied()
                     .unwrap_or(s);
                 let n1 = current
-                    .get(&(v.coords.x + 1, v.coords.z))
+                    .get(&ChunkCoord::new(
+                        v.coords.chunk_coord.x + 1,
+                        v.coords.chunk_coord.z,
+                    ))
                     .copied()
                     .unwrap_or(s);
                 let n2 = current
-                    .get(&(v.coords.x, v.coords.z - 1))
+                    .get(&ChunkCoord::new(
+                        v.coords.chunk_coord.x,
+                        v.coords.chunk_coord.z - 1,
+                    ))
                     .copied()
                     .unwrap_or(s);
                 let n3 = current
-                    .get(&(v.coords.x, v.coords.z + 1))
+                    .get(&ChunkCoord::new(
+                        v.coords.chunk_coord.x,
+                        v.coords.chunk_coord.z + 1,
+                    ))
                     .copied()
                     .unwrap_or(s);
 
                 self.lod_map
-                    .insert((v.coords.x, v.coords.z), s.min(n0).min(n1).min(n2).min(n3));
+                    .insert(v.coords.chunk_coord, s.min(n0).min(n1).min(n2).min(n3));
             }
         }
     }
@@ -469,15 +437,15 @@ impl TerrainRenderer {
         let mut far_batches_sent = 0usize;
 
         for v in self.visible.iter() {
-            let cx = v.coords.x;
-            let cz = v.coords.z;
+            let cx = v.coords.chunk_coord.x;
+            let cz = v.coords.chunk_coord.z;
             if close_jobs_sent >= self.max_close_jobs_per_frame
                 && far_batches_sent >= self.max_far_jobs_per_frame
             {
                 break;
             }
 
-            let coord = (cx, cz);
+            let coord = v.coords.chunk_coord;
             let desired_step = *self.lod_map.get(&coord).unwrap_or(&1);
 
             // Already good?
@@ -495,10 +463,22 @@ impl TerrainRenderer {
 
             // Neighbor LODs (fallback to step if neighbor not visible)
             let step = desired_step;
-            let n_x_neg = *self.lod_map.get(&(cx - 1, cz)).unwrap_or(&step);
-            let n_x_pos = *self.lod_map.get(&(cx + 1, cz)).unwrap_or(&step);
-            let n_z_neg = *self.lod_map.get(&(cx, cz - 1)).unwrap_or(&step);
-            let n_z_pos = *self.lod_map.get(&(cx, cz + 1)).unwrap_or(&step);
+            let n_x_neg = *self
+                .lod_map
+                .get(&ChunkCoord::new(cx - 1, cz))
+                .unwrap_or(&step);
+            let n_x_pos = *self
+                .lod_map
+                .get(&ChunkCoord::new(cx + 1, cz))
+                .unwrap_or(&step);
+            let n_z_neg = *self
+                .lod_map
+                .get(&ChunkCoord::new(cx, cz - 1))
+                .unwrap_or(&step);
+            let n_z_pos = *self
+                .lod_map
+                .get(&ChunkCoord::new(cx, cz + 1))
+                .unwrap_or(&step);
 
             if step <= 2 {
                 if close_jobs_sent < self.max_close_jobs_per_frame {
@@ -506,8 +486,7 @@ impl TerrainRenderer {
                     self.pending.insert(coord, (version, step));
 
                     close_batch.push((
-                        cx,
-                        cz,
+                        coord,
                         step,
                         n_x_neg,
                         n_x_pos,
@@ -531,8 +510,7 @@ impl TerrainRenderer {
                     self.pending.insert(coord, (version, step));
 
                     far_batch.push((
-                        cx,
-                        cz,
+                        coord,
                         step,
                         n_x_neg,
                         n_x_pos,
@@ -572,18 +550,18 @@ impl TerrainRenderer {
         let r2 = r * r;
 
         // Build a set of currently-visible coords so we never unload them.
-        let mut visible_set: HashSet<(i32, i32)> = HashSet::with_capacity(self.visible.len());
+        let mut visible_set: HashSet<ChunkCoord> = HashSet::with_capacity(self.visible.len());
         for v in self.visible.iter() {
-            visible_set.insert((v.coords.x, v.coords.z));
+            visible_set.insert(v.coords.chunk_coord);
         }
 
         let mut to_remove = Vec::new();
-        for (&coord @ (cx, cz), _) in self.chunks.iter() {
+        for (&coord @ chunk_coord, _) in self.chunks.iter() {
             if visible_set.contains(&coord) {
                 continue;
             }
-            let dx = cx - frame.cam_cx;
-            let dz = cz - frame.cam_cz;
+            let dx = chunk_coord.x - frame.cam_chunk_coord.x;
+            let dz = chunk_coord.z - frame.cam_chunk_coord.z;
             if dx * dx + dz * dz > r2 {
                 to_remove.push(coord);
             }
@@ -598,24 +576,25 @@ impl TerrainRenderer {
         let (_, _, view_proj) = camera.matrices(aspect);
         let planes = extract_frustum_planes(view_proj);
 
-        let cs = self.chunk_size as f32;
-        let cam_pos = camera.target;
-        let cam_cx = (cam_pos.x / cs).floor() as i32;
-        let cam_cz = (cam_pos.z / cs).floor() as i32;
+        let cs = self.chunk_size;
+        let target_pos = camera.target;
+        let target_cx = target_pos.chunk.x;
+        let target_cz = target_pos.chunk.z;
 
         let r = self.view_radius_render as i32;
         let r2 = r * r;
 
         let mut per_page: Vec<Vec<GpuChunkHandle>> = vec![Vec::new(); self.arena.pages.len()];
 
-        for (&(cx, cz), chunk) in self.chunks.iter() {
-            let dx = cx - cam_cx;
-            let dz = cz - cam_cz;
+        for (&chunk_coord, chunk) in self.chunks.iter() {
+            let dx = chunk_coord.x - target_cx;
+            let dz = chunk_coord.z - target_cz;
             if dx * dx + dz * dz > r2 {
                 continue;
             }
 
-            let (min, max) = chunk_aabb_world(cx, cz, cs);
+            let (min, max) =
+                chunk_aabb_render(chunk_coord.x, chunk_coord.z, cs, camera.eye_world());
             if !aabb_in_frustum(&planes, min, max) {
                 continue;
             }
@@ -646,63 +625,75 @@ impl TerrainRenderer {
         }
     }
 
-    pub fn pick_terrain_point(&mut self, ray: Ray) -> Option<(i32, i32, Vec3)> {
-        let cs = self.chunk_size as f32;
-        let eps = 1e-6 * cs;
+    /// Pick a terrain point by casting a ray through loaded chunks.
+    /// Uses WorldRay for maximum precision at any distance.
+    pub fn pick_terrain_point(&mut self, ray: WorldRay) -> Option<WorldPos> {
+        let cs = self.chunk_size;
+        let cs_f32 = cs as f32;
+        let eps = 1e-6 * cs_f32;
 
-        let mut cx = (ray.origin.x / cs).floor() as i32;
-        let mut cz = (ray.origin.z / cs).floor() as i32;
+        // Start DDA from ray origin's chunk (exact, no precision loss)
+        let mut cx = ray.origin.chunk.x;
+        let mut cz = ray.origin.chunk.z;
 
-        let step_x = ray.dir.x.signum() as i32;
-        let step_z = ray.dir.z.signum() as i32;
+        let step_x = if ray.dir.x >= 0.0 { 1i32 } else { -1i32 };
+        let step_z = if ray.dir.z >= 0.0 { 1i32 } else { -1i32 };
 
-        let next_x = (cx + if step_x > 0 { 1 } else { 0 }) as f32 * cs;
-        let next_z = (cz + if step_z > 0 { 1 } else { 0 }) as f32 * cs;
+        // Compute t to first chunk boundaries using integer chunk math
+        let first_boundary_x = if step_x > 0 { cx + 1 } else { cx };
+        let first_boundary_z = if step_z > 0 { cz + 1 } else { cz };
 
-        let mut t_max_x = if ray.dir.x.abs() < 1e-8 {
+        let mut t_max_x = ray.t_to_chunk_x_boundary(first_boundary_x, cs);
+        let mut t_max_z = ray.t_to_chunk_z_boundary(first_boundary_z, cs);
+
+        // Handle ray starting exactly on boundary moving negative
+        if t_max_x <= 0.0 && step_x < 0 {
+            cx -= 1;
+            t_max_x = ray.t_to_chunk_x_boundary(cx, cs);
+        }
+        if t_max_z <= 0.0 && step_z < 0 {
+            cz -= 1;
+            t_max_z = ray.t_to_chunk_z_boundary(cz, cs);
+        }
+
+        let t_delta_x = if ray.dir.x.abs() < 1e-12 {
             f32::INFINITY
         } else {
-            (next_x - ray.origin.x) / ray.dir.x
+            cs_f32 / ray.dir.x.abs()
         };
 
-        let mut t_max_z = if ray.dir.z.abs() < 1e-8 {
+        let t_delta_z = if ray.dir.z.abs() < 1e-12 {
             f32::INFINITY
         } else {
-            (next_z - ray.origin.z) / ray.dir.z
+            cs_f32 / ray.dir.z.abs()
         };
 
-        let t_delta_x = if ray.dir.x.abs() < 1e-8 {
-            f32::INFINITY
-        } else {
-            cs / ray.dir.x.abs()
-        };
-
-        let t_delta_z = if ray.dir.z.abs() < 1e-8 {
-            f32::INFINITY
-        } else {
-            cs / ray.dir.z.abs()
-        };
-
-        let mut t = 0.0;
-        let max_t = 10_000.0;
+        let mut t = 0.0f32;
+        let max_t = 100_000.0f32;
 
         while t < max_t {
-            let next_t = t_max_x.min(t_max_z);
+            let next_t = t_max_x.min(t_max_z).min(max_t);
+            let chunk_coord = ChunkCoord::new(cx, cz);
 
-            if let Some(chunk) = self.chunks.get(&(cx, cz)) {
-                if let Some((_, pos)) =
-                    raycast_chunk_heightgrid(ray, &chunk.height_grid, t, next_t + eps)
+            if let Some(chunk) = self.chunks.get(&chunk_coord) {
+                if let Some((hit_t, hit_pos)) =
+                    raycast_chunk_heightgrid(&ray, &chunk.height_grid, t, next_t + eps)
                 {
-                    let chunk = VisibleChunk {
+                    // Update last picked info
+                    let visible_chunk = VisibleChunk {
                         coords: ChunkCoords {
-                            x: cx,
-                            z: cz,
+                            chunk_coord,
                             dist2: 0,
                         },
                         id: chunk_coord_to_id(cx, cz),
                     };
-                    self.last_picked = Some(PickedPoint { pos, chunk });
-                    return Some((cx, cz, pos));
+
+                    self.last_picked = Some(PickedPoint {
+                        pos: hit_pos,
+                        chunk: visible_chunk,
+                    });
+
+                    return Some(hit_pos);
                 }
             }
 
@@ -723,10 +714,19 @@ impl TerrainRenderer {
         None
     }
 
-    pub fn make_pick_uniforms(&self, queue: &Queue, pick_uniform_buffer: &Buffer) {
+    pub fn make_pick_uniforms(
+        &self,
+        queue: &Queue,
+        pick_uniform_buffer: &Buffer,
+        camera: &Camera,
+        chunk_size: ChunkSize,
+    ) {
         let u = if let Some(p) = &self.last_picked {
             PickUniform {
-                pos: p.pos.into(),
+                pos: p
+                    .pos
+                    .to_render_pos(camera.eye_world(), chunk_size)
+                    .to_array(),
                 radius: self.pick_radius_m,
                 underwater: 1,
                 _pad0: [0, 0, 0],
@@ -746,33 +746,14 @@ impl TerrainRenderer {
 
         queue.write_buffer(pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
-    pub fn get_height_at(&self, pos: [f32; 2]) -> f32 {
-        let chunk_size = self.chunk_size as f32;
-
-        let [cx, cz] = pos_to_chunk_coord(pos, chunk_size);
-
-        let chunk = match self.chunks.get(&(cx, cz)) {
+    pub fn get_height_at(&self, pos: WorldPos) -> f32 {
+        let chunk = match self.chunks.get(&pos.chunk) {
             Some(c) => c,
             None => return 0.0,
         };
 
-        height_bilinear(&chunk.height_grid, pos[0], pos[1])
+        height_bilinear_world(&chunk.height_grid, pos)
     }
-}
-
-#[inline]
-pub fn pos_to_chunk_coord(pos: [f32; 2], chunk_size: f32) -> [i32; 2] {
-    [
-        (pos[0] / chunk_size).floor() as i32,
-        (pos[1] / chunk_size).floor() as i32,
-    ]
-}
-#[inline]
-pub fn position_to_chunk_coords(pos: Vec3, chunk_size: usize) -> (i32, i32) {
-    let cs = chunk_size as f32;
-    let cx = (pos.x / cs).floor() as i32;
-    let cz = (pos.z / cs).floor() as i32;
-    (cx, cz)
 }
 
 #[derive(Clone, Copy)]
@@ -781,67 +762,62 @@ pub struct Plane {
     pub d: f32,
 }
 
-impl Plane {
-    pub fn distance(&self, p: Vec3) -> f32 {
-        self.normal.dot(p) + self.d
-    }
-}
+pub fn extract_frustum_planes(view_proj: Mat4) -> [Plane; 6] {
+    let m = view_proj.transpose();
 
-pub fn extract_frustum_planes(view_proj: glam::Mat4) -> [Plane; 6] {
-    // glam is column-major; transpose to treat axes as rows.
-    let mt = view_proj.transpose();
-    let r0 = mt.x_axis; // row 0
-    let r1 = mt.y_axis; // row 1
-    let r2 = mt.z_axis; // row 2
-    let r3 = mt.w_axis; // row 3
+    let r0 = m.x_axis;
+    let r1 = m.y_axis;
+    let r2 = m.z_axis;
+    let r3 = m.w_axis;
 
-    // left, right, bottom, top, near, far
-    let eqs = [
-        r3 + r0,
-        r3 - r0,
-        r3 + r1,
-        r3 - r1,
-        r2,      // near: z >= 0   (wgpu/D3D/Vulkan)
-        r3 - r2, // far:  z <= w
+    let raw = [
+        r3 + r0, // left
+        r3 - r0, // right
+        r3 + r1, // bottom
+        r3 - r1, // top
+        r2,      // near (wgpu z >= 0)
+        r3 - r2, // far  (z <= w)
     ];
 
-    eqs.map(|v| {
-        let n = Vec3::new(v.x, v.y, v.z);
+    raw.map(|p| {
+        let n = Vec3::new(p.x, p.y, p.z);
         let inv_len = 1.0 / n.length();
+
         Plane {
             normal: n * inv_len,
-            d: v.w * inv_len,
+            d: p.w * inv_len,
         }
     })
 }
 
 pub fn aabb_in_frustum(planes: &[Plane; 6], min: Vec3, max: Vec3) -> bool {
-    // 0.5..2.0 meters is usually enough to remove micro-popping
-    let margin = 1.0_f32;
+    let center = (min + max) * 0.5;
+    let extents = (max - min) * 0.5;
+
+    const EPS: f32 = 0.5;
 
     for p in planes {
-        let vx = if p.normal.x >= 0.0 { max.x } else { min.x };
-        let vy = if p.normal.y >= 0.0 { max.y } else { min.y };
-        let vz = if p.normal.z >= 0.0 { max.z } else { min.z };
+        let r = extents.dot(p.normal.abs());
+        let s = p.normal.dot(center) + p.d;
 
-        if p.distance(Vec3::new(vx, vy, vz)) < -margin {
+        if s + r < -EPS {
             return false;
         }
     }
     true
 }
 
-const TERRAIN_MIN_Y: f32 = -4096.0;
-const TERRAIN_MAX_Y: f32 = 4096.0;
-
 #[inline]
-fn chunk_aabb_world(cx: i32, cz: i32, chunk_size: f32) -> (Vec3, Vec3) {
-    let x0 = cx as f32 * chunk_size;
-    let z0 = cz as f32 * chunk_size;
-    let min = Vec3::new(x0, TERRAIN_MIN_Y, z0);
-    let max = Vec3::new(x0 + chunk_size, TERRAIN_MAX_Y, z0 + chunk_size);
+fn chunk_aabb_render(cx: i32, cz: i32, cs: ChunkSize, eye: WorldPos) -> (Vec3, Vec3) {
+    let origin =
+        WorldPos::new(ChunkCoord::new(cx, cz), LocalPos::new(0.0, 0.0, 0.0)).to_render_pos(eye, cs);
+
+    let min = origin + Vec3::new(0.0, CHUNK_MIN_Y, 0.0);
+    let max = origin + Vec3::new(cs as f32, CHUNK_MAX_Y, cs as f32);
+
     (min, max)
 }
+
 #[derive(Default)]
 pub struct FrameTimings {
     pub drain_ms: f32,

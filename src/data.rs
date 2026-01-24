@@ -79,6 +79,8 @@ pub struct Settings {
     pub zoom_speed: f32,
     #[serde(default)]
     pub render_lanes_gizmo: bool,
+    #[serde(default)]
+    pub render_chunk_bounds: bool,
 }
 
 impl Default for Settings {
@@ -100,6 +102,7 @@ impl Default for Settings {
             shadow_map_size: 4096,
             zoom_speed: 10.0,
             render_lanes_gizmo: false,
+            render_chunk_bounds: false,
         }
     }
 }
