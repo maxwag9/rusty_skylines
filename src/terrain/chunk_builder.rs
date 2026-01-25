@@ -375,7 +375,31 @@ pub struct CpuChunkMesh {
     pub height_grid: Arc<ChunkHeightGrid>,
 }
 
+/// Pre-computed cell data for greedy meshing decisions
+#[derive(Clone, Copy)]
+struct CellData {
+    heights: [f32; 4], // Corner heights: [0,0], [1,0], [0,1], [1,1]
+    color: [f32; 3],   // Average color for merging comparison
+    flat_height: f32,  // Average height if flat
+    is_flat: bool,     // Can this cell participate in greedy merge?
+}
+
+/// Represents a merged rectangular region
+struct MergedQuad {
+    x: usize,
+    z: usize,
+    width: usize,
+    depth: usize,
+    height: f32,
+    color: [f32; 3],
+}
+
 impl ChunkBuilder {
+    // Tunable thresholds for greedy merging
+    const HEIGHT_TOLERANCE: f32 = 0.005; // Max height variance to consider "flat"
+    const COLOR_TOLERANCE: f32 = 0.02; // Max color difference per channel
+    const NORMAL_FLAT_THRESHOLD: f32 = 0.01; // Normal Y threshold for flat detection
+
     pub fn build_chunk_cpu(
         chunk_coord: ChunkCoord,
         chunk_size: ChunkSize,
@@ -389,108 +413,145 @@ impl ChunkBuilder {
         terrain_gen: &TerrainGenerator,
     ) -> Option<CpuChunkMesh> {
         let stepf = step as f32;
+        let step_usize = step as usize;
+        let inv_step = 1.0 / stepf;
 
         let verts_x = (chunk_size / step + 1) as usize;
         let verts_z = (chunk_size / step + 1) as usize;
+        let cells_x = verts_x - 1;
+        let cells_z = verts_z - 1;
+        let total_verts = verts_x * verts_z;
+        let total_cells = cells_x * cells_z;
 
-        let mut vertices = Vec::with_capacity(verts_x * verts_z);
-        let mut heights = vec![0.0f32; verts_x * verts_z];
+        // ═══════════════════════════════════════════════════════════════
+        // PHASE 1: Sample terrain data (heights + colors) with batching
+        // ═══════════════════════════════════════════════════════════════
+        let (heights, colors) = Self::sample_terrain_batch(
+            chunk_coord,
+            chunk_size,
+            step,
+            verts_x,
+            verts_z,
+            terrain_gen,
+        );
 
-        // 1. Populate heights (Inner Chunk Data)
-        for gx in 0..verts_x {
-            for gz in 0..verts_z {
-                // Local position within the chunk
-                let local_x = (gx * step as usize) as f32;
-                let local_z = (gz * step as usize) as f32;
-
-                let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
-
-                let h = terrain_gen.height(&world_pos, chunk_size);
-                heights[gx * verts_z + gz] = h;
-
-                let m = terrain_gen.moisture(&world_pos, h, chunk_size);
-                let color = terrain_gen.color(&world_pos, h, m, chunk_size);
-
-                // Store LOCAL position - rendering will offset by chunk position relative to camera
-                vertices.push(Vertex {
-                    local_position: [local_x, h, local_z],
-                    normal: [0.0, 1.0, 0.0], // Dummy normal
-                    color,
-                    chunk_xz: [chunk_coord.x, chunk_coord.z],
-                });
-            }
+        if !ChunkWorkerPool::still_current(version_atomic, version) {
+            return None;
         }
 
-        // 2. Compute Normals (Using Neighbor Lookups for Edges)
-        let inv = 1.0 / stepf;
-        for gx in 0..verts_x {
-            for gz in 0..verts_z {
-                let local_x = (gx * step as usize) as f32;
-                let local_z = (gz * step as usize) as f32;
+        // ═══════════════════════════════════════════════════════════════
+        // PHASE 2: Pre-compute normals for all vertices
+        // ═══════════════════════════════════════════════════════════════
+        let normals = Self::compute_normals_batch(
+            chunk_coord,
+            chunk_size,
+            step,
+            stepf,
+            inv_step,
+            verts_x,
+            verts_z,
+            &heights,
+            terrain_gen,
+        );
 
-                // --- X Axis Gradient ---
-                let h_l = if gx > 0 {
-                    heights[(gx - 1) * verts_z + gz]
-                } else {
-                    // Query generator for x - step (normalizes to previous chunk if needed)
-                    let pos =
-                        WorldPos::new(chunk_coord, LocalPos::new(local_x - stepf, 0.0, local_z))
-                            .normalize(chunk_size);
-                    terrain_gen.height(&pos, chunk_size)
-                };
-
-                let h_r = if gx < verts_x - 1 {
-                    heights[(gx + 1) * verts_z + gz]
-                } else {
-                    let pos =
-                        WorldPos::new(chunk_coord, LocalPos::new(local_x + stepf, 0.0, local_z))
-                            .normalize(chunk_size);
-                    terrain_gen.height(&pos, chunk_size)
-                };
-
-                // --- Z Axis Gradient ---
-                let h_d = if gz > 0 {
-                    heights[gx * verts_z + (gz - 1)]
-                } else {
-                    let pos =
-                        WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z - stepf))
-                            .normalize(chunk_size);
-                    terrain_gen.height(&pos, chunk_size)
-                };
-
-                let h_u = if gz < verts_z - 1 {
-                    heights[gx * verts_z + (gz + 1)]
-                } else {
-                    let pos =
-                        WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z + stepf))
-                            .normalize(chunk_size);
-                    terrain_gen.height(&pos, chunk_size)
-                };
-
-                // Central Difference
-                let dhdx = (h_r - h_l) * 0.5 * inv;
-                let dhdz = (h_u - h_d) * 0.5 * inv;
-
-                let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
-                vertices[gx * verts_z + gz].normal = [n.x, n.y, n.z];
-            }
+        if !ChunkWorkerPool::still_current(version_atomic, version) {
+            return None;
         }
 
-        // -------- indices --------
-        let mut indices = Vec::with_capacity((verts_x - 1) * (verts_z - 1) * 6);
-        for gx in 0..verts_x - 1 {
-            if gx & 0b1111 == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
+        // ═══════════════════════════════════════════════════════════════
+        // PHASE 3: Build cell classification for greedy meshing
+        // ═══════════════════════════════════════════════════════════════
+        let cells = Self::build_cell_data(cells_x, cells_z, verts_z, &heights, &colors);
+
+        // ═══════════════════════════════════════════════════════════════
+        // PHASE 4: Greedy meshing - merge flat regions
+        // ═══════════════════════════════════════════════════════════════
+        let mut merged = vec![false; total_cells];
+        let mut merged_quads: Vec<MergedQuad> = Vec::new();
+        let mut non_flat_cells: Vec<(usize, usize)> = Vec::new();
+
+        let cell_idx = |x: usize, z: usize| x * cells_z + z;
+
+        for cx in 0..cells_x {
+            if cx & 0xF == 0 && !ChunkWorkerPool::still_current(version_atomic, version) {
                 return None;
             }
 
-            for gz in 0..verts_z - 1 {
-                let i0 = (gx * verts_z + gz) as u32;
-                let i1 = ((gx + 1) * verts_z + gz) as u32;
-                let i2 = (gx * verts_z + gz + 1) as u32;
-                let i3 = ((gx + 1) * verts_z + gz + 1) as u32;
-                indices.extend_from_slice(&[i0, i1, i2, i2, i1, i3]);
+            for cz in 0..cells_z {
+                let idx = cell_idx(cx, cz);
+                if merged[idx] {
+                    continue;
+                }
+
+                let cell = &cells[idx];
+
+                if cell.is_flat {
+                    // Greedy expansion
+                    let (width, depth) = Self::find_max_rect(
+                        &cells,
+                        &merged,
+                        cx,
+                        cz,
+                        cells_x,
+                        cells_z,
+                        cell.flat_height,
+                        &cell.color,
+                    );
+
+                    // Mark all cells in the rectangle as merged
+                    for dx in 0..width {
+                        for dz in 0..depth {
+                            merged[cell_idx(cx + dx, cz + dz)] = true;
+                        }
+                    }
+
+                    merged_quads.push(MergedQuad {
+                        x: cx,
+                        z: cz,
+                        width,
+                        depth,
+                        height: cell.flat_height,
+                        color: cell.color,
+                    });
+                } else {
+                    merged[idx] = true;
+                    non_flat_cells.push((cx, cz));
+                }
             }
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // PHASE 5: Generate optimized mesh
+        // ═══════════════════════════════════════════════════════════════
+        let estimated_verts = merged_quads.len() * 4 + non_flat_cells.len() * 4;
+        let estimated_indices = merged_quads.len() * 6 + non_flat_cells.len() * 6;
+
+        let mut vertices = Vec::with_capacity(estimated_verts);
+        let mut indices = Vec::with_capacity(estimated_indices);
+
+        // Emit merged flat quads (huge savings!)
+        for quad in &merged_quads {
+            Self::emit_merged_quad(&mut vertices, &mut indices, chunk_coord, step_usize, quad);
+        }
+
+        // Emit non-flat cells with full vertex data
+        for &(cx, cz) in &non_flat_cells {
+            Self::emit_detailed_cell(
+                &mut vertices,
+                &mut indices,
+                chunk_coord,
+                step_usize,
+                cx,
+                cz,
+                verts_z,
+                &heights,
+                &colors,
+                &normals,
+            );
+        }
+
+        vertices.shrink_to_fit();
+        indices.shrink_to_fit();
 
         Some(CpuChunkMesh {
             chunk_coord,
@@ -507,6 +568,392 @@ impl ChunkBuilder {
         })
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // TERRAIN SAMPLING
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[inline]
+    fn sample_terrain_batch(
+        chunk_coord: ChunkCoord,
+        chunk_size: ChunkSize,
+        step: LodStep,
+        verts_x: usize,
+        verts_z: usize,
+        terrain_gen: &TerrainGenerator,
+    ) -> (Vec<f32>, Vec<[f32; 3]>) {
+        let step_usize = step as usize;
+        let total = verts_x * verts_z;
+
+        let mut heights = Vec::with_capacity(total);
+        let mut colors = Vec::with_capacity(total);
+
+        for gx in 0..verts_x {
+            let local_x = (gx * step_usize) as f32;
+
+            for gz in 0..verts_z {
+                let local_z = (gz * step_usize) as f32;
+                let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
+
+                let h = terrain_gen.height(&world_pos, chunk_size);
+                let m = terrain_gen.moisture(&world_pos, h, chunk_size);
+                let c = terrain_gen.color(&world_pos, h, m, chunk_size);
+
+                heights.push(h);
+                colors.push(c);
+            }
+        }
+
+        (heights, colors)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // NORMAL COMPUTATION
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn compute_normals_batch(
+        chunk_coord: ChunkCoord,
+        chunk_size: ChunkSize,
+        step: LodStep,
+        stepf: f32,
+        inv_step: f32,
+        verts_x: usize,
+        verts_z: usize,
+        heights: &[f32],
+        terrain_gen: &TerrainGenerator,
+    ) -> Vec<[f32; 3]> {
+        let total = verts_x * verts_z;
+        let mut normals = vec![[0.0f32, 1.0, 0.0]; total];
+        let step_usize = step as usize;
+
+        for gx in 0..verts_x {
+            let local_x = (gx * step_usize) as f32;
+
+            for gz in 0..verts_z {
+                let local_z = (gz * step_usize) as f32;
+                let idx = gx * verts_z + gz;
+
+                // Sample neighbors (with chunk boundary lookups)
+                let h_left = if gx > 0 {
+                    heights[(gx - 1) * verts_z + gz]
+                } else {
+                    Self::sample_neighbor_height(
+                        chunk_coord,
+                        chunk_size,
+                        terrain_gen,
+                        local_x - stepf,
+                        local_z,
+                    )
+                };
+
+                let h_right = if gx < verts_x - 1 {
+                    heights[(gx + 1) * verts_z + gz]
+                } else {
+                    Self::sample_neighbor_height(
+                        chunk_coord,
+                        chunk_size,
+                        terrain_gen,
+                        local_x + stepf,
+                        local_z,
+                    )
+                };
+
+                let h_back = if gz > 0 {
+                    heights[gx * verts_z + (gz - 1)]
+                } else {
+                    Self::sample_neighbor_height(
+                        chunk_coord,
+                        chunk_size,
+                        terrain_gen,
+                        local_x,
+                        local_z - stepf,
+                    )
+                };
+
+                let h_front = if gz < verts_z - 1 {
+                    heights[gx * verts_z + (gz + 1)]
+                } else {
+                    Self::sample_neighbor_height(
+                        chunk_coord,
+                        chunk_size,
+                        terrain_gen,
+                        local_x,
+                        local_z + stepf,
+                    )
+                };
+
+                // Central difference
+                let dhdx = (h_right - h_left) * 0.5 * inv_step;
+                let dhdz = (h_front - h_back) * 0.5 * inv_step;
+
+                let n = Vec3::new(-dhdx, 1.0, -dhdz).normalize();
+                normals[idx] = [n.x, n.y, n.z];
+            }
+        }
+
+        normals
+    }
+
+    #[inline]
+    fn sample_neighbor_height(
+        chunk_coord: ChunkCoord,
+        chunk_size: ChunkSize,
+        terrain_gen: &TerrainGenerator,
+        local_x: f32,
+        local_z: f32,
+    ) -> f32 {
+        let pos =
+            WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z)).normalize(chunk_size);
+        terrain_gen.height(&pos, chunk_size)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CELL DATA CONSTRUCTION
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn build_cell_data(
+        cells_x: usize,
+        cells_z: usize,
+        verts_z: usize,
+        heights: &[f32],
+        colors: &[[f32; 3]],
+    ) -> Vec<CellData> {
+        let total_cells = cells_x * cells_z;
+        let mut cells = Vec::with_capacity(total_cells);
+
+        for cx in 0..cells_x {
+            for cz in 0..cells_z {
+                let i00 = cx * verts_z + cz;
+                let i10 = (cx + 1) * verts_z + cz;
+                let i01 = cx * verts_z + (cz + 1);
+                let i11 = (cx + 1) * verts_z + (cz + 1);
+
+                let h = [heights[i00], heights[i10], heights[i01], heights[i11]];
+
+                // Fast min/max without branching
+                let min_h = h[0].min(h[1]).min(h[2]).min(h[3]);
+                let max_h = h[0].max(h[1]).max(h[2]).max(h[3]);
+                let height_range = max_h - min_h;
+                let is_flat = height_range <= Self::HEIGHT_TOLERANCE;
+
+                // Compute average color
+                let c00 = colors[i00];
+                let c10 = colors[i10];
+                let c01 = colors[i01];
+                let c11 = colors[i11];
+
+                let avg_color = [
+                    (c00[0] + c10[0] + c01[0] + c11[0]) * 0.25,
+                    (c00[1] + c10[1] + c01[1] + c11[1]) * 0.25,
+                    (c00[2] + c10[2] + c01[2] + c11[2]) * 0.25,
+                    //(c00[3] + c10[3] + c01[3] + c11[3]) * 0.25,
+                ];
+
+                cells.push(CellData {
+                    heights: h,
+                    color: avg_color,
+                    flat_height: (min_h + max_h) * 0.5,
+                    is_flat,
+                });
+            }
+        }
+
+        cells
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // GREEDY RECTANGLE FINDING (Core algorithm)
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn find_max_rect(
+        cells: &[CellData],
+        merged: &[bool],
+        start_x: usize,
+        start_z: usize,
+        cells_x: usize,
+        cells_z: usize,
+        ref_height: f32,
+        ref_color: &[f32; 3],
+    ) -> (usize, usize) {
+        let cell_idx = |x: usize, z: usize| x * cells_z + z;
+
+        // Step 1: Expand in Z direction (find max depth)
+        let mut depth = 1usize;
+        while start_z + depth < cells_z {
+            let idx = cell_idx(start_x, start_z + depth);
+            if !Self::can_merge_cell(merged, cells, idx, ref_height, ref_color) {
+                break;
+            }
+            depth += 1;
+        }
+
+        // Step 2: Expand in X direction (must validate entire column each time)
+        let mut width = 1usize;
+        'expand_x: while start_x + width < cells_x {
+            // Check all cells in this column within our depth
+            for dz in 0..depth {
+                let idx = cell_idx(start_x + width, start_z + dz);
+                if !Self::can_merge_cell(merged, cells, idx, ref_height, ref_color) {
+                    break 'expand_x;
+                }
+            }
+            width += 1;
+        }
+
+        (width, depth)
+    }
+
+    #[inline(always)]
+    fn can_merge_cell(
+        merged: &[bool],
+        cells: &[CellData],
+        idx: usize,
+        ref_height: f32,
+        ref_color: &[f32; 3],
+    ) -> bool {
+        if merged[idx] {
+            return false;
+        }
+
+        let cell = &cells[idx];
+
+        cell.is_flat
+            && (cell.flat_height - ref_height).abs() <= Self::HEIGHT_TOLERANCE
+            && Self::colors_match(ref_color, &cell.color)
+    }
+
+    #[inline(always)]
+    fn colors_match(a: &[f32; 3], b: &[f32; 3]) -> bool {
+        let dr = (a[0] - b[0]).abs();
+        let dg = (a[1] - b[1]).abs();
+        let db = (a[2] - b[2]).abs();
+
+        dr <= Self::COLOR_TOLERANCE && dg <= Self::COLOR_TOLERANCE && db <= Self::COLOR_TOLERANCE
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MESH EMISSION
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[inline]
+    fn emit_merged_quad(
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        chunk_coord: ChunkCoord,
+        step: usize,
+        quad: &MergedQuad,
+    ) {
+        let base = vertices.len() as u32;
+
+        let x0 = (quad.x * step) as f32;
+        let z0 = (quad.z * step) as f32;
+        let x1 = ((quad.x + quad.width) * step) as f32;
+        let z1 = ((quad.z + quad.depth) * step) as f32;
+
+        let normal = [0.0, 1.0, 0.0];
+        let chunk_xz = [chunk_coord.x, chunk_coord.z];
+        let h = quad.height;
+        let c = quad.color;
+
+        // 4 vertices with quad-local UVs for edge detection
+        vertices.extend_from_slice(&[
+            Vertex {
+                local_position: [x0, h, z0],
+                normal,
+                color: c,
+                chunk_xz,
+                quad_uv: [0.0, 0.0],
+            },
+            Vertex {
+                local_position: [x1, h, z0],
+                normal,
+                color: c,
+                chunk_xz,
+                quad_uv: [1.0, 0.0],
+            },
+            Vertex {
+                local_position: [x0, h, z1],
+                normal,
+                color: c,
+                chunk_xz,
+                quad_uv: [0.0, 1.0],
+            },
+            Vertex {
+                local_position: [x1, h, z1],
+                normal,
+                color: c,
+                chunk_xz,
+                quad_uv: [1.0, 1.0],
+            },
+        ]);
+
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
+    }
+
+    #[inline]
+    fn emit_detailed_cell(
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+        chunk_coord: ChunkCoord,
+        step: usize,
+        cx: usize,
+        cz: usize,
+        verts_z: usize,
+        heights: &[f32],
+        colors: &[[f32; 3]],
+        normals: &[[f32; 3]],
+    ) {
+        let base = vertices.len() as u32;
+
+        let x0 = (cx * step) as f32;
+        let z0 = (cz * step) as f32;
+        let x1 = ((cx + 1) * step) as f32;
+        let z1 = ((cz + 1) * step) as f32;
+
+        let i00 = cx * verts_z + cz;
+        let i10 = (cx + 1) * verts_z + cz;
+        let i01 = cx * verts_z + (cz + 1);
+        let i11 = (cx + 1) * verts_z + (cz + 1);
+
+        let chunk_xz = [chunk_coord.x, chunk_coord.z];
+
+        vertices.extend_from_slice(&[
+            Vertex {
+                local_position: [x0, heights[i00], z0],
+                normal: normals[i00],
+                color: colors[i00],
+                chunk_xz,
+                quad_uv: [0.0, 0.0],
+            },
+            Vertex {
+                local_position: [x1, heights[i10], z0],
+                normal: normals[i10],
+                color: colors[i10],
+                chunk_xz,
+                quad_uv: [1.0, 0.0],
+            },
+            Vertex {
+                local_position: [x0, heights[i01], z1],
+                normal: normals[i01],
+                color: colors[i01],
+                chunk_xz,
+                quad_uv: [0.0, 1.0],
+            },
+            Vertex {
+                local_position: [x1, heights[i11], z1],
+                normal: normals[i11],
+                color: colors[i11],
+                chunk_xz,
+                quad_uv: [1.0, 1.0],
+            },
+        ]);
+
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // HEIGHT GRID (unchanged but optimized)
+    // ═══════════════════════════════════════════════════════════════════
+
     pub fn build_height_grid(
         chunk_coord: ChunkCoord,
         chunk_size: ChunkSize,
@@ -520,16 +967,15 @@ impl ChunkBuilder {
         let mut heights = vec![0.0f32; nx * nz];
 
         for x in 0..nx {
+            let local_x = x as f32 * cell_size_f;
             for z in 0..nz {
-                let local_x = x as f32 * cell_size_f;
                 let local_z = z as f32 * cell_size_f;
-
                 let pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
                 heights[x * nz + z] = terrain_gen.height(&pos, chunk_size);
             }
         }
 
-        // 8x8 logical cell patches
+        // Build 8x8 patch min/max for fast culling
         let patch_cells = 8usize;
         let px = (nx - 1) / patch_cells;
         let pz = (nz - 1) / patch_cells;
@@ -545,9 +991,11 @@ impl ChunkBuilder {
                     for lz in 0..=patch_cells {
                         let gx = px_i * patch_cells + lx;
                         let gz = pz_i * patch_cells + lz;
-                        let h = heights[gx * nz + gz];
-                        min_y = min_y.min(h);
-                        max_y = max_y.max(h);
+                        if gx < nx && gz < nz {
+                            let h = heights[gx * nz + gz];
+                            min_y = min_y.min(h);
+                            max_y = max_y.max(h);
+                        }
                     }
                 }
 
@@ -568,19 +1016,18 @@ impl ChunkBuilder {
 }
 
 pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
-    // distance in chunks
-    // sqrt(dist2) gives number of chunks away
+    let d = (dist2_chunks as f32).sqrt() * 8.0;
 
-    if dist2_chunks < 1 {
-        1 // same chunk
-    } else if dist2_chunks < 4 {
-        2 // < 2 chunks
-    } else if dist2_chunks < 12 {
-        4 // < 4 chunks
-    } else if dist2_chunks < 48 {
-        8 // < 8 chunks
-    } else if dist2_chunks < 128 {
-        16 // < 16 chunks
+    if d < 1.5 {
+        1
+    } else if d < 3.0 {
+        2
+    } else if d < 6.0 {
+        4
+    } else if d < 12.0 {
+        8
+    } else if d < 24.0 {
+        16
     } else {
         32
     }

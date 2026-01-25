@@ -554,6 +554,7 @@ pub(crate) struct Vertex {
     pub normal: [f32; 3],
     pub(crate) color: [f32; 3],
     pub(crate) chunk_xz: [i32; 2], // NEW
+    pub quad_uv: [f32; 2],         // NEW: 0-1 coordinates within each quad
 }
 
 impl Vertex {
@@ -587,6 +588,12 @@ impl Vertex {
                     offset: 36,
                     format: VertexFormat::Sint32x2,
                 },
+                // @location(4) quad_uv
+                VertexAttribute {
+                    shader_location: 4,
+                    offset: 44,
+                    format: VertexFormat::Float32x2,
+                },
             ],
         }
     }
@@ -604,8 +611,8 @@ impl VertexWithPosition for Vertex {
     // produce a vertex that is a linear interpolation between a and b with factor t in [0,1]
     // must interpolate all vertex attributes consistently (position, normal, color).
     fn lerp(a: &Self, b: &Self, t: f32) -> Self {
-        // Linear interpolation helper
-        fn mix(x: [f32; 3], y: [f32; 3], t: f32) -> [f32; 3] {
+        // Linear interpolation helper for [f32; 3]
+        fn mix3(x: [f32; 3], y: [f32; 3], t: f32) -> [f32; 3] {
             [
                 x[0] + (y[0] - x[0]) * t,
                 x[1] + (y[1] - x[1]) * t,
@@ -613,9 +620,15 @@ impl VertexWithPosition for Vertex {
             ]
         }
 
-        let position = mix(a.local_position, b.local_position, t);
-        let mut normal = mix(a.normal, b.normal, t);
-        let color = mix(a.color, b.color, t);
+        // Linear interpolation helper for [f32; 2]
+        fn mix2(x: [f32; 2], y: [f32; 2], t: f32) -> [f32; 2] {
+            [x[0] + (y[0] - x[0]) * t, x[1] + (y[1] - x[1]) * t]
+        }
+
+        let position = mix3(a.local_position, b.local_position, t);
+        let mut normal = mix3(a.normal, b.normal, t);
+        let color = mix3(a.color, b.color, t);
+        let quad_uv = mix2(a.quad_uv, b.quad_uv, t);
 
         // Normalize normal
         let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
@@ -624,12 +637,16 @@ impl VertexWithPosition for Vertex {
             normal[1] /= len;
             normal[2] /= len;
         }
+
+        // For chunk_xz, pick based on which vertex we're closer to
         let chunk_xz = if t <= 0.5 { a.chunk_xz } else { b.chunk_xz };
+
         Vertex {
             local_position: position,
             normal,
             color,
             chunk_xz,
+            quad_uv,
         }
     }
 }

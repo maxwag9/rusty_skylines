@@ -9,10 +9,10 @@ struct Uniforms {
     cascade_splits: vec4<f32>,
     sun_direction: vec3<f32>,
     time: f32,
-    camera_local: vec3<f32>, // eye_world.local (x,y,z) where x/z are within chunk
+    camera_local: vec3<f32>,
     chunk_size: f32,
-    camera_chunk: vec2<i32>, // eye_world.chunk (x,z)
-    _pad_cam: vec2<i32>,     // padding to 16 bytes
+    camera_chunk: vec2<i32>,
+    _pad_cam: vec2<i32>,
     moon_direction: vec3<f32>,
     orbit_radius: f32,
 };
@@ -36,24 +36,23 @@ struct PickUniform {
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) color: vec3<f32>,
-    @location(3) chunk_xz: vec2<i32>, // NEW
+    @location(2) color: vec4<f32>,
+    @location(3) chunk_xz: vec2<i32>,
+    @location(4) quad_uv: vec2<f32>,  // NEW: 0-1 within each quad
 };
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) world_normal: vec3<f32>,
     @location(1) color: vec3<f32>,
-
-    // This is now *render-space* position (relative to camera eye)
     @location(2) world_pos: vec3<f32>,
+    @location(3) quad_uv: vec2<f32>,  // For edge detection
 };
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
 
-    // ----- render-space position (WorldPos - EyeWorldPos) -----
     let dc: vec2<i32> = in.chunk_xz - uniforms.camera_chunk;
 
     let rx = f32(dc.x) * uniforms.chunk_size + (in.position.x - uniforms.camera_local.x);
@@ -64,23 +63,21 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     out.position = uniforms.view_proj * vec4<f32>(render_pos, 1.0);
     out.world_pos = render_pos;
+    out.quad_uv = in.quad_uv;
 
     out.world_normal = normalize(in.normal);
-    out.color = in.color;
+    out.color = in.color.rgb;
     return out;
 }
 
-// Cheap high-quality hash
 fn hash2(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
 }
 
-// Quintic smoothstep for buttery noise
 fn quintic(t: f32) -> f32 {
     return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 }
 
-// Value noise 0-1
 fn value_noise(p: vec2<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
@@ -95,7 +92,6 @@ fn value_noise(p: vec2<f32>) -> f32 {
     return mix(mix(a, b, ux), mix(c, d, ux), uy);
 }
 
-// 4-octave rotated FBM for organic broad patterns
 fn fbm(p_in: vec2<f32>) -> f32 {
     let ROT = mat2x2<f32>(vec2(0.8, 0.6), vec2(-0.6, 0.8));
     var acc: f32 = 0.0;
@@ -109,6 +105,12 @@ fn fbm(p_in: vec2<f32>) -> f32 {
     }
     return acc;
 }
+
+// Edge rendering constants
+const EDGE_WIDTH: f32 = 0.005;       // Width as fraction of quad (0.02 = 2% of quad width)
+const EDGE_COLOR: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);  // Black edges
+const EDGE_ENABLED: bool = true;
+const SHOW_DIAGONAL: bool = true;   // Show triangle diagonal too
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
@@ -125,7 +127,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Basic diffuse + wrapped for grass
     let ndotl = dot(n, l);
     let diffuse = max(ndotl, 0.0);
-    let wrapped = saturate(ndotl + 0.4) / 1.4; // Soft subsurface feel
+    let wrapped = saturate(ndotl + 0.4) / 1.4;
 
     // Shadow
     let shadow = fetch_shadow(in.world_pos, n, l);
@@ -144,8 +146,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     let grass_uv1 = in.world_pos.xz * grass_uv_scale1;
 
-    // Rotate second sample to break alignment
-    let rot_angle: f32 = 0.615; // ~35 degrees, tweak if you want
+    let rot_angle: f32 = 0.615;
     let ca = cos(rot_angle);
     let sa = sin(rot_angle);
     let rot = mat2x2<f32>(ca, -sa, sa, ca);
@@ -154,16 +155,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let grass_a = textureSample(grass_tex, material_sampler, grass_uv1).rgb;
     let grass_b = textureSample(grass_tex2, material_sampler, grass_uv2).rgb;
 
-    // Organic broad mixing — lower mix_scale = broader patches
-    let mix_scale: f32 = 0.4; // Try 0.2-0.8 range
+    let mix_scale: f32 = 0.4;
     let mix_offset = vec2<f32>(42.0, 87.0);
     let mix_p = in.world_pos.xz * mix_scale + mix_offset;
     let mix_noise = fbm(mix_p);
-    let tex_mix = mix_noise;
 
-    let grass_color = mix(grass_a, grass_b, tex_mix);
-
-    // Apply procedural grass detail where it belongs
+    let grass_color = mix(grass_a, grass_b, mix_noise);
     let albedo = mix(in.color, grass_color, grass_amount);
 
     // Final lighting
@@ -176,6 +173,35 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let t = 1.0 - smoothstep(0.0, pick.radius, d);
             final_color += pick.color * t;
         }
+    }
+
+    // ============ MESH EDGE VISUALIZATION ============
+    if (EDGE_ENABLED) {
+        let uv = in.quad_uv;
+
+        // Distance to quad edges (0 at edge, 0.5 at center)
+        let d_left   = uv.x;
+        let d_right  = 1.0 - uv.x;
+        let d_bottom = uv.y;
+        let d_top    = 1.0 - uv.y;
+
+        // Minimum distance to any quad edge
+        var edge_dist = min(min(d_left, d_right), min(d_bottom, d_top));
+
+        // Optionally show triangle diagonal (the line from (0,1) to (1,0) or (0,0) to (1,1))
+        if (SHOW_DIAGONAL) {
+            // Diagonal from (1,0) to (0,1): line equation x + y = 1
+            // Distance to this line: |x + y - 1| / sqrt(2)
+            let diag_dist = abs(uv.x + uv.y - 1.0) * 0.7071067811865476; // 1/sqrt(2)
+            edge_dist = min(edge_dist, diag_dist);
+        }
+
+        // Anti-aliased edge (fwidth must be called directly in fragment shader)
+        let edge_w = fwidth(edge_dist);
+        let edge_threshold = max(edge_w * 1.5, EDGE_WIDTH);
+        let edge_factor = smoothstep(0.0, edge_threshold, edge_dist);
+
+        final_color = mix(EDGE_COLOR, final_color, edge_factor);
     }
 
     return vec4<f32>(final_color, 1.0);
@@ -196,7 +222,6 @@ fn project_to_shadow(cascade: u32, world_pos: vec3<f32>) -> vec3<f32> {
     let uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
     return vec3<f32>(uv, ndc.z);
 }
-
 
 fn shadow_pcf(cascade: u32, uv: vec2<f32>, depth: f32) -> f32 {
     let dims = vec2<f32>(textureDimensions(t_shadow, 0));
@@ -269,10 +294,10 @@ fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
     let c1 = c0 + 1u;
     let s1 = shadow_for_cascade(c1, world_pos, N, L);
 
-    // one-sided blend: never brighten
     return mix(min(s0, s1), s0, fade);
 }
-const SHADOW_FADE_UV: f32 = 0.05;   // how wide the blend band is near cascade edge
-const PCF_RADIUS: f32 = 1.5;       // in texels, consistent across cascades
+
+const SHADOW_FADE_UV: f32 = 0.05;
+const PCF_RADIUS: f32 = 1.5;
 const BASE_BIAS: f32 = 0.000002;
 const SLOPE_BIAS: f32 = 0.0005;

@@ -1082,9 +1082,9 @@ fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32,
         indices.push(i1);
         indices.push(i2);
     } else {
-        indices.push(i0);
         indices.push(i2);
         indices.push(i1);
+        indices.push(i0);
     }
 }
 

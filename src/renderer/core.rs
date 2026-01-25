@@ -146,7 +146,7 @@ impl RenderCore {
                 label: Some("Render Encoder"),
             });
 
-        // self.execute_shadow_pass(&mut encoder, camera, aspect, time);
+        //self.execute_shadow_pass(&mut encoder, camera, aspect, time);
         self.execute_main_pass(
             &mut encoder,
             &surface_view,
@@ -259,9 +259,9 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         astronomy: &AstronomyState,
     ) {
-        let eye = camera.eye_world();
+        let eye = camera.target;
         let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
-        println!("{}", target_pos_render);
+        //println!("{}", target_pos_render);
         ui_loader
             .variables
             .set_i32("target_pos_cx", camera.target.chunk.x);

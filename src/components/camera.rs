@@ -21,7 +21,7 @@ impl Camera {
             orbit_radius: 50.0,
             yaw: -230f32.to_radians(),
             pitch: 52f32.to_radians(),
-            near: 5.5,
+            near: 2.5,
             far: 10_000.0,
             fov: 80.0,
             chunk_size: 256,

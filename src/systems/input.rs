@@ -75,13 +75,27 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     if cam_ctrl.zoom_velocity.abs() > 0.00001 {
         let r = camera.orbit_radius;
 
+        // Target planes
+        let min_near = 0.0001;
+        let near_scale = 0.004; // 0.2% of radius
+        let far_scale = 400.0;
+
+        let target_near = (r * near_scale).max(min_near);
+        let target_far = (r * far_scale).max(target_near * 10.0);
+
+        // Smooth to avoid popping
+        let smooth = 1.0 - (-dt * 12.0).exp();
+        camera.near += (target_near - camera.near) * smooth;
+        camera.far += (target_far - camera.far) * smooth;
+
         // Adaptive zoom step
-        let base_step = 0.05; // meters, allows crawling near 1 m
+        let base_step = 0.005; // meters, allows crawling near 1 m
         let scale_step = r * 0.45; // exponential feel at distance
         let zoom_step = (base_step + scale_step) * cam_ctrl.zoom_velocity * dt;
 
-        camera.orbit_radius = (r + zoom_step).clamp(1.0, 100_000.0);
+        camera.orbit_radius = (r + zoom_step).clamp(camera.near * 2.0, camera.far * 0.8);
 
+        //println!("{} {}", camera.near, camera.far);
         // Radius-aware damping
         let damping = cam_ctrl.zoom_damping * (1.0 + (r / 500.0).sqrt());
         cam_ctrl.zoom_velocity *= (1.0 - damping * dt).max(0.0);

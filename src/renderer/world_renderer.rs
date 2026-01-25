@@ -20,7 +20,7 @@ use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 pub struct ChunkCoords {
     chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
-    dist2: i32,
+    dist3: i32,
 }
 pub struct VisibleChunk {
     pub coords: ChunkCoords,
@@ -34,7 +34,7 @@ pub struct PickedPoint {
 #[derive(Clone, Copy)]
 struct FrameState {
     cs: ChunkSize,
-    cam_chunk_coord: ChunkCoord,
+    cam_pos: WorldPos,
     planes: [Plane; 6],
     r2_render: i32,
     r2_gen: i32,
@@ -70,7 +70,7 @@ pub struct TerrainRenderer {
     pub visible: Vec<VisibleChunk>,
     pub terrain_editing_enabled: bool,
 }
-
+const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl TerrainRenderer {
     pub fn new(device: &Device, settings: &Settings) -> Self {
         let mut terrain_params = TerrainParams::default();
@@ -169,7 +169,7 @@ impl TerrainRenderer {
         self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.visible.sort_unstable_by_key(|v| v.coords.dist2);
+        self.visible.sort_unstable_by_key(|v| v.coords.dist3);
         self.frame_timings.sort_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -247,7 +247,7 @@ impl TerrainRenderer {
     fn frame_state(&self, camera: &Camera, aspect: f32) -> FrameState {
         let cs = self.chunk_size;
 
-        let cam_pos = camera.target;
+        let cam_pos = camera.eye_world();
         let cam_cx = cam_pos.chunk.x;
         let cam_cz = cam_pos.chunk.z;
 
@@ -259,7 +259,7 @@ impl TerrainRenderer {
 
         FrameState {
             cs,
-            cam_chunk_coord: ChunkCoord::new(cam_cx, cam_cz),
+            cam_pos,
             planes,
             r2_render: r_render * r_render,
             r2_gen: r_gen * r_gen,
@@ -354,19 +354,20 @@ impl TerrainRenderer {
         let mut visible = Vec::new();
         for &chunk_coord in &self.spiral {
             let (dx, dz) = (chunk_coord.x, chunk_coord.z);
-            let dist2 = dx * dx + dz * dz;
-            if dist2 > frame.r2_render {
+            //let dy =
+            let dist3 = dx * dx + dz * dz;
+            if dist3 > frame.r2_render {
                 continue;
             }
-            let cx = frame.cam_chunk_coord.x + dx;
-            let cz = frame.cam_chunk_coord.z + dz;
+            let cx = frame.cam_pos.chunk.x + dx;
+            let cz = frame.cam_pos.chunk.z + dz;
 
             let (min, max) = chunk_aabb_render(cx, cz, frame.cs, camera.eye_world());
             if aabb_in_frustum(&frame.planes, min, max) {
                 visible.push(VisibleChunk {
                     coords: ChunkCoords {
                         chunk_coord: ChunkCoord::new(cx, cz),
-                        dist2,
+                        dist3,
                     },
                     id: chunk_coord_to_id(cx, cz),
                 });
@@ -379,10 +380,10 @@ impl TerrainRenderer {
         self.lod_map.clear();
 
         for v in self.visible.iter() {
-            let step = if v.coords.dist2 > r2_gen {
+            let step = if v.coords.dist3 > r2_gen {
                 lod_step_for_distance(r2_gen + 1)
             } else {
-                lod_step_for_distance(v.coords.dist2)
+                lod_step_for_distance(v.coords.dist3)
             };
             self.lod_map.insert(v.coords.chunk_coord, step);
         }
@@ -560,8 +561,8 @@ impl TerrainRenderer {
             if visible_set.contains(&coord) {
                 continue;
             }
-            let dx = chunk_coord.x - frame.cam_chunk_coord.x;
-            let dz = chunk_coord.z - frame.cam_chunk_coord.z;
+            let dx = chunk_coord.x - frame.cam_pos.chunk.x;
+            let dz = chunk_coord.z - frame.cam_pos.chunk.z;
             if dx * dx + dz * dz > r2 {
                 to_remove.push(coord);
             }
@@ -604,6 +605,35 @@ impl TerrainRenderer {
                 per_page[p].push(chunk.handle);
             }
         }
+        let mut total_indices: usize = 0;
+        let mut total_vertices: usize = 0;
+
+        for handles in &per_page {
+            for h in handles {
+                let count = if underwater {
+                    h.index_count_under as usize
+                } else {
+                    h.index_count_above as usize
+                };
+
+                total_indices += count;
+
+                // Worst-case but correct for GPU memory usage
+                // base_vertex + max index touched
+                total_vertices += count; // triangles already expanded
+            }
+        }
+
+        let index_bytes = total_indices * 4;
+        let vertex_bytes = total_vertices * VERTEX_SIZE_BYTES;
+        let total_bytes = index_bytes + vertex_bytes;
+
+        println!(
+            "render: {} vertices, {} indices, {:.2} KB total",
+            total_vertices,
+            total_indices,
+            total_bytes as f32 / 1024.0
+        );
 
         for (pi, handles) in per_page.iter().enumerate() {
             if handles.is_empty() {
@@ -683,7 +713,7 @@ impl TerrainRenderer {
                     let visible_chunk = VisibleChunk {
                         coords: ChunkCoords {
                             chunk_coord,
-                            dist2: 0,
+                            dist3: 0,
                         },
                         id: chunk_coord_to_id(cx, cz),
                     };
