@@ -214,6 +214,10 @@ fn shadow_for_cascade(
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z < 0.0 || z > 1.0) {
         return 1.0;
     }
+    // If shadow map is cleared/unused, NO SHADOW1!
+    if (z >= 0.9999) {
+        return 1.0;
+    }
 
     let ndotl = saturate(dot(N, L));
     let bias = BASE_BIAS + SLOPE_BIAS * (1.0 - ndotl);

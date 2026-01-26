@@ -1,10 +1,14 @@
+use crate::events::Event;
 use crate::paths::data_dir;
+use crate::renderer::world_renderer::CursorMode;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
 use crate::systems::input::camera_input_system;
-use crate::systems::physics::simulation_system;
 use crate::systems::render::render_system;
+use crate::systems::simulation::simulation_system;
+use crate::systems::small_systems::*;
 use crate::systems::ui::ui_system;
+use crate::terrain::roads::road_structs::RoadType;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
@@ -77,6 +81,18 @@ impl Schedule {
             system(world, resources);
         }
     }
+    pub fn run_events(&self, world: &mut World, resources: &mut Resources) {
+        resources.events.flip();
+
+        for event in resources.events.drain() {
+            // order is explicit and intentional
+            resources.simulation.process_event(&event);
+            cursor_system(&mut resources.renderer.core.terrain_renderer.cursor, &event);
+            // later:
+            // audio_event_system(...)
+            // ui_event_system(...)
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -135,7 +151,9 @@ impl ApplicationHandler for App {
                 let Some(resources) = self.resources.as_mut() else {
                     return;
                 };
-
+                let variables = &mut resources.ui_loader.variables;
+                let settings = &mut resources.settings;
+                let ui_options = &mut resources.ui_loader.touch_manager.options;
                 let input = &mut resources.input;
                 let down = event.state == ElementState::Pressed;
 
@@ -181,54 +199,35 @@ impl ApplicationHandler for App {
 
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
-                    resources.settings.editor_mode = !resources.settings.editor_mode;
-                    resources.ui_loader.touch_manager.editor.enabled =
-                        resources.settings.editor_mode;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_bool("editor_mode", resources.settings.editor_mode)
+                    settings.editor_mode = !settings.editor_mode;
+                    resources.ui_loader.touch_manager.editor.enabled = settings.editor_mode;
+                    variables.set_bool("editor_mode", settings.editor_mode);
+                    settings.show_world = !settings.editor_mode;
+                    variables.set_bool("show_world", settings.show_world);
+                    settings.show_gui = true;
+                    variables.set_bool("show_gui", settings.show_gui);
                 }
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
-                    resources.settings.override_mode = !resources.settings.override_mode;
-                    resources.ui_loader.touch_manager.options.override_mode =
-                        resources.settings.override_mode;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_bool("override_mode", resources.settings.override_mode)
+                    settings.override_mode = !settings.override_mode;
+                    ui_options.override_mode = settings.override_mode;
+                    variables.set_bool("override_mode", settings.override_mode)
                 }
                 if input.action_repeat("Toggle show world") {
-                    resources.settings.show_world = !resources.settings.show_world;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_bool("show_world", resources.settings.show_world);
+                    settings.show_world = !settings.show_world;
+                    variables.set_bool("show_world", settings.show_world);
                 }
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
-                    resources.settings.show_gui = !resources.settings.show_gui;
-                    resources.ui_loader.touch_manager.options.show_gui =
-                        resources.settings.show_gui;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_bool("show_gui", resources.settings.show_gui);
-                    resources.settings.override_mode = false;
-                    resources.ui_loader.touch_manager.options.override_mode =
-                        resources.settings.override_mode;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_bool("override_mode", resources.settings.override_mode);
-                    resources.settings.editor_mode = false;
-                    resources.ui_loader.touch_manager.editor.enabled =
-                        resources.settings.editor_mode;
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_bool("editor_mode", resources.settings.editor_mode)
+                    settings.show_gui = !settings.show_gui;
+                    ui_options.show_gui = settings.show_gui;
+                    variables.set_bool("show_gui", settings.show_gui);
+                    settings.override_mode = false;
+                    ui_options.override_mode = settings.override_mode;
+                    variables.set_bool("override_mode", settings.override_mode);
+                    settings.editor_mode = false;
+                    resources.ui_loader.touch_manager.editor.enabled = settings.editor_mode;
+                    variables.set_bool("editor_mode", settings.editor_mode)
                 }
 
                 // Save GUI
@@ -241,14 +240,26 @@ impl ApplicationHandler for App {
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
                     }
                 }
-
+                if input.action_pressed_once("Toggle Cursor Mode") {
+                    match resources.renderer.core.terrain_renderer.cursor.mode {
+                        CursorMode::Roads(_) => resources
+                            .events
+                            .send(Event::SetCursorMode(CursorMode::TerrainEditing)),
+                        CursorMode::TerrainEditing => resources
+                            .events
+                            .send(Event::SetCursorMode(CursorMode::None)),
+                        CursorMode::None => resources
+                            .events
+                            .send(Event::SetCursorMode(CursorMode::Roads(RoadType::default()))),
+                    }
+                }
                 if input.action_pressed_once("Leave Game") {
-                    resources.settings.total_game_time = resources.time.total_game_time;
-                    match resources.settings.save(data_dir("settings.toml")) {
+                    settings.total_game_time = resources.time.total_game_time;
+                    match settings.save(data_dir("settings.toml")) {
                         Ok(_) => println!("Settings saved"),
                         Err(e) => eprintln!("Failed to save Settings: {e}"),
                     }
-                    if resources.settings.show_world {
+                    if settings.show_world {
                         match resources
                             .renderer
                             .core
@@ -403,6 +414,7 @@ impl ApplicationHandler for App {
                         resources.time.sim_dt = resources.time.sim_target_step;
 
                         self.schedule.run_inputs(world, resources);
+                        self.schedule.run_events(world, resources);
                         self.schedule.run_sim(world, resources);
                         resources.time.sim_accumulator -= resources.time.sim_target_step;
                     }

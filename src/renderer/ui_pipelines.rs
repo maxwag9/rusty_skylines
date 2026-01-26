@@ -1,21 +1,20 @@
+use crate::paths::shader_dir;
 use crate::renderer::pipelines::load_shader;
 use crate::renderer::ui::ScreenUniform;
 use crate::renderer::ui_text_rendering::TextAtlas;
 use crate::ui::helper::{make_pipeline, make_storage_layout, make_uniform_layout};
 use crate::ui::vertex::{UiVertexPoly, UiVertexText};
-use std::path::{Path, PathBuf};
-use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
-    *,
-};
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::*;
 use winit::dpi::PhysicalSize;
 
 pub struct UiPipelines {
     pub device: Device,
-    pub(crate) uniform_buffer: Buffer,
-    pub(crate) uniform_bind_group: BindGroup,
+    pub uniform_layout: BindGroupLayout,
+    pub uniform_buffer: Buffer,
+    pub uniform_bind_group: BindGroup,
 
-    pub(crate) msaa_samples: u32,
+    pub msaa_samples: u32,
 
     format: TextureFormat,
     pub vertex_buffer: Buffer,
@@ -51,8 +50,6 @@ pub struct UiPipelines {
     pub outline_pipeline_layout: PipelineLayout,
     pub good_blend: Option<BlendState>,
     pub additive_blend: BlendState,
-
-    shader_dir: PathBuf,
 }
 
 impl UiPipelines {
@@ -61,7 +58,6 @@ impl UiPipelines {
         format: TextureFormat,
         msaa_samples: u32,
         size: PhysicalSize<u32>,
-        shader_dir: &Path,
     ) -> anyhow::Result<Self> {
         let handle_quad_vertices = [
             UiVertexPoly {
@@ -158,7 +154,7 @@ impl UiPipelines {
         });
 
         let text_shader =
-            load_shader(&device, &shader_dir.join("text.wgsl"), "UI Text Shader")?.module;
+            load_shader(&device, &shader_dir().join("text.wgsl"), "UI Text Shader")?.module;
         let text_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Text Layout"),
             entries: &[
@@ -207,19 +203,19 @@ impl UiPipelines {
         // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
         let circle_shader = load_shader(
             &device,
-            &shader_dir.join("ui_circle.wgsl"),
+            &shader_dir().join("ui_circle.wgsl"),
             "UI Circle Shader",
         )?
         .module;
         let outline_shader = load_shader(
             &device,
-            &shader_dir.join("ui_shape_outline.wgsl"),
+            &shader_dir().join("ui_shape_outline.wgsl"),
             "UI Outline Shader",
         )?
         .module;
         let handle_shader = load_shader(
             &device,
-            &shader_dir.join("ui_handle.wgsl"),
+            &shader_dir().join("ui_handle.wgsl"),
             "UI Handle Shader",
         )?
         .module;
@@ -325,7 +321,7 @@ impl UiPipelines {
         );
         let polygon_shader = load_shader(
             &device,
-            &shader_dir.join("ui_polygon.wgsl"),
+            &shader_dir().join("ui_polygon.wgsl"),
             "UI Polygon Shader",
         )?
         .module;
@@ -357,7 +353,7 @@ impl UiPipelines {
 
         let glow_shader = load_shader(
             &device,
-            &shader_dir.join("ui_circle_glow.wgsl"),
+            &shader_dir().join("ui_circle_glow.wgsl"),
             "UI Glow Shader",
         )?
         .module;
@@ -432,6 +428,7 @@ impl UiPipelines {
 
         Ok(Self {
             device: device.clone(),
+            uniform_layout,
             uniform_buffer,
             uniform_bind_group,
             msaa_samples,
@@ -479,7 +476,6 @@ impl UiPipelines {
             good_blend,
 
             num_vertices: 0,
-            shader_dir: shader_dir.to_path_buf(),
         })
     }
 
@@ -556,37 +552,37 @@ impl UiPipelines {
     pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
         self.text_shader = load_shader(
             &self.device,
-            &self.shader_dir.join("text.wgsl"),
+            &shader_dir().join("text.wgsl"),
             "UI Text Shader",
         )?
         .module;
         self.circle_shader = load_shader(
             &self.device,
-            &self.shader_dir.join("ui_circle.wgsl"),
+            &shader_dir().join("ui_circle.wgsl"),
             "UI Circle Shader",
         )?
         .module;
         self.outline_shader = load_shader(
             &self.device,
-            &self.shader_dir.join("ui_shape_outline.wgsl"),
+            &shader_dir().join("ui_shape_outline.wgsl"),
             "UI Outline Shader",
         )?
         .module;
         self.handle_shader = load_shader(
             &self.device,
-            &self.shader_dir.join("ui_handle.wgsl"),
+            &shader_dir().join("ui_handle.wgsl"),
             "UI Handle Shader",
         )?
         .module;
         self.polygon_shader = load_shader(
             &self.device,
-            &self.shader_dir.join("ui_polygon.wgsl"),
+            &shader_dir().join("ui_polygon.wgsl"),
             "UI Polygon Shader",
         )?
         .module;
         self.glow_shader = load_shader(
             &self.device,
-            &self.shader_dir.join("ui_circle_glow.wgsl"),
+            &shader_dir().join("ui_circle_glow.wgsl"),
             "UI Glow Shader",
         )?
         .module;

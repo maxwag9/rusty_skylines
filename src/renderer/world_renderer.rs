@@ -8,6 +8,7 @@ use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::resources::{InputState, TimeSystem};
 use crate::terrain::chunk_builder::*;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
+use crate::terrain::roads::road_structs::RoadType;
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
@@ -39,8 +40,27 @@ struct FrameState {
     r2_render: i32,
     r2_gen: i32,
 }
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CursorMode {
+    None,
+    Roads(RoadType),
+    TerrainEditing,
+}
+#[derive(Debug)]
+pub struct Cursor {
+    pub mode: CursorMode,
+}
+
+impl Cursor {
+    pub fn new() -> Self {
+        Self {
+            mode: CursorMode::Roads(RoadType::default()),
+        }
+    }
+}
 
 pub struct TerrainRenderer {
+    pub cursor: Cursor,
     pub arena: TerrainMeshArena,
 
     pub chunks: HashMap<ChunkCoord, ChunkMeshLod>,
@@ -78,8 +98,8 @@ impl TerrainRenderer {
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
         let chunk_size: ChunkSize = 256;
-        let view_radius_render = 128;
-        let view_radius_generate = 128;
+        let view_radius_render = 64;
+        let view_radius_generate = 632;
 
         let arena = TerrainMeshArena::new(
             device,
@@ -108,6 +128,7 @@ impl TerrainRenderer {
         }
 
         Self {
+            cursor: Cursor::new(),
             arena,
             chunks: HashMap::new(),
             pending: HashMap::new(),
@@ -185,7 +206,7 @@ impl TerrainRenderer {
         self.frame_timings.unload_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        if settings.show_world && self.terrain_editing_enabled {
+        if settings.show_world {
             self.handle_terrain_editing(device, queue, input_state);
         }
 
@@ -200,6 +221,12 @@ impl TerrainRenderer {
         queue: &Queue,
         input_state: &mut InputState,
     ) {
+        match self.cursor.mode {
+            CursorMode::TerrainEditing => {} // just continue lol
+            _ => {
+                return;
+            } //Fuck off, this is not your mode!!
+        };
         let editing =
             input_state.action_down("Edit Terrain +") || input_state.action_down("Edit Terrain -");
         let released = input_state.action_released("Edit Terrain +")
@@ -277,21 +304,18 @@ impl TerrainRenderer {
             self.remove_chunk(coord);
 
             let mut vertices = cpu.vertices;
-            let indices = cpu.indices;
+            let mut indices = cpu.indices;
             let mut height_grid = (*cpu.height_grid).clone();
             let step = cpu.step;
 
-            // Check if this chunk has accumulated edits
             let has_edits = self
                 .terrain_editor
                 .edited_chunks
                 .get(&coord)
                 .map_or(false, |e| !e.accumulated_deltas.is_empty());
 
-            // Check if any neighbor is STRICTLY coarser (higher step = needs stitching on that edge)
             let has_coarser_neighbor = false;
 
-            // Only apply delta/stitching logic if there are edits OR coarser neighbors exist
             if has_edits || has_coarser_neighbor {
                 height_grid = apply_accumulated_deltas_with_stitching(
                     &height_grid,
@@ -303,20 +327,28 @@ impl TerrainRenderer {
 
                 recompute_patch_minmax(&mut height_grid);
 
-                // Gather neighbor edge heights for proper normal calculation at boundaries
-                let neighbor_edges = gather_neighbor_edge_heights(
-                    coord,
-                    &height_grid,
-                    &self.chunks,
-                    &self.terrain_editor.edited_chunks,
-                );
-                regenerate_vertices_from_height_grid(
-                    &mut vertices,
-                    &height_grid,
-                    &self.terrain_gen,
-                    Some(&neighbor_edges),
-                    false,
-                );
+                let expected_verts = height_grid.nx * height_grid.nz;
+
+                if vertices.len() == expected_verts {
+                    // Fast path: simple grid layout, update in-place
+                    let neighbor_edges = gather_neighbor_edge_heights(
+                        coord,
+                        &height_grid,
+                        &self.chunks,
+                        &self.terrain_editor.edited_chunks,
+                    );
+                    regenerate_vertices_from_height_grid(
+                        &mut vertices,
+                        &height_grid,
+                        &self.terrain_gen,
+                        Some(&neighbor_edges),
+                        false,
+                    );
+                } else {
+                    // Greedy-meshed chunk: rebuild with simple grid layout
+                    (vertices, indices) =
+                        build_simple_grid_mesh(&height_grid, coord, &self.terrain_gen);
+                }
             }
 
             let handle = self.arena.alloc_and_upload(
@@ -388,13 +420,12 @@ impl TerrainRenderer {
             self.lod_map.insert(v.coords.chunk_coord, step);
         }
 
-        // Smooth within visible set.
+        // Smooth to prevent T-junctions: no chunk should be >2x finer than neighbors
         for _ in 0..2 {
             let current = self.lod_map.clone();
             for v in self.visible.iter() {
-                let s = *current.get(&v.coords.chunk_coord).unwrap_or(&1);
+                let s = *current.get(&v.coords.chunk_coord).unwrap_or(&32);
 
-                // Neighbors default to s if not visible, to keep edges stable.
                 let n0 = current
                     .get(&ChunkCoord::new(
                         v.coords.chunk_coord.x - 1,
@@ -424,8 +455,11 @@ impl TerrainRenderer {
                     .copied()
                     .unwrap_or(s);
 
+                // FIX: Prevent being more than 2x finer than coarsest neighbor
+                let max_neighbor = n0.max(n1).max(n2).max(n3);
+                let min_allowed_step = (max_neighbor / 2).max(1);
                 self.lod_map
-                    .insert(v.coords.chunk_coord, s.min(n0).min(n1).min(n2).min(n3));
+                    .insert(v.coords.chunk_coord, s.max(min_allowed_step));
             }
         }
     }
@@ -461,7 +495,11 @@ impl TerrainRenderer {
                     continue;
                 }
             }
-
+            let has_edits = self
+                .terrain_editor
+                .edited_chunks
+                .get(&coord)
+                .map_or(false, |e| !e.accumulated_deltas.is_empty());
             // Neighbor LODs (fallback to step if neighbor not visible)
             let step = desired_step;
             let n_x_neg = *self
@@ -495,6 +533,7 @@ impl TerrainRenderer {
                         n_z_pos,
                         version,
                         version_atomic,
+                        has_edits,
                     ));
 
                     if close_batch.len() >= self.max_close_chunks_per_batch {
@@ -519,6 +558,7 @@ impl TerrainRenderer {
                         n_z_pos,
                         version,
                         version_atomic,
+                        has_edits,
                     ));
 
                     if far_batch.len() >= self.max_far_chunks_per_batch {
@@ -546,7 +586,7 @@ impl TerrainRenderer {
 
     fn unload_out_of_range(&mut self, frame: &FrameState) {
         // Avoid thrash: unload outside render radius + generous margin.
-        let margin = 12;
+        let margin = 4;
         let r = self.view_radius_render as i32 + margin;
         let r2 = r * r;
 
@@ -564,6 +604,7 @@ impl TerrainRenderer {
             let dx = chunk_coord.x - frame.cam_pos.chunk.x;
             let dz = chunk_coord.z - frame.cam_pos.chunk.z;
             if dx * dx + dz * dz > r2 {
+                println!("removing");
                 to_remove.push(coord);
             }
         }
@@ -628,12 +669,12 @@ impl TerrainRenderer {
         let vertex_bytes = total_vertices * VERTEX_SIZE_BYTES;
         let total_bytes = index_bytes + vertex_bytes;
 
-        println!(
-            "render: {} vertices, {} indices, {:.2} KB total",
-            total_vertices,
-            total_indices,
-            total_bytes as f32 / 1024.0
-        );
+        // println!(
+        //     "render: {} vertices, {} indices, {:.2} MB total",
+        //     total_vertices,
+        //     total_indices,
+        //     total_bytes as f32 / 1024.0 / 1024.0
+        // );
 
         for (pi, handles) in per_page.iter().enumerate() {
             if handles.is_empty() {

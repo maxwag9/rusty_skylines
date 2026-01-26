@@ -71,7 +71,7 @@ impl<'a> UniformUpdater<'a> {
             _pad0: 0.0,
             fog_color: [0.55, 0.55, 0.7],
             _pad1: 0.0,
-            fog_sky_factor: 0.35,
+            fog_sky_factor: 0.05,
             fog_height_falloff: 0.0,
             fog_start: camera.far * 0.70,
             fog_end: camera.far * 1.05,

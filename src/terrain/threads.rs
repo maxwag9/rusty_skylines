@@ -19,6 +19,7 @@ pub struct ChunkJob {
         LodStep,
         u64,
         Arc<AtomicU64>,
+        bool,
     )>,
 }
 
@@ -54,6 +55,7 @@ impl ChunkWorkerPool {
                                 nz_pos,
                                 version,
                                 version_atomic,
+                                has_edits,
                             ) in job.chunks.iter().cloned()
                             {
                                 // fast pre-check before doing any work
@@ -72,6 +74,7 @@ impl ChunkWorkerPool {
                                     version,
                                     &version_atomic,
                                     &terrain,
+                                    has_edits,
                                 ) {
                                     if result_tx.send(cpu).is_err() {
                                         break;

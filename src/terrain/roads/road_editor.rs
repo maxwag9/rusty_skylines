@@ -1,6 +1,6 @@
 use crate::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
-use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
+use crate::renderer::world_renderer::{CursorMode, PickedPoint, TerrainRenderer};
 use crate::resources::InputState;
 use crate::terrain::roads::road_helpers::*;
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
@@ -41,6 +41,13 @@ impl RoadEditor {
         input: &mut InputState,
         picked_point: &Option<PickedPoint>,
     ) -> Vec<RoadEditorCommand> {
+        let Some(road_type) = (match terrain_renderer.cursor.mode {
+            CursorMode::Roads(r) => Some(r),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+        road_style_params.set_road_type(road_type);
         self.allocator.update(&road_manager.roads);
         let storage = &road_manager.roads;
         let mut output = Vec::new();
@@ -1360,7 +1367,7 @@ impl RoadEditor {
         let speed = road_style_params.road_type().speed_limit();
         let capacity = road_style_params.road_type().capacity();
         let mask = road_style_params.road_type().vehicle_mask();
-        let lane_width = road_style_params.lane_width;
+        let lane_width = road_style_params.road_type().lane_width;
 
         // Right side lanes (start -> end)
         for i in 0..right_lanes {
@@ -1611,9 +1618,9 @@ impl IntersectionBuildParams {
             max_turn_angle: 2.74,
             min_turn_radius_m: 5.0,
             clearance_length_m: 0.0,
-            lane_width_m: style.lane_width,
+            lane_width_m: style.road_type().lane_width,
             turn_tightness: style.turn_tightness(),
-            side_walk_width: style.sidewalk_width,
+            side_walk_width: style.road_type().sidewalk_width,
         }
     }
 }

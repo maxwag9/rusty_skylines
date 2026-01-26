@@ -41,10 +41,16 @@ impl Simulation {
         for event in events.drain() {
             match event {
                 Event::ToggleSimulation => self.toggle(),
+                Event::SetCursorMode(mode) => {}
             }
         }
     }
-
+    pub fn process_event(&mut self, event: &Event) {
+        match event {
+            Event::ToggleSimulation => self.toggle(),
+            _ => {}
+        }
+    }
     pub fn update(&mut self, _dt: f32) {
         if !self.running {
             return;

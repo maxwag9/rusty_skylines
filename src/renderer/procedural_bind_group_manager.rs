@@ -1,3 +1,4 @@
+use crate::data::Settings;
 use crate::renderer::procedural_texture_manager::TextureCacheKey;
 use std::collections::HashMap;
 use wgpu::{
@@ -5,7 +6,6 @@ use wgpu::{
     FilterMode, MipmapFilterMode, Sampler, ShaderStages, TextureSampleType, TextureView,
     TextureViewDimension,
 };
-
 // #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 // pub enum MaterialKind {
 //     Diffuse,
@@ -20,8 +20,9 @@ pub struct MaterialBindGroupManager {
     device: Device,
     sampler: Sampler,
     shadow_sampler: Sampler,
-    layout_cache: HashMap<(usize, bool), BindGroupLayout>,
-    bind_group_cache: HashMap<(Vec<TextureCacheKey>, bool), BindGroup>,
+    shadows_off_sampler: Sampler,
+    layout_cache: HashMap<(usize, bool, bool), BindGroupLayout>,
+    bind_group_cache: HashMap<(Vec<TextureCacheKey>, bool, bool, bool), BindGroup>,
 }
 
 impl MaterialBindGroupManager {
@@ -44,29 +45,46 @@ impl MaterialBindGroupManager {
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
             mipmap_filter: MipmapFilterMode::Nearest,
-            compare: Some(CompareFunction::LessEqual), // <--- CRITICAL
+            compare: Some(CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let shadows_off_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Shadows Off Sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Nearest,
+            compare: Some(CompareFunction::Always), // <--- Mission CRITICAL
             ..Default::default()
         });
         Self {
             device,
             sampler,
             shadow_sampler,
+            shadows_off_sampler,
             layout_cache: HashMap::new(),
             bind_group_cache: HashMap::new(),
         }
     }
 
-    pub fn get_layout(&mut self, material_count: usize, shadow_pass: bool) -> &BindGroupLayout {
+    pub fn get_layout(
+        &mut self,
+        material_count: usize,
+        shadow_pass: bool,
+        fullscreen_pass: bool,
+    ) -> &BindGroupLayout {
         if !self
             .layout_cache
-            .contains_key(&(material_count, shadow_pass))
+            .contains_key(&(material_count, shadow_pass, fullscreen_pass))
         {
-            let layout = self.create_layout(material_count, shadow_pass);
+            let layout = self.create_layout(material_count, shadow_pass, fullscreen_pass);
             self.layout_cache
-                .insert((material_count, shadow_pass), layout);
+                .insert((material_count, shadow_pass, fullscreen_pass), layout);
         }
+
         self.layout_cache
-            .get(&(material_count, shadow_pass))
+            .get(&(material_count, shadow_pass, fullscreen_pass))
             .unwrap()
     }
 
@@ -76,33 +94,84 @@ impl MaterialBindGroupManager {
         views: Vec<&TextureView>,
         shadow_array_view: &TextureView,
         shadow_pass: bool,
+        fullscreen_pass: bool,
+        settings: &Settings,
     ) -> &BindGroup {
-        assert_eq!(materials.len(), views.len());
+        // Fullscreen tonemap: we expect exactly 1 source texture view (resolved HDR)
+        if fullscreen_pass {
+            assert_eq!(views.len(), 1);
+        } else {
+            assert_eq!(materials.len(), views.len());
+        }
 
-        let key = (materials.to_vec(), shadow_pass);
-        let material_count = materials.len();
+        let material_count = if fullscreen_pass { 1 } else { materials.len() };
+
+        let key = (
+            materials.to_vec(),
+            shadow_pass,
+            fullscreen_pass,
+            settings.shadows_enabled,
+        );
 
         if !self
             .layout_cache
-            .contains_key(&(material_count, shadow_pass))
+            .contains_key(&(material_count, shadow_pass, fullscreen_pass))
         {
-            let layout = self.create_layout(material_count, shadow_pass);
+            let layout = self.create_layout(material_count, shadow_pass, fullscreen_pass);
             self.layout_cache
-                .insert((material_count, shadow_pass), layout);
+                .insert((material_count, shadow_pass, fullscreen_pass), layout);
         }
 
         if !self.bind_group_cache.contains_key(&key) {
-            let bind_group =
-                self.build_bind_group(material_count, views, shadow_array_view, shadow_pass);
+            let bind_group = self.build_bind_group(
+                material_count,
+                views,
+                shadow_array_view,
+                shadow_pass,
+                fullscreen_pass,
+                settings,
+            );
             self.bind_group_cache.insert(key.clone(), bind_group);
         }
 
         self.bind_group_cache.get(&key).unwrap()
     }
 
-    fn create_layout(&self, material_count: usize, shadow_pass: bool) -> BindGroupLayout {
+    fn create_layout(
+        &self,
+        material_count: usize,
+        shadow_pass: bool,
+        fullscreen_pass: bool,
+    ) -> BindGroupLayout {
         let mut entries = Vec::new();
-        if !shadow_pass {
+
+        // Shadow pass: no material bindings
+        if shadow_pass {
+            // leave empty
+        }
+        // Fullscreen pass (tonemap): fixed bindings:
+        // @group(0) @binding(0) texture_2d<f32>
+        // @group(0) @binding(1) sampler
+        else if fullscreen_pass {
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Texture {
+                    sample_type: TextureSampleType::Float { filterable: true },
+                    view_dimension: TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            });
+        }
+        // Normal forward/gbuffer/etc: your existing material + shadow bindings
+        else {
             for i in 0..material_count {
                 entries.push(wgpu::BindGroupLayoutEntry {
                     binding: i as u32,
@@ -116,14 +185,13 @@ impl MaterialBindGroupManager {
                 });
             }
 
-            // Binding N: Standard Sampler
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: material_count as u32,
                 visibility: ShaderStages::FRAGMENT,
                 ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             });
-            // Binding N+1: The Shadow Map Texture
+
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: (material_count + 1) as u32,
                 visibility: ShaderStages::FRAGMENT,
@@ -134,7 +202,7 @@ impl MaterialBindGroupManager {
                 },
                 count: None,
             });
-            // Binding N+2: Shadow Sampler (Comparison)
+
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: (material_count + 2) as u32,
                 visibility: ShaderStages::FRAGMENT,
@@ -156,15 +224,29 @@ impl MaterialBindGroupManager {
         views: Vec<&TextureView>,
         shadow_array_view: &TextureView,
         shadow_pass: bool,
+        fullscreen_pass: bool,
+        settings: &Settings,
     ) -> BindGroup {
         let layout = self
             .layout_cache
-            .get(&(material_count, shadow_pass))
+            .get(&(material_count, shadow_pass, fullscreen_pass))
             .unwrap();
+
         let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
 
-        if !shadow_pass {
-            // Bind material textures
+        if shadow_pass {
+            // no entries
+        } else if fullscreen_pass {
+            // binding(0) = hdr_tex, binding(1) = hdr_sampler
+            entries.push(wgpu::BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(views[0]),
+            });
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Sampler(&self.sampler),
+            });
+        } else {
             for (i, view) in views.iter().enumerate() {
                 entries.push(wgpu::BindGroupEntry {
                     binding: i as u32,
@@ -172,27 +254,28 @@ impl MaterialBindGroupManager {
                 });
             }
 
-            // Bind Standard Sampler
             entries.push(wgpu::BindGroupEntry {
                 binding: material_count as u32,
                 resource: BindingResource::Sampler(&self.sampler),
             });
 
-            // Bind Shadow Map Texture
             entries.push(wgpu::BindGroupEntry {
                 binding: (material_count + 1) as u32,
                 resource: BindingResource::TextureView(shadow_array_view),
             });
 
-            // Bind Shadow Comparison Sampler
             entries.push(wgpu::BindGroupEntry {
                 binding: (material_count + 2) as u32,
-                resource: BindingResource::Sampler(&self.shadow_sampler),
+                resource: BindingResource::Sampler(if settings.shadows_enabled {
+                    &self.shadow_sampler
+                } else {
+                    &self.shadows_off_sampler
+                }),
             });
         }
 
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Road Material Bind Group"),
+            label: Some("Material Bind Group"),
             layout,
             entries: &entries,
         })

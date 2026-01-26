@@ -5,7 +5,8 @@ use crate::resources::Uniforms;
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use wgpu::TextureFormat::Rgba16Float;
 use wgpu::*;
 
 #[macro_export]
@@ -64,8 +65,8 @@ pub struct ComputePipelineState {
     pub pipeline: ComputePipeline,
 }
 pub struct GpuResourceSet {
-    pub bind_group_layout: BindGroupLayout,
-    pub bind_group: BindGroup,
+    pub _bind_group_layout: BindGroupLayout,
+    pub _bind_group: BindGroup,
     pub buffer: Buffer,
 }
 pub struct MeshBuffers {
@@ -76,16 +77,17 @@ pub struct MeshBuffers {
 
 #[derive(Clone)]
 pub struct ShaderAsset {
-    pub path: PathBuf,
+    pub _path: PathBuf,
     pub module: ShaderModule,
 }
 
 pub struct Pipelines {
     pub device: Device,
 
-    pub msaa_texture: Texture,
-    pub msaa_view: TextureView,
-
+    pub msaa_hdr_texture: Texture,
+    pub msaa_hdr_view: TextureView,
+    pub resolved_hdr_texture: Texture,
+    pub resolved_hdr_view: TextureView,
     pub depth_texture: Texture,
     pub depth_view: TextureView,
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
@@ -111,17 +113,18 @@ impl Pipelines {
         device: &Device,
         config: &SurfaceConfiguration,
         msaa_samples: u32,
-        shader_dir: &Path,
         camera: &Camera,
         shadow_map_size: u32,
     ) -> anyhow::Result<Self> {
         // Create render targets
-        let (msaa_texture, msaa_view) = create_msaa_targets(&device, &config, msaa_samples);
+        let (msaa_hdr_texture, msaa_hdr_view) = create_msaa_targets(&device, &config, msaa_samples);
+        let (resolved_hdr_texture, resolved_hdr_view) =
+            create_resolved_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
         let csm = create_csm_shadow_texture(device, shadow_map_size, "Sun CSM"); // 2048 or 4096
         // Load all shaders
-        let shaders = load_all_shaders(device, shader_dir)?;
+        let shaders = load_all_shaders(device)?;
 
         let (uniforms_set, uniforms_cpu) = create_camera_uniforms(device, camera, config);
         let sky_uniforms = create_sky_uniforms(device);
@@ -136,8 +139,10 @@ impl Pipelines {
 
         let this = Self {
             device: device.clone(),
-            msaa_texture,
-            msaa_view,
+            msaa_hdr_texture,
+            msaa_hdr_view,
+            resolved_hdr_texture,
+            resolved_hdr_view,
             depth_texture,
             depth_view,
             depth_sample_view,
@@ -167,7 +172,7 @@ impl Pipelines {
         // always match the swapchain size. Or ELSE, after a window resize we'd recreate
         // attachments using the old dimensions, leading to mismatched resolve targets!!!
         self.config = config.clone();
-        (self.msaa_texture, self.msaa_view) =
+        (self.msaa_hdr_texture, self.msaa_hdr_view) =
             create_msaa_targets(&self.device, &self.config, msaa_samples);
         (self.depth_texture, self.depth_view, self.depth_sample_view) =
             create_depth_texture(&self.device, &self.config, msaa_samples);
@@ -190,7 +195,7 @@ pub fn load_shader(device: &Device, path: &PathBuf, label: &str) -> anyhow::Resu
         source: ShaderSource::Wgsl(Cow::Owned(src)),
     });
     let asset = ShaderAsset {
-        path: path.clone(),
+        _path: path.clone(),
         module,
     };
     Ok(asset)
@@ -211,8 +216,32 @@ pub fn create_msaa_targets(
         mip_level_count: 1,
         sample_count: samples,
         dimension: TextureDimension::D2,
-        format: config.format,
+        format: Rgba16Float,
         usage: TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&TextureViewDescriptor::default());
+    (texture, view)
+}
+
+pub fn create_resolved_targets(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    samples: u32,
+) -> (Texture, TextureView) {
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("Resolved, non-MSAA Color Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: Rgba16Float,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 

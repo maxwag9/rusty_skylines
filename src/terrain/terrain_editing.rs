@@ -1,4 +1,4 @@
-use crate::positions::{ChunkCoord, ChunkSize, LodStep, WorldPos};
+use crate::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, gather_neighbor_edge_heights,
@@ -16,7 +16,7 @@ use wgpu::{Device, Queue};
 
 #[derive(Serialize, Deserialize)]
 struct PersistedChunk {
-    accumulated_deltas: Vec<((u8, u8), f32)>,
+    accumulated_deltas: Vec<((u16, u16), f32)>,
     dirty: bool,
 }
 
@@ -75,17 +75,6 @@ pub fn affected_chunks(
     (min_x, max_x, min_z, max_z)
 }
 
-/// Iterator-friendly version that returns an iterator over affected ChunkCoords.
-pub fn affected_chunks_iter(
-    center: WorldPos,
-    radius: f32,
-    chunk_size: ChunkSize,
-) -> impl Iterator<Item = ChunkCoord> {
-    let (min_x, max_x, min_z, max_z) = affected_chunks(center, radius, chunk_size);
-
-    (min_x..=max_x).flat_map(move |cx| (min_z..=max_z).map(move |cz| ChunkCoord::new(cx, cz)))
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum Edge {
     XNeg,
@@ -95,9 +84,9 @@ enum Edge {
 }
 
 pub struct EditedChunk {
-    pub pending_deltas: Vec<(u8, u8, f32)>,
+    pub pending_deltas: Vec<(u16, u16, f32)>,
     /// Accumulated deltas stored at LOD 1 (step=1) coordinates
-    pub accumulated_deltas: HashMap<(u8, u8), f32>,
+    pub accumulated_deltas: HashMap<(u16, u16), f32>,
     pub dirty: bool,
 }
 
@@ -203,8 +192,8 @@ impl TerrainEditor {
         };
         for (chunk_coord, persisted_chunk) in meta.edits {
             let mut acc = HashMap::with_capacity(persisted_chunk.accumulated_deltas.len());
-            for ((x8, z8), h) in persisted_chunk.accumulated_deltas {
-                acc.insert((x8, z8), h);
+            for ((x16, z16), h) in persisted_chunk.accumulated_deltas {
+                acc.insert((x16, z16), h);
             }
             editor.edited_chunks.insert(
                 chunk_coord,
@@ -330,17 +319,17 @@ impl TerrainEditor {
                 }
 
                 // Always store at base resolution
-                let base_gx_u8 = base_gx as u8;
-                let base_gz_u8 = base_gz as u8;
+                let base_gx_u16 = base_gx as u16;
+                let base_gz_u16 = base_gz as u16;
                 *edited
                     .accumulated_deltas
-                    .entry((base_gx_u8, base_gz_u8))
+                    .entry((base_gx_u16, base_gz_u16))
                     .or_insert(0.0) += delta;
 
                 // Only add to pending_deltas if this aligns with current LOD grid
                 if base_gx % step == 0 && base_gz % step == 0 {
-                    let gx = (base_gx / step) as u8;
-                    let gz = (base_gz / step) as u8;
+                    let gx = (base_gx / step) as u16;
+                    let gz = (base_gz / step) as u16;
                     edited.pending_deltas.push((gx, gz, delta));
                 }
 
@@ -401,7 +390,7 @@ impl TerrainEditor {
             return None;
         }
 
-        let (step, indices, mut grid, mut vertices) = match chunks.get(&coord) {
+        let (step, mut indices, mut grid, mut vertices) = match chunks.get(&coord) {
             Some(c) => (
                 c.step,
                 c.cpu_indices.clone(),
@@ -411,7 +400,7 @@ impl TerrainEditor {
             None => return None,
         };
 
-        // Apply pending deltas directly (no stitching during live editing)
+        // Apply pending deltas
         for (gx, gz, delta) in &pending {
             let gx_usize = *gx as usize;
             let gz_usize = *gz as usize;
@@ -422,16 +411,24 @@ impl TerrainEditor {
 
         recompute_patch_minmax(&mut grid);
 
-        // Gather neighbor edge heights for proper normal calculation at boundaries
-        let neighbor_edges =
-            gather_neighbor_edge_heights(coord, &grid, chunks, &self.edited_chunks);
-        regenerate_vertices_from_height_grid(
-            &mut vertices,
-            &grid,
-            terrain_gen,
-            Some(&neighbor_edges),
-            false,
-        );
+        // FIX: Check if vertex layout is compatible with in-place update
+        let expected_verts = grid.nx * grid.nz;
+
+        if vertices.len() == expected_verts {
+            // Fast path: simple grid layout, update in-place
+            let neighbor_edges =
+                gather_neighbor_edge_heights(coord, &grid, chunks, &self.edited_chunks);
+            regenerate_vertices_from_height_grid(
+                &mut vertices,
+                &grid,
+                terrain_gen,
+                Some(&neighbor_edges),
+                false,
+            );
+        } else {
+            // Greedy-meshed chunk: rebuild with simple grid layout (once per chunk)
+            (vertices, indices) = build_simple_grid_mesh(&grid, coord, terrain_gen);
+        }
 
         let new_handle = arena.alloc_and_upload(device, queue, &vertices, &indices, scratch);
         let old_handle = chunks.remove(&coord).map(|c| c.handle);
@@ -449,6 +446,80 @@ impl TerrainEditor {
 
         old_handle
     }
+}
+/// Build mesh with simple shared-vertex grid layout for edited chunks.
+pub fn build_simple_grid_mesh(
+    grid: &ChunkHeightGrid,
+    coord: ChunkCoord,
+    terrain_gen: &TerrainGenerator,
+) -> (Vec<Vertex>, Vec<u32>) {
+    let nx = grid.nx;
+    let nz = grid.nz;
+    let cell = grid.cell_f32();
+    let step = grid.cell_size as usize;
+    let chunk_size = grid.chunk_size;
+    let inv = 1.0 / cell;
+
+    let mut vertices = Vec::with_capacity(nx * nz);
+    let mut indices = Vec::with_capacity((nx - 1) * (nz - 1) * 6);
+
+    for gx in 0..nx {
+        let local_x = (gx * step) as f32;
+        for gz in 0..nz {
+            let local_z = (gz * step) as f32;
+            let h = grid.heights[gx * nz + gz];
+
+            // Normal via central difference
+            let h_l = if gx > 0 {
+                grid.heights[(gx - 1) * nz + gz]
+            } else {
+                h
+            };
+            let h_r = if gx + 1 < nx {
+                grid.heights[(gx + 1) * nz + gz]
+            } else {
+                h
+            };
+            let h_d = if gz > 0 {
+                grid.heights[gx * nz + (gz - 1)]
+            } else {
+                h
+            };
+            let h_u = if gz + 1 < nz {
+                grid.heights[gx * nz + (gz + 1)]
+            } else {
+                h
+            };
+
+            let dhdx = (h_r - h_l) * 0.5 * inv;
+            let dhdz = (h_u - h_d) * 0.5 * inv;
+            let n = glam::Vec3::new(-dhdx, 1.0, -dhdz).normalize();
+
+            let pos = WorldPos::new(coord, LocalPos::new(local_x, h, local_z));
+            let m = terrain_gen.moisture(&pos, h, chunk_size);
+            let c = terrain_gen.color(&pos, h, m, chunk_size);
+
+            vertices.push(Vertex {
+                local_position: [local_x, h, local_z],
+                normal: [n.x, n.y, n.z],
+                color: c,
+                chunk_xz: [coord.x, coord.z],
+                quad_uv: [0.0, 0.0],
+            });
+        }
+    }
+
+    for gx in 0..(nx - 1) {
+        for gz in 0..(nz - 1) {
+            let i00 = (gx * nz + gz) as u32;
+            let i10 = ((gx + 1) * nz + gz) as u32;
+            let i01 = (gx * nz + (gz + 1)) as u32;
+            let i11 = ((gx + 1) * nz + (gz + 1)) as u32;
+            indices.extend_from_slice(&[i00, i10, i01, i01, i10, i11]);
+        }
+    }
+
+    (vertices, indices)
 }
 /// Sample height at local position using bilinear interpolation.
 /// `local_x` and `local_z` should be in range [0, chunk_size].

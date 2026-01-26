@@ -141,3 +141,6 @@ keys = ["Ctrl+KeyY"]
 keys = ["Ctrl+Shift+KeyY"]
 ["Duplicate"]
 keys = ["Ctrl+KeyD"]
+
+["Toggle Cursor Mode"]
+keys = ["KeyR"]

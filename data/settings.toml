@@ -5,18 +5,19 @@ editor_mode = false
 override_mode = false
 show_gui = true
 background_color = [
-    0.01,
-    0.01,
-    0.01,
+    0.0,
+    0.0,
+    0.0,
     1.0,
 ]
-total_game_time = 51252.37329358235
+total_game_time = 54637.493133660406
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
 always_day = false
 msaa_samples = 4
 shadow_map_size = 4096
+shadows_enabled = false
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_chunk_bounds = true

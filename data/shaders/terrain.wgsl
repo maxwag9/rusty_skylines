@@ -109,38 +109,93 @@ fn fbm(p_in: vec2<f32>) -> f32 {
 // Edge rendering constants
 const EDGE_WIDTH: f32 = 0.005;       // Width as fraction of quad (0.02 = 2% of quad width)
 const EDGE_COLOR: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);  // Black edges
-const EDGE_ENABLED: bool = true;
-const SHOW_DIAGONAL: bool = true;   // Show triangle diagonal too
+const EDGE_ENABLED: bool = false;
+const SHOW_DIAGONAL: bool = false;   // Show triangle diagonal too
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
-    let l = normalize(uniforms.sun_direction);
     let up = vec3<f32>(0.0, 1.0, 0.0);
 
-    // Hemisphere ambient
+    // Your convention: direction from origin -> sun/moon in the sky.
+    // For Lambert (dot(n, l)) we want direction from surface -> light.
+    // With a directional light at infinity, these are the same unit vector.
+    let sun_l  = normalize(uniforms.sun_direction);
+    let moon_l = normalize(uniforms.moon_direction);
+
+    // Fade the SUN out when it goes below the horizon to stop wrapped lighting
+    // from "glowing" at night.
+    let sun_elev   = dot(sun_l, up);                    // [-1..1]
+    let sun_amount = smoothstep(-0.06, 0.10, sun_elev); // twilight band
+    let night_amount = 1.0 - sun_amount;
+
+    // Moon visibility (also fades if the moon is below the horizon)
+    let moon_elev    = dot(moon_l, up);
+    let moon_visible = smoothstep(-0.08, 0.08, moon_elev);
+
+    // -------------------------------------------------------------------------
+    // Hemisphere ambient (blend day/night)
+    // -------------------------------------------------------------------------
     let hemi = saturate(dot(n, up) * 0.5 + 0.5);
-    let sky_ambient = vec3<f32>(0.01, 0.01, 0.01);
-    let ground_ambient = vec3<f32>(0.02, 0.02, 0.02);
-    let ambient = mix(ground_ambient, sky_ambient, hemi);
 
-    // Basic diffuse + wrapped for grass
-    let ndotl = dot(n, l);
-    let diffuse = max(ndotl, 0.0);
-    let wrapped = saturate(ndotl + 0.4) / 1.4;
+    // Day ambient
+    let sky_ambient_day    = vec3<f32>(0.10, 0.12, 0.15);
+    let ground_ambient_day = vec3<f32>(0.05, 0.05, 0.05);
 
-    // Shadow
-    let shadow = fetch_shadow(in.world_pos, n, l);
+    // Night ambient (your original-ish values)
+    let sky_ambient_night    = vec3<f32>(0.01, 0.01, 0.01);
+    let ground_ambient_night = vec3<f32>(0.02, 0.02, 0.02);
 
+    let sky_ambient    = mix(sky_ambient_night,    sky_ambient_day,    sun_amount);
+    let ground_ambient = mix(ground_ambient_night, ground_ambient_day, sun_amount);
+
+    // Slight moon-tinted ambient at night (constant, no new uniforms)
+    let moon_ambient_color = vec3<f32>(0.02, 0.03, 0.06);
+    let moon_ambient = moon_ambient_color * (0.6 * night_amount * moon_visible);
+
+    let ambient = mix(ground_ambient, sky_ambient, hemi) + moon_ambient * hemi;
+
+    // -------------------------------------------------------------------------
+    // Sun diffuse + wrapped (grass), then SHADOW
+    // -------------------------------------------------------------------------
+    let sun_ndotl = dot(n, sun_l);
+    let sun_diffuse = max(sun_ndotl, 0.0);
+
+    // Wrapped lighting (allows some light around terminator for grass)
+    // The important part: multiply by sun_amount so it doesn't light at night.
+    let sun_wrapped = saturate(sun_ndotl + 0.4) / 1.4;
+
+    let sun_shadow = fetch_shadow(in.world_pos, n, sun_l);
+
+    // -------------------------------------------------------------------------
     // Grass mask
+    // -------------------------------------------------------------------------
     let greenness = in.color.g - max(in.color.r, in.color.b);
     let up_facing = saturate(dot(n, up));
     let grass_amount = saturate(greenness * 2.5) * up_facing * up_facing;
 
-    // Direct light with grass wrap
-    let direct_light = mix(diffuse, wrapped, grass_amount);
+    // Sun direct term (wrap only for grass) + fade by sun_amount to prevent night glow
+    let sun_direct = mix(sun_diffuse, sun_wrapped, grass_amount) * sun_amount;
 
+    // -------------------------------------------------------------------------
+    // Moon lighting (constant color/intensity, no extra uniforms)
+    // -------------------------------------------------------------------------
+    let moon_ndotl = dot(n, moon_l);
+    let moon_diffuse = max(moon_ndotl, 0.0);
+
+    // Smaller wrap for moon (optional, helps grass a bit but not too much)
+    let moon_wrapped = saturate(moon_ndotl + 0.15) / 1.15;
+
+    let moon_intensity: f32 = 0.22;
+    let moon_color = vec3<f32>(0.35, 0.42, 0.60);
+
+    let moon_direct =
+        mix(moon_diffuse, moon_wrapped, grass_amount) *
+        (moon_visible * night_amount * moon_intensity);
+
+    // -------------------------------------------------------------------------
     // ============ GRASS TEXTURING ============
+    // -------------------------------------------------------------------------
     let grass_uv_scale1: f32 = 0.025;
     let grass_uv_scale2: f32 = 0.011;
 
@@ -163,8 +218,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let grass_color = mix(grass_a, grass_b, mix_noise);
     let albedo = mix(in.color, grass_color, grass_amount);
 
+    // -------------------------------------------------------------------------
     // Final lighting
-    var final_color = albedo * (ambient + direct_light * shadow);
+    // -------------------------------------------------------------------------
+    // Constant sun color (no extra uniforms)
+    let sun_color = vec3<f32>(1.0, 0.98, 0.92);
+
+    var final_color =
+        albedo * ambient +
+        albedo * (sun_color * (sun_direct * sun_shadow)) +
+        albedo * (moon_color * moon_direct);
 
     // Pick highlight
     if (pick.radius > 0.0) {
@@ -179,24 +242,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     if (EDGE_ENABLED) {
         let uv = in.quad_uv;
 
-        // Distance to quad edges (0 at edge, 0.5 at center)
         let d_left   = uv.x;
         let d_right  = 1.0 - uv.x;
         let d_bottom = uv.y;
         let d_top    = 1.0 - uv.y;
 
-        // Minimum distance to any quad edge
         var edge_dist = min(min(d_left, d_right), min(d_bottom, d_top));
 
-        // Optionally show triangle diagonal (the line from (0,1) to (1,0) or (0,0) to (1,1))
         if (SHOW_DIAGONAL) {
-            // Diagonal from (1,0) to (0,1): line equation x + y = 1
-            // Distance to this line: |x + y - 1| / sqrt(2)
             let diag_dist = abs(uv.x + uv.y - 1.0) * 0.7071067811865476; // 1/sqrt(2)
             edge_dist = min(edge_dist, diag_dist);
         }
 
-        // Anti-aliased edge (fwidth must be called directly in fragment shader)
         let edge_w = fwidth(edge_dist);
         let edge_threshold = max(edge_w * 1.5, EDGE_WIDTH);
         let edge_factor = smoothstep(0.0, edge_threshold, edge_dist);
@@ -254,6 +311,10 @@ fn shadow_for_cascade(
     let z  = proj.z;
 
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || z < 0.0 || z > 1.0) {
+        return 1.0;
+    }
+    // If shadow map is cleared/unused, NO SHADOW1!
+    if (z >= 0.9999) {
         return 1.0;
     }
 

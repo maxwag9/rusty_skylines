@@ -7,17 +7,6 @@ pub struct RoadStyleParams {
     state: EditorState,
     mode: BuildMode,
     road_type: RoadType,
-    pub lane_width: f32,
-    pub lane_height: f32,
-    pub lane_material_id: u32,
-
-    pub sidewalk_width: f32,
-    pub sidewalk_height: f32,
-    pub sidewalk_material_id: u32,
-
-    pub median_width: f32,
-    pub median_height: f32,
-    pub median_material_id: u32,
 }
 
 impl RoadStyleParams {
@@ -62,15 +51,6 @@ impl Default for RoadStyleParams {
             state: EditorState::Idle,
             mode: BuildMode::Straight,
             road_type: RoadType::default(),
-            lane_width: 2.4,
-            lane_height: 0.0,
-            lane_material_id: 2, // Asphalt
-            sidewalk_width: 1.25,
-            sidewalk_height: 0.15,
-            sidewalk_material_id: 0, // Concrete or Pavement
-            median_width: 0.25,
-            median_height: 0.15,
-            median_material_id: 0, // Concrete
         }
     }
 }
@@ -274,7 +254,7 @@ impl AttachedControl {
 
 pub type LeftLaneCount = usize;
 pub type RightLaneCount = usize;
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RoadType {
     pub name: &'static str,
 

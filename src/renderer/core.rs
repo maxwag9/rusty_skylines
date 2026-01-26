@@ -64,19 +64,17 @@ impl RenderCore {
         let (device, queue) = create_device(&adapter);
         surface.configure(&device, &config);
 
-        let shader_dir = shader_dir();
-        let shader_watcher = ShaderWatcher::new(&shader_dir).ok();
+        let shader_watcher = ShaderWatcher::new().ok();
 
         let pipelines = Pipelines::new(
             &device,
             &config,
             msaa_samples,
-            &shader_dir,
             camera,
             settings.shadow_map_size,
         )
         .expect("Failed to create render pipelines");
-        let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples, &shader_dir)
+        let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderer::new(&device, settings);
         let road_renderer = RoadRenderSubsystem::new(&device);
@@ -146,7 +144,7 @@ impl RenderCore {
                 label: Some("Render Encoder"),
             });
 
-        //self.execute_shadow_pass(&mut encoder, camera, aspect, time);
+        self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
         self.execute_main_pass(
             &mut encoder,
             &surface_view,
@@ -156,6 +154,7 @@ impl RenderCore {
             time,
             input_state,
             ui_loader,
+            settings,
             settings.show_world,
         );
 
@@ -319,6 +318,7 @@ impl RenderCore {
         camera: &Camera,
         aspect: f32,
         _time: &TimeSystem,
+        settings: &Settings,
     ) {
         for cascade in 0..CSM_CASCADES {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -336,7 +336,9 @@ impl RenderCore {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-
+            if !settings.shadows_enabled {
+                return;
+            }
             let shadow_buf = &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[cascade];
 
             if cascade != 0 && cascade != 1 {
@@ -345,6 +347,7 @@ impl RenderCore {
                     &mut self.render_manager,
                     &self.terrain_renderer,
                     &self.pipelines,
+                    settings,
                     camera,
                     aspect,
                     shadow_buf,
@@ -356,6 +359,7 @@ impl RenderCore {
                 &mut self.render_manager,
                 &self.road_renderer,
                 &self.pipelines,
+                settings,
                 shadow_buf,
             );
         }
@@ -371,33 +375,38 @@ impl RenderCore {
         time: &TimeSystem,
         input_state: &InputState,
         ui_loader: &mut UiButtonLoader,
+        settings: &Settings,
         show_world: bool,
     ) {
         // -------- Pass 1: Main world pass (writes depth) --------
-        self.execute_world_pass(encoder, surface_view, config, camera, aspect, show_world);
+        self.execute_world_pass(encoder, config, camera, settings, aspect, show_world);
 
         // -------- Pass 2: Fog (samples depth, no depth attachment) --------
-        self.execute_fog_pass(encoder, surface_view);
+        if show_world {
+            self.execute_fog_pass(encoder);
+        }
 
         // -------- Pass 3: UI (NOT fogged, because it draws after fog) Logic! --------
-        self.execute_ui_pass(encoder, surface_view, ui_loader, time, input_state);
+        self.execute_ui_pass(encoder, ui_loader, time, input_state);
 
         // -------- Pass 4: Debug preview (disabled by default) --------
         //self.execute_debug_preview_pass(encoder, surface_view);
+        // Last Pass
+        self.execute_tonemap_pass(encoder, surface_view, settings)
     }
 
     fn execute_world_pass(
         &mut self,
         encoder: &mut CommandEncoder,
-        surface_view: &TextureView,
         config: &RenderPassConfig,
         camera: &Camera,
+        settings: &Settings,
         aspect: f32,
         show_world: bool,
     ) {
         let color_attachment = create_color_attachment(
-            &self.pipelines.msaa_view,
-            surface_view,
+            &self.pipelines.msaa_hdr_view,
+            &self.pipelines.resolved_hdr_view,
             self.msaa_samples,
             config.background_color,
         );
@@ -411,49 +420,54 @@ impl RenderCore {
             multiview_mask: None,
         });
 
-        if show_world {
-            render_sky(
-                &mut pass,
-                &mut self.render_manager,
-                &self.pipelines,
-                self.msaa_samples,
-            );
-
-            self.terrain_renderer.make_pick_uniforms(
-                &self.queue,
-                &self.pipelines.pick_uniforms.buffer,
-                camera,
-                self.terrain_renderer.chunk_size,
-            );
-            render_terrain(
-                &mut pass,
-                &mut self.render_manager,
-                &self.terrain_renderer,
-                &self.pipelines,
-                self.msaa_samples,
-                camera,
-                aspect,
-            );
-
-            render_water(
-                &mut pass,
-                &mut self.render_manager,
-                &self.pipelines,
-                self.msaa_samples,
-            );
+        if !show_world {
+            return;
         }
+        render_sky(
+            &mut pass,
+            &mut self.render_manager,
+            &self.pipelines,
+            settings,
+            self.msaa_samples,
+        );
 
+        self.terrain_renderer.make_pick_uniforms(
+            &self.queue,
+            &self.pipelines.pick_uniforms.buffer,
+            camera,
+            self.terrain_renderer.chunk_size,
+        );
+        render_terrain(
+            &mut pass,
+            &mut self.render_manager,
+            &self.terrain_renderer,
+            &self.pipelines,
+            settings,
+            self.msaa_samples,
+            camera,
+            aspect,
+        );
+
+        render_water(
+            &mut pass,
+            &mut self.render_manager,
+            &self.pipelines,
+            settings,
+            self.msaa_samples,
+        );
         render_roads(
             &mut pass,
             &mut self.render_manager,
             &self.road_renderer,
             &self.pipelines,
+            settings,
             self.msaa_samples,
         );
         render_gizmo(
             &mut pass,
             &mut self.render_manager,
             &self.pipelines,
+            settings,
             self.msaa_samples,
             &mut self.gizmo,
             camera,
@@ -462,10 +476,10 @@ impl RenderCore {
         );
     }
 
-    fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder, surface_view: &TextureView) {
+    fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder) {
         let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_view,
-            surface_view,
+            &self.pipelines.msaa_hdr_view,
+            &self.pipelines.resolved_hdr_view,
             self.msaa_samples,
         );
 
@@ -493,6 +507,7 @@ impl RenderCore {
                 &self.pipelines.fog_uniforms.buffer,
                 &self.pipelines.pick_uniforms.buffer,
             ],
+            self.pipelines.msaa_hdr_view.texture().format(),
             &mut pass,
         );
     }
@@ -500,27 +515,32 @@ impl RenderCore {
     fn execute_ui_pass(
         &mut self,
         encoder: &mut CommandEncoder,
-        surface_view: &TextureView,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &InputState,
     ) {
         let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_view,
-            surface_view,
+            &self.pipelines.msaa_hdr_view,
+            &self.pipelines.resolved_hdr_view,
             self.msaa_samples,
         );
 
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (UI)"),
             color_attachments: &[Some(color_attachment)],
-            depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
+            depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });
 
-        self.render_ui(&mut pass, ui_loader, time, input_state);
+        self.render_ui(
+            &mut pass,
+            ui_loader,
+            time,
+            input_state,
+            self.pipelines.msaa_hdr_view.texture().format(),
+        );
     }
 
     fn execute_debug_preview_pass(
@@ -529,8 +549,8 @@ impl RenderCore {
         surface_view: &TextureView,
     ) {
         let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_view,
-            surface_view,
+            &self.pipelines.msaa_hdr_view,
+            &self.pipelines.resolved_hdr_view,
             self.msaa_samples,
         );
 
@@ -550,13 +570,59 @@ impl RenderCore {
             &mut pass,
         );
     }
+    fn execute_tonemap_pass(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        surface_view: &TextureView,
+        settings: &Settings,
+    ) {
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Tonemap Pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: surface_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: Operations {
+                    load: LoadOp::Clear(Color::BLACK),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let options = PipelineOptions {
+            topology: TriangleList,
+            msaa_samples: 1,
+            depth_stencil: None,
+            vertex_layouts: vec![],
+            blend: None,
+            cull_mode: None,
+            shadow_pass: false,
+            fullscreen_pass: true,
+            target_format: surface_view.texture().format(),
+        };
+        self.render_manager.render(
+            vec![],
+            "Tonemap",
+            shader_dir().join("tonemap.wgsl").as_path(),
+            options,
+            &[],
+            &mut pass,
+            &self.pipelines,
+            settings,
+        );
+        pass.draw(0..3, 0..1);
+    }
 
     fn render_ui(
-        &self,
+        &mut self,
         pass: &mut RenderPass,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &InputState,
+        texture_format: TextureFormat,
     ) {
         let screen_uniform = crate::renderer::ui::ScreenUniform {
             size: [self.size.width as f32, self.size.height as f32],
@@ -571,7 +637,8 @@ impl RenderCore {
             bytemuck::bytes_of(&screen_uniform),
         );
 
-        self.ui_renderer.render(pass, ui_loader);
+        self.ui_renderer
+            .render(&mut self.render_manager, pass, ui_loader, texture_format);
     }
 
     pub(crate) fn cycle_msaa(&mut self) {
@@ -994,6 +1061,7 @@ fn render_gizmo(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
+    settings: &Settings,
     msaa_samples: u32,
     gizmo: &mut Gizmo,
     camera: &Camera,
@@ -1018,10 +1086,13 @@ fn render_gizmo(
             cull_mode: None,
             blend: Some(BlendState::REPLACE),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&pipelines.uniforms.buffer],
         pass,
         pipelines,
+        settings,
     );
 
     let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
@@ -1034,6 +1105,7 @@ fn render_water(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
+    settings: &Settings,
     msaa_samples: u32,
 ) {
     render_manager.render(
@@ -1069,6 +1141,8 @@ fn render_water(
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1077,6 +1151,7 @@ fn render_water(
         ],
         pass,
         pipelines,
+        settings,
     );
 
     pass.set_stencil_reference(1);
@@ -1092,6 +1167,7 @@ fn render_sky(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
+    settings: &Settings,
     msaa_samples: u32,
 ) {
     let sky_depth_stencil = Some(DepthStencilState {
@@ -1114,10 +1190,13 @@ fn render_sky(
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
         pipelines,
+        settings,
     );
     pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
     pass.draw(0..4, 0..STAR_COUNT);
@@ -1134,10 +1213,13 @@ fn render_sky(
             cull_mode: None,
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
         pipelines,
+        settings,
     );
     pass.draw(0..3, 0..1);
 }
@@ -1147,6 +1229,7 @@ fn render_roads(
     render_manager: &mut RenderManager,
     road_renderer: &RoadRenderSubsystem,
     pipelines: &Pipelines,
+    settings: &Settings,
     msaa_samples: u32,
 ) {
     let keys = road_material_keys();
@@ -1169,6 +1252,8 @@ fn render_roads(
             cull_mode: Some(Face::Back),
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1176,6 +1261,7 @@ fn render_roads(
         ],
         pass,
         pipelines,
+        settings,
     );
 
     for chunk_id in &road_renderer.visible_draw_list {
@@ -1211,6 +1297,8 @@ fn render_roads(
             cull_mode: Some(Face::Back),
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1218,6 +1306,7 @@ fn render_roads(
         ],
         pass,
         pipelines,
+        settings,
     );
 
     pass.set_vertex_buffer(0, vb.slice(..));
@@ -1230,6 +1319,7 @@ fn render_terrain(
     render_manager: &mut RenderManager,
     terrain_renderer: &TerrainRenderer,
     pipelines: &Pipelines,
+    settings: &Settings,
     msaa_samples: u32,
     camera: &Camera,
     aspect: f32,
@@ -1275,10 +1365,13 @@ fn render_terrain(
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
         pipelines,
+        settings,
     );
     terrain_renderer.render(pass, camera, aspect, false);
 
@@ -1295,10 +1388,13 @@ fn render_terrain(
             blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
         pipelines,
+        settings,
     );
     terrain_renderer.render(pass, camera, aspect, true);
 }

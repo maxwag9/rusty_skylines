@@ -17,67 +17,6 @@ pub fn calc_move_speed(input: &InputState) -> f32 {
     base
 }
 
-pub fn polygon_sdf(px: f32, py: f32, verts: &[UiVertex]) -> f32 {
-    let mut min_dist = f32::MAX;
-    let mut winding = 0;
-    let n = verts.len();
-
-    for i in 0..n {
-        let ax = verts[i].pos[0];
-        let ay = verts[i].pos[1];
-        let bx = verts[(i + 1) % n].pos[0];
-        let by = verts[(i + 1) % n].pos[1];
-
-        // edge vector
-        let abx = bx - ax;
-        let aby = by - ay;
-
-        // point-to-a
-        let apx = px - ax;
-        let apy = py - ay;
-
-        // projection factor
-        let t = ((apx * abx + apy * aby) / (abx * abx + aby * aby)).clamp(0.0, 1.0);
-
-        // closest point
-        let cx = ax + abx * t;
-        let cy = ay + aby * t;
-
-        // distance to edge
-        let dx = px - cx;
-        let dy = py - cy;
-        let dist = (dx * dx + dy * dy).sqrt();
-
-        if dist < min_dist {
-            min_dist = dist;
-        }
-
-        // winding (stable inside/outside)
-        let cond1 = (ay <= py) && (py < by);
-        let cond2 = (by <= py) && (py < ay);
-        let side = (px - ax) * (by - ay) - (bx - ax) * (py - ay);
-
-        if cond1 && side > 0.0 {
-            winding += 1;
-        }
-        if cond2 && side < 0.0 {
-            winding -= 1;
-        }
-    }
-
-    // inside = negative distance, outside = positive distance
-    if winding == 0 {
-        min_dist // outside
-    } else {
-        -min_dist // inside
-    }
-}
-
-#[inline]
-pub fn dist(a: f32, b: f32, c: f32, d: f32) -> f32 {
-    ((a - c) * (a - c) + (b - d) * (b - d)).sqrt()
-}
-
 pub fn ensure_ccw(verts: &mut [UiVertex]) {
     if verts.len() < 3 {
         return;

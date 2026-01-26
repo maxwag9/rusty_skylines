@@ -198,6 +198,7 @@ fn mesh_segment_with_boundaries(
     if lane_ids.is_empty() {
         return;
     }
+    let road_type = style.road_type();
     // Extract clip polygons
     let start_clip = start_result
         .map(|r| &r.polygon)
@@ -254,10 +255,10 @@ fn mesh_segment_with_boundaries(
             gizmo,
             style,
             geom,
-            style.lane_width,
-            style.lane_height,
+            road_type.lane_width,
+            road_type.lane_height,
             0.0,
-            style.lane_material_id,
+            road_type.lane_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
             start_clip,
@@ -270,17 +271,17 @@ fn mesh_segment_with_boundaries(
     // 2. Draw sidewalks on outer edges
     if has_left {
         if let Some((_lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == min_lane_idx) {
-            let offset = style.lane_width * 0.5 + style.sidewalk_width * 0.5;
+            let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
 
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
                 style,
                 geom,
-                style.sidewalk_width,
-                style.sidewalk_height,
+                road_type.sidewalk_width,
+                road_type.sidewalk_height,
                 offset,
-                style.sidewalk_material_id,
+                road_type.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
                 start_clip,
@@ -289,14 +290,14 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let inner_offset = style.lane_width * 0.5;
+            let inner_offset = road_type.lane_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
                 geom,
                 inner_offset,
-                style.lane_height,
-                style.sidewalk_height,
+                road_type.lane_height,
+                road_type.sidewalk_height,
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
@@ -307,14 +308,14 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let outer_offset = style.lane_width * 0.5 + style.sidewalk_width;
+            let outer_offset = road_type.lane_width * 0.5 + road_type.sidewalk_width;
             build_vertical_face(
                 terrain_renderer,
                 style,
                 geom,
                 outer_offset,
-                style.lane_height,
-                style.sidewalk_height,
+                road_type.lane_height,
+                road_type.sidewalk_height,
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
@@ -329,17 +330,17 @@ fn mesh_segment_with_boundaries(
 
     if has_right {
         if let Some((_lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == max_lane_idx) {
-            let offset = style.lane_width * 0.5 + style.sidewalk_width * 0.5;
+            let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
 
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
                 style,
                 geom,
-                style.sidewalk_width,
-                style.sidewalk_height,
+                road_type.sidewalk_width,
+                road_type.sidewalk_height,
                 offset,
-                style.sidewalk_material_id,
+                road_type.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
                 start_clip,
@@ -348,15 +349,15 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let inner_offset = style.lane_width * 0.5;
+            let inner_offset = road_type.lane_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
                 geom,
                 inner_offset,
-                style.lane_height,
-                style.sidewalk_height,
-                0,
+                road_type.lane_height,
+                road_type.sidewalk_height,
+                road_type.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
                 None,
@@ -366,15 +367,15 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let outer_offset = style.lane_width * 0.5 + style.sidewalk_width;
+            let outer_offset = road_type.lane_width * 0.5 + road_type.sidewalk_width;
             build_vertical_face(
                 terrain_renderer,
                 style,
                 geom,
                 outer_offset,
-                style.lane_height,
-                style.sidewalk_height,
-                0,
+                road_type.lane_height,
+                road_type.sidewalk_height,
+                road_type.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
                 Some(1f32),
@@ -387,19 +388,19 @@ fn mesh_segment_with_boundaries(
     }
 
     // 3. Draw median if needed
-    if has_left && has_right && style.median_width > 0.1 {
+    if has_left && has_right && road_type.median_width > 0.1 {
         if let Some((_lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == 1) {
-            let offset = -style.lane_width * 0.5;
+            let offset = -road_type.lane_width * 0.5;
 
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
                 style,
                 geom,
-                style.median_width,
-                style.median_height,
+                road_type.median_width,
+                road_type.median_height,
                 offset,
-                style.median_material_id,
+                road_type.median_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
                 start_clip,
@@ -408,14 +409,14 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let curb_offset_right = -style.lane_width * 0.5 + style.median_width * 0.5;
+            let curb_offset_right = -road_type.lane_width * 0.5 + road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
                 geom,
                 curb_offset_right,
-                style.lane_height,
-                style.median_height,
+                road_type.lane_height,
+                road_type.median_height,
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
@@ -426,14 +427,14 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let curb_offset_left = -style.lane_width * 0.5 - style.median_width * 0.5;
+            let curb_offset_left = -road_type.lane_width * 0.5 - road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
                 geom,
                 curb_offset_left,
-                style.lane_height,
-                style.median_height,
+                road_type.lane_height,
+                road_type.median_height,
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
@@ -458,13 +459,14 @@ fn draw_node_geometry(
     indices: &mut Vec<u32>,
 ) {
     let chunk_size = terrain_renderer.chunk_size;
+    let road_type = style.road_type();
     // --- Compute radii ---
     let mut max_radius = 2.0_f32;
     for (idx, width) in connected_lanes_info {
-        max_radius = max_radius.max(idx.abs() as f32 * width + style.sidewalk_width);
+        max_radius = max_radius.max(idx.abs() as f32 * width + road_type.sidewalk_width);
     }
 
-    let road_radius = max_radius - style.sidewalk_width;
+    let road_radius = max_radius - road_type.sidewalk_width;
     let sw_inner = road_radius;
     let sw_outer = max_radius;
 
@@ -504,18 +506,14 @@ fn draw_node_geometry(
     // 1) ROAD SURFACE - Filled disk using triangle fan from center
     // =========================================================================
     let mut center_p = node_pos;
-    set_point_height_with_structure_type(
-        terrain_renderer,
-        style.road_type().structure(),
-        &mut center_p,
-    );
-    center_p.local.y += style.lane_height;
+    set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut center_p);
+    center_p.local.y += road_type.lane_height;
     let center_idx = vertices.len() as u32;
 
     vertices.push(road_vertex(
         center_p,
         up_normal,
-        style.lane_material_id,
+        road_type.lane_material_id,
         0.5,
         0.5,
     ));
@@ -527,12 +525,8 @@ fn draw_node_geometry(
         let dir = Vec3::new(cos_a, 0.0, sin_a);
         let pos = node_pos.add_vec3(dir * road_radius, chunk_size);
         let mut outer_p = pos;
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            style.road_type().structure(),
-            &mut outer_p,
-        );
-        outer_p.local.y += style.lane_height;
+        set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut outer_p);
+        outer_p.local.y += road_type.lane_height;
 
         // Polar UVs for road disk
         let uv_scale = road_radius / config.uv_scale_v;
@@ -542,7 +536,7 @@ fn draw_node_geometry(
         vertices.push(road_vertex(
             outer_p,
             up_normal,
-            style.lane_material_id,
+            road_type.lane_material_id,
             u,
             v,
         ));
@@ -572,16 +566,16 @@ fn draw_node_geometry(
 
         set_point_height_with_structure_type(
             terrain_renderer,
-            style.road_type().structure(),
+            road_type.structure(),
             &mut pos_inner,
         );
-        pos_inner.local.y += style.sidewalk_height;
+        pos_inner.local.y += road_type.sidewalk_height;
         set_point_height_with_structure_type(
             terrain_renderer,
-            style.road_type().structure(),
+            road_type.structure(),
             &mut pos_outer,
         );
-        pos_outer.local.y += style.sidewalk_height;
+        pos_outer.local.y += road_type.sidewalk_height;
 
         let arc_u = (angle - start_angle) * ((sw_inner + sw_outer) * 0.5) / config.uv_scale_u;
 
@@ -589,7 +583,7 @@ fn draw_node_geometry(
         vertices.push(road_vertex(
             pos_inner,
             up_normal,
-            style.sidewalk_material_id,
+            road_type.sidewalk_material_id,
             arc_u,
             0.0,
         ));
@@ -598,9 +592,9 @@ fn draw_node_geometry(
         vertices.push(road_vertex(
             pos_inner,
             up_normal,
-            style.sidewalk_material_id,
+            road_type.sidewalk_material_id,
             arc_u,
-            style.sidewalk_width / config.uv_scale_v,
+            road_type.sidewalk_width / config.uv_scale_v,
         ));
     }
 
@@ -630,32 +624,28 @@ fn draw_node_geometry(
         let dir = Vec3::new(cos_a, 0.0, sin_a);
 
         let mut pos = node_pos.add_vec3(dir * sw_inner, chunk_size);
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            style.road_type().structure(),
-            &mut pos,
-        );
+        set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut pos);
 
         let mut top_p = pos;
-        top_p.local.y += style.sidewalk_height;
+        top_p.local.y += road_type.sidewalk_height;
         let mut bottom_p = pos;
-        bottom_p.local.y += style.lane_height;
+        bottom_p.local.y += road_type.lane_height;
 
         let inward_normal = [-dir.x, 0.0, -dir.z];
         let arc_u = (angle - start_angle) * sw_inner / config.uv_scale_u;
-        let curb_height = style.sidewalk_height - style.lane_height;
+        let curb_height = road_type.sidewalk_height - road_type.lane_height;
 
         vertices.push(road_vertex(
             top_p,
             inward_normal,
-            style.sidewalk_material_id,
+            road_type.sidewalk_material_id,
             arc_u,
             curb_height / config.uv_scale_v,
         ));
         vertices.push(road_vertex(
             bottom_p,
             inward_normal,
-            style.sidewalk_material_id,
+            road_type.sidewalk_material_id,
             arc_u,
             0.0,
         ));
@@ -697,9 +687,9 @@ fn draw_node_geometry(
         );
 
         let mut top_p = pos;
-        top_p.local.y += style.sidewalk_height;
+        top_p.local.y += road_type.sidewalk_height;
         let mut bottom_p = pos;
-        bottom_p.local.y += style.lane_height;
+        bottom_p.local.y += road_type.lane_height;
 
         let outward_normal = [dir.x, 0.0, dir.z];
         let arc_u = (angle - start_angle) * sw_outer / config.uv_scale_u;
@@ -707,14 +697,14 @@ fn draw_node_geometry(
         vertices.push(road_vertex(
             top_p,
             outward_normal,
-            style.sidewalk_material_id,
+            road_type.sidewalk_material_id,
             arc_u,
-            style.sidewalk_height / config.uv_scale_v,
+            road_type.sidewalk_height / config.uv_scale_v,
         ));
         vertices.push(road_vertex(
             bottom_p,
             outward_normal,
-            style.sidewalk_material_id,
+            road_type.sidewalk_material_id,
             arc_u,
             0.0,
         ));
@@ -1248,7 +1238,7 @@ impl RoadMeshManager {
                     .chain(node.outgoing_lanes().iter())
                 {
                     let lane = storage.lane(lane_id);
-                    connected_lanes_info.push((lane.lane_index(), style.lane_width));
+                    connected_lanes_info.push((lane.lane_index(), style.road_type().lane_width));
                 }
 
                 if connected_lanes_info.is_empty() {

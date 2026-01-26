@@ -1,4 +1,4 @@
-// shaders/fog.wgsl
+// shaders/fog_msaa.wgsl
 
 struct Uniforms {
     view: mat4x4<f32>,
@@ -74,6 +74,7 @@ fn view_distance(world_pos: vec3<f32>) -> f32 {
     let view_pos = uniforms.view * vec4<f32>(world_pos, 1.0);
     return abs(view_pos.z);
 }
+
 
 // ----------------------------
 // Distance fog (guaranteed 0..1)
@@ -153,26 +154,25 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
     let far_pos = far_h.xyz / far_h.w;
     let ray_dir = normalize(far_pos - uniforms.camera_pos);
 
-    // Sky = pretend depth at fog_end
-    var world_pos: vec3<f32>;
-    var view_dist: f32;
+    let is_sky = depth >= 0.999999;
 
-    if (depth >= 0.999999) {
-        return vec4<f32>(fog_col, 0.0);
-//        view_dist = fog.fog_start;
-//        world_pos = uniforms.camera_pos + ray_dir * view_dist;
+    var fog_amt: f32;
+    var fog_col: vec3<f32>;
+
+    if (is_sky) {
+        // SKY FOG
+        let horizon = saturate(1.0 - abs(ray_dir.y));
+        fog_amt = horizon * fog.fog_sky_factor;
+        fog_col = scattering_color(ray_dir);
     } else {
-        world_pos = reconstruct_world(frag_pos.xy, depth);
-        view_dist = view_distance(world_pos);
+        // GEOMETRY FOG
+        let world_pos = reconstruct_world(frag_pos.xy, depth);
+        let view_dist = view_distance(world_pos);
+        fog_amt = distance_fog_factor(view_dist) * fog.fog_density;
+
+        fog_col = fog_color_tinted(world_pos, scattering_color(ray_dir));
     }
 
-    // Fog factors
-    let dist_fog = saturate(distance_fog_factor(view_dist));
-    let fog_amt = dist_fog;
-
-    // Fog color
-    let scatter_col = scattering_color(ray_dir);
-    let fog_col = fog_color_tinted(world_pos, scatter_col);
 
     return vec4<f32>(fog_col, fog_amt);
 }

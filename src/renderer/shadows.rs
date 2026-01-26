@@ -1,4 +1,5 @@
 use crate::components::camera::Camera;
+use crate::data::Settings;
 use crate::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
@@ -92,46 +93,9 @@ pub fn create_csm_shadow_texture(
         shadow_mat_buffers: std::array::from_fn(|_| create_shadow_mat_uniform_buffer(device)),
     }
 }
-// Helper to create the shadow texture
-pub fn create_shadow_texture(device: &wgpu::Device, size: u32, label: &str) -> wgpu::TextureView {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(format!("Shadow Map. Size: {size}, Label: {label}").as_str()),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: Depth32Float,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
-}
 
 // Defaults (tweak later)
 pub const DEFAULT_SHADOW_DISTANCE: f32 = 200.0; // how far from camera to cast shadows
-pub const DEFAULT_SPLIT_LAMBDA: f32 = 0.5; // 0 = uniform, 1 = logarithmic
-pub const DEFAULT_Z_PADDING: f32 = 50.0; // extra depth range in light space
-pub const DEFAULT_XY_PAD_RATIO: f32 = 0.02; // expand xy bounds by 2%
-
-pub fn compute_cascade_splits(near: f32, far: f32, lambda: f32) -> [f32; 4] {
-    let n = near.max(1e-3);
-    let f = far.max(n + 1e-3);
-    let l = lambda.clamp(0.0, 1.0);
-
-    let mut splits = [0.0; 4];
-    for i in 1..=4 {
-        let p = i as f32 / 4.0;
-        let log = n * (f / n).powf(p);
-        let uni = n + (f - n) * p;
-        splits[i - 1] = log * l + uni * (1.0 - l);
-    }
-    splits
-}
 
 fn camera_basis_from_view(view: Mat4) -> (Vec3, Vec3, Vec3, Vec3) {
     // inv_view transforms view-space axes into world-space axes.
@@ -314,7 +278,8 @@ pub fn render_roads_shadows(
     render_manager: &mut RenderManager,
     road_renderer: &RoadRenderSubsystem,
     pipelines: &Pipelines,
-    shadow_mat_buffer: &wgpu::Buffer,
+    settings: &Settings,
+    shadow_mat_buffer: &Buffer,
 ) {
     let bias = DepthBiasState {
         constant: 0, // for Depth32Float, constants often need to be “large”
@@ -341,10 +306,13 @@ pub fn render_roads_shadows(
             cull_mode: Some(Face::Back),
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: true,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&shadow_mat_buffer],
         pass,
         pipelines,
+        settings,
     );
 
     for chunk_id in &road_renderer.visible_draw_list {
@@ -385,10 +353,13 @@ pub fn render_roads_shadows(
             cull_mode: Some(Face::Back),
             blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: true,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&shadow_mat_buffer],
         pass,
         pipelines,
+        settings,
     );
     pass.set_vertex_buffer(0, vb.slice(..));
     pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
@@ -399,6 +370,7 @@ pub fn render_terrain_shadows(
     render_manager: &mut RenderManager,
     terrain_renderer: &TerrainRenderer,
     pipelines: &Pipelines,
+    settings: &Settings,
     camera: &Camera,
     aspect: f32,
     shadow_mat_buffer: &Buffer,
@@ -427,10 +399,13 @@ pub fn render_terrain_shadows(
             blend: Some(BlendState::ALPHA_BLENDING),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
+            fullscreen_pass: false,
+            target_format: pipelines.msaa_hdr_view.texture().format(),
         },
         &[&shadow_mat_buffer],
         pass,
         pipelines,
+        settings,
     );
     terrain_renderer.render(pass, camera, aspect, false);
 }

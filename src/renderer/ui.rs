@@ -1,3 +1,5 @@
+use crate::paths::shader_dir;
+use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
@@ -6,9 +8,9 @@ use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiElement, UiVertexPoly,
+    UiVertexText,
 };
 use std::ops::Range;
-use std::path::Path;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 
@@ -206,9 +208,8 @@ impl UiRenderer {
         format: TextureFormat,
         size: PhysicalSize<u32>,
         msaa_samples: u32,
-        shader_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let pipelines = UiPipelines::new(device, format, msaa_samples, size, shader_dir)?;
+        let pipelines = UiPipelines::new(device, format, msaa_samples, size)?;
 
         Ok(Self {
             pipelines,
@@ -258,7 +259,13 @@ impl UiRenderer {
         Ok(())
     }
 
-    pub fn render<'a>(&self, pass: &mut RenderPass<'a>, ui: &mut UiButtonLoader) {
+    pub fn render<'a>(
+        &self,
+        render_manager: &mut RenderManager,
+        pass: &mut RenderPass<'a>,
+        ui: &mut UiButtonLoader,
+        texture_format: TextureFormat,
+    ) {
         if !ui.touch_manager.options.show_gui {
             return;
         }
@@ -266,18 +273,18 @@ impl UiRenderer {
         ui.update_dynamic_texts();
 
         let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
-
-        for (_, menu) in ui.menus.iter().filter(|(_, menu)| menu.active) {
+        for (_, menu) in ui.menus.iter().filter(|(_, m)| m.active) {
             for layer in menu.layers.iter().filter(|l| l.active) {
                 layers_to_render.push(layer);
             }
         }
-
         layers_to_render.sort_by_key(|l| l.order);
 
-        for layer in layers_to_render {
-            let mut cmds: Vec<DrawCmd> = Vec::new();
+        let depth_stencil = None;
+        let msaa = self.pipelines.msaa_samples;
 
+        for layer in layers_to_render {
+            // Build per-layer bind groups (same as before)
             let circle_bg = if layer.gpu.circle_count > 0 {
                 Some(self.device.create_bind_group(&BindGroupDescriptor {
                     label: None,
@@ -368,96 +375,190 @@ impl UiRenderer {
             for element in &layer.elements {
                 match element {
                     UiElement::Circle(_) => {
-                        if let Some(bg) = &circle_bg {
-                            cmds.push(DrawCmd {
-                                pipeline: &self.pipelines.circle_pipeline,
-                                bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: Some(bg.clone()),
-                                vertex_buffer: Some(&self.pipelines.quad_buffer),
-                                vertex_range: 0..4,
-                                instance_range: circle_idx..circle_idx + 1,
-                            });
-                            cmds.push(DrawCmd {
-                                pipeline: &self.pipelines.glow_pipeline,
-                                bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: Some(bg.clone()),
-                                vertex_buffer: Some(&self.pipelines.quad_buffer),
-                                vertex_range: 0..4,
-                                instance_range: circle_idx..circle_idx + 1,
-                            });
+                        if let Some(bg1) = &circle_bg {
+                            // Circle
+                            let options = PipelineOptions {
+                                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                                cull_mode: None,
+                                shadow_pass: false,
+                                fullscreen_pass: false,
+                                target_format: texture_format,
+                            };
+                            render_manager.render_with_bind_groups(
+                                "UI Circle",
+                                &shader_dir().join("ui_circle.wgsl"),
+                                options,
+                                &[
+                                    &self.pipelines.uniform_layout,
+                                    &self.pipelines.circle_layout,
+                                ],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, circle_idx..circle_idx + 1);
+
+                            // Glow
+                            let options = PipelineOptions {
+                                blend: Some(self.pipelines.additive_blend),
+                                ..PipelineOptions {
+                                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                    msaa_samples: msaa,
+                                    depth_stencil: depth_stencil.clone(),
+                                    vertex_layouts: vec![UiVertexPoly::desc()],
+                                    blend: Some(self.pipelines.additive_blend),
+                                    cull_mode: None,
+                                    shadow_pass: false,
+                                    fullscreen_pass: false,
+                                    target_format: texture_format,
+                                }
+                            };
+                            render_manager.render_with_bind_groups(
+                                "UI Glow",
+                                &shader_dir().join("ui_circle_glow.wgsl"),
+                                options,
+                                &[
+                                    &self.pipelines.uniform_layout,
+                                    &self.pipelines.circle_layout,
+                                ],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, circle_idx..circle_idx + 1);
                         }
                         circle_idx += 1;
                     }
+
                     UiElement::Handle(_) => {
-                        if let Some(bg) = &handle_bg {
-                            cmds.push(DrawCmd {
-                                pipeline: &self.pipelines.handle_pipeline,
-                                bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: Some(bg.clone()),
-                                vertex_buffer: Some(&self.pipelines.handle_quad_buffer),
-                                vertex_range: 0..4,
-                                instance_range: handle_idx..handle_idx + 1,
-                            });
+                        if let Some(bg1) = &handle_bg {
+                            let options = PipelineOptions {
+                                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                blend: self.pipelines.good_blend,
+                                cull_mode: None,
+                                shadow_pass: false,
+                                fullscreen_pass: false,
+                                target_format: texture_format,
+                            };
+                            render_manager.render_with_bind_groups(
+                                "UI Handle",
+                                &shader_dir().join("ui_handle.wgsl"),
+                                options,
+                                &[
+                                    &self.pipelines.uniform_layout,
+                                    &self.pipelines.handle_layout,
+                                ],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.handle_quad_buffer.slice(..));
+                            pass.draw(0..4, handle_idx..handle_idx + 1);
                         }
                         handle_idx += 1;
                     }
+
                     UiElement::Polygon(poly) => {
                         let count = poly.tri_count.saturating_mul(3);
-                        if let (Some(bg), Some(vbo)) = (&poly_bg, &layer.gpu.poly_vbo) {
-                            cmds.push(DrawCmd {
-                                pipeline: &self.pipelines.polygon_pipeline,
-                                bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: Some(bg.clone()),
-                                vertex_buffer: Some(vbo),
-                                vertex_range: poly_vtx_offset..poly_vtx_offset + count,
-                                instance_range: 0..1,
-                            });
+                        if let (Some(bg1), Some(vbo)) = (&poly_bg, &layer.gpu.poly_vbo) {
+                            let options = PipelineOptions {
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                blend: Some(BlendState::ALPHA_BLENDING),
+                                cull_mode: None,
+                                shadow_pass: false,
+                                fullscreen_pass: false,
+                                target_format: texture_format,
+                            };
+                            render_manager.render_with_bind_groups(
+                                "UI Polygon",
+                                &shader_dir().join("ui_polygon.wgsl"),
+                                options,
+                                &[
+                                    &self.pipelines.uniform_layout,
+                                    &self.pipelines.polygon_layout,
+                                ],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, vbo.slice(..));
+                            pass.draw(poly_vtx_offset..poly_vtx_offset + count, 0..1);
                         }
                         poly_vtx_offset = poly_vtx_offset.saturating_add(count);
                     }
+
                     UiElement::Outline(_) => {
-                        if let Some(bg) = &outline_bg {
-                            cmds.push(DrawCmd {
-                                pipeline: &self.pipelines.outline_pipeline,
-                                bind_group0: &self.pipelines.uniform_bind_group,
-                                bind_group1: Some(bg.clone()),
-                                vertex_buffer: Some(&self.pipelines.quad_buffer),
-                                vertex_range: 0..4,
-                                instance_range: outline_idx..outline_idx + 1,
-                            });
+                        if let Some(bg1) = &outline_bg {
+                            let options = PipelineOptions {
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                blend: self.pipelines.good_blend,
+                                cull_mode: None,
+                                shadow_pass: false,
+                                fullscreen_pass: false,
+                                target_format: texture_format,
+                            };
+                            render_manager.render_with_bind_groups(
+                                "UI Outline",
+                                &shader_dir().join("ui_shape_outline.wgsl"),
+                                options,
+                                &[
+                                    &self.pipelines.uniform_layout,
+                                    &self.pipelines.outline_layout,
+                                ],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, outline_idx..outline_idx + 1);
                         }
                         outline_idx += 1;
                     }
+
                     UiElement::Text(_) => {
-                        // Text is handled above everything below!!
+                        // handled after other elements for proper layering
                     }
                 }
             }
 
+            // Text on top
             if layer.gpu.text_count > 0 {
                 if let Some(text_vbo) = &layer.gpu.text_vbo {
-                    cmds.push(DrawCmd {
-                        pipeline: &self.pipelines.text_pipeline,
-                        bind_group0: &self.pipelines.uniform_bind_group,
-                        bind_group1: Some(self.pipelines.text_bind_group.clone()),
-                        vertex_buffer: Some(text_vbo),
-                        vertex_range: 0..layer.gpu.text_count,
-                        instance_range: 0..1,
-                    });
+                    let options = PipelineOptions {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        msaa_samples: msaa,
+                        depth_stencil: depth_stencil.clone(),
+                        vertex_layouts: vec![UiVertexText::desc()],
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        cull_mode: None,
+                        shadow_pass: false,
+                        fullscreen_pass: false,
+                        target_format: texture_format,
+                    };
+                    render_manager.render_with_bind_groups(
+                        "UI Text",
+                        &shader_dir().join("text.wgsl"),
+                        options,
+                        &[&self.pipelines.uniform_layout, &self.pipelines.text_layout],
+                        &[
+                            &self.pipelines.uniform_bind_group,
+                            &self.pipelines.text_bind_group,
+                        ],
+                        pass,
+                    );
+                    pass.set_vertex_buffer(0, text_vbo.slice(..));
+                    pass.draw(0..layer.gpu.text_count, 0..1);
                 }
-            }
-
-            // --- Execute ---
-            for c in cmds {
-                pass.set_pipeline(c.pipeline);
-                pass.set_bind_group(0, c.bind_group0, &[]);
-                if let Some(bg1) = &c.bind_group1 {
-                    pass.set_bind_group(1, bg1, &[]);
-                }
-                if let Some(vb) = c.vertex_buffer {
-                    pass.set_vertex_buffer(0, vb.slice(..));
-                }
-                pass.draw(c.vertex_range.clone(), c.instance_range.clone());
             }
         }
     }

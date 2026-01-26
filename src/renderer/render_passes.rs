@@ -21,15 +21,15 @@ impl RenderPassConfig {
 }
 
 pub fn create_color_attachment<'a>(
-    msaa_view: &'a TextureView,
-    surface_view: &'a TextureView,
+    msaa_hdr_view: &'a TextureView,
+    resolved_hdr_view: &'a TextureView,
     msaa_samples: u32,
     background_color: Color,
 ) -> RenderPassColorAttachment<'a> {
     if msaa_samples > 1 {
         RenderPassColorAttachment {
-            view: msaa_view,
-            resolve_target: Some(surface_view),
+            view: msaa_hdr_view,
+            resolve_target: Some(resolved_hdr_view),
             depth_slice: None,
             ops: Operations {
                 load: LoadOp::Clear(background_color),
@@ -38,7 +38,7 @@ pub fn create_color_attachment<'a>(
         }
     } else {
         RenderPassColorAttachment {
-            view: surface_view,
+            view: resolved_hdr_view,
             resolve_target: None,
             depth_slice: None,
             ops: Operations {

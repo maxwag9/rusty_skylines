@@ -76,6 +76,8 @@ pub struct Settings {
     #[serde(default)]
     pub shadow_map_size: u32,
     #[serde(default)]
+    pub shadows_enabled: bool,
+    #[serde(default)]
     pub zoom_speed: f32,
     #[serde(default)]
     pub render_lanes_gizmo: bool,
@@ -100,6 +102,7 @@ impl Default for Settings {
             always_day: false,
             msaa_samples: 4,
             shadow_map_size: 4096,
+            shadows_enabled: true,
             zoom_speed: 10.0,
             render_lanes_gizmo: false,
             render_chunk_bounds: false,

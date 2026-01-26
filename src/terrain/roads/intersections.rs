@@ -187,7 +187,7 @@ pub fn build_intersection_mesh(
     if node_lanes.len() < 2 {
         return IntersectionMeshResult::default();
     }
-
+    let road_type = style.road_type();
     let outer_lanes = select_outermost_lanes(node_lanes, storage, terrain.chunk_size);
 
     // Build polylines AND track segment ownership
@@ -195,7 +195,7 @@ pub fn build_intersection_mesh(
     let mut polyline_segment_info: Vec<(SegmentId, i8)> = Vec::new(); // (segment_id, outward_sign)
 
     for lane in &outer_lanes {
-        let offset = style.lane_width * 0.5 * lane.outward_sign as f32;
+        let offset = road_type.lane_width * 0.5 * lane.outward_sign as f32;
         let node_lane = node.node_lane(lane.node_lane);
 
         gizmo.polyline(node_lane.polyline(), [1.0, 0.0, 1.0], 4.0, 10.0);
@@ -217,12 +217,12 @@ pub fn build_intersection_mesh(
 
     // center vertex (UV at texture center)
     let mut point = node.position();
-    set_point_height_with_structure_type(terrain, style.road_type().structure(), &mut point);
-    point.local.y += style.lane_height;
+    set_point_height_with_structure_type(terrain, road_type.structure(), &mut point);
+    point.local.y += road_type.lane_height;
     vertices.push(road_vertex(
         point,
         [0.0, 1.0, 0.0],
-        style.lane_material_id,
+        road_type.lane_material_id,
         0.5, // u
         0.5, // v
     ));
@@ -251,13 +251,13 @@ pub fn build_intersection_mesh(
     // push ring in the same order triangulator expects (CCW)
     for p in asphalt_ring.iter() {
         let mut point = p.clone();
-        set_point_height_with_structure_type(terrain, style.road_type().structure(), &mut point);
-        point.local.y += style.lane_height;
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut point);
+        point.local.y += road_type.lane_height;
         let (u, v) = radial_uv(*p);
         vertices.push(road_vertex(
             *p,
             [0.0, 1.0, 0.0],
-            style.lane_material_id,
+            road_type.lane_material_id,
             u,
             v,
         ));
@@ -266,26 +266,27 @@ pub fn build_intersection_mesh(
     triangulate_center_fan(asphalt_base, asphalt_ring.len() as u32, indices);
 
     // Sidewalks
-    if style.sidewalk_width > 0.01 {
+    if road_type.sidewalk_width > 0.01 {
         for lane in &outer_lanes {
             let node_lane = node.node_lane(lane.node_lane);
 
             // Offset sign must match the lane's side
             let offset_sign = lane.outward_sign as f32;
             let sidewalk_offset =
-                (style.lane_width * 0.5 + style.sidewalk_width * 0.5) * offset_sign;
-            let curb_inner_offset = (style.lane_width * 0.5) * offset_sign;
-            let curb_outer_offset = (style.lane_width * 0.5 + style.sidewalk_width) * offset_sign;
+                (road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5) * offset_sign;
+            let curb_inner_offset = (road_type.lane_width * 0.5) * offset_sign;
+            let curb_outer_offset =
+                (road_type.lane_width * 0.5 + road_type.sidewalk_width) * offset_sign;
 
             build_ribbon_mesh(
                 terrain,
                 gizmo,
                 style,
                 node_lane.geometry(),
-                style.sidewalk_width,
-                style.sidewalk_height,
+                road_type.sidewalk_width,
+                road_type.sidewalk_height,
                 sidewalk_offset, // Now correctly signed based on lane side
-                style.sidewalk_material_id,
+                road_type.sidewalk_material_id,
                 None,
                 (config.uv_scale_u, config.uv_scale_v),
                 None,
@@ -299,9 +300,9 @@ pub fn build_intersection_mesh(
                 style,
                 node_lane.geometry(),
                 curb_inner_offset,
-                style.lane_height,
-                style.sidewalk_height,
-                style.sidewalk_material_id,
+                road_type.lane_height,
+                road_type.sidewalk_height,
+                road_type.sidewalk_material_id,
                 None,
                 (config.uv_scale_u, config.uv_scale_v),
                 Some(-offset_sign), // Normal faces inward
@@ -316,9 +317,9 @@ pub fn build_intersection_mesh(
                 style,
                 node_lane.geometry(),
                 curb_outer_offset,
-                style.lane_height,
-                style.sidewalk_height,
-                style.sidewalk_material_id,
+                road_type.lane_height,
+                road_type.sidewalk_height,
+                road_type.sidewalk_material_id,
                 None,
                 (config.uv_scale_u, config.uv_scale_v),
                 Some(offset_sign), // Normal faces outward

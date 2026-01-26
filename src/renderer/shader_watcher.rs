@@ -1,5 +1,6 @@
+use crate::paths::shader_dir;
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 
 pub struct ShaderWatcher {
@@ -8,15 +9,14 @@ pub struct ShaderWatcher {
 }
 
 impl ShaderWatcher {
-    pub fn new(shader_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
-        let shader_dir = shader_dir.as_ref();
+    pub fn new() -> anyhow::Result<Self> {
         let (tx, rx) = channel();
 
         let mut watcher = recommended_watcher(move |res| {
             let _ = tx.send(res);
         })?;
 
-        watcher.watch(shader_dir, RecursiveMode::Recursive)?;
+        watcher.watch(shader_dir().as_path(), RecursiveMode::Recursive)?;
 
         Ok(Self {
             rx,

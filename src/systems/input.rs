@@ -93,7 +93,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         let scale_step = r * 0.45; // exponential feel at distance
         let zoom_step = (base_step + scale_step) * cam_ctrl.zoom_velocity * dt;
 
-        camera.orbit_radius = (r + zoom_step).clamp(camera.near * 2.0, camera.far * 0.8);
+        camera.orbit_radius = (r + zoom_step).clamp(camera.near * 2.0, 1000.0);
 
         //println!("{} {}", camera.near, camera.far);
         // Radius-aware damping

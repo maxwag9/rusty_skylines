@@ -411,6 +411,7 @@ impl ChunkBuilder {
         version: u64,
         version_atomic: &AtomicU64,
         terrain_gen: &TerrainGenerator,
+        has_edits: bool,
     ) -> Option<CpuChunkMesh> {
         let stepf = step as f32;
         let step_usize = step as usize;
@@ -423,9 +424,6 @@ impl ChunkBuilder {
         let total_verts = verts_x * verts_z;
         let total_cells = cells_x * cells_z;
 
-        // ═══════════════════════════════════════════════════════════════
-        // PHASE 1: Sample terrain data (heights + colors) with batching
-        // ═══════════════════════════════════════════════════════════════
         let (heights, colors) = Self::sample_terrain_batch(
             chunk_coord,
             chunk_size,
@@ -439,9 +437,6 @@ impl ChunkBuilder {
             return None;
         }
 
-        // ═══════════════════════════════════════════════════════════════
-        // PHASE 2: Pre-compute normals for all vertices
-        // ═══════════════════════════════════════════════════════════════
         let normals = Self::compute_normals_batch(
             chunk_coord,
             chunk_size,
@@ -458,14 +453,124 @@ impl ChunkBuilder {
             return None;
         }
 
-        // ═══════════════════════════════════════════════════════════════
-        // PHASE 3: Build cell classification for greedy meshing
-        // ═══════════════════════════════════════════════════════════════
-        let cells = Self::build_cell_data(cells_x, cells_z, verts_z, &heights, &colors);
+        let (vertices, indices) = if has_edits {
+            // Simple grid layout: vertices[gx * verts_z + gz] = vertex at (gx, gz)
+            // This allows in-place updates via regenerate_vertices_from_height_grid
+            Self::build_simple_grid(
+                chunk_coord,
+                step_usize,
+                verts_x,
+                verts_z,
+                &heights,
+                &colors,
+                &normals,
+            )
+        } else {
+            // Greedy meshing path for non-edited chunks
+            Self::build_greedy_mesh(
+                chunk_coord,
+                step_usize,
+                verts_x,
+                verts_z,
+                cells_x,
+                cells_z,
+                total_cells,
+                &heights,
+                &colors,
+                &normals,
+                version,
+                version_atomic,
+            )?
+        };
 
-        // ═══════════════════════════════════════════════════════════════
-        // PHASE 4: Greedy meshing - merge flat regions
-        // ═══════════════════════════════════════════════════════════════
+        Some(CpuChunkMesh {
+            chunk_coord,
+            step,
+            version,
+            vertices,
+            indices,
+            height_grid: Arc::new(Self::build_height_grid(
+                chunk_coord,
+                chunk_size,
+                step,
+                terrain_gen,
+            )),
+        })
+    }
+
+    /// Build a simple grid mesh where vertices[gx * nz + gz] = vertex at grid position (gx, gz).
+    /// This layout is required for in-place height updates on edited chunks.
+    fn build_simple_grid(
+        chunk_coord: ChunkCoord,
+        step: usize,
+        verts_x: usize,
+        verts_z: usize,
+        heights: &[f32],
+        colors: &[[f32; 3]],
+        normals: &[[f32; 3]],
+    ) -> (Vec<Vertex>, Vec<u32>) {
+        let total_verts = verts_x * verts_z;
+        let cells_x = verts_x - 1;
+        let cells_z = verts_z - 1;
+
+        let mut vertices = Vec::with_capacity(total_verts);
+        let mut indices = Vec::with_capacity(cells_x * cells_z * 6);
+
+        let step_f = step as f32;
+
+        // Emit vertices in row-major order: gx * verts_z + gz
+        for gx in 0..verts_x {
+            for gz in 0..verts_z {
+                let idx = gx * verts_z + gz;
+
+                let local_x = gx as f32 * step_f;
+                let local_z = gz as f32 * step_f;
+
+                vertices.push(Vertex {
+                    local_position: [local_x, heights[idx], local_z],
+                    normal: normals[idx],
+                    color: colors[idx],
+                    chunk_xz: [chunk_coord.x, chunk_coord.z],
+                    quad_uv: [1.0, 0.0],
+                });
+            }
+        }
+
+        // Emit indices for each cell
+        for cx in 0..cells_x {
+            for cz in 0..cells_z {
+                let v00 = (cx * verts_z + cz) as u32;
+                let v10 = ((cx + 1) * verts_z + cz) as u32;
+                let v01 = (cx * verts_z + (cz + 1)) as u32;
+                let v11 = ((cx + 1) * verts_z + (cz + 1)) as u32;
+
+                // Two triangles per cell
+                indices.extend_from_slice(&[v00, v10, v11, v00, v11, v01]);
+            }
+        }
+
+        (vertices, indices)
+    }
+
+    /// Build a greedy-meshed geometry for non-edited chunks.
+    fn build_greedy_mesh(
+        chunk_coord: ChunkCoord,
+        step_usize: usize,
+        verts_x: usize,
+        verts_z: usize,
+        cells_x: usize,
+        cells_z: usize,
+        total_cells: usize,
+        heights: &[f32],
+        colors: &[[f32; 3]],
+        normals: &[[f32; 3]],
+        version: u64,
+        version_atomic: &AtomicU64,
+    ) -> Option<(Vec<Vertex>, Vec<u32>)> {
+        // Build cell classification for greedy meshing
+        let cells = Self::build_cell_data(cells_x, cells_z, verts_z, heights, colors);
+
+        // Greedy meshing - merge flat regions
         let mut merged = vec![false; total_cells];
         let mut merged_quads: Vec<MergedQuad> = Vec::new();
         let mut non_flat_cells: Vec<(usize, usize)> = Vec::new();
@@ -520,16 +625,14 @@ impl ChunkBuilder {
             }
         }
 
-        // ═══════════════════════════════════════════════════════════════
-        // PHASE 5: Generate optimized mesh
-        // ═══════════════════════════════════════════════════════════════
+        // Generate optimized mesh
         let estimated_verts = merged_quads.len() * 4 + non_flat_cells.len() * 4;
         let estimated_indices = merged_quads.len() * 6 + non_flat_cells.len() * 6;
 
         let mut vertices = Vec::with_capacity(estimated_verts);
         let mut indices = Vec::with_capacity(estimated_indices);
 
-        // Emit merged flat quads (huge savings!)
+        // Emit merged flat quads
         for quad in &merged_quads {
             Self::emit_merged_quad(&mut vertices, &mut indices, chunk_coord, step_usize, quad);
         }
@@ -544,33 +647,17 @@ impl ChunkBuilder {
                 cx,
                 cz,
                 verts_z,
-                &heights,
-                &colors,
-                &normals,
+                heights,
+                colors,
+                normals,
             );
         }
 
         vertices.shrink_to_fit();
         indices.shrink_to_fit();
 
-        Some(CpuChunkMesh {
-            chunk_coord,
-            step,
-            version,
-            vertices,
-            indices,
-            height_grid: Arc::new(Self::build_height_grid(
-                chunk_coord,
-                chunk_size,
-                step,
-                terrain_gen,
-            )),
-        })
+        Some((vertices, indices))
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // TERRAIN SAMPLING
-    // ═══════════════════════════════════════════════════════════════════
 
     #[inline]
     fn sample_terrain_batch(
@@ -706,10 +793,6 @@ impl ChunkBuilder {
         terrain_gen.height(&pos, chunk_size)
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // CELL DATA CONSTRUCTION
-    // ═══════════════════════════════════════════════════════════════════
-
     fn build_cell_data(
         cells_x: usize,
         cells_z: usize,
@@ -759,10 +842,6 @@ impl ChunkBuilder {
 
         cells
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // GREEDY RECTANGLE FINDING (Core algorithm)
-    // ═══════════════════════════════════════════════════════════════════
 
     fn find_max_rect(
         cells: &[CellData],
@@ -829,10 +908,6 @@ impl ChunkBuilder {
 
         dr <= Self::COLOR_TOLERANCE && dg <= Self::COLOR_TOLERANCE && db <= Self::COLOR_TOLERANCE
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // MESH EMISSION
-    // ═══════════════════════════════════════════════════════════════════
 
     #[inline]
     fn emit_merged_quad(
@@ -950,10 +1025,6 @@ impl ChunkBuilder {
         indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // HEIGHT GRID (unchanged but optimized)
-    // ═══════════════════════════════════════════════════════════════════
-
     pub fn build_height_grid(
         chunk_coord: ChunkCoord,
         chunk_size: ChunkSize,
@@ -1016,20 +1087,24 @@ impl ChunkBuilder {
 }
 
 pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
-    let d = (dist2_chunks as f32).sqrt() * 8.0;
+    let d = (dist2_chunks as f32).sqrt();
 
-    if d < 1.5 {
+    if d < 2.0 {
         1
-    } else if d < 3.0 {
+    } else if d < 4.0 {
         2
-    } else if d < 6.0 {
+    } else if d < 8.0 {
         4
-    } else if d < 12.0 {
+    } else if d < 16.0 {
         8
-    } else if d < 24.0 {
+    } else if d < 32.0 {
         16
-    } else {
+    } else if d < 64.0 {
         32
+    } else if d < 128.0 {
+        64
+    } else {
+        128
     }
 }
 

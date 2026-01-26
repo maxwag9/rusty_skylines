@@ -2067,7 +2067,7 @@ fn compute_lane_geometries(
 ) -> Vec<LaneDefinition> {
     let mut lanes = Vec::new();
     let (left_count, right_count) = road_style_params.road_type().lanes_each_direction();
-    let lane_width = road_style_params.lane_width;
+    let lane_width = road_style_params.road_type().lane_width;
 
     // Forward lanes (right side: travel from start to end)
     for i in 0..right_count {

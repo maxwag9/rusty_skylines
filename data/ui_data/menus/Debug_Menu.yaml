@@ -28,14 +28,14 @@ layers:
       - !Text
         id: player_info_text
         x: 0.001895523
-        y: 0.042415771
+        y: 0.04241577
         px: 0.013205536
         color:
           - 0.0
           - 0.5
           - 1.0
           - 1.0
-        text: "Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}"
+        text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
       - !Circle
         id: '967'
         x: 0.9281143
@@ -75,7 +75,7 @@ layers:
           - 0.0
       - !Polygon
         id: '566'
-        action: '_set_roads_four_lanes(16, 16)'
+        action: _set_roads_four_lanes(16, 16)
         vertices:
           - pos:
               - 0.8578537

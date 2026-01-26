@@ -1,6 +1,6 @@
 use crate::components::camera::Camera;
 use crate::mouse_ray::PickUniform;
-use crate::paths::data_dir;
+use crate::paths::{data_dir, shader_dir};
 use crate::renderer::pipelines::{
     FogUniforms, GpuResourceSet, MeshBuffers, ShaderAsset, create_grass_texture, load_shader,
     make_dummy_buf, make_new_uniforms_csm,
@@ -13,7 +13,6 @@ use crate::terrain::water::{SimpleVertex, WaterUniform};
 use crate::ui::vertex::LineVtxRender;
 use glam::Vec3;
 use std::fs;
-use std::path::Path;
 use wgpu::TextureFormat::Rgba8Unorm;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::*;
@@ -28,18 +27,18 @@ pub struct Shaders {
     pub(crate) road: ShaderAsset,
 }
 
-pub fn load_all_shaders(device: &Device, shader_dir: &Path) -> anyhow::Result<Shaders> {
+pub fn load_all_shaders(device: &Device) -> anyhow::Result<Shaders> {
     Ok(Shaders {
-        line: load_shader(device, &shader_dir.join("lines.wgsl"), "Line Shader")?,
-        water: load_shader(device, &shader_dir.join("water.wgsl"), "Water Shader")?,
-        sky: load_shader(device, &shader_dir.join("sky.wgsl"), "Sky Shader")?,
-        stars: load_shader(device, &shader_dir.join("stars.wgsl"), "Stars Shader")?,
+        line: load_shader(device, &shader_dir().join("lines.wgsl"), "Line Shader")?,
+        water: load_shader(device, &shader_dir().join("water.wgsl"), "Water Shader")?,
+        sky: load_shader(device, &shader_dir().join("sky.wgsl"), "Sky Shader")?,
+        stars: load_shader(device, &shader_dir().join("stars.wgsl"), "Stars Shader")?,
         grass_texture: load_shader(
             device,
-            &shader_dir.join("textures/grass.wgsl"),
+            &shader_dir().join("textures/grass.wgsl"),
             "Grass Texture Shader",
         )?,
-        road: load_shader(device, &shader_dir.join("road.wgsl"), "Road Shader")?,
+        road: load_shader(device, &shader_dir().join("road.wgsl"), "Road Shader")?,
     })
 }
 
@@ -107,8 +106,8 @@ pub fn create_camera_uniforms(
 
     (
         GpuResourceSet {
-            bind_group_layout,
-            bind_group,
+            _bind_group_layout: bind_group_layout,
+            _bind_group: bind_group,
             buffer,
         },
         uniforms,
@@ -157,8 +156,8 @@ pub fn create_sky_uniforms(device: &Device) -> GpuResourceSet {
     });
 
     GpuResourceSet {
-        bind_group_layout,
-        bind_group,
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
         buffer,
     }
 }
@@ -214,8 +213,8 @@ pub fn create_fog_uniforms(device: &Device) -> GpuResourceSet {
     });
 
     GpuResourceSet {
-        bind_group_layout,
-        bind_group,
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
         buffer,
     }
 }
@@ -258,8 +257,8 @@ pub fn create_pick_uniforms(device: &Device) -> GpuResourceSet {
     });
 
     GpuResourceSet {
-        bind_group_layout,
-        bind_group,
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
         buffer,
     }
 }
@@ -322,8 +321,8 @@ pub fn create_water_uniforms(device: &Device, sky_buffer: &Buffer) -> GpuResourc
     });
 
     GpuResourceSet {
-        bind_group_layout,
-        bind_group,
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
         buffer,
     }
 }
@@ -481,8 +480,8 @@ pub fn create_grass_texture_resources(
     });
 
     GpuResourceSet {
-        bind_group_layout,
-        bind_group,
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
         buffer,
     }
 }

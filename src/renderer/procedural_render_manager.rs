@@ -1,9 +1,11 @@
+use crate::data::Settings;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::procedural_bind_group_manager::MaterialBindGroupManager;
 use crate::renderer::procedural_texture_manager::{ProceduralTextureManager, TextureCacheKey};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use wgpu::*;
 
@@ -81,6 +83,8 @@ pub struct PipelineOptions {
     pub blend: Option<BlendState>,
     pub cull_mode: Option<Face>,
     pub shadow_pass: bool,
+    pub fullscreen_pass: bool,
+    pub target_format: TextureFormat,
 }
 
 impl Default for PipelineOptions {
@@ -93,6 +97,8 @@ impl Default for PipelineOptions {
             blend: None,
             cull_mode: None,
             shadow_pass: false,
+            fullscreen_pass: false,
+            target_format: TextureFormat::Rgba8UnormSrgb,
         }
     }
 }
@@ -190,6 +196,13 @@ impl From<&PipelineOptions> for PipelineOptionsKey {
     }
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct PipelineCacheKeyRaw {
+    shader_path: PathBuf,
+    bind_group_layout_ptrs: Vec<usize>,
+    vertex_layout_hash: u64,
+    options: PipelineOptionsKey,
+}
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct PipelineCacheKey {
     shader_path: PathBuf,
@@ -211,6 +224,7 @@ struct FogPipelineCacheKey {
     msaa_samples: u32,
     depth_multisampled: bool,
     uniform_count: usize,
+    target_format: TextureFormat,
 }
 struct ShaderEntry {
     module: wgpu::ShaderModule,
@@ -224,6 +238,7 @@ pub struct PipelineManager {
     shader_cache: HashMap<PathBuf, ShaderEntry>,
     pipeline_cache: HashMap<PipelineCacheKey, RenderPipeline>,
     fullscreen_pipeline_cache: HashMap<FullscreenPipelineKey, RenderPipeline>,
+    raw_pipeline_cache: HashMap<PipelineCacheKeyRaw, RenderPipeline>,
     uniform_bind_group_layouts: HashMap<usize, BindGroupLayout>,
     fullscreen_color_bgl: BindGroupLayout,
     fullscreen_depth_bgl: BindGroupLayout,
@@ -302,6 +317,7 @@ impl PipelineManager {
             shader_cache: HashMap::new(),
             pipeline_cache: HashMap::new(),
             fullscreen_pipeline_cache: HashMap::new(),
+            raw_pipeline_cache: HashMap::new(),
             uniform_bind_group_layouts: HashMap::new(),
             fullscreen_color_bgl,
             fullscreen_depth_bgl,
@@ -415,6 +431,16 @@ impl PipelineManager {
             bind_group_layouts: &bind_group_layouts,
             immediate_size: 0,
         });
+        let vertex = VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: if options.fullscreen_pass {
+                &[]
+            } else {
+                &options.vertex_layouts
+            },
+            compilation_options: PipelineCompilationOptions::default(),
+        };
         let fragment = if options.shadow_pass {
             None
         } else {
@@ -422,7 +448,7 @@ impl PipelineManager {
                 module: shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
-                    format: surface_format,
+                    format: options.target_format,
                     blend: options.blend,
                     write_mask: ColorWrites::ALL,
                 })],
@@ -432,12 +458,7 @@ impl PipelineManager {
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some(&format!("{} {} Pipeline", shader_path.display(), label)),
             layout: Some(&pipeline_layout),
-            vertex: VertexState {
-                module: shader,
-                entry_point: Some("vs_main"),
-                buffers: &options.vertex_layouts.clone(),
-                compilation_options: PipelineCompilationOptions::default(),
-            },
+            vertex,
             fragment,
             primitive: wgpu::PrimitiveState {
                 topology: options.topology,
@@ -589,6 +610,98 @@ impl PipelineManager {
         self.fullscreen_pipeline_cache.get(&key).unwrap()
     }
 
+    pub fn get_or_create_pipeline_with_layouts(
+        &mut self,
+        shader_path: &std::path::Path,
+        bind_group_layouts: &[&wgpu::BindGroupLayout],
+        options: &PipelineOptions,
+        label: &str,
+    ) -> &wgpu::RenderPipeline {
+        let options_key: PipelineOptionsKey = options.into();
+
+        let vertex_layouts: &[wgpu::VertexBufferLayout] = if options.fullscreen_pass {
+            &[]
+        } else {
+            &options.vertex_layouts
+        };
+
+        let key = PipelineCacheKeyRaw {
+            shader_path: shader_path.to_path_buf(),
+            bind_group_layout_ptrs: bind_group_layouts
+                .iter()
+                .map(|l| (*l as *const wgpu::BindGroupLayout) as usize)
+                .collect(),
+            vertex_layout_hash: hash_vertex_layouts(vertex_layouts),
+            options: options_key,
+        };
+
+        if self.raw_pipeline_cache.contains_key(&key) {
+            return self.raw_pipeline_cache.get(&key).unwrap();
+        }
+
+        self.load_shader(shader_path);
+        let shader = &self.shader_cache.get(shader_path).unwrap().module;
+
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(&format!("{} RAW Pipeline Layout", shader_path.display())),
+                bind_group_layouts,
+                immediate_size: 0,
+            });
+
+        let vertex = wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: vertex_layouts,
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        };
+
+        let fragment = if options.shadow_pass {
+            None
+        } else {
+            Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: options.target_format,
+                    blend: options.blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            })
+        };
+
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("{} {} RAW Pipeline", shader_path.display(), label)),
+                layout: Some(&pipeline_layout),
+                vertex,
+                fragment,
+                primitive: wgpu::PrimitiveState {
+                    topology: options.topology,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: options.cull_mode,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: options.depth_stencil.clone(),
+                multisample: wgpu::MultisampleState {
+                    count: options.msaa_samples,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                cache: None,
+                multiview_mask: None,
+            });
+
+        self.raw_pipeline_cache.insert(key.clone(), pipeline);
+        self.raw_pipeline_cache.get(&key).unwrap()
+    }
+
     pub fn reload_all_shaders(&mut self) {
         let paths: Vec<PathBuf> = self.shader_cache.keys().cloned().collect();
 
@@ -667,12 +780,14 @@ impl PipelineManager {
         msaa_samples: u32,
         depth_multisampled: bool,
         uniform_count: usize,
+        target_format: TextureFormat,
     ) -> &RenderPipeline {
         let key = FogPipelineCacheKey {
             shader_path: shader_path.to_path_buf(),
             msaa_samples,
             depth_multisampled,
             uniform_count,
+            target_format,
         };
 
         if self.fog_pipeline_cache.contains_key(&key) {
@@ -709,7 +824,7 @@ impl PipelineManager {
                     module: shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(ColorTargetState {
-                        format: self.surface_format,
+                        format: target_format,
                         blend: Some(BlendState::ALPHA_BLENDING),
                         write_mask: ColorWrites::ALL,
                     })],
@@ -818,6 +933,12 @@ pub struct RenderManager {
     uniform_bind_groups: HashMap<UniformBindGroupKey, BindGroup>,
 }
 
+// impl RenderManager {
+//     pub fn render_tonemap(&self, label: &str, pass: &mut RenderPass) {
+//         self.pipeline_manager.
+//     }
+// }
+
 impl RenderManager {
     pub fn new(
         device: &Device,
@@ -897,17 +1018,32 @@ impl RenderManager {
         uniforms: &[&Buffer],
         pass: &mut RenderPass,
         pipelines: &Pipelines,
+        settings: &Settings,
     ) {
-        let views = self.procedural_textures.get_views(&materials);
+        // Fullscreen tonemap reads from resolved HDR view instead of procedural material textures
+        let (views, material_count_for_layout) = if options.fullscreen_pass {
+            (vec![&pipelines.resolved_hdr_view], 1usize)
+        } else {
+            let v = self.procedural_textures.get_views(&materials);
+            (v, materials.len())
+        };
+
         let material_layout = self
             .material_manager
-            .get_layout(materials.len(), options.shadow_pass)
+            .get_layout(
+                material_count_for_layout,
+                options.shadow_pass,
+                options.fullscreen_pass,
+            )
             .clone();
+
         let material_bind_group = self.material_manager.request_bind_group(
             &materials,
             views,
             &pipelines.cascaded_shadow_map.array_view,
             options.shadow_pass,
+            options.fullscreen_pass,
+            settings,
         );
 
         let pipeline = self.pipeline_manager.get_or_create_pipeline(
@@ -924,8 +1060,6 @@ impl RenderManager {
 
         if !uniforms.is_empty() {
             let key = UniformBindGroupKey::from_buffers(uniforms);
-
-            // Extract references before entry() to enable disjoint field borrowing
             let pm = &self.pipeline_manager;
             let label_owned = format!("{} Uniform BindGroup", label);
 
@@ -937,7 +1071,28 @@ impl RenderManager {
             pass.set_bind_group(1, &*bind_group, &[]);
         }
     }
+    pub fn render_with_bind_groups(
+        &mut self,
+        label: &str,
+        shader_path: &std::path::Path,
+        options: PipelineOptions,
+        bind_group_layouts: &[&wgpu::BindGroupLayout],
+        bind_groups: &[&wgpu::BindGroup],
+        pass: &mut wgpu::RenderPass,
+    ) {
+        let pipeline = self.pipeline_manager.get_or_create_pipeline_with_layouts(
+            shader_path,
+            bind_group_layouts,
+            &options,
+            label,
+        );
 
+        pass.set_pipeline(pipeline);
+
+        for (i, bg) in bind_groups.iter().enumerate() {
+            pass.set_bind_group(i as u32, *bg, &[]);
+        }
+    }
     pub fn render_fullscreen_preview(
         &mut self,
         texture: &wgpu::TextureView,
@@ -991,6 +1146,7 @@ impl RenderManager {
         msaa_samples: u32,
         depth_view: &TextureView,
         uniforms: &[&Buffer], // must include: uniforms, fog_uniforms, pick_uniforms
+        target_format: TextureFormat,
         pass: &mut RenderPass,
     ) {
         let depth_multisampled = msaa_samples > 1;
@@ -1016,6 +1172,7 @@ impl RenderManager {
             msaa_samples,
             depth_multisampled,
             uniforms.len(),
+            target_format,
         );
 
         pass.set_pipeline(pipeline);
@@ -1078,4 +1235,24 @@ pub fn create_color_attachment_load<'a>(
             },
         }
     }
+}
+fn hash_vertex_layouts(layouts: &[VertexBufferLayout]) -> u64 {
+    let mut h = DefaultHasher::new();
+    layouts.len().hash(&mut h);
+
+    for l in layouts {
+        // stride + step mode
+        (l.array_stride as u64).hash(&mut h);
+        (l.step_mode as u32).hash(&mut h);
+
+        // attributes
+        l.attributes.len().hash(&mut h);
+        for a in l.attributes {
+            (a.shader_location as u32).hash(&mut h);
+            (a.offset as u64).hash(&mut h);
+            (a.format as u32).hash(&mut h);
+        }
+    }
+
+    h.finish()
 }
