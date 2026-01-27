@@ -2,8 +2,8 @@ use crate::components::camera::Camera;
 use crate::mouse_ray::PickUniform;
 use crate::paths::{data_dir, shader_dir};
 use crate::renderer::pipelines::{
-    FogUniforms, GpuResourceSet, MeshBuffers, ShaderAsset, create_grass_texture, load_shader,
-    make_dummy_buf, make_new_uniforms_csm,
+    FogUniforms, GpuResourceSet, MeshBuffers, ShaderAsset, ToneMappingUniforms,
+    create_grass_texture, load_shader, make_dummy_buf, make_new_uniforms_csm,
 };
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::renderer::textures::grass::{GrassParams, generate_noise};
@@ -205,6 +205,43 @@ pub fn create_fog_uniforms(device: &Device) -> GpuResourceSet {
 
     let bind_group = device.create_bind_group(&BindGroupDescriptor {
         label: Some("Fog Bind Group"),
+        layout: &bind_group_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+
+    GpuResourceSet {
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
+        buffer,
+    }
+}
+pub fn create_tonemapping_uniforms(device: &Device) -> GpuResourceSet {
+    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("Tonemapping BGL"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: BufferSize::new(size_of::<ToneMappingUniforms>() as u64),
+            },
+            count: None,
+        }],
+    });
+
+    let buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("Tonemapping Uniform Buffer"),
+        size: size_of::<ToneMappingUniforms>() as u64,
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("Tonemapping Bind Group"),
         layout: &bind_group_layout,
         entries: &[BindGroupEntry {
             binding: 0,

@@ -111,9 +111,13 @@ const EDGE_WIDTH: f32 = 0.005;       // Width as fraction of quad (0.02 = 2% of 
 const EDGE_COLOR: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);  // Black edges
 const EDGE_ENABLED: bool = false;
 const SHOW_DIAGONAL: bool = false;   // Show triangle diagonal too
-
+struct FragmentOut {
+    @location(0) color : vec4<f32>,
+    @location(1) normal : vec4<f32>
+};
 @fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOut) -> FragmentOut {
+    var out: FragmentOut;
     let n = normalize(in.world_normal);
     let up = vec3<f32>(0.0, 1.0, 0.0);
 
@@ -260,8 +264,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
         final_color = mix(EDGE_COLOR, final_color, edge_factor);
     }
-
-    return vec4<f32>(final_color, 1.0);
+    out.color = vec4<f32>(final_color, 1.0);
+    out.normal = vec4<f32>(n * 0.5 + 0.5, 1.0);
+    return out;
 }
 
 fn saturate(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }

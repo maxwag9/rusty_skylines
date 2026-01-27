@@ -11,8 +11,8 @@ use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
 use wgpu::{
-    BlendState, Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face,
-    IndexFormat, RenderPass, StencilState, Texture, TextureView,
+    Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face, IndexFormat,
+    RenderPass, StencilState, Texture, TextureView,
 };
 
 pub const CSM_CASCADES: usize = 4;
@@ -35,17 +35,13 @@ pub struct CascadedShadowMap {
 pub fn create_shadow_mat_uniform_buffer(device: &Device) -> Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("CSM Shadow Mat Buffer"),
-        size: std::mem::size_of::<ShadowMatUniform>() as u64,
+        size: size_of::<ShadowMatUniform>() as u64,
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
 }
 
-pub fn create_csm_shadow_texture(
-    device: &wgpu::Device,
-    size: u32,
-    label: &str,
-) -> CascadedShadowMap {
+pub fn create_csm_shadow_texture(device: &Device, size: u32, label: &str) -> CascadedShadowMap {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(&format!(
             "CSM Shadow Map Array ({CSM_CASCADES} layers). {label}"
@@ -304,10 +300,9 @@ pub fn render_roads_shadows(
             msaa_samples: 1,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: true,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets: vec![],
         },
         &[&shadow_mat_buffer],
         pass,
@@ -351,10 +346,9 @@ pub fn render_roads_shadows(
             msaa_samples: 1,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: true,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets: Vec::new(),
         },
         &[&shadow_mat_buffer],
         pass,
@@ -396,11 +390,10 @@ pub fn render_terrain_shadows(
             }),
             msaa_samples: 1,
             vertex_layouts: Vec::from([Vertex::desc()]),
-            blend: Some(BlendState::ALPHA_BLENDING),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets: Vec::new(),
         },
         &[&shadow_mat_buffer],
         pass,

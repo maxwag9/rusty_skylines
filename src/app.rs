@@ -1,3 +1,4 @@
+use crate::data::DebugViewState;
 use crate::events::Event;
 use crate::paths::data_dir;
 use crate::renderer::world_renderer::CursorMode;
@@ -196,6 +197,19 @@ impl ApplicationHandler for App {
                     resources.renderer.core.cycle_msaa();
                 }
 
+                if input.action_repeat("Switch Debug Render Mode") {
+                    match settings.debug_view_state {
+                        DebugViewState::None => {
+                            settings.debug_view_state = DebugViewState::Normals;
+                        }
+                        DebugViewState::Normals => {
+                            settings.debug_view_state = DebugViewState::Depth;
+                        }
+                        DebugViewState::Depth => {
+                            settings.debug_view_state = DebugViewState::None;
+                        }
+                    }
+                }
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
                     settings.editor_mode = !settings.editor_mode;

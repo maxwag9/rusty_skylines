@@ -1,6 +1,8 @@
 use crate::components::camera::Camera;
 use crate::renderer::astronomy::AstronomyState;
-use crate::renderer::pipelines::{FogUniforms, Pipelines, make_new_uniforms_csm};
+use crate::renderer::pipelines::{
+    FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
+};
 use crate::renderer::shadows::{CSM_CASCADES, compute_csm_matrices};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
@@ -83,7 +85,15 @@ impl<'a> UniformUpdater<'a> {
             bytemuck::bytes_of(&fog_uniforms),
         );
     }
+    pub fn update_tonemapping_uniforms(&self, tonemapping_state: &ToneMappingState) {
+        let tonemapping_uniforms = ToneMappingUniforms::from_state(tonemapping_state);
 
+        self.queue.write_buffer(
+            &self.pipelines.tonemapping_uniforms.buffer,
+            0,
+            bytemuck::bytes_of(&tonemapping_uniforms),
+        );
+    }
     pub fn update_sky_uniforms(&self, moon_phase: f32) {
         let sky_uniform = SkyUniform {
             exposure: 1.0,

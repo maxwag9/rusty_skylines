@@ -145,6 +145,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let offset = n * (3.0 / 255.0) * noise_scale;
 
     col = vec4<f32>(col.rgb + vec3<f32>(offset), col.a);
+    if col.a < 0.01 {
+        col = vec4<f32>(0.0);
+    };
     return col;
 }
 

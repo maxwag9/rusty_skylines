@@ -1,4 +1,5 @@
 use crate::positions::ChunkSize;
+use crate::renderer::pipelines::ToneMappingState;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
@@ -47,7 +48,17 @@ impl Default for PresentModeSetting {
 fn default_chunk_size() -> ChunkSize {
     128
 }
-
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DebugViewState {
+    None,
+    Normals,
+    Depth,
+}
+impl Default for DebugViewState {
+    fn default() -> Self {
+        Self::None
+    }
+}
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -89,6 +100,10 @@ pub struct Settings {
     pub render_chunk_bounds: bool,
     #[serde(default = "default_chunk_size")]
     pub chunk_size: ChunkSize,
+    #[serde(default)]
+    pub tonemapping_state: ToneMappingState,
+    #[serde(default)]
+    pub debug_view_state: DebugViewState,
 }
 
 impl Default for Settings {
@@ -113,6 +128,8 @@ impl Default for Settings {
             render_lanes_gizmo: false,
             render_chunk_bounds: false,
             chunk_size: default_chunk_size(),
+            tonemapping_state: ToneMappingState::default(),
+            debug_view_state: DebugViewState::None,
         }
     }
 }

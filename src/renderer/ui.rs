@@ -1,4 +1,6 @@
 use crate::paths::shader_dir;
+use crate::renderer::core::color_target;
+use crate::renderer::pipelines::Pipelines;
 use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text_rendering::Anchor;
@@ -10,7 +12,6 @@ use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiElement, UiVertexPoly,
     UiVertexText,
 };
-use std::ops::Range;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 
@@ -186,16 +187,6 @@ impl Default for TextParams {
     }
 }
 
-#[derive(Debug)]
-pub struct DrawCmd<'a> {
-    pub pipeline: &'a RenderPipeline,
-    pub bind_group0: &'a BindGroup,
-    pub bind_group1: Option<BindGroup>,
-    pub vertex_buffer: Option<&'a Buffer>,
-    pub vertex_range: Range<u32>,
-    pub instance_range: Range<u32>,
-}
-
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
 
@@ -264,7 +255,7 @@ impl UiRenderer {
         render_manager: &mut RenderManager,
         pass: &mut RenderPass<'a>,
         ui: &mut UiButtonLoader,
-        texture_format: TextureFormat,
+        pipelines: &Pipelines,
     ) {
         if !ui.touch_manager.options.show_gui {
             return;
@@ -377,16 +368,16 @@ impl UiRenderer {
                     UiElement::Circle(_) => {
                         if let Some(bg1) = &circle_bg {
                             // Circle
+                            let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
                             let options = PipelineOptions {
-                                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                                 cull_mode: None,
                                 shadow_pass: false,
                                 fullscreen_pass: false,
-                                target_format: texture_format,
+                                targets,
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Circle",
@@ -403,19 +394,17 @@ impl UiRenderer {
                             pass.draw(0..4, circle_idx..circle_idx + 1);
 
                             // Glow
+                            let targets =
+                                color_target(pipelines, Some(self.pipelines.additive_blend));
                             let options = PipelineOptions {
-                                blend: Some(self.pipelines.additive_blend),
-                                ..PipelineOptions {
-                                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                                    msaa_samples: msaa,
-                                    depth_stencil: depth_stencil.clone(),
-                                    vertex_layouts: vec![UiVertexPoly::desc()],
-                                    blend: Some(self.pipelines.additive_blend),
-                                    cull_mode: None,
-                                    shadow_pass: false,
-                                    fullscreen_pass: false,
-                                    target_format: texture_format,
-                                }
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                cull_mode: None,
+                                shadow_pass: false,
+                                fullscreen_pass: false,
+                                targets,
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Glow",
@@ -436,16 +425,16 @@ impl UiRenderer {
 
                     UiElement::Handle(_) => {
                         if let Some(bg1) = &handle_bg {
+                            let targets = color_target(pipelines, self.pipelines.good_blend);
                             let options = PipelineOptions {
-                                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                                topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                blend: self.pipelines.good_blend,
                                 cull_mode: None,
                                 shadow_pass: false,
                                 fullscreen_pass: false,
-                                target_format: texture_format,
+                                targets,
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Handle",
@@ -466,17 +455,17 @@ impl UiRenderer {
 
                     UiElement::Polygon(poly) => {
                         let count = poly.tri_count.saturating_mul(3);
+                        let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
                         if let (Some(bg1), Some(vbo)) = (&poly_bg, &layer.gpu.poly_vbo) {
                             let options = PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                blend: Some(BlendState::ALPHA_BLENDING),
                                 cull_mode: None,
                                 shadow_pass: false,
                                 fullscreen_pass: false,
-                                target_format: texture_format,
+                                targets,
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Polygon",
@@ -497,16 +486,16 @@ impl UiRenderer {
 
                     UiElement::Outline(_) => {
                         if let Some(bg1) = &outline_bg {
+                            let targets = color_target(pipelines, self.pipelines.good_blend);
                             let options = PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                blend: self.pipelines.good_blend,
                                 cull_mode: None,
                                 shadow_pass: false,
                                 fullscreen_pass: false,
-                                target_format: texture_format,
+                                targets,
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Outline",
@@ -534,16 +523,16 @@ impl UiRenderer {
             // Text on top
             if layer.gpu.text_count > 0 {
                 if let Some(text_vbo) = &layer.gpu.text_vbo {
+                    let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
                     let options = PipelineOptions {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        topology: PrimitiveTopology::TriangleList,
                         msaa_samples: msaa,
                         depth_stencil: depth_stencil.clone(),
                         vertex_layouts: vec![UiVertexText::desc()],
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         cull_mode: None,
                         shadow_pass: false,
                         fullscreen_pass: false,
-                        target_format: texture_format,
+                        targets,
                     };
                     render_manager.render_with_bind_groups(
                         "UI Text",
@@ -592,12 +581,6 @@ impl UiRenderer {
         if let Some(buf) = target {
             queue.write_buffer(buf, 0, bytes);
         }
-    }
-
-    fn sorted_indices_by_z<T>(&self, items: &[T], z: impl Fn(&T) -> i32) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..items.len()).collect();
-        indices.sort_by_key(|&i| z(&items[i]));
-        indices
     }
 
     fn upload_layer(

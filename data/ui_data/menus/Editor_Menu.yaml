@@ -1,5 +1,97 @@
 name: Editor_Menu
 layers:
+  - name: adding_elements
+    order: 2
+    elements:
+      - !Text
+        id: player_info_text
+        x: 0.001895523
+        y: 0.04241577
+        px: 0.013205536
+        color:
+          - 0.0
+          - 0.5
+          - 1.0
+          - 1.0
+        text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
+      - !Circle
+        id: Add Circle
+        action: add_circle
+        x: 0.6281143
+        y: 0.8954688
+        radius: 0.031416472
+        border_thickness_percentage: 0.03282214
+        fill_color:
+          - 0.0
+          - 0.0
+          - 0.1
+          - 0.8
+        border_color:
+          - 0.1
+          - 0.1
+          - 0.1
+          - 1.0
+        glow_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.0
+        misc:
+          active: true
+          pressable: true
+          editable: false
+      - !Circle
+        id: '9683'
+        x: 0.8455063
+        y: 0.93613005
+        radius: 0.043656804
+        border_thickness_percentage: 0.2
+        border_color:
+          - 1.0
+          - 0.0
+          - 0.0
+          - 0.98
+        glow_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.0
+      - !Polygon
+        id: '5660'
+        action: _set_roads_four_lanes(16, 16)
+        vertices:
+          - pos:
+              - 0.8578537
+              - 0.85722375
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 1.0
+          - pos:
+              - 0.9186829
+              - 0.8571847
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 1.0
+          - pos:
+              - 0.9190384
+              - 0.971529
+            color:
+              - 1.0
+              - 1.0
+              - 0.0
+              - 1.0
+          - pos:
+              - 0.856781
+              - 0.970731
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 1.0
   - name: editor_information
     order: 3
     elements:
@@ -279,96 +371,3 @@ layers:
               - 1.0
             roundness: 0.5
     active: false
-  - name: adding_elements
-    order: 2
-    elements:
-      - !Text
-        id: player_info_text
-        x: 0.001895523
-        y: 0.042415771
-        px: 0.013205536
-        color:
-          - 0.0
-          - 0.5
-          - 1.0
-          - 1.0
-        text: "Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}"
-      - !Circle
-        id: 'Add Circle'
-        action: 'add_circle'
-        x: 0.6281143
-        y: 0.8954688
-        radius: 0.07209885
-        border_thickness_percentage: 0.03282214
-        fill_color:
-          - 0.0
-          - 0.0
-          - 0.1
-          - 0.8
-        border_color:
-          - 0.1
-          - 0.1
-          - 0.1
-          - 1.0
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-        misc:
-          active: true
-          pressable: true
-          editable: false
-      - !Circle
-        id: '9683'
-        x: 0.8455063
-        y: 0.93613005
-        radius: 0.043656804
-        border_thickness_percentage: 0.2
-        border_color:
-          - 1.0
-          - 0.0
-          - 0.0
-          - 0.98
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-      - !Polygon
-        id: '5660'
-        action: '_set_roads_four_lanes(16, 16)'
-        vertices:
-          - pos:
-              - 0.8578537
-              - 0.85722375
-            color:
-              - 1.0
-              - 1.0
-              - 1.0
-              - 1.0
-          - pos:
-              - 0.9186829
-              - 0.8571847
-            color:
-              - 1.0
-              - 1.0
-              - 1.0
-              - 1.0
-          - pos:
-              - 0.9190384
-              - 0.971529
-            color:
-              - 1.0
-              - 1.0
-              - 0.0
-              - 1.0
-          - pos:
-              - 0.856781
-              - 0.970731
-            color:
-              - 1.0
-              - 1.0
-              - 1.0
-              - 1.0
-

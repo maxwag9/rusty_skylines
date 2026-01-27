@@ -144,3 +144,5 @@ keys = ["Ctrl+KeyD"]
 
 ["Toggle Cursor Mode"]
 keys = ["KeyR"]
+["Switch Debug Render Mode"]
+keys = ["Shift+F8"]

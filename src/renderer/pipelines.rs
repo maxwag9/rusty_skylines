@@ -3,6 +3,7 @@ use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::resources::Uniforms;
 use glam::{Mat4, Vec3};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
@@ -54,7 +55,62 @@ impl Default for FogUniforms {
         }
     }
 }
-
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ToneMappingState {
+    Cinematic,
+    Off,
+}
+impl Default for ToneMappingState {
+    fn default() -> Self {
+        Self::Cinematic
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ToneMappingUniforms {
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    e: f32,
+}
+impl Default for ToneMappingUniforms {
+    fn default() -> Self {
+        Self {
+            a: 2.55,
+            b: 0.02,
+            c: 2.43,
+            d: 0.59,
+            e: 0.14,
+        }
+    }
+}
+impl ToneMappingUniforms {
+    pub fn from_state(tonemapping_state: &ToneMappingState) -> Self {
+        match tonemapping_state {
+            ToneMappingState::Cinematic => Self::cinematic(),
+            ToneMappingState::Off => Self::off(),
+        }
+    }
+    fn cinematic() -> Self {
+        Self {
+            a: 2.55,
+            b: 0.02,
+            c: 2.43,
+            d: 0.59,
+            e: 0.14,
+        }
+    }
+    fn off() -> Self {
+        Self {
+            a: 0.0,
+            b: 1.0,
+            c: 0.0,
+            d: 0.0,
+            e: 1.0,
+        }
+    }
+}
 pub struct RenderPipelineState {
     pub shader: ShaderAsset,
     pub pipeline: RenderPipeline,
@@ -88,6 +144,10 @@ pub struct Pipelines {
     pub msaa_hdr_view: TextureView,
     pub resolved_hdr_texture: Texture,
     pub resolved_hdr_view: TextureView,
+    pub msaa_normal_view: TextureView,
+    pub msaa_normal_texture: Texture,
+    pub resolved_normal_view: TextureView,
+    pub resolved_normal_texture: Texture,
     pub depth_texture: Texture,
     pub depth_view: TextureView,
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
@@ -99,6 +159,7 @@ pub struct Pipelines {
     pub sky_uniforms: GpuResourceSet,
     pub water_uniforms: GpuResourceSet,
     pub fog_uniforms: GpuResourceSet,
+    pub tonemapping_uniforms: GpuResourceSet,
     pub pick_uniforms: GpuResourceSet,
 
     pub water_mesh_buffers: MeshBuffers,
@@ -117,9 +178,14 @@ impl Pipelines {
         shadow_map_size: u32,
     ) -> anyhow::Result<Self> {
         // Create render targets
-        let (msaa_hdr_texture, msaa_hdr_view) = create_msaa_targets(&device, &config, msaa_samples);
-        let (resolved_hdr_texture, resolved_hdr_view) =
-            create_resolved_targets(&device, &config, msaa_samples);
+        let (msaa_hdr_texture, msaa_hdr_view, msaa_normal_texture, msaa_normal_view) =
+            create_msaa_targets(&device, &config, msaa_samples);
+        let (
+            resolved_hdr_texture,
+            resolved_hdr_view,
+            resolved_normal_texture,
+            resolved_normal_view,
+        ) = create_resolved_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
         let csm = create_csm_shadow_texture(device, shadow_map_size, "Sun CSM"); // 2048 or 4096
@@ -129,6 +195,7 @@ impl Pipelines {
         let (uniforms_set, uniforms_cpu) = create_camera_uniforms(device, camera, config);
         let sky_uniforms = create_sky_uniforms(device);
         let fog_uniforms = create_fog_uniforms(device);
+        let tonemapping_uniforms = create_tonemapping_uniforms(device);
         let pick_uniforms = create_pick_uniforms(device);
         //let road_uniforms = create_road_uniforms(device);
         let water_uniforms = create_water_uniforms(device, &sky_uniforms.buffer);
@@ -143,6 +210,10 @@ impl Pipelines {
             msaa_hdr_view,
             resolved_hdr_texture,
             resolved_hdr_view,
+            msaa_normal_texture,
+            msaa_normal_view,
+            resolved_normal_view,
+            resolved_normal_texture,
             depth_texture,
             depth_view,
             depth_sample_view,
@@ -153,6 +224,7 @@ impl Pipelines {
             sky_uniforms,
             water_uniforms,
             fog_uniforms,
+            tonemapping_uniforms,
             pick_uniforms,
 
             water_mesh_buffers: water_mesh,
@@ -172,8 +244,18 @@ impl Pipelines {
         // always match the swapchain size. Or ELSE, after a window resize we'd recreate
         // attachments using the old dimensions, leading to mismatched resolve targets!!!
         self.config = config.clone();
-        (self.msaa_hdr_texture, self.msaa_hdr_view) =
-            create_msaa_targets(&self.device, &self.config, msaa_samples);
+        (
+            self.msaa_hdr_texture,
+            self.msaa_hdr_view,
+            self.msaa_normal_texture,
+            self.msaa_normal_view,
+        ) = create_msaa_targets(&self.device, &self.config, msaa_samples);
+        (
+            self.resolved_hdr_texture,
+            self.resolved_hdr_view,
+            self.resolved_normal_texture,
+            self.resolved_normal_view,
+        ) = create_resolved_targets(&self.device, &self.config, msaa_samples);
         (self.depth_texture, self.depth_view, self.depth_sample_view) =
             create_depth_texture(&self.device, &self.config, msaa_samples);
     }
@@ -205,8 +287,8 @@ pub fn create_msaa_targets(
     device: &Device,
     config: &SurfaceConfiguration,
     samples: u32,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
+) -> (Texture, TextureView, Texture, TextureView) {
+    let color_texture = device.create_texture(&TextureDescriptor {
         label: Some("MSAA Color Texture"),
         size: Extent3d {
             width: config.width,
@@ -221,16 +303,32 @@ pub fn create_msaa_targets(
         view_formats: &[],
     });
 
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
+    let color_view = color_texture.create_view(&TextureViewDescriptor::default());
+    let normal_texture = device.create_texture(&TextureDescriptor {
+        label: Some("MSAA Normals Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: samples,
+        dimension: TextureDimension::D2,
+        format: Rgba16Float,
+        usage: TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+
+    let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
+    (color_texture, color_view, normal_texture, normal_view)
 }
 
 pub fn create_resolved_targets(
     device: &Device,
     config: &SurfaceConfiguration,
     samples: u32,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
+) -> (Texture, TextureView, Texture, TextureView) {
+    let color_texture = device.create_texture(&TextureDescriptor {
         label: Some("Resolved, non-MSAA Color Texture"),
         size: Extent3d {
             width: config.width,
@@ -245,8 +343,24 @@ pub fn create_resolved_targets(
         view_formats: &[],
     });
 
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
+    let color_view = color_texture.create_view(&TextureViewDescriptor::default());
+    let normal_texture = device.create_texture(&TextureDescriptor {
+        label: Some("Resolved, non-MSAA Normals Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: Rgba16Float,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
+    (color_texture, color_view, normal_texture, normal_view)
 }
 
 pub const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth24PlusStencil8;

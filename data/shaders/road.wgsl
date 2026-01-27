@@ -97,9 +97,13 @@ fn g_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
     let k = (r * r) / 8.0;
     return g_schlick_ggx(NdotV, k) * g_schlick_ggx(NdotL, k);
 }
-
+struct FragmentOut {
+    @location(0) color : vec4<f32>,
+    @location(1) normal : vec4<f32>
+};
 @fragment
-fn fs_main(input : VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(input : VertexOutput) -> FragmentOut {
+    var out: FragmentOut;
     // --- sample material ---
     let uv = input.uv;
     var tex : vec4<f32>;
@@ -163,7 +167,9 @@ fn fs_main(input : VertexOutput) -> @location(0) vec4<f32> {
 
     let rgb = (direct + ambient) * road_appearance.tint.xyz;
     let a   = road_appearance.tint.w;
-    return vec4<f32>(rgb, a);
+    out.color = vec4<f32>(rgb, a);
+    out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
+    return out;
 }
 
 fn select_cascade(view_depth: f32) -> u32 {

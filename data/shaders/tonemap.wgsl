@@ -28,13 +28,16 @@ var hdr_tex: texture_2d<f32>;
 
 @group(0) @binding(1)
 var hdr_sampler: sampler;
-
-fn tonemap_aces(x: vec3<f32>) -> vec3<f32> {
-    let a = 2.55;
-    let b = 0.02;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
+struct ToneMappingUniforms {
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    e: f32,
+}
+@group(1) @binding(0)
+var<uniform> uniforms: ToneMappingUniforms;
+fn tonemap_aces(a: f32, b: f32, c: f32, d: f32, e: f32, x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3(0.0), vec3(1.0));
 }
 
@@ -52,7 +55,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     // Apply vignette in HDR (exposure domain)
     let hdr_v = hdr * v;
 
-    let color = tonemap_aces(hdr_v);
+    let color = tonemap_aces(uniforms.a, uniforms.b, uniforms.c, uniforms.d, uniforms.e, hdr_v);
     return vec4(color, 1.0);
 }
 

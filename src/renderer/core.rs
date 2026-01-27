@@ -1,5 +1,5 @@
 use crate::components::camera::*;
-use crate::data::Settings;
+use crate::data::{DebugViewState, Settings};
 use crate::mouse_ray::*;
 use crate::paths::{shader_dir, texture_dir};
 use crate::positions::WorldPos;
@@ -12,7 +12,7 @@ use crate::renderer::procedural_render_manager::{
 };
 use crate::renderer::procedural_texture_manager::{MaterialKind, Params, TextureCacheKey};
 use crate::renderer::render_passes::{
-    RenderPassConfig, create_color_attachment, create_depth_attachment,
+    RenderPassConfig, create_color_attachment, create_depth_attachment, create_normal_attachment,
 };
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
@@ -192,8 +192,9 @@ impl RenderCore {
         );
         self.terrain_renderer.pick_terrain_point(ray);
 
-        let (new_uniforms, light_mats, splits) =
-            self.update_uniforms(camera, view, proj, view_proj, &astronomy, time, aspect);
+        let (new_uniforms, light_mats, splits) = self.update_uniforms(
+            camera, view, proj, view_proj, &astronomy, time, aspect, settings,
+        );
         self.pipelines.uniforms_cpu = new_uniforms;
         self.pipelines.cascaded_shadow_map.light_mats = light_mats;
         self.pipelines.cascaded_shadow_map.splits = splits;
@@ -231,6 +232,7 @@ impl RenderCore {
         astronomy: &AstronomyState,
         time: &TimeSystem,
         aspect: f32,
+        settings: &Settings,
     ) -> (Uniforms, [Mat4; CSM_CASCADES], [f32; 4]) {
         let updater = UniformUpdater::new(&self.queue, &self.pipelines);
         let (new_uniforms, light_mats, splits) = updater.update_camera_uniforms(
@@ -245,6 +247,7 @@ impl RenderCore {
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy.moon_phase);
         updater.update_water_uniforms();
+        updater.update_tonemapping_uniforms(&settings.tonemapping_state);
         (new_uniforms, light_mats, splits)
     }
 
@@ -390,9 +393,10 @@ impl RenderCore {
         self.execute_ui_pass(encoder, ui_loader, time, input_state);
 
         // -------- Pass 4: Debug preview (disabled by default) --------
-        //self.execute_debug_preview_pass(encoder, surface_view);
-        // Last Pass
-        self.execute_tonemap_pass(encoder, surface_view, settings)
+        self.execute_debug_preview_pass(encoder, surface_view, settings);
+
+        // Last Pass (but no, before debug so the image isn't tampered with! Actually, no)
+        self.execute_tonemap_pass(encoder, surface_view, settings);
     }
 
     fn execute_world_pass(
@@ -410,10 +414,14 @@ impl RenderCore {
             self.msaa_samples,
             config.background_color,
         );
-
+        let normal_attachment = create_normal_attachment(
+            &self.pipelines.msaa_normal_view,
+            &self.pipelines.resolved_normal_view,
+            self.msaa_samples,
+        );
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (World)"),
-            color_attachments: &[Some(color_attachment)],
+            color_attachments: &[Some(color_attachment), Some(normal_attachment)],
             depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -534,41 +542,66 @@ impl RenderCore {
             multiview_mask: None,
         });
 
-        self.render_ui(
-            &mut pass,
-            ui_loader,
-            time,
-            input_state,
-            self.pipelines.msaa_hdr_view.texture().format(),
-        );
+        self.render_ui(&mut pass, ui_loader, time, input_state);
     }
 
     fn execute_debug_preview_pass(
         &mut self,
         encoder: &mut CommandEncoder,
         surface_view: &TextureView,
+        settings: &Settings,
     ) {
-        let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_hdr_view,
-            &self.pipelines.resolved_hdr_view,
-            self.msaa_samples,
-        );
+        match settings.debug_view_state {
+            DebugViewState::None => {
+                return;
+            }
+            DebugViewState::Normals => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa_hdr_view,
+                    &self.pipelines.resolved_hdr_view,
+                    self.msaa_samples,
+                );
 
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Depth View Fullscreen Preview Pass"),
-            color_attachments: &[Some(color_attachment)],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Debug Normals Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
 
-        self.render_manager.render_fullscreen_preview(
-            &self.pipelines.cascaded_shadow_map.layer_views[0],
-            "Shadow Map Fullscreen Render",
-            self.msaa_samples,
-            &mut pass,
-        );
+                self.render_manager.render_debug_textureview_fullscreen(
+                    &self.pipelines.resolved_normal_view,
+                    "Debug Normals Render",
+                    self.msaa_samples,
+                    &mut pass,
+                );
+            }
+            DebugViewState::Depth => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa_hdr_view,
+                    &self.pipelines.resolved_hdr_view,
+                    self.msaa_samples,
+                );
+
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Debug Depth Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                self.render_manager.render_debug_textureview_fullscreen(
+                    &self.pipelines.depth_sample_view,
+                    "Debug Depth Render",
+                    self.msaa_samples,
+                    &mut pass,
+                );
+            }
+        }
     }
     fn execute_tonemap_pass(
         &mut self,
@@ -597,18 +630,21 @@ impl RenderCore {
             msaa_samples: 1,
             depth_stencil: None,
             vertex_layouts: vec![],
-            blend: None,
             cull_mode: None,
             shadow_pass: false,
             fullscreen_pass: true,
-            target_format: surface_view.texture().format(),
+            targets: vec![Some(ColorTargetState {
+                format: surface_view.texture().format(),
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
         };
         self.render_manager.render(
             vec![],
             "Tonemap",
             shader_dir().join("tonemap.wgsl").as_path(),
             options,
-            &[],
+            &[&self.pipelines.tonemapping_uniforms.buffer],
             &mut pass,
             &self.pipelines,
             settings,
@@ -622,7 +658,6 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &InputState,
-        texture_format: TextureFormat,
     ) {
         let screen_uniform = crate::renderer::ui::ScreenUniform {
             size: [self.size.width as f32, self.size.height as f32],
@@ -638,7 +673,7 @@ impl RenderCore {
         );
 
         self.ui_renderer
-            .render(&mut self.render_manager, pass, ui_loader, texture_format);
+            .render(&mut self.render_manager, pass, ui_loader, &self.pipelines);
     }
 
     pub(crate) fn cycle_msaa(&mut self) {
@@ -1070,6 +1105,7 @@ fn render_gizmo(
     device: &Device,
     queue: &Queue,
 ) {
+    let targets = color_and_normals_targets(pipelines);
     render_manager.render(
         Vec::new(),
         "Gizmo",
@@ -1086,10 +1122,9 @@ fn render_gizmo(
             msaa_samples,
             vertex_layouts: Vec::from([LineVtxRender::layout()]),
             cull_mode: None,
-            blend: Some(BlendState::REPLACE),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets,
         },
         &[&pipelines.uniforms.buffer],
         pass,
@@ -1110,6 +1145,7 @@ fn render_water(
     settings: &Settings,
     msaa_samples: u32,
 ) {
+    let targets = color_and_normals_targets(pipelines);
     render_manager.render(
         Vec::new(),
         "Water",
@@ -1141,10 +1177,9 @@ fn render_water(
             msaa_samples,
             vertex_layouts: Vec::from([SimpleVertex::layout()]),
             cull_mode: None,
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets,
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1179,7 +1214,7 @@ fn render_sky(
         stencil: Default::default(),
         bias: Default::default(),
     });
-
+    let targets = color_and_normals_targets(pipelines);
     render_manager.render(
         Vec::new(),
         "Stars",
@@ -1190,10 +1225,9 @@ fn render_sky(
             msaa_samples,
             vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
             cull_mode: None,
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets: targets.clone(),
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
@@ -1202,7 +1236,6 @@ fn render_sky(
     );
     pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
     pass.draw(0..4, 0..STAR_COUNT);
-
     render_manager.render(
         Vec::new(),
         "Sky",
@@ -1213,10 +1246,9 @@ fn render_sky(
             msaa_samples,
             vertex_layouts: Vec::new(),
             cull_mode: None,
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets,
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
@@ -1242,6 +1274,7 @@ fn render_roads(
         slope_scale: -2.0,
         clamp: 0.0,
     };
+    let targets = color_and_normals_targets(pipelines);
     render_manager.render(
         keys.clone(),
         "Roads",
@@ -1252,10 +1285,9 @@ fn render_roads(
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets: targets.clone(),
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1297,10 +1329,9 @@ fn render_roads(
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            blend: Some(BlendState::ALPHA_BLENDING),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets,
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1353,7 +1384,7 @@ fn render_terrain(
             bias: Default::default(),
         }
     };
-
+    let targets = color_and_normals_targets(pipelines);
     pass.set_stencil_reference(0);
     render_manager.render(
         keys.clone(),
@@ -1364,11 +1395,10 @@ fn render_terrain(
             depth_stencil: Some(make_stencil(0)),
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
-            blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets: targets.clone(),
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
@@ -1387,11 +1417,10 @@ fn render_terrain(
             depth_stencil: Some(make_stencil(0xFF)),
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
-            blend: Some(BlendState::REPLACE),
             cull_mode: Some(Face::Front),
             shadow_pass: false,
             fullscreen_pass: false,
-            target_format: pipelines.msaa_hdr_view.texture().format(),
+            targets,
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
@@ -1399,4 +1428,30 @@ fn render_terrain(
         settings,
     );
     terrain_renderer.render(pass, camera, aspect, true);
+}
+
+fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
+    vec![
+        Some(ColorTargetState {
+            format: pipelines.msaa_hdr_view.texture().format(),
+            blend: Some(BlendState::ALPHA_BLENDING),
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: pipelines.msaa_normal_view.texture().format(),
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }),
+    ]
+}
+
+pub fn color_target(
+    pipelines: &Pipelines,
+    blend: Option<BlendState>,
+) -> Vec<Option<ColorTargetState>> {
+    vec![Some(ColorTargetState {
+        format: pipelines.msaa_hdr_view.texture().format(),
+        blend,
+        write_mask: ColorWrites::ALL,
+    })]
 }
