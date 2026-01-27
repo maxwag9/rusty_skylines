@@ -97,9 +97,9 @@ impl TerrainRenderer {
         terrain_params.seed = 144;
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
-        let chunk_size: ChunkSize = 256;
+        let chunk_size: ChunkSize = settings.chunk_size;
         let view_radius_render = 64;
-        let view_radius_generate = 632;
+        let view_radius_generate = 32;
 
         let arena = TerrainMeshArena::new(
             device,
@@ -604,7 +604,6 @@ impl TerrainRenderer {
             let dx = chunk_coord.x - frame.cam_pos.chunk.x;
             let dz = chunk_coord.z - frame.cam_pos.chunk.z;
             if dx * dx + dz * dz > r2 {
-                println!("removing");
                 to_remove.push(coord);
             }
         }

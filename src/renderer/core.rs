@@ -684,10 +684,12 @@ impl RenderCore {
                 } else {
                     format!("Shaders reloaded: {summary}")
                 };
+                println!("{}", label);
                 ui_loader.log_console(format!("✅ {label}"));
             }
             Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
         }
+        self.render_manager.pipeline_manager.reload_shaders(changed);
     }
 }
 

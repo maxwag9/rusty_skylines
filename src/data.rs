@@ -1,3 +1,4 @@
+use crate::positions::ChunkSize;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
@@ -43,6 +44,9 @@ impl Default for PresentModeSetting {
         PresentModeSetting::Mailbox
     }
 }
+fn default_chunk_size() -> ChunkSize {
+    128
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
@@ -83,6 +87,8 @@ pub struct Settings {
     pub render_lanes_gizmo: bool,
     #[serde(default)]
     pub render_chunk_bounds: bool,
+    #[serde(default = "default_chunk_size")]
+    pub chunk_size: ChunkSize,
 }
 
 impl Default for Settings {
@@ -106,6 +112,7 @@ impl Default for Settings {
             zoom_speed: 10.0,
             render_lanes_gizmo: false,
             render_chunk_bounds: false,
+            chunk_size: default_chunk_size(),
         }
     }
 }

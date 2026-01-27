@@ -374,24 +374,22 @@ impl PipelineManager {
     }
 
     fn load_shader(&mut self, path: &Path) {
-        if !self.shader_cache.contains_key(path) {
-            let source = fs::read_to_string(path).unwrap_or_else(|e| {
-                panic!("Failed to load shader at {:?}: {}", path, e);
+        let source = fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("Failed to load shader at {:?}: {}", path, e);
+        });
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(path.to_str().unwrap_or("Shader")),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
             });
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(path.to_str().unwrap_or("Shader")),
-                    source: wgpu::ShaderSource::Wgsl(source.into()),
-                });
-            self.shader_cache.insert(
-                path.to_path_buf(),
-                ShaderEntry {
-                    module,
-                    source_path: path.to_path_buf(),
-                },
-            );
-        }
+        self.shader_cache.insert(
+            path.to_path_buf(),
+            ShaderEntry {
+                module,
+                source_path: path.to_path_buf(),
+            },
+        );
     }
 
     pub fn get_or_create_pipeline(
@@ -702,10 +700,8 @@ impl PipelineManager {
         self.raw_pipeline_cache.get(&key).unwrap()
     }
 
-    pub fn reload_all_shaders(&mut self) {
+    pub fn reload_shaders(&mut self, affected_shaders: Vec<PathBuf>) {
         let paths: Vec<PathBuf> = self.shader_cache.keys().cloned().collect();
-
-        self.shader_cache.clear();
 
         for path in &paths {
             self.load_shader(path);
@@ -925,7 +921,7 @@ impl UniformBindGroupKey {
 }
 
 pub struct RenderManager {
-    pipeline_manager: PipelineManager,
+    pub pipeline_manager: PipelineManager,
     material_manager: MaterialBindGroupManager,
     procedural_textures: ProceduralTextureManager,
     fullscreen_color_sampler: Sampler,
@@ -1003,10 +999,6 @@ impl RenderManager {
 
     pub fn procedural_texture_manager_mut(&mut self) -> &mut ProceduralTextureManager {
         &mut self.procedural_textures
-    }
-
-    pub fn reload_all_shaders(&mut self) {
-        self.pipeline_manager.reload_all_shaders();
     }
 
     pub fn render(

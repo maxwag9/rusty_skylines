@@ -24,7 +24,7 @@ impl Camera {
             near: 2.5,
             far: 10_000.0,
             fov: 80.0,
-            chunk_size: 256,
+            chunk_size: 128,
         }
     }
     #[inline]

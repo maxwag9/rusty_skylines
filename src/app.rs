@@ -135,7 +135,6 @@ impl ApplicationHandler for App {
         resources
             .time
             .set_fps(resources.settings.target_fps.max(1.0));
-
         self.window = Some(window.clone());
         self.world = Some(world);
         self.resources = Some(resources);
@@ -430,6 +429,11 @@ impl ApplicationHandler for App {
 
                 if let Some(window) = &self.window {
                     window.request_redraw();
+                }
+            }
+            WindowEvent::Focused(false) | WindowEvent::Focused(true) => {
+                if let Some(resources) = self.resources.as_mut() {
+                    resources.input.reset_all(resources.time.total_time);
                 }
             }
 

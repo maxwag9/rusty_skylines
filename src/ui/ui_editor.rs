@@ -1258,10 +1258,6 @@ impl UiButtonLoader {
         }
     }
 
-    // ========================================================================
-    // UTILITY METHODS (kept from original)
-    // ========================================================================
-
     pub fn log_console(&mut self, message: impl Into<String>) {
         self.console_lines.push_back(message.into());
         while self.console_lines.len() > 6 {

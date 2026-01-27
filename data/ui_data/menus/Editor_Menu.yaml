@@ -316,7 +316,9 @@ layers:
           - 1.0
           - 0.0
         misc:
-          - editable: false
+          active: true
+          pressable: true
+          editable: false
       - !Circle
         id: '9683'
         x: 0.8455063

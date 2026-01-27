@@ -233,6 +233,21 @@ impl MouseState {
             MouseButton::Other(_) => false,
         }
     }
+    pub fn reset(&mut self) {
+        self.left_pressed = false;
+        self.right_pressed = false;
+        self.middle_pressed = false;
+        self.back_pressed = false;
+        self.forward_pressed = false;
+
+        self.left_just_pressed = false;
+        self.left_just_released = false;
+        self.right_just_pressed = false;
+        self.right_just_released = false;
+
+        self.delta = Vec2::ZERO;
+        self.scroll_delta = Vec2::ZERO;
+    }
 }
 
 pub struct InputState {
@@ -298,6 +313,29 @@ impl InputState {
 
         self.mouse.update_just_states();
         self.text_chars.clear();
+    }
+    pub fn reset_all(&mut self, now: f64) {
+        self.now = now;
+
+        self.physical.clear();
+        self.logical.clear();
+        self.text_chars.clear();
+
+        self.shift = false;
+        self.ctrl = false;
+        self.alt = false;
+
+        self.mouse.reset();
+
+        self.scroll_up_hit = false;
+        self.scroll_down_hit = false;
+        self.scroll_left_hit = false;
+        self.scroll_right_hit = false;
+
+        self.action_last_down.clear();
+        self.gameplay_last_down.clear();
+        self.repeat_timers.clear();
+        self.gameplay_repeat_timers.clear();
     }
 
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {

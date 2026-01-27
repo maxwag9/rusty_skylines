@@ -16,6 +16,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     };
     let camera = &mut camera_bundle.camera;
     let cam_ctrl = &mut camera_bundle.controller;
+    camera.chunk_size = resources.settings.chunk_size;
     let eye = camera.eye_world();
     let mut fwd3d = camera
         .target
@@ -78,7 +79,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         // Target planes
         let min_near = 0.0001;
         let near_scale = 0.004; // 0.2% of radius
-        let far_scale = 400.0;
+        let far_scale = 4000.0;
 
         let target_near = (r * near_scale).max(min_near);
         let target_far = (r * far_scale).max(target_near * 10.0);
