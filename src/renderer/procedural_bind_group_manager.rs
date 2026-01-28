@@ -68,6 +68,9 @@ impl MaterialBindGroupManager {
         }
     }
 
+    pub fn clear_bind_groups(&mut self) {
+        self.bind_group_cache.clear();
+    }
     pub fn get_layout(
         &mut self,
         material_count: usize,

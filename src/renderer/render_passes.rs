@@ -3,7 +3,6 @@ use wgpu::*;
 
 pub struct RenderPassConfig {
     pub background_color: Color,
-    pub msaa_samples: u32,
 }
 
 impl RenderPassConfig {
@@ -15,7 +14,6 @@ impl RenderPassConfig {
                 b: settings.background_color[2] as f64,
                 a: settings.background_color[3] as f64,
             },
-            msaa_samples: 1, // Set from pipelines
         }
     }
 }

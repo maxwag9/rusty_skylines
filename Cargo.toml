@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
 
 [dependencies]
@@ -26,7 +26,7 @@ serde_yaml = "0.9.34+deprecated"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults
-opt-level = 1         # override with release-level speed
+opt-level = 3         # override with release-level speed (the same lol)
 debug = true           # keep debug symbols
 split-debuginfo = "packed"
 overflow-checks = true

@@ -10,14 +10,14 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 55842.10635940265
+total_game_time = 56336.22744779382
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
 always_day = false
 msaa_samples = 4
 shadow_map_size = 4096
-shadows_enabled = false
+shadows_enabled = true
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_chunk_bounds = true

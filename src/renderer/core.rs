@@ -15,10 +15,8 @@ use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment, create_normal_attachment,
 };
 use crate::renderer::shader_watcher::ShaderWatcher;
-use crate::renderer::shadows::{
-    CSM_CASCADES, ShadowMatUniform, render_roads_shadows, render_terrain_shadows,
-};
-use crate::renderer::ui::UiRenderer;
+use crate::renderer::shadows::{CSM_CASCADES, ShadowMatUniform, render_roads_shadows};
+use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::{InputState, TimeSystem, Uniforms};
@@ -31,12 +29,193 @@ use crate::ui::variables::update_ui_variables;
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use crate::world::CameraBundle;
 use glam::Mat4;
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
+
+macro_rules! gpu_timestamp {
+    ($pass:expr, $qs:expr, $idx:expr, $body:block) => {{
+        // Write start timestamp
+        $pass.write_timestamp($qs, $idx);
+        let r = { $body };
+        // Write end timestamp
+        $pass.write_timestamp($qs, $idx + 1);
+        r
+    }};
+}
+
+struct Slot {
+    resolve: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    pending: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+}
+
+pub struct GpuProfiler {
+    pub query_set: wgpu::QuerySet,
+    slots: Vec<Slot>,
+    num_systems: usize,
+    num_entries: u32,
+    buffer_size: u64,
+
+    frame: u64,
+    slot_just_written: Option<usize>,
+
+    sums_ms: Vec<f64>,
+    samples: u32,
+    last_print: Instant,
+}
+
+impl GpuProfiler {
+    pub fn new(device: &Device, num_systems: usize, frames_in_flight: usize) -> Self {
+        assert!(frames_in_flight >= 3);
+
+        let num_entries = (num_systems * 2) as u32;
+        let buffer_size = num_entries as u64 * size_of::<u64>() as u64;
+
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("Timestamp Query Set"),
+            count: num_entries,
+            ty: QueryType::Timestamp,
+        });
+
+        let mut slots = Vec::with_capacity(frames_in_flight);
+        for i in 0..frames_in_flight {
+            let resolve = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Query Resolve Buffer {i}")),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Query Readback Buffer {i}")),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            slots.push(Slot {
+                resolve,
+                readback,
+                pending: None,
+            });
+        }
+
+        Self {
+            query_set,
+            slots,
+            num_systems,
+            num_entries,
+            buffer_size,
+            frame: 0,
+            slot_just_written: None,
+            sums_ms: vec![0.0; num_systems],
+            samples: 0,
+            last_print: Instant::now(),
+        }
+    }
+
+    /// Call while encoding, before submit.
+    pub fn resolve(&mut self, encoder: &mut CommandEncoder) {
+        let write_slot = (self.frame as usize) % self.slots.len();
+
+        // If still mapped/pending, skip profiling this frame (prevents submit validation error).
+        if self.slots[write_slot].pending.is_some() {
+            self.slot_just_written = None;
+            return;
+        }
+
+        let slot = &self.slots[write_slot];
+        encoder.resolve_query_set(&self.query_set, 0..self.num_entries, &slot.resolve, 0);
+        encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, self.buffer_size);
+
+        self.slot_just_written = Some(write_slot);
+    }
+
+    /// Call once per frame AFTER `queue.submit()` and `frame.present()`.
+    pub fn end_frame(&mut self, device: &Device, queue: &Queue, system_names: &[&str]) {
+        let _ = device.poll(PollType::Poll);
+
+        self.collect_ready(queue, system_names);
+
+        // Start mapping the slot we JUST wrote this frame (so it has N-1 frames before reuse).
+        if let Some(i) = self.slot_just_written.take() {
+            let slot = &mut self.slots[i];
+            if slot.pending.is_none() {
+                let (tx, rx) = mpsc::channel();
+                slot.readback
+                    .slice(..)
+                    .map_async(MapMode::Read, move |res| {
+                        let _ = tx.send(res);
+                    });
+                slot.pending = Some(rx);
+            }
+        }
+
+        self.frame += 1;
+
+        if self.last_print.elapsed() >= Duration::from_secs(1) && self.samples > 0 {
+            // println!("--- GPU averages over last ~1s ({} samples) ---", self.samples);
+            // let n = self.num_systems.min(system_names.len());
+            // for i in 0..n {
+            //     println!("{:<16} {:>8.3} ms", system_names[i], self.sums_ms[i] / self.samples as f64);
+            // }
+            // println!();
+
+            self.sums_ms.fill(0.0);
+            self.samples = 0;
+            self.last_print = Instant::now();
+        }
+    }
+
+    fn collect_ready(&mut self, queue: &Queue, system_names: &[&str]) {
+        let period = queue.get_timestamp_period() as f64;
+
+        for slot in &mut self.slots {
+            let Some(rx) = slot.pending.as_ref() else {
+                continue;
+            };
+
+            let done = match rx.try_recv() {
+                Ok(Ok(())) => true,
+                Ok(Err(_)) => {
+                    slot.pending = None;
+                    continue;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => false,
+                Err(_) => {
+                    slot.pending = None;
+                    continue;
+                }
+            };
+            if !done {
+                continue;
+            }
+
+            let slice = slot.readback.slice(..);
+            let mapped = slice.get_mapped_range();
+            let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
+
+            let n = self.num_systems.min(system_names.len());
+            for i in 0..n {
+                let s = i * 2;
+                let e = i * 2 + 1;
+                if e < timestamps.len() && timestamps[e] >= timestamps[s] {
+                    let ns = (timestamps[e] - timestamps[s]) as f64 * period;
+                    self.sums_ms[i] += ns / 1_000_000.0;
+                }
+            }
+            self.samples += 1;
+
+            drop(mapped);
+            slot.readback.unmap();
+            slot.pending = None;
+        }
+    }
+}
 
 pub struct RenderCore {
     pub surface: Surface<'static>,
@@ -48,13 +227,13 @@ pub struct RenderCore {
     ui_renderer: UiRenderer,
     pub terrain_renderer: TerrainRenderer,
     pub road_renderer: RoadRenderSubsystem,
-    size: PhysicalSize<u32>,
     shader_watcher: Option<ShaderWatcher>,
     encoder: Option<CommandEncoder>,
     arena: GeneralMeshArena,
     render_manager: RenderManager,
     pub gizmo: Gizmo,
     astronomy: AstronomyState,
+    profiler: GpuProfiler,
 }
 
 impl RenderCore {
@@ -81,7 +260,7 @@ impl RenderCore {
         let arena = GeneralMeshArena::new(&device, 256 * 1024 * 1024, 128 * 1024 * 1024);
         let render_manager = RenderManager::new(&device, &queue, config.format, texture_dir());
         let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
-
+        let profiler = GpuProfiler::new(&device, 5, 3);
         Self {
             surface,
             device,
@@ -92,13 +271,13 @@ impl RenderCore {
             ui_renderer,
             terrain_renderer,
             road_renderer,
-            size,
             shader_watcher,
             encoder: None,
             arena,
             render_manager,
             gizmo,
             astronomy: AstronomyState::default(),
+            profiler,
         }
     }
 
@@ -110,6 +289,7 @@ impl RenderCore {
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
+        self.render_manager.invalidate_resize_bind_groups();
     }
 
     pub(crate) fn render(
@@ -121,6 +301,7 @@ impl RenderCore {
         settings: &Settings,
     ) {
         let aspect = self.config.width as f32 / self.config.height as f32;
+        println!("aspect: {}", aspect);
         self.update_render(
             camera_bundle,
             ui_loader,
@@ -131,13 +312,12 @@ impl RenderCore {
         );
 
         let camera = &camera_bundle.camera;
-        let frame_result = acquire_frame(&self.surface, &self.device, &mut self.config);
-        if frame_result.resized {
-            self.pipelines.resize(&self.config, self.msaa_samples);
-        }
+        let Some(frame) = acquire_frame(&self.surface, &self.device, &self.config) else {
+            return;
+        };
 
-        let frame = frame_result.frame;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
+        println!("{:?}", surface_view.texture().size());
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor {
@@ -158,8 +338,16 @@ impl RenderCore {
             settings.show_world,
         );
 
+        self.profiler.resolve(&mut encoder);
+
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        println!("Render complete {}", time.render_dt);
+        self.profiler.end_frame(
+            &self.device,
+            &self.queue,
+            &["Sky", "Terrain", "Water", "Roads", "Gizmo"],
+        );
     }
 
     pub fn update_render(
@@ -288,8 +476,13 @@ impl RenderCore {
             input_state,
             time,
         );
-        self.ui_renderer
-            .update(ui_loader, time, input_state, &self.queue, &self.size);
+        self.ui_renderer.update(
+            ui_loader,
+            time,
+            input_state,
+            &self.queue,
+            &PhysicalSize::new(self.config.width, self.config.height),
+        );
         self.road_renderer.update(
             &self.terrain_renderer,
             &self.device,
@@ -344,18 +537,19 @@ impl RenderCore {
             }
             let shadow_buf = &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[cascade];
 
-            if cascade != 0 && cascade != 1 {
-                render_terrain_shadows(
-                    &mut pass,
-                    &mut self.render_manager,
-                    &self.terrain_renderer,
-                    &self.pipelines,
-                    settings,
-                    camera,
-                    aspect,
-                    shadow_buf,
-                );
-            }
+            //
+            // if cascade != 0 && cascade != 1 {
+            //     render_terrain_shadows(
+            //         &mut pass,
+            //         &mut self.render_manager,
+            //         &self.terrain_renderer,
+            //         &self.pipelines,
+            //         settings,
+            //         camera,
+            //         aspect,
+            //         shadow_buf,
+            //     );
+            // }
 
             render_roads_shadows(
                 &mut pass,
@@ -382,7 +576,9 @@ impl RenderCore {
         show_world: bool,
     ) {
         // -------- Pass 1: Main world pass (writes depth) --------
-        self.execute_world_pass(encoder, config, camera, settings, aspect, show_world);
+        if show_world {
+            self.execute_world_pass(encoder, config, camera, settings, aspect);
+        }
 
         // -------- Pass 2: Fog (samples depth, no depth attachment) --------
         if show_world {
@@ -406,82 +602,83 @@ impl RenderCore {
         camera: &Camera,
         settings: &Settings,
         aspect: f32,
-        show_world: bool,
     ) {
-        let color_attachment = create_color_attachment(
-            &self.pipelines.msaa_hdr_view,
-            &self.pipelines.resolved_hdr_view,
-            self.msaa_samples,
-            config.background_color,
-        );
-        let normal_attachment = create_normal_attachment(
-            &self.pipelines.msaa_normal_view,
-            &self.pipelines.resolved_normal_view,
-            self.msaa_samples,
-        );
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Main Pass (World)"),
-            color_attachments: &[Some(color_attachment), Some(normal_attachment)],
-            depth_stencil_attachment: Some(create_depth_attachment(&self.pipelines.depth_view)),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let qs = &self.profiler.query_set;
 
-        if !show_world {
-            return;
-        }
-        render_sky(
-            &mut pass,
-            &mut self.render_manager,
-            &self.pipelines,
-            settings,
-            self.msaa_samples,
-        );
-
+        // Prepare Terrain Uniforms (Needs queue)
         self.terrain_renderer.make_pick_uniforms(
             &self.queue,
             &self.pipelines.pick_uniforms.buffer,
             camera,
             self.terrain_renderer.chunk_size,
         );
-        render_terrain(
-            &mut pass,
-            &mut self.render_manager,
-            &self.terrain_renderer,
-            &self.pipelines,
-            settings,
-            self.msaa_samples,
-            camera,
-            aspect,
-        );
 
-        render_water(
-            &mut pass,
-            &mut self.render_manager,
-            &self.pipelines,
-            settings,
-            self.msaa_samples,
-        );
-        render_roads(
-            &mut pass,
-            &mut self.render_manager,
-            &self.road_renderer,
-            &self.pipelines,
-            settings,
-            self.msaa_samples,
-        );
-        render_gizmo(
-            &mut pass,
-            &mut self.render_manager,
-            &self.pipelines,
-            settings,
-            self.msaa_samples,
-            &mut self.gizmo,
-            camera,
-            &self.device,
-            &self.queue,
-        );
+        let mut pass = create_world_pass(encoder, &self.pipelines, config, self.msaa_samples);
+
+        // NOTE: Timestamp indices:
+        // Sky: 0-1, Terrain: 2-3, Water: 4-5, Roads: 6-7, Gizmo: 8-9
+
+        // 1. Sky
+        gpu_timestamp!(pass, qs, 0, {
+            render_sky(
+                &mut pass,
+                &mut self.render_manager,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
+            );
+        });
+
+        // 2. Terrain
+        gpu_timestamp!(pass, qs, 2, {
+            render_terrain(
+                &mut pass,
+                &mut self.render_manager,
+                &self.terrain_renderer,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
+                camera,
+                aspect,
+            );
+        });
+
+        // 3. Water
+        gpu_timestamp!(pass, qs, 4, {
+            render_water(
+                &mut pass,
+                &mut self.render_manager,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
+            );
+        });
+
+        // 4. Roads
+        gpu_timestamp!(pass, qs, 6, {
+            render_roads(
+                &mut pass,
+                &mut self.render_manager,
+                &self.road_renderer,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
+            );
+        });
+
+        gpu_timestamp!(pass, qs, 8, {
+            render_gizmo(
+                &mut pass,
+                &mut self.render_manager,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
+                &mut self.gizmo,
+                camera,
+                &self.device,
+                &self.queue,
+            );
+        });
     }
 
     fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder) {
@@ -659,8 +856,8 @@ impl RenderCore {
         time: &TimeSystem,
         input_state: &InputState,
     ) {
-        let screen_uniform = crate::renderer::ui::ScreenUniform {
-            size: [self.size.width as f32, self.size.height as f32],
+        let screen_uniform = ScreenUniform {
+            size: [self.config.width as f32, self.config.height as f32],
             time: time.total_time as f32,
             enable_dither: 1,
             mouse: input_state.mouse.pos.to_array(),
@@ -800,7 +997,9 @@ fn create_surface_config(
 fn create_device(adapter: &Adapter) -> (Device, Queue) {
     pollster::block_on(adapter.request_device(&DeviceDescriptor {
         label: Some("Device"),
-        required_features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+        required_features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | Features::TIMESTAMP_QUERY
+            | Features::TIMESTAMP_QUERY_INSIDE_PASSES,
         required_limits: Limits::default(),
         experimental_features: ExperimentalFeatures::disabled(),
         memory_hints: MemoryHints::default(),
@@ -931,27 +1130,25 @@ pub struct FrameResult {
 pub fn acquire_frame(
     surface: &Surface,
     device: &Device,
-    config: &mut SurfaceConfiguration,
-) -> FrameResult {
+    config: &SurfaceConfiguration,
+) -> Option<SurfaceTexture> {
     match surface.get_current_texture() {
-        Ok(frame) => FrameResult {
-            frame,
-            resized: false,
-        },
-        Err(SurfaceError::Outdated | SurfaceError::Lost) => {
-            surface.configure(device, config);
-            let frame = surface.get_current_texture().unwrap();
-
-            let size = frame.texture.size();
-            config.width = size.width;
-            config.height = size.height;
-
-            FrameResult {
-                frame,
-                resized: true,
-            }
+        Ok(frame) => Some(frame),
+        Err(wgpu::SurfaceError::Outdated) => {
+            // Surface is temporarily invalid
+            None // skip this frame
         }
-        Err(e) => panic!("{e:?}"),
+        Err(wgpu::SurfaceError::Lost) => {
+            surface.configure(device, config);
+            None
+        }
+        Err(wgpu::SurfaceError::OutOfMemory) => {
+            panic!("OOM");
+        }
+        Err(e) => {
+            eprintln!("Surface error: {:?}", e);
+            None
+        }
     }
 }
 
@@ -1092,6 +1289,34 @@ fn road_depth_stencil(bias: DepthBiasState) -> DepthStencilState {
         stencil: Default::default(),
         bias,
     }
+}
+fn create_world_pass<'a>(
+    encoder: &'a mut CommandEncoder,
+    pipelines: &'a Pipelines,
+    config: &'a RenderPassConfig,
+    msaa_samples: u32,
+) -> RenderPass<'a> {
+    let color_attachment = create_color_attachment(
+        &pipelines.msaa_hdr_view,
+        &pipelines.resolved_hdr_view,
+        msaa_samples,
+        config.background_color,
+    );
+
+    let normal_attachment = create_normal_attachment(
+        &pipelines.msaa_normal_view,
+        &pipelines.resolved_normal_view,
+        msaa_samples,
+    );
+
+    encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("World Pass"),
+        color_attachments: &[Some(color_attachment), Some(normal_attachment)],
+        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.depth_view)),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
 }
 
 fn render_gizmo(

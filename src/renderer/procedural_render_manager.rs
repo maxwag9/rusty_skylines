@@ -1054,12 +1054,6 @@ pub struct RenderManager {
     uniform_bind_groups: HashMap<UniformBindGroupKey, BindGroup>,
 }
 
-// impl RenderManager {
-//     pub fn render_tonemap(&self, label: &str, pass: &mut RenderPass) {
-//         self.pipeline_manager.
-//     }
-// }
-
 impl RenderManager {
     pub fn new(
         device: &Device,
@@ -1106,7 +1100,10 @@ impl RenderManager {
             uniform_bind_groups: HashMap::new(),
         }
     }
-
+    pub fn invalidate_resize_bind_groups(&mut self) {
+        self.fullscreen_debug_bind_groups.clear();
+        self.material_manager.clear_bind_groups()
+    }
     pub fn device(&self) -> &wgpu::Device {
         self.pipeline_manager.device()
     }
@@ -1379,6 +1376,11 @@ pub fn create_color_attachment_load<'a>(
     surface_view: &'a TextureView,
     msaa_samples: u32,
 ) -> RenderPassColorAttachment<'a> {
+    println!(
+        "Creating color attachment load {:?} {:?}",
+        msaa_view.texture().size(),
+        surface_view.texture().size()
+    );
     if msaa_samples > 1 {
         RenderPassColorAttachment {
             view: msaa_view,
