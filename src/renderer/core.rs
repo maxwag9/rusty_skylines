@@ -7,8 +7,9 @@ use crate::renderer::astronomy::*;
 use crate::renderer::general_mesh_arena::GeneralMeshArena;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
+use crate::renderer::procedural_bind_group_manager::FullscreenPassType;
 use crate::renderer::procedural_render_manager::{
-    PipelineOptions, RenderManager, create_color_attachment_load,
+    DepthDebugParams, PipelineOptions, RenderManager, create_color_attachment_load,
 };
 use crate::renderer::procedural_texture_manager::{MaterialKind, Params, TextureCacheKey};
 use crate::renderer::render_passes::{
@@ -25,7 +26,7 @@ use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::terrain::water::SimpleVertex;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::variables::update_ui_variables;
+use crate::ui::variables::{UiVariableRegistry, update_ui_variables};
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use crate::world::CameraBundle;
 use glam::Mat4;
@@ -136,7 +137,13 @@ impl GpuProfiler {
     }
 
     /// Call once per frame AFTER `queue.submit()` and `frame.present()`.
-    pub fn end_frame(&mut self, device: &Device, queue: &Queue, system_names: &[&str]) {
+    pub fn end_frame(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        system_names: &[&str],
+        variables: &mut UiVariableRegistry,
+    ) {
         let _ = device.poll(PollType::Poll);
 
         self.collect_ready(queue, system_names);
@@ -158,12 +165,13 @@ impl GpuProfiler {
         self.frame += 1;
 
         if self.last_print.elapsed() >= Duration::from_secs(1) && self.samples > 0 {
-            // println!("--- GPU averages over last ~1s ({} samples) ---", self.samples);
-            // let n = self.num_systems.min(system_names.len());
-            // for i in 0..n {
-            //     println!("{:<16} {:>8.3} ms", system_names[i], self.sums_ms[i] / self.samples as f64);
-            // }
-            // println!();
+            let n = self.num_systems.min(system_names.len());
+            let inv_samples = 1.0 / self.samples as f64;
+            for i in 0..n {
+                // println!("{:<16} {:>8.3} ms", system_names[i], self.sums_ms[i] / self.samples as f64);
+                let name = format!("{}_frametime", system_names[i]);
+                variables.set_f32(&name, (self.sums_ms[i] * inv_samples) as f32);
+            }
 
             self.sums_ms.fill(0.0);
             self.samples = 0;
@@ -301,7 +309,6 @@ impl RenderCore {
         settings: &Settings,
     ) {
         let aspect = self.config.width as f32 / self.config.height as f32;
-        println!("aspect: {}", aspect);
         self.update_render(
             camera_bundle,
             ui_loader,
@@ -317,7 +324,6 @@ impl RenderCore {
         };
 
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
-        println!("{:?}", surface_view.texture().size());
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor {
@@ -342,11 +348,11 @@ impl RenderCore {
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-        println!("Render complete {}", time.render_dt);
         self.profiler.end_frame(
             &self.device,
             &self.queue,
-            &["Sky", "Terrain", "Water", "Roads", "Gizmo"],
+            &["sky", "terrain", "water", "roads", "gizmo"], // Lower Case important!
+            &mut ui_loader.variables,
         );
     }
 
@@ -379,7 +385,16 @@ impl RenderCore {
             self.terrain_renderer.chunk_size,
         );
         self.terrain_renderer.pick_terrain_point(ray);
-
+        self.render_manager
+            .update_depth_params_buffer(DepthDebugParams {
+                near: camera.near,
+                far: camera.far,
+                power: 20.0,
+                reversed_z: 0, // or 1? Not yet
+                msaa_samples: self.msaa_samples,
+                _pad0: 0,
+                _pad1: 0,
+            });
         let (new_uniforms, light_mats, splits) = self.update_uniforms(
             camera, view, proj, view_proj, &astronomy, time, aspect, settings,
         );
@@ -582,7 +597,7 @@ impl RenderCore {
 
         // -------- Pass 2: Fog (samples depth, no depth attachment) --------
         if show_world {
-            self.execute_fog_pass(encoder);
+            self.execute_fog_pass(encoder, settings);
         }
 
         // -------- Pass 3: UI (NOT fogged, because it draws after fog) Logic! --------
@@ -681,7 +696,7 @@ impl RenderCore {
         });
     }
 
-    fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder) {
+    fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
         let color_attachment = create_color_attachment_load(
             &self.pipelines.msaa_hdr_view,
             &self.pipelines.resolved_hdr_view,
@@ -702,18 +717,35 @@ impl RenderCore {
         } else {
             "fog.wgsl"
         };
-        self.render_manager.render_fog_fullscreen(
+
+        let options = PipelineOptions {
+            topology: TriangleList,
+            msaa_samples: self.msaa_samples,
+            depth_stencil: None,
+            vertex_layouts: vec![],
+            cull_mode: None,
+            shadow_pass: false,
+            fullscreen_pass: FullscreenPassType::Fog, // (will be overwritten anyway)
+            targets: vec![Some(ColorTargetState {
+                format: self.pipelines.msaa_hdr_view.texture().format(),
+                blend: Some(BlendState::ALPHA_BLENDING),
+                write_mask: ColorWrites::ALL,
+            })],
+        };
+
+        self.render_manager.render_fullscreen_pass(
             "Fog",
             shader_dir().join(fog_shader).as_path(),
-            self.msaa_samples,
-            &self.pipelines.depth_sample_view,
+            options,
             &[
                 &self.pipelines.uniforms.buffer,
                 &self.pipelines.fog_uniforms.buffer,
                 &self.pipelines.pick_uniforms.buffer,
             ],
-            self.pipelines.msaa_hdr_view.texture().format(),
             &mut pass,
+            &self.pipelines,
+            settings,
+            FullscreenPassType::Fog,
         );
     }
 
@@ -768,9 +800,10 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                self.render_manager.render_debug_textureview_fullscreen(
+                self.render_manager.render_fullscreen_debug_view(
                     &self.pipelines.resolved_normal_view,
                     "Debug Normals Render",
+                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
                     &mut pass,
                 );
@@ -791,15 +824,17 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                self.render_manager.render_debug_textureview_fullscreen(
+                self.render_manager.render_fullscreen_debug_view(
                     &self.pipelines.depth_sample_view,
                     "Debug Depth Render",
+                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
                     &mut pass,
                 );
             }
         }
     }
+
     fn execute_tonemap_pass(
         &mut self,
         encoder: &mut CommandEncoder,
@@ -829,15 +864,14 @@ impl RenderCore {
             vertex_layouts: vec![],
             cull_mode: None,
             shadow_pass: false,
-            fullscreen_pass: true,
+            fullscreen_pass: FullscreenPassType::Normal,
             targets: vec![Some(ColorTargetState {
                 format: surface_view.texture().format(),
                 blend: None,
                 write_mask: ColorWrites::ALL,
             })],
         };
-        self.render_manager.render(
-            vec![],
+        self.render_manager.render_fullscreen_pass(
             "Tonemap",
             shader_dir().join("tonemap.wgsl").as_path(),
             options,
@@ -845,8 +879,8 @@ impl RenderCore {
             &mut pass,
             &self.pipelines,
             settings,
+            FullscreenPassType::Normal,
         );
-        pass.draw(0..3, 0..1);
     }
 
     fn render_ui(
@@ -886,6 +920,7 @@ impl RenderCore {
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
         self.ui_renderer.pipelines.rebuild_pipelines();
+        self.render_manager.invalidate_resize_bind_groups();
     }
 
     fn reload_all_shaders(&mut self) -> anyhow::Result<()> {
@@ -1346,10 +1381,8 @@ fn render_gizmo(
             }),
             msaa_samples,
             vertex_layouts: Vec::from([LineVtxRender::layout()]),
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets,
+            ..Default::default()
         },
         &[&pipelines.uniforms.buffer],
         pass,
@@ -1401,10 +1434,8 @@ fn render_water(
             }),
             msaa_samples,
             vertex_layouts: Vec::from([SimpleVertex::layout()]),
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets,
+            ..Default::default()
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1449,10 +1480,8 @@ fn render_sky(
             depth_stencil: sky_depth_stencil.clone(),
             msaa_samples,
             vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets: targets.clone(),
+            ..Default::default()
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
@@ -1470,10 +1499,8 @@ fn render_sky(
             depth_stencil: sky_depth_stencil,
             msaa_samples,
             vertex_layouts: Vec::new(),
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets,
+            ..Default::default()
         },
         &[&pipelines.uniforms.buffer, &pipelines.sky_uniforms.buffer],
         pass,
@@ -1510,9 +1537,8 @@ fn render_roads(
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets: targets.clone(),
+            ..Default::default()
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1554,9 +1580,8 @@ fn render_roads(
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets,
+            ..Default::default()
         },
         &[
             &pipelines.uniforms.buffer,
@@ -1621,9 +1646,8 @@ fn render_terrain(
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets: targets.clone(),
+            ..Default::default()
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,
@@ -1643,9 +1667,8 @@ fn render_terrain(
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
-            shadow_pass: false,
-            fullscreen_pass: false,
             targets,
+            ..Default::default()
         },
         &[&pipelines.uniforms.buffer, &pipelines.pick_uniforms.buffer],
         pass,

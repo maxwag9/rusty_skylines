@@ -374,10 +374,8 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                cull_mode: None,
-                                shadow_pass: false,
-                                fullscreen_pass: false,
                                 targets,
+                                ..Default::default()
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Circle",
@@ -401,10 +399,8 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                cull_mode: None,
-                                shadow_pass: false,
-                                fullscreen_pass: false,
                                 targets,
+                                ..Default::default()
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Glow",
@@ -431,10 +427,8 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                cull_mode: None,
-                                shadow_pass: false,
-                                fullscreen_pass: false,
                                 targets,
+                                ..Default::default()
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Handle",
@@ -462,10 +456,8 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                cull_mode: None,
-                                shadow_pass: false,
-                                fullscreen_pass: false,
                                 targets,
+                                ..Default::default()
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Polygon",
@@ -492,10 +484,8 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                cull_mode: None,
-                                shadow_pass: false,
-                                fullscreen_pass: false,
                                 targets,
+                                ..Default::default()
                             };
                             render_manager.render_with_bind_groups(
                                 "UI Outline",
@@ -529,10 +519,8 @@ impl UiRenderer {
                         msaa_samples: msaa,
                         depth_stencil: depth_stencil.clone(),
                         vertex_layouts: vec![UiVertexText::desc()],
-                        cull_mode: None,
-                        shadow_pass: false,
-                        fullscreen_pass: false,
                         targets,
+                        ..Default::default()
                     };
                     render_manager.render_with_bind_groups(
                         "UI Text",

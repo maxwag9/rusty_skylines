@@ -5,6 +5,7 @@ use crate::renderer::pipelines::{
     FogUniforms, GpuResourceSet, MeshBuffers, ShaderAsset, ToneMappingUniforms,
     create_grass_texture, load_shader, make_dummy_buf, make_new_uniforms_csm,
 };
+use crate::renderer::procedural_render_manager::DepthDebugParams;
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::renderer::textures::grass::{GrassParams, generate_noise};
 use crate::resources::Uniforms;
@@ -299,7 +300,55 @@ pub fn create_pick_uniforms(device: &Device) -> GpuResourceSet {
         buffer,
     }
 }
+pub fn create_depth_debug_uniforms(
+    device: &Device,
+    camera: &Camera,
+    msaa_samples: u32,
+) -> GpuResourceSet {
+    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("Depth Debug Uniform BGL"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let params = DepthDebugParams {
+        near: camera.near,
+        far: camera.far,
+        power: 20.0,
+        reversed_z: 0, // if you use reversed-z, else 0
+        msaa_samples,
+        _pad0: 0,
+        _pad1: 0,
+    };
 
+    let buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("Depth Debug Uniform Buffer"),
+        contents: bytemuck::bytes_of(&params),
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+    });
+
+    let bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("Depth Debug Uniform BG"),
+        layout: &bind_group_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+
+    GpuResourceSet {
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
+        buffer,
+    }
+}
 pub fn create_water_uniforms(device: &Device, sky_buffer: &Buffer) -> GpuResourceSet {
     let wu = WaterUniform {
         sea_level: 0.0,

@@ -301,8 +301,8 @@ pub fn render_roads_shadows(
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
-            fullscreen_pass: false,
             targets: vec![],
+            ..Default::default()
         },
         &[&shadow_mat_buffer],
         pass,
@@ -347,8 +347,8 @@ pub fn render_roads_shadows(
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
-            fullscreen_pass: false,
             targets: Vec::new(),
+            ..Default::default()
         },
         &[&shadow_mat_buffer],
         pass,
@@ -392,8 +392,8 @@ pub fn render_terrain_shadows(
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Back),
             shadow_pass: true,
-            fullscreen_pass: false,
             targets: Vec::new(),
+            ..Default::default()
         },
         &[&shadow_mat_buffer],
         pass,

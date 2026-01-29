@@ -15,6 +15,17 @@ layers:
           - 1.0
         text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
       - !Text
+        id: fps_text
+        x: 0.0008250045
+        y: 0.0702857145
+        px: 0.01
+        color:
+          - 1.0
+          - 0.0
+          - 1.0
+          - 1.0
+        text: 'Rendering times per frame: Sky: {(sky_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
+      - !Text
         id: sky_info_text
         x: 0.001895523
         y: 0.027415771

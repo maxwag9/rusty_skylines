@@ -161,6 +161,7 @@ pub struct Pipelines {
     pub fog_uniforms: GpuResourceSet,
     pub tonemapping_uniforms: GpuResourceSet,
     pub pick_uniforms: GpuResourceSet,
+    pub depth_debug_uniforms: GpuResourceSet,
 
     pub water_mesh_buffers: MeshBuffers,
     pub stars_mesh_buffers: MeshBuffers,
@@ -197,6 +198,7 @@ impl Pipelines {
         let fog_uniforms = create_fog_uniforms(device);
         let tonemapping_uniforms = create_tonemapping_uniforms(device);
         let pick_uniforms = create_pick_uniforms(device);
+        let depth_debug_uniforms = create_depth_debug_uniforms(device, camera, msaa_samples);
         //let road_uniforms = create_road_uniforms(device);
         let water_uniforms = create_water_uniforms(device, &sky_uniforms.buffer);
         let water_mesh = create_water_mesh(device);
@@ -226,6 +228,7 @@ impl Pipelines {
             fog_uniforms,
             tonemapping_uniforms,
             pick_uniforms,
+            depth_debug_uniforms,
 
             water_mesh_buffers: water_mesh,
             gizmo_mesh_buffers: gizmo_mesh,

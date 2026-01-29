@@ -2,9 +2,10 @@ use crate::data::Settings;
 use crate::renderer::procedural_texture_manager::TextureCacheKey;
 use std::collections::HashMap;
 use wgpu::{
-    AddressMode, BindGroup, BindGroupLayout, BindingResource, BindingType, CompareFunction, Device,
-    FilterMode, MipmapFilterMode, Sampler, ShaderStages, TextureSampleType, TextureView,
-    TextureViewDimension,
+    AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
+    BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, CompareFunction,
+    Device, FilterMode, MipmapFilterMode, Sampler, SamplerBindingType, ShaderStages,
+    TextureSampleType, TextureView, TextureViewDimension,
 };
 // #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 // pub enum MaterialKind {
@@ -15,14 +16,38 @@ use wgpu::{
 //     AmbientOcclusion,
 //     Emissive,
 // }
+#[derive(Eq, Hash, PartialEq, Clone, Copy, Debug)]
+pub enum FullscreenPassType {
+    /// Regular material path (N textures + sampler + shadow map)
+    None,
+    /// 1 color texture + sampler (tonemapping for example)
+    Normal,
+    /// 1 depth texture (no sampler; can be MSAA or not)
+    Fog,
+}
 
+#[derive(Eq, Hash, PartialEq, Clone, Copy, Debug)]
+struct FullscreenLayoutKey {
+    pass: FullscreenPassType,
+    input_multisampled: bool,
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+struct MaterialBindGroupKey {
+    materials: Vec<TextureCacheKey>,
+    view_ptrs: Vec<usize>,
+    shadow_pass: bool,
+    fullscreen: FullscreenLayoutKey,
+    shadows_enabled: bool,
+}
 pub struct MaterialBindGroupManager {
     device: Device,
     sampler: Sampler,
     shadow_sampler: Sampler,
     shadows_off_sampler: Sampler,
-    layout_cache: HashMap<(usize, bool, bool), BindGroupLayout>,
-    bind_group_cache: HashMap<(Vec<TextureCacheKey>, bool, bool, bool), BindGroup>,
+
+    layout_cache: HashMap<(usize, bool, FullscreenLayoutKey), BindGroupLayout>,
+    bind_group_cache: HashMap<MaterialBindGroupKey, BindGroup>,
 }
 
 impl MaterialBindGroupManager {
@@ -67,27 +92,42 @@ impl MaterialBindGroupManager {
             bind_group_cache: HashMap::new(),
         }
     }
-
     pub fn clear_bind_groups(&mut self) {
         self.bind_group_cache.clear();
     }
+    fn fullscreen_key(
+        fullscreen_pass: FullscreenPassType,
+        msaa_samples: u32,
+    ) -> FullscreenLayoutKey {
+        // Fog input is MSAA when rendering with MSAA (like fog).
+        let input_multisampled =
+            matches!(fullscreen_pass, FullscreenPassType::Fog) && msaa_samples > 1;
+        FullscreenLayoutKey {
+            pass: fullscreen_pass,
+            input_multisampled,
+        }
+    }
+
     pub fn get_layout(
         &mut self,
         material_count: usize,
         shadow_pass: bool,
-        fullscreen_pass: bool,
+        fullscreen_pass: FullscreenPassType,
+        msaa_samples: u32,
     ) -> &BindGroupLayout {
+        let fk = Self::fullscreen_key(fullscreen_pass, msaa_samples);
+
         if !self
             .layout_cache
-            .contains_key(&(material_count, shadow_pass, fullscreen_pass))
+            .contains_key(&(material_count, shadow_pass, fk))
         {
-            let layout = self.create_layout(material_count, shadow_pass, fullscreen_pass);
+            let layout = self.create_layout(material_count, shadow_pass, fk);
             self.layout_cache
-                .insert((material_count, shadow_pass, fullscreen_pass), layout);
+                .insert((material_count, shadow_pass, fk), layout);
         }
 
         self.layout_cache
-            .get(&(material_count, shadow_pass, fullscreen_pass))
+            .get(&(material_count, shadow_pass, fk))
             .unwrap()
     }
 
@@ -97,33 +137,46 @@ impl MaterialBindGroupManager {
         views: Vec<&TextureView>,
         shadow_array_view: &TextureView,
         shadow_pass: bool,
-        fullscreen_pass: bool,
+        fullscreen_pass: FullscreenPassType,
+        msaa_samples: u32,
         settings: &Settings,
     ) -> &BindGroup {
-        // Fullscreen tonemap: we expect exactly 1 source texture view (resolved HDR)
-        if fullscreen_pass {
-            assert_eq!(views.len(), 1);
-        } else {
-            assert_eq!(materials.len(), views.len());
-        }
+        let fk = Self::fullscreen_key(fullscreen_pass, msaa_samples);
 
-        let material_count = if fullscreen_pass { 1 } else { materials.len() };
+        // Validate + determine layout material_count
+        let material_count = match fullscreen_pass {
+            FullscreenPassType::None => {
+                assert_eq!(materials.len(), views.len());
+                materials.len()
+            }
+            FullscreenPassType::Normal | FullscreenPassType::Fog => {
+                assert_eq!(views.len(), 1);
+                1
+            }
+        };
 
-        let key = (
-            materials.to_vec(),
-            shadow_pass,
-            fullscreen_pass,
-            settings.shadows_enabled,
-        );
-
+        // Ensure layout exists
         if !self
             .layout_cache
-            .contains_key(&(material_count, shadow_pass, fullscreen_pass))
+            .contains_key(&(material_count, shadow_pass, fk))
         {
-            let layout = self.create_layout(material_count, shadow_pass, fullscreen_pass);
+            let layout = self.create_layout(material_count, shadow_pass, fk);
             self.layout_cache
-                .insert((material_count, shadow_pass, fullscreen_pass), layout);
+                .insert((material_count, shadow_pass, fk), layout);
         }
+
+        let view_ptrs: Vec<usize> = views
+            .iter()
+            .map(|v| (*v as *const TextureView) as usize)
+            .collect();
+
+        let key = MaterialBindGroupKey {
+            materials: materials.to_vec(),
+            view_ptrs,
+            shadow_pass,
+            fullscreen: fk,
+            shadows_enabled: settings.shadows_enabled,
+        };
 
         if !self.bind_group_cache.contains_key(&key) {
             let bind_group = self.build_bind_group(
@@ -131,7 +184,7 @@ impl MaterialBindGroupManager {
                 views,
                 shadow_array_view,
                 shadow_pass,
-                fullscreen_pass,
+                fk,
                 settings,
             );
             self.bind_group_cache.insert(key.clone(), bind_group);
@@ -144,78 +197,93 @@ impl MaterialBindGroupManager {
         &self,
         material_count: usize,
         shadow_pass: bool,
-        fullscreen_pass: bool,
+        fullscreen: FullscreenLayoutKey,
     ) -> BindGroupLayout {
         let mut entries = Vec::new();
 
-        // Shadow pass: no material bindings
         if shadow_pass {
-            // leave empty
-        }
-        // Fullscreen pass (tonemap): fixed bindings:
-        // @group(0) @binding(0) texture_2d<f32>
-        // @group(0) @binding(1) sampler
-        else if fullscreen_pass {
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Float { filterable: true },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            });
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
-        }
-        // Normal forward/gbuffer/etc: your existing material + shadow bindings
-        else {
-            for i in 0..material_count {
-                entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: i as u32,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                });
+            // shadow pass: intentionally empty
+        } else {
+            match fullscreen.pass {
+                FullscreenPassType::Normal => {
+                    // 1 color texture + sampler
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    });
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    });
+                }
+
+                FullscreenPassType::Fog => {
+                    // 1 depth texture, MSAA depending on input
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Depth,
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: fullscreen.input_multisampled,
+                        },
+                        count: None,
+                    });
+                }
+
+                FullscreenPassType::None => {
+                    // normal material path
+                    for i in 0..material_count {
+                        entries.push(BindGroupLayoutEntry {
+                            binding: i as u32,
+                            visibility: ShaderStages::FRAGMENT,
+                            ty: BindingType::Texture {
+                                sample_type: TextureSampleType::Float { filterable: true },
+                                view_dimension: TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        });
+                    }
+
+                    entries.push(BindGroupLayoutEntry {
+                        binding: material_count as u32,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    });
+
+                    entries.push(BindGroupLayoutEntry {
+                        binding: (material_count + 1) as u32,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Depth,
+                            view_dimension: TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    });
+
+                    entries.push(BindGroupLayoutEntry {
+                        binding: (material_count + 2) as u32,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Comparison),
+                        count: None,
+                    });
+                }
             }
-
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: material_count as u32,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            });
-
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: (material_count + 1) as u32,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Texture {
-                    sample_type: TextureSampleType::Depth,
-                    view_dimension: TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: None,
-            });
-
-            entries.push(wgpu::BindGroupLayoutEntry {
-                binding: (material_count + 2) as u32,
-                visibility: ShaderStages::FRAGMENT,
-                ty: BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
-                count: None,
-            });
         }
 
         self.device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            .create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Material Bind Group Layout"),
                 entries: &entries,
             })
@@ -227,57 +295,69 @@ impl MaterialBindGroupManager {
         views: Vec<&TextureView>,
         shadow_array_view: &TextureView,
         shadow_pass: bool,
-        fullscreen_pass: bool,
+        fullscreen: FullscreenLayoutKey,
         settings: &Settings,
     ) -> BindGroup {
         let layout = self
             .layout_cache
-            .get(&(material_count, shadow_pass, fullscreen_pass))
+            .get(&(material_count, shadow_pass, fullscreen))
             .unwrap();
 
-        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
+        let mut entries = Vec::new();
 
         if shadow_pass {
-            // no entries
-        } else if fullscreen_pass {
-            // binding(0) = hdr_tex, binding(1) = hdr_sampler
-            entries.push(wgpu::BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(views[0]),
-            });
-            entries.push(wgpu::BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::Sampler(&self.sampler),
-            });
+            // shadow pass: intentionally empty
         } else {
-            for (i, view) in views.iter().enumerate() {
-                entries.push(wgpu::BindGroupEntry {
-                    binding: i as u32,
-                    resource: BindingResource::TextureView(view),
-                });
+            match fullscreen.pass {
+                FullscreenPassType::Normal => {
+                    entries.push(BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(views[0]),
+                    });
+                    entries.push(BindGroupEntry {
+                        binding: 1,
+                        resource: BindingResource::Sampler(&self.sampler),
+                    });
+                }
+
+                FullscreenPassType::Fog => {
+                    entries.push(BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(views[0]),
+                    });
+                }
+
+                FullscreenPassType::None => {
+                    for (i, view) in views.iter().enumerate() {
+                        entries.push(BindGroupEntry {
+                            binding: i as u32,
+                            resource: BindingResource::TextureView(view),
+                        });
+                    }
+
+                    entries.push(BindGroupEntry {
+                        binding: material_count as u32,
+                        resource: BindingResource::Sampler(&self.sampler),
+                    });
+
+                    entries.push(BindGroupEntry {
+                        binding: (material_count + 1) as u32,
+                        resource: BindingResource::TextureView(shadow_array_view),
+                    });
+
+                    entries.push(BindGroupEntry {
+                        binding: (material_count + 2) as u32,
+                        resource: BindingResource::Sampler(if settings.shadows_enabled {
+                            &self.shadow_sampler
+                        } else {
+                            &self.shadows_off_sampler
+                        }),
+                    });
+                }
             }
-
-            entries.push(wgpu::BindGroupEntry {
-                binding: material_count as u32,
-                resource: BindingResource::Sampler(&self.sampler),
-            });
-
-            entries.push(wgpu::BindGroupEntry {
-                binding: (material_count + 1) as u32,
-                resource: BindingResource::TextureView(shadow_array_view),
-            });
-
-            entries.push(wgpu::BindGroupEntry {
-                binding: (material_count + 2) as u32,
-                resource: BindingResource::Sampler(if settings.shadows_enabled {
-                    &self.shadow_sampler
-                } else {
-                    &self.shadows_off_sampler
-                }),
-            });
         }
 
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("Material Bind Group"),
             layout,
             entries: &entries,
