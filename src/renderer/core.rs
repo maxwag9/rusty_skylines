@@ -20,16 +20,18 @@ use crate::renderer::shadows::{CSM_CASCADES, ShadowMatUniform, render_roads_shad
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::resources::{InputState, TimeSystem, Uniforms};
+use crate::resources::{TimeSystem, Uniforms};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
 use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::terrain::water::SimpleVertex;
+use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::{UiVariableRegistry, update_ui_variables};
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use crate::world::CameraBundle;
 use glam::Mat4;
+use std::collections::HashMap;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
@@ -39,35 +41,39 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 macro_rules! gpu_timestamp {
-    ($pass:expr, $qs:expr, $idx:expr, $body:block) => {{
-        // Write start timestamp
-        $pass.write_timestamp($qs, $idx);
+    ($pass:expr, $profiler:expr, $label:literal, $body:block) => {{
+        let (start, end) = $profiler.get_range($label);
+        $pass.write_timestamp(&$profiler.query_set, start);
         let r = { $body };
-        // Write end timestamp
-        $pass.write_timestamp($qs, $idx + 1);
+        $pass.write_timestamp(&$profiler.query_set, end);
         r
     }};
 }
 
 struct Slot {
-    resolve: wgpu::Buffer,
-    readback: wgpu::Buffer,
-    pending: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    resolve: Buffer,
+    readback: Buffer,
+    pending: Option<mpsc::Receiver<Result<(), BufferAsyncError>>>,
 }
 
 pub struct GpuProfiler {
-    pub query_set: wgpu::QuerySet,
+    pub query_set: QuerySet,
     slots: Vec<Slot>,
     num_systems: usize,
-    num_entries: u32,
+    capacity_entries: u32,
     buffer_size: u64,
 
     frame: u64,
     slot_just_written: Option<usize>,
 
-    sums_ms: Vec<f64>,
+    sums_ms: HashMap<String, f64>,
     samples: u32,
     last_print: Instant,
+
+    label_to_index: HashMap<String, u32>,
+    index_to_label: Vec<String>,
+    next_index: u32,
+    used_entries: u32,
 }
 
 impl GpuProfiler {
@@ -91,10 +97,10 @@ impl GpuProfiler {
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
-            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            let readback = device.create_buffer(&BufferDescriptor {
                 label: Some(&format!("Query Readback Buffer {i}")),
                 size: buffer_size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                usage: wgpu::BufferUsages::COPY_DST | BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
 
@@ -109,18 +115,48 @@ impl GpuProfiler {
             query_set,
             slots,
             num_systems,
-            num_entries,
+            capacity_entries: num_entries,
             buffer_size,
             frame: 0,
             slot_just_written: None,
-            sums_ms: vec![0.0; num_systems],
+            sums_ms: HashMap::with_capacity(num_systems),
             samples: 0,
             last_print: Instant::now(),
+            label_to_index: HashMap::new(),
+            index_to_label: vec![],
+            next_index: 0,
+            used_entries: 0,
         }
+    }
+    pub fn get_range(&mut self, label: &str) -> (u32, u32) {
+        let key = label.to_lowercase();
+
+        if let Some(&start) = self.label_to_index.get(&key) {
+            return (start, start + 1);
+        }
+
+        let start = self.used_entries;
+        let end = start + 1;
+
+        assert!(
+            end < self.capacity_entries,
+            "GpuProfiler: ran out of timestamp slots"
+        );
+
+        self.label_to_index.insert(key.clone(), start);
+        self.index_to_label.push(key);
+        self.used_entries += 2;
+
+        (start, end)
     }
 
     /// Call while encoding, before submit.
     pub fn resolve(&mut self, encoder: &mut CommandEncoder) {
+        if self.used_entries == 0 {
+            // Nothing to resolve, skip
+            self.slot_just_written = None;
+            return;
+        }
         let write_slot = (self.frame as usize) % self.slots.len();
 
         // If still mapped/pending, skip profiling this frame (prevents submit validation error).
@@ -130,7 +166,7 @@ impl GpuProfiler {
         }
 
         let slot = &self.slots[write_slot];
-        encoder.resolve_query_set(&self.query_set, 0..self.num_entries, &slot.resolve, 0);
+        encoder.resolve_query_set(&self.query_set, 0..self.capacity_entries, &slot.resolve, 0);
         encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, self.buffer_size);
 
         self.slot_just_written = Some(write_slot);
@@ -141,14 +177,13 @@ impl GpuProfiler {
         &mut self,
         device: &Device,
         queue: &Queue,
-        system_names: &[&str],
         variables: &mut UiVariableRegistry,
     ) {
         let _ = device.poll(PollType::Poll);
 
-        self.collect_ready(queue, system_names);
+        self.collect_ready(queue);
 
-        // Start mapping the slot we JUST wrote this frame (so it has N-1 frames before reuse).
+        // Start mapping the slot we JUST wrote this frame
         if let Some(i) = self.slot_just_written.take() {
             let slot = &mut self.slots[i];
             if slot.pending.is_none() {
@@ -163,23 +198,24 @@ impl GpuProfiler {
         }
 
         self.frame += 1;
-
         if self.last_print.elapsed() >= Duration::from_secs(1) && self.samples > 0 {
-            let n = self.num_systems.min(system_names.len());
             let inv_samples = 1.0 / self.samples as f64;
-            for i in 0..n {
-                // println!("{:<16} {:>8.3} ms", system_names[i], self.sums_ms[i] / self.samples as f64);
-                let name = format!("{}_frametime", system_names[i]);
-                variables.set_f32(&name, (self.sums_ms[i] * inv_samples) as f32);
+
+            for (label, sum) in self.sums_ms.iter() {
+                let name = format!("{label}_frametime");
+                variables.set_f32(&name, (*sum * inv_samples) as f32);
             }
 
-            self.sums_ms.fill(0.0);
+            self.sums_ms.clear();
             self.samples = 0;
             self.last_print = Instant::now();
         }
     }
 
-    fn collect_ready(&mut self, queue: &Queue, system_names: &[&str]) {
+    fn collect_ready(&mut self, queue: &Queue) {
+        if self.used_entries == 0 {
+            return; // nothing to collect
+        }
         let period = queue.get_timestamp_period() as f64;
 
         for slot in &mut self.slots {
@@ -193,12 +229,13 @@ impl GpuProfiler {
                     slot.pending = None;
                     continue;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => false,
+                Err(mpsc::TryRecvError::Empty) => false,
                 Err(_) => {
                     slot.pending = None;
                     continue;
                 }
             };
+
             if !done {
                 continue;
             }
@@ -207,15 +244,27 @@ impl GpuProfiler {
             let mapped = slice.get_mapped_range();
             let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
 
-            let n = self.num_systems.min(system_names.len());
-            for i in 0..n {
+            let max_pairs = (self.used_entries / 2) as usize;
+            let available_pairs = timestamps.len() / 2;
+            let pair_count = max_pairs.min(available_pairs);
+
+            for i in 0..pair_count {
                 let s = i * 2;
-                let e = i * 2 + 1;
-                if e < timestamps.len() && timestamps[e] >= timestamps[s] {
-                    let ns = (timestamps[e] - timestamps[s]) as f64 * period;
-                    self.sums_ms[i] += ns / 1_000_000.0;
+                let e = s + 1;
+
+                let start = timestamps[s];
+                let end = timestamps[e];
+
+                if end >= start {
+                    let ns = (end - start) as f64 * period;
+                    let ms = ns / 1_000_000.0;
+
+                    if let Some(label) = self.index_to_label.get(i) {
+                        *self.sums_ms.entry(label.clone()).or_insert(0.0) += ms;
+                    }
                 }
             }
+
             self.samples += 1;
 
             drop(mapped);
@@ -348,12 +397,8 @@ impl RenderCore {
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-        self.profiler.end_frame(
-            &self.device,
-            &self.queue,
-            &["sky", "terrain", "water", "roads", "gizmo"], // Lower Case important!
-            &mut ui_loader.variables,
-        );
+        self.profiler
+            .end_frame(&self.device, &self.queue, &mut ui_loader.variables);
     }
 
     pub fn update_render(
@@ -466,7 +511,6 @@ impl RenderCore {
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
-        //println!("{}", target_pos_render);
         ui_loader
             .variables
             .set_i32("target_pos_cx", camera.target.chunk.x);
@@ -591,14 +635,10 @@ impl RenderCore {
         show_world: bool,
     ) {
         // -------- Pass 1: Main world pass (writes depth) --------
-        if show_world {
-            self.execute_world_pass(encoder, config, camera, settings, aspect);
-        }
-
+        self.execute_world_pass(encoder, config, camera, settings, aspect);
+        self.execute_ssao_pass(encoder, settings);
         // -------- Pass 2: Fog (samples depth, no depth attachment) --------
-        if show_world {
-            self.execute_fog_pass(encoder, settings);
-        }
+        self.execute_fog_pass(encoder, settings);
 
         // -------- Pass 3: UI (NOT fogged, because it draws after fog) Logic! --------
         self.execute_ui_pass(encoder, ui_loader, time, input_state);
@@ -618,8 +658,6 @@ impl RenderCore {
         settings: &Settings,
         aspect: f32,
     ) {
-        let qs = &self.profiler.query_set;
-
         // Prepare Terrain Uniforms (Needs queue)
         self.terrain_renderer.make_pick_uniforms(
             &self.queue,
@@ -630,11 +668,14 @@ impl RenderCore {
 
         let mut pass = create_world_pass(encoder, &self.pipelines, config, self.msaa_samples);
 
+        if !settings.show_world {
+            return;
+        }
         // NOTE: Timestamp indices:
         // Sky: 0-1, Terrain: 2-3, Water: 4-5, Roads: 6-7, Gizmo: 8-9
-
         // 1. Sky
-        gpu_timestamp!(pass, qs, 0, {
+        gpu_timestamp!(pass, &mut self.profiler, "Sky", {
+            // All frame time names must be lowercase, I decided. (Doesn't matter anyway, cuz I .lowercase() anyway.)
             render_sky(
                 &mut pass,
                 &mut self.render_manager,
@@ -645,7 +686,7 @@ impl RenderCore {
         });
 
         // 2. Terrain
-        gpu_timestamp!(pass, qs, 2, {
+        gpu_timestamp!(pass, &mut self.profiler, "Terrain", {
             render_terrain(
                 &mut pass,
                 &mut self.render_manager,
@@ -659,7 +700,7 @@ impl RenderCore {
         });
 
         // 3. Water
-        gpu_timestamp!(pass, qs, 4, {
+        gpu_timestamp!(pass, &mut self.profiler, "Water", {
             render_water(
                 &mut pass,
                 &mut self.render_manager,
@@ -670,7 +711,7 @@ impl RenderCore {
         });
 
         // 4. Roads
-        gpu_timestamp!(pass, qs, 6, {
+        gpu_timestamp!(pass, &mut self.profiler, "Roads", {
             render_roads(
                 &mut pass,
                 &mut self.render_manager,
@@ -681,7 +722,7 @@ impl RenderCore {
             );
         });
 
-        gpu_timestamp!(pass, qs, 8, {
+        gpu_timestamp!(pass, &mut self.profiler, "Gizmo", {
             render_gizmo(
                 &mut pass,
                 &mut self.render_manager,
@@ -695,7 +736,74 @@ impl RenderCore {
             );
         });
     }
+    fn execute_ssao_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+        if !settings.show_world {
+            return;
+        }
 
+        // We LOAD the current HDR color and MULTIPLY it by AO using blending.
+        let color_attachment = create_color_attachment_load(
+            &self.pipelines.msaa_hdr_view,
+            &self.pipelines.resolved_hdr_view,
+            self.msaa_samples,
+        );
+
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("SSAO Pass (depth+normals)"),
+            color_attachments: &[Some(color_attachment)],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        // Multiply blending: out = dst * srcColor
+        // (we output AO in srcColor as vec3(ao))
+        let multiply_blend = BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::Zero,
+                dst_factor: BlendFactor::Src,
+                operation: BlendOperation::Add,
+            },
+            // keep alpha unchanged
+            alpha: BlendComponent {
+                src_factor: BlendFactor::Zero,
+                dst_factor: BlendFactor::One,
+                operation: BlendOperation::Add,
+            },
+        };
+
+        let options = PipelineOptions {
+            topology: TriangleList,
+            msaa_samples: self.msaa_samples, // ok: we write into your MSAA HDR target
+            depth_stencil: None,
+            vertex_layouts: vec![],
+            cull_mode: None,
+            shadow_pass: false,
+            fullscreen_pass: FullscreenPassType::Ssao, // you need this pass type to bind depth+normals (see note below)
+            targets: vec![Some(ColorTargetState {
+                format: self.pipelines.msaa_hdr_view.texture().format(),
+                blend: Some(multiply_blend),
+                write_mask: ColorWrites::ALL,
+            })],
+        };
+        let ssao_shader = if self.msaa_samples > 1 {
+            "ssao_msaa.wgsl"
+        } else {
+            "ssao.wgsl"
+        };
+        // SSAO only needs camera matrices (inv_proj + view/proj) from your existing Uniforms.
+        self.render_manager.render_fullscreen_pass(
+            "SSAO",
+            shader_dir().join(ssao_shader).as_path(),
+            options,
+            &[&self.pipelines.uniforms.buffer],
+            &mut pass,
+            &self.pipelines,
+            settings,
+            FullscreenPassType::Ssao,
+        );
+    }
     fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
         let color_attachment = create_color_attachment_load(
             &self.pipelines.msaa_hdr_view,
@@ -711,7 +819,9 @@ impl RenderCore {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-
+        if !settings.show_world {
+            return;
+        }
         let fog_shader = if self.msaa_samples > 1 {
             "fog_msaa.wgsl"
         } else {
@@ -1001,7 +1111,7 @@ fn create_surface_config(
         .copied()
         .find(|f| *f == Rgba8UnormSrgb)
         .unwrap_or(surface_caps.formats[0]);
-    println!("{:?}", format);
+    // println!("{:?}", format);
 
     let alpha_mode = surface_caps
         .alpha_modes
@@ -1157,11 +1267,6 @@ fn clamp_to_supported_msaa(caps: TextureFormatFeatures, requested: u32) -> u32 {
     1
 }
 
-pub struct FrameResult {
-    pub frame: SurfaceTexture,
-    pub resized: bool,
-}
-
 pub fn acquire_frame(
     surface: &Surface,
     device: &Device,
@@ -1169,15 +1274,15 @@ pub fn acquire_frame(
 ) -> Option<SurfaceTexture> {
     match surface.get_current_texture() {
         Ok(frame) => Some(frame),
-        Err(wgpu::SurfaceError::Outdated) => {
+        Err(SurfaceError::Outdated) => {
             // Surface is temporarily invalid
             None // skip this frame
         }
-        Err(wgpu::SurfaceError::Lost) => {
+        Err(SurfaceError::Lost) => {
             surface.configure(device, config);
             None
         }
-        Err(wgpu::SurfaceError::OutOfMemory) => {
+        Err(SurfaceError::OutOfMemory) => {
             panic!("OOM");
         }
         Err(e) => {

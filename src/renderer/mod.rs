@@ -9,7 +9,7 @@ pub mod pipelines_outsource;
 mod procedural_bind_group_manager;
 mod procedural_render_manager;
 pub mod procedural_texture_manager;
-pub(crate) mod render_passes;
+pub mod render_passes;
 pub(crate) mod shader_watcher;
 pub mod shadows;
 pub(crate) mod textures;
@@ -22,7 +22,8 @@ pub(crate) mod world_renderer;
 
 use crate::components::camera::Camera;
 use crate::data::Settings;
-use crate::resources::{InputState, TimeSystem};
+use crate::resources::TimeSystem;
+use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::CameraBundle;
 use core::RenderCore;

@@ -2,15 +2,15 @@
 //!
 //! Uses Command pattern for all undoable operations.
 
-use crate::data::BendMode;
+use crate::data::{BendMode, Settings};
 use crate::hsv::{HSV, rgb_to_hsv};
 use crate::paths::data_dir;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::resources::{InputState, TimeSystem};
+use crate::resources::{CommandQueues, TimeSystem};
 use crate::terrain::roads::road_structs::RoadStyleParams;
-use crate::ui::actions::{ActionSystem, activate_action, execute_action};
+use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
 use crate::ui::helper::calc_move_speed;
-use crate::ui::input::MouseState;
+use crate::ui::input::{InputState, MouseState};
 use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::selections::SelectedUiElement;
@@ -66,10 +66,6 @@ pub struct GuiOptions {
     pub(crate) override_mode: bool,
 }
 
-// ============================================================================
-// UI BUTTON LOADER
-// ============================================================================
-
 pub struct UiButtonLoader {
     // Core data
     pub menus: HashMap<String, Menu>,
@@ -110,7 +106,6 @@ impl UiButtonLoader {
                 println!("No menus in directory, trying legacy file...");
                 load_legacy_gui_layout_legacy(&legacy_path, bend_mode)
             });
-
         let mut loader = Self {
             menus: HashMap::new(),
             variables: UiVariableRegistry::new(),
@@ -161,19 +156,15 @@ impl UiButtonLoader {
         loader
     }
 
-    // ========================================================================
-    // MAIN UPDATE LOOP - NEW IMPLEMENTATION
-    // ========================================================================
-
     pub fn handle_touches(
         &mut self,
-        action_system: &mut ActionSystem,
         dt: f32,
         input_state: &mut InputState,
         time_system: &TimeSystem,
         world_renderer: &mut TerrainRenderer,
         window_size: PhysicalSize<u32>,
         road_style_params: &mut RoadStyleParams,
+        command_queues: &mut CommandQueues,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
@@ -225,23 +216,11 @@ impl UiButtonLoader {
 
         // Execute actions
         let top_hit = self.get_current_hit_for_actions();
-        activate_action(
-            action_system,
-            self,
-            &top_hit,
-            &input_state.mouse,
-            input_state,
-            time_system,
-            world_renderer,
-            window_size,
-            road_style_params,
-        );
 
-        execute_action(
-            action_system,
+        process_commands(
+            &mut command_queues.ui_command_queue,
             self,
             &top_hit,
-            &input_state.mouse,
             input_state,
             time_system,
             world_renderer,
@@ -2023,7 +2002,15 @@ impl UiButtonLoader {
 
         menu.sort_layers();
     }
-    pub(crate) fn hash_id(id: &str) -> f32 {
+    pub fn set_starting_menu(&mut self, settings: &Settings, ui_command_queue: &mut CommandQueue) {
+        ui_command_queue.push(UiCommand::OpenMenu {
+            menu_name: "Main Menu".to_string(),
+        });
+        ui_command_queue.push(UiCommand::OpenMenu {
+            menu_name: "Main Menu".to_string(),
+        });
+    }
+    pub fn hash_id(id: &str) -> f32 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         id.hash(&mut hasher);

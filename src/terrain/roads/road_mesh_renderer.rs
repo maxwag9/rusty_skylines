@@ -1,6 +1,5 @@
 //! road_mesh_renderer.rs
 use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer, VisibleChunk};
-use crate::resources::InputState;
 use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
 use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
@@ -9,6 +8,7 @@ use crate::components::camera::Camera;
 use crate::renderer::gizmo::Gizmo;
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::terrain::roads::road_structs::RoadStyleParams;
+use crate::ui::input::InputState;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 use wgpu::util::DeviceExt;

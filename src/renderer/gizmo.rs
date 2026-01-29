@@ -416,26 +416,27 @@ impl Gizmo {
     ) {
         self.total_game_time = total_game_time;
 
-        if !settings.render_lanes_gizmo {
-            return;
-        }
-
-        let cs = self.chunk_size;
-
-        // Optional: render chunk bounds
         if settings.render_chunk_bounds {
             if terrain_renderer.chunks.contains_key(&target.chunk) {
-                let chunk_size_f = terrain_renderer.chunk_size as f32;
-                let corner = WorldPos::new(target.chunk, LocalPos::new(0.0, target.local.y, 0.0));
+                let chunk_size_f = self.chunk_size as f32;
+                let corner = WorldPos::new(
+                    target.chunk,
+                    LocalPos::new(0.0, terrain_renderer.get_height_at(target), 0.0),
+                );
                 self.box_xz(
-                    corner.add_vec3(Vec3::new(chunk_size_f * 0.5, 0.0, chunk_size_f * 0.5), cs),
+                    corner.add_vec3(
+                        Vec3::new(chunk_size_f * 0.5, 0.0, chunk_size_f * 0.5),
+                        self.chunk_size,
+                    ),
                     chunk_size_f * 0.5,
                     [0.2, 0.8, 0.6],
                     0.0,
                 );
             }
         }
-
+        if !settings.render_lanes_gizmo {
+            return;
+        }
         // Road visualization
         let render_disabled = false;
         let render_lane_arrows = false;

@@ -1,5 +1,4 @@
-use crate::resources::InputState;
-use crate::ui::input::MouseState;
+use crate::ui::input::{InputState, MouseState};
 use crate::ui::menu::Menu;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};

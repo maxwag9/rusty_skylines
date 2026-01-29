@@ -1,17 +1,18 @@
 use crate::components::camera::Camera;
-use crate::data::Settings;
+use crate::data::{LodCenterType, Settings};
 use crate::mouse_ray::*;
 use crate::paths::data_dir;
 use crate::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
-use crate::resources::{InputState, TimeSystem};
+use crate::resources::TimeSystem;
 use crate::terrain::chunk_builder::*;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use crate::terrain::roads::road_structs::RoadType;
 use crate::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
+use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
 use glam::{Mat4, Vec3};
 use std::collections::{HashMap, HashSet};
@@ -88,7 +89,6 @@ pub struct TerrainRenderer {
     pub frame_timings: FrameTimings,
     pub job_config: ChunkJobConfig,
     pub visible: Vec<VisibleChunk>,
-    pub terrain_editing_enabled: bool,
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl TerrainRenderer {
@@ -154,7 +154,6 @@ impl TerrainRenderer {
             benchmark: Benchmark::default(),
             frame_timings: FrameTimings::default(),
             visible: vec![],
-            terrain_editing_enabled: false,
         }
     }
 
@@ -179,7 +178,7 @@ impl TerrainRenderer {
                 });
         }
 
-        let frame = self.frame_state(camera, aspect);
+        let frame = self.frame_state(settings, camera, aspect);
 
         let t0 = Instant::now();
         self.drain_finished_meshes(device, queue);
@@ -271,10 +270,13 @@ impl TerrainRenderer {
         }
     }
 
-    fn frame_state(&self, camera: &Camera, aspect: f32) -> FrameState {
+    fn frame_state(&self, settings: &Settings, camera: &Camera, aspect: f32) -> FrameState {
         let cs = self.chunk_size;
 
-        let cam_pos = camera.eye_world();
+        let cam_pos = match settings.lod_center {
+            LodCenterType::Eye => camera.eye_world(),
+            LodCenterType::Target => camera.target,
+        };
         let cam_cx = cam_pos.chunk.x;
         let cam_cz = cam_pos.chunk.z;
 
@@ -819,7 +821,7 @@ impl TerrainRenderer {
     pub fn get_height_at(&self, pos: WorldPos) -> f32 {
         let chunk = match self.chunks.get(&pos.chunk) {
             Some(c) => c,
-            None => return 0.0,
+            None => return self.terrain_gen.height(&pos, self.chunk_size),
         };
 
         height_bilinear_world(&chunk.height_grid, pos)

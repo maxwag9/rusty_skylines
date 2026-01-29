@@ -1,7 +1,6 @@
 use crate::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
 use crate::renderer::world_renderer::{CursorMode, PickedPoint, TerrainRenderer};
-use crate::resources::InputState;
 use crate::terrain::roads::road_helpers::*;
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::terrain::roads::road_structs::*;
@@ -10,6 +9,7 @@ use crate::terrain::roads::roads::{
     RoadStorage, Segment, bezier3, nearest_lane_to_point, project_point_to_lane_xz,
     sample_lane_position,
 };
+use crate::ui::input::InputState;
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::{HashMap, HashSet};
 

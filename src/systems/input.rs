@@ -138,7 +138,9 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         camera.pitch = cam_ctrl.target_pitch;
     }
 
-    camera.pitch = camera
-        .pitch
-        .clamp(-50.0f32.to_radians(), 89.0f32.to_radians());
+    clamp_pitch(&mut camera.pitch);
+    clamp_pitch(&mut cam_ctrl.target_pitch);
+}
+fn clamp_pitch(p: &mut f32) {
+    *p = p.clamp(-60.0f32.to_radians(), 89.0f32.to_radians());
 }

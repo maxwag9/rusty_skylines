@@ -59,6 +59,27 @@ impl Default for DebugViewState {
         Self::None
     }
 }
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum InternalMenu {
+    None,
+    MainMenu,
+}
+impl Default for InternalMenu {
+    fn default() -> Self {
+        Self::MainMenu
+    }
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum LodCenterType {
+    Eye,
+    Target,
+}
+impl Default for LodCenterType {
+    fn default() -> Self {
+        Self::Target
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -104,6 +125,10 @@ pub struct Settings {
     pub tonemapping_state: ToneMappingState,
     #[serde(default)]
     pub debug_view_state: DebugViewState,
+    #[serde(default)]
+    pub starting_menu: InternalMenu,
+    #[serde(default)]
+    pub lod_center: LodCenterType,
 }
 
 impl Default for Settings {
@@ -130,6 +155,8 @@ impl Default for Settings {
             chunk_size: default_chunk_size(),
             tonemapping_state: ToneMappingState::default(),
             debug_view_state: DebugViewState::None,
+            starting_menu: InternalMenu::default(),
+            lod_center: LodCenterType::default(),
         }
     }
 }
@@ -138,7 +165,7 @@ impl Settings {
     pub fn load<P: AsRef<Path>>(path: P) -> Self {
         let path = path.as_ref();
 
-        match fs::read_to_string(path) {
+        let mut settings = match fs::read_to_string(path) {
             Ok(content) => match toml::from_str::<Settings>(&content) {
                 Ok(settings) => settings,
                 Err(err) => {
@@ -154,7 +181,13 @@ impl Settings {
                 }
                 default
             }
+        };
+        match settings.starting_menu {
+            InternalMenu::None => {}
+            InternalMenu::MainMenu => settings.show_world = false,
         }
+        println!("{:#?}", settings);
+        settings
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {

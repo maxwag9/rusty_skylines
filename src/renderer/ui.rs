@@ -5,7 +5,8 @@ use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager}
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
-use crate::resources::{InputState, TimeSystem};
+use crate::resources::TimeSystem;
+use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::{

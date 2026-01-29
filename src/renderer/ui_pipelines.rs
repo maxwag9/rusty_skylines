@@ -588,7 +588,6 @@ impl UiPipelines {
         .module;
 
         self.rebuild_pipelines();
-        println!("rebuilt shaders");
         Ok(())
     }
 }

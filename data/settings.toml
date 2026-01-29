@@ -10,7 +10,7 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 56745.097837387584
+total_game_time = 57663.12623250205
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
@@ -21,6 +21,8 @@ shadows_enabled = true
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_chunk_bounds = true
-chunk_size = 128
+chunk_size = 64
 tonemapping_state = "Off"
 debug_view_state = "None"
+starting_menu = "None"
+lod_center = "Target"

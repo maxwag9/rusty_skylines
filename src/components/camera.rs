@@ -11,7 +11,7 @@ pub struct Camera {
     pub near: f32,
     pub far: f32,
     pub fov: f32,
-    pub(crate) chunk_size: ChunkSize,
+    pub chunk_size: ChunkSize,
 }
 
 impl Camera {
@@ -23,8 +23,8 @@ impl Camera {
             pitch: 52f32.to_radians(),
             near: 2.5,
             far: 10_000.0,
-            fov: 80.0,
-            chunk_size: 128,
+            fov: 55.0,
+            chunk_size: 64,
         }
     }
     #[inline]

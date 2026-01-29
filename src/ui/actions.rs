@@ -1,141 +1,373 @@
 pub mod drag_hue_point;
-
-use crate::data::BendMode;
-use crate::hsv::{HSV, hsv_to_rgb, rgb_to_hsv};
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::resources::{InputState, TimeSystem};
+use crate::resources::TimeSystem;
 use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::actions::drag_hue_point::drag_hue_point;
-use crate::ui::input::MouseState;
-use crate::ui::ui_edit_manager::DeselectAllCommand;
+use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::ui_loader::load_menus_from_directory;
 use crate::ui::ui_text_editing::HitResult;
 use glam::Vec2;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
 use winit::dpi::PhysicalSize;
-// ==================== ACTION ARGUMENTS ====================
+// ==================== COMMAND TYPE ENUM ====================
+
+/// Canonical command type identifier for pattern matching and legacy conversion.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum UiCommandType {
+    // Menus
+    OpenMenu,
+    CloseMenu,
+    ToggleMenu,
+    MenuActive,
+
+    // Layers
+    OpenLayer,
+    CloseLayer,
+    ToggleLayer,
+
+    // Variables
+    SetVar,
+    IncVar,
+    DecVar,
+    MulVar,
+    ToggleBool,
+    Clamp,
+
+    // Action state management
+    StartAction,
+    StopAction,
+    RemoveAction,
+
+    // World renderer
+    SetPickRadius,
+    GrowPickRadius,
+    ShrinkPickRadius,
+
+    // Flow control
+    Delay,
+    Halt,
+    Skip,
+    If,
+    IfVarEq,
+
+    // Debug
+    Print,
+    DebugVars,
+    DebugMenus,
+    DebugActions,
+
+    // Events
+    EmitEvent,
+
+    // Legacy/Special
+    DragHuePoint,
+    SetRoadsFourLanes,
+
+    // No-op
+    Noop,
+}
+
+impl UiCommandType {
+    /// Convert legacy string action names to explicit command types.
+    pub fn from_legacy_name(name: &str) -> Option<Self> {
+        let n = canonicalize_action_name(name);
+
+        Some(match n.as_str() {
+            // ===== MENU =====
+            "open_menu" | "show_menu" => UiCommandType::OpenMenu,
+            "close_menu" | "hide_menu" => UiCommandType::CloseMenu,
+            "toggle_menu" => UiCommandType::ToggleMenu,
+            "menu_active" => UiCommandType::MenuActive,
+
+            // ===== LAYERS =====
+            "open_layer" | "show_layer" => UiCommandType::OpenLayer,
+            "close_layer" | "hide_layer" => UiCommandType::CloseLayer,
+            "toggle_layer" => UiCommandType::ToggleLayer,
+
+            // ===== VARIABLES =====
+            "set" | "set_var" => UiCommandType::SetVar,
+            "inc" | "increment" | "add" => UiCommandType::IncVar,
+            "dec" | "decrement" | "sub" => UiCommandType::DecVar,
+            "mul" | "multiply" => UiCommandType::MulVar,
+            "toggle_bool" => UiCommandType::ToggleBool,
+            "clamp" => UiCommandType::Clamp,
+
+            // ===== ACTION STATE =====
+            "start" | "activate" | "start_action" => UiCommandType::StartAction,
+            "stop" | "deactivate" | "stop_action" => UiCommandType::StopAction,
+            "remove_action" => UiCommandType::RemoveAction,
+
+            // ===== WORLD RENDERER =====
+            "set_pick_radius" => UiCommandType::SetPickRadius,
+            "grow_pick_radius" => UiCommandType::GrowPickRadius,
+            "shrink_pick_radius" => UiCommandType::ShrinkPickRadius,
+
+            // ===== FLOW CONTROL =====
+            "delay" | "wait" => UiCommandType::Delay,
+            "halt" | "break" => UiCommandType::Halt,
+            "skip" => UiCommandType::Skip,
+            "if" => UiCommandType::If,
+            "if_var_eq" => UiCommandType::IfVarEq,
+
+            // ===== DEBUG =====
+            "print" | "log" => UiCommandType::Print,
+            "debug_vars" => UiCommandType::DebugVars,
+            "debug_menus" => UiCommandType::DebugMenus,
+            "debug_actions" => UiCommandType::DebugActions,
+
+            // ===== EVENTS =====
+            "emit" | "emit_event" => UiCommandType::EmitEvent,
+
+            // ===== SPECIAL =====
+            "drag_hue_point" | "drag_hue" | "drag_huepoint" => UiCommandType::DragHuePoint,
+            "set_roads_four_lanes" => UiCommandType::SetRoadsFourLanes,
+
+            // ===== NO-OP =====
+            "" | "none" | "noop" => UiCommandType::Noop,
+
+            _ => return None,
+        })
+    }
+
+    /// Get the canonical name for this command type.
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            UiCommandType::OpenMenu => "open_menu",
+            UiCommandType::CloseMenu => "close_menu",
+            UiCommandType::ToggleMenu => "toggle_menu",
+            UiCommandType::MenuActive => "menu_active",
+
+            UiCommandType::OpenLayer => "open_layer",
+            UiCommandType::CloseLayer => "close_layer",
+            UiCommandType::ToggleLayer => "toggle_layer",
+
+            UiCommandType::SetVar => "set_var",
+            UiCommandType::IncVar => "inc",
+            UiCommandType::DecVar => "dec",
+            UiCommandType::MulVar => "mul",
+            UiCommandType::ToggleBool => "toggle_bool",
+            UiCommandType::Clamp => "clamp",
+
+            UiCommandType::StartAction => "start_action",
+            UiCommandType::StopAction => "stop_action",
+            UiCommandType::RemoveAction => "remove_action",
+
+            UiCommandType::SetPickRadius => "set_pick_radius",
+            UiCommandType::GrowPickRadius => "grow_pick_radius",
+            UiCommandType::ShrinkPickRadius => "shrink_pick_radius",
+
+            UiCommandType::Delay => "delay",
+            UiCommandType::Halt => "halt",
+            UiCommandType::Skip => "skip",
+            UiCommandType::If => "if",
+            UiCommandType::IfVarEq => "if_var_eq",
+
+            UiCommandType::Print => "print",
+            UiCommandType::DebugVars => "debug_vars",
+            UiCommandType::DebugMenus => "debug_menus",
+            UiCommandType::DebugActions => "debug_actions",
+
+            UiCommandType::EmitEvent => "emit_event",
+
+            UiCommandType::DragHuePoint => "drag_hue_point",
+            UiCommandType::SetRoadsFourLanes => "set_roads_four_lanes",
+
+            UiCommandType::Noop => "noop",
+        }
+    }
+}
+
+// ==================== COMMAND ENUM ====================
+
+/// A fully-specified UI command with all data embedded.
+/// Can be queued and executed without the original parsing context.
+#[derive(Debug, Clone)]
+pub enum UiCommand {
+    // ===== MENU COMMANDS =====
+    OpenMenu {
+        menu_name: String,
+    },
+    CloseMenu {
+        menu_name: String,
+    },
+    CloseAllMenus,
+    ToggleMenu {
+        menu_name: String,
+    },
+    MenuActive {
+        menu_name: String,
+    },
+
+    // ===== LAYER COMMANDS =====
+    OpenLayer {
+        menu_name: String,
+        layer_name: String,
+    },
+    CloseLayer {
+        menu_name: String,
+        layer_name: String,
+    },
+    ToggleLayer {
+        menu_name: String,
+        layer_name: String,
+    },
+
+    // ===== VARIABLE COMMANDS =====
+    SetVar {
+        name: String,
+        value: CommandArg,
+    },
+    IncVar {
+        name: String,
+        amount: f32,
+    },
+    DecVar {
+        name: String,
+        amount: f32,
+    },
+    MulVar {
+        name: String,
+        factor: f32,
+    },
+    ToggleBool {
+        name: String,
+    },
+    Clamp {
+        name: String,
+        min: f32,
+        max: f32,
+    },
+
+    // ===== ACTION STATE COMMANDS =====
+    StartAction {
+        action_name: String,
+    },
+    StopAction {
+        action_name: String,
+    },
+    RemoveAction {
+        action_name: String,
+    },
+
+    // ===== WORLD RENDERER COMMANDS =====
+    SetPickRadius {
+        radius: f32,
+    },
+    GrowPickRadius {
+        amount: f32,
+    },
+    ShrinkPickRadius {
+        amount: f32,
+    },
+
+    // ===== FLOW CONTROL =====
+    Delay {
+        seconds: f32,
+    },
+    Halt,
+    Skip {
+        count: usize,
+    },
+    If {
+        condition: CommandArg,
+        then_branch: Vec<UiCommand>,
+        else_branch: Vec<UiCommand>,
+    },
+    IfVarEq {
+        var_name: String,
+        value: CommandArg,
+        then_branch: Vec<UiCommand>,
+    },
+
+    // ===== DEBUG COMMANDS =====
+    Print {
+        args: Vec<CommandArg>,
+    },
+    DebugVars,
+    DebugMenus,
+    DebugActions,
+
+    // ===== EVENT COMMANDS =====
+    EmitEvent {
+        event_name: String,
+    },
+
+    // ===== LEGACY/SPECIAL COMMANDS =====
+    DragHuePoint,
+    SetRoadsFourLanes {
+        forward: usize,
+        backward: usize,
+    },
+
+    // ===== UTILITY =====
+    Batch {
+        commands: Vec<UiCommand>,
+    },
+    Noop,
+}
+
+// ==================== COMMAND ARGUMENTS ====================
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ActionArg {
+pub enum CommandArg {
     String(String),
     Float(f32),
     Int(i64),
     Bool(bool),
-    Var(String), // Variable reference: $my_var
+    Var(String),
 }
 
-impl ActionArg {
+impl CommandArg {
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            ActionArg::String(s) | ActionArg::Var(s) => Some(s),
+            CommandArg::String(s) | CommandArg::Var(s) => Some(s),
             _ => None,
         }
     }
 
     pub fn as_float(&self) -> Option<f32> {
         match self {
-            ActionArg::Float(f) => Some(*f),
-            ActionArg::Int(i) => Some(*i as f32),
+            CommandArg::Float(f) => Some(*f),
+            CommandArg::Int(i) => Some(*i as f32),
             _ => None,
         }
     }
 
     pub fn as_int(&self) -> Option<i64> {
         match self {
-            ActionArg::Int(i) => Some(*i),
-            ActionArg::Float(f) => Some(*f as i64),
+            CommandArg::Int(i) => Some(*i),
+            CommandArg::Float(f) => Some(*f as i64),
             _ => None,
         }
     }
 
     pub fn as_bool(&self) -> Option<bool> {
         match self {
-            ActionArg::Bool(b) => Some(*b),
-            ActionArg::Int(i) => Some(*i != 0),
+            CommandArg::Bool(b) => Some(*b),
+            CommandArg::Int(i) => Some(*i != 0),
             _ => None,
         }
     }
 
     pub fn to_string_value(&self) -> String {
         match self {
-            ActionArg::String(s) => s.clone(),
-            ActionArg::Float(f) => f.to_string(),
-            ActionArg::Int(i) => i.to_string(),
-            ActionArg::Bool(b) => b.to_string(),
-            ActionArg::Var(v) => format!("${}", v),
-        }
-    }
-}
-
-// ==================== PARSED ACTION ====================
-
-#[derive(Debug, Clone)]
-pub struct ParsedAction {
-    pub name: String,
-    pub args: Vec<ActionArg>,
-}
-
-impl ParsedAction {
-    pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            args: Vec::new(),
+            CommandArg::String(s) => s.clone(),
+            CommandArg::Float(f) => f.to_string(),
+            CommandArg::Int(i) => i.to_string(),
+            CommandArg::Bool(b) => b.to_string(),
+            CommandArg::Var(v) => format!("${}", v),
         }
     }
 
-    pub fn with_args(name: &str, args: Vec<ActionArg>) -> Self {
-        Self {
-            name: name.to_string(),
-            args,
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            CommandArg::Bool(b) => *b,
+            CommandArg::Int(i) => *i != 0,
+            CommandArg::Float(f) => *f != 0.0,
+            CommandArg::String(s) => !s.is_empty() && s != "false" && s != "0",
+            CommandArg::Var(_) => true,
         }
     }
-
-    pub fn arg_str(&self, index: usize) -> Option<&str> {
-        self.args.get(index).and_then(|a| a.as_str())
-    }
-
-    pub fn arg_string(&self, index: usize) -> String {
-        self.arg_str(index).unwrap_or_default().to_string()
-    }
-
-    pub fn arg_float(&self, index: usize) -> Option<f32> {
-        self.args.get(index).and_then(|a| a.as_float())
-    }
-
-    pub fn arg_float_or(&self, index: usize, default: f32) -> f32 {
-        self.arg_float(index).unwrap_or(default)
-    }
-
-    pub fn arg_int(&self, index: usize) -> Option<i64> {
-        self.args.get(index).and_then(|a| a.as_int())
-    }
-
-    pub fn arg_bool(&self, index: usize) -> Option<bool> {
-        self.args.get(index).and_then(|a| a.as_bool())
-    }
-
-    pub fn arg_bool_or(&self, index: usize, default: bool) -> bool {
-        self.arg_bool(index).unwrap_or(default)
-    }
-}
-
-// ==================== ACTION RESULT ====================
-
-#[derive(Debug, Clone)]
-pub enum ActionResult {
-    /// Action completed successfully, continue chain
-    Ok,
-    /// Stop executing the action chain
-    Stop,
-    /// Delay remaining actions by specified seconds
-    Delay(f32),
-    /// Skip the next N actions in the chain
-    Skip(usize),
-    /// Error occurred
-    Error(String),
 }
 
 // ==================== ACTION STATE ====================
@@ -147,7 +379,7 @@ pub struct ActionState {
     pub started_at: f64,
     pub position: Option<Vec2>,
     pub last_pos: Option<Vec2>,
-    pub custom_data: HashMap<String, ActionArg>,
+    pub custom_data: HashMap<String, CommandArg>,
 }
 
 impl ActionState {
@@ -173,29 +405,42 @@ impl ActionState {
         }
     }
 
-    pub fn set_data(&mut self, key: &str, value: ActionArg) {
+    pub fn set_data(&mut self, key: &str, value: CommandArg) {
         self.custom_data.insert(key.to_string(), value);
     }
 
-    pub fn get_data(&self, key: &str) -> Option<&ActionArg> {
+    pub fn get_data(&self, key: &str) -> Option<&CommandArg> {
         self.custom_data.get(key)
     }
 }
 
-// ==================== DELAYED ACTION ====================
+// ==================== DELAYED COMMAND ====================
 
 #[derive(Debug, Clone)]
-struct DelayedAction {
-    actions: Vec<ParsedAction>,
+struct DelayedCommands {
+    commands: Vec<UiCommand>,
     execute_at: f64,
-    source: String, // For debugging
 }
 
-// ==================== ACTION CONTEXT ====================
+// ==================== COMMAND RESULT ====================
 
-pub struct ActionContext<'a> {
+#[derive(Debug, Clone)]
+pub enum CommandResult {
+    Ok,
+    Stop,
+    Delay {
+        seconds: f32,
+        remaining: Vec<UiCommand>,
+    },
+    Skip(usize),
+    Error(String),
+}
+
+// ==================== COMMAND CONTEXT ====================
+
+/// Context provided only during command execution (drain phase).
+pub struct CommandContext<'a> {
     pub loader: &'a mut UiButtonLoader,
-    pub mouse_state: &'a MouseState,
     pub input_state: &'a InputState,
     pub time: &'a TimeSystem,
     pub world_renderer: &'a mut TerrainRenderer,
@@ -204,67 +449,77 @@ pub struct ActionContext<'a> {
     pub road_style_params: &'a mut RoadStyleParams,
 }
 
-// ==================== ACTION HANDLER TYPE ====================
+// ==================== COMMAND QUEUE ====================
 
-pub type ActionHandler =
-    Arc<dyn Fn(&ParsedAction, &mut ActionContext, &mut ActionSystem) -> ActionResult + Send + Sync>;
-
-// ==================== ACTION SYSTEM ====================
-
-pub struct ActionSystem {
-    handlers: HashMap<String, ActionHandler>,
-    delayed: Vec<DelayedAction>,
-    pub variables: HashMap<String, ActionArg>,
-    pub last_result: Option<ActionResult>,
+/// The central command queue that processes commands.
+/// Commands are queued without context, then drained with context each frame.
+pub struct CommandQueue {
+    queue: VecDeque<UiCommand>,
+    delayed: Vec<DelayedCommands>,
+    pub variables: HashMap<String, CommandArg>,
 }
 
-impl Default for ActionSystem {
+impl Default for CommandQueue {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ActionSystem {
+impl CommandQueue {
     pub fn new() -> Self {
         Self {
-            handlers: HashMap::new(),
+            queue: VecDeque::new(),
             delayed: Vec::new(),
             variables: HashMap::new(),
-            last_result: None,
         }
     }
 
-    // ==================== HANDLER REGISTRATION ====================
+    // ==================== QUEUEING (no context needed) ====================
 
-    /// Register a custom action handler
-    pub fn register<F>(&mut self, name: &str, handler: F)
-    where
-        F: Fn(&ParsedAction, &mut ActionContext, &mut ActionSystem) -> ActionResult
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.handlers.insert(name.to_lowercase(), Arc::new(handler));
+    /// Queue a single command.
+    pub fn push(&mut self, cmd: UiCommand) {
+        self.queue.push_back(cmd);
     }
 
-    /// Register a simple action (no access to ActionSystem)
-    pub fn register_simple<F>(&mut self, name: &str, handler: F)
-    where
-        F: Fn(&ParsedAction, &mut ActionContext) -> ActionResult + Send + Sync + 'static,
-    {
-        self.handlers.insert(
-            name.to_lowercase(),
-            Arc::new(move |action, ctx, _sys| handler(action, ctx)),
-        );
+    /// Queue multiple commands.
+    pub fn push_many(&mut self, cmds: impl IntoIterator<Item = UiCommand>) {
+        for cmd in cmds {
+            self.queue.push_back(cmd);
+        }
+    }
+
+    /// Parse and queue commands from an action string.
+    pub fn push_str(&mut self, action_str: &str) {
+        let commands = parse_command_string(action_str);
+        self.push_many(commands);
+    }
+
+    /// Queue commands from a UI hit result.
+    pub fn push_from_hit(&mut self, hit: &HitResult) {
+        if let Some(action_str) = &hit.action {
+            if !action_str.is_empty() && action_str != "None" {
+                self.push_str(action_str);
+            }
+        }
+    }
+
+    /// Check if queue is empty (including delayed).
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty() && self.delayed.is_empty()
+    }
+
+    /// Get pending command count.
+    pub fn pending_count(&self) -> usize {
+        self.queue.len()
     }
 
     // ==================== VARIABLE MANAGEMENT ====================
 
-    pub fn set_var(&mut self, name: &str, value: ActionArg) {
+    pub fn set_var(&mut self, name: &str, value: CommandArg) {
         self.variables.insert(name.to_string(), value);
     }
 
-    pub fn get_var(&self, name: &str) -> Option<&ActionArg> {
+    pub fn get_var(&self, name: &str) -> Option<&CommandArg> {
         self.variables.get(name)
     }
 
@@ -276,81 +531,58 @@ impl ActionSystem {
         self.variables.get(name).and_then(|v| v.as_str())
     }
 
-    /// Resolve an argument, replacing variable references with their values
-    pub fn resolve_arg(&self, arg: &ActionArg) -> ActionArg {
+    pub fn resolve_arg(&self, arg: &CommandArg) -> CommandArg {
         match arg {
-            ActionArg::Var(name) => self
+            CommandArg::Var(name) => self
                 .variables
                 .get(name)
                 .cloned()
-                .unwrap_or(ActionArg::String(String::new())),
+                .unwrap_or(CommandArg::String(String::new())),
             other => other.clone(),
         }
     }
 
-    // ==================== EXECUTION ====================
+    // ==================== EXECUTION (context required) ====================
 
-    /// Parse and execute an action string (supports chaining with `;`)
-    pub fn run(&mut self, action_str: &str, ctx: &mut ActionContext) {
-        let actions = parse_action_chain(action_str);
-        self.execute_chain(actions, ctx, action_str);
-    }
+    /// Drain and execute all pending commands.
+    /// Call this once per frame.
+    pub fn drain(&mut self, ctx: &mut CommandContext) {
+        // Process delayed commands that are ready
+        self.process_delayed(ctx);
 
-    /// Execute a chain of parsed actions
-    fn execute_chain(&mut self, actions: Vec<ParsedAction>, ctx: &mut ActionContext, source: &str) {
-        let mut skip_count = 0;
-
-        for (i, action) in actions.iter().enumerate() {
-            if skip_count > 0 {
-                skip_count -= 1;
-                continue;
-            }
-
-            let result = self.execute_single(action, ctx);
-            self.last_result = Some(result.clone());
-
-            match result {
-                ActionResult::Ok => continue,
-                ActionResult::Stop => break,
-                ActionResult::Skip(n) => {
-                    skip_count = n;
+        // Drain the main queue
+        while let Some(cmd) = self.queue.pop_front() {
+            match self.execute_one(cmd, ctx) {
+                CommandResult::Ok => continue,
+                CommandResult::Stop => {
+                    self.queue.clear();
+                    break;
                 }
-                ActionResult::Delay(seconds) => {
-                    let remaining: Vec<ParsedAction> = actions[i + 1..].to_vec();
+                CommandResult::Skip(n) => {
+                    for _ in 0..n {
+                        self.queue.pop_front();
+                    }
+                }
+                CommandResult::Delay { seconds, remaining } => {
                     if !remaining.is_empty() {
-                        self.delayed.push(DelayedAction {
-                            actions: remaining,
+                        self.delayed.push(DelayedCommands {
+                            commands: remaining,
                             execute_at: ctx.time.total_time + seconds as f64,
-                            source: source.to_string(),
                         });
                     }
                     break;
                 }
-                ActionResult::Error(msg) => {
-                    eprintln!("[ActionSystem] Error in '{}': {}", action.name, msg);
+                CommandResult::Error(msg) => {
+                    eprintln!("[CommandQueue] Error: {}", msg);
                 }
             }
         }
     }
 
-    /// Execute a single action
-    fn execute_single(&mut self, action: &ParsedAction, ctx: &mut ActionContext) -> ActionResult {
-        let name = action.name.to_lowercase();
-
-        // Check custom handlers first
-        if let Some(handler) = self.handlers.get(&name).cloned() {
-            return handler(action, ctx, self); // now mutable borrow is fine
-        }
-
-        // Otherwise use built-in handlers
-        self.execute_builtin(&name, action, ctx)
-    }
-
-    /// Process delayed actions (call each frame)
-    pub fn update(&mut self, ctx: &mut ActionContext) {
+    fn process_delayed(&mut self, ctx: &mut CommandContext) {
         let current_time = ctx.time.total_time;
 
-        let ready: Vec<DelayedAction> = self
+        let ready: Vec<DelayedCommands> = self
             .delayed
             .iter()
             .filter(|d| d.execute_at <= current_time)
@@ -360,192 +592,169 @@ impl ActionSystem {
         self.delayed.retain(|d| d.execute_at > current_time);
 
         for delayed in ready {
-            self.execute_chain(delayed.actions, ctx, &delayed.source);
+            for cmd in delayed.commands {
+                self.queue.push_back(cmd);
+            }
         }
     }
 
-    // ==================== BUILT-IN ACTIONS ====================
-
-    fn execute_builtin(
-        &mut self,
-        name: &str,
-        action: &ParsedAction,
-        ctx: &mut ActionContext,
-    ) -> ActionResult {
-        match name {
-            // ===== MENU ACTIONS =====
-            "open_menu" | "show_menu" => {
-                let menu_name = action.arg_string(0);
+    fn execute_one(&mut self, cmd: UiCommand, ctx: &mut CommandContext) -> CommandResult {
+        match cmd {
+            // ===== MENU COMMANDS =====
+            UiCommand::OpenMenu { menu_name } => {
                 if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
                     menu.active = true;
-                    ActionResult::Ok
+                    CommandResult::Ok
                 } else {
-                    ActionResult::Error(format!("Menu '{}' not found", menu_name))
+                    CommandResult::Error(format!("Menu '{}' not found", menu_name))
                 }
             }
 
-            "close_menu" | "hide_menu" => {
-                let menu_name = action.arg_string(0);
+            UiCommand::CloseMenu { menu_name } => {
                 if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
                     menu.active = false;
-                    ActionResult::Ok
+                    CommandResult::Ok
                 } else {
-                    ActionResult::Error(format!("Menu '{}' not found", menu_name))
+                    CommandResult::Error(format!("Menu '{}' not found", menu_name))
                 }
             }
 
-            "toggle_menu" => {
-                let menu_name = action.arg_string(0);
+            UiCommand::CloseAllMenus => {
+                for (_, menu) in ctx.loader.menus.iter_mut() {
+                    menu.active = false;
+                }
+                CommandResult::Ok
+            }
+
+            UiCommand::ToggleMenu { menu_name } => {
                 if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
                     menu.active = !menu.active;
-                    ActionResult::Ok
+                    CommandResult::Ok
                 } else {
-                    ActionResult::Error(format!("Menu '{}' not found", menu_name))
+                    CommandResult::Error(format!("Menu '{}' not found", menu_name))
                 }
             }
 
-            "menu_active" => {
-                let menu_name = action.arg_string(0);
+            UiCommand::MenuActive { menu_name } => {
                 let is_active = ctx
                     .loader
                     .menus
                     .get(&menu_name)
                     .map(|m| m.active)
                     .unwrap_or(false);
-                self.set_var("_result", ActionArg::Bool(is_active));
-                ActionResult::Ok
+                self.set_var("_result", CommandArg::Bool(is_active));
+                CommandResult::Ok
             }
 
-            // ===== LAYER ACTIONS =====
-            "open_layer" | "show_layer" => {
-                let menu_name = action.arg_string(0);
-                let layer_name = action.arg_string(1);
-
+            // ===== LAYER COMMANDS =====
+            UiCommand::OpenLayer {
+                menu_name,
+                layer_name,
+            } => {
                 if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = true;
-                        return ActionResult::Ok;
+                        return CommandResult::Ok;
                     }
-                    return ActionResult::Error(format!(
+                    return CommandResult::Error(format!(
                         "Layer '{}' not found in '{}'",
                         layer_name, menu_name
                     ));
                 }
-                ActionResult::Error(format!("Menu '{}' not found", menu_name))
+                CommandResult::Error(format!("Menu '{}' not found", menu_name))
             }
 
-            "close_layer" | "hide_layer" => {
-                let menu_name = action.arg_string(0);
-                let layer_name = action.arg_string(1);
-
+            UiCommand::CloseLayer {
+                menu_name,
+                layer_name,
+            } => {
                 if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = false;
-                        return ActionResult::Ok;
+                        return CommandResult::Ok;
                     }
-                    return ActionResult::Error(format!("Layer '{}' not found", layer_name));
+                    return CommandResult::Error(format!("Layer '{}' not found", layer_name));
                 }
-                ActionResult::Error(format!("Menu '{}' not found", menu_name))
+                CommandResult::Error(format!("Menu '{}' not found", menu_name))
             }
 
-            "toggle_layer" => {
-                let menu_name = action.arg_string(0);
-                let layer_name = action.arg_string(1);
-
+            UiCommand::ToggleLayer {
+                menu_name,
+                layer_name,
+            } => {
                 if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = !layer.active;
-                        return ActionResult::Ok;
+                        return CommandResult::Ok;
                     }
-                    return ActionResult::Error(format!("Layer '{}' not found", layer_name));
+                    return CommandResult::Error(format!("Layer '{}' not found", layer_name));
                 }
-                ActionResult::Error(format!("Menu '{}' not found", menu_name))
+                CommandResult::Error(format!("Menu '{}' not found", menu_name))
             }
 
-            // ===== VARIABLE ACTIONS =====
-            "set" | "set_var" => {
-                let var_name = action.arg_string(0);
-                if let Some(value) = action.args.get(1) {
-                    self.variables.insert(var_name, self.resolve_arg(value));
-                    ActionResult::Ok
-                } else {
-                    ActionResult::Error("set requires 2 arguments: name, value".to_string())
+            // ===== VARIABLE COMMANDS =====
+            UiCommand::SetVar { name, value } => {
+                let resolved = self.resolve_arg(&value);
+                self.variables.insert(name, resolved);
+                CommandResult::Ok
+            }
+
+            UiCommand::IncVar { name, amount } => {
+                let new_val = match self.variables.get(&name) {
+                    Some(CommandArg::Float(f)) => CommandArg::Float(f + amount),
+                    Some(CommandArg::Int(i)) => CommandArg::Float(*i as f32 + amount),
+                    _ => CommandArg::Float(amount),
+                };
+                self.variables.insert(name, new_val);
+                CommandResult::Ok
+            }
+
+            UiCommand::DecVar { name, amount } => {
+                let new_val = match self.variables.get(&name) {
+                    Some(CommandArg::Float(f)) => CommandArg::Float(f - amount),
+                    Some(CommandArg::Int(i)) => CommandArg::Float(*i as f32 - amount),
+                    _ => CommandArg::Float(-amount),
+                };
+                self.variables.insert(name, new_val);
+                CommandResult::Ok
+            }
+
+            UiCommand::MulVar { name, factor } => {
+                if let Some(CommandArg::Float(f)) = self.variables.get(&name) {
+                    self.variables.insert(name, CommandArg::Float(f * factor));
                 }
+                CommandResult::Ok
             }
 
-            "inc" | "increment" | "add" => {
-                let var_name = action.arg_string(0);
-                let amount = action.arg_float_or(1, 1.0);
-
-                let new_val = match self.variables.get(&var_name) {
-                    Some(ActionArg::Float(f)) => ActionArg::Float(f + amount),
-                    Some(ActionArg::Int(i)) => ActionArg::Float(*i as f32 + amount),
-                    _ => ActionArg::Float(amount),
+            UiCommand::ToggleBool { name } => {
+                let new_val = match self.variables.get(&name) {
+                    Some(CommandArg::Bool(b)) => CommandArg::Bool(!b),
+                    _ => CommandArg::Bool(true),
                 };
-                self.variables.insert(var_name, new_val);
-                ActionResult::Ok
+                self.variables.insert(name, new_val);
+                CommandResult::Ok
             }
 
-            "dec" | "decrement" | "sub" => {
-                let var_name = action.arg_string(0);
-                let amount = action.arg_float_or(1, 1.0);
-
-                let new_val = match self.variables.get(&var_name) {
-                    Some(ActionArg::Float(f)) => ActionArg::Float(f - amount),
-                    Some(ActionArg::Int(i)) => ActionArg::Float(*i as f32 - amount),
-                    _ => ActionArg::Float(-amount),
-                };
-                self.variables.insert(var_name, new_val);
-                ActionResult::Ok
-            }
-
-            "mul" | "multiply" => {
-                let var_name = action.arg_string(0);
-                let amount = action.arg_float_or(1, 1.0);
-
-                if let Some(ActionArg::Float(f)) = self.variables.get(&var_name) {
+            UiCommand::Clamp { name, min, max } => {
+                if let Some(CommandArg::Float(f)) = self.variables.get(&name).cloned() {
                     self.variables
-                        .insert(var_name, ActionArg::Float(f * amount));
+                        .insert(name, CommandArg::Float(f.clamp(min, max)));
                 }
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "toggle_bool" => {
-                let var_name = action.arg_string(0);
-                let new_val = match self.variables.get(&var_name) {
-                    Some(ActionArg::Bool(b)) => ActionArg::Bool(!b),
-                    _ => ActionArg::Bool(true),
-                };
-                self.variables.insert(var_name, new_val);
-                ActionResult::Ok
-            }
-
-            "clamp" => {
-                let var_name = action.arg_string(0);
-                let min = action.arg_float_or(1, 0.0);
-                let max = action.arg_float_or(2, 1.0);
-
-                if let Some(ActionArg::Float(f)) = self.variables.get(&var_name).cloned() {
-                    self.variables
-                        .insert(var_name, ActionArg::Float(f.clamp(min, max)));
-                }
-                ActionResult::Ok
-            }
-
-            // ===== ACTION STATE MANAGEMENT =====
-            "start" | "activate" | "start_action" => {
-                let action_name = action.arg_string(0);
+            // ===== ACTION STATE COMMANDS =====
+            UiCommand::StartAction { action_name } => {
                 let state = ActionState::with_time(&action_name, ctx.time.total_time);
                 ctx.loader
                     .touch_manager
                     .runtimes
                     .action_states
                     .insert(action_name, state);
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "stop" | "deactivate" | "stop_action" => {
-                let action_name = action.arg_string(0);
+            UiCommand::StopAction { action_name } => {
                 if let Some(state) = ctx
                     .loader
                     .touch_manager
@@ -555,214 +764,283 @@ impl ActionSystem {
                 {
                     state.active = false;
                 }
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "remove_action" => {
-                let action_name = action.arg_string(0);
+            UiCommand::RemoveAction { action_name } => {
                 ctx.loader
                     .touch_manager
                     .runtimes
                     .action_states
                     .remove(&action_name);
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            // ===== WORLD RENDERER ACTIONS =====
-            "set_pick_radius" => {
-                if let Some(radius) = action.arg_float(0) {
-                    ctx.world_renderer.pick_radius_m = radius;
-                    ActionResult::Ok
-                } else {
-                    ActionResult::Error("set_pick_radius requires a number".to_string())
-                }
+            // ===== WORLD RENDERER COMMANDS =====
+            UiCommand::SetPickRadius { radius } => {
+                ctx.world_renderer.pick_radius_m = radius;
+                CommandResult::Ok
             }
 
-            "grow_pick_radius" => {
-                let amount = action.arg_float_or(0, 10.0);
+            UiCommand::GrowPickRadius { amount } => {
                 ctx.world_renderer.pick_radius_m += amount;
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "shrink_pick_radius" => {
-                let amount = action.arg_float_or(0, 10.0);
+            UiCommand::ShrinkPickRadius { amount } => {
                 ctx.world_renderer.pick_radius_m =
                     (ctx.world_renderer.pick_radius_m - amount).max(0.1);
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
             // ===== FLOW CONTROL =====
-            "delay" | "wait" => {
-                let seconds = action.arg_float_or(0, 0.0);
-                ActionResult::Delay(seconds)
+            UiCommand::Delay { seconds } => {
+                let remaining: Vec<UiCommand> = self.queue.drain(..).collect();
+                CommandResult::Delay { seconds, remaining }
             }
 
-            "halt" | "break" => ActionResult::Stop,
+            UiCommand::Halt => CommandResult::Stop,
 
-            "skip" => {
-                let count = action.arg_int(0).unwrap_or(1) as usize;
-                ActionResult::Skip(count)
-            }
+            UiCommand::Skip { count } => CommandResult::Skip(count),
 
-            "if" => {
-                // if($var, action_if_true, action_if_false)
-                let condition = action.args.get(0).map(|a| self.resolve_arg(a));
-                let is_true = match condition {
-                    Some(ActionArg::Bool(b)) => b,
-                    Some(ActionArg::Int(i)) => i != 0,
-                    Some(ActionArg::Float(f)) => f != 0.0,
-                    Some(ActionArg::String(s)) => !s.is_empty() && s != "false" && s != "0",
-                    _ => false,
-                };
-
-                if is_true {
-                    if let Some(ActionArg::String(then_action)) = action.args.get(1) {
-                        let parsed = parse_action_chain(then_action);
-                        self.execute_chain(parsed, ctx, then_action);
+            UiCommand::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let resolved = self.resolve_arg(&condition);
+                if resolved.is_truthy() {
+                    for cmd in then_branch.into_iter().rev() {
+                        self.queue.push_front(cmd);
                     }
                 } else {
-                    if let Some(ActionArg::String(else_action)) = action.args.get(2) {
-                        let parsed = parse_action_chain(else_action);
-                        self.execute_chain(parsed, ctx, else_action);
+                    for cmd in else_branch.into_iter().rev() {
+                        self.queue.push_front(cmd);
                     }
                 }
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "if_var_eq" => {
-                // if_var_eq(var_name, value, action_if_true)
-                let var_name = action.arg_string(0);
-                let compare_to = action.args.get(1).map(|a| self.resolve_arg(a));
+            UiCommand::IfVarEq {
+                var_name,
+                value,
+                then_branch,
+            } => {
                 let current = self.variables.get(&var_name).cloned();
-
+                let compare_to = Some(self.resolve_arg(&value));
                 if current == compare_to {
-                    if let Some(ActionArg::String(then_action)) = action.args.get(2) {
-                        let parsed = parse_action_chain(then_action);
-                        self.execute_chain(parsed, ctx, then_action);
+                    for cmd in then_branch.into_iter().rev() {
+                        self.queue.push_front(cmd);
                     }
                 }
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            // ===== DEBUG ACTIONS =====
-            "print" | "log" => {
-                let msg: String = action
-                    .args
+            // ===== DEBUG COMMANDS =====
+            UiCommand::Print { args } => {
+                let msg: String = args
                     .iter()
-                    .map(|a| {
-                        let resolved = self.resolve_arg(a);
-                        resolved.to_string_value()
-                    })
+                    .map(|a| self.resolve_arg(a).to_string_value())
                     .collect::<Vec<_>>()
                     .join(" ");
                 println!("[UI] {}", msg);
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "debug_vars" => {
+            UiCommand::DebugVars => {
                 println!("[Debug] Variables: {:?}", self.variables);
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "debug_menus" => {
+            UiCommand::DebugMenus => {
                 for (name, menu) in &ctx.loader.menus {
                     println!("[Debug] Menu '{}': active={}", name, menu.active);
                     for layer in &menu.layers {
                         println!("  Layer '{}': active={}", layer.name, layer.active);
                     }
                 }
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            "debug_actions" => {
+            UiCommand::DebugActions => {
                 println!("[Debug] Active action states:");
                 for (name, state) in &ctx.loader.touch_manager.runtimes.action_states {
                     println!("  '{}': active={}", name, state.active);
                 }
-                ActionResult::Ok
+                CommandResult::Ok
             }
 
-            // ===== EVENT SYSTEM =====
-            "emit" | "emit_event" => {
-                let event = action.arg_string(0);
-                // You can extend this with an actual event system
-                println!("[Event] {}", event);
-                self.set_var("_last_event", ActionArg::String(event));
-                ActionResult::Ok
+            // ===== EVENT COMMANDS =====
+            UiCommand::EmitEvent { event_name } => {
+                println!("[Event] {}", event_name);
+                self.set_var("_last_event", CommandArg::String(event_name));
+                CommandResult::Ok
             }
 
-            // ===== SPECIAL LEGACY ACTIONS =====
-            "drag_hue_point" => {
+            // ===== LEGACY/SPECIAL COMMANDS =====
+            UiCommand::DragHuePoint => {
                 let state = ActionState::with_time("Drag Hue Point", ctx.time.total_time);
                 ctx.loader
                     .touch_manager
                     .runtimes
                     .action_states
                     .insert("Drag Hue Point".to_string(), state);
-                ActionResult::Ok
+                CommandResult::Ok
             }
-            "set_roads_four_lanes" => {
-                //println!("Set road to 4 lane 2 hin 2 zurück!");
-                let lanes_each_direction = (
-                    action.arg_int(0).unwrap_or(1) as usize,
-                    action.arg_int(1).unwrap_or(1) as usize,
-                );
-                //println!("{:#?}", lanes_each_direction);
-                let mut road_type = ctx.road_style_params.road_type().clone();
-                road_type.lanes_each_direction = lanes_each_direction;
-                ctx.road_style_params.set_road_type(road_type);
-                ActionResult::Ok
-            }
-            // ===== NO-OP =====
-            "none" | "noop" | "" => ActionResult::Ok,
 
-            _ => ActionResult::Error(format!("Unknown action: '{}'", name)),
+            UiCommand::SetRoadsFourLanes { forward, backward } => {
+                let mut road_type = ctx.road_style_params.road_type().clone();
+                road_type.lanes_each_direction = (forward, backward);
+                ctx.road_style_params.set_road_type(road_type);
+                CommandResult::Ok
+            }
+
+            // ===== UTILITY =====
+            UiCommand::Batch { commands } => {
+                for cmd in commands.into_iter().rev() {
+                    self.queue.push_front(cmd);
+                }
+                CommandResult::Ok
+            }
+
+            UiCommand::Noop => CommandResult::Ok,
+        }
+    }
+
+    // ==================== CONTINUOUS ACTIONS ====================
+
+    /// Execute continuous/frame-based actions. Call every frame after drain().
+    pub fn execute_continuous(&mut self, ctx: &mut CommandContext) {
+        let active_actions: Vec<String> = ctx
+            .loader
+            .touch_manager
+            .runtimes
+            .action_states
+            .iter()
+            .filter(|(_, state)| state.active)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for action_name in active_actions {
+            match action_name.as_str() {
+                "Drag Hue Point" => {
+                    drag_hue_point(ctx.loader, &ctx.input_state.mouse, ctx.time);
+                }
+                _ => {}
+            }
         }
     }
 }
 
 // ==================== PARSER ====================
 
-/// Parse an action chain: `open_menu("Editor"); toggle_layer("Editor", "Tools"); delay(0.5)`
-pub fn parse_action_chain(input: &str) -> Vec<ParsedAction> {
-    let mut actions = Vec::new();
-    let parts = split_by_delimiter(input, ';');
+/// Canonicalize action names for legacy string conversion.
+fn canonicalize_action_name(name: &str) -> String {
+    let mut s = name.trim().replace(['-', ' '], "_");
 
-    for part in parts {
-        let trimmed = part.trim();
-        if !trimmed.is_empty() {
-            if let Some(action) = parse_single_action(trimmed) {
-                actions.push(action);
+    if !s.contains('_') && s.chars().any(|c| c.is_ascii_uppercase()) {
+        let mut out = String::with_capacity(s.len() + 8);
+        for (i, ch) in s.chars().enumerate() {
+            if ch.is_ascii_uppercase() {
+                if i != 0 {
+                    out.push('_');
+                }
+                out.push(ch.to_ascii_lowercase());
+            } else {
+                out.push(ch.to_ascii_lowercase());
             }
         }
+        s = out;
+    } else {
+        s = s.to_lowercase();
     }
 
-    actions
+    while s.contains("__") {
+        s = s.replace("__", "_");
+    }
+
+    s
 }
 
-fn parse_single_action(input: &str) -> Option<ParsedAction> {
+/// Parsed raw action for intermediate representation.
+#[derive(Debug, Clone)]
+struct RawParsedAction {
+    name: String,
+    args: Vec<CommandArg>,
+}
+
+impl RawParsedAction {
+    fn arg_str(&self, index: usize) -> Option<&str> {
+        self.args.get(index).and_then(|a| a.as_str())
+    }
+
+    fn arg_string(&self, index: usize) -> String {
+        self.arg_str(index).unwrap_or_default().to_string()
+    }
+
+    fn arg_float(&self, index: usize) -> Option<f32> {
+        self.args.get(index).and_then(|a| a.as_float())
+    }
+
+    fn arg_float_or(&self, index: usize, default: f32) -> f32 {
+        self.arg_float(index).unwrap_or(default)
+    }
+
+    fn arg_int(&self, index: usize) -> Option<i64> {
+        self.args.get(index).and_then(|a| a.as_int())
+    }
+
+    fn arg_int_or(&self, index: usize, default: i64) -> i64 {
+        self.arg_int(index).unwrap_or(default)
+    }
+}
+
+/// Parse an action string into a list of commands.
+pub fn parse_command_string(input: &str) -> Vec<UiCommand> {
+    let raw_actions = parse_raw_action_chain(input);
+    raw_actions
+        .into_iter()
+        .filter_map(convert_raw_to_command)
+        .collect()
+}
+
+fn parse_raw_action_chain(input: &str) -> Vec<RawParsedAction> {
+    let parts = split_by_delimiter(input, ';');
+    parts
+        .into_iter()
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                parse_single_raw_action(trimmed)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn parse_single_raw_action(input: &str) -> Option<RawParsedAction> {
     let input = input.trim();
     if input.is_empty() {
         return None;
     }
 
-    // Find opening parenthesis
     if let Some(paren_start) = input.find('(') {
         let name = input[..paren_start].trim().to_string();
-
-        // Find matching close
         if let Some(paren_end) = input.rfind(')') {
             let args_str = &input[paren_start + 1..paren_end];
             let args = parse_arguments(args_str);
-            return Some(ParsedAction::with_args(&name, args));
+            return Some(RawParsedAction { name, args });
         }
     }
 
-    // No parens = just a command name
-    Some(ParsedAction::new(input))
+    Some(RawParsedAction {
+        name: input.to_string(),
+        args: Vec::new(),
+    })
 }
 
-fn parse_arguments(input: &str) -> Vec<ActionArg> {
+fn parse_arguments(input: &str) -> Vec<CommandArg> {
     if input.trim().is_empty() {
         return Vec::new();
     }
@@ -771,39 +1049,33 @@ fn parse_arguments(input: &str) -> Vec<ActionArg> {
     parts.iter().map(|s| parse_single_arg(s.trim())).collect()
 }
 
-fn parse_single_arg(input: &str) -> ActionArg {
+fn parse_single_arg(input: &str) -> CommandArg {
     let s = input.trim();
 
-    // Quoted string
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        return ActionArg::String(s[1..s.len() - 1].to_string());
+        return CommandArg::String(s[1..s.len() - 1].to_string());
     }
 
-    // Variable reference
     if s.starts_with('$') {
-        return ActionArg::Var(s[1..].to_string());
+        return CommandArg::Var(s[1..].to_string());
     }
 
-    // Booleans
     if s == "true" {
-        return ActionArg::Bool(true);
+        return CommandArg::Bool(true);
     }
     if s == "false" {
-        return ActionArg::Bool(false);
+        return CommandArg::Bool(false);
     }
 
-    // Integer
     if let Ok(i) = s.parse::<i64>() {
-        return ActionArg::Int(i);
+        return CommandArg::Int(i);
     }
 
-    // Float
     if let Ok(f) = s.parse::<f32>() {
-        return ActionArg::Float(f);
+        return CommandArg::Float(f);
     }
 
-    // Unquoted string (identifier)
-    ActionArg::String(s.to_string())
+    CommandArg::String(s.to_string())
 }
 
 fn split_by_delimiter(input: &str, delim: char) -> Vec<String> {
@@ -848,7 +1120,255 @@ fn split_by_delimiter(input: &str, delim: char) -> Vec<String> {
     parts
 }
 
-// ==================== HELPER FUNCTION ====================
+/// Convert a raw parsed action to a typed UiCommand.
+fn convert_raw_to_command(raw: RawParsedAction) -> Option<UiCommand> {
+    let cmd_type = UiCommandType::from_legacy_name(&raw.name)?;
+
+    let cmd = match cmd_type {
+        // ===== MENU =====
+        UiCommandType::OpenMenu => UiCommand::OpenMenu {
+            menu_name: raw.arg_string(0),
+        },
+        UiCommandType::CloseMenu => UiCommand::CloseMenu {
+            menu_name: raw.arg_string(0),
+        },
+        UiCommandType::ToggleMenu => UiCommand::ToggleMenu {
+            menu_name: raw.arg_string(0),
+        },
+        UiCommandType::MenuActive => UiCommand::MenuActive {
+            menu_name: raw.arg_string(0),
+        },
+
+        // ===== LAYERS =====
+        UiCommandType::OpenLayer => UiCommand::OpenLayer {
+            menu_name: raw.arg_string(0),
+            layer_name: raw.arg_string(1),
+        },
+        UiCommandType::CloseLayer => UiCommand::CloseLayer {
+            menu_name: raw.arg_string(0),
+            layer_name: raw.arg_string(1),
+        },
+        UiCommandType::ToggleLayer => UiCommand::ToggleLayer {
+            menu_name: raw.arg_string(0),
+            layer_name: raw.arg_string(1),
+        },
+
+        // ===== VARIABLES =====
+        UiCommandType::SetVar => {
+            let name = raw.arg_string(0);
+            let value = raw
+                .args
+                .get(1)
+                .cloned()
+                .unwrap_or(CommandArg::String(String::new()));
+            UiCommand::SetVar { name, value }
+        }
+        UiCommandType::IncVar => UiCommand::IncVar {
+            name: raw.arg_string(0),
+            amount: raw.arg_float_or(1, 1.0),
+        },
+        UiCommandType::DecVar => UiCommand::DecVar {
+            name: raw.arg_string(0),
+            amount: raw.arg_float_or(1, 1.0),
+        },
+        UiCommandType::MulVar => UiCommand::MulVar {
+            name: raw.arg_string(0),
+            factor: raw.arg_float_or(1, 1.0),
+        },
+        UiCommandType::ToggleBool => UiCommand::ToggleBool {
+            name: raw.arg_string(0),
+        },
+        UiCommandType::Clamp => UiCommand::Clamp {
+            name: raw.arg_string(0),
+            min: raw.arg_float_or(1, 0.0),
+            max: raw.arg_float_or(2, 1.0),
+        },
+
+        // ===== ACTION STATE =====
+        UiCommandType::StartAction => UiCommand::StartAction {
+            action_name: raw.arg_string(0),
+        },
+        UiCommandType::StopAction => UiCommand::StopAction {
+            action_name: raw.arg_string(0),
+        },
+        UiCommandType::RemoveAction => UiCommand::RemoveAction {
+            action_name: raw.arg_string(0),
+        },
+
+        // ===== WORLD RENDERER =====
+        UiCommandType::SetPickRadius => UiCommand::SetPickRadius {
+            radius: raw.arg_float_or(0, 10.0),
+        },
+        UiCommandType::GrowPickRadius => UiCommand::GrowPickRadius {
+            amount: raw.arg_float_or(0, 10.0),
+        },
+        UiCommandType::ShrinkPickRadius => UiCommand::ShrinkPickRadius {
+            amount: raw.arg_float_or(0, 10.0),
+        },
+
+        // ===== FLOW CONTROL =====
+        UiCommandType::Delay => UiCommand::Delay {
+            seconds: raw.arg_float_or(0, 0.0),
+        },
+        UiCommandType::Halt => UiCommand::Halt,
+        UiCommandType::Skip => UiCommand::Skip {
+            count: raw.arg_int_or(0, 1) as usize,
+        },
+        UiCommandType::If => {
+            let condition = raw.args.get(0).cloned().unwrap_or(CommandArg::Bool(false));
+            let then_str = raw.arg_string(1);
+            let else_str = raw.arg_string(2);
+            UiCommand::If {
+                condition,
+                then_branch: parse_command_string(&then_str),
+                else_branch: parse_command_string(&else_str),
+            }
+        }
+        UiCommandType::IfVarEq => {
+            let var_name = raw.arg_string(0);
+            let value = raw
+                .args
+                .get(1)
+                .cloned()
+                .unwrap_or(CommandArg::String(String::new()));
+            let then_str = raw.arg_string(2);
+            UiCommand::IfVarEq {
+                var_name,
+                value,
+                then_branch: parse_command_string(&then_str),
+            }
+        }
+
+        // ===== DEBUG =====
+        UiCommandType::Print => UiCommand::Print {
+            args: raw.args.clone(),
+        },
+        UiCommandType::DebugVars => UiCommand::DebugVars,
+        UiCommandType::DebugMenus => UiCommand::DebugMenus,
+        UiCommandType::DebugActions => UiCommand::DebugActions,
+
+        // ===== EVENTS =====
+        UiCommandType::EmitEvent => UiCommand::EmitEvent {
+            event_name: raw.arg_string(0),
+        },
+
+        // ===== SPECIAL =====
+        UiCommandType::DragHuePoint => UiCommand::DragHuePoint,
+        UiCommandType::SetRoadsFourLanes => UiCommand::SetRoadsFourLanes {
+            forward: raw.arg_int_or(0, 1) as usize,
+            backward: raw.arg_int_or(1, 1) as usize,
+        },
+
+        // ===== NO-OP =====
+        UiCommandType::Noop => UiCommand::Noop,
+    };
+
+    Some(cmd)
+}
+
+// ==================== BUILDER API ====================
+
+impl UiCommand {
+    /// Create an OpenMenu command.
+    pub fn open_menu(name: impl Into<String>) -> Self {
+        UiCommand::OpenMenu {
+            menu_name: name.into(),
+        }
+    }
+
+    /// Create a CloseMenu command.
+    pub fn close_menu(name: impl Into<String>) -> Self {
+        UiCommand::CloseMenu {
+            menu_name: name.into(),
+        }
+    }
+
+    /// Create a ToggleMenu command.
+    pub fn toggle_menu(name: impl Into<String>) -> Self {
+        UiCommand::ToggleMenu {
+            menu_name: name.into(),
+        }
+    }
+
+    /// Create an OpenLayer command.
+    pub fn open_layer(menu: impl Into<String>, layer: impl Into<String>) -> Self {
+        UiCommand::OpenLayer {
+            menu_name: menu.into(),
+            layer_name: layer.into(),
+        }
+    }
+
+    /// Create a CloseLayer command.
+    pub fn close_layer(menu: impl Into<String>, layer: impl Into<String>) -> Self {
+        UiCommand::CloseLayer {
+            menu_name: menu.into(),
+            layer_name: layer.into(),
+        }
+    }
+
+    /// Create a ToggleLayer command.
+    pub fn toggle_layer(menu: impl Into<String>, layer: impl Into<String>) -> Self {
+        UiCommand::ToggleLayer {
+            menu_name: menu.into(),
+            layer_name: layer.into(),
+        }
+    }
+
+    /// Create a SetVar command.
+    pub fn set_var(name: impl Into<String>, value: CommandArg) -> Self {
+        UiCommand::SetVar {
+            name: name.into(),
+            value,
+        }
+    }
+
+    /// Create an IncVar command.
+    pub fn inc_var(name: impl Into<String>, amount: f32) -> Self {
+        UiCommand::IncVar {
+            name: name.into(),
+            amount,
+        }
+    }
+
+    /// Create a DecVar command.
+    pub fn dec_var(name: impl Into<String>, amount: f32) -> Self {
+        UiCommand::DecVar {
+            name: name.into(),
+            amount,
+        }
+    }
+
+    /// Create a StartAction command.
+    pub fn start_action(name: impl Into<String>) -> Self {
+        UiCommand::StartAction {
+            action_name: name.into(),
+        }
+    }
+
+    /// Create a StopAction command.
+    pub fn stop_action(name: impl Into<String>) -> Self {
+        UiCommand::StopAction {
+            action_name: name.into(),
+        }
+    }
+
+    /// Create a Print command.
+    pub fn print(args: Vec<CommandArg>) -> Self {
+        UiCommand::Print { args }
+    }
+
+    /// Create a Delay command.
+    pub fn delay(seconds: f32) -> Self {
+        UiCommand::Delay { seconds }
+    }
+
+    /// Create a batch of commands.
+    pub fn batch(commands: Vec<UiCommand>) -> Self {
+        UiCommand::Batch { commands }
+    }
+}
+
+// ==================== HELPER FUNCTIONS ====================
 
 pub fn style_to_u32(style: &str) -> u32 {
     match style {
@@ -859,21 +1379,19 @@ pub fn style_to_u32(style: &str) -> u32 {
 
 // ==================== MAIN ENTRY POINTS ====================
 
-/// Execute continuous actions each frame
-pub fn execute_action(
-    action_system: &mut ActionSystem,
+/// Process commands and continuous actions. Call once per frame.
+pub fn process_commands(
+    command_queue: &mut CommandQueue,
     loader: &mut UiButtonLoader,
     top_hit: &Option<HitResult>,
-    mouse_state: &MouseState,
     input_state: &InputState,
     time: &TimeSystem,
     world_renderer: &mut TerrainRenderer,
     window_size: PhysicalSize<u32>,
     road_style_params: &mut RoadStyleParams,
 ) {
-    let mut ctx = ActionContext {
+    let mut ctx = CommandContext {
         loader,
-        mouse_state,
         input_state,
         time,
         world_renderer,
@@ -882,62 +1400,18 @@ pub fn execute_action(
         road_style_params,
     };
 
-    // Process delayed actions
-    action_system.update(&mut ctx);
+    command_queue.drain(&mut ctx);
+    command_queue.execute_continuous(&mut ctx);
+}
 
-    // Execute continuous/dragging actions
-    let active_actions: Vec<String> = ctx
-        .loader
-        .touch_manager
-        .runtimes
-        .action_states
-        .iter()
-        .filter(|(_, state)| state.active)
-        .map(|(name, _)| name.clone())
-        .collect();
-
-    for action_name in active_actions {
-        match action_name.as_str() {
-            "Drag Hue Point" => {
-                drag_hue_point(ctx.loader, ctx.mouse_state, ctx.time);
-            }
-            _ => {}
-        }
+/// Queue commands from a UI hit (when element is clicked).
+pub fn queue_from_hit(queue: &mut CommandQueue, hit: &Option<HitResult>) {
+    if let Some(h) = hit {
+        queue.push_from_hit(h);
     }
 }
 
-/// Handle action when UI element is clicked
-pub fn activate_action(
-    action_system: &mut ActionSystem,
-    loader: &mut UiButtonLoader,
-    top_hit: &Option<HitResult>,
-    mouse_state: &MouseState,
-    input_state: &InputState,
-    time: &TimeSystem,
-    world_renderer: &mut TerrainRenderer,
-    window_size: PhysicalSize<u32>,
-    road_style_params: &mut RoadStyleParams,
-) {
-    if let Some(hit) = top_hit {
-        let action_str = hit.action.clone().unwrap_or_default();
-        if action_str.is_empty() || action_str == "None" {
-            return;
-        }
-        let mut ctx = ActionContext {
-            loader,
-            mouse_state,
-            input_state,
-            time,
-            world_renderer,
-            hit: top_hit,
-            window_size,
-            road_style_params,
-        };
-
-        action_system.run(&action_str, &mut ctx);
-    }
-}
-
+/// Deactivate a continuous action by name.
 pub fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
     if let Some(state) = loader
         .touch_manager
@@ -947,250 +1421,4 @@ pub fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
     {
         state.active = false;
     }
-}
-
-pub fn selection_needed(_loader: &UiButtonLoader, action_name: &str) -> bool {
-    matches!(action_name, "Drag Hue Point")
-}
-
-// ==================== TESTS ====================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_simple() {
-        let actions = parse_action_chain("open_menu(\"Editor\")");
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].name, "open_menu");
-        assert_eq!(actions[0].arg_str(0), Some("Editor"));
-    }
-
-    #[test]
-    fn test_parse_chain() {
-        let actions = parse_action_chain(
-            "open_menu(\"Menu1\"); toggle_layer(\"Menu1\", \"Layer1\"); print(\"done\")",
-        );
-        assert_eq!(actions.len(), 3);
-        assert_eq!(actions[0].name, "open_menu");
-        assert_eq!(actions[1].name, "toggle_layer");
-        assert_eq!(actions[1].arg_str(0), Some("Menu1"));
-        assert_eq!(actions[1].arg_str(1), Some("Layer1"));
-        assert_eq!(actions[2].name, "print");
-    }
-
-    #[test]
-    fn test_parse_numbers() {
-        let actions = parse_action_chain("delay(0.5); set_pick_radius(100)");
-        assert_eq!(actions[0].arg_float(0), Some(0.5));
-        assert_eq!(actions[1].arg_float(0), Some(100.0));
-    }
-
-    #[test]
-    fn test_parse_no_args() {
-        let actions = parse_action_chain("halt; debug_vars");
-        assert_eq!(actions.len(), 2);
-        assert_eq!(actions[0].name, "halt");
-        assert_eq!(actions[1].name, "debug_vars");
-    }
-
-    #[test]
-    fn test_parse_variables() {
-        let actions = parse_action_chain("set(my_var, 42); inc($my_var, 10)");
-        assert_eq!(actions.len(), 2);
-        assert_eq!(actions[0].arg_str(0), Some("my_var"));
-        assert!(matches!(actions[1].args.get(0), Some(ActionArg::Var(_))));
-    }
-
-    #[test]
-    fn test_nested_action_string() {
-        let actions = parse_action_chain("if(true, \"print(hello)\", \"print(bye)\")");
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].name, "if");
-        assert_eq!(actions[0].arg_str(1), Some("print(hello)"));
-    }
-}
-
-pub fn make_actions() -> ActionSystem {
-    let mut sys = ActionSystem::new();
-
-    register_color_picker_actions(&mut sys);
-    register_editor_actions(&mut sys);
-    register_tool_actions(&mut sys);
-    register_debug_actions(&mut sys);
-
-    sys
-}
-
-fn register_color_picker_actions(sys: &mut ActionSystem) {
-    sys.register_simple("drag_hue_point", |_action, ctx| {
-        let state = ActionState::with_time("Drag Hue Point", ctx.time.total_time);
-        ctx.loader
-            .touch_manager
-            .runtimes
-            .action_states
-            .insert("Drag Hue Point".to_string(), state);
-        ActionResult::Ok
-    });
-
-    sys.register_simple("stop_hue_drag", |_action, ctx| {
-        if let Some(state) = ctx
-            .loader
-            .touch_manager
-            .runtimes
-            .action_states
-            .get_mut("Drag Hue Point")
-        {
-            state.active = false;
-        }
-        ActionResult::Ok
-    });
-
-    sys.register_simple("set_color", |action, ctx| {
-        let r = action.arg_float_or(0, 1.0);
-        let g = action.arg_float_or(1, 1.0);
-        let b = action.arg_float_or(2, 1.0);
-
-        ctx.loader.variables.set_f32("color_picker.r", r);
-        ctx.loader.variables.set_f32("color_picker.g", g);
-        ctx.loader.variables.set_f32("color_picker.b", b);
-
-        let HSV { h, s, v } = rgb_to_hsv([r, g, b, 1.0]);
-
-        ctx.loader.variables.set_f32("color_picker.h", h);
-        ctx.loader.variables.set_f32("color_picker.s", s);
-        ctx.loader.variables.set_f32("color_picker.v", v);
-
-        ActionResult::Ok
-    });
-
-    sys.register_simple("set_hsv", |action, ctx| {
-        let h = action.arg_float_or(0, 0.0);
-        let s = action.arg_float_or(1, 1.0);
-        let v = action.arg_float_or(2, 1.0);
-
-        ctx.loader.variables.set_f32("color_picker.h", h);
-        ctx.loader.variables.set_f32("color_picker.s", s);
-        ctx.loader.variables.set_f32("color_picker.v", v);
-
-        let rgb = hsv_to_rgb(HSV { h, s, v });
-        ctx.loader.variables.set_f32("color_picker.r", rgb[0]);
-        ctx.loader.variables.set_f32("color_picker.g", rgb[1]);
-        ctx.loader.variables.set_f32("color_picker.b", rgb[2]);
-
-        ActionResult::Ok
-    });
-}
-
-fn register_editor_actions(sys: &mut ActionSystem) {
-    sys.register_simple("toggle_editor", |_action, ctx| {
-        ctx.loader.touch_manager.editor.enabled = !ctx.loader.touch_manager.editor.enabled;
-        ActionResult::Ok
-    });
-
-    sys.register_simple("enable_editor", |_action, ctx| {
-        ctx.loader.touch_manager.editor.enabled = true;
-        ActionResult::Ok
-    });
-
-    sys.register_simple("disable_editor", |_action, ctx| {
-        ctx.loader.touch_manager.editor.enabled = false;
-        ActionResult::Ok
-    });
-
-    sys.register_simple("toggle_gui", |_action, ctx| {
-        ctx.loader.touch_manager.options.show_gui = !ctx.loader.touch_manager.options.show_gui;
-        ActionResult::Ok
-    });
-
-    sys.register_simple("deselect_all", |_action, ctx| {
-        ctx.loader.ui_edit_manager.execute_command(
-            DeselectAllCommand {
-                primary: ctx.loader.touch_manager.selection.primary.clone(),
-                secondary: ctx.loader.touch_manager.selection.secondary.clone(),
-            },
-            &mut ctx.loader.touch_manager,
-            &mut ctx.loader.menus,
-            &mut ctx.loader.variables,
-            &mut ctx.mouse_state,
-        );
-        ActionResult::Ok
-    });
-
-    sys.register_simple("save_ui", |action, ctx| {
-        let filename = action.arg_str(0).unwrap_or("ui_layout.yaml");
-        let path: PathBuf = PathBuf::from(filename);
-        match ctx.loader.save_gui_to_file(path, ctx.window_size) {
-            Ok(_) => ActionResult::Ok,
-            Err(e) => ActionResult::Error(format!("Failed to save: {}", e)),
-        }
-    });
-
-    sys.register_simple("load_ui", |action, _| {
-        let filename = action.arg_str(0).unwrap_or("ui_layout.yaml");
-        match load_menus_from_directory(&PathBuf::from(filename), &BendMode::Strict) {
-            Ok(_) => ActionResult::Ok,
-            Err(e) => ActionResult::Error(format!("Failed to load: {}", e)),
-        }
-    });
-}
-
-fn register_tool_actions(sys: &mut ActionSystem) {
-    sys.register_simple("set_tool", |action, ctx| {
-        let tool = action.arg_string(0);
-        ctx.loader.variables.set_string("current_tool", &tool);
-        ActionResult::Ok
-    });
-
-    sys.register_simple("set_brush_size", |action, ctx| {
-        let size = action.arg_float_or(0, 10.0);
-        ctx.world_renderer.pick_radius_m = size;
-        ctx.loader.variables.set_f32("brush_size", size);
-        ActionResult::Ok
-    });
-
-    sys.register_simple("adjust_brush_size", |action, ctx| {
-        let delta = action.arg_float_or(0, 1.0);
-        let min = action.arg_float_or(1, 1.0);
-        let max = action.arg_float_or(2, 500.0);
-
-        let new_size = (ctx.world_renderer.pick_radius_m + delta).clamp(min, max);
-        ctx.world_renderer.pick_radius_m = new_size;
-        ctx.loader.variables.set_f32("brush_size", new_size);
-        ActionResult::Ok
-    });
-}
-
-fn register_debug_actions(sys: &mut ActionSystem) {
-    sys.register_simple("dump_variables", |_action, ctx| {
-        println!("=== UI Variables ===");
-        ctx.loader.variables.dump();
-        ActionResult::Ok
-    });
-
-    sys.register_simple("dump_selection", |_action, ctx| {
-        let Some(sel) = &ctx.loader.touch_manager.selection.primary else {
-            println!("=== Selection ===");
-            println!("  Nothing selected...");
-            return ActionResult::Ok;
-        };
-        println!("=== Selection ===");
-        println!("  Menu: {}", sel.menu);
-        println!("  Layer: {}", sel.layer);
-        println!("  Element: {}", sel.id);
-        println!(
-            "  Dragging: {}",
-            ctx.loader.touch_manager.drag.active_drag.is_some()
-        );
-        ActionResult::Ok
-    });
-
-    sys.register("list_actions", |_action, _ctx, sys| {
-        println!("=== Action Variables ===");
-        for (name, value) in &sys.variables {
-            println!("  {}: {:?}", name, value);
-        }
-        ActionResult::Ok
-    });
 }

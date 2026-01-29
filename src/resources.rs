@@ -4,8 +4,8 @@ use crate::paths::data_dir;
 use crate::renderer::Renderer;
 use crate::renderer::shadows::CSM_CASCADES;
 use crate::simulation::Simulation;
-use crate::ui::actions::{ActionSystem, make_actions};
-pub(crate) use crate::ui::input::InputState;
+use crate::ui::actions::CommandQueue;
+use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::World;
 use std::collections::HashMap;
@@ -14,6 +14,16 @@ use std::time::Instant;
 use winit::keyboard::PhysicalKey;
 use winit::window::Window;
 
+pub struct CommandQueues {
+    pub(crate) ui_command_queue: CommandQueue,
+}
+impl CommandQueues {
+    pub fn new() -> Self {
+        Self {
+            ui_command_queue: CommandQueue::new(),
+        }
+    }
+}
 pub struct Resources {
     pub settings: Settings,
     pub time: TimeSystem,
@@ -23,7 +33,7 @@ pub struct Resources {
     pub ui_loader: UiButtonLoader,
     pub events: Events,
     pub window: Arc<Window>,
-    pub action_system: ActionSystem,
+    pub command_queues: CommandQueues,
 }
 
 impl Resources {
@@ -43,10 +53,11 @@ impl Resources {
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);
+        let mut command_queues = CommandQueues::new();
+        ui_loader.set_starting_menu(&settings, &mut command_queues.ui_command_queue);
         let mut time = TimeSystem::new();
         time.total_game_time = settings.total_game_time;
 
-        let action_system = make_actions();
         Self {
             settings,
             time,
@@ -56,7 +67,7 @@ impl Resources {
             ui_loader,
             events: Events::new(),
             window,
-            action_system,
+            command_queues,
         }
     }
 }

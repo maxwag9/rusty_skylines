@@ -47,12 +47,14 @@ struct VertexOut {
     @location(1) color: vec3<f32>,
     @location(2) world_pos: vec3<f32>,
     @location(3) quad_uv: vec2<f32>,  // For edge detection
+    @location(4) chunk_xz: vec2<f32>, // To fix swimming UVs
 };
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
 
+    // Camera-relative render position (keeps precision stable)
     let dc: vec2<i32> = in.chunk_xz - uniforms.camera_chunk;
 
     let rx = f32(dc.x) * uniforms.chunk_size + (in.position.x - uniforms.camera_local.x);
@@ -67,6 +69,12 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     out.world_normal = normalize(in.normal);
     out.color = in.color.rgb;
+
+    out.chunk_xz = vec2<f32>(
+        f32(in.chunk_xz.x) * uniforms.chunk_size + in.position.x,
+        f32(in.chunk_xz.y) * uniforms.chunk_size + in.position.z
+    );
+
     return out;
 }
 
@@ -107,87 +115,62 @@ fn fbm(p_in: vec2<f32>) -> f32 {
 }
 
 // Edge rendering constants
-const EDGE_WIDTH: f32 = 0.005;       // Width as fraction of quad (0.02 = 2% of quad width)
-const EDGE_COLOR: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);  // Black edges
+const EDGE_WIDTH: f32 = 0.0025;       // Width as fraction of quad (0.02 = 2% of quad width)
+const EDGE_COLOR: vec3<f32> = vec3<f32>(0.1, 0.1, 0.1);  // Black edges
 const EDGE_ENABLED: bool = false;
-const SHOW_DIAGONAL: bool = false;   // Show triangle diagonal too
+const SHOW_DIAGONAL: bool = true;   // Show triangle diagonal too
+
 struct FragmentOut {
     @location(0) color : vec4<f32>,
     @location(1) normal : vec4<f32>
 };
+
 @fragment
 fn fs_main(in: VertexOut) -> FragmentOut {
     var out: FragmentOut;
     let n = normalize(in.world_normal);
     let up = vec3<f32>(0.0, 1.0, 0.0);
 
-    // Your convention: direction from origin -> sun/moon in the sky.
-    // For Lambert (dot(n, l)) we want direction from surface -> light.
-    // With a directional light at infinity, these are the same unit vector.
     let sun_l  = normalize(uniforms.sun_direction);
     let moon_l = normalize(uniforms.moon_direction);
 
-    // Fade the SUN out when it goes below the horizon to stop wrapped lighting
-    // from "glowing" at night.
-    let sun_elev   = dot(sun_l, up);                    // [-1..1]
-    let sun_amount = smoothstep(-0.06, 0.10, sun_elev); // twilight band
+    let sun_elev   = dot(sun_l, up);
+    let sun_amount = smoothstep(-0.06, 0.10, sun_elev);
     let night_amount = 1.0 - sun_amount;
 
-    // Moon visibility (also fades if the moon is below the horizon)
     let moon_elev    = dot(moon_l, up);
     let moon_visible = smoothstep(-0.08, 0.08, moon_elev);
 
-    // -------------------------------------------------------------------------
-    // Hemisphere ambient (blend day/night)
-    // -------------------------------------------------------------------------
     let hemi = saturate(dot(n, up) * 0.5 + 0.5);
 
-    // Day ambient
     let sky_ambient_day    = vec3<f32>(0.10, 0.12, 0.15);
     let ground_ambient_day = vec3<f32>(0.05, 0.05, 0.05);
 
-    // Night ambient (your original-ish values)
     let sky_ambient_night    = vec3<f32>(0.01, 0.01, 0.01);
     let ground_ambient_night = vec3<f32>(0.02, 0.02, 0.02);
 
     let sky_ambient    = mix(sky_ambient_night,    sky_ambient_day,    sun_amount);
     let ground_ambient = mix(ground_ambient_night, ground_ambient_day, sun_amount);
 
-    // Slight moon-tinted ambient at night (constant, no new uniforms)
     let moon_ambient_color = vec3<f32>(0.02, 0.03, 0.06);
     let moon_ambient = moon_ambient_color * (0.6 * night_amount * moon_visible);
 
     let ambient = mix(ground_ambient, sky_ambient, hemi) + moon_ambient * hemi;
 
-    // -------------------------------------------------------------------------
-    // Sun diffuse + wrapped (grass), then SHADOW
-    // -------------------------------------------------------------------------
     let sun_ndotl = dot(n, sun_l);
     let sun_diffuse = max(sun_ndotl, 0.0);
-
-    // Wrapped lighting (allows some light around terminator for grass)
-    // The important part: multiply by sun_amount so it doesn't light at night.
     let sun_wrapped = saturate(sun_ndotl + 0.4) / 1.4;
 
     let sun_shadow = fetch_shadow(in.world_pos, n, sun_l);
 
-    // -------------------------------------------------------------------------
-    // Grass mask
-    // -------------------------------------------------------------------------
     let greenness = in.color.g - max(in.color.r, in.color.b);
     let up_facing = saturate(dot(n, up));
     let grass_amount = saturate(greenness * 2.5) * up_facing * up_facing;
 
-    // Sun direct term (wrap only for grass) + fade by sun_amount to prevent night glow
     let sun_direct = mix(sun_diffuse, sun_wrapped, grass_amount) * sun_amount;
 
-    // -------------------------------------------------------------------------
-    // Moon lighting (constant color/intensity, no extra uniforms)
-    // -------------------------------------------------------------------------
     let moon_ndotl = dot(n, moon_l);
     let moon_diffuse = max(moon_ndotl, 0.0);
-
-    // Smaller wrap for moon (optional, helps grass a bit but not too much)
     let moon_wrapped = saturate(moon_ndotl + 0.15) / 1.15;
 
     let moon_intensity: f32 = 0.22;
@@ -198,25 +181,30 @@ fn fs_main(in: VertexOut) -> FragmentOut {
         (moon_visible * night_amount * moon_intensity);
 
     // -------------------------------------------------------------------------
-    // ============ GRASS TEXTURING ============
+    // ============ GRASS TEXTURING (FIXED: NO SWIMMING UVs) ============
     // -------------------------------------------------------------------------
+    // in.chunk_xz now contains stable world-space XZ (computed in the vertex shader)
+    let stable_world_xz = in.chunk_xz;
+
     let grass_uv_scale1: f32 = 0.025;
     let grass_uv_scale2: f32 = 0.011;
 
-    let grass_uv1 = in.world_pos.xz * grass_uv_scale1;
+    let grass_uv1 = fract(stable_world_xz * grass_uv_scale1);
 
     let rot_angle: f32 = 0.615;
     let ca = cos(rot_angle);
     let sa = sin(rot_angle);
     let rot = mat2x2<f32>(ca, -sa, sa, ca);
-    let grass_uv2 = rot * (in.world_pos.xz * grass_uv_scale2) + vec2<f32>(17.3, 9.1);
+
+    let uv2_base = stable_world_xz * grass_uv_scale2;
+    let grass_uv2 = fract(rot * uv2_base + vec2<f32>(17.3, 9.1));
 
     let grass_a = textureSample(grass_tex, material_sampler, grass_uv1).rgb;
     let grass_b = textureSample(grass_tex2, material_sampler, grass_uv2).rgb;
 
     let mix_scale: f32 = 0.4;
     let mix_offset = vec2<f32>(42.0, 87.0);
-    let mix_p = in.world_pos.xz * mix_scale + mix_offset;
+    let mix_p = stable_world_xz * mix_scale + mix_offset;
     let mix_noise = fbm(mix_p);
 
     let grass_color = mix(grass_a, grass_b, mix_noise);
@@ -225,7 +213,6 @@ fn fs_main(in: VertexOut) -> FragmentOut {
     // -------------------------------------------------------------------------
     // Final lighting
     // -------------------------------------------------------------------------
-    // Constant sun color (no extra uniforms)
     let sun_color = vec3<f32>(1.0, 0.98, 0.92);
 
     var final_color =
@@ -233,7 +220,6 @@ fn fs_main(in: VertexOut) -> FragmentOut {
         albedo * (sun_color * (sun_direct * sun_shadow)) +
         albedo * (moon_color * moon_direct);
 
-    // Pick highlight
     if (pick.radius > 0.0) {
         let d = distance(in.world_pos, pick.pos);
         if (d < pick.radius) {
@@ -242,7 +228,6 @@ fn fs_main(in: VertexOut) -> FragmentOut {
         }
     }
 
-    // ============ MESH EDGE VISUALIZATION ============
     if (EDGE_ENABLED) {
         let uv = in.quad_uv;
 
@@ -254,7 +239,7 @@ fn fs_main(in: VertexOut) -> FragmentOut {
         var edge_dist = min(min(d_left, d_right), min(d_bottom, d_top));
 
         if (SHOW_DIAGONAL) {
-            let diag_dist = abs(uv.x + uv.y - 1.0) * 0.7071067811865476; // 1/sqrt(2)
+            let diag_dist = abs(uv.x + uv.y - 1.0) * 0.7071067811865476;
             edge_dist = min(edge_dist, diag_dist);
         }
 
@@ -264,6 +249,7 @@ fn fs_main(in: VertexOut) -> FragmentOut {
 
         final_color = mix(EDGE_COLOR, final_color, edge_factor);
     }
+
     out.color = vec4<f32>(final_color, 1.0);
     out.normal = vec4<f32>(n * 0.5 + 0.5, 1.0);
     return out;

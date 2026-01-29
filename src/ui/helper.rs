@@ -1,5 +1,5 @@
 use crate::renderer::pipelines::DEPTH_FORMAT;
-use crate::resources::InputState;
+use crate::ui::input::InputState;
 use crate::ui::vertex::UiVertex;
 use std::cmp::Ordering;
 use wgpu::*;

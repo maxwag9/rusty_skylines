@@ -1129,57 +1129,6 @@ impl PipelineManager {
         &self.device
     }
 }
-fn create_fullscreen_pipeline(
-    device: &Device,
-    surface_format: TextureFormat,
-    shader: &ShaderModule,
-    bgl: &BindGroupLayout,
-    msaa_samples: u32,
-) -> RenderPipeline {
-    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-        label: Some("Fullscreen Pipeline Layout"),
-        bind_group_layouts: &[bgl],
-        immediate_size: 0,
-    });
-
-    device.create_render_pipeline(&RenderPipelineDescriptor {
-        label: Some("Fullscreen Pipeline"),
-        layout: Some(&layout),
-        vertex: VertexState {
-            module: shader,
-            entry_point: Some("vs_main"),
-            buffers: &[],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(FragmentState {
-            module: shader,
-            entry_point: Some("fs_main"),
-            targets: &[Some(ColorTargetState {
-                format: surface_format,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: PrimitiveState {
-            topology: PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: FrontFace::Ccw,
-            cull_mode: None,
-            polygon_mode: PolygonMode::Fill,
-            unclipped_depth: false,
-            conservative: false,
-        },
-        depth_stencil: None,
-        multisample: MultisampleState {
-            count: msaa_samples,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        cache: None,
-        multiview_mask: None,
-    })
-}
 
 /// Cache key for uniform bind groups using buffer addresses
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -1327,6 +1276,13 @@ impl RenderManager {
             }
             FullscreenPassType::Normal => (vec![&pipelines.resolved_hdr_view], 1usize),
             FullscreenPassType::Fog => (vec![&pipelines.depth_sample_view], 1usize),
+            FullscreenPassType::Ssao => (
+                vec![
+                    &pipelines.depth_sample_view,
+                    &pipelines.resolved_normal_view,
+                ],
+                2usize,
+            ),
         };
 
         let material_layout = self
@@ -1590,11 +1546,11 @@ impl RenderManager {
         // fullscreen triangulation (strangulation)
         pass.draw(0..3, 0..1);
     }
-    pub fn create_uniform_buffer<T: bytemuck::Pod>(&self, data: &T, label: &str) -> wgpu::Buffer {
+    pub fn create_uniform_buffer<T: bytemuck::Pod>(&self, data: &T, label: &str) -> Buffer {
         use wgpu::util::DeviceExt;
         self.pipeline_manager
             .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            .create_buffer_init(&util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(&[*data]),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1666,11 +1622,6 @@ pub fn create_color_attachment_load<'a>(
     surface_view: &'a TextureView,
     msaa_samples: u32,
 ) -> RenderPassColorAttachment<'a> {
-    println!(
-        "Creating color attachment load {:?} {:?}",
-        msaa_view.texture().size(),
-        surface_view.texture().size()
-    );
     if msaa_samples > 1 {
         RenderPassColorAttachment {
             view: msaa_view,
@@ -1693,6 +1644,7 @@ pub fn create_color_attachment_load<'a>(
         }
     }
 }
+
 fn hash_vertex_layouts(layouts: &[VertexBufferLayout]) -> u64 {
     let mut h = DefaultHasher::new();
     layouts.len().hash(&mut h);
