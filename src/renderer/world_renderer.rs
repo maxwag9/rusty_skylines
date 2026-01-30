@@ -280,7 +280,7 @@ impl TerrainRenderer {
         let cam_cx = cam_pos.chunk.x;
         let cam_cz = cam_pos.chunk.z;
 
-        let (_, _, view_proj) = camera.matrices(aspect);
+        let (_, _, view_proj) = camera.matrices(aspect, settings);
         let planes = extract_frustum_planes(view_proj);
 
         let r_render = self.view_radius_render as i32;
@@ -615,8 +615,15 @@ impl TerrainRenderer {
         }
     }
 
-    pub fn render(&self, pass: &mut RenderPass, camera: &Camera, aspect: f32, underwater: bool) {
-        let (_, _, view_proj) = camera.matrices(aspect);
+    pub fn render(
+        &self,
+        pass: &mut RenderPass,
+        camera: &Camera,
+        aspect: f32,
+        settings: &Settings,
+        underwater: bool,
+    ) {
+        let (_, _, view_proj) = camera.matrices(aspect, settings);
         let planes = extract_frustum_planes(view_proj);
 
         let cs = self.chunk_size;

@@ -6,17 +6,20 @@ use crate::positions::WorldPos;
 use crate::renderer::astronomy::*;
 use crate::renderer::general_mesh_arena::GeneralMeshArena;
 use crate::renderer::gizmo::Gizmo;
-use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
+use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines, SSAO_FORMAT};
 use crate::renderer::procedural_bind_group_manager::FullscreenPassType;
 use crate::renderer::procedural_render_manager::{
-    DepthDebugParams, PipelineOptions, RenderManager, create_color_attachment_load,
+    DepthDebugParams, FullscreenDebugSwizzle, PipelineOptions, RenderManager,
+    create_color_attachment_load,
 };
 use crate::renderer::procedural_texture_manager::{MaterialKind, Params, TextureCacheKey};
 use crate::renderer::render_passes::{
     RenderPassConfig, create_color_attachment, create_depth_attachment, create_normal_attachment,
 };
 use crate::renderer::shader_watcher::ShaderWatcher;
-use crate::renderer::shadows::{CSM_CASCADES, ShadowMatUniform, render_roads_shadows};
+use crate::renderer::shadows::{
+    CSM_CASCADES, ShadowMatUniform, render_roads_shadows, render_terrain_shadows,
+};
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::renderer::world_renderer::TerrainRenderer;
@@ -302,14 +305,8 @@ impl RenderCore {
 
         let shader_watcher = ShaderWatcher::new().ok();
 
-        let pipelines = Pipelines::new(
-            &device,
-            &config,
-            msaa_samples,
-            camera,
-            settings.shadow_map_size,
-        )
-        .expect("Failed to create render pipelines");
+        let pipelines = Pipelines::new(&device, &config, camera, settings)
+            .expect("Failed to create render pipelines");
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderer::new(&device, settings);
@@ -417,9 +414,15 @@ impl RenderCore {
         let observer = ObserverParams::new(time_scales.day_angle);
         let astronomy = compute_astronomy(&time_scales);
 
-        update_ui_variables(ui_loader, &time_scales, &astronomy, observer.obliquity);
+        update_ui_variables(
+            ui_loader,
+            &time_scales,
+            &astronomy,
+            observer.obliquity,
+            settings,
+        );
 
-        let (view, proj, view_proj) = camera.matrices(aspect);
+        let (view, proj, view_proj) = camera.matrices(aspect, settings);
         let ray = WorldRay::from_mouse(
             glam::Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
             self.config.width as f32,
@@ -435,7 +438,7 @@ impl RenderCore {
                 near: camera.near,
                 far: camera.far,
                 power: 20.0,
-                reversed_z: 0, // or 1? Not yet
+                reversed_z: settings.reversed_depth_z as u32,
                 msaa_samples: self.msaa_samples,
                 _pad0: 0,
                 _pad1: 0,
@@ -491,11 +494,13 @@ impl RenderCore {
             camera,
             time.total_time,
             aspect,
+            settings,
         );
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy.moon_phase);
         updater.update_water_uniforms();
         updater.update_tonemapping_uniforms(&settings.tonemapping_state);
+        updater.update_ssao_uniforms(settings);
         (new_uniforms, light_mats, splits)
     }
 
@@ -582,7 +587,11 @@ impl RenderCore {
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
                     view: &self.pipelines.cascaded_shadow_map.layer_views[cascade],
                     depth_ops: Some(Operations {
-                        load: LoadOp::Clear(1.0),
+                        load: if settings.reversed_depth_z {
+                            LoadOp::Clear(0.0)
+                        } else {
+                            LoadOp::Clear(1.0)
+                        },
                         store: StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -592,23 +601,22 @@ impl RenderCore {
                 multiview_mask: None,
             });
             if !settings.shadows_enabled {
-                return;
+                continue;
             }
             let shadow_buf = &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[cascade];
 
-            //
-            // if cascade != 0 && cascade != 1 {
-            //     render_terrain_shadows(
-            //         &mut pass,
-            //         &mut self.render_manager,
-            //         &self.terrain_renderer,
-            //         &self.pipelines,
-            //         settings,
-            //         camera,
-            //         aspect,
-            //         shadow_buf,
-            //     );
-            // }
+            if cascade != 0 && cascade != 1 {
+                render_terrain_shadows(
+                    &mut pass,
+                    &mut self.render_manager,
+                    &self.terrain_renderer,
+                    &self.pipelines,
+                    settings,
+                    camera,
+                    aspect,
+                    shadow_buf,
+                );
+            }
 
             render_roads_shadows(
                 &mut pass,
@@ -636,9 +644,13 @@ impl RenderCore {
     ) {
         // -------- Pass 1: Main world pass (writes depth) --------
         self.execute_world_pass(encoder, config, camera, settings, aspect);
-        self.execute_ssao_pass(encoder, settings);
+
+        self.execute_ssao_gen_pass(encoder, settings);
+        self.execute_ssao_blur_pass(encoder, settings);
+        self.execute_ssao_apply_pass(encoder, settings);
+
         // -------- Pass 2: Fog (samples depth, no depth attachment) --------
-        self.execute_fog_pass(encoder, settings);
+        //self.execute_fog_pass(encoder, settings);
 
         // -------- Pass 3: UI (NOT fogged, because it draws after fog) Logic! --------
         self.execute_ui_pass(encoder, ui_loader, time, input_state);
@@ -671,8 +683,6 @@ impl RenderCore {
         if !settings.show_world {
             return;
         }
-        // NOTE: Timestamp indices:
-        // Sky: 0-1, Terrain: 2-3, Water: 4-5, Roads: 6-7, Gizmo: 8-9
         // 1. Sky
         gpu_timestamp!(pass, &mut self.profiler, "Sky", {
             // All frame time names must be lowercase, I decided. (Doesn't matter anyway, cuz I .lowercase() anyway.)
@@ -736,20 +746,133 @@ impl RenderCore {
             );
         });
     }
-    fn execute_ssao_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+    fn execute_ssao_gen_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
         if !settings.show_world {
             return;
         }
 
-        // We LOAD the current HDR color and MULTIPLY it by AO using blending.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAO Gen Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.pipelines.ssao_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), // AO=1 default
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        let shader = if self.msaa_samples > 1 {
+            "ssao_gen_msaa.wgsl"
+        } else {
+            "ssao_gen.wgsl"
+        };
+
+        let options = PipelineOptions {
+            topology: TriangleList,
+            msaa_samples: 1, // output AO is single-sample
+            depth_stencil: None,
+            vertex_layouts: vec![],
+            cull_mode: None,
+            shadow_pass: false,
+            fullscreen_pass: FullscreenPassType::SsaoGen,
+            targets: vec![Some(wgpu::ColorTargetState {
+                format: SSAO_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        };
+
+        self.render_manager.render_fullscreen_pass(
+            "SSAO Gen",
+            shader_dir().join(shader).as_path(),
+            options,
+            &[
+                &self.pipelines.uniforms.buffer,
+                &self.pipelines.ssao_uniforms.buffer,
+            ],
+            &mut pass,
+            &self.pipelines,
+            settings,
+            FullscreenPassType::SsaoGen,
+        );
+    }
+    fn execute_ssao_blur_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+        if !settings.show_world {
+            return;
+        }
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAO Blur Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.pipelines.ssao_blur_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        let shader = if self.msaa_samples > 1 {
+            "ssao_blur_msaa.wgsl"
+        } else {
+            "ssao_blur.wgsl"
+        };
+
+        let options = PipelineOptions {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            msaa_samples: 1,
+            depth_stencil: None,
+            vertex_layouts: vec![],
+            cull_mode: None,
+            shadow_pass: false,
+            fullscreen_pass: FullscreenPassType::SsaoBlur,
+            targets: vec![Some(wgpu::ColorTargetState {
+                format: SSAO_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        };
+
+        self.render_manager.render_fullscreen_pass(
+            "SSAO Blur",
+            shader_dir().join(shader).as_path(),
+            options,
+            &[
+                &self.pipelines.uniforms.buffer,
+                &self.pipelines.ssao_uniforms.buffer,
+            ],
+            &mut pass,
+            &self.pipelines,
+            settings,
+            FullscreenPassType::SsaoBlur,
+        );
+    }
+    fn execute_ssao_apply_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+        if !settings.show_world {
+            return;
+        }
+
         let color_attachment = create_color_attachment_load(
             &self.pipelines.msaa_hdr_view,
             &self.pipelines.resolved_hdr_view,
             self.msaa_samples,
         );
 
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("SSAO Pass (depth+normals)"),
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("SSAO Apply Pass"),
             color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -757,51 +880,43 @@ impl RenderCore {
             multiview_mask: None,
         });
 
-        // Multiply blending: out = dst * srcColor
-        // (we output AO in srcColor as vec3(ao))
-        let multiply_blend = BlendState {
-            color: BlendComponent {
-                src_factor: BlendFactor::Zero,
-                dst_factor: BlendFactor::Src,
-                operation: BlendOperation::Add,
+        let multiply_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::Src,
+                operation: wgpu::BlendOperation::Add,
             },
-            // keep alpha unchanged
-            alpha: BlendComponent {
-                src_factor: BlendFactor::Zero,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::Add,
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
             },
         };
 
         let options = PipelineOptions {
-            topology: TriangleList,
-            msaa_samples: self.msaa_samples, // ok: we write into your MSAA HDR target
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            msaa_samples: self.msaa_samples, // output is MSAA HDR target
             depth_stencil: None,
             vertex_layouts: vec![],
             cull_mode: None,
             shadow_pass: false,
-            fullscreen_pass: FullscreenPassType::Ssao, // you need this pass type to bind depth+normals (see note below)
-            targets: vec![Some(ColorTargetState {
-                format: self.pipelines.msaa_hdr_view.texture().format(),
+            fullscreen_pass: FullscreenPassType::SsaoApply,
+            targets: vec![Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float, // HDR
                 blend: Some(multiply_blend),
-                write_mask: ColorWrites::ALL,
+                write_mask: wgpu::ColorWrites::ALL,
             })],
         };
-        let ssao_shader = if self.msaa_samples > 1 {
-            "ssao_msaa.wgsl"
-        } else {
-            "ssao.wgsl"
-        };
-        // SSAO only needs camera matrices (inv_proj + view/proj) from your existing Uniforms.
+
         self.render_manager.render_fullscreen_pass(
-            "SSAO",
-            shader_dir().join(ssao_shader).as_path(),
+            "SSAO Apply",
+            shader_dir().join("ssao_apply.wgsl").as_path(),
             options,
-            &[&self.pipelines.uniforms.buffer],
+            &[], // no uniforms needed
             &mut pass,
             &self.pipelines,
             settings,
-            FullscreenPassType::Ssao,
+            FullscreenPassType::SsaoApply,
         );
     }
     fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
@@ -915,6 +1030,7 @@ impl RenderCore {
                     "Debug Normals Render",
                     self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
+                    FullscreenDebugSwizzle::None,
                     &mut pass,
                 );
             }
@@ -939,6 +1055,57 @@ impl RenderCore {
                     "Debug Depth Render",
                     self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
+                    FullscreenDebugSwizzle::None,
+                    &mut pass,
+                );
+            }
+            DebugViewState::SsaoRaw => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa_hdr_view,
+                    &self.pipelines.resolved_hdr_view,
+                    self.msaa_samples,
+                );
+
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Debug Normals Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                self.render_manager.render_fullscreen_debug_view(
+                    &self.pipelines.ssao_view,
+                    "Debug SSAO RAW Render",
+                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
+                    self.msaa_samples,
+                    FullscreenDebugSwizzle::RedToRgb,
+                    &mut pass,
+                );
+            }
+            DebugViewState::SsaoBlurred => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa_hdr_view,
+                    &self.pipelines.resolved_hdr_view,
+                    self.msaa_samples,
+                );
+
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Debug Normals Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                self.render_manager.render_fullscreen_debug_view(
+                    &self.pipelines.ssao_blur_view,
+                    "Debug SSAO Blurred Render",
+                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
+                    self.msaa_samples,
+                    FullscreenDebugSwizzle::RedToRgb,
                     &mut pass,
                 );
             }
@@ -1421,11 +1588,15 @@ fn terrain_material_keys() -> Vec<TextureCacheKey> {
         },
     ]
 }
-fn road_depth_stencil(bias: DepthBiasState) -> DepthStencilState {
+fn road_depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: true,
-        depth_compare: CompareFunction::LessEqual,
+        depth_compare: if settings.reversed_depth_z {
+            CompareFunction::GreaterEqual
+        } else {
+            CompareFunction::LessEqual
+        },
         stencil: Default::default(),
         bias,
     }
@@ -1452,7 +1623,7 @@ fn create_world_pass<'a>(
     encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("World Pass"),
         color_attachments: &[Some(color_attachment), Some(normal_attachment)],
-        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.depth_view)),
+        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.depth_view, config)),
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
@@ -1479,7 +1650,7 @@ fn render_gizmo(
             topology: PrimitiveTopology::LineList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: true,
+                depth_write_enabled: false,
                 depth_compare: CompareFunction::Always,
                 stencil: Default::default(),
                 bias: Default::default(),
@@ -1571,7 +1742,11 @@ fn render_sky(
     let sky_depth_stencil = Some(DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: false,
-        depth_compare: CompareFunction::Always,
+        depth_compare: if settings.reversed_depth_z {
+            CompareFunction::GreaterEqual
+        } else {
+            CompareFunction::LessEqual
+        },
         stencil: Default::default(),
         bias: Default::default(),
     });
@@ -1625,12 +1800,18 @@ fn render_roads(
 ) {
     let keys = road_material_keys();
     let shader_path = shader_dir().join("road.wgsl");
+    fn road_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
+        let sign_i = if settings.reversed_depth_z { 1 } else { -1 };
+        let sign_f = sign_i as f32;
 
-    let base_bias = DepthBiasState {
-        constant: -3,
-        slope_scale: -2.0,
-        clamp: 0.0,
-    };
+        DepthBiasState {
+            constant: sign_i * constant.abs(),
+            slope_scale: sign_f * slope.abs(),
+            clamp: 0.0,
+        }
+    }
+    let base_bias = road_bias(settings, 3, 2.0);
+    let preview_bias = road_bias(settings, 4, 2.0);
     let targets = color_and_normals_targets(pipelines);
     render_manager.render(
         keys.clone(),
@@ -1638,7 +1819,7 @@ fn render_roads(
         shader_path.as_path(),
         PipelineOptions {
             topology: TriangleList,
-            depth_stencil: Some(road_depth_stencil(base_bias)),
+            depth_stencil: Some(road_depth_stencil(base_bias, settings)),
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
@@ -1670,18 +1851,13 @@ fn render_roads(
         return;
     };
 
-    let preview_bias = DepthBiasState {
-        constant: -4,
-        slope_scale: -2.0,
-        clamp: 0.0,
-    };
     render_manager.render(
         keys,
         "Roads",
         shader_path.as_path(),
         PipelineOptions {
             topology: TriangleList,
-            depth_stencil: Some(road_depth_stencil(preview_bias)),
+            depth_stencil: Some(road_depth_stencil(preview_bias, settings)),
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
@@ -1719,7 +1895,11 @@ fn render_terrain(
         DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: true,
-            depth_compare: CompareFunction::LessEqual,
+            depth_compare: if settings.reversed_depth_z {
+                CompareFunction::GreaterEqual
+            } else {
+                CompareFunction::LessEqual
+            },
             stencil: StencilState {
                 front: StencilFaceState {
                     compare: CompareFunction::Always,
@@ -1759,7 +1939,7 @@ fn render_terrain(
         pipelines,
         settings,
     );
-    terrain_renderer.render(pass, camera, aspect, false);
+    terrain_renderer.render(pass, camera, aspect, settings, false);
 
     pass.set_stencil_reference(1);
     render_manager.render(
@@ -1780,7 +1960,7 @@ fn render_terrain(
         pipelines,
         settings,
     );
-    terrain_renderer.render(pass, camera, aspect, true);
+    terrain_renderer.render(pass, camera, aspect, settings, true);
 }
 
 fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {

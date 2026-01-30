@@ -1,3 +1,4 @@
+use crate::data::Settings;
 use crate::renderer::astronomy::{AstronomyState, TimeScales};
 use crate::ui::ui_editor::UiButtonLoader;
 use std::collections::HashMap;
@@ -167,6 +168,7 @@ pub fn update_ui_variables(
     time_scales: &TimeScales,
     astronomy: &AstronomyState,
     obliquity: f32,
+    settings: &Settings,
 ) {
     ui_loader
         .variables
@@ -187,4 +189,7 @@ pub fn update_ui_variables(
     ui_loader
         .variables
         .set_f32("moon_phase", astronomy.moon_phase);
+    ui_loader
+        .variables
+        .set_bool("reversed_depth_z", settings.reversed_depth_z);
 }

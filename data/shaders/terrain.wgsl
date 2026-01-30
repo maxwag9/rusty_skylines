@@ -15,6 +15,9 @@ struct Uniforms {
     _pad_cam: vec2<i32>,
     moon_direction: vec3<f32>,
     orbit_radius: f32,
+    reversed_depth_z: u32,
+    shadows_enabled: u32,
+    _pad_2: vec2<u32>,     // padding to 16 bytes
 };
 
 struct PickUniform {
@@ -34,10 +37,10 @@ struct PickUniform {
 @group(1) @binding(1) var<uniform> pick: PickUniform;
 
 struct VertexIn {
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) color: vec4<f32>,
-    @location(3) chunk_xz: vec2<i32>,
+    @location(0) chunk_xz: vec2<i32>,
+    @location(1) position: vec3<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) color: vec4<f32>,
     @location(4) quad_uv: vec2<f32>,  // NEW: 0-1 within each quad
 };
 
@@ -305,14 +308,19 @@ fn shadow_for_cascade(
         return 1.0;
     }
     // If shadow map is cleared/unused, NO SHADOW1!
-    if (z >= 0.9999) {
+    if (uniforms.shadows_enabled == 0u) {
         return 1.0;
     }
 
     let ndotl = saturate(dot(N, L));
     let bias = BASE_BIAS + SLOPE_BIAS * (1.0 - ndotl);
 
-    return shadow_pcf(cascade, uv, z - bias);
+    var ref_depth = z + bias; // reversed_z
+    if (uniforms.reversed_depth_z == 0u) {
+        ref_depth = z - bias;
+    }  // LessEqual
+
+    return shadow_pcf(cascade, uv, clamp(ref_depth, 0.0, 1.0));
 }
 
 fn cascade_edge_fade(cascade: u32, world_pos: vec3<f32>) -> f32 {

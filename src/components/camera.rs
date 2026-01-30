@@ -1,3 +1,4 @@
+use crate::data::Settings;
 use crate::positions::*;
 use crate::renderer::world_renderer::TerrainRenderer;
 use glam::{Mat4, Vec3};
@@ -41,12 +42,16 @@ impl Camera {
         )
     }
 
-    pub fn matrices(&self, aspect: f32) -> (Mat4, Mat4, Mat4) {
+    pub fn matrices(&self, aspect: f32, settings: &Settings) -> (Mat4, Mat4, Mat4) {
         let eye = Vec3::ZERO;
         let target = -self.orbit_offset();
 
         let view = Mat4::look_at_rh(eye, target, Vec3::Y);
-        let proj = Mat4::perspective_rh(self.fov.to_radians(), aspect, self.near, self.far);
+        let proj = if settings.reversed_depth_z {
+            Mat4::perspective_infinite_reverse_rh(self.fov.to_radians(), aspect, self.near)
+        } else {
+            Mat4::perspective_rh(self.fov.to_radians(), aspect, self.near, self.far)
+        };
 
         (view, proj, proj * view)
     }

@@ -1,4 +1,5 @@
 use crate::components::camera::Camera;
+use crate::data::Settings;
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::resources::Uniforms;
@@ -111,15 +112,6 @@ impl ToneMappingUniforms {
         }
     }
 }
-pub struct RenderPipelineState {
-    pub shader: ShaderAsset,
-    pub pipeline: RenderPipeline,
-}
-
-pub struct ComputePipelineState {
-    pub shader: ShaderAsset,
-    pub pipeline: ComputePipeline,
-}
 pub struct GpuResourceSet {
     pub _bind_group_layout: BindGroupLayout,
     pub _bind_group: BindGroup,
@@ -148,6 +140,10 @@ pub struct Pipelines {
     pub msaa_normal_texture: Texture,
     pub resolved_normal_view: TextureView,
     pub resolved_normal_texture: Texture,
+    pub _ssao_texture: Texture,
+    pub ssao_view: TextureView,
+    pub _ssao_blur_texture: Texture,
+    pub ssao_blur_view: TextureView,
     pub depth_texture: Texture,
     pub depth_view: TextureView,
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
@@ -161,12 +157,11 @@ pub struct Pipelines {
     pub fog_uniforms: GpuResourceSet,
     pub tonemapping_uniforms: GpuResourceSet,
     pub pick_uniforms: GpuResourceSet,
-    pub depth_debug_uniforms: GpuResourceSet,
+    pub ssao_uniforms: GpuResourceSet,
 
     pub water_mesh_buffers: MeshBuffers,
     pub stars_mesh_buffers: MeshBuffers,
-    pub gizmo_mesh_buffers: MeshBuffers,
-    pub grass_texture_resources: GpuResourceSet,
+
     pub uniforms_cpu: Uniforms,
 }
 
@@ -174,10 +169,10 @@ impl Pipelines {
     pub fn new(
         device: &Device,
         config: &SurfaceConfiguration,
-        msaa_samples: u32,
         camera: &Camera,
-        shadow_map_size: u32,
+        settings: &Settings,
     ) -> anyhow::Result<Self> {
+        let msaa_samples = settings.msaa_samples;
         // Create render targets
         let (msaa_hdr_texture, msaa_hdr_view, msaa_normal_texture, msaa_normal_view) =
             create_msaa_targets(&device, &config, msaa_samples);
@@ -189,22 +184,21 @@ impl Pipelines {
         ) = create_resolved_targets(&device, &config, msaa_samples);
         let (depth_texture, depth_view, depth_sample_view) =
             create_depth_texture(device, config, msaa_samples);
-        let csm = create_csm_shadow_texture(device, shadow_map_size, "Sun CSM"); // 2048 or 4096
-        // Load all shaders
-        let shaders = load_all_shaders(device)?;
+        let (ssao_texture, ssao_view, ssao_blur_texture, ssao_blur_view) =
+            create_ssao_textures(device, config);
+        let csm = create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM"); // 2048 or 4096
 
-        let (uniforms_set, uniforms_cpu) = create_camera_uniforms(device, camera, config);
+        let (uniforms_set, uniforms_cpu) = create_camera_uniforms(device, camera, config, settings);
         let sky_uniforms = create_sky_uniforms(device);
         let fog_uniforms = create_fog_uniforms(device);
         let tonemapping_uniforms = create_tonemapping_uniforms(device);
         let pick_uniforms = create_pick_uniforms(device);
-        let depth_debug_uniforms = create_depth_debug_uniforms(device, camera, msaa_samples);
+        let ssao_uniforms = create_ssao_uniforms(device, camera, settings);
         //let road_uniforms = create_road_uniforms(device);
         let water_uniforms = create_water_uniforms(device, &sky_uniforms.buffer);
         let water_mesh = create_water_mesh(device);
         let gizmo_mesh = create_gizmo_mesh(device);
         let stars_mesh = create_stars_mesh(device);
-        let grass_texture_resources = create_grass_texture_resources(device, config);
 
         let this = Self {
             device: device.clone(),
@@ -216,6 +210,10 @@ impl Pipelines {
             msaa_normal_view,
             resolved_normal_view,
             resolved_normal_texture,
+            _ssao_texture: ssao_texture,
+            ssao_view,
+            _ssao_blur_texture: ssao_blur_texture,
+            ssao_blur_view,
             depth_texture,
             depth_view,
             depth_sample_view,
@@ -228,14 +226,12 @@ impl Pipelines {
             fog_uniforms,
             tonemapping_uniforms,
             pick_uniforms,
-            depth_debug_uniforms,
 
+            ssao_uniforms,
             water_mesh_buffers: water_mesh,
-            gizmo_mesh_buffers: gizmo_mesh,
 
             stars_mesh_buffers: stars_mesh,
 
-            grass_texture_resources,
             uniforms_cpu,
         };
 
@@ -401,27 +397,39 @@ fn create_depth_texture(
     (texture, attachment_view, depth_only_view)
 }
 
-pub fn create_grass_texture(
-    device: &Device,
-    config: &SurfaceConfiguration,
-) -> (Texture, TextureView) {
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("Grass Texture"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm, // NOT sRGB
-        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
+pub const SSAO_FORMAT: wgpu::TextureFormat = TextureFormat::R32Float;
 
-    let view = texture.create_view(&TextureViewDescriptor::default());
-    (texture, view)
+fn create_ssao_textures(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> (
+    wgpu::Texture,
+    wgpu::TextureView,
+    wgpu::Texture,
+    wgpu::TextureView,
+) {
+    let make = |label: &str| {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1, // IMPORTANT: AO is single-sample
+            dimension: wgpu::TextureDimension::D2,
+            format: SSAO_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    };
+
+    let (ssao_tex, ssao_view) = make("SSAO Texture");
+    let (ssao_blur_tex, ssao_blur_view) = make("SSAO Blurred Texture");
+    (ssao_tex, ssao_view, ssao_blur_tex, ssao_blur_view)
 }
 
 pub fn make_new_uniforms_csm(
@@ -434,6 +442,7 @@ pub fn make_new_uniforms_csm(
     light_view_proj: [Mat4; CSM_CASCADES],
     cascade_splits: [f32; 4],
     camera: &Camera,
+    settings: &Settings,
 ) -> Uniforms {
     let eye = camera.eye_world();
     Uniforms {
@@ -455,5 +464,8 @@ pub fn make_new_uniforms_csm(
         _pad_cam: [1, 1],
         moon_direction: moon.to_array(),
         orbit_radius: camera.orbit_radius,
+        reversed_depth_z: settings.reversed_depth_z as u32,
+        shadows_enabled: settings.shadows_enabled as u32,
+        _pad_2: [0, 0],
     }
 }

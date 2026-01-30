@@ -13,16 +13,18 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     lighting_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
-
+    cascade_splits: vec4<f32>,
     sun_direction: vec3<f32>,
     time: f32,
-
-    camera_pos: vec3<f32>,
-    orbit_radius: f32,
-
+    camera_local: vec3<f32>,
+    chunk_size: f32,
+    camera_chunk: vec2<i32>,
+    _pad_cam: vec2<i32>,
     moon_direction: vec3<f32>,
-    shadow_cascade_index: u32,     // used only during shadow rendering
+    orbit_radius: f32,
+    reversed_depth_z: u32,
+    _pad_1: u32,
+    _pad_2: vec2<u32>,     // padding to 16 bytes
 };
 
 struct SkyUniform {
@@ -42,13 +44,6 @@ struct SkyUniform {
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(1) var<uniform> water: WaterUniform;
 @group(1) @binding(2) var<uniform> sky: SkyUniform;
-
-fn get_orbit_target() -> vec3<f32> {
-    // Camera forward in world space (-Z of inv_view)
-    let forward = normalize(-uniforms.inv_view[2].xyz);
-
-    return uniforms.camera_pos + forward * uniforms.orbit_radius;
-}
 
 fn hash2(p: vec2<i32>) -> f32 {
     let pf = vec2<f32>(f32(p.x), f32(p.y));
@@ -138,14 +133,21 @@ struct VSOut {
 
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>) -> VSOut {
-    var wp = vec3<f32>(pos.x, water.sea_level, pos.z);
-
     var out: VSOut;
-    let target_pos = get_orbit_target();
-    wp.x += target_pos.x;
-    wp.z += target_pos.z;
-    out.world = wp;
-    out.pos = uniforms.view_proj * vec4<f32>(wp, 1.0);
+
+    // Camera-relative XZ placement
+    let world_xz =
+        vec2<f32>(pos.x, pos.z) +
+        uniforms.camera_local.xz;
+
+    // Absolute height
+    let world_y = water.sea_level;
+
+    let world_pos = vec3<f32>(world_xz.x, world_y, world_xz.y);
+
+    out.world = world_pos;
+
+    out.pos = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
     return out;
 }
 
@@ -158,15 +160,24 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let sun_elev = sun_dir.y;
     let moon_elev = moon_dir.y;
 
+    let wave_xz = in.world.xz + vec2<f32>(uniforms.camera_chunk) * uniforms.chunk_size; // For noise
+
     let sun_vis = smoothstep(-0.05, 0.02, sun_elev);
     let moon_vis = smoothstep(-0.05, 0.02, moon_elev);
 
     // 0 = deep night, 0.5 = horizon, 1 = midday
     let sun_height = clamp(sun_elev * 0.5 + 0.5, 0.0, 1.0);
 
-    let cam_pos = uniforms.camera_pos;
+    // Camera in the SAME space as in.world
+    let cam_pos = vec3<f32>(
+        uniforms.camera_local.x,
+        uniforms.camera_local.y,
+        uniforms.camera_local.z
+    );
+
     let to_cam = normalize(cam_pos - in.world);
     let dist = length(cam_pos - in.world);
+
 
     let t = uniforms.time * 300.0;
 
@@ -237,7 +248,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     // Body color
     let base_water = water.color.rgb;
     let depth_noise =
-        fbm(in.world.xz * tile_lod * 0.6, t * 0.2, strength * 0.5) * 0.5 + 0.5;
+        fbm(wave_xz * tile_lod * 0.6, t * 0.2, strength * 0.5) * 0.5 + 0.5;
 
     let view_down = clamp(n.y, 0.0, 1.0);
     let view_tint = smoothstep(0.2, 1.0, view_down);
@@ -292,7 +303,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 
     // Foam
     let slope = length(n.xz);
-    let foam_noise = fbm(in.world.xz * tile_lod * 1.3, t * 0.6, strength * 1.3);
+    let foam_noise = fbm(wave_xz * tile_lod * 1.3, t * 0.6, strength * 1.3);
     let foam_edges = smoothstep(0.7, 1.0, slope + foam_noise * 0.4);
     let foam_dist_fade = 1.0 - clamp(dist / 2500.0, 0.0, 1.0);
     let foam = foam_edges * foam_dist_fade * (1.0 - detail_lod);

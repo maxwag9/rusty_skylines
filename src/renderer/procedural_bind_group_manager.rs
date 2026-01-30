@@ -24,8 +24,10 @@ pub enum FullscreenPassType {
     Normal,
     /// 1 depth texture (no sampler; can be MSAA or not)
     Fog,
-    /// 1 depth texture, 1 normal texture (no sampler; can be MSAA or not)
-    Ssao,
+    // /// 1 depth texture, 1 normal texture (no sampler; can be MSAA or not)
+    SsaoGen,
+    SsaoBlur,
+    SsaoApply,
 }
 
 #[derive(Eq, Hash, PartialEq, Clone, Copy, Debug)]
@@ -46,6 +48,7 @@ pub struct MaterialBindGroupManager {
     device: Device,
     sampler: Sampler,
     shadow_sampler: Sampler,
+    shadow_sampler_reversed_z: Sampler,
     shadows_off_sampler: Sampler,
 
     layout_cache: HashMap<(usize, bool, FullscreenLayoutKey), BindGroupLayout>,
@@ -75,6 +78,16 @@ impl MaterialBindGroupManager {
             compare: Some(CompareFunction::LessEqual),
             ..Default::default()
         });
+        let shadow_sampler_reversed_z = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Shadow Sampler (Reversed-Z)"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Nearest,
+            compare: Some(CompareFunction::GreaterEqual), // <-- important
+            ..Default::default()
+        });
         let shadows_off_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Shadows Off Sampler"),
             address_mode_u: AddressMode::ClampToEdge,
@@ -89,6 +102,7 @@ impl MaterialBindGroupManager {
             device,
             sampler,
             shadow_sampler,
+            shadow_sampler_reversed_z,
             shadows_off_sampler,
             layout_cache: HashMap::new(),
             bind_group_cache: HashMap::new(),
@@ -97,15 +111,16 @@ impl MaterialBindGroupManager {
     pub fn clear_bind_groups(&mut self) {
         self.bind_group_cache.clear();
     }
+
     fn fullscreen_key(
         fullscreen_pass: FullscreenPassType,
-        msaa_samples: u32,
+        msaa_samples_for_input: u32,
     ) -> FullscreenLayoutKey {
-        // Fog input is MSAA when rendering with MSAA (like fog).
         let input_multisampled = matches!(
             fullscreen_pass,
-            FullscreenPassType::Fog | FullscreenPassType::Ssao
-        ) && msaa_samples > 1;
+            FullscreenPassType::Fog | FullscreenPassType::SsaoGen | FullscreenPassType::SsaoBlur
+        ) && msaa_samples_for_input > 1;
+
         FullscreenLayoutKey {
             pass: fullscreen_pass,
             input_multisampled,
@@ -157,9 +172,17 @@ impl MaterialBindGroupManager {
                 assert_eq!(views.len(), 1);
                 1
             }
-            FullscreenPassType::Ssao => {
+            FullscreenPassType::SsaoGen => {
                 assert_eq!(views.len(), 2);
                 2
+            }
+            FullscreenPassType::SsaoBlur => {
+                assert_eq!(views.len(), 3);
+                3
+            }
+            FullscreenPassType::SsaoApply => {
+                assert_eq!(views.len(), 1);
+                1
             }
         };
 
@@ -246,8 +269,8 @@ impl MaterialBindGroupManager {
                         count: None,
                     });
                 }
-                FullscreenPassType::Ssao => {
-                    // depth (this IS multisampled when msaa_samples > 1)
+                FullscreenPassType::SsaoGen => {
+                    // depth (MSAA depending on fk)
                     entries.push(BindGroupLayoutEntry {
                         binding: 0,
                         visibility: ShaderStages::FRAGMENT,
@@ -259,14 +282,66 @@ impl MaterialBindGroupManager {
                         count: None,
                     });
 
-                    // normals (resolved normals = single-sample)
+                    // normals (resolved normals are single-sample)
                     entries.push(BindGroupLayoutEntry {
                         binding: 1,
                         visibility: ShaderStages::FRAGMENT,
                         ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Float { filterable: false }, // <-- use false
+                            sample_type: TextureSampleType::Float { filterable: false },
                             view_dimension: TextureViewDimension::D2,
-                            multisampled: false, // <-- not MSAA)
+                            multisampled: false,
+                        },
+                        count: None,
+                    });
+                }
+
+                FullscreenPassType::SsaoBlur => {
+                    // ao input (single-sample)
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    });
+
+                    // depth (MSAA depending on fk)
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Depth,
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: fullscreen.input_multisampled,
+                        },
+                        count: None,
+                    });
+
+                    // normals (single-sample resolved)
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    });
+                }
+
+                FullscreenPassType::SsaoApply => {
+                    // blurred AO input (single-sample)
+                    entries.push(BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
                         },
                         count: None,
                     });
@@ -358,7 +433,7 @@ impl MaterialBindGroupManager {
                         resource: BindingResource::TextureView(views[0]),
                     });
                 }
-                FullscreenPassType::Ssao => {
+                FullscreenPassType::SsaoGen => {
                     entries.push(BindGroupEntry {
                         binding: 0,
                         resource: BindingResource::TextureView(views[0]),
@@ -366,6 +441,28 @@ impl MaterialBindGroupManager {
                     entries.push(BindGroupEntry {
                         binding: 1,
                         resource: BindingResource::TextureView(views[1]),
+                    });
+                }
+
+                FullscreenPassType::SsaoBlur => {
+                    entries.push(BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(views[0]),
+                    }); // ao
+                    entries.push(BindGroupEntry {
+                        binding: 1,
+                        resource: BindingResource::TextureView(views[1]),
+                    }); // depth
+                    entries.push(BindGroupEntry {
+                        binding: 2,
+                        resource: BindingResource::TextureView(views[2]),
+                    }); // normals
+                }
+
+                FullscreenPassType::SsaoApply => {
+                    entries.push(BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(views[0]),
                     });
                 }
                 FullscreenPassType::None => {
@@ -386,13 +483,17 @@ impl MaterialBindGroupManager {
                         resource: BindingResource::TextureView(shadow_array_view),
                     });
 
+                    let shadow_samp = if !settings.shadows_enabled {
+                        &self.shadows_off_sampler
+                    } else if settings.reversed_depth_z {
+                        &self.shadow_sampler_reversed_z
+                    } else {
+                        &self.shadow_sampler
+                    };
+
                     entries.push(BindGroupEntry {
                         binding: (material_count + 2) as u32,
-                        resource: BindingResource::Sampler(if settings.shadows_enabled {
-                            &self.shadow_sampler
-                        } else {
-                            &self.shadows_off_sampler
-                        }),
+                        resource: BindingResource::Sampler(shadow_samp),
                     });
                 }
             }

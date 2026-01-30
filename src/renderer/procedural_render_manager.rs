@@ -10,7 +10,119 @@ use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use wgpu::*;
+const FULLSCREEN_SHADER_SOURCE_GRAY_FROM_RED: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
 
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx & 1u) * 2 - 1);
+    let y = f32(i32(idx >> 1u) * 2 - 1);
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>(x * 0.5 + 0.5, 0.5 - y * 0.5);
+    return out;
+}
+
+@group(0) @binding(0) var t_tex: texture_2d<f32>;
+@group(0) @binding(1) var s_tex: sampler;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let c = textureSample(t_tex, s_tex, in.uv);
+    let v = c.r;
+    return vec4<f32>(v, v, v, 1.0);
+}
+"#;
+
+const FULLSCREEN_SHADER_SOURCE_UNFILTERABLE_GRAY_FROM_RED: &str = r#"
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
+    var positions = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+    );
+
+    var uvs = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+    );
+
+    var out: VsOut;
+    out.pos = vec4<f32>(positions[vid], 0.0, 1.0);
+    out.uv = uvs[vid];
+    return out;
+}
+
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let c = textureSampleLevel(tex, samp, in.uv, 0.0);
+    let v = c.r;
+    return vec4<f32>(v, v, v, 1.0);
+}
+"#;
+
+pub const FULLSCREEN_COLOR_MSAA_SHADER_GRAY_FROM_RED: &str = r#"
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
+    var positions = array<vec2<f32>, 4>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0,  1.0),
+    );
+
+    var uvs = array<vec2<f32>, 4>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+    );
+
+    var out: VsOut;
+    out.pos = vec4<f32>(positions[vid], 0.0, 1.0);
+    out.uv = uvs[vid];
+    return out;
+}
+
+@group(0) @binding(0) var tex_msaa: texture_multisampled_2d<f32>;
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let dims_u: vec2<u32> = textureDimensions(tex_msaa);
+    let dims: vec2<f32> = vec2<f32>(f32(dims_u.x), f32(dims_u.y));
+
+    var p = vec2<i32>(
+        i32(in.uv.x * dims.x),
+        i32(in.uv.y * dims.y),
+    );
+    p.x = clamp(p.x, 0, i32(dims_u.x) - 1);
+    p.y = clamp(p.y, 0, i32(dims_u.y) - 1);
+
+    let c = textureLoad(tex_msaa, p, 0);
+    let v = c.r;
+    return vec4<f32>(v, v, v, 1.0);
+}
+"#;
 const FULLSCREEN_SHADER_SOURCE: &str = r#"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -57,7 +169,11 @@ struct DepthDebugParams {
 
 // wgpu/WebGPU depth is 0..1. This is the D3D/Vulkan linearization.
 fn linearize_depth_01(d01: f32, near: f32, far: f32) -> f32 {
-    return (near * far) / (far - d01 * (far - near));
+    if (u.reversed_z != 0) {
+        return near / d01;
+    } else {
+        return (near * far) / (far - d01 * (far - near));
+    }
 }
 
 @vertex
@@ -73,12 +189,6 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var d = textureSample(t_depth, s_depth, in.uv);
-
-    // If reversed-z (near=1, far=0), flip for linearization:
-    if (u.reversed_z != 0u) {
-        d = 1.0 - d;
-    }
-
     let z = linearize_depth_01(d, u.near, u.far);
     // Normalize and make “near bright” like your pow(d,20) did:
     let v01 = 1.0 - clamp(z / u.far, 0.0, 1.0);
@@ -392,11 +502,18 @@ struct PipelineCacheKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FullscreenDebugSwizzle {
+    None,
+    RedToRgb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FullscreenPipelineKey {
-    msaa_samples: u32, // output render target MSAA
+    msaa_samples: u32, // output
     target_format: TextureFormat,
-    kind: FullscreenDebugKind, // based on source format class
-    src_multisampled: bool,    // NEW: source texture view samples > 1
+    kind: FullscreenDebugKind,
+    src_multisampled: bool,
+    swizzle: FullscreenDebugSwizzle, // NEW
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -434,8 +551,11 @@ pub struct PipelineManager {
     fog_pipeline_cache: HashMap<FogPipelineCacheKey, RenderPipeline>,
     fog_depth_layout: Option<BindGroupLayout>,
     fog_depth_layout_msaa: Option<BindGroupLayout>,
-    fullscreen_color_unfilterable_bgl: wgpu::BindGroupLayout,
-    fullscreen_color_unfilterable_shader: wgpu::ShaderModule,
+    fullscreen_color_unfilterable_bgl: BindGroupLayout,
+    fullscreen_color_unfilterable_shader: ShaderModule,
+    fullscreen_color_shader_gray_from_red: ShaderModule,
+    fullscreen_color_unfilterable_shader_gray_from_red: ShaderModule,
+    fullscreen_color_msaa_shader_gray_from_red: ShaderModule,
 }
 
 impl PipelineManager {
@@ -565,6 +685,25 @@ impl PipelineManager {
                     count: None,
                 }],
             });
+        let fullscreen_color_shader_gray_from_red =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Fullscreen Color Preview Shader (Gray from Red)"),
+                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE_GRAY_FROM_RED.into()),
+            });
+
+        let fullscreen_color_unfilterable_shader_gray_from_red =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Fullscreen Color Preview Shader Unfilterable (Gray from Red)"),
+                source: wgpu::ShaderSource::Wgsl(
+                    FULLSCREEN_SHADER_SOURCE_UNFILTERABLE_GRAY_FROM_RED.into(),
+                ),
+            });
+
+        let fullscreen_color_msaa_shader_gray_from_red =
+            device.create_shader_module(ShaderModuleDescriptor {
+                label: Some("Fullscreen Color MSAA Preview Shader (Gray from Red)"),
+                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_COLOR_MSAA_SHADER_GRAY_FROM_RED.into()),
+            });
         Self {
             device,
             queue,
@@ -585,8 +724,11 @@ impl PipelineManager {
             fog_depth_layout_msaa: None,
             fullscreen_color_unfilterable_bgl,
             fullscreen_color_unfilterable_shader,
+            fullscreen_color_shader_gray_from_red,
+            fullscreen_color_unfilterable_shader_gray_from_red,
             fullscreen_depth_msaa_bgl,
             fullscreen_depth_msaa_shader,
+            fullscreen_color_msaa_shader_gray_from_red,
         }
     }
     pub fn fullscreen_debug_bgl(
@@ -612,14 +754,16 @@ impl PipelineManager {
         &mut self,
         kind: FullscreenDebugKind,
         src_multisampled: bool,
+        swizzle: FullscreenDebugSwizzle,
         msaa_samples: u32, // OUTPUT target MSAA
-        target_format: wgpu::TextureFormat,
-    ) -> &wgpu::RenderPipeline {
+        target_format: TextureFormat,
+    ) -> &RenderPipeline {
         let key = FullscreenPipelineKey {
             msaa_samples,
             target_format,
             kind,
             src_multisampled,
+            swizzle,
         };
 
         // 1) Fast path: already cached (only immutably borrows the cache for this statement)
@@ -635,36 +779,79 @@ impl PipelineManager {
         // 3) Create pipeline using only short-lived immutable borrows (in this block)
         let pipeline = {
             // Pick shader + BGL0
-            let (shader, bgl0, label): (&wgpu::ShaderModule, &wgpu::BindGroupLayout, &str) =
-                match (kind, src_multisampled) {
-                    (FullscreenDebugKind::Depth, false) => (
+            let (shader, bgl0, label): (&ShaderModule, &BindGroupLayout, &str) =
+                match (kind, src_multisampled, swizzle) {
+                    (FullscreenDebugKind::Depth, false, _) => (
                         &self.fullscreen_depth_shader,
                         &self.fullscreen_depth_bgl,
                         "Fullscreen Depth Debug Pipeline",
                     ),
-                    (FullscreenDebugKind::Depth, true) => (
+                    (FullscreenDebugKind::Depth, true, _) => (
                         &self.fullscreen_depth_msaa_shader,
                         &self.fullscreen_depth_msaa_bgl,
                         "Fullscreen Depth MSAA Debug Pipeline",
                     ),
 
-                    (FullscreenDebugKind::FloatFilterable, false) => (
-                        &self.fullscreen_color_shader,
+                    (FullscreenDebugKind::FloatFilterable, false, FullscreenDebugSwizzle::None) => {
+                        (
+                            &self.fullscreen_color_shader,
+                            &self.fullscreen_color_bgl,
+                            "Fullscreen Color Debug Pipeline (Filterable Float)",
+                        )
+                    }
+                    (
+                        FullscreenDebugKind::FloatFilterable,
+                        false,
+                        FullscreenDebugSwizzle::RedToRgb,
+                    ) => (
+                        &self.fullscreen_color_shader_gray_from_red,
                         &self.fullscreen_color_bgl,
-                        "Fullscreen Color Debug Pipeline (Filterable Float)",
+                        "Fullscreen Color Debug Pipeline (Filterable Float, Gray from Red)",
                     ),
-                    (FullscreenDebugKind::FloatUnfilterable, false) => (
+
+                    (
+                        FullscreenDebugKind::FloatUnfilterable,
+                        false,
+                        FullscreenDebugSwizzle::None,
+                    ) => (
                         &self.fullscreen_color_unfilterable_shader,
                         &self.fullscreen_color_unfilterable_bgl,
                         "Fullscreen Color Debug Pipeline (Unfilterable Float)",
                     ),
+                    (
+                        FullscreenDebugKind::FloatUnfilterable,
+                        false,
+                        FullscreenDebugSwizzle::RedToRgb,
+                    ) => (
+                        &self.fullscreen_color_unfilterable_shader_gray_from_red,
+                        &self.fullscreen_color_unfilterable_bgl,
+                        "Fullscreen Color Debug Pipeline (Unfilterable Float, Gray from Red)",
+                    ),
 
-                    // MSAA color uses textureLoad; one MSAA color shader/BGL is enough.
-                    (FullscreenDebugKind::FloatFilterable, true)
-                    | (FullscreenDebugKind::FloatUnfilterable, true) => (
+                    (FullscreenDebugKind::FloatFilterable, true, FullscreenDebugSwizzle::None)
+                    | (
+                        FullscreenDebugKind::FloatUnfilterable,
+                        true,
+                        FullscreenDebugSwizzle::None,
+                    ) => (
                         &self.fullscreen_color_msaa_shader,
                         &self.fullscreen_color_msaa_bgl,
                         "Fullscreen Color MSAA Debug Pipeline",
+                    ),
+
+                    (
+                        FullscreenDebugKind::FloatFilterable,
+                        true,
+                        FullscreenDebugSwizzle::RedToRgb,
+                    )
+                    | (
+                        FullscreenDebugKind::FloatUnfilterable,
+                        true,
+                        FullscreenDebugSwizzle::RedToRgb,
+                    ) => (
+                        &self.fullscreen_color_msaa_shader_gray_from_red,
+                        &self.fullscreen_color_msaa_bgl,
+                        "Fullscreen Color MSAA Debug Pipeline (Gray from Red)",
                     ),
                 };
 
@@ -691,7 +878,7 @@ impl PipelineManager {
             };
 
             self.device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                .create_render_pipeline(&RenderPipelineDescriptor {
                     label: Some(&format!("{label} -> {target_format:?}")),
                     layout: Some(&pipeline_layout),
                     vertex: wgpu::VertexState {
@@ -1276,22 +1463,40 @@ impl RenderManager {
             }
             FullscreenPassType::Normal => (vec![&pipelines.resolved_hdr_view], 1usize),
             FullscreenPassType::Fog => (vec![&pipelines.depth_sample_view], 1usize),
-            FullscreenPassType::Ssao => (
+            FullscreenPassType::SsaoGen => (
                 vec![
                     &pipelines.depth_sample_view,
                     &pipelines.resolved_normal_view,
                 ],
                 2usize,
             ),
-        };
 
+            FullscreenPassType::SsaoBlur => (
+                vec![
+                    &pipelines.ssao_view,
+                    &pipelines.depth_sample_view,
+                    &pipelines.resolved_normal_view,
+                ],
+                3usize,
+            ),
+
+            FullscreenPassType::SsaoApply => (vec![&pipelines.ssao_blur_view], 1usize),
+        };
+        let msaa_samples_for_layout = match options.fullscreen_pass {
+            FullscreenPassType::Fog
+            | FullscreenPassType::SsaoGen
+            | FullscreenPassType::SsaoBlur => {
+                pipelines.depth_texture.sample_count() // this is your scene MSAA
+            }
+            _ => options.msaa_samples, // output MSAA
+        };
         let material_layout = self
             .material_manager
             .get_layout(
                 material_count_for_layout,
                 options.shadow_pass,
                 options.fullscreen_pass,
-                options.msaa_samples,
+                msaa_samples_for_layout,
             )
             .clone();
 
@@ -1301,7 +1506,7 @@ impl RenderManager {
             &pipelines.cascaded_shadow_map.array_view,
             options.shadow_pass,
             options.fullscreen_pass,
-            options.msaa_samples,
+            msaa_samples_for_layout,
             settings,
         );
 
@@ -1350,6 +1555,7 @@ impl RenderManager {
         label: &str,
         target_format: TextureFormat,
         target_msaa_samples: u32,
+        swizzle: FullscreenDebugSwizzle,
         pass: &mut RenderPass,
     ) {
         let src_format = texture.texture().format();
@@ -1373,7 +1579,7 @@ impl RenderManager {
             .fullscreen_debug_bind_groups
             .entry(key)
             .or_insert_with(|| {
-                let entries: Vec<wgpu::BindGroupEntry> = match (kind, src_multisampled) {
+                let entries: Vec<BindGroupEntry> = match (kind, src_multisampled) {
                     // MSAA: textureLoad path, no sampler
                     (FullscreenDebugKind::Depth, true) => vec![wgpu::BindGroupEntry {
                         binding: 0,
@@ -1445,6 +1651,7 @@ impl RenderManager {
             .get_or_create_fullscreen_debug_pipeline(
                 kind,
                 src_multisampled,
+                swizzle,
                 target_msaa_samples,
                 target_format,
             );

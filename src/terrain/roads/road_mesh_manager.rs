@@ -92,11 +92,11 @@ pub fn chunk_z_range(chunk_id: ChunkId) -> (f32, f32) {
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct RoadVertex {
+    pub chunk_xz: [i32; 2],
     pub local_position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub material_id: u32,
-    pub chunk_xz: [i32; 2], // NEW
 }
 
 impl RoadVertex {
@@ -105,31 +105,35 @@ impl RoadVertex {
             array_stride: size_of::<RoadVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
+                // loc0 chunk_xz
+                VertexAttribute {
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    format: VertexFormat::Sint32x2,
                 },
-                wgpu::VertexAttribute {
-                    offset: 12,
+                // @location(1) chunk-local position
+                VertexAttribute {
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 8,
+                    format: VertexFormat::Float32x3,
                 },
-                wgpu::VertexAttribute {
-                    offset: 24,
+                // @location(2) normals
+                VertexAttribute {
+                    offset: 20,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: VertexFormat::Float32x3,
                 },
-                wgpu::VertexAttribute {
+                // @location(3) uv
+                VertexAttribute {
                     offset: 32,
                     shader_location: 3,
-                    format: wgpu::VertexFormat::Uint32,
+                    format: VertexFormat::Float32x2,
                 },
-                // loc4 chunk_xz
+                // @location(4) material_id
                 VertexAttribute {
+                    offset: 40,
                     shader_location: 4,
-                    offset: 36,
-                    format: VertexFormat::Sint32x2,
+                    format: VertexFormat::Uint32,
                 },
             ],
         }

@@ -1,8 +1,10 @@
 use crate::components::camera::Camera;
+use crate::data::Settings;
 use crate::renderer::astronomy::AstronomyState;
 use crate::renderer::pipelines::{
     FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
 };
+use crate::renderer::pipelines_outsource::{SsaoUniforms, make_ssao_kernel};
 use crate::renderer::shadows::{CSM_CASCADES, compute_csm_matrices};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
@@ -29,6 +31,7 @@ impl<'a> UniformUpdater<'a> {
         camera: &Camera,
         total_time: f64,
         aspect: f32,
+        settings: &Settings,
     ) -> (Uniforms, [Mat4; CSM_CASCADES], [f32; 4]) {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
         let (light_mats, splits) = compute_csm_matrices(
@@ -40,6 +43,7 @@ impl<'a> UniformUpdater<'a> {
             astronomy.sun_dir,
             /*shadow_map_size:*/ self.pipelines.cascaded_shadow_map.size,
             /*stabilize:*/ true,
+            settings.reversed_depth_z,
         );
 
         // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
@@ -53,6 +57,7 @@ impl<'a> UniformUpdater<'a> {
             light_mats,
             splits,
             camera,
+            settings,
         );
 
         self.queue.write_buffer(
@@ -127,6 +132,25 @@ impl<'a> UniformUpdater<'a> {
             &self.pipelines.water_uniforms.buffer,
             0,
             bytemuck::bytes_of(&wu),
+        );
+    }
+    pub fn update_ssao_uniforms(&self, settings: &Settings) {
+        let radius = 5.0f32;
+        let bias = 0.20f32;
+        let intensity = 1.2f32;
+        let power = 1.22f32;
+        let reversed_z = settings.reversed_depth_z as u32;
+        let noise_tile_px = 8u32;
+        let params = SsaoUniforms {
+            kernel: make_ssao_kernel(69420, 2.0),
+            params0: [radius, bias, intensity, power],
+            params1: [reversed_z, noise_tile_px, 0, 0],
+        };
+
+        self.queue.write_buffer(
+            &self.pipelines.ssao_uniforms.buffer,
+            0,
+            bytemuck::bytes_of(&params),
         );
     }
 }

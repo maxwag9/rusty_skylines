@@ -548,13 +548,13 @@ pub struct ButtonRuntime {
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct Vertex {
+pub struct Vertex {
     /// @location(0) chunk-local position
-    pub(crate) local_position: [f32; 3],
+    pub chunk_xz: [i32; 2],
+    pub local_position: [f32; 3],
     pub normal: [f32; 3],
-    pub(crate) color: [f32; 3],
-    pub(crate) chunk_xz: [i32; 2], // NEW
-    pub quad_uv: [f32; 2],         // NEW: 0-1 coordinates within each quad
+    pub color: [f32; 3],
+    pub quad_uv: [f32; 2], // NEW: 0-1 coordinates within each quad
 }
 
 impl Vertex {
@@ -564,29 +564,29 @@ impl Vertex {
             array_stride: size_of::<Vertex>() as BufferAddress,
             step_mode: VertexStepMode::Vertex,
             attributes: &[
-                // @location(0) chunk-local position
+                // loc0 chunk_xz
                 VertexAttribute {
                     shader_location: 0,
                     offset: 0,
-                    format: VertexFormat::Float32x3,
+                    format: VertexFormat::Sint32x2,
                 },
-                // @location(1) normal
+                // @location(1) chunk-local position
                 VertexAttribute {
                     shader_location: 1,
-                    offset: 12,
+                    offset: 8,
                     format: VertexFormat::Float32x3,
                 },
-                // @location(2) color
+                // @location(2) normal
                 VertexAttribute {
                     shader_location: 2,
-                    offset: 24,
+                    offset: 20,
                     format: VertexFormat::Float32x3,
                 },
-                // loc3 chunk_xz
+                // @location(3) color
                 VertexAttribute {
                     shader_location: 3,
-                    offset: 36,
-                    format: VertexFormat::Sint32x2,
+                    offset: 32,
+                    format: VertexFormat::Float32x3,
                 },
                 // @location(4) quad_uv
                 VertexAttribute {

@@ -1,56 +1,34 @@
 use crate::components::camera::Camera;
+use crate::data::Settings;
+use crate::hsv::lerp;
 use crate::mouse_ray::PickUniform;
-use crate::paths::{data_dir, shader_dir};
+use crate::paths::data_dir;
 use crate::renderer::pipelines::{
-    FogUniforms, GpuResourceSet, MeshBuffers, ShaderAsset, ToneMappingUniforms,
-    create_grass_texture, load_shader, make_dummy_buf, make_new_uniforms_csm,
+    FogUniforms, GpuResourceSet, MeshBuffers, ToneMappingUniforms, make_dummy_buf,
+    make_new_uniforms_csm,
 };
 use crate::renderer::procedural_render_manager::DepthDebugParams;
 use crate::renderer::shadows::compute_csm_matrices;
-use crate::renderer::textures::grass::{GrassParams, generate_noise};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::{SimpleVertex, WaterUniform};
 use crate::ui::vertex::LineVtxRender;
 use glam::Vec3;
+use rand::prelude::SmallRng;
+use rand::{Rng, SeedableRng};
 use std::fs;
-use wgpu::TextureFormat::Rgba8Unorm;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::*;
-
-// Helper struct to hold all shaders
-pub struct Shaders {
-    pub(crate) line: ShaderAsset,
-    pub(crate) water: ShaderAsset,
-    pub(crate) sky: ShaderAsset,
-    pub(crate) stars: ShaderAsset,
-    pub(crate) grass_texture: ShaderAsset,
-    pub(crate) road: ShaderAsset,
-}
-
-pub fn load_all_shaders(device: &Device) -> anyhow::Result<Shaders> {
-    Ok(Shaders {
-        line: load_shader(device, &shader_dir().join("lines.wgsl"), "Line Shader")?,
-        water: load_shader(device, &shader_dir().join("water.wgsl"), "Water Shader")?,
-        sky: load_shader(device, &shader_dir().join("sky.wgsl"), "Sky Shader")?,
-        stars: load_shader(device, &shader_dir().join("stars.wgsl"), "Stars Shader")?,
-        grass_texture: load_shader(
-            device,
-            &shader_dir().join("textures/grass.wgsl"),
-            "Grass Texture Shader",
-        )?,
-        road: load_shader(device, &shader_dir().join("road.wgsl"), "Road Shader")?,
-    })
-}
 
 pub fn create_camera_uniforms(
     device: &Device,
     camera: &Camera,
     config: &SurfaceConfiguration,
+    settings: &Settings,
 ) -> (GpuResourceSet, Uniforms) {
     let aspect = config.width as f32 / config.height as f32;
     let sun = Vec3::new(0.3, 1.0, 0.6).normalize();
-    let (view, proj, view_proj) = camera.matrices(aspect);
+    let (view, proj, view_proj) = camera.matrices(aspect, settings);
     // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
     let (light_mats, splits) = compute_csm_matrices(
         view,
@@ -61,6 +39,7 @@ pub fn create_camera_uniforms(
         Vec3::ONE,
         /*shadow_map_size:*/ 2048, // or the actual CSM texture size
         /*stabilize:*/ true,
+        settings.reversed_depth_z,
     );
 
     // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
@@ -74,6 +53,7 @@ pub fn create_camera_uniforms(
         light_mats,
         splits,
         camera,
+        settings,
     );
 
     let buffer = device.create_buffer_init(&BufferInitDescriptor {
@@ -349,6 +329,65 @@ pub fn create_depth_debug_uniforms(
         buffer,
     }
 }
+pub const SSAO_KERNEL_AMOUNT: usize = 32;
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SsaoUniforms {
+    pub kernel: [[f32; 4]; SSAO_KERNEL_AMOUNT],
+    pub params0: [f32; 4], // radius, bias, intensity, power
+    pub params1: [u32; 4], // reversed_z, noise_tile_px, 0, 0
+}
+pub fn create_ssao_uniforms(
+    device: &Device,
+    camera: &Camera,
+    settings: &Settings,
+) -> GpuResourceSet {
+    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("SSAO Uniform BGL"),
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let radius = 3.0f32;
+    let bias = 0.10f32;
+    let intensity = 1.0f32;
+    let power = 1.22f32;
+    let reversed_z = settings.reversed_depth_z as u32;
+    let noise_tile_px = 8u32;
+    let params = SsaoUniforms {
+        kernel: make_ssao_kernel(69420, 2.0),
+        params0: [radius, bias, intensity, power],
+        params1: [reversed_z, noise_tile_px, 0, 0],
+    };
+
+    let buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: Some("SSAO Uniform Buffer"),
+        contents: bytemuck::bytes_of(&params),
+        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+    });
+
+    let bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("SSAO Uniform BG"),
+        layout: &bind_group_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+
+    GpuResourceSet {
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
+        buffer,
+    }
+}
 pub fn create_water_uniforms(device: &Device, sky_buffer: &Buffer) -> GpuResourceSet {
     let wu = WaterUniform {
         sea_level: 0.0,
@@ -481,93 +520,33 @@ pub fn create_stars_mesh(device: &Device) -> MeshBuffers {
     }
 }
 
-pub fn create_grass_texture_resources(
-    device: &Device,
-    config: &SurfaceConfiguration,
-) -> GpuResourceSet {
-    let grass_params = GrassParams {
-        grass_color: [0.2, 0.6, 0.2, 1.0],
-        blade_density: 120.0,
-        blade_height: 0.8,
-        wind_phase: 0.0,
-        time: 0.0,
-        noise_scale: 4.0,
-        _pad: [0.0; 3],
-    };
+pub fn make_ssao_kernel(seed: u64, horizon_bias: f32) -> [[f32; 4]; SSAO_KERNEL_AMOUNT] {
+    // horizon_bias:
+    // 1.0 = uniform hemisphere
+    // 2.0..4.0 = more rays near tangent plane (often helps corners)
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let mut kernel = [[0.0f32; 4]; SSAO_KERNEL_AMOUNT];
 
-    let buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("grass_params_buffer"),
-        contents: bytemuck::bytes_of(&grass_params),
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-    });
+    for i in 0..SSAO_KERNEL_AMOUNT {
+        let u1: f32 = rng.random();
+        let u2: f32 = rng.random();
 
-    let noise_data: Vec<f32> = generate_noise(512);
-    let noise_buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("grass_noise_buffer"),
-        contents: bytemuck::cast_slice(&noise_data),
-        usage: BufferUsages::STORAGE,
-    });
+        let phi = std::f32::consts::TAU * u1;
 
-    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some("grass_texture_bgl"),
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::StorageTexture {
-                    access: StorageTextureAccess::WriteOnly,
-                    format: Rgba8Unorm,
-                    view_dimension: TextureViewDimension::D2,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 2,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-    });
+        // cos(theta) in [0..1], biased toward 0 (horizon) if horizon_bias > 1
+        let cos_theta = u2.powf(horizon_bias);
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
 
-    let (_, grass_texture_view) = create_grass_texture(&device, &config);
+        let x = sin_theta * phi.cos();
+        let y = sin_theta * phi.sin();
+        let z = cos_theta; // >= 0 hemisphere  // hemisphere (IMPORTANT) and cool, crysis had a full circle so it had some unique look
 
-    let bind_group = device.create_bind_group(&BindGroupDescriptor {
-        label: Some("Grass Texture Bind Group"),
-        layout: &bind_group_layout,
-        entries: &[
-            BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(&grass_texture_view),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: buffer.as_entire_binding(),
-            },
-            BindGroupEntry {
-                binding: 2,
-                resource: noise_buffer.as_entire_binding(),
-            },
-        ],
-    });
+        // deterministic per-sample radius scale (less grain than random scaling)
+        let fi = i as f32 / SSAO_KERNEL_AMOUNT as f32;
+        let scale = lerp(0.05, 1.0, fi * fi);
 
-    GpuResourceSet {
-        _bind_group_layout: bind_group_layout,
-        _bind_group: bind_group,
-        buffer,
+        kernel[i] = [x * scale, y * scale, z * scale, 0.0];
     }
+
+    kernel
 }

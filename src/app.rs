@@ -1,4 +1,3 @@
-use crate::data::DebugViewState;
 use crate::events::Event;
 use crate::paths::data_dir;
 use crate::renderer::world_renderer::CursorMode;
@@ -198,17 +197,10 @@ impl ApplicationHandler for App {
                 }
 
                 if input.action_repeat("Switch Debug Render Mode") {
-                    match settings.debug_view_state {
-                        DebugViewState::None => {
-                            settings.debug_view_state = DebugViewState::Normals;
-                        }
-                        DebugViewState::Normals => {
-                            settings.debug_view_state = DebugViewState::Depth;
-                        }
-                        DebugViewState::Depth => {
-                            settings.debug_view_state = DebugViewState::None;
-                        }
-                    }
+                    settings.debug_view_state = settings.debug_view_state.next();
+                }
+                if input.action_repeat("Toggle Reversed Depth Z") {
+                    settings.reversed_depth_z = !settings.reversed_depth_z;
                 }
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {

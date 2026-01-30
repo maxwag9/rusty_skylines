@@ -8,10 +8,8 @@ use crate::ui::actions::CommandQueue;
 use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::World;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use winit::keyboard::PhysicalKey;
 use winit::window::Window;
 
 pub struct CommandQueues {
@@ -159,22 +157,10 @@ pub struct Uniforms {
     pub camera_local: [f32; 3], // eye_world.local (x,y,z) where x/z are within chunk
     pub chunk_size: f32,
     pub camera_chunk: [i32; 2], // eye_world.chunk (x,z)
-    pub _pad_cam: [i32; 2],     // padding to 16 bytes
+    pub _pad_cam: [u32; 2],     // padding to 16 bytes
     pub moon_direction: [f32; 3],
     pub orbit_radius: f32,
-}
-
-fn default_keybinds() -> HashMap<PhysicalKey, String> {
-    use winit::keyboard::{KeyCode, PhysicalKey};
-
-    let mut m = HashMap::new();
-
-    m.insert(PhysicalKey::Code(KeyCode::KeyW), "editor.move_up".into());
-    m.insert(PhysicalKey::Code(KeyCode::KeyA), "editor.move_left".into());
-    m.insert(PhysicalKey::Code(KeyCode::KeyS), "editor.move_down".into());
-    m.insert(PhysicalKey::Code(KeyCode::KeyD), "editor.move_right".into());
-    m.insert(PhysicalKey::Code(KeyCode::Space), "simulation.pause".into());
-    m.insert(PhysicalKey::Code(KeyCode::Escape), "editor.cancel".into());
-
-    m
+    pub reversed_depth_z: u32,
+    pub shadows_enabled: u32,
+    pub _pad_2: [u32; 2], // padding to 16 bytes
 }

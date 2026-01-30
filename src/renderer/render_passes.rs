@@ -3,6 +3,7 @@ use wgpu::*;
 
 pub struct RenderPassConfig {
     pub background_color: Color,
+    pub reversed_z: bool,
 }
 
 impl RenderPassConfig {
@@ -14,6 +15,7 @@ impl RenderPassConfig {
                 b: settings.background_color[2] as f64,
                 a: settings.background_color[3] as f64,
             },
+            reversed_z: settings.reversed_depth_z,
         }
     }
 }
@@ -73,11 +75,15 @@ pub fn create_normal_attachment<'a>(
         }
     }
 }
-pub fn create_depth_attachment(depth_view: &TextureView) -> RenderPassDepthStencilAttachment<'_> {
+pub fn create_depth_attachment<'a>(
+    depth_view: &'a TextureView,
+    config: &RenderPassConfig,
+) -> RenderPassDepthStencilAttachment<'a> {
+    let clear_z = LoadOp::Clear(if config.reversed_z { 0.0 } else { 1.0 });
     RenderPassDepthStencilAttachment {
         view: depth_view,
         depth_ops: Some(Operations {
-            load: LoadOp::Clear(1.0),
+            load: clear_z,
             store: StoreOp::Store,
         }),
         stencil_ops: Some(Operations {

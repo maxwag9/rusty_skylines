@@ -77,17 +77,17 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
         let r = camera.orbit_radius;
 
         // Target planes
-        let min_near = 0.0001;
-        let near_scale = 0.004; // 0.2% of radius
-        let far_scale = 4000.0;
-
-        let target_near = (r * near_scale).max(min_near);
-        let target_far = (r * far_scale).max(target_near * 10.0);
-
-        // Smooth to avoid popping
-        let smooth = 1.0 - (-dt * 12.0).exp();
-        camera.near += (target_near - camera.near) * smooth;
-        camera.far += (target_far - camera.far) * smooth;
+        // let min_near = 0.0001;
+        // let near_scale = 0.004; // 0.2% of radius
+        // let far_scale = 4000.0;
+        //
+        // let target_near = (r * near_scale).max(min_near);
+        // let target_far = (r * far_scale).max(target_near * 10.0);
+        //
+        // // Smooth to avoid popping
+        // let smooth = 1.0 - (-dt * 12.0).exp();
+        // camera.near += (target_near - camera.near) * smooth;
+        // camera.far += (target_far - camera.far) * smooth;
 
         // Adaptive zoom step
         let base_step = 0.005; // meters, allows crawling near 1 m

@@ -93,18 +93,12 @@ pub fn create_csm_shadow_texture(device: &Device, size: u32, label: &str) -> Cas
 // Defaults (tweak later)
 pub const DEFAULT_SHADOW_DISTANCE: f32 = 200.0; // how far from camera to cast shadows
 
-fn camera_basis_from_view(view: Mat4) -> (Vec3, Vec3, Vec3, Vec3) {
-    // inv_view transforms view-space axes into world-space axes.
+fn camera_basis_from_view_rotation_only(view: Mat4) -> (Vec3, Vec3, Vec3) {
     let inv = view.inverse();
-
-    let eye = inv.w_axis.truncate();
     let right = inv.x_axis.truncate().normalize();
     let up = inv.y_axis.truncate().normalize();
-
-    // view space forward is -Z, so world forward = -(inv_view * +Z)
-    let forward = (-inv.z_axis.truncate()).normalize();
-
-    (eye, right, up, forward)
+    let forward = (-inv.z_axis.truncate()).normalize(); // view forward is -Z
+    (right, up, forward)
 }
 
 fn frustum_slice_corners_ws(
@@ -148,6 +142,7 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     sun_dir_surface_to_sun: Vec3,
     shadow_map_size: u32,
     stabilize: bool,
+    reversed_z: bool,
 ) -> Mat4 {
     let sun_dir_raw = sun_dir_surface_to_sun;
     let sun_dir = if sun_dir_raw.length_squared() < 1e-8 {
@@ -214,8 +209,12 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     const Z_PAD: f32 = 150.0;
     let near = (-max_z - Z_PAD).max(0.1);
     let far = (-min_z + Z_PAD).max(near + 0.1);
-
-    let light_proj = Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near, far);
+    let light_proj = if reversed_z {
+        // reversed Z: near maps to 1, far maps to 0
+        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, far, near)
+    } else {
+        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near, far)
+    };
     light_proj * light_view
 }
 pub fn cascade_splits_from_ratios(near: f32, far: f32, ratios: [f32; 4]) -> [f32; 4] {
@@ -236,13 +235,16 @@ pub fn compute_csm_matrices(
     sun_dir_surface_to_sun: Vec3,
     shadow_map_size: u32,
     stabilize: bool,
+    reversed_z: bool, // <--- add
 ) -> ([Mat4; CSM_CASCADES], [f32; 4]) {
     let shadow_far = camera_far
         .min(DEFAULT_SHADOW_DISTANCE)
         .max(camera_near + 1.0);
+
     let splits = cascade_splits_from_ratios(camera_near, shadow_far, [0.05, 0.15, 0.55, 1.0]);
 
-    let (eye, right, up, forward) = camera_basis_from_view(camera_view);
+    let (right, up, forward) = camera_basis_from_view_rotation_only(camera_view);
+    let eye = Vec3::ZERO; // IMPORTANT: camera-relative space
 
     let matrices: [Mat4; CSM_CASCADES] = std::array::from_fn(|i| {
         let slice_near = if i == 0 { camera_near } else { splits[i - 1] };
@@ -252,7 +254,7 @@ pub fn compute_csm_matrices(
             eye,
             right,
             up,
-            forward, // <-- correct
+            forward,
             camera_fov_y_radians,
             aspect,
             slice_near,
@@ -264,6 +266,7 @@ pub fn compute_csm_matrices(
             sun_dir_surface_to_sun,
             shadow_map_size,
             stabilize,
+            reversed_z, // <--- pass through
         )
     });
 
@@ -293,7 +296,11 @@ pub fn render_roads_shadows(
             depth_stencil: Some(DepthStencilState {
                 format: Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
+                depth_compare: if settings.reversed_depth_z {
+                    CompareFunction::GreaterEqual
+                } else {
+                    CompareFunction::LessEqual
+                },
                 stencil: Default::default(),
                 bias,
             }),
@@ -304,7 +311,7 @@ pub fn render_roads_shadows(
             targets: vec![],
             ..Default::default()
         },
-        &[&shadow_mat_buffer],
+        &[&pipelines.uniforms.buffer, &shadow_mat_buffer],
         pass,
         pipelines,
         settings,
@@ -339,7 +346,11 @@ pub fn render_roads_shadows(
             depth_stencil: Some(DepthStencilState {
                 format: Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
+                depth_compare: if settings.reversed_depth_z {
+                    CompareFunction::GreaterEqual
+                } else {
+                    CompareFunction::LessEqual
+                },
                 stencil: Default::default(),
                 bias: nudge_bias,
             }),
@@ -350,7 +361,7 @@ pub fn render_roads_shadows(
             targets: Vec::new(),
             ..Default::default()
         },
-        &[&shadow_mat_buffer],
+        &[&pipelines.uniforms.buffer, &shadow_mat_buffer],
         pass,
         pipelines,
         settings,
@@ -384,7 +395,11 @@ pub fn render_terrain_shadows(
             depth_stencil: Some(DepthStencilState {
                 format: Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: CompareFunction::LessEqual,
+                depth_compare: if settings.reversed_depth_z {
+                    CompareFunction::GreaterEqual
+                } else {
+                    CompareFunction::LessEqual
+                },
                 stencil: StencilState::default(),
                 bias,
             }),
@@ -395,10 +410,10 @@ pub fn render_terrain_shadows(
             targets: Vec::new(),
             ..Default::default()
         },
-        &[&shadow_mat_buffer],
+        &[&pipelines.uniforms.buffer, &shadow_mat_buffer],
         pass,
         pipelines,
         settings,
     );
-    terrain_renderer.render(pass, camera, aspect, false);
+    terrain_renderer.render(pass, camera, aspect, settings, false);
 }

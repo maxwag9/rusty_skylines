@@ -53,10 +53,24 @@ pub enum DebugViewState {
     None,
     Normals,
     Depth,
+    SsaoRaw,
+    SsaoBlurred,
 }
 impl Default for DebugViewState {
     fn default() -> Self {
         Self::None
+    }
+}
+impl DebugViewState {
+    pub fn next(&self) -> Self {
+        use DebugViewState::*;
+        match self {
+            None => Normals,
+            Normals => Depth,
+            Depth => SsaoRaw,
+            SsaoRaw => SsaoBlurred,
+            SsaoBlurred => None,
+        }
     }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -129,6 +143,8 @@ pub struct Settings {
     pub starting_menu: InternalMenu,
     #[serde(default)]
     pub lod_center: LodCenterType,
+    #[serde(default)]
+    pub reversed_depth_z: bool,
 }
 
 impl Default for Settings {
@@ -157,6 +173,7 @@ impl Default for Settings {
             debug_view_state: DebugViewState::None,
             starting_menu: InternalMenu::default(),
             lod_center: LodCenterType::default(),
+            reversed_depth_z: true,
         }
     }
 }

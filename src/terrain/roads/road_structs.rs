@@ -289,11 +289,11 @@ impl Default for RoadType {
             lane_material_id: 2, // asphalt
 
             sidewalk_width: 1.75,
-            sidewalk_height: 0.15,
+            sidewalk_height: 0.35,
             sidewalk_material_id: 0, // concrete
 
             median_width: 0.3,
-            median_height: 0.15,
+            median_height: 0.35,
             median_material_id: 0, // concrete
 
             speed_limit: 16.7,

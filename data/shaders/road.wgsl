@@ -9,12 +9,15 @@ struct Uniforms {
     cascade_splits: vec4<f32>,
     sun_direction: vec3<f32>,
     time: f32,
-    camera_local: vec3<f32>, // eye_world.local (x,y,z) where x/z are within chunk
+    camera_local: vec3<f32>,
     chunk_size: f32,
-    camera_chunk: vec2<i32>, // eye_world.chunk (x,z)
-    _pad_cam: vec2<i32>,     // padding to 16 bytes
+    camera_chunk: vec2<i32>,
+    _pad_cam: vec2<i32>,
     moon_direction: vec3<f32>,
     orbit_radius: f32,
+    reversed_depth_z: u32,
+    shadows_enabled: u32,
+    _pad_2: vec2<u32>,     // padding to 16 bytes
 };
 
 struct RoadAppearance {
@@ -22,11 +25,11 @@ struct RoadAppearance {
 }
 
 struct VertexInput {
-    @location(0) position : vec3<f32>,
-    @location(1) normal   : vec3<f32>,
-    @location(2) uv       : vec2<f32>,
-    @location(3) material_id : u32,
-    @location(4) chunk_xz: vec2<i32>, // NEW
+    @location(0) chunk_xz: vec2<i32>,
+    @location(1) position : vec3<f32>,
+    @location(2) normal   : vec3<f32>,
+    @location(3) uv       : vec2<f32>,
+    @location(4) material_id : u32,
 };
 
 struct VertexOutput {
@@ -221,14 +224,18 @@ fn shadow_for_cascade(
         return 1.0;
     }
     // If shadow map is cleared/unused, NO SHADOW1!
-    if (z >= 0.9999) {
+    if (uniforms.shadows_enabled == 0u) {
         return 1.0;
     }
 
     let ndotl = saturate(dot(N, L));
     let bias = BASE_BIAS + SLOPE_BIAS * (1.0 - ndotl);
+    var ref_depth = z + bias; // reversed_z
+    if (uniforms.reversed_depth_z == 0u) {
+        ref_depth = z - bias;
+    }  // LessEqual, normal depth Z
 
-    return shadow_pcf(cascade, uv, z - bias);
+    return shadow_pcf(cascade, uv, clamp(ref_depth, 0.0, 1.0));
 }
 
 fn cascade_edge_fade(cascade: u32, world_pos: vec3<f32>) -> f32 {

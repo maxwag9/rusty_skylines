@@ -7,16 +7,18 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     lighting_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,     // end distance of each cascade in view-space units
-
+    cascade_splits: vec4<f32>,
     sun_direction: vec3<f32>,
     time: f32,
-
-    camera_pos: vec3<f32>,
-    orbit_radius: f32,
-
+    camera_local: vec3<f32>,
+    chunk_size: f32,
+    camera_chunk: vec2<i32>,
+    _pad_cam: vec2<i32>,
     moon_direction: vec3<f32>,
-    shadow_cascade_index: u32,     // used only during shadow rendering
+    orbit_radius: f32,
+    reversed_depth_z: u32,
+    _pad_1: u32,
+    _pad_2: vec2<u32>,     // padding to 16 bytes
 };
 
 @group(1) @binding(0)
@@ -51,27 +53,34 @@ struct VSOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
-    var clip: vec4<f32>;
+    var clip_xy: vec2<f32>;
 
     if vid == 0u {
-        clip = vec4<f32>(-1.0, -1.0, 1.0, 1.0);
+        clip_xy = vec2<f32>(-1.0, -1.0);
     } else if vid == 1u {
-        clip = vec4<f32>( 3.0, -1.0, 1.0, 1.0);
+        clip_xy = vec2<f32>( 3.0, -1.0);
     } else {
-        clip = vec4<f32>(-1.0,  3.0, 1.0, 1.0);
+        clip_xy = vec2<f32>(-1.0,  3.0);
     }
 
-    // world direction reconstruction
-    let inv_vp = u.inv_view_proj;
-    let world_pos = inv_vp * clip;
-    let dir = normalize(world_pos.xyz / world_pos.w - u.camera_pos);
+    // Z = 1.0 is fine here because we are NOT using depth,
+    // only direction. Projection handles the convention.
+    let clip = vec4<f32>(clip_xy, 1.0, 1.0);
 
-    let ndc = clip.xy / clip.w;
+    // Unproject to view space (direction only)
+    let view_h = u.inv_proj * clip;
+    let view_dir = normalize(view_h.xyz / view_h.w);
 
-    return VSOut(clip, dir, ndc);
+    // Rotate into world space (ignore translation!)
+    let world_dir = normalize((u.inv_view * vec4<f32>(view_dir, 0.0)).xyz);
+
+    var out: VSOut;
+    out.clip = clip;
+    out.dir = world_dir;
+    out.ndc = clip_xy;
+
+    return out;
 }
-
-
 
 // ----------------------------------------
 // HELPERS
