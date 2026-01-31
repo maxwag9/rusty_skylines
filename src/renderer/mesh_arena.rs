@@ -59,8 +59,8 @@ impl AllocationRequest {
 pub struct MeshPage {
     pub vertex_buf: Buffer,
     pub index_buf: Buffer,
-    pub vcap: u64,
-    pub icap: u64,
+    pub _vcap: u64,
+    pub _icap: u64,
     pub free_v: Vec<FreeRange>,
     pub free_i: Vec<FreeRange>,
 }
@@ -193,8 +193,8 @@ impl TerrainMeshArena {
         self.pages.push(MeshPage {
             vertex_buf,
             index_buf,
-            vcap: self.page_v_bytes,
-            icap: self.page_i_bytes,
+            _vcap: self.page_v_bytes,
+            _icap: self.page_i_bytes,
             free_v: vec![FreeRange {
                 start: 0,
                 size: self.page_v_bytes,
@@ -265,15 +265,7 @@ impl TerrainMeshArena {
     }
 }
 
-fn align_up(x: u64, a: u64) -> u64 {
-    if a == 0 {
-        return x;
-    }
-    ((x + a - 1) / a) * a
-}
-
 // Triangle clipping logic - completely separate from allocation
-
 fn clip_triangles_by_plane<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
     indices: &[u32],
     scratch: &mut GeometryScratch<V>,

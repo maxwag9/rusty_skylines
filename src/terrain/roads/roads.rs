@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 //! roads.rs - Lane-first, 3D, topology-only road system for chunked citybuilder
 //!
 //! This module provides the canonical road topology and command API.
@@ -19,7 +20,6 @@ use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_editor::{
     IntersectionBuildParams, build_intersection_at_node, offset_polyline,
-    polyline_cumulative_lengths, sample_polyline_at,
 };
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
@@ -55,7 +55,7 @@ impl Node {
         }
     }
 
-    pub fn version(&self) -> u64 {
+    pub fn _version(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
 
         #[inline(always)]
@@ -125,12 +125,12 @@ impl Node {
         &self.node_lanes.get(node_lane_id as usize).unwrap()
     }
     #[inline]
-    pub fn attached_controls(&self) -> &[AttachedControl] {
+    pub fn _attached_controls(&self) -> &[AttachedControl] {
         &self.attached_controls
     }
     /// Returns true if the node has any active traffic control.
     #[inline]
-    pub fn has_active_control(&self) -> bool {
+    pub fn _has_active_control(&self) -> bool {
         self.attached_controls
             .iter()
             .any(|c| c.enabled && !matches!(c.control, TrafficControl::None))
@@ -985,24 +985,6 @@ pub fn sample_lane_position(
     Some(from_pos.lerp(to_pos, t, chunk_size))
 }
 
-/// Sample position along lane polyline at parameter t in [0,1].
-pub fn sample_lane_polyline_position(lane: &Lane, t: f32, chunk_size: ChunkSize) -> WorldPos {
-    let poly = lane.polyline();
-    if poly.is_empty() {
-        return WorldPos::zero();
-    }
-    if poly.len() == 1 {
-        return poly[0];
-    }
-
-    let lengths = polyline_cumulative_lengths(poly, chunk_size);
-    let total = *lengths.last().unwrap();
-    let target = t * total;
-
-    let (pos, _) = sample_polyline_at(poly, &lengths, target, chunk_size);
-    pos
-}
-
 /// Project a WorldPos onto a lane and returns (t, distance_squared).
 /// t is the parameter [0,1] along the lane; dist_sq is squared XZ distance.
 #[inline]
@@ -1049,37 +1031,13 @@ pub fn project_point_to_segment_xz(
     let t = (p.x * dx + p.z * dz) / len_sq;
     let t_clamped = t.clamp(0.0, 1.0);
 
-    // Compute closest point on segment (relative to seg_start)
+    // Compute the closest point on segment (relative to seg_start)
     let cx = t_clamped * dx;
     let cz = t_clamped * dz;
 
     let dist_sq = (p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz);
 
     (t_clamped, dist_sq)
-}
-
-/// Project point onto polyline, return (segment_index, t_in_segment, distance_squared).
-pub fn project_point_to_polyline_xz(
-    point: WorldPos,
-    polyline: &[WorldPos],
-    chunk_size: ChunkSize,
-) -> Option<(usize, f32, f32)> {
-    if polyline.len() < 2 {
-        return None;
-    }
-
-    let mut best: Option<(usize, f32, f32)> = None;
-
-    for i in 0..polyline.len() - 1 {
-        let (t, dist_sq) =
-            project_point_to_segment_xz(point, polyline[i], polyline[i + 1], chunk_size);
-
-        if best.map_or(true, |(_, _, d)| dist_sq < d) {
-            best = Some((i, t, dist_sq));
-        }
-    }
-
-    best
 }
 
 /// Finds the nearest enabled lane to a 3D point (brute force).
@@ -1808,38 +1766,6 @@ fn generate_intersection_preview(
     }
 
     commands
-}
-
-fn copy_real_node_to_preview(
-    node_id: NodeId,
-    preview_storage: &mut RoadStorage,
-    real_storage: &RoadStorage,
-) {
-    if let Some(node) = real_storage.node(node_id) {
-        if preview_storage.node(node_id).is_some() {
-            return;
-        }
-        for lane_id in node.incoming_lanes.iter().chain(node.outgoing_lanes.iter()) {
-            if !real_storage.lane_exists(lane_id) {
-                return;
-            }
-            let lane = real_storage.lane(lane_id);
-            let segment = real_storage.segment(lane.segment);
-            if segment.lanes().contains(lane_id) {
-                preview_storage.lanes.push(lane.clone());
-                preview_storage.segments.push(segment.clone());
-                let node_b = if segment.start() == node_id {
-                    real_storage.node(segment.end()).unwrap()
-                } else {
-                    real_storage.node(segment.start()).unwrap()
-                };
-                preview_storage.nodes.push(node_b.clone());
-            } else {
-                return;
-            }
-        }
-        preview_storage.nodes.push(node.clone());
-    }
 }
 
 struct PreviewIdAllocator {

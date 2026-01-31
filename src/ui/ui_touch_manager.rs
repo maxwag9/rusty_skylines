@@ -116,7 +116,7 @@ impl HitTestResult {
 /// Mouse/touch input snapshot
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InputSnapshot {
-    pub position: (f32, f32),
+    pub position: [f32; 2],
     pub pressed: bool,
     pub just_pressed: bool,
     pub just_released: bool,
@@ -144,41 +144,41 @@ pub enum TouchEvent {
     // Press/release events
     Press {
         element: ElementRef,
-        position: (f32, f32),
+        position: [f32; 2],
         vertex_index: Option<usize>,
     },
     Release {
         element: ElementRef,
-        position: (f32, f32),
+        position: [f32; 2],
         was_drag: bool,
         action: Option<String>,
     },
     Click {
         element: ElementRef,
-        position: (f32, f32),
+        position: [f32; 2],
         action: Option<String>,
     },
     DoubleClick {
         element: ElementRef,
-        position: (f32, f32),
+        position: [f32; 2],
     },
 
     // Drag events
     DragStart {
         element: ElementRef,
-        start_position: (f32, f32),
+        start_position: [f32; 2],
         vertex_index: Option<usize>,
     },
     DragMove {
         element: ElementRef,
-        current_position: (f32, f32),
-        delta: (f32, f32),
-        total_delta: (f32, f32),
+        current_position: [f32; 2],
+        delta: [f32; 2],
+        total_delta: [f32; 2],
     },
     DragEnd {
         element: ElementRef,
-        start_position: (f32, f32),
-        end_position: (f32, f32),
+        start_position: [f32; 2],
+        end_position: [f32; 2],
         vertex_index: Option<usize>,
     },
 
@@ -190,14 +190,14 @@ pub enum TouchEvent {
     },
     DeselectAllRequested,
     BoxSelectStart {
-        start: (f32, f32),
+        start: [f32; 2],
     },
     BoxSelectMove {
-        current: (f32, f32),
+        current: [f32; 2],
     },
     BoxSelectEnd {
-        start: (f32, f32),
-        end: (f32, f32),
+        start: [f32; 2],
+        end: [f32; 2],
     },
 
     // Scroll/resize events
@@ -241,8 +241,8 @@ pub enum NavigationDirection {
 /// Trait for elements that can be hit-tested
 pub trait Touchable {
     fn kind(&self) -> ElementKind;
-    fn hit_test(&self, point: (f32, f32)) -> Option<TouchableHit>;
-    fn center(&self) -> (f32, f32);
+    fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit>;
+    fn center(&self) -> [f32; 2];
     fn z_order(&self) -> u32;
     fn is_active(&self) -> bool;
     fn is_pressable(&self) -> bool;
@@ -259,7 +259,7 @@ pub struct TouchableHit {
 
 /// Trait for elements that can be dragged
 pub trait Draggable: Touchable {
-    fn drag_anchor(&self, vertex_index: Option<usize>) -> (f32, f32);
+    fn drag_anchor(&self, vertex_index: Option<usize>) -> [f32; 2];
     fn can_snap(&self) -> bool;
 }
 
@@ -272,9 +272,9 @@ impl Touchable for UiButtonCircle {
         ElementKind::Circle
     }
 
-    fn hit_test(&self, point: (f32, f32)) -> Option<TouchableHit> {
-        let dx = point.0 - self.x;
-        let dy = point.1 - self.y;
+    fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
+        let dx = point[0] - self.x;
+        let dy = point[1] - self.y;
         let dist = (dx * dx + dy * dy).sqrt();
 
         if dist <= self.radius {
@@ -287,8 +287,8 @@ impl Touchable for UiButtonCircle {
         }
     }
 
-    fn center(&self) -> (f32, f32) {
-        (self.x, self.y)
+    fn center(&self) -> [f32; 2] {
+        [self.x, self.y]
     }
 
     fn z_order(&self) -> u32 {
@@ -313,8 +313,8 @@ impl Touchable for UiButtonCircle {
 }
 
 impl Draggable for UiButtonCircle {
-    fn drag_anchor(&self, _vertex_index: Option<usize>) -> (f32, f32) {
-        (self.x, self.y)
+    fn drag_anchor(&self, _vertex_index: Option<usize>) -> [f32; 2] {
+        [self.x, self.y]
     }
 
     fn can_snap(&self) -> bool {
@@ -327,7 +327,7 @@ impl Touchable for UiButtonPolygon {
         ElementKind::Polygon
     }
 
-    fn hit_test(&self, point: (f32, f32)) -> Option<TouchableHit> {
+    fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
         if self.vertices.is_empty() {
             return None;
         }
@@ -336,8 +336,8 @@ impl Touchable for UiButtonPolygon {
 
         // Check vertex hits first
         for (i, v) in self.vertices.iter().enumerate() {
-            let dx = point.0 - v.pos[0];
-            let dy = point.1 - v.pos[1];
+            let dx = point[0] - v.pos[0];
+            let dy = point[1] - v.pos[1];
             let dist = (dx * dx + dy * dy).sqrt();
             if dist < VERTEX_RADIUS {
                 return Some(TouchableHit {
@@ -348,7 +348,7 @@ impl Touchable for UiButtonPolygon {
         }
 
         // Check polygon interior/edge
-        let sdf = polygon_sdf(point.0, point.1, &self.vertices);
+        let sdf = polygon_sdf(point[0], point[1], &self.vertices);
         let inside = sdf < 0.0;
         let near_edge = sdf.abs() < 8.0;
 
@@ -362,16 +362,16 @@ impl Touchable for UiButtonPolygon {
         }
     }
 
-    fn center(&self) -> (f32, f32) {
+    fn center(&self) -> [f32; 2] {
         if self.vertices.is_empty() {
-            return (0.0, 0.0);
+            return [0.0, 0.0];
         }
         let n = self.vertices.len() as f32;
         let (sx, sy) = self
             .vertices
             .iter()
             .fold((0.0, 0.0), |(ax, ay), v| (ax + v.pos[0], ay + v.pos[1]));
-        (sx / n, sy / n)
+        [sx / n, sy / n]
     }
 
     fn z_order(&self) -> u32 {
@@ -396,10 +396,10 @@ impl Touchable for UiButtonPolygon {
 }
 
 impl Draggable for UiButtonPolygon {
-    fn drag_anchor(&self, vertex_index: Option<usize>) -> (f32, f32) {
+    fn drag_anchor(&self, vertex_index: Option<usize>) -> [f32; 2] {
         if let Some(idx) = vertex_index {
             if let Some(v) = self.vertices.get(idx) {
-                return (v.pos[0], v.pos[1]);
+                return [v.pos[0], v.pos[1]];
             }
         }
         self.center()
@@ -415,16 +415,16 @@ impl Touchable for UiButtonText {
         ElementKind::Text
     }
 
-    fn hit_test(&self, point: (f32, f32)) -> Option<TouchableHit> {
+    fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
         let x0 = self.x + self.top_left_offset[0];
         let y0 = self.y + self.top_left_offset[1];
         let x1 = x0 + self.natural_width + self.top_right_offset[0];
         let y1 = y0 + self.natural_height + self.bottom_left_offset[1];
 
-        if point.0 >= x0 && point.0 <= x1 && point.1 >= y0 && point.1 <= y1 {
+        if point[0] >= x0 && point[0] <= x1 && point[1] >= y0 && point[1] <= y1 {
             let cx = (x0 + x1) / 2.0;
             let cy = (y0 + y1) / 2.0;
-            let dist = ((point.0 - cx).powi(2) + (point.1 - cy).powi(2)).sqrt();
+            let dist = ((point[0] - cx).powi(2) + (point[1] - cy).powi(2)).sqrt();
             Some(TouchableHit {
                 distance: dist,
                 vertex_index: None,
@@ -434,8 +434,8 @@ impl Touchable for UiButtonText {
         }
     }
 
-    fn center(&self) -> (f32, f32) {
-        (self.x, self.y)
+    fn center(&self) -> [f32; 2] {
+        [self.x, self.y]
     }
 
     fn z_order(&self) -> u32 {
@@ -460,8 +460,8 @@ impl Touchable for UiButtonText {
 }
 
 impl Draggable for UiButtonText {
-    fn drag_anchor(&self, _vertex_index: Option<usize>) -> (f32, f32) {
-        (self.x, self.y)
+    fn drag_anchor(&self, _vertex_index: Option<usize>) -> [f32; 2] {
+        [self.x, self.y]
     }
 
     fn can_snap(&self) -> bool {
@@ -474,9 +474,9 @@ impl Touchable for UiButtonHandle {
         ElementKind::Handle
     }
 
-    fn hit_test(&self, point: (f32, f32)) -> Option<TouchableHit> {
-        let dx = point.0 - self.x;
-        let dy = point.1 - self.y;
+    fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
+        let dx = point[0] - self.x;
+        let dy = point[1] - self.y;
         let dist2 = dx * dx + dy * dy;
 
         let width_ratio = self.handle_misc.handle_width;
@@ -497,8 +497,8 @@ impl Touchable for UiButtonHandle {
         }
     }
 
-    fn center(&self) -> (f32, f32) {
-        (self.x, self.y)
+    fn center(&self) -> [f32; 2] {
+        [self.x, self.y]
     }
 
     fn z_order(&self) -> u32 {
@@ -523,8 +523,8 @@ impl Touchable for UiButtonHandle {
 }
 
 impl Draggable for UiButtonHandle {
-    fn drag_anchor(&self, _vertex_index: Option<usize>) -> (f32, f32) {
-        (self.x, self.y)
+    fn drag_anchor(&self, _vertex_index: Option<usize>) -> [f32; 2] {
+        [self.x, self.y]
     }
 
     fn can_snap(&self) -> bool {
@@ -555,7 +555,7 @@ impl Default for ElementTouchState {
 #[derive(Clone, Debug, Default)]
 pub struct ElementTouchData {
     pub state: ElementTouchState,
-    pub press_position: Option<(f32, f32)>,
+    pub press_position: Option<[f32; 2]>,
     pub press_time: f32,
     pub last_click_time: f32,
     pub vertex_index: Option<usize>,
@@ -586,7 +586,7 @@ pub struct HitDetector;
 impl HitDetector {
     /// Find the topmost hit element at a point
     pub fn find_top_hit<'a, I>(
-        point: (f32, f32),
+        point: [f32; 2],
         elements: I,
         editor_mode: bool,
     ) -> Option<HitTestResult>
@@ -624,7 +624,7 @@ impl HitDetector {
 
     /// Test a single element for hit
     fn test_element(
-        point: (f32, f32),
+        point: [f32; 2],
         menu_name: &str,
         layer_name: &str,
         layer_order: u32,
@@ -707,32 +707,33 @@ impl HitDetector {
     }
 
     /// Find all elements within a box selection region
-    pub fn find_in_box<'a, I>(start: (f32, f32), end: (f32, f32), elements: I) -> Vec<ElementRef>
+    pub fn find_in_box<'a, I>(start: [f32; 2], end: [f32; 2], elements: I) -> Vec<ElementRef>
     where
         I: Iterator<Item = (&'a str, &'a str, &'a UiElement)>,
     {
-        let min_x = start.0.min(end.0);
-        let max_x = start.0.max(end.0);
-        let min_y = start.1.min(end.1);
-        let max_y = start.1.max(end.1);
+        let min_x = start[0].min(end[0]);
+        let max_x = start[0].max(end[0]);
+        let min_y = start[1].min(end[1]);
+        let max_y = start[1].max(end[1]);
 
         let mut results = Vec::new();
 
         for (menu_name, layer_name, element) in elements {
             let (id, kind, center) = match element {
                 UiElement::Circle(c) if c.misc.active => {
-                    (c.id.clone(), ElementKind::Circle, (c.x, c.y))
+                    (c.id.clone(), ElementKind::Circle, [c.x, c.y])
                 }
                 UiElement::Polygon(p) if p.misc.active => {
                     (p.id.clone(), ElementKind::Polygon, p.center())
                 }
                 UiElement::Text(t) if t.misc.active => {
-                    (t.id.clone(), ElementKind::Text, (t.x, t.y))
+                    (t.id.clone(), ElementKind::Text, [t.x, t.y])
                 }
                 _ => continue,
             };
 
-            if center.0 >= min_x && center.0 <= max_x && center.1 >= min_y && center.1 <= max_y {
+            if center[0] >= min_x && center[0] <= max_x && center[1] >= min_y && center[1] <= max_y
+            {
                 results.push(ElementRef::new(menu_name, layer_name, id.as_str(), kind));
             }
         }
@@ -756,26 +757,26 @@ pub struct DragCoordinator {
 pub struct ActiveDrag {
     pub element: ElementRef,
     pub affected_element: Option<ElementRef>,
-    pub start_position: (f32, f32),
-    pub current_position: (f32, f32),
-    pub offset: (f32, f32),
+    pub start_position: [f32; 2],
+    pub current_position: [f32; 2],
+    pub offset: [f32; 2],
     pub vertex_index: Option<usize>,
     pub threshold_exceeded: bool,
 }
 
 impl ActiveDrag {
-    pub fn total_delta(&self) -> (f32, f32) {
-        (
-            self.current_position.0 - self.start_position.0,
-            self.current_position.1 - self.start_position.1,
-        )
+    pub fn total_delta(&self) -> [f32; 2] {
+        [
+            self.current_position[0] - self.start_position[0],
+            self.current_position[1] - self.start_position[1],
+        ]
     }
 
-    pub fn delta_from_last(&self, new_pos: (f32, f32)) -> (f32, f32) {
-        (
-            new_pos.0 - self.current_position.0,
-            new_pos.1 - self.current_position.1,
-        )
+    pub fn delta_from_last(&self, new_pos: [f32; 2]) -> [f32; 2] {
+        [
+            new_pos[0] - self.current_position[0],
+            new_pos[1] - self.current_position[1],
+        ]
     }
 }
 
@@ -789,11 +790,11 @@ impl DragCoordinator {
         &mut self,
         element: ElementRef,
         affected_element: Option<ElementRef>,
-        mouse_pos: (f32, f32),
-        anchor: (f32, f32),
+        mouse_pos: [f32; 2],
+        anchor: [f32; 2],
         vertex_index: Option<usize>,
     ) {
-        let offset = (mouse_pos.0 - anchor.0, mouse_pos.1 - anchor.1);
+        let offset = [mouse_pos[0] - anchor[0], mouse_pos[1] - anchor[1]];
 
         self.active_drag = Some(ActiveDrag {
             element,
@@ -807,15 +808,15 @@ impl DragCoordinator {
     }
 
     /// Update drag with new position, returns events if any
-    pub fn update(&mut self, mouse_pos: (f32, f32), config: &TouchConfig) -> Vec<TouchEvent> {
+    pub fn update(&mut self, mouse_pos: [f32; 2], config: &TouchConfig) -> Vec<TouchEvent> {
         let mut events = Vec::new();
 
         let Some(drag) = &mut self.active_drag else {
             return events;
         };
 
-        let dx = mouse_pos.0 - drag.start_position.0;
-        let dy = mouse_pos.1 - drag.start_position.1;
+        let dx = mouse_pos[0] - drag.start_position[0];
+        let dy = mouse_pos[1] - drag.start_position[1];
         let distance = (dx * dx + dy * dy).sqrt();
 
         // Check if we've exceeded drag threshold
@@ -842,10 +843,10 @@ impl DragCoordinator {
 
         if drag.threshold_exceeded {
             let delta = drag.delta_from_last(mouse_pos);
-            let total_delta = (
-                mouse_pos.0 - drag.start_position.0,
-                mouse_pos.1 - drag.start_position.1,
-            );
+            let total_delta = [
+                mouse_pos[0] - drag.start_position[0],
+                mouse_pos[1] - drag.start_position[1],
+            ];
 
             events.push(TouchEvent::DragMove {
                 element: drag.element.clone(),
@@ -893,12 +894,16 @@ impl DragCoordinator {
     }
 
     /// Apply snapping to a position
-    pub fn apply_snap(pos: (f32, f32), config: &TouchConfig) -> (f32, f32) {
+    pub fn apply_snap(pos: [f32; 2], config: &TouchConfig) -> [f32; 2] {
         if !config.snap_enabled {
             return pos;
         }
+
         let grid = config.snap_grid_size;
-        ((pos.0 / grid).round() * grid, (pos.1 / grid).round() * grid)
+        [
+            (pos[0] / grid).round() * grid,
+            (pos[1] / grid).round() * grid,
+        ]
     }
 
     /// Cancel current drag without emitting end event
@@ -1560,18 +1565,18 @@ mod tests {
         dc.begin(
             elem.clone(),
             Some(elem),
-            (100.0, 100.0),
-            (100.0, 100.0),
+            [100.0, 100.0],
+            [100.0, 100.0],
             None,
         );
 
         // Move less than threshold
-        let events = dc.update((102.0, 102.0), &config);
+        let events = dc.update([102.0, 102.0], &config);
         assert!(events.is_empty());
         assert!(!dc.is_dragging());
 
         // Move past threshold
-        let events = dc.update((110.0, 110.0), &config);
+        let events = dc.update([110.0, 110.0], &config);
         assert!(!events.is_empty());
         assert!(dc.is_dragging());
 
@@ -1588,8 +1593,8 @@ mod tests {
             ..Default::default()
         };
 
-        let snapped = DragCoordinator::apply_snap((12.3, 17.8), &config);
-        assert_eq!(snapped, (10.0, 20.0));
+        let snapped = DragCoordinator::apply_snap([12.3, 17.8], &config);
+        assert_eq!(snapped, [10.0, 20.0]);
     }
 
     #[test]

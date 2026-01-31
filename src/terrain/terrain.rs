@@ -72,13 +72,6 @@ fn world_xz_f64(p: &WorldPos, chunk_size: ChunkSize) -> (f64, f64) {
     (wx, wz)
 }
 
-/// Sample noise at world position with frequency applied in f64 before f32 conversion
-#[inline]
-fn noise2(n: &FastNoiseLite, p: &WorldPos, freq: f64, chunk_size: ChunkSize) -> f32 {
-    let (wx, wz) = world_xz_f64(p, chunk_size);
-    n.get_noise_2d((wx * freq) as f32, (wz * freq) as f32)
-}
-
 /// Sample noise at derived f64 coordinates with a scale factor
 #[inline]
 fn noise2_f64(n: &FastNoiseLite, x: f64, z: f64, scale: f64) -> f32 {
@@ -125,7 +118,6 @@ pub struct TerrainParams {
 
     pub force_land_at_origin: bool,
     pub origin_island_radius: f32,
-    pub origin_island_strength: f32,
     pub origin_min_height: f32,
     pub pull_one_continent_to_origin: bool,
     pub origin_pull_strength: f32,
@@ -179,7 +171,6 @@ pub struct TerrainParams {
     pub micro_flatten: f32,
 
     pub plate_freq: f32,
-    pub plate_sharpness: f32,
     pub plate_mountain_amp: f32,
 
     pub erosion_strength: f32,
@@ -212,7 +203,6 @@ impl Default for TerrainParams {
 
             force_land_at_origin: false,
             origin_island_radius: 12_000.0,
-            origin_island_strength: 0.75,
             origin_min_height: 50.0,
             pull_one_continent_to_origin: true,
             origin_pull_strength: 0.85,
@@ -266,7 +256,6 @@ impl Default for TerrainParams {
             micro_flatten: 0.20,
 
             plate_freq: 0.0022,
-            plate_sharpness: 4.2,
             plate_mountain_amp: 1.8,
 
             erosion_strength: 0.20,

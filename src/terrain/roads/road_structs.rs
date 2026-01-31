@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::positions::WorldPos;
 use crate::terrain::roads::roads::{RoadCommand, RoadStorage};
 use glam::Vec3;
@@ -13,7 +14,7 @@ impl RoadStyleParams {
     pub fn turn_tightness(&self) -> f32 {
         self.road_type.turn_tightness
     }
-    pub fn set_mode(&mut self, mode: BuildMode) {
+    pub fn _set_mode(&mut self, mode: BuildMode) {
         if self.mode != mode {
             self.mode = mode;
             self.state = EditorState::Idle;
@@ -34,10 +35,10 @@ impl RoadStyleParams {
     pub fn state(&self) -> &EditorState {
         &self.state
     }
-    pub fn is_idle(&self) -> bool {
+    pub fn _is_idle(&self) -> bool {
         matches!(self.state, EditorState::Idle)
     }
-    pub fn cancel(&mut self) {
+    pub fn _cancel(&mut self) {
         self.set_to_idle();
     }
     pub fn set_to_idle(&mut self) {
@@ -371,14 +372,6 @@ pub struct SnapPreview {
     pub distance: f32,
 }
 
-/// Simplified connection info for previews, replacing the old MeshManager version
-#[derive(Debug, Clone)]
-pub struct ConnectedSegmentInfo {
-    pub direction_xz: [f32; 2],
-    pub node_is_start: bool,
-    pub segment_id: Option<SegmentId>,
-}
-
 #[derive(Debug, Clone)]
 pub struct NodePreview {
     pub world_pos: WorldPos,
@@ -519,25 +512,25 @@ pub struct IdAllocator {
 }
 
 impl IdAllocator {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             next_node: 0,
             next_segment: 0,
             next_lane: 0,
         }
     }
-    pub(crate) fn update(&mut self, real_roads_storage: &RoadStorage) {
+    pub fn update(&mut self, real_roads_storage: &RoadStorage) {
         self.next_node = real_roads_storage.nodes.len() as u32;
         self.next_segment = real_roads_storage.segments.len() as u32;
         self.next_lane = real_roads_storage.lanes.len() as u32;
     }
-    pub(crate) fn alloc_node(&mut self) -> NodeId {
+    pub fn alloc_node(&mut self) -> NodeId {
         let id = NodeId::new(self.next_node);
         self.next_node += 1;
         id
     }
 
-    pub(crate) fn alloc_segment(&mut self) -> SegmentId {
+    pub fn alloc_segment(&mut self) -> SegmentId {
         let id = SegmentId::new(self.next_segment);
         self.next_segment += 1;
         id

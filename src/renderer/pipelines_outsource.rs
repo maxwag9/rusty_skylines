@@ -7,12 +7,10 @@ use crate::renderer::pipelines::{
     FogUniforms, GpuResourceSet, MeshBuffers, ToneMappingUniforms, make_dummy_buf,
     make_new_uniforms_csm,
 };
-use crate::renderer::procedural_render_manager::DepthDebugParams;
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::{SimpleVertex, WaterUniform};
-use crate::ui::vertex::LineVtxRender;
 use glam::Vec3;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -25,9 +23,8 @@ pub fn create_camera_uniforms(
     camera: &Camera,
     config: &SurfaceConfiguration,
     settings: &Settings,
-) -> (GpuResourceSet, Uniforms) {
+) -> GpuResourceSet {
     let aspect = config.width as f32 / config.height as f32;
-    let sun = Vec3::new(0.3, 1.0, 0.6).normalize();
     let (view, proj, view_proj) = camera.matrices(aspect, settings);
     // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
     let (light_mats, splits) = compute_csm_matrices(
@@ -85,14 +82,11 @@ pub fn create_camera_uniforms(
         }],
     });
 
-    (
-        GpuResourceSet {
-            _bind_group_layout: bind_group_layout,
-            _bind_group: bind_group,
-            buffer,
-        },
-        uniforms,
-    )
+    GpuResourceSet {
+        _bind_group_layout: bind_group_layout,
+        _bind_group: bind_group,
+        buffer,
+    }
 }
 
 pub fn create_sky_uniforms(device: &Device) -> GpuResourceSet {
@@ -280,55 +274,7 @@ pub fn create_pick_uniforms(device: &Device) -> GpuResourceSet {
         buffer,
     }
 }
-pub fn create_depth_debug_uniforms(
-    device: &Device,
-    camera: &Camera,
-    msaa_samples: u32,
-) -> GpuResourceSet {
-    let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some("Depth Debug Uniform BGL"),
-        entries: &[BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::FRAGMENT,
-            ty: BindingType::Buffer {
-                ty: BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
-    let params = DepthDebugParams {
-        near: camera.near,
-        far: camera.far,
-        power: 20.0,
-        reversed_z: 0, // if you use reversed-z, else 0
-        msaa_samples,
-        _pad0: 0,
-        _pad1: 0,
-    };
 
-    let buffer = device.create_buffer_init(&BufferInitDescriptor {
-        label: Some("Depth Debug Uniform Buffer"),
-        contents: bytemuck::bytes_of(&params),
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-    });
-
-    let bind_group = device.create_bind_group(&BindGroupDescriptor {
-        label: Some("Depth Debug Uniform BG"),
-        layout: &bind_group_layout,
-        entries: &[BindGroupEntry {
-            binding: 0,
-            resource: buffer.as_entire_binding(),
-        }],
-    });
-
-    GpuResourceSet {
-        _bind_group_layout: bind_group_layout,
-        _bind_group: bind_group,
-        buffer,
-    }
-}
 pub const SSAO_KERNEL_AMOUNT: usize = 32;
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -337,11 +283,7 @@ pub struct SsaoUniforms {
     pub params0: [f32; 4], // radius, bias, intensity, power
     pub params1: [u32; 4], // reversed_z, noise_tile_px, 0, 0
 }
-pub fn create_ssao_uniforms(
-    device: &Device,
-    camera: &Camera,
-    settings: &Settings,
-) -> GpuResourceSet {
+pub fn create_ssao_uniforms(device: &Device, settings: &Settings) -> GpuResourceSet {
     let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
         label: Some("SSAO Uniform BGL"),
         entries: &[BindGroupLayoutEntry {
@@ -486,21 +428,6 @@ pub fn create_water_mesh(device: &Device) -> MeshBuffers {
         vertex,
         index,
         index_count: water_indices.len() as u32,
-    }
-}
-
-pub fn create_gizmo_mesh(device: &Device) -> MeshBuffers {
-    let vertex = device.create_buffer(&BufferDescriptor {
-        label: Some("Gizmo VB"),
-        size: (size_of::<LineVtxRender>() * 6) as u64,
-        usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    MeshBuffers {
-        vertex,
-        index: make_dummy_buf(&device),
-        index_count: 0,
     }
 }
 

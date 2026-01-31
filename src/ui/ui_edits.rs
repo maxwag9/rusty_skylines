@@ -14,15 +14,15 @@ pub fn set_element_position(
     layer_name: &str,
     id: &str,
     kind: ElementKind,
-    pos: (f32, f32),
-) {
+    pos: [f32; 2],
+) -> Option<[f32; 2]> {
     let Some(menu) = menus.get_mut(menu_name) else {
-        return;
+        return None;
     };
     let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
-        return;
+        return None;
     };
-
+    let mut before: Option<[f32; 2]> = None;
     match kind {
         ElementKind::Circle => {
             if let Some(c) = layer
@@ -31,10 +31,12 @@ pub fn set_element_position(
                 .filter_map(UiElement::as_circle_mut)
                 .find(|c| c.id == id)
             {
-                c.x = pos.0;
-                c.y = pos.1;
+                before = Some([c.x, c.y]);
+                c.x = pos[0];
+                c.y = pos[1];
                 layer.dirty.mark_circles();
             }
+            before
         }
         ElementKind::Text => {
             if let Some(t) = layer
@@ -43,10 +45,12 @@ pub fn set_element_position(
                 .filter_map(UiElement::as_text_mut)
                 .find(|t| t.id == id)
             {
-                t.x = pos.0;
-                t.y = pos.1;
+                before = Some([t.x, t.y]);
+                t.x = pos[0];
+                t.y = pos[1];
                 layer.dirty.mark_texts();
             }
+            before
         }
         ElementKind::Polygon => {
             if let Some(p) = layer
@@ -55,15 +59,17 @@ pub fn set_element_position(
                 .filter_map(UiElement::as_polygon_mut)
                 .find(|p| p.id == id)
             {
-                let (cx, cy) = p.center();
-                let dx = pos.0 - cx;
-                let dy = pos.1 - cy;
+                let [cx, cy] = p.center();
+                before = Some([cx, cy]);
+                let dx = pos[0] - cx;
+                let dy = pos[1] - cy;
                 for v in &mut p.vertices {
                     v.pos[0] += dx;
                     v.pos[1] += dy;
                 }
                 layer.dirty.mark_polygons();
             }
+            before
         }
         ElementKind::Handle => {
             if let Some(h) = layer
@@ -72,12 +78,14 @@ pub fn set_element_position(
                 .filter_map(UiElement::as_handle_mut)
                 .find(|h| h.id == id)
             {
-                h.x = pos.0;
-                h.y = pos.1;
+                before = Some([h.x, h.y]);
+                h.x = pos[0];
+                h.y = pos[1];
                 layer.dirty.mark_handles();
             }
+            before
         }
-        _ => {}
+        _ => before,
     }
 }
 
@@ -185,14 +193,14 @@ pub fn set_vertex_position(
     id: &str,
     vertex_index: usize,
     pos: [f32; 2],
-) {
+) -> Option<[f32; 2]> {
     let Some(menu) = menus.get_mut(menu_name) else {
-        return;
+        return None;
     };
     let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
-        return;
+        return None;
     };
-
+    let mut before = None;
     if let Some(poly) = layer
         .elements
         .iter_mut()
@@ -200,10 +208,12 @@ pub fn set_vertex_position(
         .find(|p| p.id == id)
     {
         if let Some(v) = poly.vertices.get_mut(vertex_index) {
+            before = Some(v.pos);
             v.pos = pos;
             layer.dirty.mark_polygons();
         }
     }
+    before
 }
 
 pub fn set_layer_order(

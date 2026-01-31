@@ -44,7 +44,7 @@ impl ChunkHeightGrid {
     /// Convert a WorldPos to local coordinates relative to this grid's chunk.
     /// Returns (local_x, local_z) which may be outside [0, chunk_size] if pos is in a different chunk.
     #[inline]
-    pub fn world_to_local(&self, pos: &WorldPos) -> (f32, f32) {
+    pub fn _world_to_local(&self, pos: &WorldPos) -> (f32, f32) {
         let chunk_size = self.chunk_size_f32();
         let chunk_offset_x = (pos.chunk.x - self.chunk_coord.x) as f32 * chunk_size;
         let chunk_offset_z = (pos.chunk.z - self.chunk_coord.z) as f32 * chunk_size;
@@ -53,14 +53,14 @@ impl ChunkHeightGrid {
 
     /// Convert local coordinates to a WorldPos (normalizing if needed).
     #[inline]
-    pub fn local_to_world(&self, local_x: f32, local_y: f32, local_z: f32) -> WorldPos {
+    pub fn _local_to_world(&self, local_x: f32, local_y: f32, local_z: f32) -> WorldPos {
         WorldPos::new(self.chunk_coord, LocalPos::new(local_x, local_y, local_z))
             .normalize(self.chunk_size)
     }
 
     /// Check if a WorldPos falls within this chunk's boundaries.
     #[inline]
-    pub fn contains(&self, pos: &WorldPos) -> bool {
+    pub fn _contains(&self, pos: &WorldPos) -> bool {
         pos.chunk.x == self.chunk_coord.x && pos.chunk.z == self.chunk_coord.z
     }
 }
@@ -378,10 +378,10 @@ pub struct CpuChunkMesh {
 /// Pre-computed cell data for greedy meshing decisions
 #[derive(Clone, Copy)]
 struct CellData {
-    heights: [f32; 4], // Corner heights: [0,0], [1,0], [0,1], [1,1]
-    color: [f32; 3],   // Average color for merging comparison
-    flat_height: f32,  // Average height if flat
-    is_flat: bool,     // Can this cell participate in greedy merge?
+    _heights: [f32; 4], // Corner heights: [0,0], [1,0], [0,1], [1,1]
+    color: [f32; 3],    // Average color for merging comparison
+    flat_height: f32,   // Average height if flat
+    is_flat: bool,      // Can this cell participate in greedy merge?
 }
 
 /// Represents a merged rectangular region
@@ -398,7 +398,6 @@ impl ChunkBuilder {
     // Tunable thresholds for greedy merging
     const HEIGHT_TOLERANCE: f32 = 0.005; // Max height variance to consider "flat"
     const COLOR_TOLERANCE: f32 = 0.02; // Max color difference per channel
-    const NORMAL_FLAT_THRESHOLD: f32 = 0.01; // Normal Y threshold for flat detection
 
     pub fn build_chunk_cpu(
         chunk_coord: ChunkCoord,
@@ -421,7 +420,7 @@ impl ChunkBuilder {
         let verts_z = (chunk_size / step + 1) as usize;
         let cells_x = verts_x - 1;
         let cells_z = verts_z - 1;
-        let total_verts = verts_x * verts_z;
+        let _total_verts = verts_x * verts_z;
         let total_cells = cells_x * cells_z;
 
         let (heights, colors) = Self::sample_terrain_batch(
@@ -556,7 +555,7 @@ impl ChunkBuilder {
     fn build_greedy_mesh(
         chunk_coord: ChunkCoord,
         step_usize: usize,
-        verts_x: usize,
+        _verts_x: usize,
         verts_z: usize,
         cells_x: usize,
         cells_z: usize,
@@ -832,7 +831,7 @@ impl ChunkBuilder {
                 ];
 
                 cells.push(CellData {
-                    heights: h,
+                    _heights: h,
                     color: avg_color,
                     flat_height: (min_h + max_h) * 0.5,
                     is_flat,

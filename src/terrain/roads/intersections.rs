@@ -11,7 +11,7 @@ use glam::{Vec2, Vec3};
 #[derive(Clone, Debug, Default)]
 pub struct IntersectionPolygon {
     pub ring: Vec<WorldPos>,
-    pub(crate) chunk_size: ChunkSize,
+    pub chunk_size: ChunkSize,
 }
 
 impl IntersectionPolygon {
@@ -135,28 +135,7 @@ impl IntersectionPolygon {
         self.signed_area_xz() > 0.0
     }
 }
-/// Helper: clip or extend a point to the polygon boundary using ray projection
-pub fn clip_point_to_polygon(
-    point: WorldPos,
-    lane_dir: Vec3, // Direction along lane AWAY from the intersection
-    poly: &IntersectionPolygon,
-    proj_dist: f32,
-) -> WorldPos {
-    if poly.contains_xz(point) {
-        // Point is inside polygon - project outward along lane to find exit point
-        let far_point = point.add_vec3(lane_dir * proj_dist, poly.chunk_size);
-        poly.clip_to_edge(far_point, point)
-    } else {
-        // Point is outside polygon - check if we need to EXTEND toward intersection
-        let toward_intersection = point.sub_vec3(lane_dir * proj_dist, poly.chunk_size);
-        if poly.contains_xz(toward_intersection) {
-            // Lane doesn't reach polygon - extend to meet it
-            poly.clip_to_edge(point, toward_intersection)
-        } else {
-            point
-        }
-    }
-}
+
 #[derive(Clone, Debug, Default)]
 pub struct IntersectionMeshResult {
     pub polygon: IntersectionPolygon,
@@ -172,7 +151,7 @@ pub struct OuterNodeLane {
 }
 pub fn build_intersection_mesh(
     terrain: &TerrainRenderer,
-    node_id: NodeId,
+    _node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,
     style: &RoadStyleParams,

@@ -81,7 +81,7 @@ impl Schedule {
             system(world, resources);
         }
     }
-    pub fn run_events(&self, world: &mut World, resources: &mut Resources) {
+    pub fn run_events(&self, _world: &mut World, resources: &mut Resources) {
         resources.events.flip();
 
         for event in resources.events.drain() {
@@ -348,7 +348,6 @@ impl ApplicationHandler for App {
                     if !resources.settings.editor_mode {
                         if let Some(world) = self.world.as_mut() {
                             let cam = world.main_camera();
-                            let radius = world.camera(cam).unwrap().orbit_radius;
 
                             if let Some(controller) = world.camera_controller_mut(cam) {
                                 let zoom_factor = 10.0;

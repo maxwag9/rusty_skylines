@@ -1,5 +1,5 @@
 use crate::data::Settings;
-use crate::renderer::procedural_texture_manager::TextureCacheKey;
+use crate::renderer::textures::procedural_texture_manager::TextureCacheKey;
 use std::collections::HashMap;
 use wgpu::{
     AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,

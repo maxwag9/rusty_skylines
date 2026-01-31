@@ -145,6 +145,8 @@ pub struct Settings {
     pub lod_center: LodCenterType,
     #[serde(default)]
     pub reversed_depth_z: bool,
+    #[serde(default)]
+    pub show_fog: bool,
 }
 
 impl Default for Settings {
@@ -174,6 +176,7 @@ impl Default for Settings {
             starting_menu: InternalMenu::default(),
             lod_center: LodCenterType::default(),
             reversed_depth_z: true,
+            show_fog: true,
         }
     }
 }
@@ -203,7 +206,6 @@ impl Settings {
             InternalMenu::None => {}
             InternalMenu::MainMenu => settings.show_world = false,
         }
-        println!("{:#?}", settings);
         settings
     }
 

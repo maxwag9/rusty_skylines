@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 use crate::data::Settings;
 use crate::positions::{ChunkSize, LocalPos, WorldPos};
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld};
 use glam::Vec3;
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 const CIRCLE_SEGMENT_COUNT: usize = 16;
@@ -18,7 +19,7 @@ pub struct Gizmo {
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
     total_game_time: f64,
-    pub(crate) chunk_size: ChunkSize,
+    pub chunk_size: ChunkSize,
 }
 
 impl Gizmo {
@@ -201,7 +202,7 @@ impl Gizmo {
             verts.push(LineVtxWorld::new(p1, color));
 
             // Arrow head
-            let angle = time * spin_speed + (i as f32 * 12.9898).sin() * 3.14;
+            let angle = time * spin_speed + (i as f32 * 12.9898).sin() * PI;
             let rot = rotate_frame(side, up_perp, angle);
             let back = p1.add_vec3(-dir * head_len, cs);
 
@@ -415,6 +416,7 @@ impl Gizmo {
         settings: &Settings,
     ) {
         self.total_game_time = total_game_time;
+        self.chunk_size = settings.chunk_size;
 
         if settings.render_chunk_bounds {
             if terrain_renderer.chunks.contains_key(&target.chunk) {
@@ -559,58 +561,17 @@ impl Gizmo {
             duration,
         );
     }
-    pub fn update_gizmo_vertices(
+    pub fn update_orbit_gizmo(
         &mut self,
         target: WorldPos,
         orbit_radius: f32,
-        scale_with_orbit: bool,
         sun_direction: Vec3,
-        chunk_size: ChunkSize,
+        scale_with_orbit: bool,
     ) {
-        let s = if scale_with_orbit {
-            orbit_radius * 0.2
-        } else {
-            1.0
-        };
-
-        let axes = [
-            LineVtxWorld {
-                pos: target,
-                color: [1.0, 0.2, 0.2],
-            },
-            LineVtxWorld {
-                pos: target.add_vec3(Vec3::X * s, chunk_size),
-                color: [1.0, 0.2, 0.2],
-            },
-            LineVtxWorld {
-                pos: target,
-                color: [0.2, 1.0, 0.2],
-            },
-            LineVtxWorld {
-                pos: target.add_vec3(Vec3::Y * s, chunk_size),
-                color: [0.2, 1.0, 0.2],
-            },
-            LineVtxWorld {
-                pos: target,
-                color: [0.2, 0.6, 1.0],
-            },
-            LineVtxWorld {
-                pos: target.add_vec3(Vec3::Z * s, chunk_size),
-                color: [0.2, 0.6, 1.0],
-            },
-        ];
-
-        self.pending_renders.push(PendingGizmoRender {
-            vertices: axes.to_vec(),
-            duration: 0.0,
-            start_time: self.total_game_time,
-        });
-
-        let arrow_length = s;
-        let sun_end = target.add_vec3(sun_direction.normalize_or_zero() * arrow_length, chunk_size);
-
-        // Make render_arrow take WorldPos endpoints too (recommended)
-        self.arrow(target, sun_end, [1.0, 1.0, 0.0], false, 0.0);
+        let scale = scale_with_orbit
+            .then_some(orbit_radius * 0.1)
+            .unwrap_or(1.0);
+        self.axes_with_sun(target, scale, sun_direction, 0.0);
     }
 }
 #[inline]

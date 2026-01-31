@@ -425,19 +425,19 @@ impl UiElement {
             UiElement::Polygon(p) => Some(p.action.clone()),
         }
     }
-    pub fn center(&self) -> (f32, f32) {
+    pub fn center(&self) -> [f32; 2] {
         match self {
-            UiElement::Text(t) => (t.x, t.y),
-            UiElement::Circle(c) => (c.x, c.y),
-            UiElement::Handle(h) => (h.x, h.y),
-            UiElement::Outline(o) => (o.shape_data.x, o.shape_data.y),
+            UiElement::Text(t) => [t.x, t.y],
+            UiElement::Circle(c) => [c.x, c.y],
+            UiElement::Handle(h) => [h.x, h.y],
+            UiElement::Outline(o) => [o.shape_data.x, o.shape_data.y],
             UiElement::Polygon(p) => {
                 let count = p.vertices.len().max(1);
                 let sum = p
                     .vertices
                     .iter()
                     .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-                (sum.0 / count as f32, sum.1 / count as f32)
+                [sum.0 / count as f32, sum.1 / count as f32]
             }
         }
     }
@@ -1492,13 +1492,13 @@ impl UiButtonPolygon {
         }
     }
 
-    pub fn center(&self) -> (f32, f32) {
+    pub fn center(&self) -> [f32; 2] {
         let count = self.vertices.len().max(1);
         let sum = self
             .vertices
             .iter()
             .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-        (sum.0 / count as f32, sum.1 / count as f32)
+        [sum.0 / count as f32, sum.1 / count as f32]
     }
 }
 

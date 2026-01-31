@@ -277,8 +277,6 @@ impl TerrainRenderer {
             LodCenterType::Eye => camera.eye_world(),
             LodCenterType::Target => camera.target,
         };
-        let cam_cx = cam_pos.chunk.x;
-        let cam_cz = cam_pos.chunk.z;
 
         let (_, _, view_proj) = camera.matrices(aspect, settings);
         let planes = extract_frustum_planes(view_proj);
@@ -457,7 +455,7 @@ impl TerrainRenderer {
                     .copied()
                     .unwrap_or(s);
 
-                // FIX: Prevent being more than 2x finer than coarsest neighbor
+                // FIX: Prevent being more than 2x finer than the coarsest neighbor
                 let max_neighbor = n0.max(n1).max(n2).max(n3);
                 let min_allowed_step = (max_neighbor / 2).max(1);
                 self.lod_map
@@ -675,13 +673,13 @@ impl TerrainRenderer {
 
         let index_bytes = total_indices * 4;
         let vertex_bytes = total_vertices * VERTEX_SIZE_BYTES;
-        let total_bytes = index_bytes + vertex_bytes;
+        let _total_bytes = index_bytes + vertex_bytes;
 
         // println!(
         //     "render: {} vertices, {} indices, {:.2} MB total",
         //     total_vertices,
         //     total_indices,
-        //     total_bytes as f32 / 1024.0 / 1024.0
+        //     _total_bytes as f32 / 1024.0 / 1024.0
         // );
 
         for (pi, handles) in per_page.iter().enumerate() {
@@ -755,7 +753,7 @@ impl TerrainRenderer {
             let chunk_coord = ChunkCoord::new(cx, cz);
 
             if let Some(chunk) = self.chunks.get(&chunk_coord) {
-                if let Some((hit_t, hit_pos)) =
+                if let Some((_, hit_pos)) =
                     raycast_chunk_heightgrid(&ray, &chunk.height_grid, t, next_t + eps)
                 {
                     // Update last picked info

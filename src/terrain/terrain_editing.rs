@@ -548,20 +548,6 @@ fn sample_height_at_local(hg: &ChunkHeightGrid, local_x: f32, local_z: f32) -> f
 
     h0 + tz * (h1 - h0)
 }
-/// Sample height at a WorldPos. Returns the height if the position is within or near this grid.
-#[inline]
-pub fn sample_height_at_world(hg: &ChunkHeightGrid, pos: &WorldPos) -> f32 {
-    let chunk_size = hg.chunk_size as f32;
-
-    // Convert WorldPos to local coordinates relative to this grid's chunk
-    let chunk_offset_x = (pos.chunk.x - hg.chunk_coord.x) as f32 * chunk_size;
-    let chunk_offset_z = (pos.chunk.z - hg.chunk_coord.z) as f32 * chunk_size;
-
-    let local_x = chunk_offset_x + pos.local.x;
-    let local_z = chunk_offset_z + pos.local.z;
-
-    sample_height_at_local(hg, local_x, local_z)
-}
 
 pub fn recompute_patch_minmax(grid: &mut ChunkHeightGrid) {
     const PATCH_CELLS: usize = 8;
@@ -613,12 +599,12 @@ pub fn apply_accumulated_deltas_with_stitching(
     if let Some(edit) = edited_chunks.get(&coord) {
         for (&(base_x, base_z), &delta) in &edit.accumulated_deltas {
             // Check if this base coordinate aligns with current LOD grid
-            if base_x as u16 % own_step != 0 || base_z as u16 % own_step != 0 {
+            if base_x % own_step != 0 || base_z % own_step != 0 {
                 continue;
             }
 
-            let gx = (base_x as u16 / own_step) as usize;
-            let gz = (base_z as u16 / own_step) as usize;
+            let gx = (base_x / own_step) as usize;
+            let gz = (base_z / own_step) as usize;
 
             if gx < grid.nx && gz < grid.nz {
                 grid.heights[gx * grid.nz + gz] += delta;

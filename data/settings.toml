@@ -10,7 +10,7 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 62854.92417079676
+total_game_time = 63881.954451736994
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
@@ -26,4 +26,5 @@ tonemapping_state = "Cinematic"
 debug_view_state = "None"
 starting_menu = "None"
 lod_center = "Target"
-reversed_depth_z = false
+reversed_depth_z = true
+show_fog = false

@@ -5,8 +5,7 @@ use crate::renderer::pipelines::{
     FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
 };
 use crate::renderer::pipelines_outsource::{SsaoUniforms, make_ssao_kernel};
-use crate::renderer::shadows::{CSM_CASCADES, compute_csm_matrices};
-use crate::resources::Uniforms;
+use crate::renderer::shadows::compute_csm_matrices;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
 use glam::Mat4;
@@ -14,16 +13,16 @@ use wgpu::Queue;
 
 pub struct UniformUpdater<'a> {
     queue: &'a Queue,
-    pipelines: &'a Pipelines,
+    pipelines: &'a mut Pipelines,
 }
 
 impl<'a> UniformUpdater<'a> {
-    pub fn new(queue: &'a Queue, pipelines: &'a Pipelines) -> Self {
+    pub fn new(queue: &'a Queue, pipelines: &'a mut Pipelines) -> Self {
         Self { queue, pipelines }
     }
 
     pub fn update_camera_uniforms(
-        &self,
+        &mut self,
         view: Mat4,
         proj: Mat4,
         view_proj: Mat4,
@@ -32,7 +31,7 @@ impl<'a> UniformUpdater<'a> {
         total_time: f64,
         aspect: f32,
         settings: &Settings,
-    ) -> (Uniforms, [Mat4; CSM_CASCADES], [f32; 4]) {
+    ) {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
         let (light_mats, splits) = compute_csm_matrices(
             view,
@@ -61,11 +60,12 @@ impl<'a> UniformUpdater<'a> {
         );
 
         self.queue.write_buffer(
-            &self.pipelines.uniforms.buffer,
+            &self.pipelines.camera_uniforms.buffer,
             0,
             bytemuck::bytes_of(&new_uniforms),
         );
-        (new_uniforms, light_mats, splits)
+        self.pipelines.cascaded_shadow_map.light_mats = light_mats;
+        self.pipelines.cascaded_shadow_map.splits = splits;
     }
 
     pub fn update_fog_uniforms(&self, config: &wgpu::SurfaceConfiguration, camera: &Camera) {

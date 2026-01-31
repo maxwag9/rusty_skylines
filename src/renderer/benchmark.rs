@@ -9,7 +9,6 @@ const MAX_BATCH: usize = 128;
 #[derive(Clone, Copy)]
 struct BenchRange {
     min: usize,
-    max: usize,
 }
 
 struct BenchmarkState {
@@ -67,10 +66,10 @@ impl Benchmark {
                 start: Instant::now(),
                 best_score: 0.0,
                 step: 0,
-                close_jobs: BenchRange { min: 4, max: 4 },
-                far_jobs: BenchRange { min: 4, max: 16 },
-                close_batch: BenchRange { min: 16, max: 16 },
-                far_batch: BenchRange { min: 64, max: 64 },
+                close_jobs: BenchRange { min: 4 },
+                far_jobs: BenchRange { min: 4 },
+                close_batch: BenchRange { min: 16 },
+                far_batch: BenchRange { min: 64 },
             });
         }
 

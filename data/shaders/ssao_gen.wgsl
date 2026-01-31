@@ -121,8 +121,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
     let intensity = ssao.params0.z;
     let power     = ssao.params0.w;
 
-    let tile_px: f32 = f32(max(1u, ssao.params1.y)); // e.g. 4 or 8
-    let r = rand2(floor(frag_pos.xy / tile_px));
+    let r = rand2(frag_pos.xy); // no floor/tile
+
     let angle = r.x * 6.2831853;
 
     let rand_vec = normalize(vec3<f32>(
@@ -143,8 +143,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
         let k = ssao.kernel[i].xyz;
         let sample_dir = tbn * k;
 
-        // bias along normal to reduce acne
-        let sample_pos = view_pos + n_view * bias + sample_dir * radius;
+        let sample_pos = view_pos + sample_dir * radius;
 
         let suv = project_view_to_uv(sample_pos);
         if (suv.x <= 0.0 || suv.x >= 1.0 || suv.y <= 0.0 || suv.y >= 1.0) {
@@ -159,7 +158,16 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
 
         // With RH view where forward is -Z: closer = larger z (less negative).
         //let occluded = select(0.0, 1.0, sview.z > sample_pos.z);
-        let occluded = select(0.0, 1.0, sview.z >= sample_pos.z + bias); // non-reversed z, or not?
+        var occluded = 0.0;
+        var ref_z = sample_pos.z;
+
+        if (ssao.params1.x == 1u) { // reversed Z: near = larger z
+         ref_z = ref_z + bias;
+         occluded = select(0.0, 1.0, sview.z >= ref_z);
+        } else {              // normal Z: near = smaller z
+         ref_z = ref_z - bias;
+         occluded = select(0.0, 1.0, sview.z <= ref_z);
+        }
 
         let dist = length(sview - view_pos);
         let range = smoothstep(0.0, 1.0, radius / max(1e-4, dist));

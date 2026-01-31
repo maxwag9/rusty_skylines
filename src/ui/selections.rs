@@ -3,43 +3,6 @@ use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct SelectedUiElement {
-    pub menu_name: String,
-    pub layer_name: String,
-    pub element_id: String,
-    pub active: bool,
-    pub just_deselected: bool,
-    pub dragging: bool,
-    pub just_selected: bool,
-    pub action_name: String,
-    pub input_box: bool,
-}
-
-impl SelectedUiElement {
-    pub(crate) fn default() -> SelectedUiElement {
-        Self {
-            menu_name: "no menu".to_string(),
-            layer_name: "no layer".to_string(),
-            element_id: "no element".to_string(),
-            active: false,
-            just_deselected: true,
-            dragging: false,
-            just_selected: false,
-            action_name: "None".to_string(),
-            input_box: false,
-        }
-    }
-    pub fn element_type(&self, menus: &HashMap<String, Menu>) -> ElementKind {
-        menus
-            .get(&self.menu_name)
-            .and_then(|menu| menu.layers.iter().find(|l| l.name == self.layer_name))
-            .and_then(|layer| layer.iter_all().find(|e| e.id() == &self.element_id))
-            .map(ElementKind::from)
-            .unwrap_or(ElementKind::None)
-    }
-}
-
 /// Manages UI element selection state
 #[derive(Clone, Debug, Default)]
 pub struct SelectionManager {
@@ -48,7 +11,7 @@ pub struct SelectionManager {
     /// Additional selected elements (multi-select)
     pub secondary: Vec<ElementRef>,
     /// Anchor point for box selection
-    pub box_select_anchor: Option<(f32, f32)>,
+    pub box_select_anchor: Option<[f32; 2]>,
     /// Whether selection changed this frame
     pub selection_changed: bool,
     /// Whether a selection was just made
@@ -210,12 +173,12 @@ impl SelectionManager {
     }
 
     /// Begin box selection
-    pub fn begin_box_select(&mut self, start: (f32, f32)) {
+    pub fn begin_box_select(&mut self, start: [f32; 2]) {
         self.box_select_anchor = Some(start);
     }
 
     /// End box selection
-    pub fn end_box_select(&mut self) -> Option<(f32, f32)> {
+    pub fn end_box_select(&mut self) -> Option<[f32; 2]> {
         self.box_select_anchor.take()
     }
 

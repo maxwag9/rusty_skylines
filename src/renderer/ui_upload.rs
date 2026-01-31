@@ -4,10 +4,9 @@ use crate::renderer::ui_text_rendering::{
     render_editor_outline, render_selection,
 };
 use crate::resources::TimeSystem;
-use std::collections::HashMap;
-
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::*;
+use std::collections::HashMap;
 use wgpu::{BufferDescriptor, BufferUsages, Queue};
 
 pub fn upload_circles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {

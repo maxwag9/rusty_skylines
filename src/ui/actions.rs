@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 pub mod drag_hue_point;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::TimeSystem;
@@ -182,6 +183,7 @@ impl UiCommandType {
 /// A fully-specified UI command with all data embedded.
 /// Can be queued and executed without the original parsing context.
 #[derive(Debug, Clone)]
+
 pub enum UiCommand {
     // ===== MENU COMMANDS =====
     OpenMenu {

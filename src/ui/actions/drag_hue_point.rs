@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 use crate::resources::TimeSystem;
 use crate::ui::actions::deactivate_action;
 use crate::ui::input::MouseState;

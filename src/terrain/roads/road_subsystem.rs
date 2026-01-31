@@ -1,7 +1,7 @@
 //! road_mesh_renderer.rs
-use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer, VisibleChunk};
+use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
 use crate::terrain::roads::road_editor::RoadEditor;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager, RoadVertex};
+use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
 use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
 
 use crate::components::camera::Camera;
@@ -9,8 +9,7 @@ use crate::renderer::gizmo::Gizmo;
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::input::InputState;
-use std::collections::{BTreeMap, HashMap};
-use std::ops::Range;
+use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
 
@@ -22,26 +21,13 @@ pub struct ChunkGpuMesh {
 }
 pub struct RoadRenderSubsystem {
     pub mesh_manager: RoadMeshManager,
-    pub mesh_renderer: RoadMeshRenderer,
 
     pub style: RoadStyleParams,
-    pub road_gpu_storage: RoadGpuStorage,
     pub chunk_gpu: HashMap<ChunkId, ChunkGpuMesh>,
     pub visible_draw_list: Vec<ChunkId>,
 
-    pub material_array: MaterialArray,
-
-    pub visible_chunks: Vec<ChunkId>,
     pub road_manager: RoadManager,
     pub road_editor: RoadEditor,
-    pub road_vertex_buffer: Option<wgpu::Buffer>,
-    pub road_index_buffer: Option<wgpu::Buffer>,
-    pub geometry_dirty: bool,
-    pub last_visible_hash: u64,
-
-    // switch to write_buffer:
-    pub vb_capacity_bytes: u64,
-    pub ib_capacity_bytes: u64,
 
     pub preview_state: RoadPreviewState,
     pub preview_gpu: PreviewGpuMesh,
@@ -51,21 +37,11 @@ impl RoadRenderSubsystem {
     pub fn new(device: &Device) -> Self {
         Self {
             mesh_manager: RoadMeshManager::new(MeshConfig::default()),
-            mesh_renderer: RoadMeshRenderer::new(),
             style: RoadStyleParams::default(),
-            road_gpu_storage: RoadGpuStorage::new(),
             chunk_gpu: Default::default(),
             visible_draw_list: vec![],
-            material_array: MaterialArray::new(),
-            visible_chunks: Vec::new(),
             road_manager: RoadManager::new(),
             road_editor: RoadEditor::new(),
-            road_vertex_buffer: None,
-            road_index_buffer: None,
-            geometry_dirty: true,
-            last_visible_hash: 0,
-            vb_capacity_bytes: 0,
-            ib_capacity_bytes: 0,
             preview_state: RoadPreviewState::new(),
             preview_gpu: PreviewGpuMesh::new(),
             road_appearance: RoadAppearanceGpu::new(device),
@@ -193,131 +169,9 @@ impl RoadRenderSubsystem {
             }
         }
     }
-
-    /// Get draw calls for current frame
-    pub fn draw_calls(&self) -> &[DrawCall] {
-        &self.road_gpu_storage.draw_calls
-    }
 }
 
-struct GpuRoadChunk {
-    topo_version: u64,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct MaterialArray {
-    mapping: BTreeMap<u32, u32>,
-}
-
-impl MaterialArray {
-    pub fn new() -> Self {
-        Self {
-            mapping: BTreeMap::new(),
-        }
-    }
-
-    pub fn insert(&mut self, material_id: u32, layer_index: u32) {
-        self.mapping.insert(material_id, layer_index);
-    }
-
-    pub fn get(&self, material_id: u32) -> Option<u32> {
-        self.mapping.get(&material_id).copied()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrawCall {
-    pub chunk_id: ChunkId,
-    pub index_range: Range<u32>,
-    pub vertex_offset: u32,
-    pub base_vertex: i32,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct UploadMesh {
-    pub chunk_id: ChunkId,
-    pub vertices: Vec<RoadVertex>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct RoadGpuStorage {
-    pub uploaded_vertex_buffers: Vec<UploadMesh>,
-    pub uploaded_index_buffers: Vec<(u32, Vec<u32>)>,
-    pub draw_calls: Vec<DrawCall>,
-}
-
-impl RoadGpuStorage {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn upload_vertices(&mut self, chunk_id: ChunkId, vertices: Vec<RoadVertex>) {
-        self.uploaded_vertex_buffers
-            .push(UploadMesh { chunk_id, vertices });
-    }
-
-    pub fn upload_indices(&mut self, material_layer_index: u32, indices: Vec<u32>) {
-        self.uploaded_index_buffers
-            .push((material_layer_index, indices));
-    }
-
-    pub fn add_draw_call(&mut self, draw_call: DrawCall) {
-        self.draw_calls.push(draw_call);
-    }
-}
-
-pub struct RoadMeshRenderer {
-    last_draw_calls: Vec<DrawCall>,
-}
-
-impl Default for RoadMeshRenderer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RoadMeshRenderer {
-    pub fn new() -> Self {
-        Self {
-            last_draw_calls: Vec::new(),
-        }
-    }
-
-    pub fn last_draw_calls(&self) -> &[DrawCall] {
-        &self.last_draw_calls
-    }
-}
-fn hash_visible(visible: &[VisibleChunk]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    visible.len().hash(&mut h);
-    for v in visible {
-        v.id.hash(&mut h);
-    }
-    h.finish()
-}
-pub const WGSL_FRAGMENT_SHADER: &str = r#"
-@group(0) @binding(0) var texture_array: texture_2d_array<f32>;
-@group(0) @binding(1) var texture_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) clip_position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) material_layer_index: u32,
-}
-
-fn sample_road_texture(uv: vec2<f32>, material_layer_index: u32) -> vec4<f32> {
-    return textureSample(texture_array, texture_sampler, uv, i32(material_layer_index));
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let road_color = sample_road_texture(in.uv, in.material_layer_index);
-    return road_color;
-}
-"#;
-
-pub const WGSL_SDF_TEXT_OVERLAY: &str = r#"
+pub const _WGSL_SDF_TEXT_OVERLAY: &str = r#"
 @group(1) @binding(0) var glyph_atlas: texture_2d_array<f32>;
 @group(1) @binding(1) var glyph_sampler: sampler;
 

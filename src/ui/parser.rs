@@ -1054,20 +1054,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let negative = int_part.starts_with('-');
             let digits: String = int_part.chars().filter(|c| c.is_ascii_digit()).collect();
 
-            let with_commas: String = digits
-                .chars()
-                .rev()
-                .enumerate()
-                .fold(String::new(), |mut acc, (i, c)| {
-                    if i > 0 && i % 3 == 0 {
-                        acc.push(',');
-                    }
-                    acc.push(c);
-                    acc
-                })
-                .chars()
-                .rev()
-                .collect();
+            let with_commas = insert_thousands_commas(&digits);
 
             let result = if negative {
                 format!("-{}", with_commas)
@@ -1105,20 +1092,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let frac_part = parts.get(1);
 
             let digits: String = int_part.chars().filter(|c| c.is_ascii_digit()).collect();
-            let with_commas: String = digits
-                .chars()
-                .rev()
-                .enumerate()
-                .fold(String::new(), |mut acc, (i, c)| {
-                    if i > 0 && i % 3 == 0 {
-                        acc.push(',');
-                    }
-                    acc.push(c);
-                    acc
-                })
-                .chars()
-                .rev()
-                .collect();
+            let with_commas = insert_thousands_commas(&digits);
 
             let num_str = match frac_part {
                 Some(frac) => format!("{}.{}", with_commas, frac),
@@ -1339,18 +1313,8 @@ impl<'a> Parser<'a> {
                 if let Token::LParen = self.peek() {
                     self.next();
                     let mut args = vec![value];
-                    if !matches!(self.peek(), Token::RParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            match self.peek() {
-                                Token::Comma => {
-                                    self.next();
-                                }
-                                Token::RParen => break,
-                                _ => return None,
-                            }
-                        }
-                    }
+                    args = self.parse_comma_separated_until_rparen(|s| s.parse_expr())?;
+
                     self.next(); // consume )
 
                     if let Some(func) = get_builtin(&name) {
@@ -1822,19 +1786,8 @@ impl<'a> Parser<'a> {
                 // Check for function call
                 if let Token::LParen = self.peek() {
                     self.next();
-                    let mut args = Vec::new();
-                    if !matches!(self.peek(), Token::RParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            match self.peek() {
-                                Token::Comma => {
-                                    self.next();
-                                }
-                                Token::RParen => break,
-                                _ => return None,
-                            }
-                        }
-                    }
+                    let args: Vec<Value>;
+                    args = self.parse_comma_separated_until_rparen(|s| s.parse_expr())?;
                     self.next(); // consume )
 
                     // Try built-in function
@@ -1899,6 +1852,27 @@ impl<'a> Parser<'a> {
             }
             _ => None,
         }
+    }
+    fn parse_comma_separated_until_rparen<F>(&mut self, mut parse_item: F) -> Option<Vec<Value>>
+    where
+        F: FnMut(&mut Self) -> Option<Value>,
+    {
+        let mut items = Vec::new();
+
+        if !matches!(self.peek(), Token::RParen) {
+            loop {
+                items.push(parse_item(self)?);
+                match self.peek() {
+                    Token::Comma => {
+                        self.next();
+                    }
+                    Token::RParen => break,
+                    _ => return None,
+                }
+            }
+        }
+
+        Some(items)
     }
 }
 
@@ -2420,4 +2394,20 @@ pub fn set_input_box(template: &str, current_text: &str, _vars: &mut UiVariableR
 
     // Visible text keeps what the user typed, nothing blanked
     current_text.to_string()
+}
+fn insert_thousands_commas(digits: &str) -> String {
+    digits
+        .chars()
+        .rev()
+        .enumerate()
+        .fold(String::new(), |mut acc, (i, c)| {
+            if i > 0 && i % 3 == 0 {
+                acc.push(',');
+            }
+            acc.push(c);
+            acc
+        })
+        .chars()
+        .rev()
+        .collect()
 }

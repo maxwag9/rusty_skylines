@@ -1,4 +1,17 @@
+use crate::components::camera::Camera;
 use crate::data::Settings;
+use crate::paths::shader_dir;
+use crate::renderer::gizmo::Gizmo;
+use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
+use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
+use crate::renderer::textures::material_keys::*;
+use crate::renderer::world_renderer::TerrainRenderer;
+use crate::terrain::roads::road_mesh_manager::RoadVertex;
+use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
+use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
+use crate::terrain::water::SimpleVertex;
+use crate::ui::vertex::{LineVtxRender, Vertex};
+use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 
 pub struct RenderPassConfig {
@@ -90,5 +103,425 @@ pub fn create_depth_attachment<'a>(
             load: LoadOp::Clear(0),
             store: StoreOp::Store,
         }),
+    }
+}
+
+pub fn create_world_pass<'a>(
+    encoder: &'a mut CommandEncoder,
+    pipelines: &'a Pipelines,
+    config: &'a RenderPassConfig,
+    msaa_samples: u32,
+) -> RenderPass<'a> {
+    let color_attachment = create_color_attachment(
+        &pipelines.msaa_hdr_view,
+        &pipelines.resolved_hdr_view,
+        msaa_samples,
+        config.background_color,
+    );
+
+    let normal_attachment = create_normal_attachment(
+        &pipelines.msaa_normal_view,
+        &pipelines.resolved_normal_view,
+        msaa_samples,
+    );
+
+    encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("World Pass"),
+        color_attachments: &[Some(color_attachment), Some(normal_attachment)],
+        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.depth_view, config)),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
+// RENDER PASSES
+
+pub fn render_gizmo(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+    gizmo: &mut Gizmo,
+    camera: &Camera,
+    device: &Device,
+    queue: &Queue,
+) {
+    let targets = color_and_normals_targets(pipelines);
+    render_manager.render(
+        Vec::new(),
+        "Gizmo",
+        shader_dir().join("lines.wgsl").as_path(),
+        PipelineOptions {
+            topology: PrimitiveTopology::LineList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([LineVtxRender::layout()]),
+            targets,
+            ..Default::default()
+        },
+        &[&pipelines.camera_uniforms.buffer],
+        pass,
+        pipelines,
+        settings,
+    );
+
+    let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
+    pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
+    pass.draw(0..vertex_count, 0..1);
+    gizmo.clear();
+}
+
+pub fn render_water(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+) {
+    let targets = color_and_normals_targets(pipelines);
+    render_manager.render(
+        Vec::new(),
+        "Water",
+        shader_dir().join("water.wgsl").as_path(),
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::Always,
+                stencil: StencilState {
+                    front: StencilFaceState {
+                        compare: CompareFunction::Equal,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Keep,
+                    },
+                    back: StencilFaceState {
+                        compare: CompareFunction::Equal,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Keep,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0x00,
+                },
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([SimpleVertex::layout()]),
+            targets,
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &pipelines.water_uniforms.buffer,
+            &pipelines.sky_uniforms.buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+
+    pass.set_stencil_reference(1);
+    pass.set_vertex_buffer(0, pipelines.water_mesh_buffers.vertex.slice(..));
+    pass.set_index_buffer(
+        pipelines.water_mesh_buffers.index.slice(..),
+        IndexFormat::Uint32,
+    );
+    pass.draw_indexed(0..pipelines.water_mesh_buffers.index_count, 0, 0..1);
+}
+
+pub fn render_sky(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+) {
+    let sky_depth_stencil = Some(DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: false,
+        depth_compare: if settings.reversed_depth_z {
+            CompareFunction::GreaterEqual
+        } else {
+            CompareFunction::LessEqual
+        },
+        stencil: Default::default(),
+        bias: Default::default(),
+    });
+    let targets = color_and_normals_targets(pipelines);
+    render_manager.render(
+        Vec::new(),
+        "Stars",
+        shader_dir().join("stars.wgsl").as_path(),
+        PipelineOptions {
+            topology: PrimitiveTopology::TriangleStrip,
+            depth_stencil: sky_depth_stencil.clone(),
+            msaa_samples,
+            vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
+            targets: targets.clone(),
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &pipelines.sky_uniforms.buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+    pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
+    pass.draw(0..4, 0..STAR_COUNT);
+    render_manager.render(
+        Vec::new(),
+        "Sky",
+        shader_dir().join("sky.wgsl").as_path(),
+        PipelineOptions {
+            topology: Default::default(),
+            depth_stencil: sky_depth_stencil,
+            msaa_samples,
+            vertex_layouts: Vec::new(),
+            targets,
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &pipelines.sky_uniforms.buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+    pass.draw(0..3, 0..1);
+}
+
+pub fn render_roads(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    road_renderer: &RoadRenderSubsystem,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+) {
+    let keys = road_material_keys();
+    let shader_path = shader_dir().join("road.wgsl");
+    fn road_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
+        let sign_i = if settings.reversed_depth_z { 1 } else { -1 };
+        let sign_f = sign_i as f32;
+
+        DepthBiasState {
+            constant: sign_i * constant.abs(),
+            slope_scale: sign_f * slope.abs(),
+            clamp: 0.0,
+        }
+    }
+    let base_bias = road_bias(settings, 3, 2.0);
+    let preview_bias = road_bias(settings, 4, 2.0);
+    let targets = color_and_normals_targets(pipelines);
+    render_manager.render(
+        keys.clone(),
+        "Roads",
+        shader_path.as_path(),
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(road_depth_stencil(base_bias, settings)),
+            msaa_samples,
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            cull_mode: Some(Face::Back),
+            targets: targets.clone(),
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &road_renderer.road_appearance.normal_buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+
+    draw_visible_roads(pass, road_renderer);
+
+    if road_renderer.preview_gpu.is_empty() {
+        return;
+    }
+    let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
+    else {
+        return;
+    };
+
+    render_manager.render(
+        keys,
+        "Roads",
+        shader_path.as_path(),
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(road_depth_stencil(preview_bias, settings)),
+            msaa_samples,
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            cull_mode: Some(Face::Back),
+            targets,
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &road_renderer.road_appearance.preview_buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+
+    pass.set_vertex_buffer(0, vb.slice(..));
+    pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
+    pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
+}
+
+pub fn draw_visible_roads(pass: &mut RenderPass, road_renderer: &RoadRenderSubsystem) {
+    for chunk_id in &road_renderer.visible_draw_list {
+        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
+            pass.set_vertex_buffer(0, gpu.vertex.slice(..));
+            pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        }
+    }
+}
+
+pub fn render_terrain(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    terrain_renderer: &TerrainRenderer,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+    camera: &Camera,
+    aspect: f32,
+) {
+    let keys = terrain_material_keys();
+    let shader_path = shader_dir().join("terrain.wgsl");
+
+    let make_stencil = |write_mask: u32| -> DepthStencilState {
+        DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: if settings.reversed_depth_z {
+                CompareFunction::GreaterEqual
+            } else {
+                CompareFunction::LessEqual
+            },
+            stencil: StencilState {
+                front: StencilFaceState {
+                    compare: CompareFunction::Always,
+                    fail_op: StencilOperation::Keep,
+                    depth_fail_op: StencilOperation::Keep,
+                    pass_op: StencilOperation::Replace,
+                },
+                back: StencilFaceState {
+                    compare: CompareFunction::Always,
+                    fail_op: StencilOperation::Keep,
+                    depth_fail_op: StencilOperation::Keep,
+                    pass_op: StencilOperation::Replace,
+                },
+                read_mask: 0xFF,
+                write_mask,
+            },
+            bias: Default::default(),
+        }
+    };
+    let targets = color_and_normals_targets(pipelines);
+    pass.set_stencil_reference(0);
+    render_manager.render(
+        keys.clone(),
+        "Terrain Pipeline (Above Water)",
+        shader_path.as_path(),
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(make_stencil(0)),
+            msaa_samples,
+            vertex_layouts: Vec::from([Vertex::desc()]),
+            cull_mode: Some(Face::Front),
+            targets: targets.clone(),
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &pipelines.pick_uniforms.buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+    terrain_renderer.render(pass, camera, aspect, settings, false);
+
+    pass.set_stencil_reference(1);
+    render_manager.render(
+        keys,
+        "Terrain Pipeline (Under Water)",
+        shader_path.as_path(),
+        PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(make_stencil(0xFF)),
+            msaa_samples,
+            vertex_layouts: Vec::from([Vertex::desc()]),
+            cull_mode: Some(Face::Front),
+            targets,
+            ..Default::default()
+        },
+        &[
+            &pipelines.camera_uniforms.buffer,
+            &pipelines.pick_uniforms.buffer,
+        ],
+        pass,
+        pipelines,
+        settings,
+    );
+    terrain_renderer.render(pass, camera, aspect, settings, true);
+}
+
+fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
+    vec![
+        Some(ColorTargetState {
+            format: pipelines.msaa_hdr_view.texture().format(),
+            blend: Some(BlendState::ALPHA_BLENDING),
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: pipelines.msaa_normal_view.texture().format(),
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }),
+    ]
+}
+
+pub fn color_target(
+    pipelines: &Pipelines,
+    blend: Option<BlendState>,
+) -> Vec<Option<ColorTargetState>> {
+    vec![Some(ColorTargetState {
+        format: pipelines.msaa_hdr_view.texture().format(),
+        blend,
+        write_mask: ColorWrites::ALL,
+    })]
+}
+
+fn road_depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
+    DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: true,
+        depth_compare: if settings.reversed_depth_z {
+            CompareFunction::GreaterEqual
+        } else {
+            CompareFunction::LessEqual
+        },
+        stencil: Default::default(),
+        bias,
     }
 }

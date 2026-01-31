@@ -23,7 +23,6 @@ pub type ChunkId = u64;
 // Constants & Configuration
 // ============================================================================
 
-const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
 pub const CLEARANCE: f32 = 0.03;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
@@ -73,16 +72,6 @@ pub fn chunk_id_to_coord(id: ChunkId) -> ChunkCoord {
         unzigzag_u32(compact1by1(id)),
         unzigzag_u32(compact1by1(id >> 1)),
     )
-}
-pub fn chunk_x_range(chunk_id: ChunkId) -> (f32, f32) {
-    let chunk_coord = chunk_id_to_coord(chunk_id);
-    let min_x = chunk_coord.x as f32 * 64.0;
-    (min_x, min_x + 64.0)
-}
-pub fn chunk_z_range(chunk_id: ChunkId) -> (f32, f32) {
-    let chunk_coord = chunk_id_to_coord(chunk_id);
-    let min_z = chunk_coord.z as f32 * 64.0;
-    (min_z, min_z + 64.0)
 }
 
 // ============================================================================
@@ -152,6 +141,7 @@ pub struct ChunkMesh {
 }
 
 impl ChunkMesh {
+    #![allow(dead_code)]
     pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
@@ -500,7 +490,6 @@ fn draw_node_geometry(
     let angle_span = end_angle - start_angle;
     let step_angle = angle_span / num_quads as f32;
 
-    let y_base = node_pos.local.y;
     let up_normal = [0.0_f32, 1.0, 0.0];
 
     // Helper to get next vertex index (wraps for full circle, doesn't for cap)
@@ -732,7 +721,7 @@ fn draw_node_geometry(
 }
 
 /// Builds a ribbon mesh for a single lane or strip.
-pub(crate) fn build_ribbon_mesh(
+pub fn build_ribbon_mesh(
     terrain_renderer: &TerrainRenderer,
     gizmo: &mut Gizmo,
     style: &RoadStyleParams,
@@ -760,21 +749,12 @@ pub(crate) fn build_ribbon_mesh(
 
     for i in 0..lane_geom.points.len() {
         let p = lane_geom.points[i];
-        let tangent = if i + 1 < lane_geom.points.len() {
-            p.delta_to(lane_geom.points[i + 1], chunk_size)
-                .normalize_or_zero()
-        } else if i > 0 {
-            lane_geom.points[i - 1]
-                .delta_to(p, chunk_size)
-                .normalize_or_zero()
-        } else {
-            Vec3::X
-        };
+        let (_, lateral) = tangent_and_lateral(&lane_geom.points, i, chunk_size);
 
-        let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
         let center_pos = p.sub_vec3(lateral * offset_from_center, chunk_size);
         let left_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
         let right_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
+
         edges.push((left_pos, right_pos));
     }
 
@@ -959,37 +939,14 @@ pub fn build_vertical_face(
         };
 
         let (face_pos, normal) = if let Some(ovr) = override_pos {
-            // If overridden, use the exact position provided
-            // We still need a normal. Use the tangent of the geometry near the end.
-            let tangent = if i == 0 {
-                ref_geom.points[1]
-                    .delta_to(ref_geom.points[0], chunk_size)
-                    .normalize_or_zero()
-            } else {
-                ref_geom.points[i]
-                    .delta_to(ref_geom.points[i - 1], chunk_size)
-                    .normalize_or_zero()
-            };
-
-            let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
+            let (_, lateral) = tangent_and_lateral(&ref_geom.points, i, chunk_size);
             (ovr, lateral * normal_sign)
         } else {
-            // Standard tangent based calculation
-            let tangent = if i + 1 < ref_geom.points.len() {
-                ref_geom.points[i + 1]
-                    .delta_to(p, chunk_size)
-                    .normalize_or_zero()
-            } else if i > 0 {
-                p.delta_to(ref_geom.points[i - 1], chunk_size)
-                    .normalize_or_zero()
-            } else {
-                Vec3::X
-            };
-
-            let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
+            let (_, lateral) = tangent_and_lateral(&ref_geom.points, i, chunk_size);
             let raw = p.add_vec3(lateral * offset_lateral, chunk_size);
             (raw, lateral * normal_sign)
         };
+
         let mut p_bottom = face_pos;
         set_point_height_with_structure_type(
             terrain_renderer,
@@ -1169,11 +1126,11 @@ impl RoadMeshManager {
         self.chunk_cache.get(&chunk_id)
     }
 
-    pub fn invalidate_chunk(&mut self, chunk_id: ChunkId) {
+    pub fn _invalidate_chunk(&mut self, chunk_id: ChunkId) {
         self.chunk_cache.remove(&chunk_id);
     }
 
-    pub fn clear_cache(&mut self) {
+    pub fn _clear_cache(&mut self) {
         self.chunk_cache.clear();
     }
 

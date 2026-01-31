@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::f32::consts::TAU;
 
 pub struct AstronomyState {

@@ -17,7 +17,6 @@ pub struct UiPipelines {
     pub msaa_samples: u32,
 
     format: TextureFormat,
-    pub vertex_buffer: Buffer,
     pub circle_pipeline: RenderPipeline,
     pub outline_pipeline: RenderPipeline,
     pub polygon_pipeline: RenderPipeline,
@@ -31,10 +30,7 @@ pub struct UiPipelines {
     pub text_pipeline: RenderPipeline,
     pub text_layout: BindGroupLayout,
     pub text_bind_group: BindGroup,
-    pub text_vertex_buffer: Buffer,
     pub outline_layout: BindGroupLayout,
-    pub text_vertex_count: i32,
-    pub num_vertices: i32,
     pub text_shader: ShaderModule,
     pub circle_shader: ShaderModule,
     pub outline_shader: ShaderModule,
@@ -122,12 +118,6 @@ impl UiPipelines {
             contents: bytemuck::cast_slice(&quad_vertices),
             usage: BufferUsages::VERTEX,
         });
-        let vertex_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("UI VB"),
-            size: (1024 * 1024) as u64, // 1MB buffer
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let uniform_layout = make_uniform_layout(device, "UI Bind Layout");
 
@@ -193,14 +183,6 @@ impl UiPipelines {
             msaa_samples,
         );
 
-        let text_vertex_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("UI Text VB"),
-            size: 256 * 1024,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // println!("CircleParams size: {}", std::mem::size_of::<CircleParams>());
         let circle_shader = load_shader(
             &device,
             &shader_dir().join("ui_circle.wgsl"),
@@ -434,7 +416,6 @@ impl UiPipelines {
             msaa_samples,
             format,
 
-            vertex_buffer,
             quad_buffer,
 
             circle_shader,
@@ -469,13 +450,9 @@ impl UiPipelines {
             text_pipeline,
 
             text_bind_group,
-            text_vertex_buffer,
-            text_vertex_count: 0,
 
             additive_blend,
             good_blend,
-
-            num_vertices: 0,
         })
     }
 

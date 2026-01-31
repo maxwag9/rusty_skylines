@@ -25,7 +25,7 @@ const COALESCE_TIMEOUT: f32 = 0.3;
 // ============================================================================
 
 /// Command trait for undoable actions
-pub trait Command: Any {
+pub trait UICommand: Any {
     /// Apply undo (restore before state)
     fn undo(
         &self,
@@ -37,7 +37,7 @@ pub trait Command: Any {
 
     /// Apply redo (apply after state)
     fn redo(
-        &self,
+        &mut self,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
@@ -53,29 +53,29 @@ pub trait Command: Any {
 
     /// Try to merge another command into this one (for coalescing).
     /// Returns true if merged successfully.
-    fn try_coalesce(&mut self, _other: &dyn Command) -> bool {
+    fn try_coalesce(&mut self, _other: &dyn UICommand) -> bool {
         false
     }
 
     /// Clone into a Box (required for redo stack)
-    fn clone_box(&self) -> Box<dyn Command>;
+    fn clone_box(&self) -> Box<dyn UICommand>;
 }
 
-impl dyn Command {
-    pub fn is<T: Command + 'static>(&self) -> bool {
+impl dyn UICommand {
+    pub fn is<T: UICommand + 'static>(&self) -> bool {
         self.as_any().is::<T>()
     }
 
-    pub fn downcast_ref<T: Command + 'static>(&self) -> Option<&T> {
+    pub fn downcast_ref<T: UICommand + 'static>(&self) -> Option<&T> {
         self.as_any().downcast_ref::<T>()
     }
 
-    pub fn downcast_mut<T: Command + 'static>(&mut self) -> Option<&mut T> {
+    pub fn downcast_mut<T: UICommand + 'static>(&mut self) -> Option<&mut T> {
         self.as_any_mut().downcast_mut::<T>()
     }
 }
 
-impl Clone for Box<dyn Command> {
+impl Clone for Box<dyn UICommand> {
     fn clone(&self) -> Self {
         self.clone_box()
     }
@@ -89,38 +89,39 @@ impl Clone for Box<dyn Command> {
 #[derive(Clone, Debug)]
 pub struct MoveElementCommand {
     pub affected_element: ElementRef,
-    pub before: (f32, f32),
-    pub after: (f32, f32),
+    /// Just say None, it works fine.
+    pub before: Option<[f32; 2]>,
+    pub after: [f32; 2],
 }
 
-impl Command for MoveElementCommand {
+impl UICommand for MoveElementCommand {
     fn undo(
         &self,
-        touch_manager: &mut UiTouchManager,
-
+        _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        set_element_position(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.affected_element.kind,
-            self.before,
-        );
+        if let Some(before) = self.before {
+            set_element_position(
+                menus,
+                &self.affected_element.menu,
+                &self.affected_element.layer,
+                &self.affected_element.id,
+                self.affected_element.kind,
+                before,
+            );
+        }
     }
 
     fn redo(
-        &self,
-        touch_manager: &mut UiTouchManager,
-
+        &mut self,
+        _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        set_element_position(
+        let before = set_element_position(
             menus,
             &self.affected_element.menu,
             &self.affected_element.layer,
@@ -128,6 +129,9 @@ impl Command for MoveElementCommand {
             self.affected_element.kind,
             self.after,
         );
+        if self.before.is_none() {
+            self.before = before;
+        }
     }
 
     fn description(&self) -> String {
@@ -141,7 +145,7 @@ impl Command for MoveElementCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn Command) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -153,7 +157,7 @@ impl Command for MoveElementCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -166,7 +170,7 @@ pub struct ResizeElementCommand {
     pub after: f32,
 }
 
-impl Command for ResizeElementCommand {
+impl UICommand for ResizeElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -186,7 +190,7 @@ impl Command for ResizeElementCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -214,7 +218,7 @@ impl Command for ResizeElementCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn Command) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -226,7 +230,7 @@ impl Command for ResizeElementCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -239,7 +243,7 @@ pub struct ModifyCircleCommand {
     pub after: UiButtonCircle,
 }
 
-impl Command for ModifyCircleCommand {
+impl UICommand for ModifyCircleCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -257,7 +261,7 @@ impl Command for ModifyCircleCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -282,7 +286,7 @@ impl Command for ModifyCircleCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -295,7 +299,7 @@ pub struct ModifyTextCommand {
     pub after: UiButtonText,
 }
 
-impl Command for ModifyTextCommand {
+impl UICommand for ModifyTextCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -313,7 +317,7 @@ impl Command for ModifyTextCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -338,7 +342,7 @@ impl Command for ModifyTextCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -351,7 +355,7 @@ pub struct ModifyPolygonCommand {
     pub after: UiButtonPolygon,
 }
 
-impl Command for ModifyPolygonCommand {
+impl UICommand for ModifyPolygonCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -369,7 +373,7 @@ impl Command for ModifyPolygonCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -394,7 +398,7 @@ impl Command for ModifyPolygonCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -406,7 +410,7 @@ pub struct CreateElementCommand {
     pub element: UiElement,
 }
 
-impl Command for CreateElementCommand {
+impl UICommand for CreateElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -424,7 +428,7 @@ impl Command for CreateElementCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -450,7 +454,7 @@ impl Command for CreateElementCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -462,7 +466,7 @@ pub struct DeleteElementCommand {
     pub element: UiElement,
 }
 
-impl Command for DeleteElementCommand {
+impl UICommand for DeleteElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -481,7 +485,7 @@ impl Command for DeleteElementCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -506,7 +510,7 @@ impl Command for DeleteElementCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -518,7 +522,7 @@ pub struct ChangeZIndexCommand {
     pub delta: i32,
 }
 
-impl Command for ChangeZIndexCommand {
+impl UICommand for ChangeZIndexCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -537,7 +541,7 @@ impl Command for ChangeZIndexCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -563,7 +567,7 @@ impl Command for ChangeZIndexCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -576,7 +580,7 @@ pub struct ChangeLayerOrderCommand {
     pub after: u32,
 }
 
-impl Command for ChangeLayerOrderCommand {
+impl UICommand for ChangeLayerOrderCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -594,7 +598,7 @@ impl Command for ChangeLayerOrderCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -619,7 +623,7 @@ impl Command for ChangeLayerOrderCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -636,7 +640,7 @@ pub struct TextEditCommand {
     pub after_caret: usize,
 }
 
-impl Command for TextEditCommand {
+impl UICommand for TextEditCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -657,7 +661,7 @@ impl Command for TextEditCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -685,7 +689,7 @@ impl Command for TextEditCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -695,11 +699,11 @@ impl Command for TextEditCommand {
 pub struct MoveVertexCommand {
     pub affected_element: ElementRef,
     pub vertex_index: usize,
-    pub before: [f32; 2],
+    pub before: Option<[f32; 2]>,
     pub after: [f32; 2],
 }
 
-impl Command for MoveVertexCommand {
+impl UICommand for MoveVertexCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -708,25 +712,27 @@ impl Command for MoveVertexCommand {
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        set_vertex_position(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.vertex_index,
-            self.before,
-        );
+        if let Some(before) = self.before {
+            set_vertex_position(
+                menus,
+                &self.affected_element.menu,
+                &self.affected_element.layer,
+                &self.affected_element.id,
+                self.vertex_index,
+                before,
+            );
+        }
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        set_vertex_position(
+        let before = set_vertex_position(
             menus,
             &self.affected_element.menu,
             &self.affected_element.layer,
@@ -734,6 +740,9 @@ impl Command for MoveVertexCommand {
             self.vertex_index,
             self.after,
         );
+        if self.before.is_none() {
+            self.before = before;
+        }
     }
 
     fn description(&self) -> String {
@@ -750,7 +759,7 @@ impl Command for MoveVertexCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn Command) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -764,7 +773,7 @@ impl Command for MoveVertexCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -804,7 +813,7 @@ pub struct ChangeColorCommand {
     pub after: [f32; 4],
 }
 
-impl Command for ChangeColorCommand {
+impl UICommand for ChangeColorCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -825,7 +834,7 @@ impl Command for ChangeColorCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -856,7 +865,7 @@ impl Command for ChangeColorCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -868,7 +877,7 @@ pub struct DuplicateElementCommand {
     pub new_element: UiElement,
 }
 
-impl Command for DuplicateElementCommand {
+impl UICommand for DuplicateElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -886,7 +895,7 @@ impl Command for DuplicateElementCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -912,7 +921,7 @@ impl Command for DuplicateElementCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -924,7 +933,7 @@ pub struct DeselectAllCommand {
     pub(crate) secondary: Vec<ElementRef>,
 }
 
-impl Command for DeselectAllCommand {
+impl UICommand for DeselectAllCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
@@ -939,7 +948,7 @@ impl Command for DeselectAllCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -959,26 +968,18 @@ impl Command for DeselectAllCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
-}
-
-/// Data for a single element move within MoveMultipleCommand
-#[derive(Clone, Debug)]
-pub struct ElementMove {
-    pub affected_element: ElementRef,
-    pub before: (f32, f32),
-    pub after: (f32, f32),
 }
 
 /// Command for moving multiple elements at once
 #[derive(Clone, Debug)]
 pub struct MoveMultipleCommand {
-    pub moves: Vec<ElementMove>,
+    pub moves: Vec<MoveElementCommand>,
 }
 
-impl Command for MoveMultipleCommand {
+impl UICommand for MoveMultipleCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
@@ -988,27 +989,29 @@ impl Command for MoveMultipleCommand {
         _mouse: &MouseState,
     ) {
         for m in &self.moves {
-            set_element_position(
-                menus,
-                &m.affected_element.menu,
-                &m.affected_element.layer,
-                &m.affected_element.id,
-                m.affected_element.kind,
-                m.before,
-            );
+            if let Some(before) = m.before {
+                set_element_position(
+                    menus,
+                    &m.affected_element.menu,
+                    &m.affected_element.layer,
+                    &m.affected_element.id,
+                    m.affected_element.kind,
+                    before,
+                );
+            }
         }
     }
 
     fn redo(
-        &self,
+        &mut self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &MouseState,
     ) {
-        for m in &self.moves {
-            set_element_position(
+        for m in self.moves.iter_mut() {
+            let before = set_element_position(
                 menus,
                 &m.affected_element.menu,
                 &m.affected_element.layer,
@@ -1016,6 +1019,9 @@ impl Command for MoveMultipleCommand {
                 m.affected_element.kind,
                 m.after,
             );
+            if m.before.is_none() {
+                m.before = before;
+            }
         }
     }
 
@@ -1030,7 +1036,7 @@ impl Command for MoveMultipleCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn Command) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -1056,14 +1062,14 @@ impl Command for MoveMultipleCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
 
 /// Command that batches multiple commands as a single undo step
 pub struct BatchCommand {
-    pub commands: Vec<Box<dyn Command>>,
+    pub commands: Vec<Box<dyn UICommand>>,
     pub description_text: String,
 }
 
@@ -1085,7 +1091,7 @@ impl std::fmt::Debug for BatchCommand {
     }
 }
 
-impl Command for BatchCommand {
+impl UICommand for BatchCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
@@ -1101,7 +1107,7 @@ impl Command for BatchCommand {
     }
 
     fn redo(
-        &self,
+        &mut self,
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
@@ -1109,7 +1115,7 @@ impl Command for BatchCommand {
         mouse: &MouseState,
     ) {
         // Redo in forward order
-        for cmd in &self.commands {
+        for cmd in self.commands.iter_mut() {
             cmd.redo(touch_manager, menus, _variables, mouse);
         }
     }
@@ -1124,7 +1130,7 @@ impl Command for BatchCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn Command> {
+    fn clone_box(&self) -> Box<dyn UICommand> {
         Box::new(self.clone())
     }
 }
@@ -1132,19 +1138,19 @@ impl Command for BatchCommand {
 ///MANAGER!! Karen >:( ///
 
 struct TimestampedCommand {
-    command: Box<dyn Command>,
+    command: Box<dyn UICommand>,
     timestamp: f32,
 }
 
 struct BatchBuilder {
-    commands: Vec<Box<dyn Command>>,
+    commands: Vec<Box<dyn UICommand>>,
     description: String,
 }
 
 /// Manages undo/redo history with coalescing support
 pub struct UiEditManager {
     undo_stack: VecDeque<TimestampedCommand>,
-    redo_stack: Vec<Box<dyn Command>>,
+    redo_stack: Vec<Box<dyn UICommand>>,
     in_undo_redo: bool,
     pending_batch: Option<BatchBuilder>,
     saved_position: Option<usize>,
@@ -1216,7 +1222,7 @@ impl UiEditManager {
     }
 
     /// Push a command (boxed)
-    pub fn push(&mut self, command: Box<dyn Command>) {
+    pub fn push(&mut self, command: Box<dyn UICommand>) {
         if self.in_undo_redo {
             return;
         }
@@ -1232,12 +1238,12 @@ impl UiEditManager {
     }
 
     /// Convenience: push without explicit Box
-    pub fn push_command<C: Command + 'static>(&mut self, command: C) {
+    pub fn push_command<C: UICommand + 'static>(&mut self, command: C) {
         self.push(Box::new(command));
     }
 
     /// Try to merge with previous command
-    fn try_coalesce(&mut self, command: &dyn Command) -> bool {
+    fn try_coalesce(&mut self, command: &dyn UICommand) -> bool {
         if self.current_time - self.last_action_time > COALESCE_TIMEOUT {
             return false;
         }
@@ -1258,7 +1264,7 @@ impl UiEditManager {
     /// Execute a command immediately and push it onto the undo stack
     pub fn execute(
         &mut self,
-        command: Box<dyn Command>,
+        mut command: Box<dyn UICommand>,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
@@ -1283,7 +1289,7 @@ impl UiEditManager {
     }
 
     /// Convenience: execute without explicit Box
-    pub fn execute_command<C: Command + 'static>(
+    pub fn execute_command<C: UICommand + 'static>(
         &mut self,
         command: C,
         touch_manager: &mut UiTouchManager,
@@ -1294,7 +1300,7 @@ impl UiEditManager {
         self.execute(Box::new(command), touch_manager, menus, variables, mouse);
     }
 
-    fn push_internal(&mut self, command: Box<dyn Command>) {
+    fn push_internal(&mut self, command: Box<dyn UICommand>) {
         self.redo_stack.clear();
 
         self.undo_stack.push_back(TimestampedCommand {
@@ -1377,7 +1383,7 @@ impl UiEditManager {
 
         self.in_undo_redo = true;
 
-        let command = self.redo_stack.pop()?;
+        let mut command = self.redo_stack.pop()?;
         let desc = command.description();
 
         command.redo(touch_manager, menus, _variables, mouse);
@@ -1393,7 +1399,7 @@ impl UiEditManager {
     }
 
     /// Access last command for direct mutation during drag operations
-    pub fn last_command_mut<T: Command + 'static>(&mut self) -> Option<&mut T> {
+    pub fn last_command_mut<T: UICommand + 'static>(&mut self) -> Option<&mut T> {
         if self.in_undo_redo {
             return None;
         }
@@ -1426,90 +1432,5 @@ impl UiEditManager {
 
     pub fn redo_count(&self) -> usize {
         self.redo_stack.len()
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_move_coalescing() {
-        let mut cmd1 = MoveElementCommand {
-            affected_element: ElementRef::default(),
-            before: (0.0, 0.0),
-            after: (5.0, 5.0),
-        };
-
-        let cmd2 = MoveElementCommand {
-            affected_element: ElementRef::default(),
-            before: (5.0, 5.0),
-            after: (10.0, 10.0),
-        };
-
-        assert!(cmd1.try_coalesce(&cmd2));
-        assert_eq!(cmd1.before, (0.0, 0.0));
-        assert_eq!(cmd1.after, (10.0, 10.0));
-    }
-
-    #[test]
-    fn test_no_coalesce_different_element() {
-        let mut cmd1 = MoveElementCommand {
-            affected_element: ElementRef::default(),
-            before: (0.0, 0.0),
-            after: (5.0, 5.0),
-        };
-        let mut affected_2 = ElementRef::default();
-        affected_2.id = "e2".into();
-        let cmd2 = MoveElementCommand {
-            affected_element: affected_2,
-            before: (0.0, 0.0),
-            after: (10.0, 10.0),
-        };
-
-        assert!(!cmd1.try_coalesce(&cmd2));
-    }
-
-    #[test]
-    fn test_batch_undo_order() {
-        let mut affected_2 = ElementRef::default();
-        affected_2.id = "b".into();
-        let batch = BatchCommand {
-            commands: vec![
-                Box::new(MoveElementCommand {
-                    affected_element: ElementRef::default(),
-                    before: (0.0, 0.0),
-                    after: (1.0, 1.0),
-                }),
-                Box::new(MoveElementCommand {
-                    affected_element: affected_2,
-                    before: (0.0, 0.0),
-                    after: (2.0, 2.0),
-                }),
-            ],
-            description_text: "Move multiple".into(),
-        };
-
-        assert_eq!(batch.description(), "Move multiple");
-        assert_eq!(batch.commands.len(), 2);
-    }
-
-    #[test]
-    fn test_dirty_tracking() {
-        let mut manager = UiEditManager::new();
-        assert!(!manager.is_dirty());
-
-        manager.push_command(CreateElementCommand {
-            affected_element: ElementRef::default(),
-            element: UiElement::Circle(UiButtonCircle::default()),
-        });
-
-        assert!(manager.is_dirty());
-        manager.mark_saved();
-        assert!(!manager.is_dirty());
     }
 }

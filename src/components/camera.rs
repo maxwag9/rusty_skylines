@@ -62,13 +62,13 @@ impl Camera {
     }
 
     #[inline]
-    pub fn world_to_render(&self, pos: WorldPos) -> Vec3 {
+    pub fn _world_to_render(&self, pos: WorldPos) -> Vec3 {
         let eye = self.eye_world();
         pos.to_render_pos(eye, self.chunk_size) // subtract eye, not target
     }
 
     #[inline]
-    pub fn render_to_world(&self, render_pos: Vec3) -> WorldPos {
+    pub fn _render_to_world(&self, render_pos: Vec3) -> WorldPos {
         self.eye_world()
             .add_render_offset(render_pos, self.chunk_size)
     }
@@ -85,9 +85,6 @@ pub struct CameraController {
     pub pitch_velocity: f32,
     pub orbit_damping_release: f32,
     pub zoom_damping: f32,
-    pub base_fov: f32,
-    pub follow_vel: Vec3, // spring state for target follow
-    pub fov_vel: f32,     // optional (nice) spring state for fov
 }
 
 impl CameraController {
@@ -102,9 +99,6 @@ impl CameraController {
             pitch_velocity: 0.0,
             orbit_damping_release: 2.0,
             zoom_damping: 12.0,
-            base_fov: camera.fov,
-            follow_vel: Default::default(),
-            fov_vel: 0.0,
         }
     }
 }
@@ -158,24 +152,4 @@ pub fn resolve_pitch_by_search(
         camera.pitch = new_pitch;
         camera_controller.pitch_velocity = 0.0;
     }
-}
-
-// Stricter version: checks multiple points along orbit for terrain collision
-fn is_clear_strict(camera: &Camera, terrain: &TerrainRenderer, pitch: f32) -> bool {
-    let mut tmp = camera.clone();
-    tmp.pitch = pitch;
-
-    let orbit_samples = 16;
-    let offset = tmp.orbit_offset();
-
-    for i in 0..=orbit_samples {
-        let t = i as f32 / orbit_samples as f32;
-        let pos: WorldPos = tmp.target.add_vec3(offset * t, terrain.chunk_size);
-
-        let ground_y = terrain.get_height_at(pos);
-        if pos.local.y < ground_y + 2.0 {
-            return false;
-        }
-    }
-    true
 }

@@ -33,7 +33,7 @@ pub fn anchor_to_top_left(
 #[derive(Clone)]
 pub struct FontMetrics {
     pub ascent: f32,
-    pub descent: f32,
+    pub _descent: f32,
     pub line_height: f32,
 }
 
@@ -128,7 +128,7 @@ impl TextAtlas {
                 let metrics = if let Some(v) = vertical {
                     FontMetrics {
                         ascent: v.ascent,
-                        descent: v.descent.abs(),
+                        _descent: v.descent.abs(),
                         line_height: (v.ascent - v.descent + v.line_gap).ceil(),
                     }
                 } else {
@@ -153,7 +153,7 @@ impl TextAtlas {
                         // absolute last resort, should never happen
                         FontMetrics {
                             ascent: size as f32 * 0.8,
-                            descent: size as f32 * 0.2,
+                            _descent: size as f32 * 0.2,
                             line_height: size as f32,
                         }
                     } else {
@@ -162,7 +162,7 @@ impl TextAtlas {
 
                         FontMetrics {
                             ascent,
-                            descent,
+                            _descent: descent,
                             line_height: (ascent + descent).ceil(),
                         }
                     }

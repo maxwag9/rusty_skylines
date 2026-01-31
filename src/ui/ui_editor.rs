@@ -13,9 +13,8 @@ use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{InputState, MouseState};
 use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
-use crate::ui::selections::SelectedUiElement;
 use crate::ui::ui_edit_manager::{
-    Command, DeselectAllCommand, MoveElementCommand, MoveVertexCommand, ResizeElementCommand,
+    DeselectAllCommand, MoveElementCommand, MoveVertexCommand, ResizeElementCommand, UICommand,
     UiEditManager,
 };
 use crate::ui::ui_edits::*;
@@ -41,7 +40,7 @@ use winit::dpi::PhysicalSize;
 #[derive(Clone, Debug)]
 pub struct DragStartState {
     pub affected_element: ElementRef,
-    pub start_pos: (f32, f32),
+    pub start_pos: [f32; 2],
     pub start_size: Option<f32>,
     pub start_vertices: Option<Vec<[f32; 2]>>,
 }
@@ -50,7 +49,7 @@ pub struct DragStartState {
 #[derive(Default)]
 struct EventProcessingResult {
     /// Commands to push to undo system
-    commands: Vec<Box<dyn Command>>,
+    commands: Vec<Box<dyn UICommand>>,
     /// Whether to update selection visuals
     update_selection: bool,
     /// Whether to mark layers dirty
@@ -81,9 +80,6 @@ pub struct UiButtonLoader {
     // Drag tracking for undo
     pub drag_start_state: Option<DragStartState>,
 
-    // Multi-selection (now delegated to touch_manager.selection)
-    pub multi_selection: Vec<SelectedUiElement>,
-
     // Element clipboard
     pub element_clipboard: Option<UiElement>,
 }
@@ -113,7 +109,6 @@ impl UiButtonLoader {
             touch_manager: UiTouchManager::new(editor_mode, override_mode, show_gui),
             ui_edit_manager: UiEditManager::new(),
             drag_start_state: None,
-            multi_selection: Vec::new(),
             element_clipboard: None,
         };
 
@@ -232,7 +227,7 @@ impl UiButtonLoader {
     /// Create input snapshot from mouse state
     fn create_input_snapshot(&self, mouse: &MouseState, input: &InputState) -> InputSnapshot {
         InputSnapshot {
-            position: (mouse.pos.x, mouse.pos.y),
+            position: mouse.pos.to_array(),
             pressed: mouse.left_pressed,
             just_pressed: mouse.left_just_pressed,
             just_released: !mouse.left_pressed && self.touch_manager.last_input.pressed,
@@ -353,14 +348,7 @@ impl UiButtonLoader {
                 delta,
                 total_delta,
             } => {
-                self.handle_drag_move(
-                    element,
-                    *current_position,
-                    *delta,
-                    *total_delta,
-                    result,
-                    mouse,
-                );
+                self.handle_drag_move(element, *current_position, result, mouse);
             }
             TouchEvent::DragEnd {
                 element,
@@ -368,13 +356,7 @@ impl UiButtonLoader {
                 end_position,
                 vertex_index,
             } => {
-                self.handle_drag_end(
-                    element,
-                    *start_position,
-                    *end_position,
-                    *vertex_index,
-                    result,
-                );
+                self.handle_drag_end(element, *vertex_index, result);
             }
 
             // ----------------------------------------------------------------
@@ -456,7 +438,7 @@ impl UiButtonLoader {
     fn handle_press(
         &mut self,
         element: &ElementRef,
-        position: (f32, f32),
+        position: [f32; 2],
         vertex_index: Option<usize>,
         result: &mut EventProcessingResult,
     ) {
@@ -465,7 +447,7 @@ impl UiButtonLoader {
             if let Some(elem) = self.get_element(&element.menu, &element.layer, &element.id) {
                 if vertex_index.is_none() {
                     let center = elem.center();
-                    let offset = (position.0 - center.0, position.1 - center.1);
+                    let offset = [position[0] - center[0], position[1] - center[1]];
                     if let Some(active_drag) = &mut self.touch_manager.drag.active_drag {
                         active_drag.offset = offset;
                     }
@@ -480,7 +462,7 @@ impl UiButtonLoader {
     fn handle_release(
         &mut self,
         _element: &ElementRef,
-        _position: (f32, f32),
+        _position: [f32; 2],
         was_drag: bool,
         action: Option<String>,
         result: &mut EventProcessingResult,
@@ -501,7 +483,7 @@ impl UiButtonLoader {
     fn handle_click(
         &mut self,
         _element: &ElementRef,
-        _position: (f32, f32),
+        _position: [f32; 2],
         action: Option<String>,
         result: &mut EventProcessingResult,
     ) {
@@ -513,7 +495,7 @@ impl UiButtonLoader {
     fn handle_double_click(
         &mut self,
         element: &ElementRef,
-        _position: (f32, f32),
+        _position: [f32; 2],
         result: &mut EventProcessingResult,
     ) {
         if element.kind != ElementKind::Text || !self.touch_manager.editor.enabled {
@@ -546,7 +528,7 @@ impl UiButtonLoader {
     fn handle_drag_start(
         &mut self,
         element: &ElementRef,
-        start_position: (f32, f32),
+        start_position: [f32; 2],
         vertex_index: Option<usize>,
         _result: &mut EventProcessingResult,
     ) {
@@ -575,9 +557,7 @@ impl UiButtonLoader {
     fn handle_drag_move(
         &mut self,
         element: &ElementRef,
-        current_position: (f32, f32),
-        delta: (f32, f32),
-        _total_delta: (f32, f32),
+        current_position: [f32; 2],
         result: &mut EventProcessingResult,
         mouse: &MouseState,
     ) {
@@ -589,7 +569,10 @@ impl UiButtonLoader {
         };
 
         let offset = active_drag.offset;
-        let new_pos = (current_position.0 - offset.0, current_position.1 - offset.1);
+        let new_pos = [
+            current_position[0] - offset[0],
+            current_position[1] - offset[1],
+        ];
 
         // Apply snap if enabled
         let snapped_pos = if self.touch_manager.config.snap_enabled {
@@ -599,23 +582,30 @@ impl UiButtonLoader {
         };
 
         match element.kind {
-            ElementKind::Circle => {
-                self.move_circle(&element.menu, &element.layer, &element.id, snapped_pos);
-            }
-            ElementKind::Text => {
-                self.move_text(&element.menu, &element.layer, &element.id, snapped_pos);
-            }
+            ElementKind::Circle => self.ui_edit_manager.push_command(MoveElementCommand {
+                affected_element: element.clone(),
+                before: None,
+                after: snapped_pos,
+            }),
+            ElementKind::Text => self.ui_edit_manager.push_command(MoveElementCommand {
+                affected_element: element.clone(),
+                before: None,
+                after: snapped_pos,
+            }),
             ElementKind::Polygon => {
                 if let Some(vertex_idx) = self.touch_manager.editor.active_vertex {
-                    self.move_polygon_vertex(
-                        &element.menu,
-                        &element.layer,
-                        &element.id,
-                        vertex_idx,
-                        snapped_pos,
-                    );
+                    self.ui_edit_manager.push_command(MoveVertexCommand {
+                        affected_element: element.clone(),
+                        vertex_index: vertex_idx,
+                        before: None,
+                        after: snapped_pos,
+                    });
                 } else {
-                    self.move_polygon(&element.menu, &element.layer, &element.id, delta);
+                    self.ui_edit_manager.push_command(MoveElementCommand {
+                        affected_element: element.clone(),
+                        before: None,
+                        after: snapped_pos,
+                    })
                 }
             }
             ElementKind::Handle => {
@@ -637,40 +627,30 @@ impl UiButtonLoader {
     fn handle_drag_end(
         &mut self,
         element: &ElementRef,
-        _start_position: (f32, f32),
-        _end_position: (f32, f32),
         vertex_index: Option<usize>,
         result: &mut EventProcessingResult,
     ) {
-        if let Some(start_state) = self.drag_start_state.take() {
-            // Create undo command for the completed drag
+        if self.drag_start_state.take().is_some() {
             let new_pos = self.get_element_position(&element.menu, &element.layer, &element.id);
 
-            let dx = (new_pos.0 - start_state.start_pos.0).abs();
-            let dy = (new_pos.1 - start_state.start_pos.1).abs();
+            // Element move
+            self.ui_edit_manager.push_command(MoveElementCommand {
+                affected_element: element.clone(),
+                before: None, // captured on execution
+                after: new_pos,
+            });
 
-            if dx > 0.5 || dy > 0.5 {
-                self.ui_edit_manager.push_command(MoveElementCommand {
-                    affected_element: element.clone(),
-                    before: start_state.start_pos,
-                    after: new_pos,
-                });
-            }
-
-            // Handle vertex moves for polygons
+            // Polygon vertex move
             if element.kind == ElementKind::Polygon {
                 if let Some(idx) = vertex_index {
-                    if let (Some(old_verts), Some(new_verts)) = (
-                        &start_state.start_vertices,
-                        self.get_polygon_vertices(&element.menu, &element.layer, &element.id),
-                    ) {
-                        if let (Some(old_pos), Some(new_pos)) =
-                            (old_verts.get(idx), new_verts.get(idx))
-                        {
+                    if let Some(new_verts) =
+                        self.get_polygon_vertices(&element.menu, &element.layer, &element.id)
+                    {
+                        if let Some(new_pos) = new_verts.get(idx) {
                             self.ui_edit_manager.push_command(MoveVertexCommand {
                                 affected_element: element.clone(),
                                 vertex_index: idx,
-                                before: *old_pos,
+                                before: None, // captured on execution
                                 after: *new_pos,
                             });
                         }
@@ -727,22 +707,18 @@ impl UiButtonLoader {
         );
     }
 
-    fn handle_box_select_start(&mut self, start: (f32, f32), _result: &mut EventProcessingResult) {
+    fn handle_box_select_start(&mut self, start: [f32; 2], _result: &mut EventProcessingResult) {
         self.touch_manager.selection.begin_box_select(start);
     }
 
-    fn handle_box_select_move(
-        &mut self,
-        _current: (f32, f32),
-        _result: &mut EventProcessingResult,
-    ) {
+    fn handle_box_select_move(&mut self, _current: [f32; 2], _result: &mut EventProcessingResult) {
         // Could draw selection rectangle here
     }
 
     fn handle_box_select_end(
         &mut self,
-        start: (f32, f32),
-        end: (f32, f32),
+        start: [f32; 2],
+        end: [f32; 2],
         result: &mut EventProcessingResult,
     ) {
         // Find all elements in box
@@ -876,97 +852,12 @@ impl UiButtonLoader {
         }
     }
 
-    // ========================================================================
-    // ELEMENT MANIPULATION HELPERS
-    // ========================================================================
-
-    fn move_circle(&mut self, menu: &str, layer: &str, id: &str, pos: (f32, f32)) {
-        if let Some(menu_data) = self.menus.get_mut(menu) {
-            if let Some(layer_data) = menu_data.layers.iter_mut().find(|l| l.name == layer) {
-                if let Some(circle) = layer_data
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_circle_mut)
-                    .find(|c| c.id == id)
-                {
-                    circle.x = pos.0;
-                    circle.y = pos.1;
-                    layer_data.dirty.mark_circles();
-                }
-            }
-        }
-    }
-
-    fn move_text(&mut self, menu: &str, layer: &str, id: &str, pos: (f32, f32)) {
-        if let Some(menu_data) = self.menus.get_mut(menu) {
-            if let Some(layer_data) = menu_data.layers.iter_mut().find(|l| l.name == layer) {
-                if let Some(text) = layer_data
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_text_mut)
-                    .find(|t| t.id == id)
-                {
-                    if text.being_edited {
-                        return;
-                    }
-                    text.x = pos.0;
-                    text.y = pos.1;
-                    layer_data.dirty.mark_texts();
-                }
-            }
-        }
-    }
-
-    fn move_polygon(&mut self, menu: &str, layer: &str, id: &str, delta: (f32, f32)) {
-        if let Some(menu_data) = self.menus.get_mut(menu) {
-            if let Some(layer_data) = menu_data.layers.iter_mut().find(|l| l.name == layer) {
-                if let Some(poly) = layer_data
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_polygon_mut)
-                    .find(|p| p.id == id)
-                {
-                    for v in &mut poly.vertices {
-                        v.pos[0] += delta.0;
-                        v.pos[1] += delta.1;
-                    }
-                    layer_data.dirty.mark_polygons();
-                }
-            }
-        }
-    }
-
-    fn move_polygon_vertex(
-        &mut self,
-        menu: &str,
-        layer: &str,
-        id: &str,
-        vertex_idx: usize,
-        pos: (f32, f32),
-    ) {
-        if let Some(menu_data) = self.menus.get_mut(menu) {
-            if let Some(layer_data) = menu_data.layers.iter_mut().find(|l| l.name == layer) {
-                if let Some(poly) = layer_data
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_polygon_mut)
-                    .find(|p| p.id == id)
-                {
-                    if let Some(v) = poly.vertices.get_mut(vertex_idx) {
-                        v.pos = [pos.0, pos.1];
-                        layer_data.dirty.mark_polygons();
-                    }
-                }
-            }
-        }
-    }
-
     fn handle_handle_drag(
         &mut self,
         menu_name: &str,
         layer_name: &str,
         id: &str,
-        position: (f32, f32),
+        position: [f32; 2],
         mouse: &MouseState,
     ) {
         // Extract parent_id first (clone to own the data)
@@ -993,8 +884,8 @@ impl UiButtonLoader {
                     .filter_map(UiElement::as_circle_mut)
                     .find(|c| c.id == affected_element.id.as_str())
                 {
-                    let dx = position.0 - circle.x;
-                    let dy = position.1 - circle.y;
+                    let dx = position[0] - circle.x;
+                    let dy = position[1] - circle.y;
                     let new_radius = (dx * dx + dy * dy).sqrt().max(2.0);
                     self.ui_edit_manager.execute_command(
                         ResizeElementCommand {
@@ -1039,10 +930,10 @@ impl UiButtonLoader {
         layer_data.iter_handles().find(|h| h.id == id)
     }
 
-    fn get_element_position(&self, menu: &str, layer: &str, id: &str) -> (f32, f32) {
+    fn get_element_position(&self, menu: &str, layer: &str, id: &str) -> [f32; 2] {
         self.get_element(menu, layer, id)
             .map(|e| e.center())
-            .unwrap_or((0.0, 0.0))
+            .unwrap_or([0.0, 0.0])
     }
 
     fn get_element_size_by_ref(&self, element: &ElementRef) -> Option<f32> {
@@ -1120,18 +1011,33 @@ impl UiButtonLoader {
     fn find_element_in_direction(
         &self,
         from: &ElementRef,
-        from_pos: (f32, f32),
+        from_pos: [f32; 2],
         direction: NavigationDirection,
     ) -> Option<ElementRef> {
-        let dir_vec = match direction {
-            NavigationDirection::Up => (0.0, -1.0),
-            NavigationDirection::Down => (0.0, 1.0),
-            NavigationDirection::Left => (-1.0, 0.0),
-            NavigationDirection::Right => (1.0, 0.0),
+        // --- tiny vector helpers ---
+        fn dot(a: [f32; 2], b: [f32; 2]) -> f32 {
+            a[0] * b[0] + a[1] * b[1]
+        }
+
+        fn sub(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
+            [a[0] - b[0], a[1] - b[1]]
+        }
+
+        fn len(v: [f32; 2]) -> f32 {
+            (v[0] * v[0] + v[1] * v[1]).sqrt()
+        }
+        // --------------------------
+
+        let dir_vec: [f32; 2] = match direction {
+            NavigationDirection::Up => [0.0, -1.0],
+            NavigationDirection::Down => [0.0, 1.0],
+            NavigationDirection::Left => [-1.0, 0.0],
+            NavigationDirection::Right => [1.0, 0.0],
         };
 
         let menu = self.menus.get(&from.menu)?;
         let mut best: Option<(ElementRef, f32)> = None;
+
         let max_angle = 45.0_f32.to_radians();
         let cos_max = max_angle.cos();
 
@@ -1141,30 +1047,30 @@ impl UiButtonLoader {
             }
 
             for elem in &layer.elements {
-                let id = match elem.id() {
-                    id if id != from.id => id,
-                    _ => continue,
-                };
+                let id = elem.id();
+                if id == from.id {
+                    continue;
+                }
 
-                let pos = elem.center();
-                let dx = pos.0 - from_pos.0;
-                let dy = pos.1 - from_pos.1;
-                let dist = (dx * dx + dy * dy).sqrt();
+                let pos = elem.center(); // assume this returns [f32; 2]
+                let delta = sub(pos, from_pos);
+                let dist = len(delta);
 
                 if dist < 1.0 {
                     continue;
                 }
 
-                // Check direction
-                let cos_theta = (dx * dir_vec.0 + dy * dir_vec.1) / dist;
+                // direction check
+                let cos_theta = dot(delta, dir_vec) / dist;
                 if cos_theta < cos_max {
                     continue;
                 }
 
-                // Prefer closer elements
-                match &best {
-                    Some((_, best_dist)) if dist >= *best_dist => continue,
-                    _ => {}
+                // prefer closer elements
+                if let Some((_, best_dist)) = &best {
+                    if dist >= *best_dist {
+                        continue;
+                    }
                 }
 
                 best = Some((
@@ -1322,8 +1228,8 @@ impl UiButtonLoader {
     fn handle_text_editing(&mut self, input: &mut InputState, snapshot: InputSnapshot) {
         if self.touch_manager.editor.editing_text.is_some() {
             let mouse_snapshot = MouseSnapshot {
-                mx: snapshot.position.0,
-                my: snapshot.position.1,
+                mx: snapshot.position[0],
+                my: snapshot.position[1],
                 pressed: snapshot.pressed,
                 just_pressed: snapshot.just_pressed,
                 scroll: snapshot.scroll_delta,
@@ -1739,7 +1645,7 @@ impl UiButtonLoader {
                             border_thickness: 0.9,
                         },
                     };
-                    println!("YEES");
+                    // println!("YEES");
                     editor_layer
                         .elements
                         .push(UiElement::Outline(polygon_outline));
@@ -2073,11 +1979,11 @@ pub fn get_element_position(
     menu_name: &str,
     layer_name: &str,
     element_id: &str,
-) -> (f32, f32) {
+) -> [f32; 2] {
     if let Some(element) = get_element(menus, menu_name, layer_name, element_id) {
         element.center()
     } else {
-        (0.0, 0.0)
+        [0.0, 0.0]
     }
 }
 pub fn get_element_size(

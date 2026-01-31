@@ -3,16 +3,17 @@ use crate::data::Settings;
 use crate::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
+use crate::renderer::render_passes::draw_visible_roads;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
-use crate::terrain::roads::road_mesh_renderer::RoadRenderSubsystem;
+use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
 use crate::ui::vertex::Vertex;
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
 use wgpu::{
     Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face, IndexFormat,
-    RenderPass, StencilState, Texture, TextureView,
+    RenderPass, StencilState, TextureView,
 };
 
 pub const CSM_CASCADES: usize = 4;
@@ -22,7 +23,6 @@ pub struct ShadowMatUniform {
     pub light_view_proj: [[f32; 4]; 4],
 }
 pub struct CascadedShadowMap {
-    pub texture: Texture,
     pub array_view: TextureView,
     pub layer_views: [TextureView; CSM_CASCADES],
     pub size: u32,
@@ -80,7 +80,6 @@ pub fn create_csm_shadow_texture(device: &Device, size: u32, label: &str) -> Cas
     });
 
     CascadedShadowMap {
-        texture,
         array_view,
         layer_views,
         size,
@@ -311,19 +310,14 @@ pub fn render_roads_shadows(
             targets: vec![],
             ..Default::default()
         },
-        &[&pipelines.uniforms.buffer, &shadow_mat_buffer],
+        &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
         pass,
         pipelines,
         settings,
     );
 
-    for chunk_id in &road_renderer.visible_draw_list {
-        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
-            pass.set_vertex_buffer(0, gpu.vertex.slice(..));
-            pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
-            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
-        }
-    }
+    draw_visible_roads(pass, road_renderer);
+
     if road_renderer.preview_gpu.is_empty() {
         return;
     }
@@ -361,7 +355,7 @@ pub fn render_roads_shadows(
             targets: Vec::new(),
             ..Default::default()
         },
-        &[&pipelines.uniforms.buffer, &shadow_mat_buffer],
+        &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
         pass,
         pipelines,
         settings,
@@ -410,7 +404,7 @@ pub fn render_terrain_shadows(
             targets: Vec::new(),
             ..Default::default()
         },
-        &[&pipelines.uniforms.buffer, &shadow_mat_buffer],
+        &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
         pass,
         pipelines,
         settings,

@@ -657,7 +657,6 @@ impl RoadEditor {
         chunk_size: ChunkSize,
     ) -> Option<(f32, f32)> {
         // Use start as local origin
-        let a = Vec3::ZERO;
         let b = start.delta_to(end, chunk_size);
         let p = start.delta_to(point, chunk_size);
         let c = control.map(|c| start.delta_to(c, chunk_size));
@@ -801,11 +800,9 @@ impl RoadEditor {
         // Resolve start anchor
         let Some((start_node_id, start_node_pos)) = self.resolve_anchor(
             storage,
-            road_style_params,
             start,
             chunk_id,
             &mut cmds,
-            output,
             terrain_renderer.chunk_size,
         ) else {
             return Vec::new();
@@ -823,7 +820,6 @@ impl RoadEditor {
                 CrossingKind::ExistingNode(id) => id,
                 CrossingKind::LaneCrossing { lane_id, .. } => {
                     let Some((split_cmds, new_node_id)) = self.plan_split(
-                        road_style_params,
                         storage,
                         lane_id,
                         crossing.world_pos,
@@ -847,11 +843,9 @@ impl RoadEditor {
         // Resolve end anchor
         let Some((end_node_id, end_node_pos)) = self.resolve_anchor(
             storage,
-            road_style_params,
             end,
             chunk_id,
             &mut cmds,
-            output,
             terrain_renderer.chunk_size,
         ) else {
             return cmds;
@@ -1208,11 +1202,9 @@ impl RoadEditor {
     fn resolve_anchor(
         &mut self,
         storage: &RoadStorage,
-        road_style_params: &RoadStyleParams,
         anchor: &Anchor,
         chunk_id: ChunkId,
         cmds: &mut Vec<RoadCommand>,
-        output: &mut Vec<RoadEditorCommand>,
         chunk_size: ChunkSize,
     ) -> Option<(NodeId, WorldPos)> {
         match &anchor.planned_node {
@@ -1226,14 +1218,7 @@ impl RoadEditor {
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
-                let result = self.plan_split(
-                    road_style_params,
-                    storage,
-                    *lane_id,
-                    *pos,
-                    chunk_id,
-                    chunk_size,
-                )?;
+                let result = self.plan_split(storage, *lane_id, *pos, chunk_id, chunk_size)?;
                 cmds.extend(result.0);
                 Some((result.1, *pos))
             }
@@ -1242,7 +1227,6 @@ impl RoadEditor {
 
     fn plan_split(
         &mut self,
-        road_style_params: &RoadStyleParams,
         storage: &RoadStorage,
         lane_id: LaneId,
         split_pos: WorldPos,
@@ -1437,7 +1421,6 @@ fn make_straight_centerline(
         .map(|i| {
             let t = i as f32 / samples as f32;
             let mut p = start_pos.lerp(end_pos, t, terrain_renderer.chunk_size);
-            let terrain_y = terrain_renderer.get_height_at(p);
             set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
             p
         })
@@ -1596,14 +1579,13 @@ pub fn offset_polyline(
 #[derive(Clone, Debug)]
 pub struct IntersectionBuildParams {
     /// Degrees: outgoing arm considered "straight" if within this angle of incoming heading.
-    pub straight_angle_deg: f32,
+    pub _straight_angle_deg: f32,
     /// Bezier samples for NodeLane geometry.
-    pub turn_samples: usize,
+    pub _turn_samples: usize,
     /// If true: dedicate rightmost lane to right turn and leftmost to left turn (when possible).
-    pub dedicate_turn_lanes: bool,
+    pub _dedicate_turn_lanes: bool,
     pub max_turn_angle: f32,    // radians, eg 160° = 2.79 (kills u-turns)
     pub min_turn_radius_m: f32, // eg 6.0
-    pub clearance_length_m: f32,
     pub lane_width_m: f32,
     pub turn_tightness: f32,
     pub side_walk_width: f32,
@@ -1612,12 +1594,11 @@ pub struct IntersectionBuildParams {
 impl IntersectionBuildParams {
     pub fn from_style(style: &RoadStyleParams) -> Self {
         Self {
-            straight_angle_deg: 25.0,
-            turn_samples: 12,
-            dedicate_turn_lanes: true,
+            _straight_angle_deg: 25.0,
+            _turn_samples: 12,
+            _dedicate_turn_lanes: true,
             max_turn_angle: 2.74,
             min_turn_radius_m: 5.0,
-            clearance_length_m: 0.0,
             lane_width_m: style.road_type().lane_width,
             turn_tightness: style.turn_tightness(),
             side_walk_width: style.road_type().sidewalk_width,
@@ -1910,45 +1891,6 @@ pub fn modify_polyline_end(
     out.push(new_end);
 
     if out.len() >= 2 { Some(out) } else { None }
-}
-/// Extend polyline at start by given amount.
-fn extend_polyline_start(
-    points: &[WorldPos],
-    amount: f32,
-    chunk_size: ChunkSize,
-) -> Option<Vec<WorldPos>> {
-    if points.len() < 2 {
-        return None;
-    }
-
-    let dir = points[0].to_render_pos(points[1], chunk_size).normalize();
-    let new_start = points[0].add_vec3(dir * amount, chunk_size);
-
-    let mut out = Vec::with_capacity(points.len() + 1);
-    out.push(new_start);
-    out.extend_from_slice(points);
-    Some(out)
-}
-
-/// Extend polyline at end by given amount.
-fn extend_polyline_end(
-    points: &[WorldPos],
-    amount: f32,
-    chunk_size: ChunkSize,
-) -> Option<Vec<WorldPos>> {
-    if points.len() < 2 {
-        return None;
-    }
-
-    let n = points.len();
-    let dir = points[n - 1]
-        .to_render_pos(points[n - 2], chunk_size)
-        .normalize();
-    let new_end = points[n - 1].add_vec3(dir * amount, chunk_size);
-
-    let mut out = points.to_vec();
-    out.push(new_end);
-    Some(out)
 }
 
 fn segment_ids_sorted_left_to_right(
@@ -2395,7 +2337,7 @@ pub fn probe_intersection_node_lanes(
 
     let mut connections = Vec::new();
     let mut center_accum = Vec3::ZERO;
-    let mut center_count = 0u32;
+    let mut _center_count = 0u32;
 
     // Use first valid point as reference for center calculation
     let mut reference_pos: Option<WorldPos> = None;
@@ -2444,17 +2386,17 @@ pub fn probe_intersection_node_lanes(
             // Accumulate center relative to reference
             center_accum += in_pt.to_render_pos(ref_pos, chunk_size);
             center_accum += out_pt.to_render_pos(ref_pos, chunk_size);
-            center_count += 2;
+            _center_count += 2;
         }
     }
 
     // Compute intersection center
-    let intersection_center = if center_count > 0 && reference_pos.is_some() {
-        let avg = center_accum / center_count as f32;
-        reference_pos.unwrap().add_vec3(avg, chunk_size)
-    } else {
-        node.position()
-    };
+    // let intersection_center = if center_count > 0 && reference_pos.is_some() {
+    //     let avg = center_accum / center_count as f32;
+    //     reference_pos.unwrap().add_vec3(avg, chunk_size)
+    // } else {
+    //     node.position()
+    // };
 
     // Evaluate demands
     for conn in &connections {
@@ -2507,7 +2449,7 @@ fn apply_lane_demand(lane_id: LaneId, demand: f32, map: &mut HashMap<LaneId, f32
         .or_insert(demand);
 }
 
-fn push_intersection(
+fn _push_intersection(
     cmds: &mut Vec<RoadCommand>,
     node_id: NodeId,
     planned: &PlannedNode,
@@ -2524,38 +2466,6 @@ fn push_intersection(
     });
 }
 
-fn seg_sphere_intersection_t(a: Vec3, b: Vec3, center: Vec3, r: f32) -> Option<f32> {
-    let d = b - a;
-    let f = a - center;
-
-    let aa = d.dot(d);
-    if aa < 1e-8 {
-        return None;
-    }
-
-    let bb = 2.0 * f.dot(d);
-    let cc = f.dot(f) - r * r;
-
-    let disc = bb * bb - 4.0 * aa * cc;
-    if disc < 0.0 {
-        return None;
-    }
-    let s = disc.sqrt();
-
-    let t1 = (-bb - s) / (2.0 * aa);
-    let t2 = (-bb + s) / (2.0 * aa);
-
-    // We want a valid intersection on the segment.
-    let in1 = (0.0..=1.0).contains(&t1);
-    let in2 = (0.0..=1.0).contains(&t2);
-
-    match (in1, in2) {
-        (true, true) => Some(t1.min(t2)),
-        (true, false) => Some(t1),
-        (false, true) => Some(t2),
-        (false, false) => None,
-    }
-}
 fn carve_intersection_clearance_per_lane(
     storage: &mut RoadStorage,
     _node_id: NodeId,
@@ -2698,70 +2608,6 @@ fn get_node_side_end(
         let toward_idx =
             points.len().saturating_sub(1) - (points.len() / 4).max(1).min(points.len() - 1);
         (points[points.len() - 1], points[toward_idx])
-    }
-}
-
-/// Project two rays and find their intersection in XZ plane.
-/// Ray A: from a_origin in direction toward a_toward.
-/// Ray B: from b_origin in direction toward b_toward.
-/// Returns the intersection point as WorldPos.
-pub fn project_rays_intersection_xz(
-    a_origin: WorldPos,
-    a_toward: WorldPos,
-    b_origin: WorldPos,
-    b_toward: WorldPos,
-    chunk_size: ChunkSize,
-) -> Option<WorldPos> {
-    // Compute directions relative to origins
-    let da = a_toward.to_render_pos(a_origin, chunk_size);
-    let db = b_toward.to_render_pos(b_origin, chunk_size);
-
-    let da_len_sq = da.x * da.x + da.z * da.z;
-    let db_len_sq = db.x * db.x + db.z * db.z;
-
-    if da_len_sq < 1e-12 || db_len_sq < 1e-12 {
-        return None;
-    }
-
-    let da_len = da_len_sq.sqrt();
-    let db_len = db_len_sq.sqrt();
-
-    // Normalize to unit vectors
-    let da_x = da.x / da_len;
-    let da_z = da.z / da_len;
-    let db_x = db.x / db_len;
-    let db_z = db.z / db_len;
-
-    // Determinant (cross product of unit direction vectors)
-    let det = da_x * db_z - da_z * db_x;
-
-    if det.abs() < 1e-6 {
-        return None; // Parallel or nearly parallel
-    }
-
-    // Difference from a_origin to b_origin
-    let diff = b_origin.to_render_pos(a_origin, chunk_size);
-
-    // t and u are arc-length distances since we're using unit vectors
-    let t = (diff.x * db_z - diff.z * db_x) / det;
-    let u = (diff.x * da_z - diff.z * da_x) / det;
-
-    // Check if intersection is ahead of both ray origins
-    if t >= -1e-4 && u >= -1e-4 {
-        // Compute intersection point
-        let offset = Vec3::new(t * da_x, 0.0, t * da_z);
-
-        // Average Y from both rays
-        let y_a = a_origin.local.y + da.y * (t / da_len);
-        let y_b = b_origin.local.y + db.y * (u / db_len);
-        let avg_y = (y_a + y_b) * 0.5;
-
-        let mut result = a_origin.add_vec3(offset, chunk_size);
-        result.local.y = avg_y;
-
-        Some(result)
-    } else {
-        None
     }
 }
 

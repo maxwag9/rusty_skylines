@@ -1,7 +1,7 @@
 use crate::paths::shader_dir;
-use crate::renderer::core::color_target;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
+use crate::renderer::render_passes::color_target;
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;

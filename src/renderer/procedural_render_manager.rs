@@ -3,7 +3,9 @@ use crate::renderer::pipelines::Pipelines;
 use crate::renderer::procedural_bind_group_manager::{
     FullscreenPassType, MaterialBindGroupManager,
 };
-use crate::renderer::procedural_texture_manager::{ProceduralTextureManager, TextureCacheKey};
+use crate::renderer::textures::procedural_texture_manager::{
+    ProceduralTextureManager, TextureCacheKey,
+};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use std::collections::HashMap;
 use std::fs;
@@ -368,9 +370,9 @@ pub struct DepthDebugParams {
 }
 #[derive(Clone, Debug)]
 pub struct PipelineOptions {
-    pub topology: wgpu::PrimitiveTopology,
+    pub topology: PrimitiveTopology,
     pub msaa_samples: u32,
-    pub depth_stencil: Option<wgpu::DepthStencilState>,
+    pub depth_stencil: Option<DepthStencilState>,
     pub vertex_layouts: Vec<VertexBufferLayout<'static>>,
     pub cull_mode: Option<Face>,
     pub shadow_pass: bool,
@@ -381,7 +383,7 @@ pub struct PipelineOptions {
 impl Default for PipelineOptions {
     fn default() -> Self {
         Self {
-            topology: wgpu::PrimitiveTopology::TriangleList,
+            topology: PrimitiveTopology::TriangleList,
             msaa_samples: 1,
             depth_stencil: None,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
@@ -400,8 +402,8 @@ struct DepthBiasStateKey {
     clamp_bits: u32,
 }
 
-impl From<wgpu::DepthBiasState> for DepthBiasStateKey {
-    fn from(b: wgpu::DepthBiasState) -> Self {
+impl From<DepthBiasState> for DepthBiasStateKey {
+    fn from(b: DepthBiasState) -> Self {
         Self {
             constant: b.constant,
             slope_scale_bits: b.slope_scale.to_bits(),
@@ -413,13 +415,13 @@ impl From<wgpu::DepthBiasState> for DepthBiasStateKey {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct StencilFaceStateKey {
     compare: CompareFunction,
-    fail_op: wgpu::StencilOperation,
-    depth_fail_op: wgpu::StencilOperation,
-    pass_op: wgpu::StencilOperation,
+    fail_op: StencilOperation,
+    depth_fail_op: StencilOperation,
+    pass_op: StencilOperation,
 }
 
-impl From<wgpu::StencilFaceState> for StencilFaceStateKey {
-    fn from(f: wgpu::StencilFaceState) -> Self {
+impl From<StencilFaceState> for StencilFaceStateKey {
+    fn from(f: StencilFaceState) -> Self {
         Self {
             compare: f.compare,
             fail_op: f.fail_op,
@@ -437,8 +439,8 @@ struct StencilStateKey {
     write_mask: u32,
 }
 
-impl From<wgpu::StencilState> for StencilStateKey {
-    fn from(s: wgpu::StencilState) -> Self {
+impl From<StencilState> for StencilStateKey {
+    fn from(s: StencilState) -> Self {
         Self {
             front: s.front.into(),
             back: s.back.into(),
@@ -450,15 +452,15 @@ impl From<wgpu::StencilState> for StencilStateKey {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct DepthStencilStateKey {
-    format: wgpu::TextureFormat,
+    format: TextureFormat,
     depth_write_enabled: bool,
-    depth_compare: wgpu::CompareFunction,
+    depth_compare: CompareFunction,
     stencil: StencilStateKey,
     bias: DepthBiasStateKey,
 }
 
-impl From<&wgpu::DepthStencilState> for DepthStencilStateKey {
-    fn from(d: &wgpu::DepthStencilState) -> Self {
+impl From<&DepthStencilState> for DepthStencilStateKey {
+    fn from(d: &DepthStencilState) -> Self {
         Self {
             format: d.format,
             depth_write_enabled: d.depth_write_enabled,
@@ -471,7 +473,7 @@ impl From<&wgpu::DepthStencilState> for DepthStencilStateKey {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct PipelineOptionsKey {
-    topology: wgpu::PrimitiveTopology,
+    topology: PrimitiveTopology,
     msaa_samples: u32,
     depth_stencil: Option<DepthStencilStateKey>,
 }
@@ -513,33 +515,24 @@ struct FullscreenPipelineKey {
     target_format: TextureFormat,
     kind: FullscreenDebugKind,
     src_multisampled: bool,
-    swizzle: FullscreenDebugSwizzle, // NEW
+    swizzle: FullscreenDebugSwizzle,
 }
 
-#[derive(Hash, PartialEq, Eq, Clone)]
-struct FogPipelineCacheKey {
-    shader_path: PathBuf,
-    msaa_samples: u32,
-    depth_multisampled: bool,
-    uniform_count: usize,
-    target_format: TextureFormat,
-}
 struct ShaderEntry {
-    module: wgpu::ShaderModule,
-    source_path: PathBuf,
+    module: ShaderModule,
+    _source_path: PathBuf,
 }
 
 pub struct PipelineManager {
     device: Device,
     queue: Queue,
-    surface_format: wgpu::TextureFormat,
     shader_cache: HashMap<PathBuf, ShaderEntry>,
     pipeline_cache: HashMap<PipelineCacheKey, RenderPipeline>,
     fullscreen_pipeline_cache: HashMap<FullscreenPipelineKey, RenderPipeline>,
     raw_pipeline_cache: HashMap<PipelineCacheKeyRaw, RenderPipeline>,
     uniform_bind_group_layouts: HashMap<usize, BindGroupLayout>,
     fullscreen_color_bgl: BindGroupLayout,
-    fullscreen_color_msaa_bgl: wgpu::BindGroupLayout,
+    fullscreen_color_msaa_bgl: BindGroupLayout,
     fullscreen_depth_bgl: BindGroupLayout,
     fullscreen_depth_msaa_bgl: BindGroupLayout,
 
@@ -548,9 +541,6 @@ pub struct PipelineManager {
     fullscreen_depth_shader: ShaderModule,
     fullscreen_depth_msaa_shader: ShaderModule,
 
-    fog_pipeline_cache: HashMap<FogPipelineCacheKey, RenderPipeline>,
-    fog_depth_layout: Option<BindGroupLayout>,
-    fog_depth_layout_msaa: Option<BindGroupLayout>,
     fullscreen_color_unfilterable_bgl: BindGroupLayout,
     fullscreen_color_unfilterable_shader: ShaderModule,
     fullscreen_color_shader_gray_from_red: ShaderModule,
@@ -559,142 +549,134 @@ pub struct PipelineManager {
 }
 
 impl PipelineManager {
-    pub fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
-        let fullscreen_color_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+    pub fn new(device: Device, queue: Queue) -> Self {
+        let fullscreen_color_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Fullscreen Color Preview Shader"),
-            source: wgpu::ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE.into()),
+            source: ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE.into()),
         });
-        let fullscreen_depth_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let fullscreen_depth_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Fullscreen Depth Preview Shader"),
-            source: wgpu::ShaderSource::Wgsl(FULLSCREEN_DEPTH_SHADER.into()),
+            source: ShaderSource::Wgsl(FULLSCREEN_DEPTH_SHADER.into()),
         });
-        let fullscreen_color_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Fullscreen Color BGL"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+        let fullscreen_color_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Fullscreen Color BGL"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
 
-        let fullscreen_depth_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Fullscreen Depth BGL"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Depth,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+        let fullscreen_depth_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Fullscreen Depth BGL"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                        count: None,
-                    },
-                ],
-            });
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
         let fullscreen_color_unfilterable_shader =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("Fullscreen Color Preview Shader (Unfilterable Float)"),
-                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE_UNFILTERABLE.into()),
+                source: ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE_UNFILTERABLE.into()),
             });
 
         let fullscreen_color_unfilterable_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Fullscreen Color BGL (Unfilterable Float)"),
                 entries: &[
-                    wgpu::BindGroupLayoutEntry {
+                    BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: false },
+                            view_dimension: TextureViewDimension::D2,
                             multisampled: false,
                         },
                         count: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
+                    BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::NonFiltering),
                         count: None,
                     },
                 ],
             });
-        let fullscreen_depth_msaa_shader =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Fullscreen Depth MSAA Preview Shader"),
-                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_DEPTH_MSAA_SHADER.into()),
-            });
+        let fullscreen_depth_msaa_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Fullscreen Depth MSAA Preview Shader"),
+            source: ShaderSource::Wgsl(FULLSCREEN_DEPTH_MSAA_SHADER.into()),
+        });
 
         let fullscreen_depth_msaa_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Fullscreen Depth MSAA BGL"),
-                entries: &[wgpu::BindGroupLayoutEntry {
+                entries: &[BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Depth,
+                        view_dimension: TextureViewDimension::D2,
                         multisampled: true, // IMPORTANT
                     },
                     count: None,
                 }],
             });
-        let fullscreen_color_msaa_shader =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Fullscreen Color MSAA Preview Shader"),
-                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_COLOR_MSAA_SHADER.into()),
-            });
+        let fullscreen_color_msaa_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Fullscreen Color MSAA Preview Shader"),
+            source: ShaderSource::Wgsl(FULLSCREEN_COLOR_MSAA_SHADER.into()),
+        });
 
         let fullscreen_color_msaa_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Fullscreen Color MSAA BGL"),
-                entries: &[wgpu::BindGroupLayoutEntry {
+                entries: &[BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
                         multisampled: true,
                     },
                     count: None,
                 }],
             });
         let fullscreen_color_shader_gray_from_red =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("Fullscreen Color Preview Shader (Gray from Red)"),
-                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE_GRAY_FROM_RED.into()),
+                source: ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE_GRAY_FROM_RED.into()),
             });
 
         let fullscreen_color_unfilterable_shader_gray_from_red =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("Fullscreen Color Preview Shader Unfilterable (Gray from Red)"),
-                source: wgpu::ShaderSource::Wgsl(
+                source: ShaderSource::Wgsl(
                     FULLSCREEN_SHADER_SOURCE_UNFILTERABLE_GRAY_FROM_RED.into(),
                 ),
             });
@@ -702,12 +684,11 @@ impl PipelineManager {
         let fullscreen_color_msaa_shader_gray_from_red =
             device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("Fullscreen Color MSAA Preview Shader (Gray from Red)"),
-                source: wgpu::ShaderSource::Wgsl(FULLSCREEN_COLOR_MSAA_SHADER_GRAY_FROM_RED.into()),
+                source: ShaderSource::Wgsl(FULLSCREEN_COLOR_MSAA_SHADER_GRAY_FROM_RED.into()),
             });
         Self {
             device,
             queue,
-            surface_format,
             shader_cache: HashMap::new(),
             pipeline_cache: HashMap::new(),
             fullscreen_pipeline_cache: HashMap::new(),
@@ -719,9 +700,6 @@ impl PipelineManager {
             fullscreen_color_shader,
             fullscreen_color_msaa_shader,
             fullscreen_depth_shader,
-            fog_pipeline_cache: Default::default(),
-            fog_depth_layout: None,
-            fog_depth_layout_msaa: None,
             fullscreen_color_unfilterable_bgl,
             fullscreen_color_unfilterable_shader,
             fullscreen_color_shader_gray_from_red,
@@ -863,14 +841,14 @@ impl PipelineManager {
                     .expect("uniform_bind_group_layout(1) must have been ensured above");
 
                 self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    .create_pipeline_layout(&PipelineLayoutDescriptor {
                         label: Some(&format!("{label} Layout")),
                         bind_group_layouts: &[bgl0, ubgl],
                         immediate_size: 0,
                     })
             } else {
                 self.device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    .create_pipeline_layout(&PipelineLayoutDescriptor {
                         label: Some(&format!("{label} Layout")),
                         bind_group_layouts: &[bgl0],
                         immediate_size: 0,
@@ -881,33 +859,33 @@ impl PipelineManager {
                 .create_render_pipeline(&RenderPipelineDescriptor {
                     label: Some(&format!("{label} -> {target_format:?}")),
                     layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
+                    vertex: VertexState {
                         module: shader,
                         entry_point: Some("vs_main"),
                         buffers: &[],
                         compilation_options: Default::default(),
                     },
-                    fragment: Some(wgpu::FragmentState {
+                    fragment: Some(FragmentState {
                         module: shader,
                         entry_point: Some("fs_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
+                        targets: &[Some(ColorTargetState {
                             format: target_format,
                             blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
+                            write_mask: ColorWrites::ALL,
                         })],
                         compilation_options: Default::default(),
                     }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    primitive: PrimitiveState {
+                        topology: PrimitiveTopology::TriangleStrip,
                         strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
+                        front_face: FrontFace::Ccw,
                         cull_mode: None,
-                        polygon_mode: wgpu::PolygonMode::Fill,
+                        polygon_mode: PolygonMode::Fill,
                         unclipped_depth: false,
                         conservative: false,
                     },
                     depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
+                    multisample: MultisampleState {
                         count: msaa_samples,
                         mask: !0,
                         alpha_to_coverage_enabled: false,
@@ -923,21 +901,13 @@ impl PipelineManager {
         self.fullscreen_pipeline_cache.get(&key).unwrap()
     }
 
-    pub fn queue(&self) -> &wgpu::Queue {
+    pub fn queue(&self) -> &Queue {
         &self.queue
     }
 
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_format
-    }
-
-    pub fn uniform_bind_group_layout(&mut self, count: usize) -> &wgpu::BindGroupLayout {
+    pub fn uniform_bind_group_layout(&mut self, count: usize) -> &BindGroupLayout {
         self.ensure_uniform_bind_group_layout(count);
         self.uniform_bind_group_layouts.get(&count).unwrap()
-    }
-
-    pub fn fullscreen_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.fullscreen_depth_bgl
     }
 
     fn ensure_uniform_bind_group_layout(&mut self, count: usize) {
@@ -945,12 +915,12 @@ impl PipelineManager {
             return;
         }
 
-        let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..count)
-            .map(|i| wgpu::BindGroupLayoutEntry {
+        let entries: Vec<BindGroupLayoutEntry> = (0..count)
+            .map(|i| BindGroupLayoutEntry {
                 binding: i as u32,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },
@@ -960,7 +930,7 @@ impl PipelineManager {
 
         let layout = self
             .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            .create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some(&format!("Uniform BindGroup Layout (count: {})", count)),
                 entries: &entries,
             });
@@ -971,17 +941,15 @@ impl PipelineManager {
         let source = fs::read_to_string(path).unwrap_or_else(|e| {
             panic!("Failed to load shader at {:?}: {}", path, e);
         });
-        let module = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(path.to_str().unwrap_or("Shader")),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
+        let module = self.device.create_shader_module(ShaderModuleDescriptor {
+            label: Some(path.to_str().unwrap_or("Shader")),
+            source: ShaderSource::Wgsl(source.into()),
+        });
         self.shader_cache.insert(
             path.to_path_buf(),
             ShaderEntry {
                 module,
-                source_path: path.to_path_buf(),
+                _source_path: path.to_path_buf(),
             },
         );
     }
@@ -990,11 +958,11 @@ impl PipelineManager {
         &mut self,
         shader_path: &Path,
         material_kinds: &Vec<TextureCacheKey>,
-        material_layout: &wgpu::BindGroupLayout,
+        material_layout: &BindGroupLayout,
         uniform_count: usize,
         options: &PipelineOptions,
         label: &str,
-    ) -> &wgpu::RenderPipeline {
+    ) -> &RenderPipeline {
         let cache_key = PipelineCacheKey {
             shader_path: shader_path.to_path_buf(),
             material_kinds: material_kinds.clone(),
@@ -1011,14 +979,13 @@ impl PipelineManager {
 
         let shader = &self.shader_cache.get(shader_path).unwrap().module;
         let device = &self.device;
-        let surface_format = self.surface_format;
 
-        let mut bind_group_layouts: Vec<&wgpu::BindGroupLayout> = vec![material_layout];
+        let mut bind_group_layouts: Vec<&BindGroupLayout> = vec![material_layout];
         if uniform_count > 0 {
             bind_group_layouts.push(self.uniform_bind_group_layouts.get(&uniform_count).unwrap());
         }
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some(&format!("{} Pipeline Layout", shader_path.display())),
             bind_group_layouts: &bind_group_layouts,
             immediate_size: 0,
@@ -1051,17 +1018,17 @@ impl PipelineManager {
             layout: Some(&pipeline_layout),
             vertex,
             fragment,
-            primitive: wgpu::PrimitiveState {
+            primitive: PrimitiveState {
                 topology: options.topology,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
+                front_face: FrontFace::Ccw,
                 cull_mode: options.cull_mode,
                 polygon_mode: PolygonMode::Fill,
                 unclipped_depth: false,
                 conservative: false,
             },
             depth_stencil: options.depth_stencil.clone(),
-            multisample: wgpu::MultisampleState {
+            multisample: MultisampleState {
                 count: options.msaa_samples,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
@@ -1076,11 +1043,11 @@ impl PipelineManager {
 
     pub fn get_or_create_pipeline_with_layouts(
         &mut self,
-        shader_path: &std::path::Path,
-        bind_group_layouts: &[&wgpu::BindGroupLayout],
+        shader_path: &Path,
+        bind_group_layouts: &[&BindGroupLayout],
         options: &PipelineOptions,
         label: &str,
-    ) -> &wgpu::RenderPipeline {
+    ) -> &RenderPipeline {
         let options_key: PipelineOptionsKey = options.into();
 
         let vertex_layouts: &[VertexBufferLayout] =
@@ -1094,7 +1061,7 @@ impl PipelineManager {
             shader_path: shader_path.to_path_buf(),
             bind_group_layout_ptrs: bind_group_layouts
                 .iter()
-                .map(|l| (*l as *const wgpu::BindGroupLayout) as usize)
+                .map(|l| (*l as *const BindGroupLayout) as usize)
                 .collect(),
             vertex_layout_hash: hash_vertex_layouts(vertex_layouts),
             options: options_key,
@@ -1109,48 +1076,48 @@ impl PipelineManager {
 
         let pipeline_layout = self
             .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            .create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some(&format!("{} RAW Pipeline Layout", shader_path.display())),
                 bind_group_layouts,
                 immediate_size: 0,
             });
 
-        let vertex = wgpu::VertexState {
+        let vertex = VertexState {
             module: shader,
             entry_point: Some("vs_main"),
             buffers: vertex_layouts,
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: PipelineCompilationOptions::default(),
         };
 
         let fragment = if options.shadow_pass {
             None
         } else {
-            Some(wgpu::FragmentState {
+            Some(FragmentState {
                 module: shader,
                 entry_point: Some("fs_main"),
                 targets: options.targets.as_slice(),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: PipelineCompilationOptions::default(),
             })
         };
 
         let pipeline = self
             .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            .create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some(&format!("{} {} RAW Pipeline", shader_path.display(), label)),
                 layout: Some(&pipeline_layout),
                 vertex,
                 fragment,
-                primitive: wgpu::PrimitiveState {
+                primitive: PrimitiveState {
                     topology: options.topology,
                     strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
+                    front_face: FrontFace::Ccw,
                     cull_mode: options.cull_mode,
-                    polygon_mode: wgpu::PolygonMode::Fill,
+                    polygon_mode: PolygonMode::Fill,
                     unclipped_depth: false,
                     conservative: false,
                 },
                 depth_stencil: options.depth_stencil.clone(),
-                multisample: wgpu::MultisampleState {
+                multisample: MultisampleState {
                     count: options.msaa_samples,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
@@ -1164,20 +1131,19 @@ impl PipelineManager {
     }
 
     pub fn reload_shaders(&mut self, affected_shaders: Vec<PathBuf>) {
-        let paths: Vec<PathBuf> = self.shader_cache.keys().cloned().collect();
-
-        for path in &paths {
-            self.load_shader(path);
+        // reload only touched shaders
+        for path in &affected_shaders {
+            if self.shader_cache.contains_key(path) {
+                self.load_shader(path);
+            }
         }
 
-        self.pipeline_cache.clear();
+        // invalidate only pipelines that use those shaders, AWESOME!
+        self.pipeline_cache
+            .retain(|key, _| !affected_shaders.contains(&key.shader_path));
     }
 
-    pub fn create_uniform_bind_group(
-        &self,
-        buffers: &[&wgpu::Buffer],
-        label: &str,
-    ) -> wgpu::BindGroup {
+    pub fn create_uniform_bind_group(&self, buffers: &[&Buffer], label: &str) -> BindGroup {
         let count = buffers.len();
         let layout = self
             .uniform_bind_group_layouts
@@ -1189,127 +1155,20 @@ impl PipelineManager {
                 )
             });
 
-        let entries: Vec<wgpu::BindGroupEntry> = buffers
+        let entries: Vec<BindGroupEntry> = buffers
             .iter()
             .enumerate()
-            .map(|(i, buffer)| wgpu::BindGroupEntry {
+            .map(|(i, buffer)| BindGroupEntry {
                 binding: i as u32,
                 resource: buffer.as_entire_binding(),
             })
             .collect();
 
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.device.create_bind_group(&BindGroupDescriptor {
             label: Some(label),
             layout,
             entries: &entries,
         })
-    }
-    fn fog_depth_bind_group_layout(&mut self, depth_multisampled: bool) -> &BindGroupLayout {
-        let slot = if depth_multisampled {
-            &mut self.fog_depth_layout_msaa
-        } else {
-            &mut self.fog_depth_layout
-        };
-
-        slot.get_or_insert_with(|| {
-            self.device
-                .create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: Some(if depth_multisampled {
-                        "Fog Depth BGL (MSAA)"
-                    } else {
-                        "Fog Depth BGL"
-                    }),
-                    entries: &[BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: TextureSampleType::Depth,
-                            view_dimension: TextureViewDimension::D2,
-                            multisampled: depth_multisampled,
-                        },
-                        count: None,
-                    }],
-                })
-        })
-    }
-
-    pub fn get_or_create_fog_pipeline(
-        &mut self,
-        shader_path: &Path,
-        msaa_samples: u32,
-        depth_multisampled: bool,
-        uniform_count: usize,
-        target_format: TextureFormat,
-    ) -> &RenderPipeline {
-        let key = FogPipelineCacheKey {
-            shader_path: shader_path.to_path_buf(),
-            msaa_samples,
-            depth_multisampled,
-            uniform_count,
-            target_format,
-        };
-
-        if self.fog_pipeline_cache.contains_key(&key) {
-            return self.fog_pipeline_cache.get(&key).unwrap();
-        }
-
-        self.load_shader(shader_path);
-        self.ensure_uniform_bind_group_layout(uniform_count);
-
-        let depth_layout = self.fog_depth_bind_group_layout(depth_multisampled).clone();
-        let shader = &self.shader_cache.get(shader_path).unwrap().module;
-        let uniform_layout = self.uniform_bind_group_layouts.get(&uniform_count).unwrap();
-
-        let pipeline_layout = self
-            .device
-            .create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Fog Pipeline Layout"),
-                bind_group_layouts: &[&depth_layout, uniform_layout],
-                immediate_size: 0,
-            });
-
-        let pipeline = self
-            .device
-            .create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Fog Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: VertexState {
-                    module: shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: PipelineCompilationOptions::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(ColorTargetState {
-                        format: target_format,
-                        blend: Some(BlendState::ALPHA_BLENDING),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: PipelineCompilationOptions::default(),
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None, // IMPORTANT: we sample depth, so do not attach it here
-                multisample: MultisampleState {
-                    count: msaa_samples,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
-
-        self.fog_pipeline_cache.insert(key.clone(), pipeline);
-        self.fog_pipeline_cache.get(&key).unwrap()
     }
 
     pub fn device(&self) -> &Device {
@@ -1339,7 +1198,7 @@ pub enum FullscreenDebugKind {
 }
 
 impl FullscreenDebugKind {
-    fn from_format(format: wgpu::TextureFormat) -> Self {
+    fn from_format(format: TextureFormat) -> Self {
         if format.is_depth_stencil_format() {
             return Self::Depth;
         }
@@ -1347,9 +1206,9 @@ impl FullscreenDebugKind {
         // 32-bit float formats are unfilterable in WebGPU/wgpu.
         // (This is the main practical reason to branch by format here.)
         match format {
-            wgpu::TextureFormat::R32Float
-            | wgpu::TextureFormat::Rg32Float
-            | wgpu::TextureFormat::Rgba32Float => Self::FloatUnfilterable,
+            TextureFormat::R32Float | TextureFormat::Rg32Float | TextureFormat::Rgba32Float => {
+                Self::FloatUnfilterable
+            }
             _ => Self::FloatFilterable,
         }
     }
@@ -1374,35 +1233,30 @@ pub struct RenderManager {
 }
 
 impl RenderManager {
-    pub fn new(
-        device: &Device,
-        queue: &Queue,
-        target_format: TextureFormat,
-        shader_dir: PathBuf,
-    ) -> Self {
+    pub fn new(device: &Device, queue: &Queue, texture_shader_dir: PathBuf) -> Self {
         let procedural_textures =
-            ProceduralTextureManager::new(device.clone(), queue.clone(), shader_dir);
+            ProceduralTextureManager::new(device.clone(), queue.clone(), texture_shader_dir);
         let material_manager = MaterialBindGroupManager::new(device.clone());
-        let pipeline_manager = PipelineManager::new(device.clone(), queue.clone(), target_format);
+        let pipeline_manager = PipelineManager::new(device.clone(), queue.clone());
 
-        let fullscreen_color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let fullscreen_color_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Fullscreen Preview Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        let fullscreen_depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let fullscreen_depth_sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Fullscreen Depth Preview Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Nearest,
+            min_filter: FilterMode::Nearest,
+            mipmap_filter: MipmapFilterMode::Nearest,
             lod_min_clamp: 0.0,
             lod_max_clamp: 0.0,
             compare: None,
@@ -1424,25 +1278,6 @@ impl RenderManager {
     pub fn invalidate_resize_bind_groups(&mut self) {
         self.fullscreen_debug_bind_groups.clear();
         self.material_manager.clear_bind_groups()
-    }
-    pub fn device(&self) -> &Device {
-        self.pipeline_manager.device()
-    }
-
-    pub fn queue(&self) -> &Queue {
-        self.pipeline_manager.queue()
-    }
-
-    pub fn pipeline_manager(&self) -> &PipelineManager {
-        &self.pipeline_manager
-    }
-
-    pub fn pipeline_manager_mut(&mut self) -> &mut PipelineManager {
-        &mut self.pipeline_manager
-    }
-
-    pub fn procedural_texture_manager_mut(&mut self) -> &mut ProceduralTextureManager {
-        &mut self.procedural_textures
     }
 
     pub fn render(
@@ -1486,7 +1321,7 @@ impl RenderManager {
             FullscreenPassType::Fog
             | FullscreenPassType::SsaoGen
             | FullscreenPassType::SsaoBlur => {
-                pipelines.depth_texture.sample_count() // this is your scene MSAA
+                pipelines.depth_sample_view.texture().sample_count() // this is the scene MSAA
             }
             _ => options.msaa_samples, // output MSAA
         };
@@ -1529,10 +1364,10 @@ impl RenderManager {
     pub fn render_with_bind_groups(
         &mut self,
         label: &str,
-        shader_path: &std::path::Path,
+        shader_path: &Path,
         options: PipelineOptions,
-        bind_group_layouts: &[&wgpu::BindGroupLayout],
-        bind_groups: &[&wgpu::BindGroup],
+        bind_group_layouts: &[&BindGroupLayout],
+        bind_groups: &[&BindGroup],
         pass: &mut RenderPass,
     ) {
         let pipeline = self.pipeline_manager.get_or_create_pipeline_with_layouts(
@@ -1564,7 +1399,7 @@ impl RenderManager {
 
         // --- BG0 cache key ---
         let key = FullscreenDebugBindGroupKey {
-            view_ptr: (texture as *const wgpu::TextureView) as usize,
+            view_ptr: (texture as *const TextureView) as usize,
             format: src_format,
             src_multisampled,
         };
@@ -1581,64 +1416,58 @@ impl RenderManager {
             .or_insert_with(|| {
                 let entries: Vec<BindGroupEntry> = match (kind, src_multisampled) {
                     // MSAA: textureLoad path, no sampler
-                    (FullscreenDebugKind::Depth, true) => vec![wgpu::BindGroupEntry {
+                    (FullscreenDebugKind::Depth, true) => vec![BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(texture),
+                        resource: BindingResource::TextureView(texture),
                     }],
                     (FullscreenDebugKind::FloatFilterable, true)
                     | (FullscreenDebugKind::FloatUnfilterable, true) => {
-                        vec![wgpu::BindGroupEntry {
+                        vec![BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(texture),
+                            resource: BindingResource::TextureView(texture),
                         }]
                     }
 
                     // Non-MSAA depth: depth texture + non-filtering sampler
                     (FullscreenDebugKind::Depth, false) => vec![
-                        wgpu::BindGroupEntry {
+                        BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(texture),
+                            resource: BindingResource::TextureView(texture),
                         },
-                        wgpu::BindGroupEntry {
+                        BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(
-                                &self.fullscreen_depth_sampler,
-                            ),
+                            resource: BindingResource::Sampler(&self.fullscreen_depth_sampler),
                         },
                     ],
 
                     // Non-MSAA color filterable: texture + filtering sampler
                     (FullscreenDebugKind::FloatFilterable, false) => vec![
-                        wgpu::BindGroupEntry {
+                        BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(texture),
+                            resource: BindingResource::TextureView(texture),
                         },
-                        wgpu::BindGroupEntry {
+                        BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(
-                                &self.fullscreen_color_sampler,
-                            ),
+                            resource: BindingResource::Sampler(&self.fullscreen_color_sampler),
                         },
                     ],
 
                     // Non-MSAA float unfilterable: texture + non-filtering sampler (and shader uses SampleLevel)
                     (FullscreenDebugKind::FloatUnfilterable, false) => vec![
-                        wgpu::BindGroupEntry {
+                        BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(texture),
+                            resource: BindingResource::TextureView(texture),
                         },
-                        wgpu::BindGroupEntry {
+                        BindGroupEntry {
                             binding: 1,
-                            resource: wgpu::BindingResource::Sampler(
-                                &self.fullscreen_depth_sampler,
-                            ),
+                            resource: BindingResource::Sampler(&self.fullscreen_depth_sampler),
                         },
                     ],
                 };
 
                 self.pipeline_manager
                     .device()
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                    .create_bind_group(&BindGroupDescriptor {
                         label: Some(label),
                         layout: bgl0,
                         entries: &entries,
@@ -1672,66 +1501,13 @@ impl RenderManager {
         pass.draw(0..4, 0..1);
     }
 
-    pub fn render_fog_fullscreen(
-        &mut self,
-        label: &str,
-        shader_path: &Path,
-        msaa_samples: u32,
-        depth_view: &TextureView,
-        uniforms: &[&Buffer],
-        target_format: TextureFormat,
-        pass: &mut RenderPass,
-    ) {
-        let depth_multisampled = msaa_samples > 1;
-
-        let depth_layout = self
-            .pipeline_manager
-            .fog_depth_bind_group_layout(depth_multisampled)
-            .clone();
-        let depth_bind_group =
-            self.pipeline_manager
-                .device()
-                .create_bind_group(&BindGroupDescriptor {
-                    label: Some(&format!("{label} Depth BindGroup")),
-                    layout: &depth_layout,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(depth_view),
-                    }],
-                });
-
-        let pipeline = self.pipeline_manager.get_or_create_fog_pipeline(
-            shader_path,
-            msaa_samples,
-            depth_multisampled,
-            uniforms.len(),
-            target_format,
-        );
-
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &depth_bind_group, &[]);
-
-        // Reuse your existing uniform bind group cache logic
-        let key = UniformBindGroupKey::from_buffers(uniforms);
-        let label_owned = format!("{label} Uniform BindGroup");
-
-        let bind_group = self.uniform_bind_groups.entry(key).or_insert_with(|| {
-            self.pipeline_manager
-                .create_uniform_bind_group(uniforms, &label_owned)
-        });
-
-        if let Some(bg) = self.get_or_create_uniform_bind_group(label, uniforms) {
-            pass.set_bind_group(1, bg, &[]);
-        }
-        pass.draw(0..3, 0..1);
-    }
     pub fn render_fullscreen_pass(
         &mut self,
         label: &str,
         shader_path: &Path,
         mut options: PipelineOptions,
-        uniforms: &[&wgpu::Buffer],
-        pass: &mut wgpu::RenderPass,
+        uniforms: &[&Buffer],
+        pass: &mut RenderPass,
         pipelines: &Pipelines,
         settings: &Settings,
         fullscreen_pass_type: FullscreenPassType,
@@ -1753,27 +1529,12 @@ impl RenderManager {
         // fullscreen triangulation (strangulation)
         pass.draw(0..3, 0..1);
     }
-    pub fn create_uniform_buffer<T: bytemuck::Pod>(&self, data: &T, label: &str) -> Buffer {
-        use wgpu::util::DeviceExt;
-        self.pipeline_manager
-            .device()
-            .create_buffer_init(&util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(&[*data]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            })
-    }
 
-    pub fn update_uniform_buffer<T: bytemuck::Pod>(&self, buffer: &wgpu::Buffer, data: &T) {
-        self.pipeline_manager
-            .queue()
-            .write_buffer(buffer, 0, bytemuck::cast_slice(&[*data]));
-    }
     fn get_or_create_uniform_bind_group<'a>(
         &'a mut self,
         label: &str,
-        uniforms: &[&wgpu::Buffer],
-    ) -> Option<&'a wgpu::BindGroup> {
+        uniforms: &[&Buffer],
+    ) -> Option<&'a BindGroup> {
         if uniforms.is_empty() {
             return None;
         }
@@ -1794,32 +1555,31 @@ impl RenderManager {
         self.pipeline_manager.uniform_bind_group_layout(1);
 
         // Create buffer once, then just update it.
-        if self.depth_debug_params_buffer.is_none() {
-            use wgpu::util::DeviceExt;
-
-            let buf = self.pipeline_manager.device().create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Depth Debug Params Buffer"),
-                    contents: bytemuck::bytes_of(&params),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                },
-            );
-            self.depth_debug_params_buffer = Some(buf);
-
-            // Create bind group once (points at the buffer).
-            let buffer_ref = self.depth_debug_params_buffer.as_ref().unwrap();
-            let bg = self
-                .pipeline_manager
-                .create_uniform_bind_group(&[buffer_ref], "Depth Debug Params BindGroup");
-            self.depth_debug_params_bind_group = Some(bg);
-        } else {
+        if let Some(buf) = &self.depth_debug_params_buffer {
             // Update existing buffer
-            let buf = self.depth_debug_params_buffer.as_ref().unwrap();
             self.pipeline_manager
                 .queue()
                 .write_buffer(buf, 0, bytemuck::bytes_of(&params));
 
             // Bind group still valid; no need to recreate.
+        } else {
+            use util::DeviceExt;
+
+            let buf =
+                self.pipeline_manager
+                    .device()
+                    .create_buffer_init(&util::BufferInitDescriptor {
+                        label: Some("Depth Debug Params Buffer"),
+                        contents: bytemuck::bytes_of(&params),
+                        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                    });
+
+            let bg = self
+                .pipeline_manager
+                .create_uniform_bind_group(&[&buf], "Depth Debug Params BindGroup");
+
+            self.depth_debug_params_buffer = Some(buf);
+            self.depth_debug_params_bind_group = Some(bg);
         }
     }
 }
