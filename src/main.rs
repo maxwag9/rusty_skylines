@@ -1,5 +1,7 @@
 //#![allow(unused_variables)]
 
+extern crate core;
+
 mod app;
 mod components;
 mod data;

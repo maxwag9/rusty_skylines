@@ -1,6 +1,5 @@
 pub(crate) mod astronomy;
 mod benchmark;
-mod compute_system;
 pub(crate) mod core;
 pub mod general_mesh_arena;
 pub mod gizmo;
@@ -8,8 +7,6 @@ mod gpu_profiler;
 pub(crate) mod mesh_arena;
 pub(crate) mod pipelines;
 pub mod pipelines_outsource;
-mod procedural_bind_group_manager;
-mod procedural_render_manager;
 pub mod render_passes;
 pub(crate) mod shader_watcher;
 pub mod shadows;

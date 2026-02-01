@@ -23,11 +23,10 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
     out.uv.y = 1.0 - out.uv.y;
     return out;
 }
-@group(0) @binding(0)
-var hdr_tex: texture_2d<f32>;
+@group(0) @binding(0) var hdr_sampler: sampler;
+@group(0) @binding(1) var hdr_tex: texture_2d<f32>;
 
-@group(0) @binding(1)
-var hdr_sampler: sampler;
+
 struct ToneMappingUniforms {
     a: f32,
     b: f32,

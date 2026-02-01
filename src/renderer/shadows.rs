@@ -2,7 +2,6 @@ use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
-use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
 use crate::renderer::render_passes::draw_visible_roads;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
@@ -15,6 +14,8 @@ use wgpu::{
     Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face, IndexFormat,
     RenderPass, StencilState, TextureView,
 };
+use wgpu_crm_mgr::pipelines::PipelineOptions;
+use wgpu_crm_mgr::renderer::RenderManager;
 
 pub const CSM_CASCADES: usize = 4;
 #[repr(C)]
@@ -286,11 +287,11 @@ pub fn render_roads_shadows(
     };
     // This sets the road pipeline + texture array bind group (bind group 0)
     let shadow_shader_path = shader_dir().join("shadows.wgsl");
+    // Roads Shadows
     render_manager.render(
-        Vec::new(),
-        "Roads Shadows",
+        &[],
         shadow_shader_path.as_path(), // file containing shadow vertex-only shader
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: Depth32Float,
@@ -306,14 +307,12 @@ pub fn render_roads_shadows(
             msaa_samples: 1,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            shadow_pass: true,
+            vertex_only: true,
             targets: vec![],
             ..Default::default()
         },
         &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
         pass,
-        pipelines,
-        settings,
     );
 
     draw_visible_roads(pass, road_renderer);
@@ -331,11 +330,11 @@ pub fn render_roads_shadows(
         slope_scale: 0.5,
         clamp: 0.0,
     };
+    // Roads Preview Shadows
     render_manager.render(
-        Vec::new(),
-        "Roads Preview Shadows",
+        &[],
         shadow_shader_path.as_path(), // file containing full vertex+fragment shader
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: Depth32Float,
@@ -351,14 +350,12 @@ pub fn render_roads_shadows(
             msaa_samples: 1,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            shadow_pass: true,
+            vertex_only: true,
             targets: Vec::new(),
             ..Default::default()
         },
         &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
         pass,
-        pipelines,
-        settings,
     );
     pass.set_vertex_buffer(0, vb.slice(..));
     pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
@@ -380,11 +377,11 @@ pub fn render_terrain_shadows(
         clamp: 0.0,
     };
     let shadows_shader_path = shader_dir().join("shadows.wgsl");
+    // Terrain Pipeline (Above Water) Shadows
     render_manager.render(
-        Vec::new(),
-        "Terrain Pipeline (Above Water) Shadows",
+        &[],
         shadows_shader_path.as_path(), // file containing vertex shader
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: Depth32Float,
@@ -400,14 +397,12 @@ pub fn render_terrain_shadows(
             msaa_samples: 1,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Back),
-            shadow_pass: true,
+            vertex_only: true,
             targets: Vec::new(),
             ..Default::default()
         },
         &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
         pass,
-        pipelines,
-        settings,
     );
     terrain_renderer.render(pass, camera, aspect, settings, false);
 }

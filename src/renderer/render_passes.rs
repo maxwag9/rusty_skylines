@@ -3,7 +3,6 @@ use crate::data::Settings;
 use crate::paths::shader_dir;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
-use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
 use crate::renderer::textures::material_keys::*;
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
@@ -13,6 +12,8 @@ use crate::terrain::water::SimpleVertex;
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
+use wgpu_crm_mgr::pipelines::{PipelineOptions, ShadowOptions};
+use wgpu_crm_mgr::renderer::RenderManager;
 
 pub struct RenderPassConfig {
     pub background_color: Color,
@@ -121,7 +122,7 @@ pub fn create_world_pass<'a>(
 
     let normal_attachment = create_normal_attachment(
         &pipelines.msaa_normal_view,
-        &pipelines.resolved_normal_view,
+        &pipelines.resolved_normals_full,
         msaa_samples,
     );
 
@@ -141,7 +142,7 @@ pub fn render_gizmo(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
-    settings: &Settings,
+    _settings: &Settings,
     msaa_samples: u32,
     gizmo: &mut Gizmo,
     camera: &Camera,
@@ -149,11 +150,11 @@ pub fn render_gizmo(
     queue: &Queue,
 ) {
     let targets = color_and_normals_targets(pipelines);
+    // Gizmo
     render_manager.render(
-        Vec::new(),
-        "Gizmo",
+        &[],
         shader_dir().join("lines.wgsl").as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: PrimitiveTopology::LineList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
@@ -169,8 +170,6 @@ pub fn render_gizmo(
         },
         &[&pipelines.camera_uniforms.buffer],
         pass,
-        pipelines,
-        settings,
     );
 
     let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
@@ -183,15 +182,15 @@ pub fn render_water(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
-    settings: &Settings,
+    _settings: &Settings,
     msaa_samples: u32,
 ) {
     let targets = color_and_normals_targets(pipelines);
+    // Water
     render_manager.render(
-        Vec::new(),
-        "Water",
+        &[],
         shader_dir().join("water.wgsl").as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
@@ -226,8 +225,6 @@ pub fn render_water(
             &pipelines.sky_uniforms.buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
 
     pass.set_stencil_reference(1);
@@ -258,11 +255,11 @@ pub fn render_sky(
         bias: Default::default(),
     });
     let targets = color_and_normals_targets(pipelines);
+    // Stars
     render_manager.render(
-        Vec::new(),
-        "Stars",
+        &[],
         shader_dir().join("stars.wgsl").as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: PrimitiveTopology::TriangleStrip,
             depth_stencil: sky_depth_stencil.clone(),
             msaa_samples,
@@ -275,16 +272,14 @@ pub fn render_sky(
             &pipelines.sky_uniforms.buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
     pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
     pass.draw(0..4, 0..STAR_COUNT);
+    // Sky
     render_manager.render(
-        Vec::new(),
-        "Sky",
+        &[],
         shader_dir().join("sky.wgsl").as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: Default::default(),
             depth_stencil: sky_depth_stencil,
             msaa_samples,
@@ -297,8 +292,6 @@ pub fn render_sky(
             &pipelines.sky_uniforms.buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
     pass.draw(0..3, 0..1);
 }
@@ -313,6 +306,8 @@ pub fn render_roads(
 ) {
     let keys = road_material_keys();
     let shader_path = shader_dir().join("road.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+
     fn road_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
         let sign_i = if settings.reversed_depth_z { 1 } else { -1 };
         let sign_f = sign_i as f32;
@@ -326,17 +321,18 @@ pub fn render_roads(
     let base_bias = road_bias(settings, 3, 2.0);
     let preview_bias = road_bias(settings, 4, 2.0);
     let targets = color_and_normals_targets(pipelines);
+    // Roads
     render_manager.render(
-        keys.clone(),
-        "Roads",
+        keys.as_slice(),
         shader_path.as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(road_depth_stencil(base_bias, settings)),
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
             targets: targets.clone(),
+            shadow: shadow.clone(),
             ..Default::default()
         },
         &[
@@ -344,8 +340,6 @@ pub fn render_roads(
             &road_renderer.road_appearance.normal_buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
 
     draw_visible_roads(pass, road_renderer);
@@ -357,18 +351,18 @@ pub fn render_roads(
     else {
         return;
     };
-
+    // Roads
     render_manager.render(
-        keys,
-        "Roads",
+        keys.as_slice(),
         shader_path.as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(road_depth_stencil(preview_bias, settings)),
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
             targets,
+            shadow,
             ..Default::default()
         },
         &[
@@ -376,8 +370,6 @@ pub fn render_roads(
             &road_renderer.road_appearance.preview_buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
 
     pass.set_vertex_buffer(0, vb.slice(..));
@@ -407,6 +399,7 @@ pub fn render_terrain(
 ) {
     let keys = terrain_material_keys();
     let shader_path = shader_dir().join("terrain.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
 
     let make_stencil = |write_mask: u32| -> DepthStencilState {
         DepthStencilState {
@@ -438,17 +431,18 @@ pub fn render_terrain(
     };
     let targets = color_and_normals_targets(pipelines);
     pass.set_stencil_reference(0);
+    // Terrain Pipeline (Above Water)
     render_manager.render(
-        keys.clone(),
-        "Terrain Pipeline (Above Water)",
+        keys.as_slice(),
         shader_path.as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0)),
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
             targets: targets.clone(),
+            shadow: shadow.clone(),
             ..Default::default()
         },
         &[
@@ -456,23 +450,22 @@ pub fn render_terrain(
             &pipelines.pick_uniforms.buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
     terrain_renderer.render(pass, camera, aspect, settings, false);
 
     pass.set_stencil_reference(1);
+    // Terrain Pipeline (Underwater)
     render_manager.render(
-        keys,
-        "Terrain Pipeline (Under Water)",
+        keys.as_slice(),
         shader_path.as_path(),
-        PipelineOptions {
+        &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0xFF)),
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
             targets,
+            shadow,
             ..Default::default()
         },
         &[
@@ -480,10 +473,27 @@ pub fn render_terrain(
             &pipelines.pick_uniforms.buffer,
         ],
         pass,
-        pipelines,
-        settings,
     );
     terrain_renderer.render(pass, camera, aspect, settings, true);
+}
+
+fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {
+    match settings.shadows_enabled {
+        true => match settings.reversed_depth_z {
+            true => Some(ShadowOptions {
+                sampler: pipelines.shadow_samplers.shadow_sampler_rev_z.clone(),
+                view: pipelines.cascaded_shadow_map.array_view.clone(),
+            }),
+            false => Some(ShadowOptions {
+                sampler: pipelines.shadow_samplers.shadow_sampler.clone(),
+                view: pipelines.cascaded_shadow_map.array_view.clone(),
+            }),
+        },
+        false => Some(ShadowOptions {
+            sampler: pipelines.shadow_samplers.shadow_sampler_off.clone(),
+            view: pipelines.cascaded_shadow_map.array_view.clone(),
+        }),
+    }
 }
 
 fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {

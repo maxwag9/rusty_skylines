@@ -162,5 +162,5 @@ pub struct Uniforms {
     pub orbit_radius: f32,
     pub reversed_depth_z: u32,
     pub shadows_enabled: u32,
-    pub _pad_2: [u32; 2], // padding to 16 bytes
+    pub near_far_depth: [f32; 2],
 }

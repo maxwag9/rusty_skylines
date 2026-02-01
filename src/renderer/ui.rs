@@ -1,6 +1,5 @@
 use crate::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
-use crate::renderer::procedural_render_manager::{PipelineOptions, RenderManager};
 use crate::renderer::render_passes::color_target;
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text_rendering::Anchor;
@@ -14,6 +13,8 @@ use crate::ui::vertex::{
     UiVertexText,
 };
 use wgpu::*;
+use wgpu_crm_mgr::pipelines::PipelineOptions;
+use wgpu_crm_mgr::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 
 pub const PAD: i32 = 1;
@@ -367,10 +368,10 @@ impl UiRenderer {
             for element in &layer.elements {
                 match element {
                     UiElement::Circle(_) => {
-                        if let Some(bg1) = &circle_bg {
+                        if let Some(bg1) = circle_bg.as_ref() {
                             // Circle
                             let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
-                            let options = PipelineOptions {
+                            let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
@@ -378,15 +379,15 @@ impl UiRenderer {
                                 targets,
                                 ..Default::default()
                             };
-                            render_manager.render_with_bind_groups(
-                                "UI Circle",
+                            // UI Circle
+                            render_manager.render_with_layouts(
                                 &shader_dir().join("ui_circle.wgsl"),
-                                options,
                                 &[
                                     &self.pipelines.uniform_layout,
                                     &self.pipelines.circle_layout,
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
                                 pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
@@ -395,7 +396,7 @@ impl UiRenderer {
                             // Glow
                             let targets =
                                 color_target(pipelines, Some(self.pipelines.additive_blend));
-                            let options = PipelineOptions {
+                            let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
@@ -403,15 +404,16 @@ impl UiRenderer {
                                 targets,
                                 ..Default::default()
                             };
-                            render_manager.render_with_bind_groups(
-                                "UI Glow",
+                            // UI Glow
+                            render_manager.render_with_layouts(
+                                //cannot borrow `*render_manager` as mutable more than once at a time [E0499] second mutable borrow occurs here
                                 &shader_dir().join("ui_circle_glow.wgsl"),
-                                options,
                                 &[
                                     &self.pipelines.uniform_layout,
                                     &self.pipelines.circle_layout,
                                 ],
-                                &[&self.pipelines.uniform_bind_group, bg1],
+                                &[&self.pipelines.uniform_bind_group, bg1], // `bg1` does not live long enough [E0597] borrowed value does not live long enough  EVERYWHERE
+                                options,
                                 pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
@@ -421,9 +423,9 @@ impl UiRenderer {
                     }
 
                     UiElement::Handle(_) => {
-                        if let Some(bg1) = &handle_bg {
+                        if let Some(bg1) = handle_bg.as_ref() {
                             let targets = color_target(pipelines, self.pipelines.good_blend);
-                            let options = PipelineOptions {
+                            let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
@@ -431,15 +433,15 @@ impl UiRenderer {
                                 targets,
                                 ..Default::default()
                             };
-                            render_manager.render_with_bind_groups(
-                                "UI Handle",
+                            // UI Handle
+                            render_manager.render_with_layouts(
                                 &shader_dir().join("ui_handle.wgsl"),
-                                options,
                                 &[
                                     &self.pipelines.uniform_layout,
                                     &self.pipelines.handle_layout,
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
                                 pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.handle_quad_buffer.slice(..));
@@ -451,8 +453,8 @@ impl UiRenderer {
                     UiElement::Polygon(poly) => {
                         let count = poly.tri_count.saturating_mul(3);
                         let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
-                        if let (Some(bg1), Some(vbo)) = (&poly_bg, &layer.gpu.poly_vbo) {
-                            let options = PipelineOptions {
+                        if let (Some(bg1), Some(vbo)) = (poly_bg.as_ref(), &layer.gpu.poly_vbo) {
+                            let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
@@ -460,15 +462,15 @@ impl UiRenderer {
                                 targets,
                                 ..Default::default()
                             };
-                            render_manager.render_with_bind_groups(
-                                "UI Polygon",
+                            // UI Polygon
+                            render_manager.render_with_layouts(
                                 &shader_dir().join("ui_polygon.wgsl"),
-                                options,
                                 &[
                                     &self.pipelines.uniform_layout,
                                     &self.pipelines.polygon_layout,
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
                                 pass,
                             );
                             pass.set_vertex_buffer(0, vbo.slice(..));
@@ -478,9 +480,9 @@ impl UiRenderer {
                     }
 
                     UiElement::Outline(_) => {
-                        if let Some(bg1) = &outline_bg {
+                        if let Some(bg1) = outline_bg.as_ref() {
                             let targets = color_target(pipelines, self.pipelines.good_blend);
-                            let options = PipelineOptions {
+                            let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
@@ -488,17 +490,18 @@ impl UiRenderer {
                                 targets,
                                 ..Default::default()
                             };
-                            render_manager.render_with_bind_groups(
-                                "UI Outline",
+                            // UI Outline
+                            render_manager.render_with_layouts(
+                                //cannot borrow `*render_manager` as mutable more than once at a time [E0499] `*render_manager` was mutably borrowed here in the previous iteration of the loop
                                 &shader_dir().join("ui_shape_outline.wgsl"),
-                                options,
                                 &[
                                     &self.pipelines.uniform_layout,
                                     &self.pipelines.outline_layout,
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
                                 pass,
-                            );
+                            ); //argument requires that `*render_manager` is borrowed for `'a`
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, outline_idx..outline_idx + 1);
                         }
@@ -515,7 +518,7 @@ impl UiRenderer {
             if layer.gpu.text_count > 0 {
                 if let Some(text_vbo) = &layer.gpu.text_vbo {
                     let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
-                    let options = PipelineOptions {
+                    let options = &PipelineOptions {
                         topology: PrimitiveTopology::TriangleList,
                         msaa_samples: msaa,
                         depth_stencil: depth_stencil.clone(),
@@ -523,15 +526,15 @@ impl UiRenderer {
                         targets,
                         ..Default::default()
                     };
-                    render_manager.render_with_bind_groups(
-                        "UI Text",
+                    // UI Text
+                    render_manager.render_with_layouts(
                         &shader_dir().join("text.wgsl"),
-                        options,
                         &[&self.pipelines.uniform_layout, &self.pipelines.text_layout],
                         &[
                             &self.pipelines.uniform_bind_group,
                             &self.pipelines.text_bind_group,
                         ],
+                        options,
                         pass,
                     );
                     pass.set_vertex_buffer(0, text_vbo.slice(..));

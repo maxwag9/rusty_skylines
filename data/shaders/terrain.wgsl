@@ -17,7 +17,7 @@ struct Uniforms {
     orbit_radius: f32,
     reversed_depth_z: u32,
     shadows_enabled: u32,
-    _pad_2: vec2<u32>,     // padding to 16 bytes
+    near_far_depth: vec2<f32>,
 };
 
 struct PickUniform {
@@ -26,12 +26,12 @@ struct PickUniform {
     underwater: u32,
     color: vec3<f32>,
 }
+@group(0) @binding(0) var material_sampler: sampler;
+@group(0) @binding(1) var grass_tex: texture_2d<f32>;
+@group(0) @binding(2) var grass_tex2: texture_2d<f32>;
 
-@group(0) @binding(0) var grass_tex: texture_2d<f32>;
-@group(0) @binding(1) var grass_tex2: texture_2d<f32>;
-@group(0) @binding(2) var material_sampler: sampler;
-@group(0) @binding(3) var t_shadow: texture_depth_2d_array;
-@group(0) @binding(4) var s_shadow: sampler_comparison;
+@group(0) @binding(3) var s_shadow: sampler_comparison;
+@group(0) @binding(4) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(1) var<uniform> pick: PickUniform;

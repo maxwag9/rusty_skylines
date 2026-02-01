@@ -7,12 +7,7 @@ use crate::positions::WorldPos;
 use crate::renderer::astronomy::*;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
-use crate::renderer::pipelines::{Pipelines, SSAO_FORMAT};
-use crate::renderer::procedural_bind_group_manager::FullscreenPassType;
-use crate::renderer::procedural_render_manager::{
-    DepthDebugParams, FullscreenDebugSwizzle, PipelineOptions, RenderManager,
-    create_color_attachment_load,
-};
+use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
@@ -32,9 +27,12 @@ use std::sync::Arc;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::*;
+use wgpu_crm_mgr::compute_system::{ComputePipelineOptions, ComputeSystem};
+use wgpu_crm_mgr::fullscreen::{DebugVisualization, DepthDebugParams};
+use wgpu_crm_mgr::pipelines::PipelineOptions;
+use wgpu_crm_mgr::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
-
 pub struct RenderCore {
     adapter: Adapter,
     pub surface: Surface<'static>,
@@ -51,6 +49,7 @@ pub struct RenderCore {
     pub gizmo: Gizmo,
     astronomy: AstronomyState,
     profiler: GpuProfiler,
+    compute: ComputeSystem,
 }
 
 impl RenderCore {
@@ -71,6 +70,7 @@ impl RenderCore {
         let render_manager = RenderManager::new(&device, &queue, texture_dir());
         let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
         let profiler = GpuProfiler::new(&device, 5, 3);
+        let compute = ComputeSystem::new(&device, &queue);
         Self {
             adapter,
             surface,
@@ -87,6 +87,7 @@ impl RenderCore {
             gizmo,
             astronomy: AstronomyState::default(),
             profiler,
+            compute,
         }
     }
 
@@ -98,7 +99,7 @@ impl RenderCore {
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
-        self.render_manager.invalidate_resize_bind_groups();
+        self.render_manager.invalidate_bind_groups();
     }
 
     pub(crate) fn render(
@@ -187,16 +188,13 @@ impl RenderCore {
             self.terrain_renderer.chunk_size,
         );
         self.terrain_renderer.pick_terrain_point(ray);
-        self.render_manager
-            .update_depth_params_buffer(DepthDebugParams {
-                near: camera.near,
-                far: camera.far,
-                power: 20.0,
-                reversed_z: settings.reversed_depth_z as u32,
-                msaa_samples: self.msaa_samples,
-                _pad0: 0,
-                _pad1: 0,
-            });
+        self.render_manager.update_depth_params(DepthDebugParams {
+            near: camera.near,
+            far: camera.far,
+            power: 20.0,
+            reversed_z: settings.reversed_depth_z as u32,
+            msaa_samples: self.msaa_samples,
+        });
         self.update_uniforms(
             camera, view, proj, view_proj, &astronomy, time, aspect, settings,
         );
@@ -389,9 +387,7 @@ impl RenderCore {
         // -------- Pass 1: Main world pass (writes depth) --------
         self.execute_world_pass(encoder, config, camera, settings, aspect);
 
-        self.execute_ssao_gen_pass(encoder, settings);
-        self.execute_ssao_blur_pass(encoder, settings);
-        self.execute_ssao_apply_pass(encoder, settings);
+        // self.execute_ssao_pass(settings);
 
         // -------- Pass 2: Fog (samples depth, no depth attachment) --------
         self.execute_fog_pass(encoder, settings);
@@ -490,180 +486,49 @@ impl RenderCore {
             );
         });
     }
-    fn execute_ssao_gen_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+    fn execute_ssao_pass(&mut self, settings: &Settings) {
         if !settings.show_world {
             return;
         }
-
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("SSAO Gen Pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &self.pipelines.ssao_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color::WHITE), // AO=1 default
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        let shader = if self.msaa_samples > 1 {
-            "ssao_gen_msaa.wgsl"
-        } else {
-            "ssao_gen.wgsl"
-        };
-
-        let options = PipelineOptions {
-            topology: TriangleList,
-            msaa_samples: 1, // output AO is single-sample
-            depth_stencil: None,
-            vertex_layouts: vec![],
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: FullscreenPassType::SsaoGen,
-            targets: vec![Some(ColorTargetState {
-                format: SSAO_FORMAT,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-        };
-
-        self.render_manager.render_fullscreen_pass(
-            "SSAO Gen",
-            shader_dir().join(shader).as_path(),
-            options,
-            &[
-                &self.pipelines.camera_uniforms.buffer,
-                &self.pipelines.ssao_uniforms.buffer,
-            ],
-            &mut pass,
-            &self.pipelines,
-            settings,
-            FullscreenPassType::SsaoGen,
-        );
-    }
-    fn execute_ssao_blur_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
-        if !settings.show_world {
-            return;
-        }
-
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("SSAO Blur Pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &self.pipelines.ssao_blur_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color::WHITE),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        let shader = if self.msaa_samples > 1 {
-            "ssao_blur_msaa.wgsl"
-        } else {
-            "ssao_blur.wgsl"
-        };
-
-        let options = PipelineOptions {
-            topology: TriangleList,
-            msaa_samples: 1,
-            depth_stencil: None,
-            vertex_layouts: vec![],
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: FullscreenPassType::SsaoBlur,
-            targets: vec![Some(ColorTargetState {
-                format: SSAO_FORMAT,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-        };
-
-        self.render_manager.render_fullscreen_pass(
-            "SSAO Blur",
-            shader_dir().join(shader).as_path(),
-            options,
-            &[
-                &self.pipelines.camera_uniforms.buffer,
-                &self.pipelines.ssao_uniforms.buffer,
-            ],
-            &mut pass,
-            &self.pipelines,
-            settings,
-            FullscreenPassType::SsaoBlur,
-        );
-    }
-    fn execute_ssao_apply_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
-        if !settings.show_world {
-            return;
-        }
-
-        let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_hdr_view,
-            &self.pipelines.resolved_hdr_view,
-            self.msaa_samples,
-        );
-
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("SSAO Apply Pass"),
-            color_attachments: &[Some(color_attachment)],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        let multiply_blend = BlendState {
-            color: BlendComponent {
-                src_factor: BlendFactor::Zero,
-                dst_factor: BlendFactor::Src,
-                operation: BlendOperation::Add,
+        // Resolve depth pass (Even non-msaa depth gets resolved)
+        self.compute.compute(
+            "resolve_depth_compute_pass",
+            vec![&self.pipelines.depth_sample_view],
+            vec![&self.pipelines.resolved_depth_view_full],
+            "shaders/resolve_depth.wgsl",
+            ComputePipelineOptions {
+                dispatch_size: [
+                    self.pipelines.depth_sample_view.texture().width() / 8,
+                    self.pipelines.depth_sample_view.texture().height() / 8,
+                    1,
+                ],
             },
-            alpha: BlendComponent {
-                src_factor: BlendFactor::Zero,
-                dst_factor: BlendFactor::One,
-                operation: BlendOperation::Add,
-            },
-        };
-
-        let options = PipelineOptions {
-            topology: TriangleList,
-            msaa_samples: self.msaa_samples, // output is MSAA HDR target
-            depth_stencil: None,
-            vertex_layouts: vec![],
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: FullscreenPassType::SsaoApply,
-            targets: vec![Some(ColorTargetState {
-                format: TextureFormat::Rgba16Float, // HDR
-                blend: Some(multiply_blend),
-                write_mask: ColorWrites::ALL,
-            })],
-        };
-
-        self.render_manager.render_fullscreen_pass(
-            "SSAO Apply",
-            shader_dir().join("ssao_apply.wgsl").as_path(),
-            options,
-            &[], // no uniforms needed
-            &mut pass,
-            &self.pipelines,
-            settings,
-            FullscreenPassType::SsaoApply,
+            &[&self.pipelines.camera_uniforms.buffer],
         );
+
+        // Linearize depth pass
+        self.compute.compute(
+            "linearize_depth_compute_pass",
+            vec![&self.pipelines.resolved_depth_view_full],
+            vec![&self.pipelines.linear_depth_view_full],
+            "shaders/linearize_depth.wgsl",
+            ComputePipelineOptions {
+                dispatch_size: [
+                    self.pipelines.resolved_depth_view_full.texture().width() / 8,
+                    self.pipelines.resolved_depth_view_full.texture().height() / 8,
+                    1,
+                ],
+            },
+            &[&self.pipelines.camera_uniforms.buffer],
+        );
+        // ...
     }
-    fn execute_fog_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+    fn execute_fog_pass(&mut self, encoder: &mut wgpu::CommandEncoder, settings: &Settings) {
+        // Do the early-out BEFORE creating the render pass (cleaner).
+        if !settings.show_world || !settings.show_fog {
+            return;
+        }
+
         let color_attachment = create_color_attachment_load(
             &self.pipelines.msaa_hdr_view,
             &self.pipelines.resolved_hdr_view,
@@ -678,44 +543,40 @@ impl RenderCore {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        if !settings.show_world || !settings.show_fog {
-            return;
-        }
-        let fog_shader = if self.msaa_samples > 1 {
+
+        // Decide shader variant based on whether the *input depth* is multisampled.
+        let depth_is_msaa = self.pipelines.depth_sample_view.texture().sample_count() > 1;
+        let fog_shader = if depth_is_msaa {
             "fog_msaa.wgsl"
         } else {
             "fog.wgsl"
         };
 
-        let options = PipelineOptions {
-            topology: TriangleList,
-            msaa_samples: self.msaa_samples,
-            depth_stencil: None,
-            vertex_layouts: vec![],
-            cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: FullscreenPassType::Fog, // (will be overwritten anyway)
-            targets: vec![Some(ColorTargetState {
+        let options = PipelineOptions::default()
+            .with_topology(TriangleList)
+            .with_msaa(self.msaa_samples)
+            .with_target(ColorTargetState {
                 format: self.pipelines.msaa_hdr_view.texture().format(),
                 blend: Some(BlendState::ALPHA_BLENDING),
                 write_mask: ColorWrites::ALL,
-            })],
-        };
+            });
 
-        self.render_manager.render_fullscreen_pass(
-            "Fog",
+        // group(0): your “materials” bind group becomes “fullscreen inputs”
+        // Here: one input texture = depth_sample_view
+        self.render_manager.render_with_textures(
+            &[&self.pipelines.depth_sample_view],
             shader_dir().join(fog_shader).as_path(),
-            options,
+            &options,
             &[
                 &self.pipelines.camera_uniforms.buffer,
                 &self.pipelines.fog_uniforms.buffer,
                 &self.pipelines.pick_uniforms.buffer,
             ],
             &mut pass,
-            &self.pipelines,
-            settings,
-            FullscreenPassType::Fog,
         );
+
+        // New API: RenderManager no longer draws for you.
+        pass.draw(0..3, 0..1);
     }
 
     fn execute_ui_pass(
@@ -764,12 +625,12 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                self.render_manager.render_fullscreen_debug_view(
-                    &self.pipelines.resolved_normal_view,
-                    "Debug Normals Render",
+                // Debug Normals Render
+                self.render_manager.render_fullscreen_debug(
+                    &self.pipelines.resolved_normals_full,
+                    DebugVisualization::Color,
                     self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
-                    FullscreenDebugSwizzle::None,
                     &mut pass,
                 );
             }
@@ -789,12 +650,12 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                self.render_manager.render_fullscreen_debug_view(
+                // Debug Depth Render
+                self.render_manager.render_fullscreen_debug(
                     &self.pipelines.depth_sample_view,
-                    "Debug Depth Render",
+                    DebugVisualization::Depth,
                     self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
-                    FullscreenDebugSwizzle::None,
                     &mut pass,
                 );
             }
@@ -814,12 +675,12 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                self.render_manager.render_fullscreen_debug_view(
-                    &self.pipelines.ssao_view,
-                    "Debug SSAO RAW Render",
+                // Debug SSAO RAW Render
+                self.render_manager.render_fullscreen_debug(
+                    &self.pipelines.ssao_raw_view_half,
+                    DebugVisualization::RedToGrayscale,
                     self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
-                    FullscreenDebugSwizzle::RedToRgb,
                     &mut pass,
                 );
             }
@@ -838,13 +699,12 @@ impl RenderCore {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-
-                self.render_manager.render_fullscreen_debug_view(
-                    &self.pipelines.ssao_blur_view,
-                    "Debug SSAO Blurred Render",
+                // Debug SSAO Blurred Render
+                self.render_manager.render_fullscreen_debug(
+                    &self.pipelines.ssao_blur_view_half,
+                    DebugVisualization::RedToGrayscale,
                     self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
                     self.msaa_samples,
-                    FullscreenDebugSwizzle::RedToRgb,
                     &mut pass,
                 );
             }
@@ -855,7 +715,7 @@ impl RenderCore {
         &mut self,
         encoder: &mut CommandEncoder,
         surface_view: &TextureView,
-        settings: &Settings,
+        _settings: &Settings,
     ) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Tonemap Pass"),
@@ -879,29 +739,29 @@ impl RenderCore {
             depth_stencil: None,
             vertex_layouts: vec![],
             cull_mode: None,
-            shadow_pass: false,
-            fullscreen_pass: FullscreenPassType::Normal,
             targets: vec![Some(ColorTargetState {
                 format: surface_view.texture().format(),
                 blend: None,
                 write_mask: ColorWrites::ALL,
             })],
+            vertex_only: false,
+            shadow: None,
         };
-        self.render_manager.render_fullscreen_pass(
-            "Tonemap",
+        // Tonemap
+        self.render_manager.render_with_textures(
+            &[&self.pipelines.resolved_hdr_view],
             shader_dir().join("tonemap.wgsl").as_path(),
-            options,
+            &options,
             &[&self.pipelines.tonemapping_uniforms.buffer],
             &mut pass,
-            &self.pipelines,
-            settings,
-            FullscreenPassType::Normal,
         );
+        // New API: RenderManager no longer draws for me.
+        pass.draw(0..3, 0..1);
     }
 
-    fn render_ui(
-        &mut self,
-        pass: &mut RenderPass,
+    fn render_ui<'a>(
+        &'a mut self,
+        pass: &mut RenderPass<'a>,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &InputState,
@@ -936,7 +796,7 @@ impl RenderCore {
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
         self.ui_renderer.pipelines.rebuild_pipelines();
-        self.render_manager.invalidate_resize_bind_groups();
+        self.render_manager.invalidate_bind_groups();
     }
 
     fn reload_all_shaders(&mut self) -> anyhow::Result<()> {
@@ -972,7 +832,8 @@ impl RenderCore {
             }
             Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
         }
-        self.render_manager.pipeline_manager.reload_shaders(changed);
+        self.render_manager
+            .reload_render_shaders(changed.as_slice());
     }
 }
 
@@ -1166,6 +1027,33 @@ pub fn acquire_frame(
         Err(e) => {
             eprintln!("Surface error: {:?}", e);
             None
+        }
+    }
+}
+fn create_color_attachment_load<'a>(
+    msaa_view: &'a TextureView,
+    surface_view: &'a TextureView,
+    msaa_samples: u32,
+) -> RenderPassColorAttachment<'a> {
+    if msaa_samples > 1 {
+        RenderPassColorAttachment {
+            view: msaa_view,
+            depth_slice: None,
+            resolve_target: Some(surface_view),
+            ops: Operations {
+                load: LoadOp::Load,
+                store: StoreOp::Store,
+            },
+        }
+    } else {
+        RenderPassColorAttachment {
+            view: surface_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations {
+                load: LoadOp::Load,
+                store: StoreOp::Store,
+            },
         }
     }
 }

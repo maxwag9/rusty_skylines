@@ -64,16 +64,17 @@ fn vs_main(input : VertexInput) -> VertexOutput {
 }
 
 // ---- Bind group 0: road materials ----
-@group(0) @binding(0) var tex0 : texture_2d<f32>; // concrete
-@group(0) @binding(1) var tex1 : texture_2d<f32>; // goo (filler between new and old asphalt)
-@group(0) @binding(2) var tex2 : texture_2d<f32>; // asphalt (new, black)
-@group(0) @binding(3) var tex3 : texture_2d<f32>; // asphalt (brighter black, "new" but worn)
-@group(0) @binding(4) var tex4 : texture_2d<f32>; // asphalt (kinda orange old "new age" asphalt I see in germany)
-@group(0) @binding(5) var tex5 : texture_2d<f32>; // asphalt (old, gray, rough asphalt)
+@group(0) @binding(0) var road_sampler : sampler;
+@group(0) @binding(1) var tex0 : texture_2d<f32>; // concrete
+@group(0) @binding(2) var tex1 : texture_2d<f32>; // goo (filler between new and old asphalt)
+@group(0) @binding(3) var tex2 : texture_2d<f32>; // asphalt (new, black)
+@group(0) @binding(4) var tex3 : texture_2d<f32>; // asphalt (brighter black, "new" but worn)
+@group(0) @binding(5) var tex4 : texture_2d<f32>; // asphalt (kinda orange old "new age" asphalt I see in germany)
+@group(0) @binding(6) var tex5 : texture_2d<f32>; // asphalt (old, gray, rough asphalt)
 // Keep these comments!
-@group(0) @binding(6) var road_sampler : sampler;
-@group(0) @binding(7) var t_shadow: texture_depth_2d_array;
-@group(0) @binding(8) var s_shadow: sampler_comparison;
+@group(0) @binding(7) var s_shadow: sampler_comparison;
+@group(0) @binding(8) var t_shadow: texture_depth_2d_array;
+
 @group(1) @binding(0) var<uniform> uniforms : Uniforms;
 @group(1) @binding(1) var<uniform> road_appearance: RoadAppearance;
 

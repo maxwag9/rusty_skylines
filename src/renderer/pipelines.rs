@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
-use wgpu::TextureFormat::Rgba16Float;
+use wgpu::TextureFormat::{Depth32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
 
 #[macro_export]
@@ -124,19 +124,30 @@ pub struct ShaderAsset {
     pub _path: PathBuf,
     pub module: ShaderModule,
 }
-
+pub struct ShadowSamplers {
+    pub shadow_sampler: Sampler,
+    pub shadow_sampler_rev_z: Sampler,
+    pub shadow_sampler_off: Sampler,
+}
 pub struct Pipelines {
     pub device: Device,
 
     pub msaa_hdr_view: TextureView,
     pub resolved_hdr_view: TextureView,
     pub msaa_normal_view: TextureView,
-    pub resolved_normal_view: TextureView,
-    pub ssao_view: TextureView,
-    pub ssao_blur_view: TextureView,
+    pub resolved_normals_full: TextureView,
+    pub resolved_normals_half: TextureView,
+    pub ssao_raw_view_half: TextureView,
+    pub ssao_blur_view_half: TextureView,
+    pub ssao_history_half: TextureView,
     pub depth_view: TextureView,
     pub depth_sample_view: TextureView, // sampling (DepthOnly)
+    pub resolved_depth_view_full: TextureView,
+    pub linear_depth_view_full: TextureView,
+    pub linear_depth_view_half: TextureView,
+
     pub cascaded_shadow_map: CascadedShadowMap,
+    pub shadow_samplers: ShadowSamplers,
 
     pub config: SurfaceConfiguration,
 
@@ -162,12 +173,17 @@ impl Pipelines {
         let msaa_samples = settings.msaa_samples;
         // Create render targets
         let (msaa_hdr_view, msaa_normal_view) = create_msaa_targets(&device, &config, msaa_samples);
-        let (resolved_hdr_view, resolved_normal_view) = create_resolved_targets(&device, &config);
+        let (resolved_hdr_view, resolved_normal_view, resolved_depth_view) =
+            create_resolved_targets(&device, &config);
         let (depth_view, depth_sample_view) = create_depth_texture(device, config, msaa_samples);
-        let linear_depth_view = create_linear_depth_texture(device, config);
-        let (ssao_view, ssao_blur_view) = create_ssao_textures(device, config, 1.0);
+        let linear_depth_view_full = create_linear_depth_texture(device, config, 1.0);
+        let linear_depth_view_half = create_linear_depth_texture(device, config, 0.5);
+        let resolved_normals_half = create_normals_texture(device, config, 0.5);
+        let (ssao_raw_view_half, ssao_blur_view_half) = create_ssao_textures(device, config, 0.5);
+        let ssao_history_half = create_ao_history_texture(device, config, 0.5);
         let cascaded_shadow_map =
             create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM");
+        let shadow_samplers = create_shadow_samplers(&device);
         let camera_uniforms = create_camera_uniforms(device, camera, config, settings);
         let sky_uniforms = create_sky_uniforms(device);
         let fog_uniforms = create_fog_uniforms(device);
@@ -185,11 +201,17 @@ impl Pipelines {
             msaa_hdr_view,
             resolved_hdr_view,
             msaa_normal_view,
-            resolved_normal_view,
-            ssao_view,
-            ssao_blur_view,
+            resolved_normals_full: resolved_normal_view,
+            resolved_normals_half,
+            ssao_raw_view_half,
+            ssao_blur_view_half,
+            ssao_history_half,
             depth_view,
             depth_sample_view,
+            resolved_depth_view_full: resolved_depth_view,
+            linear_depth_view_full,
+            linear_depth_view_half,
+
             cascaded_shadow_map,
 
             camera_uniforms,
@@ -203,6 +225,7 @@ impl Pipelines {
             water_mesh_buffers: water_mesh,
 
             stars_mesh_buffers: stars_mesh,
+            shadow_samplers,
         };
 
         Ok(this)
@@ -215,10 +238,51 @@ impl Pipelines {
         self.config = config.clone();
         (self.msaa_hdr_view, self.msaa_normal_view) =
             create_msaa_targets(&self.device, &self.config, msaa_samples);
-        (self.resolved_hdr_view, self.resolved_normal_view) =
-            create_resolved_targets(&self.device, &self.config);
+        (
+            self.resolved_hdr_view,
+            self.resolved_normals_full,
+            self.resolved_depth_view_full,
+        ) = create_resolved_targets(&self.device, &self.config);
         (self.depth_view, self.depth_sample_view) =
             create_depth_texture(&self.device, &self.config, msaa_samples);
+    }
+}
+
+fn create_shadow_samplers(device: &Device) -> ShadowSamplers {
+    let shadow_sampler = device.create_sampler(&SamplerDescriptor {
+        label: Some("Shadow Sampler"),
+        address_mode_u: AddressMode::ClampToEdge,
+        address_mode_v: AddressMode::ClampToEdge,
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mipmap_filter: MipmapFilterMode::Nearest,
+        compare: Some(CompareFunction::LessEqual), // ||| Great!
+        ..Default::default()
+    });
+    let shadow_sampler_rev_z = device.create_sampler(&SamplerDescriptor {
+        label: Some("Shadow Sampler (Reversed-Z)"),
+        address_mode_u: AddressMode::ClampToEdge,
+        address_mode_v: AddressMode::ClampToEdge,
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mipmap_filter: MipmapFilterMode::Nearest,
+        compare: Some(CompareFunction::GreaterEqual), // <-- important
+        ..Default::default()
+    });
+    let shadow_sampler_off = device.create_sampler(&SamplerDescriptor {
+        label: Some("Shadows Off Sampler"),
+        address_mode_u: AddressMode::ClampToEdge,
+        address_mode_v: AddressMode::ClampToEdge,
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mipmap_filter: MipmapFilterMode::Nearest,
+        compare: Some(CompareFunction::Always), // <--- Mission CRITICAL
+        ..Default::default()
+    });
+    ShadowSamplers {
+        shadow_sampler,
+        shadow_sampler_rev_z,
+        shadow_sampler_off,
     }
 }
 
@@ -275,7 +339,7 @@ pub fn create_msaa_targets(
         mip_level_count: 1,
         sample_count: samples,
         dimension: TextureDimension::D2,
-        format: Rgba16Float,
+        format: NORMAL_FORMAT,
         usage: TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
@@ -283,11 +347,11 @@ pub fn create_msaa_targets(
     let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
     (color_view, normal_view)
 }
-
+const NORMAL_FORMAT: TextureFormat = Rgba8Unorm;
 pub fn create_resolved_targets(
     device: &Device,
     config: &SurfaceConfiguration,
-) -> (TextureView, TextureView) {
+) -> (TextureView, TextureView, TextureView) {
     let color_texture = device.create_texture(&TextureDescriptor {
         label: Some("Resolved, non-MSAA Color Texture"),
         size: Extent3d {
@@ -314,13 +378,56 @@ pub fn create_resolved_targets(
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: Rgba16Float,
+        format: NORMAL_FORMAT,
         usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
 
     let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
-    (color_view, normal_view)
+    let texture = device.create_texture(&TextureDescriptor {
+        label: Some("Depth Texture"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: Depth32Float,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    // For sampling in fog shader: MUST be DepthOnly for Depth24PlusStencil8
+    let depth_only_view = texture.create_view(&TextureViewDescriptor {
+        label: Some("Depth Texture View (DepthOnly)"),
+        aspect: TextureAspect::DepthOnly,
+        ..Default::default()
+    });
+    (color_view, normal_view, depth_only_view)
+}
+pub fn create_normals_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    resolution_factor: f32,
+) -> TextureView {
+    let tex = device.create_texture(&TextureDescriptor {
+        label: Some("Normal Half"),
+        size: Extent3d {
+            width: (config.width as f32 * resolution_factor) as u32,
+            height: (config.height as f32 * resolution_factor) as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: NORMAL_FORMAT,
+        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    tex.create_view(&Default::default())
 }
 
 pub const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32FloatStencil8;
@@ -357,22 +464,24 @@ fn create_depth_texture(
 
     (attachment_view, depth_only_view)
 }
-fn create_linear_depth_texture(device: &Device, config: &SurfaceConfiguration) -> TextureView {
-    // Full-res linear depth (filterable!)
+fn create_linear_depth_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    resolution_factor: f32,
+) -> TextureView {
+    // linear depth (filterable!)
     let linear_depth_tex = device.create_texture(&TextureDescriptor {
         label: Some("Linear Depth"),
         size: Extent3d {
-            width: config.width,
-            height: config.height,
+            width: (config.width as f32 * resolution_factor) as u32,
+            height: (config.height as f32 * resolution_factor) as u32,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1, // single-sample
         dimension: TextureDimension::D2,
-        format: TextureFormat::R32Float, // or R16Float if you want smaller
-        usage: TextureUsages::STORAGE_BINDING
-            | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::COPY_DST,
+        format: TextureFormat::R16Float,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
         view_formats: &[],
     });
 
@@ -381,7 +490,7 @@ fn create_linear_depth_texture(device: &Device, config: &SurfaceConfiguration) -
     linear_depth_view
 }
 
-pub const SSAO_FORMAT: TextureFormat = TextureFormat::R32Float;
+pub const SSAO_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 
 fn create_ssao_textures(
     device: &Device,
@@ -410,6 +519,28 @@ fn create_ssao_textures(
     let (_, ssao_view) = make("SSAO Texture");
     let (_, ssao_blur_view) = make("SSAO Blurred Texture");
     (ssao_view, ssao_blur_view)
+}
+pub fn create_ao_history_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    resolution_factor: f32,
+) -> TextureView {
+    let tex = device.create_texture(&TextureDescriptor {
+        label: Some("AO History"),
+        size: Extent3d {
+            width: (config.width as f32 * resolution_factor) as u32,
+            height: (config.height as f32 * resolution_factor) as u32,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: SSAO_FORMAT,
+        usage: TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    tex.create_view(&Default::default())
 }
 
 pub fn make_new_uniforms_csm(
@@ -446,6 +577,7 @@ pub fn make_new_uniforms_csm(
         orbit_radius: camera.orbit_radius,
         reversed_depth_z: settings.reversed_depth_z as u32,
         shadows_enabled: settings.shadows_enabled as u32,
-        _pad_2: [0, 0],
+
+        near_far_depth: [camera.near, camera.far],
     }
 }
