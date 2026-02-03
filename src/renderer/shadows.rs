@@ -14,8 +14,8 @@ use wgpu::{
     Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face, IndexFormat,
     RenderPass, StencilState, TextureView,
 };
-use wgpu_crm_mgr::pipelines::PipelineOptions;
-use wgpu_crm_mgr::renderer::RenderManager;
+use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::renderer::RenderManager;
 
 pub const CSM_CASCADES: usize = 4;
 #[repr(C)]
@@ -311,7 +311,7 @@ pub fn render_roads_shadows(
             targets: vec![],
             ..Default::default()
         },
-        &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
+        &[&pipelines.buffers.camera, &shadow_mat_buffer],
         pass,
     );
 
@@ -354,7 +354,7 @@ pub fn render_roads_shadows(
             targets: Vec::new(),
             ..Default::default()
         },
-        &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
+        &[&pipelines.buffers.camera, &shadow_mat_buffer],
         pass,
     );
     pass.set_vertex_buffer(0, vb.slice(..));
@@ -401,7 +401,7 @@ pub fn render_terrain_shadows(
             targets: Vec::new(),
             ..Default::default()
         },
-        &[&pipelines.camera_uniforms.buffer, &shadow_mat_buffer],
+        &[&pipelines.buffers.camera, &shadow_mat_buffer],
         pass,
     );
     terrain_renderer.render(pass, camera, aspect, settings, false);

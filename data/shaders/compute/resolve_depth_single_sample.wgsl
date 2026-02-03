@@ -28,7 +28,7 @@ struct Uniforms {
 // ----------------------------------------------------------------------------
 // Group 0: Input Textures
 // ----------------------------------------------------------------------------
-@group(0) @binding(0) var msaa_depth: texture_depth_multisampled_2d;
+@group(0) @binding(0) var resolved_but_wrong_format_depth: texture_depth_2d;
 
 // ----------------------------------------------------------------------------
 // Group 1: Output Storage
@@ -48,31 +48,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // 2. Determine Depth Logic
-    // If Reversed Z (1.0 = Near, 0.0 = Far): We want the MAX value (closest to 1.0)
-    // If Standard Z (0.0 = Near, 1.0 = Far): We want the MIN value (closest to 0.0)
-    let is_reversed = global_uniforms.reversed_depth_z != 0u;
 
-    // 3. Initialize "furthest" possible depth
-    // Rev: Start at 0.0. Std: Start at 1.0.
-    var best_depth = select(1.0, 0.0, is_reversed);
+    let depth = textureLoad(resolved_but_wrong_format_depth, coords, 0);
 
-    let samples = textureNumSamples(msaa_depth);
-
-    // 4. Resolve Loop
-    for (var i = 0u; i < samples; i++) {
-        let sample_depth = textureLoad(msaa_depth, coords, i);
-
-        if (is_reversed) {
-            // Reverse Z: Larger values are closer to camera
-            best_depth = max(best_depth, sample_depth);
-        } else {
-            // Standard Z: Smaller values are closer to camera
-            best_depth = min(best_depth, sample_depth);
-        }
-    }
-
-    // 5. Store Result
-    // textureStore for r32float usually requires a vec4, even if only red is used
-    textureStore(resolved_depth, coords, vec4<f32>(best_depth, 0.0, 0.0, 1.0));
+    // textureStore for r32float requires a vec4, even though only red is used (stupid!)
+    textureStore(resolved_depth, coords, vec4<f32>(depth, 0.0, 0.0, 1.0));
 }

@@ -2,11 +2,12 @@ use crate::components::camera::*;
 use crate::data::{DebugViewState, Settings};
 use crate::gpu_timestamp;
 use crate::mouse_ray::*;
-use crate::paths::{shader_dir, texture_dir};
+use crate::paths::{compute_shader_dir, shader_dir, texture_dir};
 use crate::positions::WorldPos;
 use crate::renderer::astronomy::*;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
+use crate::renderer::gtao::gtao::GtaoBlurParams;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
@@ -26,13 +27,24 @@ use glam::Mat4;
 use std::sync::Arc;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
-use wgpu::*;
-use wgpu_crm_mgr::compute_system::{ComputePipelineOptions, ComputeSystem};
-use wgpu_crm_mgr::fullscreen::{DebugVisualization, DepthDebugParams};
-use wgpu_crm_mgr::pipelines::PipelineOptions;
-use wgpu_crm_mgr::renderer::RenderManager;
+use wgpu::{
+    Adapter, Backends, Color, ColorTargetState, ColorWrites, CommandEncoder,
+    CommandEncoderDescriptor, CompositeAlphaMode, Device, DeviceDescriptor, ExperimentalFeatures,
+    Features, Instance, InstanceDescriptor, Limits, LoadOp, MemoryHints, Operations,
+    PowerPreference, PresentMode, Queue, RenderPass, RenderPassColorAttachment,
+    RenderPassDepthStencilAttachment, RenderPassDescriptor, RequestAdapterOptions, StoreOp,
+    Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, TextureFormat,
+    TextureFormatFeatureFlags, TextureFormatFeatures, TextureUsages, TextureView,
+    TextureViewDescriptor, Trace,
+};
+// use wgpu::*;
+use wgpu_render_manager::compute_system::{ComputePipelineOptions, ComputeSystem};
+use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
+use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
+
 pub struct RenderCore {
     adapter: Adapter,
     pub surface: Surface<'static>,
@@ -61,7 +73,7 @@ impl RenderCore {
 
         let shader_watcher = ShaderWatcher::new().ok();
 
-        let pipelines = Pipelines::new(&device, &config, camera, settings)
+        let pipelines = Pipelines::new(&device, &queue, &config, camera, settings)
             .expect("Failed to create render pipelines");
         let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples)
             .expect("Failed to create UI pipelines");
@@ -126,15 +138,9 @@ impl RenderCore {
         };
 
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
 
-        self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
+        // self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
         self.execute_main_pass(
-            &mut encoder,
             &surface_view,
             &RenderPassConfig::from_settings(settings),
             camera,
@@ -145,12 +151,11 @@ impl RenderCore {
             settings,
         );
 
-        self.profiler.resolve(&mut encoder);
+        //self.profiler.resolve(&mut encoder);
 
-        self.queue.submit(Some(encoder.finish()));
         frame.present();
-        self.profiler
-            .end_frame(&self.device, &self.queue, &mut ui_loader.variables);
+        // self.profiler
+        //     .end_frame(&self.device, &self.queue, &mut ui_loader.variables);
     }
 
     pub fn update_render(
@@ -188,6 +193,12 @@ impl RenderCore {
             self.terrain_renderer.chunk_size,
         );
         self.terrain_renderer.pick_terrain_point(ray);
+        self.terrain_renderer.make_pick_uniforms(
+            &self.queue,
+            &self.pipelines.buffers.pick,
+            camera,
+            self.terrain_renderer.chunk_size,
+        );
         self.render_manager.update_depth_params(DepthDebugParams {
             near: camera.near,
             far: camera.far,
@@ -202,11 +213,11 @@ impl RenderCore {
         // upload per-cascade shadow uniforms ONCE (outside encoder)
         for i in 0..CSM_CASCADES {
             let smu = ShadowMatUniform {
-                light_view_proj: self.pipelines.cascaded_shadow_map.light_mats[i]
+                light_view_proj: self.pipelines.resources.csm_shadows.light_mats[i]
                     .to_cols_array_2d(),
             };
             self.queue.write_buffer(
-                &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[i],
+                &self.pipelines.resources.csm_shadows.shadow_mat_buffers[i],
                 0,
                 bytemuck::bytes_of(&smu),
             );
@@ -249,7 +260,7 @@ impl RenderCore {
         updater.update_sky_uniforms(astronomy.moon_phase);
         updater.update_water_uniforms();
         updater.update_tonemapping_uniforms(&settings.tonemapping_state);
-        updater.update_ssao_uniforms(settings);
+        updater.update_ssao_uniforms(time, settings);
     }
 
     fn update_subsystems(
@@ -328,7 +339,7 @@ impl RenderCore {
                 label: Some("CSM Shadow Pass"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &self.pipelines.cascaded_shadow_map.layer_views[cascade],
+                    view: &self.pipelines.resources.csm_shadows.layer_views[cascade],
                     depth_ops: Some(Operations {
                         load: if settings.reversed_depth_z {
                             LoadOp::Clear(0.0)
@@ -346,7 +357,7 @@ impl RenderCore {
             if !settings.shadows_enabled {
                 continue;
             }
-            let shadow_buf = &self.pipelines.cascaded_shadow_map.shadow_mat_buffers[cascade];
+            let shadow_buf = &self.pipelines.resources.csm_shadows.shadow_mat_buffers[cascade];
 
             if cascade != 0 && cascade != 1 {
                 render_terrain_shadows(
@@ -374,7 +385,6 @@ impl RenderCore {
 
     fn execute_main_pass(
         &mut self,
-        encoder: &mut CommandEncoder,
         surface_view: &TextureView,
         config: &RenderPassConfig,
         camera: &Camera,
@@ -384,22 +394,29 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         settings: &Settings,
     ) {
-        // -------- Pass 1: Main world pass (writes depth) --------
-        self.execute_world_pass(encoder, config, camera, settings, aspect);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+        self.execute_world_pass(&mut encoder, config, camera, settings, aspect);
+        self.queue.submit(Some(encoder.finish()));
 
-        // self.execute_ssao_pass(settings);
+        self.execute_gtao_pass(settings);
 
-        // -------- Pass 2: Fog (samples depth, no depth attachment) --------
-        self.execute_fog_pass(encoder, settings);
+        self.execute_fog_pass(settings);
 
-        // -------- Pass 3: UI (NOT fogged, because it draws after fog) Logic! --------
-        self.execute_ui_pass(encoder, ui_loader, time, input_state);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+        self.execute_ui_pass(&mut encoder, ui_loader, time, input_state);
 
-        // -------- Pass 4: Debug preview (disabled by default) --------
-        self.execute_debug_preview_pass(encoder, settings);
+        self.execute_debug_preview_pass(&mut encoder, settings);
 
-        // Last Pass (but no, before debug so the image isn't tampered with! Actually, no)
-        self.execute_tonemap_pass(encoder, surface_view, settings);
+        self.execute_tonemap_pass(&mut encoder, surface_view, settings);
+        self.queue.submit(Some(encoder.finish()));
     }
 
     fn execute_world_pass(
@@ -410,14 +427,6 @@ impl RenderCore {
         settings: &Settings,
         aspect: f32,
     ) {
-        // Prepare Terrain Uniforms (Needs queue)
-        self.terrain_renderer.make_pick_uniforms(
-            &self.queue,
-            &self.pipelines.pick_uniforms.buffer,
-            camera,
-            self.terrain_renderer.chunk_size,
-        );
-
         let mut pass = create_world_pass(encoder, &self.pipelines, config, self.msaa_samples);
 
         if !settings.show_world {
@@ -486,97 +495,224 @@ impl RenderCore {
             );
         });
     }
-    fn execute_ssao_pass(&mut self, settings: &Settings) {
+    fn execute_gtao_pass(&mut self, settings: &Settings) {
         if !settings.show_world {
             return;
         }
-        // Resolve depth pass (Even non-msaa depth gets resolved)
-        self.compute.compute(
-            "resolve_depth_compute_pass",
-            vec![&self.pipelines.depth_sample_view],
-            vec![&self.pipelines.resolved_depth_view_full],
-            "shaders/resolve_depth.wgsl",
-            ComputePipelineOptions {
-                dispatch_size: [
-                    self.pipelines.depth_sample_view.texture().width() / 8,
-                    self.pipelines.depth_sample_view.texture().height() / 8,
-                    1,
-                ],
-            },
-            &[&self.pipelines.camera_uniforms.buffer],
-        );
+        let msaa_on = settings.msaa_samples > 1;
+        if msaa_on {
+            self.compute.compute(
+                "resolve_depth_compute_pass",
+                vec![&self.pipelines.msaa.depth_sample],
+                vec![&self.pipelines.resolved.depth],
+                &shader_dir().join("compute/resolve_depth.wgsl"),
+                ComputePipelineOptions {
+                    dispatch_size: [
+                        self.pipelines.resolved.depth.texture().width() / 8,
+                        self.pipelines.resolved.depth.texture().height() / 8,
+                        1,
+                    ],
+                },
+                &[&self.pipelines.buffers.camera],
+            );
+        } else {
+            self.compute.compute(
+                "convert_depth_compute_pass",
+                vec![&self.pipelines.msaa.depth_sample],
+                vec![&self.pipelines.resolved.depth],
+                &shader_dir().join("compute/resolve_depth_single_sample.wgsl"),
+                ComputePipelineOptions {
+                    dispatch_size: [
+                        self.pipelines.msaa.depth_sample.texture().width() / 8,
+                        self.pipelines.msaa.depth_sample.texture().height() / 8,
+                        1,
+                    ],
+                },
+                &[&self.pipelines.buffers.camera],
+            );
+        }
+
+        let resolved_depth = &self.pipelines.resolved.depth;
 
         // Linearize depth pass
         self.compute.compute(
             "linearize_depth_compute_pass",
-            vec![&self.pipelines.resolved_depth_view_full],
-            vec![&self.pipelines.linear_depth_view_full],
-            "shaders/linearize_depth.wgsl",
+            vec![resolved_depth],
+            vec![&self.pipelines.post_fx.linear_depth_full],
+            &shader_dir().join("compute/linearize_depth.wgsl"),
             ComputePipelineOptions {
                 dispatch_size: [
-                    self.pipelines.resolved_depth_view_full.texture().width() / 8,
-                    self.pipelines.resolved_depth_view_full.texture().height() / 8,
+                    self.pipelines.resolved.depth.texture().width() / 8,
+                    self.pipelines.resolved.depth.texture().height() / 8,
                     1,
                 ],
             },
-            &[&self.pipelines.camera_uniforms.buffer],
+            &[&self.pipelines.buffers.camera],
         );
-        // ...
+
+        // Downsample linear depth to half resolution
+        self.compute.compute(
+            "downsample_linear_depth_pass",
+            vec![&self.pipelines.post_fx.linear_depth_full],
+            vec![&self.pipelines.post_fx.linear_depth_half],
+            &shader_dir().join("compute/downsample_linear_depth.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [
+                    (self.pipelines.post_fx.linear_depth_half.texture().width() + 7) / 8,
+                    (self.pipelines.post_fx.linear_depth_half.texture().height() + 7) / 8,
+                    1,
+                ],
+            },
+            &[],
+        );
+
+        // Downsample normals to half resolution
+        self.compute.compute(
+            "downsample_normals_pass",
+            vec![&self.pipelines.resolved.normal], // Full res normals
+            vec![&self.pipelines.post_fx.normal_half], // Half res output
+            &shader_dir().join("compute/downsample_normals.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [
+                    (self.pipelines.post_fx.normal_half.texture().width() + 7) / 8,
+                    (self.pipelines.post_fx.normal_half.texture().height() + 7) / 8,
+                    1,
+                ],
+            },
+            &[],
+        );
+
+        // GTAO Generation Pass
+        let half_width = self.pipelines.post_fx.linear_depth_half.texture().width();
+        let half_height = self.pipelines.post_fx.linear_depth_half.texture().height();
+
+        self.compute.compute(
+            "gtao_generate_pass",
+            vec![
+                &self.pipelines.post_fx.linear_depth_half,
+                &self.pipelines.post_fx.normal_half,
+                &self.pipelines.resources.blue_noise,
+            ],
+            vec![&self.pipelines.post_fx.gtao_raw_half],
+            &shader_dir().join("compute/gtao_generate.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [(half_width + 7) / 8, (half_height + 7) / 8, 1],
+            },
+            &[&self.pipelines.buffers.camera, &self.pipelines.buffers.gtao],
+        );
+
+        // === Horizontal Pass ===
+        let h_params = GtaoBlurParams::horizontal(half_width, half_height);
+        self.queue.write_buffer(
+            &self.pipelines.buffers.gtao_blur,
+            0,
+            bytemuck::bytes_of(&h_params),
+        );
+
+        self.compute.compute(
+            "gtao_blur_horizontal",
+            vec![
+                &self.pipelines.post_fx.gtao_raw_half,     // AO input
+                &self.pipelines.post_fx.linear_depth_half, // Depth
+                &self.pipelines.post_fx.normal_half,       // Normals
+            ],
+            vec![&self.pipelines.post_fx.gtao_blur_horiz_half], // Temp output
+            &shader_dir().join("compute/gtao_blur.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [(half_width + 7) / 8, (half_height + 7) / 8, 1],
+            },
+            &[&self.pipelines.buffers.gtao_blur],
+        );
+
+        // === Vertical Pass ===
+        let v_params = GtaoBlurParams::vertical(half_width, half_height);
+        self.queue.write_buffer(
+            &self.pipelines.buffers.gtao_blur,
+            0,
+            bytemuck::bytes_of(&v_params),
+        );
+
+        self.compute.compute(
+            "gtao_blur_vertical",
+            vec![
+                &self.pipelines.post_fx.gtao_blur_horiz_half, // AO input (from horizontal)
+                &self.pipelines.post_fx.linear_depth_half,
+                &self.pipelines.post_fx.normal_half,
+            ],
+            vec![&self.pipelines.post_fx.gtao_blurred_half], // Final output
+            &shader_dir().join("compute/gtao_blur.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [(half_width + 7) / 8, (half_height + 7) / 8, 1],
+            },
+            &[&self.pipelines.buffers.gtao_blur],
+        );
+
+        let full_width = self.pipelines.post_fx.linear_depth_full.texture().width();
+        let full_height = self.pipelines.post_fx.linear_depth_full.texture().height();
+
+        self.compute.compute(
+            "gtao_upsample_pass",
+            vec![
+                &self.pipelines.post_fx.gtao_blurred_half, // Half-res blurred AO
+                &self.pipelines.post_fx.linear_depth_half, // Half-res depth
+                &self.pipelines.post_fx.normal_half,       // Half-res normals
+                &self.pipelines.post_fx.linear_depth_full, // Full-res depth
+                &self.pipelines.resolved.normal,           // Full-res normals
+            ],
+            vec![&self.pipelines.post_fx.gtao_final_full], // Full-res output
+            &compute_shader_dir().join("gtao_upsample.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [(full_width + 7) / 8, (full_height + 7) / 8, 1],
+            },
+            &[&self.pipelines.buffers.gtao_upsample],
+        );
+        self.execute_gtao_apply();
     }
-    fn execute_fog_pass(&mut self, encoder: &mut wgpu::CommandEncoder, settings: &Settings) {
-        // Do the early-out BEFORE creating the render pass (cleaner).
+    fn execute_gtao_apply(&mut self) {
+        let full_width = self.pipelines.resolved.hdr.texture().width();
+        let full_height = self.pipelines.resolved.hdr.texture().height();
+
+        self.compute.compute(
+            "gtao_apply_pass",
+            vec![
+                &self.pipelines.resolved.hdr,            // HDR input
+                &self.pipelines.post_fx.gtao_final_full, // GTAO texture
+            ],
+            vec![&self.pipelines.resolved.hdr_with_ao], // HDR output with AO
+            &shader_dir().join("compute/gtao_apply.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [(full_width + 7) / 8, (full_height + 7) / 8, 1],
+            },
+            &[&self.pipelines.buffers.gtao_apply],
+        );
+    }
+    fn execute_fog_pass(&mut self, settings: &Settings) {
         if !settings.show_world || !settings.show_fog {
             return;
         }
 
-        let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_hdr_view,
-            &self.pipelines.resolved_hdr_view,
-            self.msaa_samples,
-        );
+        let width = self.pipelines.resolved.hdr_fogged.texture().size().width;
+        let height = self.pipelines.resolved.hdr_fogged.texture().size().height;
 
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Fog Pass"),
-            color_attachments: &[Some(color_attachment)],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let workgroup_size = 8;
+        let dispatch_x = (width + workgroup_size - 1) / workgroup_size;
+        let dispatch_y = (height + workgroup_size - 1) / workgroup_size;
 
-        // Decide shader variant based on whether the *input depth* is multisampled.
-        let depth_is_msaa = self.pipelines.depth_sample_view.texture().sample_count() > 1;
-        let fog_shader = if depth_is_msaa {
-            "fog_msaa.wgsl"
-        } else {
-            "fog.wgsl"
-        };
-
-        let options = PipelineOptions::default()
-            .with_topology(TriangleList)
-            .with_msaa(self.msaa_samples)
-            .with_target(ColorTargetState {
-                format: self.pipelines.msaa_hdr_view.texture().format(),
-                blend: Some(BlendState::ALPHA_BLENDING),
-                write_mask: ColorWrites::ALL,
-            });
-
-        // group(0): your “materials” bind group becomes “fullscreen inputs”
-        // Here: one input texture = depth_sample_view
-        self.render_manager.render_with_textures(
-            &[&self.pipelines.depth_sample_view],
-            shader_dir().join(fog_shader).as_path(),
-            &options,
-            &[
-                &self.pipelines.camera_uniforms.buffer,
-                &self.pipelines.fog_uniforms.buffer,
-                &self.pipelines.pick_uniforms.buffer,
+        self.compute.compute(
+            "Fog Compute Pass",
+            vec![
+                &self.pipelines.resolved.hdr_with_ao,      // input color
+                &self.pipelines.post_fx.linear_depth_full, // input depth
             ],
-            &mut pass,
+            vec![
+                &self.pipelines.resolved.hdr_fogged, // output color
+            ],
+            &compute_shader_dir().join("fog.wgsl"),
+            ComputePipelineOptions {
+                dispatch_size: [dispatch_x, dispatch_y, 1],
+            },
+            &[&self.pipelines.buffers.camera, &self.pipelines.buffers.fog],
         );
-
-        // New API: RenderManager no longer draws for you.
-        pass.draw(0..3, 0..1);
     }
 
     fn execute_ui_pass(
@@ -587,8 +723,8 @@ impl RenderCore {
         input_state: &InputState,
     ) {
         let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa_hdr_view,
-            &self.pipelines.resolved_hdr_view,
+            &self.pipelines.msaa.hdr,
+            &self.pipelines.resolved.hdr,
             self.msaa_samples,
         );
 
@@ -601,6 +737,27 @@ impl RenderCore {
             multiview_mask: None,
         });
 
+        {
+            let options = PipelineOptions::default()
+                .with_topology(TriangleList)
+                .with_msaa(self.msaa_samples)
+                .with_target(ColorTargetState {
+                    format: self.pipelines.msaa.hdr.texture().format(),
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                });
+
+            self.render_manager.render_with_textures(
+                &[&self.pipelines.resolved.hdr_fogged],
+                shader_dir().join("resolved_to_msaa_copy.wgsl").as_path(),
+                &options,
+                &[],
+                &mut pass,
+            );
+
+            pass.draw(0..3, 0..1);
+        }
+
         self.render_ui(&mut pass, ui_loader, time, input_state);
     }
 
@@ -611,8 +768,8 @@ impl RenderCore {
             }
             DebugViewState::Normals => {
                 let color_attachment = create_color_attachment_load(
-                    &self.pipelines.msaa_hdr_view,
-                    &self.pipelines.resolved_hdr_view,
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
                     self.msaa_samples,
                 );
 
@@ -625,19 +782,17 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                // Debug Normals Render
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.resolved_normals_full,
+                    &self.pipelines.resolved.normal,
                     DebugVisualization::Color,
-                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
-                    self.msaa_samples,
+                    &self.pipelines.msaa.hdr,
                     &mut pass,
                 );
             }
             DebugViewState::Depth => {
                 let color_attachment = create_color_attachment_load(
-                    &self.pipelines.msaa_hdr_view,
-                    &self.pipelines.resolved_hdr_view,
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
                     self.msaa_samples,
                 );
 
@@ -650,24 +805,22 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                // Debug Depth Render
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.depth_sample_view,
-                    DebugVisualization::Depth,
-                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
-                    self.msaa_samples,
+                    &self.pipelines.post_fx.linear_depth_full,
+                    DebugVisualization::LinearDepth,
+                    &self.pipelines.msaa.hdr,
                     &mut pass,
                 );
             }
             DebugViewState::SsaoRaw => {
                 let color_attachment = create_color_attachment_load(
-                    &self.pipelines.msaa_hdr_view,
-                    &self.pipelines.resolved_hdr_view,
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
                     self.msaa_samples,
                 );
 
                 let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                    label: Some("Debug Normals Fullscreen Preview Pass"),
+                    label: Some("Debug Raw GTAO Fullscreen Preview Pass"),
                     color_attachments: &[Some(color_attachment)],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -675,36 +828,33 @@ impl RenderCore {
                     multiview_mask: None,
                 });
 
-                // Debug SSAO RAW Render
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.ssao_raw_view_half,
+                    &self.pipelines.post_fx.gtao_raw_half,
                     DebugVisualization::RedToGrayscale,
-                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
-                    self.msaa_samples,
+                    &self.pipelines.msaa.hdr,
                     &mut pass,
                 );
             }
-            DebugViewState::SsaoBlurred => {
+            DebugViewState::GtaoBlurred => {
                 let color_attachment = create_color_attachment_load(
-                    &self.pipelines.msaa_hdr_view,
-                    &self.pipelines.resolved_hdr_view,
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
                     self.msaa_samples,
                 );
 
                 let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                    label: Some("Debug Normals Fullscreen Preview Pass"),
+                    label: Some("Debug Blurred GTAO Fullscreen Preview Pass"),
                     color_attachments: &[Some(color_attachment)],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                // Debug SSAO Blurred Render
+
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.ssao_blur_view_half,
-                    DebugVisualization::RedToGrayscale,
-                    self.pipelines.msaa_hdr_view.texture().format(), // target format (color)
-                    self.msaa_samples,
+                    &self.pipelines.resolved.hdr_with_ao,
+                    DebugVisualization::Color,
+                    &self.pipelines.msaa.hdr,
                     &mut pass,
                 );
             }
@@ -733,6 +883,7 @@ impl RenderCore {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+
         let options = PipelineOptions {
             topology: TriangleList,
             msaa_samples: 1,
@@ -747,15 +898,15 @@ impl RenderCore {
             vertex_only: false,
             shadow: None,
         };
-        // Tonemap
+
         self.render_manager.render_with_textures(
-            &[&self.pipelines.resolved_hdr_view],
+            &[&self.pipelines.resolved.hdr],
             shader_dir().join("tonemap.wgsl").as_path(),
             &options,
-            &[&self.pipelines.tonemapping_uniforms.buffer],
+            &[&self.pipelines.buffers.tonemapping],
             &mut pass,
         );
-        // New API: RenderManager no longer draws for me.
+
         pass.draw(0..3, 0..1);
     }
 
@@ -783,13 +934,14 @@ impl RenderCore {
             .render(&mut self.render_manager, pass, ui_loader, &self.pipelines);
     }
 
-    pub(crate) fn cycle_msaa(&mut self) {
+    pub(crate) fn cycle_msaa(&mut self, settings: &mut Settings) {
         let supported = get_supported_msaa_levels(&self.adapter, self.config.format);
         let current_idx = supported
             .iter()
             .position(|&s| s == self.msaa_samples)
             .unwrap_or(0);
         self.msaa_samples = supported[(current_idx + 1) % supported.len()];
+        settings.msaa_samples = self.msaa_samples;
 
         println!("MSAA changed to {}x", self.msaa_samples);
 
@@ -909,8 +1061,8 @@ fn create_surface_config(
 fn create_device(adapter: &Adapter) -> (Device, Queue) {
     pollster::block_on(adapter.request_device(&DeviceDescriptor {
         label: Some("Device"),
-        required_features: //Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-        Features::TIMESTAMP_QUERY
+        required_features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | Features::TIMESTAMP_QUERY
             | Features::TIMESTAMP_QUERY_INSIDE_PASSES
             | Features::DEPTH32FLOAT_STENCIL8
             | Features::MULTIVIEW,

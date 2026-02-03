@@ -2,13 +2,14 @@ use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
+use crate::renderer::textures::noise::create_blue_noise_texture;
 use crate::resources::Uniforms;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
-use wgpu::TextureFormat::{Depth32Float, Rgba8Unorm, Rgba16Float};
+use wgpu::TextureFormat::{R32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
 
 #[macro_export]
@@ -108,11 +109,7 @@ impl ToneMappingUniforms {
         }
     }
 }
-pub struct GpuResourceSet {
-    pub _bind_group_layout: BindGroupLayout,
-    pub _bind_group: BindGroup,
-    pub buffer: Buffer,
-}
+
 pub struct MeshBuffers {
     pub vertex: Buffer,
     pub index: Buffer,
@@ -129,122 +126,178 @@ pub struct ShadowSamplers {
     pub shadow_sampler_rev_z: Sampler,
     pub shadow_sampler_off: Sampler,
 }
+pub struct MsaaTextures {
+    pub hdr: TextureView,
+    pub normal: TextureView,
+    pub depth: TextureView,
+    pub depth_sample: TextureView,
+}
+
+pub struct ResolvedTextures {
+    pub hdr: TextureView,
+    pub hdr_with_ao: TextureView,
+    pub hdr_fogged: TextureView,
+    pub hdr_ui: TextureView,
+    pub normal: TextureView,
+    pub depth: TextureView,
+}
+
+pub struct PostFxTextures {
+    pub linear_depth_full: TextureView,
+    pub linear_depth_half: TextureView,
+    pub normal_half: TextureView,
+
+    pub gtao_raw_half: TextureView,
+    pub gtao_blur_horiz_half: TextureView,
+    pub gtao_blurred_half: TextureView,
+    pub gtao_history_half: TextureView,
+    pub gtao_final_full: TextureView,
+}
+
+pub struct UniformBuffers {
+    pub camera: Buffer,
+    pub sky: Buffer,
+    pub water: Buffer,
+    pub fog: Buffer,
+    pub tonemapping: Buffer,
+    pub pick: Buffer,
+    pub gtao: Buffer,
+    pub gtao_blur: Buffer,
+    pub gtao_upsample: Buffer,
+    pub gtao_apply: Buffer,
+}
+
+pub struct SceneResources {
+    pub blue_noise: TextureView,
+    pub csm_shadows: CascadedShadowMap,
+    pub shadow_samplers: ShadowSamplers,
+    pub water_meshes: MeshBuffers,
+    pub stars_meshes: MeshBuffers,
+}
+
 pub struct Pipelines {
     pub device: Device,
-
-    pub msaa_hdr_view: TextureView,
-    pub resolved_hdr_view: TextureView,
-    pub msaa_normal_view: TextureView,
-    pub resolved_normals_full: TextureView,
-    pub resolved_normals_half: TextureView,
-    pub ssao_raw_view_half: TextureView,
-    pub ssao_blur_view_half: TextureView,
-    pub ssao_history_half: TextureView,
-    pub depth_view: TextureView,
-    pub depth_sample_view: TextureView, // sampling (DepthOnly)
-    pub resolved_depth_view_full: TextureView,
-    pub linear_depth_view_full: TextureView,
-    pub linear_depth_view_half: TextureView,
-
-    pub cascaded_shadow_map: CascadedShadowMap,
-    pub shadow_samplers: ShadowSamplers,
-
     pub config: SurfaceConfiguration,
 
-    pub camera_uniforms: GpuResourceSet,
-    pub sky_uniforms: GpuResourceSet,
-    pub water_uniforms: GpuResourceSet,
-    pub fog_uniforms: GpuResourceSet,
-    pub tonemapping_uniforms: GpuResourceSet,
-    pub pick_uniforms: GpuResourceSet,
-    pub ssao_uniforms: GpuResourceSet,
-
-    pub water_mesh_buffers: MeshBuffers,
-    pub stars_mesh_buffers: MeshBuffers,
+    pub msaa: MsaaTextures,
+    pub resolved: ResolvedTextures,
+    pub post_fx: PostFxTextures,
+    pub buffers: UniformBuffers,
+    pub resources: SceneResources,
 }
 
 impl Pipelines {
     pub fn new(
         device: &Device,
+        queue: &Queue,
         config: &SurfaceConfiguration,
         camera: &Camera,
         settings: &Settings,
     ) -> anyhow::Result<Self> {
-        let msaa_samples = settings.msaa_samples;
-        // Create render targets
-        let (msaa_hdr_view, msaa_normal_view) = create_msaa_targets(&device, &config, msaa_samples);
-        let (resolved_hdr_view, resolved_normal_view, resolved_depth_view) =
-            create_resolved_targets(&device, &config);
-        let (depth_view, depth_sample_view) = create_depth_texture(device, config, msaa_samples);
-        let linear_depth_view_full = create_linear_depth_texture(device, config, 1.0);
-        let linear_depth_view_half = create_linear_depth_texture(device, config, 0.5);
-        let resolved_normals_half = create_normals_texture(device, config, 0.5);
-        let (ssao_raw_view_half, ssao_blur_view_half) = create_ssao_textures(device, config, 0.5);
-        let ssao_history_half = create_ao_history_texture(device, config, 0.5);
-        let cascaded_shadow_map =
-            create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM");
-        let shadow_samplers = create_shadow_samplers(&device);
-        let camera_uniforms = create_camera_uniforms(device, camera, config, settings);
-        let sky_uniforms = create_sky_uniforms(device);
-        let fog_uniforms = create_fog_uniforms(device);
-        let tonemapping_uniforms = create_tonemapping_uniforms(device);
-        let pick_uniforms = create_pick_uniforms(device);
-        let ssao_uniforms = create_ssao_uniforms(device, settings);
+        let msaa = Self::create_msaa_textures(device, config, settings.msaa_samples);
+        let resolved = Self::create_resolved_textures(device, config);
+        let post_fx = Self::create_post_fx_textures(device, config);
 
-        let water_uniforms = create_water_uniforms(device, &sky_uniforms.buffer);
-        let water_mesh = create_water_mesh(device);
-        let stars_mesh = create_stars_mesh(device);
+        let blue_noise = create_blue_noise_texture(device, queue, 4);
+        let csm_shadow_map = create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM");
+        let shadow_samplers = create_shadow_samplers(device);
+        let water_meshes = create_water_mesh(device);
+        let stars_meshes = create_stars_mesh(device);
 
-        let this = Self {
-            device: device.clone(),
-            config: config.clone(),
-            msaa_hdr_view,
-            resolved_hdr_view,
-            msaa_normal_view,
-            resolved_normals_full: resolved_normal_view,
-            resolved_normals_half,
-            ssao_raw_view_half,
-            ssao_blur_view_half,
-            ssao_history_half,
-            depth_view,
-            depth_sample_view,
-            resolved_depth_view_full: resolved_depth_view,
-            linear_depth_view_full,
-            linear_depth_view_half,
-
-            cascaded_shadow_map,
-
-            camera_uniforms,
-            sky_uniforms,
-            water_uniforms,
-            fog_uniforms,
-            tonemapping_uniforms,
-            pick_uniforms,
-
-            ssao_uniforms,
-            water_mesh_buffers: water_mesh,
-
-            stars_mesh_buffers: stars_mesh,
+        let resources = SceneResources {
+            blue_noise,
+            csm_shadows: csm_shadow_map,
             shadow_samplers,
+            water_meshes,
+            stars_meshes,
         };
 
-        Ok(this)
+        let uniforms = UniformBuffers {
+            camera: create_camera_buffer(device, camera, config, settings),
+            sky: create_sky_buffer(device),
+            water: create_water_buffer(device),
+            fog: create_fog_buffer(device),
+            tonemapping: create_tonemapping_buffer(device),
+            pick: create_pick_buffer(device),
+            gtao: create_gtao_buffer(device, settings),
+            gtao_blur: create_gtao_blur_buffer(device, settings),
+            gtao_upsample: create_gtao_upsample_buffer(device, settings),
+            gtao_apply: create_gtao_apply_buffer(device, settings),
+        };
+
+        Ok(Self {
+            device: device.clone(),
+            config: config.clone(),
+            msaa,
+            resolved,
+            post_fx,
+            buffers: uniforms,
+            resources,
+        })
     }
 
-    pub(crate) fn resize(&mut self, config: &SurfaceConfiguration, msaa_samples: u32) {
-        // Keep a fresh copy of the surface configuration so our MSAA and depth textures
-        // always match the swapchain size. Or ELSE, after a window resize we'd recreate
-        // attachments using the old dimensions, leading to mismatched resolve targets!!!
+    pub fn resize(&mut self, config: &SurfaceConfiguration, msaa_samples: u32) {
         self.config = config.clone();
-        (self.msaa_hdr_view, self.msaa_normal_view) =
-            create_msaa_targets(&self.device, &self.config, msaa_samples);
-        (
-            self.resolved_hdr_view,
-            self.resolved_normals_full,
-            self.resolved_depth_view_full,
-        ) = create_resolved_targets(&self.device, &self.config);
-        (self.depth_view, self.depth_sample_view) =
-            create_depth_texture(&self.device, &self.config, msaa_samples);
+        self.msaa = Self::create_msaa_textures(&self.device, &self.config, msaa_samples);
+        self.resolved = Self::create_resolved_textures(&self.device, &self.config);
+        self.post_fx = Self::create_post_fx_textures(&self.device, &self.config);
+    }
+
+    fn create_msaa_textures(
+        device: &Device,
+        config: &SurfaceConfiguration,
+        samples: u32,
+    ) -> MsaaTextures {
+        let (hdr, normal) = create_msaa_targets(device, config, samples);
+        let (depth, depth_sample) = create_depth_texture(device, config, samples);
+
+        MsaaTextures {
+            hdr,
+            normal,
+            depth,
+            depth_sample,
+        }
+    }
+
+    fn create_resolved_textures(
+        device: &Device,
+        config: &SurfaceConfiguration,
+    ) -> ResolvedTextures {
+        let (hdr, hdr_with_ao, normal, depth) = create_resolved_targets(device, config);
+        let hdr_fogged = create_resolved_hdr(device, config, "Resolved Fogged HDR Texture");
+        let hdr_ui = create_resolved_hdr(device, config, "Resolved UI'd HDR Texture");
+
+        ResolvedTextures {
+            hdr,
+            hdr_with_ao,
+            hdr_fogged,
+            hdr_ui,
+            normal,
+            depth,
+        }
+    }
+
+    fn create_post_fx_textures(device: &Device, config: &SurfaceConfiguration) -> PostFxTextures {
+        let linear_depth_full = create_linear_depth_texture(device, config, 1.0);
+        let linear_depth_half = create_linear_depth_texture(device, config, 0.5);
+        let normal_half = create_normals_texture(device, config, 0.5);
+
+        let (gtao_raw_half, gtao_blur_horiz_half, gtao_blurred_half) =
+            create_gtao_textures(device, config, 0.5);
+
+        let gtao_history_half = create_gtao_texture(device, config, 0.5);
+        let gtao_final_full = create_gtao_texture(device, config, 1.0);
+
+        PostFxTextures {
+            linear_depth_full,
+            linear_depth_half,
+            normal_half,
+            gtao_raw_half,
+            gtao_blur_horiz_half,
+            gtao_blurred_half,
+            gtao_history_half,
+            gtao_final_full,
+        }
     }
 }
 
@@ -351,23 +404,29 @@ const NORMAL_FORMAT: TextureFormat = Rgba8Unorm;
 pub fn create_resolved_targets(
     device: &Device,
     config: &SurfaceConfiguration,
-) -> (TextureView, TextureView, TextureView) {
-    let color_texture = device.create_texture(&TextureDescriptor {
-        label: Some("Resolved, non-MSAA Color Texture"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: Rgba16Float,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
+) -> (TextureView, TextureView, TextureView, TextureView) {
+    let create_hdr = |label: &str| {
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING, // Added for compute
+            view_formats: &[],
+        });
+        tex.create_view(&TextureViewDescriptor::default())
+    };
 
-    let color_view = color_texture.create_view(&TextureViewDescriptor::default());
+    let resolved_hdr = create_hdr("Resolved HDR Texture");
+    let resolved_hdr_with_ao = create_hdr("Resolved HDR with AO"); // For ping-pong
     let normal_texture = device.create_texture(&TextureDescriptor {
         label: Some("Resolved, non-MSAA Normals Texture"),
         size: Extent3d {
@@ -384,8 +443,8 @@ pub fn create_resolved_targets(
     });
 
     let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
-    let texture = device.create_texture(&TextureDescriptor {
-        label: Some("Depth Texture"),
+    let depth_texture = device.create_texture(&TextureDescriptor {
+        label: Some("Resolved Depth Texture (R16Float)"),
         size: Extent3d {
             width: config.width,
             height: config.height,
@@ -394,18 +453,52 @@ pub fn create_resolved_targets(
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: Depth32Float,
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+        format: R32Float,
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     });
 
-    // For sampling in fog shader: MUST be DepthOnly for Depth24PlusStencil8
-    let depth_only_view = texture.create_view(&TextureViewDescriptor {
-        label: Some("Depth Texture View (DepthOnly)"),
-        aspect: TextureAspect::DepthOnly,
+    let depth_only_view = depth_texture.create_view(&TextureViewDescriptor {
+        label: Some("Resolved Depth Texture View"),
         ..Default::default()
     });
-    (color_view, normal_view, depth_only_view)
+    (
+        resolved_hdr,
+        resolved_hdr_with_ao,
+        normal_view,
+        depth_only_view,
+    )
+}
+pub fn create_resolved_hdr(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    label: &str,
+) -> (TextureView) {
+    let create_hdr = |label: &str| {
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING, // Added for compute
+            view_formats: &[],
+        });
+        tex.create_view(&TextureViewDescriptor::default())
+    };
+
+    let resolved_hdr = create_hdr(label);
+
+    resolved_hdr
 }
 pub fn create_normals_texture(
     device: &Device,
@@ -480,8 +573,10 @@ fn create_linear_depth_texture(
         mip_level_count: 1,
         sample_count: 1, // single-sample
         dimension: TextureDimension::D2,
-        format: TextureFormat::R16Float,
-        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        format: R32Float,
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     });
 
@@ -490,13 +585,13 @@ fn create_linear_depth_texture(
     linear_depth_view
 }
 
-pub const SSAO_FORMAT: TextureFormat = TextureFormat::R8Unorm;
+pub const GTAO_FORMAT: TextureFormat = R32Float;
 
-fn create_ssao_textures(
+fn create_gtao_textures(
     device: &Device,
     config: &SurfaceConfiguration,
     resolution_factor: f32,
-) -> (TextureView, TextureView) {
+) -> (TextureView, TextureView, TextureView) {
     let make = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),
@@ -508,19 +603,22 @@ fn create_ssao_textures(
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: SSAO_FORMAT,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+            format: GTAO_FORMAT,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING,
             view_formats: &[],
         });
         let view = tex.create_view(&TextureViewDescriptor::default());
-        (tex, view)
+        view
     };
 
-    let (_, ssao_view) = make("SSAO Texture");
-    let (_, ssao_blur_view) = make("SSAO Blurred Texture");
-    (ssao_view, ssao_blur_view)
+    let gtao_view = make("GTAO Raw");
+    let gtao_horizontal_blur_view = make("GTAO Horizontally Blurred");
+    let gtao_blurred_view = make("GTAO Blurred");
+    (gtao_view, gtao_horizontal_blur_view, gtao_blurred_view)
 }
-pub fn create_ao_history_texture(
+pub fn create_gtao_texture(
     device: &Device,
     config: &SurfaceConfiguration,
     resolution_factor: f32,
@@ -535,8 +633,8 @@ pub fn create_ao_history_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: SSAO_FORMAT,
-        usage: TextureUsages::TEXTURE_BINDING,
+        format: GTAO_FORMAT,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     });
 

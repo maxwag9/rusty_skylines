@@ -12,8 +12,8 @@ use crate::terrain::water::SimpleVertex;
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
-use wgpu_crm_mgr::pipelines::{PipelineOptions, ShadowOptions};
-use wgpu_crm_mgr::renderer::RenderManager;
+use wgpu_render_manager::pipelines::{PipelineOptions, ShadowOptions};
+use wgpu_render_manager::renderer::RenderManager;
 
 pub struct RenderPassConfig {
     pub background_color: Color,
@@ -114,22 +114,22 @@ pub fn create_world_pass<'a>(
     msaa_samples: u32,
 ) -> RenderPass<'a> {
     let color_attachment = create_color_attachment(
-        &pipelines.msaa_hdr_view,
-        &pipelines.resolved_hdr_view,
+        &pipelines.msaa.hdr,
+        &pipelines.resolved.hdr,
         msaa_samples,
         config.background_color,
     );
 
     let normal_attachment = create_normal_attachment(
-        &pipelines.msaa_normal_view,
-        &pipelines.resolved_normals_full,
+        &pipelines.msaa.normal,
+        &pipelines.resolved.normal,
         msaa_samples,
     );
 
     encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("World Pass"),
         color_attachments: &[Some(color_attachment), Some(normal_attachment)],
-        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.depth_view, config)),
+        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.msaa.depth, config)),
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
@@ -168,7 +168,7 @@ pub fn render_gizmo(
             targets,
             ..Default::default()
         },
-        &[&pipelines.camera_uniforms.buffer],
+        &[&pipelines.buffers.camera],
         pass,
     );
 
@@ -220,20 +220,20 @@ pub fn render_water(
             ..Default::default()
         },
         &[
-            &pipelines.camera_uniforms.buffer,
-            &pipelines.water_uniforms.buffer,
-            &pipelines.sky_uniforms.buffer,
+            &pipelines.buffers.camera,
+            &pipelines.buffers.water,
+            &pipelines.buffers.sky,
         ],
         pass,
     );
 
     pass.set_stencil_reference(1);
-    pass.set_vertex_buffer(0, pipelines.water_mesh_buffers.vertex.slice(..));
+    pass.set_vertex_buffer(0, pipelines.resources.water_meshes.vertex.slice(..));
     pass.set_index_buffer(
-        pipelines.water_mesh_buffers.index.slice(..),
+        pipelines.resources.water_meshes.index.slice(..),
         IndexFormat::Uint32,
     );
-    pass.draw_indexed(0..pipelines.water_mesh_buffers.index_count, 0, 0..1);
+    pass.draw_indexed(0..pipelines.resources.water_meshes.index_count, 0, 0..1);
 }
 
 pub fn render_sky(
@@ -267,13 +267,10 @@ pub fn render_sky(
             targets: targets.clone(),
             ..Default::default()
         },
-        &[
-            &pipelines.camera_uniforms.buffer,
-            &pipelines.sky_uniforms.buffer,
-        ],
+        &[&pipelines.buffers.camera, &pipelines.buffers.sky],
         pass,
     );
-    pass.set_vertex_buffer(0, pipelines.stars_mesh_buffers.vertex.slice(..));
+    pass.set_vertex_buffer(0, pipelines.resources.stars_meshes.vertex.slice(..));
     pass.draw(0..4, 0..STAR_COUNT);
     // Sky
     render_manager.render(
@@ -287,10 +284,7 @@ pub fn render_sky(
             targets,
             ..Default::default()
         },
-        &[
-            &pipelines.camera_uniforms.buffer,
-            &pipelines.sky_uniforms.buffer,
-        ],
+        &[&pipelines.buffers.camera, &pipelines.buffers.sky],
         pass,
     );
     pass.draw(0..3, 0..1);
@@ -336,7 +330,7 @@ pub fn render_roads(
             ..Default::default()
         },
         &[
-            &pipelines.camera_uniforms.buffer,
+            &pipelines.buffers.camera,
             &road_renderer.road_appearance.normal_buffer,
         ],
         pass,
@@ -366,7 +360,7 @@ pub fn render_roads(
             ..Default::default()
         },
         &[
-            &pipelines.camera_uniforms.buffer,
+            &pipelines.buffers.camera,
             &road_renderer.road_appearance.preview_buffer,
         ],
         pass,
@@ -445,10 +439,7 @@ pub fn render_terrain(
             shadow: shadow.clone(),
             ..Default::default()
         },
-        &[
-            &pipelines.camera_uniforms.buffer,
-            &pipelines.pick_uniforms.buffer,
-        ],
+        &[&pipelines.buffers.camera, &pipelines.buffers.pick],
         pass,
     );
     terrain_renderer.render(pass, camera, aspect, settings, false);
@@ -468,10 +459,7 @@ pub fn render_terrain(
             shadow,
             ..Default::default()
         },
-        &[
-            &pipelines.camera_uniforms.buffer,
-            &pipelines.pick_uniforms.buffer,
-        ],
+        &[&pipelines.buffers.camera, &pipelines.buffers.pick],
         pass,
     );
     terrain_renderer.render(pass, camera, aspect, settings, true);
@@ -481,17 +469,25 @@ fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<Shad
     match settings.shadows_enabled {
         true => match settings.reversed_depth_z {
             true => Some(ShadowOptions {
-                sampler: pipelines.shadow_samplers.shadow_sampler_rev_z.clone(),
-                view: pipelines.cascaded_shadow_map.array_view.clone(),
+                sampler: pipelines
+                    .resources
+                    .shadow_samplers
+                    .shadow_sampler_rev_z
+                    .clone(),
+                view: pipelines.resources.csm_shadows.array_view.clone(),
             }),
             false => Some(ShadowOptions {
-                sampler: pipelines.shadow_samplers.shadow_sampler.clone(),
-                view: pipelines.cascaded_shadow_map.array_view.clone(),
+                sampler: pipelines.resources.shadow_samplers.shadow_sampler.clone(),
+                view: pipelines.resources.csm_shadows.array_view.clone(),
             }),
         },
         false => Some(ShadowOptions {
-            sampler: pipelines.shadow_samplers.shadow_sampler_off.clone(),
-            view: pipelines.cascaded_shadow_map.array_view.clone(),
+            sampler: pipelines
+                .resources
+                .shadow_samplers
+                .shadow_sampler_off
+                .clone(),
+            view: pipelines.resources.csm_shadows.array_view.clone(),
         }),
     }
 }
@@ -499,12 +495,12 @@ fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<Shad
 fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
     vec![
         Some(ColorTargetState {
-            format: pipelines.msaa_hdr_view.texture().format(),
+            format: pipelines.msaa.hdr.texture().format(),
             blend: Some(BlendState::ALPHA_BLENDING),
             write_mask: ColorWrites::ALL,
         }),
         Some(ColorTargetState {
-            format: pipelines.msaa_normal_view.texture().format(),
+            format: pipelines.msaa.normal.texture().format(),
             blend: None,
             write_mask: ColorWrites::ALL,
         }),
@@ -516,7 +512,7 @@ pub fn color_target(
     blend: Option<BlendState>,
 ) -> Vec<Option<ColorTargetState>> {
     vec![Some(ColorTargetState {
-        format: pipelines.msaa_hdr_view.texture().format(),
+        format: pipelines.msaa.hdr.texture().format(),
         blend,
         write_mask: ColorWrites::ALL,
     })]

@@ -1,4 +1,5 @@
-use wgpu_crm_mgr::generator::{TextureKey, TextureParams};
+use wgpu_render_manager::generator::{TextureKey, TextureParams};
+
 pub fn road_material_keys() -> Vec<TextureKey> {
     vec![
         TextureKey {

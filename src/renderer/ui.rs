@@ -13,8 +13,8 @@ use crate::ui::vertex::{
     UiVertexText,
 };
 use wgpu::*;
-use wgpu_crm_mgr::pipelines::PipelineOptions;
-use wgpu_crm_mgr::renderer::RenderManager;
+use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 
 pub const PAD: i32 = 1;

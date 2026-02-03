@@ -86,6 +86,7 @@ pub struct TimeSystem {
     pub target_frametime: f32,
     pub total_time: f64,
     pub total_game_time: f64,
+    pub frame_count: u32,
 }
 
 impl TimeSystem {
@@ -106,6 +107,7 @@ impl TimeSystem {
             target_frametime: 0.0,
             total_time: 0.0,
             total_game_time: 0.0,
+            frame_count: 0,
         }
     }
 
@@ -136,6 +138,7 @@ impl TimeSystem {
 
         self.total_time += dt as f64;
         self.total_game_time += dt as f64 * time_speed as f64;
+        self.frame_count += 1;
 
         self.sim_accumulator += dt;
     }

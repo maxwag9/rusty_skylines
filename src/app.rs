@@ -193,7 +193,7 @@ impl ApplicationHandler for App {
 
                 // MSAA cycle
                 if input.action_repeat("Cycle MSAA") {
-                    resources.renderer.core.cycle_msaa();
+                    resources.renderer.core.cycle_msaa(settings);
                 }
 
                 if input.action_repeat("Switch Debug Render Mode") {

@@ -4,6 +4,7 @@ pub(crate) mod core;
 pub mod general_mesh_arena;
 pub mod gizmo;
 mod gpu_profiler;
+mod gtao;
 pub(crate) mod mesh_arena;
 pub(crate) mod pipelines;
 pub mod pipelines_outsource;

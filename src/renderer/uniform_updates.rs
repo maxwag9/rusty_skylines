@@ -1,11 +1,12 @@
 use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::renderer::astronomy::AstronomyState;
+use crate::renderer::gtao::gtao::{GtaoApplyParams, GtaoParams, GtaoUpsampleParams};
 use crate::renderer::pipelines::{
     FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
 };
-use crate::renderer::pipelines_outsource::{SsaoUniforms, make_ssao_kernel};
 use crate::renderer::shadows::compute_csm_matrices;
+use crate::resources::TimeSystem;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
 use glam::Mat4;
@@ -40,7 +41,7 @@ impl<'a> UniformUpdater<'a> {
             camera.near,
             camera.far,
             astronomy.sun_dir,
-            /*shadow_map_size:*/ self.pipelines.cascaded_shadow_map.size,
+            /*shadow_map_size:*/ self.pipelines.resources.csm_shadows.size,
             /*stabilize:*/ true,
             settings.reversed_depth_z,
         );
@@ -60,12 +61,12 @@ impl<'a> UniformUpdater<'a> {
         );
 
         self.queue.write_buffer(
-            &self.pipelines.camera_uniforms.buffer,
+            &self.pipelines.buffers.camera,
             0,
             bytemuck::bytes_of(&new_uniforms),
         );
-        self.pipelines.cascaded_shadow_map.light_mats = light_mats;
-        self.pipelines.cascaded_shadow_map.splits = splits;
+        self.pipelines.resources.csm_shadows.light_mats = light_mats;
+        self.pipelines.resources.csm_shadows.splits = splits;
     }
 
     pub fn update_fog_uniforms(&self, config: &wgpu::SurfaceConfiguration, camera: &Camera) {
@@ -85,7 +86,7 @@ impl<'a> UniformUpdater<'a> {
         };
 
         self.queue.write_buffer(
-            &self.pipelines.fog_uniforms.buffer,
+            &self.pipelines.buffers.fog,
             0,
             bytemuck::bytes_of(&fog_uniforms),
         );
@@ -94,7 +95,7 @@ impl<'a> UniformUpdater<'a> {
         let tonemapping_uniforms = ToneMappingUniforms::from_state(tonemapping_state);
 
         self.queue.write_buffer(
-            &self.pipelines.tonemapping_uniforms.buffer,
+            &self.pipelines.buffers.tonemapping,
             0,
             bytemuck::bytes_of(&tonemapping_uniforms),
         );
@@ -112,7 +113,7 @@ impl<'a> UniformUpdater<'a> {
         };
 
         self.queue.write_buffer(
-            &self.pipelines.sky_uniforms.buffer,
+            &self.pipelines.buffers.sky,
             0,
             bytemuck::bytes_of(&sky_uniform),
         );
@@ -128,29 +129,61 @@ impl<'a> UniformUpdater<'a> {
             _pad1: [0.0; 2],
         };
 
-        self.queue.write_buffer(
-            &self.pipelines.water_uniforms.buffer,
-            0,
-            bytemuck::bytes_of(&wu),
-        );
+        self.queue
+            .write_buffer(&self.pipelines.buffers.water, 0, bytemuck::bytes_of(&wu));
     }
-    pub fn update_ssao_uniforms(&self, settings: &Settings) {
-        let radius = 5.0f32;
-        let bias = 0.20f32;
-        let intensity = 1.2f32;
-        let power = 1.22f32;
-        let reversed_z = settings.reversed_depth_z as u32;
-        let noise_tile_px = 8u32;
-        let params = SsaoUniforms {
-            kernel: make_ssao_kernel(69420, 2.0),
-            params0: [radius, bias, intensity, power],
-            params1: [reversed_z, noise_tile_px, 0, 0],
+    pub fn update_ssao_uniforms(&self, time: &TimeSystem, settings: &Settings) {
+        let screen_size = [
+            self.pipelines.post_fx.linear_depth_half.texture().width() as f32,
+            self.pipelines.post_fx.linear_depth_half.texture().height() as f32,
+        ];
+        let inv_screen_size = [1.0 / screen_size[0], 1.0 / screen_size[1]];
+        let gtao_params = GtaoParams {
+            radius_world: 1.0,
+            intensity: 1.5,
+            bias: 0.02,
+            frame_index: time.frame_count,
+            screen_size,
+            inv_screen_size,
+        };
+        let full_width = self.pipelines.post_fx.linear_depth_full.texture().width();
+        let full_height = self.pipelines.post_fx.linear_depth_full.texture().height();
+        let half_width = self.pipelines.post_fx.linear_depth_half.texture().width();
+        let half_height = self.pipelines.post_fx.linear_depth_half.texture().height();
+        let upsample_params = GtaoUpsampleParams {
+            full_size: [full_width as f32, full_height as f32],
+            half_size: [half_width as f32, half_height as f32],
+            inv_full_size: [1.0 / full_width as f32, 1.0 / full_height as f32],
+            inv_half_size: [1.0 / half_width as f32, 1.0 / half_height as f32],
+            depth_threshold: 0.1,  // Adjust based on scene scale
+            normal_threshold: 0.9, // Cosine of angle (approx 25 degrees)
+            use_normal_check: 1,
+            _padding: 0,
+        };
+
+        // 2. WRITE TO GPU (This was missing)
+        self.queue.write_buffer(
+            &self.pipelines.buffers.gtao_upsample,
+            0,
+            bytemuck::bytes_of(&upsample_params),
+        );
+        self.queue.write_buffer(
+            &self.pipelines.buffers.gtao,
+            0,
+            bytemuck::bytes_of(&gtao_params),
+        );
+        // Update apply params
+        let apply_params = GtaoApplyParams {
+            power: 1.5,     // e.g., 1.5
+            intensity: 1.0, // e.g., 1.0
+            min_ao: 0.1,    // e.g., 0.1
+            debug_mode: 0,
         };
 
         self.queue.write_buffer(
-            &self.pipelines.ssao_uniforms.buffer,
+            &self.pipelines.buffers.gtao_apply,
             0,
-            bytemuck::bytes_of(&params),
+            bytemuck::bytes_of(&apply_params),
         );
     }
 }

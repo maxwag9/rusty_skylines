@@ -1,6 +1,4 @@
-//#![allow(unused_variables)]
-
-extern crate core;
+#![allow(dead_code, unused_variables)]
 
 mod app;
 mod components;
