@@ -10,9 +10,9 @@ struct VertexOutput {
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     var verts = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0, -1.0),
-        vec2<f32>( 3.0, -1.0),
-        vec2<f32>(-1.0,  3.0),
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>( 3.0, 1.0),
+        vec2<f32>(-1.0, -3.0),
     );
     var uv_coords = array<vec2<f32>, 3>(
         vec2<f32>(0.0, 0.0),

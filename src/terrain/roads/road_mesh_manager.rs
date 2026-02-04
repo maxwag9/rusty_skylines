@@ -266,7 +266,7 @@ fn mesh_segment_with_boundaries(
     if has_left {
         if let Some((_lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == min_lane_idx) {
             let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
-
+            gizmo.polyline(geom.points.as_slice(), [0.2, 1.0, 0.0], 10.0, 20.0);
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
@@ -284,7 +284,7 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let inner_offset = road_type.lane_width * 0.5;
+            let inner_offset = road_type.lane_width * -0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -295,14 +295,14 @@ fn mesh_segment_with_boundaries(
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                None,
+                Some(-1f32),
                 None,
                 None,
                 vertices,
                 indices,
             );
 
-            let outer_offset = road_type.lane_width * 0.5 + road_type.sidewalk_width;
+            let outer_offset = road_type.lane_width * -0.5 - road_type.sidewalk_width;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -343,7 +343,7 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let inner_offset = road_type.lane_width * 0.5;
+            let inner_offset = road_type.lane_width * -0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -354,14 +354,14 @@ fn mesh_segment_with_boundaries(
                 road_type.sidewalk_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                None,
+                Some(-1f32),
                 None,
                 None,
                 vertices,
                 indices,
             );
 
-            let outer_offset = road_type.lane_width * 0.5 + road_type.sidewalk_width;
+            let outer_offset = road_type.lane_width * -0.5 - road_type.sidewalk_width;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -403,7 +403,7 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let curb_offset_right = -road_type.lane_width * 0.5 + road_type.median_width * 0.5;
+            let curb_offset_right = road_type.lane_width * 0.5 + road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -414,14 +414,14 @@ fn mesh_segment_with_boundaries(
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                Some(1.0),
+                Some(-1.0),
                 None,
                 None,
                 vertices,
                 indices,
             );
 
-            let curb_offset_left = -road_type.lane_width * 0.5 - road_type.median_width * 0.5;
+            let curb_offset_left = road_type.lane_width * 0.5 - road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -432,7 +432,7 @@ fn mesh_segment_with_boundaries(
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                Some(-1.0),
+                Some(1.0),
                 None,
                 None,
                 vertices,

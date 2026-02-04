@@ -22,7 +22,7 @@ dependencies = [
  "serde_yaml",
  "toml",
  "wgpu",
-    "wgpu_render_manager",
+ "wgpu_render_manager",
  "winit",
  "zstd",
 ]
@@ -2389,9 +2389,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu_render_manager"
-version = "0.1.7"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d388139586b7e06563b2e7d3fec83f495ed7ecc01e45c7070de8fcbd9d7f2478"
+checksum = "184b6f91e845f5a015ab8e508d4953ec8110fd1559c324d5e690835dc0d7108b"
 dependencies = [
  "bytemuck",
  "wgpu",

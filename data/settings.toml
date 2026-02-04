@@ -6,25 +6,25 @@ override_mode = false
 show_gui = true
 background_color = [
     0.0,
-    1.0,
+    0.0,
     0.0,
     1.0,
 ]
-total_game_time = 65396.60004359856
+total_game_time = 67709.91195198355
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
 always_day = false
-msaa_samples = 1
+msaa_samples = 8
 shadow_map_size = 4096
 shadows_enabled = false
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_chunk_bounds = true
 chunk_size = 64
-tonemapping_state = "Off"
-debug_view_state = "Normals"
+tonemapping_state = "Cinematic"
+debug_view_state = "None"
 starting_menu = "None"
 lod_center = "Target"
 reversed_depth_z = true
-show_fog = false
+show_fog = true

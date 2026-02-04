@@ -26,6 +26,28 @@ layers:
           - 1.0
         text: 'Rendering times per frame: Sky: {(sky_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
       - !Text
+        id: gtao_text
+        x: 0.0008250045
+        y: 0.095
+        px: 0.01
+        color:
+          - 1.0
+          - 0.0
+          - 1.0
+          - 1.0
+        text: 'GTAO: Resolve: {(resolve_or_convert_depth_frametime):.2}ms, Linearize: {(linearize_depth_frametime):.2}ms, DS Depth: {(downsample_depth_frametime):.2}ms, DS Normals: {(downsample_normals_frametime):.2}ms, Generate: {(gtao_generate_frametime):.2}ms, Blur H: {(gtao_blur_h_frametime):.2}ms, Blur V: {(gtao_blur_v_frametime):.2}ms, Upsample: {(gtao_upsample_frametime):.2}ms, Apply: {(gtao_apply_frametime):.2}ms'
+      - !Text
+        id: fog_text
+        x: 0.0008250045
+        y: 0.12
+        px: 0.01
+        color:
+          - 1.0
+          - 0.0
+          - 1.0
+          - 1.0
+        text: 'Fog: {(fog_frametime):.2}ms'
+      - !Text
         id: sky_info_text
         x: 0.001895523
         y: 0.027415771

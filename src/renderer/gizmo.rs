@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::positions::{ChunkSize, LocalPos, WorldPos};
 use crate::renderer::world_renderer::TerrainRenderer;
@@ -110,6 +111,60 @@ impl Gizmo {
                 LineVtxWorld::new(center.add_vec3(offset, cs), color)
             })
             .collect();
+        self.push(verts, duration);
+    }
+
+    pub fn sphere(&mut self, center: WorldPos, radius: f32, color: [f32; 3], duration: f32) {
+        let cs = self.chunk_size;
+        let mut verts = Vec::new();
+        let rings = CIRCLE_SEGMENT_COUNT;
+        for j in 1..rings {
+            let phi = (j as f32 / rings as f32) * PI;
+            let y = radius * phi.cos();
+            let r = radius * phi.sin();
+            for i in 0..CIRCLE_SEGMENT_COUNT {
+                let a0 = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
+                let a1 = ((i + 1) as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
+                verts.push(LineVtxWorld::new(
+                    center.add_vec3(Vec3::new(r * a0.cos(), y, r * a0.sin()), cs),
+                    color,
+                ));
+                verts.push(LineVtxWorld::new(
+                    center.add_vec3(Vec3::new(r * a1.cos(), y, r * a1.sin()), cs),
+                    color,
+                ));
+            }
+        }
+        for j in 0..rings {
+            let theta = (j as f32 / rings as f32) * PI;
+            let (ct, st) = (theta.cos(), theta.sin());
+            for i in 0..CIRCLE_SEGMENT_COUNT {
+                let phi0 = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
+                let phi1 = ((i + 1) as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
+                verts.push(LineVtxWorld::new(
+                    center.add_vec3(
+                        Vec3::new(
+                            radius * phi0.sin() * ct,
+                            radius * phi0.cos(),
+                            radius * phi0.sin() * st,
+                        ),
+                        cs,
+                    ),
+                    color,
+                ));
+                verts.push(LineVtxWorld::new(
+                    center.add_vec3(
+                        Vec3::new(
+                            radius * phi1.sin() * ct,
+                            radius * phi1.cos(),
+                            radius * phi1.sin() * st,
+                        ),
+                        cs,
+                    ),
+                    color,
+                ));
+            }
+        }
         self.push(verts, duration);
     }
 
@@ -410,13 +465,16 @@ impl Gizmo {
     pub fn update(
         &mut self,
         terrain_renderer: &TerrainRenderer,
-        target: WorldPos,
         total_game_time: f64,
         road_manager: &RoadManager,
         settings: &Settings,
+        camera: &Camera,
     ) {
         self.total_game_time = total_game_time;
         self.chunk_size = settings.chunk_size;
+        let target = camera.target;
+
+        // self.sphere(camera.eye_world(), 400.0, [1.0, 1.0, 1.0], 0.0);
 
         if settings.render_chunk_bounds {
             if terrain_renderer.chunks.contains_key(&target.chunk) {

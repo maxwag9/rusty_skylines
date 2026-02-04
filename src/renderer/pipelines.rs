@@ -2,7 +2,7 @@ use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
-use crate::renderer::textures::noise::create_blue_noise_texture;
+use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
 use crate::resources::Uniforms;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use wgpu::TextureFormat::{R32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
+use wgpu_render_manager::compute_system::ComputeSystem;
 
 #[macro_export]
 macro_rules! time_call {
@@ -188,6 +189,7 @@ pub struct Pipelines {
 
 impl Pipelines {
     pub fn new(
+        compute: &mut ComputeSystem,
         device: &Device,
         queue: &Queue,
         config: &SurfaceConfiguration,
@@ -197,8 +199,9 @@ impl Pipelines {
         let msaa = Self::create_msaa_textures(device, config, settings.msaa_samples);
         let resolved = Self::create_resolved_textures(device, config);
         let post_fx = Self::create_post_fx_textures(device, config);
+        let blue_noise = create_blue_noise_texture_gpu(compute, device, queue, 32, 69);
+        // ^ Only GTAO needs it, it doesn't give a shit. This is expensive O(size⁴) computation. 32 is enough, 64 is bigger and still doesn't hog the game, but it's no use.
 
-        let blue_noise = create_blue_noise_texture(device, queue, 4);
         let csm_shadow_map = create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM");
         let shadow_samplers = create_shadow_samplers(device);
         let water_meshes = create_water_mesh(device);
@@ -475,7 +478,7 @@ pub fn create_resolved_hdr(
     device: &Device,
     config: &SurfaceConfiguration,
     label: &str,
-) -> (TextureView) {
+) -> TextureView {
     let create_hdr = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),

@@ -161,7 +161,6 @@ impl<'a> UniformUpdater<'a> {
             _padding: 0,
         };
 
-        // 2. WRITE TO GPU (This was missing)
         self.queue.write_buffer(
             &self.pipelines.buffers.gtao_upsample,
             0,
@@ -174,8 +173,8 @@ impl<'a> UniformUpdater<'a> {
         );
         // Update apply params
         let apply_params = GtaoApplyParams {
-            power: 1.5,     // e.g., 1.5
-            intensity: 1.0, // e.g., 1.0
+            power: 1.7,     // e.g., 1.5
+            intensity: 1.2, // e.g., 1.0
             min_ao: 0.1,    // e.g., 0.1
             debug_mode: 0,
         };

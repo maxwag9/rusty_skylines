@@ -27,6 +27,7 @@ use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::CameraBundle;
 use core::RenderCore;
 use std::sync::Arc;
+use winit::dpi::PhysicalSize;
 
 pub struct Renderer {
     pub core: RenderCore,
@@ -38,7 +39,7 @@ impl Renderer {
         Self { core }
     }
 
-    pub fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+    pub fn resize(&mut self, size: PhysicalSize<u32>) {
         self.core.resize(size);
     }
 

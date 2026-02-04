@@ -53,7 +53,7 @@ pub enum DebugViewState {
     None,
     Normals,
     Depth,
-    SsaoRaw,
+    GtaoRaw,
     GtaoBlurred,
 }
 impl Default for DebugViewState {
@@ -67,8 +67,8 @@ impl DebugViewState {
         match self {
             None => Normals,
             Normals => Depth,
-            Depth => SsaoRaw,
-            SsaoRaw => GtaoBlurred,
+            Depth => GtaoRaw,
+            GtaoRaw => GtaoBlurred,
             GtaoBlurred => None,
         }
     }
