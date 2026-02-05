@@ -12,6 +12,7 @@ use crate::terrain::roads::roads::{
 use crate::ui::input::InputState;
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::{HashMap, HashSet};
+use std::f32::consts::TAU;
 
 const NODE_SNAP_RADIUS: f32 = 8.0;
 const LANE_SNAP_RADIUS: f32 = 8.0;
@@ -203,7 +204,7 @@ impl RoadEditor {
             start,
             &end_anchor,
         );
-
+        // println!("{:?}", reason);
         let seg_preview = SegmentPreview {
             road_type: road_style_params.road_type().clone(),
             mode: road_style_params.mode(),
@@ -1622,58 +1623,370 @@ pub fn build_intersection_at_node(
     gizmo: &mut Gizmo,
 ) {
     let chunk_size = gizmo.chunk_size;
+
     if recalc_clearance {
-        let Some(node) = storage.node(node_id) else {
-            return;
-        };
-        carve_intersection_clearance(
-            storage,
-            node_id,
-            node.connection_count() as f32 * 0.7,
-            chunk_size,
-        );
-        initial_carve(storage, node_id, params, gizmo);
-        let demands = probe_intersection_node_lanes(storage, node_id, params, chunk_size);
-        carve_intersection_clearance_per_lane(storage, node_id, &demands, chunk_size);
+        // Compute intersection geometry
+        if let Some(geom) = compute_intersection_geometry(storage, node_id, params, chunk_size) {
+            // Apply lane trimming
+            apply_lane_clearances(storage, node_id, &geom.clearance_per_lane, chunk_size);
+
+            // Debug draw corners
+            for corner in &geom.corners {
+                gizmo.cross(corner.position, 0.3, [0.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
+            }
+        }
     }
 
+    // Clear and rebuild node lanes
     storage.node_mut(node_id).clear_node_lanes();
 
+    let node_lanes = build_node_lanes_for_intersection(storage, node_id, params, chunk_size);
+    storage.node_mut(node_id).add_node_lanes(node_lanes);
+}
+fn compute_intersection_geometry(
+    storage: &RoadStorage,
+    node_id: NodeId,
+    params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+) -> Option<IntersectionGeometry> {
+    let node = storage.node(node_id)?;
+    let center = node.position();
+
+    // Gather arms
+    let mut arms = gather_intersection_arms(storage, node_id, params, chunk_size);
+    if arms.len() < 2 {
+        return None;
+    }
+
+    // Sort CCW by angle
+    arms.sort_by(|a, b| {
+        a.angle
+            .partial_cmp(&b.angle)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Compute corners
+    let corners = compute_intersection_corners(&arms, center, params, chunk_size);
+
+    // Compute per-lane clearances
+    let clearance_per_lane = compute_clearances_from_corners(&arms, &corners, center, chunk_size);
+
+    Some(IntersectionGeometry {
+        center,
+        arms,
+        corners,
+        clearance_per_lane,
+    })
+}
+
+fn gather_intersection_arms(
+    storage: &RoadStorage,
+    node_id: NodeId,
+    params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+) -> Vec<IntersectionArm> {
+    let segment_ids = storage.enabled_segments_connected_to_node(node_id);
+
+    segment_ids
+        .into_iter()
+        .filter_map(|seg_id| {
+            let segment = storage.segment(seg_id);
+            let points_to_node = segment.end() == node_id;
+
+            // Get enabled lanes
+            let lane_ids: Vec<LaneId> = segment
+                .lanes()
+                .iter()
+                .copied()
+                .filter(|id| storage.lane(id).is_enabled())
+                .collect();
+
+            if lane_ids.is_empty() {
+                return None;
+            }
+
+            // Get direction from any lane
+            let lane = storage.lane(&lane_ids[0]);
+            let poly = lane.polyline();
+            if poly.len() < 2 {
+                return None;
+            }
+
+            // Direction pointing AWAY from node
+            let dir_vec = if points_to_node {
+                poly[poly.len() - 2].delta_to(poly[poly.len() - 1], chunk_size)
+            } else {
+                poly[1].delta_to(poly[0], chunk_size)
+            };
+            let direction = Vec3::new(dir_vec.x, 0.0, dir_vec.z).normalize_or_zero();
+
+            if direction == Vec3::ZERO {
+                return None;
+            }
+
+            // Angle in XZ plane
+            let mut angle = direction.z.atan2(direction.x);
+            if angle < 0.0 {
+                angle += TAU;
+            }
+
+            // Half-width of road
+            let half_width =
+                lane_ids.len() as f32 * params.lane_width_m * 0.5 + params.side_walk_width;
+
+            Some(IntersectionArm {
+                segment_id: seg_id,
+                points_to_node,
+                angle,
+                direction,
+                half_width,
+                lane_ids,
+            })
+        })
+        .collect()
+}
+
+fn compute_intersection_corners(
+    arms: &[IntersectionArm],
+    center: WorldPos,
+    params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+) -> Vec<IntersectionCorner> {
+    let n = arms.len();
+    let mut corners = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let left_arm = &arms[i];
+        let right_arm = &arms[(i + 1) % n];
+
+        let corner_pos =
+            compute_corner_between_arms(center, left_arm, right_arm, params, chunk_size);
+
+        corners.push(IntersectionCorner {
+            position: corner_pos,
+        });
+    }
+
+    corners
+}
+
+fn compute_corner_between_arms(
+    center: WorldPos,
+    left_arm: &IntersectionArm,
+    right_arm: &IntersectionArm,
+    params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+) -> WorldPos {
+    // Perpendicular vectors (pointing right when facing away from node)
+    let left_perp = Vec3::new(-left_arm.direction.z, 0.0, left_arm.direction.x);
+    let right_perp = Vec3::new(-right_arm.direction.z, 0.0, right_arm.direction.x);
+
+    // Minimum clearance distance from center
+    let min_dist = params.lane_width_m * 2.0;
+
+    // Edge lines: start from center, offset perpendicular by half-width, then extend along arm direction
+    // Left arm's RIGHT edge
+    let left_edge_origin = center.add_vec3(left_perp * left_arm.half_width, chunk_size);
+    let left_edge_dir = -left_arm.direction; // Points INTO intersection
+
+    // Right arm's LEFT edge
+    let right_edge_origin = center.add_vec3(-right_perp * right_arm.half_width, chunk_size);
+    let right_edge_dir = -right_arm.direction; // Points INTO intersection
+
+    // Find intersection of these two lines in XZ plane
+    // Line 1: left_edge_origin + t * left_edge_dir
+    // Line 2: right_edge_origin + s * right_edge_dir
+
+    let d1 = Vec2::new(left_edge_dir.x, left_edge_dir.z);
+    let d2 = Vec2::new(right_edge_dir.x, right_edge_dir.z);
+
+    let cross = d1.x * d2.y - d1.y * d2.x;
+
+    if cross.abs() < 1e-6 {
+        // Nearly parallel - use fallback
+        let mid_dir = (left_arm.direction + right_arm.direction).normalize_or_zero();
+        let fallback_dist = (left_arm.half_width + right_arm.half_width).max(min_dist);
+        return center.add_vec3(-mid_dir * fallback_dist, chunk_size);
+    }
+
+    let delta = right_edge_origin.delta_to(left_edge_origin, chunk_size);
+    let delta_2d = Vec2::new(delta.x, delta.z);
+
+    let t = (delta_2d.x * d2.y - delta_2d.y * d2.x) / cross;
+
+    // Clamp t to reasonable values
+    let t = t.clamp(min_dist * 0.5, 100.0);
+
+    let corner = left_edge_origin.add_vec3(left_edge_dir * t, chunk_size);
+
+    // Ensure corner is at least min_dist from center
+    let dist_to_center = corner.distance_to(center, chunk_size);
+    if dist_to_center < min_dist {
+        let dir = center.delta_to(corner, chunk_size).normalize_or_zero();
+        return center.add_vec3(dir * min_dist, chunk_size);
+    }
+
+    corner
+}
+
+fn compute_clearances_from_corners(
+    arms: &[IntersectionArm],
+    corners: &[IntersectionCorner],
+    center: WorldPos,
+    chunk_size: ChunkSize,
+) -> HashMap<LaneId, f32> {
+    let mut clearances = HashMap::new();
+    let n = arms.len();
+
+    for (i, arm) in arms.iter().enumerate() {
+        // Get adjacent corners
+        let left_corner_idx = (i + n - 1) % n;
+        let right_corner_idx = i;
+
+        let left_corner = &corners[left_corner_idx];
+        let right_corner = &corners[right_corner_idx];
+
+        // Project corners onto arm direction to get clearance distance
+        let left_clearance =
+            project_onto_arm_direction(center, left_corner.position, arm.direction, chunk_size);
+        let right_clearance =
+            project_onto_arm_direction(center, right_corner.position, arm.direction, chunk_size);
+
+        // Use maximum of both, with a minimum floor
+        let clearance = left_clearance.max(right_clearance).max(2.0);
+
+        // Apply to all lanes in this arm
+        for lane_id in &arm.lane_ids {
+            clearances.insert(*lane_id, clearance);
+        }
+    }
+
+    clearances
+}
+
+fn project_onto_arm_direction(
+    center: WorldPos,
+    point: WorldPos,
+    arm_direction: Vec3, // Points AWAY from node
+    chunk_size: ChunkSize,
+) -> f32 {
+    let delta = center.delta_to(point, chunk_size);
+    // Project onto direction pointing INTO intersection (negative of arm direction)
+    let into_intersection = -arm_direction;
+    into_intersection.dot(delta).max(0.0)
+}
+
+// ============================================================================
+// Lane Trimming
+// ============================================================================
+
+fn apply_lane_clearances(
+    storage: &mut RoadStorage,
+    node_id: NodeId,
+    clearances: &HashMap<LaneId, f32>,
+    chunk_size: ChunkSize,
+) {
+    let node = storage.node(node_id).unwrap();
+    let incoming: std::collections::HashSet<LaneId> =
+        node.incoming_lanes().iter().copied().collect();
+
+    let mut edits = Vec::new();
+
+    for (lane_id, clearance) in clearances {
+        let lane = storage.lane(lane_id);
+        if !lane.is_enabled() {
+            continue;
+        }
+
+        let pts = &lane.geometry().points;
+        let total_len = polyline_length(pts, chunk_size);
+
+        // Don't trim more than 80% of the lane
+        let max_trim = total_len * 0.8;
+        let trim_amount = clearance.min(max_trim);
+
+        if trim_amount < 0.1 {
+            continue;
+        }
+
+        let is_incoming = incoming.contains(lane_id);
+
+        let new_pts = if is_incoming {
+            modify_polyline_end(pts, trim_amount, chunk_size)
+        } else {
+            modify_polyline_start(pts, trim_amount, chunk_size)
+        };
+
+        if let Some(pts) = new_pts {
+            edits.push((*lane_id, LaneGeometry::from_polyline(pts, chunk_size)));
+        }
+    }
+
+    for (lane_id, geom) in edits {
+        storage.lane_mut(lane_id).replace_geometry(geom);
+    }
+}
+
+// ============================================================================
+// Node Lane Building
+// ============================================================================
+
+fn build_node_lanes_for_intersection(
+    storage: &RoadStorage,
+    node_id: NodeId,
+    params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+) -> Vec<NodeLane> {
     let Some(node) = storage.node(node_id) else {
-        return;
+        return Vec::new();
     };
+
     let incoming = node.incoming_lanes();
     let outgoing = node.outgoing_lanes();
 
     let mut node_lanes = Vec::new();
+    let mut lane_idx = storage.node_lane_count_for_node(node_id);
 
     for in_id in incoming {
-        for out_id in outgoing {
-            let in_lane = storage.lane(in_id);
-            let out_lane = storage.lane(out_id);
+        let in_lane = storage.lane(in_id);
+        if !in_lane.is_enabled() {
+            continue;
+        }
 
-            if !in_lane.is_enabled() || !out_lane.is_enabled() {
+        let in_poly = in_lane.polyline();
+        if in_poly.len() < 2 {
+            continue;
+        }
+
+        let in_pt = *in_poly.last().unwrap();
+        let in_dir = in_pt
+            .delta_to(in_poly[in_poly.len() - 2], chunk_size)
+            .normalize_or_zero();
+
+        for out_id in outgoing {
+            let out_lane = storage.lane(out_id);
+            if !out_lane.is_enabled() {
                 continue;
             }
 
-            let in_poly = in_lane.polyline();
             let out_poly = out_lane.polyline();
+            if out_poly.len() < 2 {
+                continue;
+            }
 
-            let in_pt = *in_poly.last().unwrap();
-            let out_pt = *out_poly.first().unwrap();
+            let out_pt = out_poly[0];
+            let out_dir = out_poly[1].delta_to(out_pt, chunk_size).normalize_or_zero();
 
-            let in_dir = in_pt
-                .to_render_pos(in_poly[in_poly.len() - 2], chunk_size)
-                .normalize();
-            let out_dir = out_poly[1].to_render_pos(out_pt, chunk_size).normalize();
-
-            let angle_rad = in_dir.dot(out_dir).clamp(-1.0, 1.0).acos();
+            // Check turn angle
+            let dot = in_dir.dot(out_dir);
+            let angle_rad = dot.clamp(-1.0, 1.0).acos();
             if angle_rad > params.max_turn_angle {
                 continue;
             }
 
+            // Generate turn geometry
             let chord = in_pt.distance_to(out_pt, chunk_size);
-            let dynamic_tightness = if chord > 25.0 {
+            let tightness = if chord > 25.0 {
                 params.turn_tightness * 1.2
             } else if chord < 8.0 {
                 params.turn_tightness * 0.7
@@ -1681,18 +1994,11 @@ pub fn build_intersection_at_node(
                 params.turn_tightness
             };
 
-            let geom = generate_turn_geometry(
-                in_pt,
-                in_dir,
-                out_pt,
-                out_dir,
-                12,
-                dynamic_tightness,
-                chunk_size,
-            );
+            let geom =
+                generate_turn_geometry(in_pt, in_dir, out_pt, out_dir, 12, tightness, chunk_size);
 
             let nl = NodeLane::new(
-                (storage.node_lane_count_for_node(node_id) + node_lanes.len()) as NodeLaneId,
+                (lane_idx + node_lanes.len()) as NodeLaneId,
                 vec![LaneRef::Segment(*in_id, 0)],
                 vec![LaneRef::Segment(
                     *out_id,
@@ -1709,9 +2015,8 @@ pub fn build_intersection_at_node(
         }
     }
 
-    storage.node_mut(node_id).add_node_lanes(node_lanes);
+    node_lanes
 }
-
 fn initial_carve(
     storage: &mut RoadStorage,
     node_id: NodeId,
@@ -1828,7 +2133,7 @@ fn find_boundary_lane(
             if is_left { signed } else { -signed }
         })
 }
-/// Modify polyline by moving start forward by `amount` meters.
+
 pub fn modify_polyline_start(
     points: &[WorldPos],
     amount: f32,
@@ -1847,7 +2152,6 @@ pub fn modify_polyline_start(
 
     let (new_start, _) = sample_polyline_at(points, &lengths, amount, chunk_size);
 
-    // Find which segment we're in
     let mut i = 1;
     while i < lengths.len() && lengths[i] < amount {
         i += 1;
@@ -1860,7 +2164,6 @@ pub fn modify_polyline_start(
     if out.len() >= 2 { Some(out) } else { None }
 }
 
-/// Modify polyline by moving end backward by `amount` meters.
 pub fn modify_polyline_end(
     points: &[WorldPos],
     amount: f32,
@@ -1880,7 +2183,6 @@ pub fn modify_polyline_end(
     let target_len = total - amount;
     let (new_end, _) = sample_polyline_at(points, &lengths, target_len, chunk_size);
 
-    // Find which segment we're in
     let mut i = 1;
     while i < lengths.len() && lengths[i] < target_len {
         i += 1;

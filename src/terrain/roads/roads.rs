@@ -1841,14 +1841,17 @@ fn generate_invalid_segment_preview(
         &mut commands,
     );
 
-    // End node with stub pointing toward start
-    generate_node_with_stub(
-        terrain_renderer,
-        allocator,
-        road_style_params,
-        preview.end,
-        &mut commands,
-    );
+    let reason = preview.reason_invalid.clone().unwrap();
+    if !matches!(reason, PreviewError::TooShort) {
+        // End node with stub pointing toward start
+        generate_node_with_stub(
+            terrain_renderer,
+            allocator,
+            road_style_params,
+            preview.end,
+            &mut commands,
+        );
+    }
 
     commands
 }

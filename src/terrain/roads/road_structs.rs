@@ -1,7 +1,9 @@
 #![allow(dead_code)]
+
 use crate::positions::WorldPos;
 use crate::terrain::roads::roads::{RoadCommand, RoadStorage};
 use glam::Vec3;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
@@ -35,7 +37,7 @@ impl RoadStyleParams {
     pub fn state(&self) -> &EditorState {
         &self.state
     }
-    pub fn _is_idle(&self) -> bool {
+    pub fn is_idle(&self) -> bool {
         matches!(self.state, EditorState::Idle)
     }
     pub fn _cancel(&mut self) {
@@ -290,17 +292,17 @@ impl Default for RoadType {
             lane_material_id: 2, // asphalt
 
             sidewalk_width: 1.75,
-            sidewalk_height: 0.35,
+            sidewalk_height: 0.15,
             sidewalk_material_id: 0, // concrete
 
             median_width: 0.3,
-            median_height: 0.35,
+            median_height: 0.15,
             median_material_id: 0, // concrete
 
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.6,
+            turn_tightness: 1.7,
         }
     }
 }
@@ -565,4 +567,26 @@ pub struct ResolvedWaypoint {
     pub(crate) node_id: NodeId,
     pub(crate) pos: WorldPos,
     pub(crate) t: f32,
+}
+#[derive(Clone, Debug)]
+pub struct IntersectionArm {
+    pub(crate) segment_id: SegmentId,
+    pub(crate) points_to_node: bool,
+    pub(crate) angle: f32,
+    pub(crate) direction: Vec3,
+    pub(crate) half_width: f32,
+    pub(crate) lane_ids: Vec<LaneId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IntersectionCorner {
+    pub(crate) position: WorldPos,
+}
+
+#[derive(Clone, Debug)]
+pub struct IntersectionGeometry {
+    pub(crate) center: WorldPos,
+    pub(crate) arms: Vec<IntersectionArm>,
+    pub(crate) corners: Vec<IntersectionCorner>,
+    pub(crate) clearance_per_lane: HashMap<LaneId, f32>,
 }

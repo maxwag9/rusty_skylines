@@ -23,7 +23,7 @@ pub type ChunkId = u64;
 // Constants & Configuration
 // ============================================================================
 
-pub const CLEARANCE: f32 = 0.03;
+pub const CLEARANCE: f32 = 0.02;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
 // ============================================================================
@@ -266,7 +266,7 @@ fn mesh_segment_with_boundaries(
     if has_left {
         if let Some((_lane_idx, geom)) = lane_data.iter().find(|(i, _)| *i == min_lane_idx) {
             let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
-            gizmo.polyline(geom.points.as_slice(), [0.2, 1.0, 0.0], 10.0, 20.0);
+            // gizmo.polyline(geom.points.as_slice(), [0.2, 1.0, 0.0], 10.0, 20.0);
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
@@ -444,6 +444,7 @@ fn mesh_segment_with_boundaries(
 
 fn draw_node_geometry(
     terrain_renderer: &TerrainRenderer,
+    gizmo: &mut Gizmo,
     node_pos: WorldPos,
     connected_lanes_info: &[(i8, f32)],
     cap_direction: Option<Vec3>,
@@ -454,7 +455,7 @@ fn draw_node_geometry(
 ) {
     let chunk_size = terrain_renderer.chunk_size;
     let road_type = style.road_type();
-    // --- Compute radii ---
+
     let mut max_radius = 2.0_f32;
     for (idx, width) in connected_lanes_info {
         max_radius = max_radius.max(idx.abs() as f32 * width + road_type.sidewalk_width);
@@ -464,40 +465,36 @@ fn draw_node_geometry(
     let sw_inner = road_radius;
     let sw_outer = max_radius;
 
-    // --- Angular setup ---
-    let (start_angle, end_angle, is_cap) = if let Some(dir) = cap_direction {
-        let forward = -dir.normalize();
+    let (start_angle, end_angle) = if let Some(dir) = cap_direction {
+        let forward = dir.normalize();
         let heading = forward.z.atan2(forward.x);
         (
             heading - std::f32::consts::FRAC_PI_2,
             heading + std::f32::consts::FRAC_PI_2,
-            true,
         )
     } else {
-        (0.0_f32, std::f32::consts::TAU, false)
+        (0.0_f32, std::f32::consts::TAU)
     };
 
     let segments = NODE_ANGULAR_SEGMENTS;
-    // For cap: we need segments+1 vertices to span segments quads over half circle
-    // For full circle: we need segments vertices, last quad wraps to first
-    let num_verts = if is_cap { segments + 1 } else { segments };
-    let num_quads = segments;
 
-    if num_verts < 2 {
-        return;
-    }
+    let create_circular_geom = |radius: f32| -> LaneGeometry {
+        let angle_span = end_angle - start_angle;
+        let step = angle_span / segments as f32;
 
-    let angle_span = end_angle - start_angle;
-    let step_angle = angle_span / num_quads as f32;
+        let mut points = Vec::with_capacity(segments + 1);
+        for i in 0..=segments {
+            let angle = start_angle + i as f32 * step;
+            let (sin_a, cos_a) = angle.sin_cos();
+            let offset = Vec3::new(cos_a * radius, 0.0, sin_a * radius);
+            points.push(node_pos.add_vec3(offset, chunk_size));
+        }
+
+        LaneGeometry::from_polyline(points, chunk_size)
+    };
 
     let up_normal = [0.0_f32, 1.0, 0.0];
 
-    // Helper to get next vertex index (wraps for full circle, doesn't for cap)
-    let next_idx = |i: usize| -> usize { if is_cap { i + 1 } else { (i + 1) % num_verts } };
-
-    // =========================================================================
-    // 1) ROAD SURFACE - Filled disk using triangle fan from center
-    // =========================================================================
     let mut center_p = node_pos;
     set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut center_p);
     center_p.local.y += road_type.lane_height;
@@ -511,17 +508,17 @@ fn draw_node_geometry(
         0.5,
     ));
 
+    let road_geom = create_circular_geom(road_radius);
     let road_ring_first = vertices.len() as u32;
-    for i in 0..num_verts {
-        let angle = start_angle + i as f32 * step_angle;
-        let (sin_a, cos_a) = angle.sin_cos();
-        let dir = Vec3::new(cos_a, 0.0, sin_a);
-        let pos = node_pos.add_vec3(dir * road_radius, chunk_size);
-        let mut outer_p = pos;
+
+    for i in 0..road_geom.points.len() {
+        let mut outer_p = road_geom.points[i];
         set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut outer_p);
         outer_p.local.y += road_type.lane_height;
 
-        // Polar UVs for road disk
+        let t = i as f32 / segments as f32;
+        let angle = start_angle + t * (end_angle - start_angle);
+        let (sin_a, cos_a) = angle.sin_cos();
         let uv_scale = road_radius / config.uv_scale_v;
         let u = 0.5 + cos_a * uv_scale;
         let v = 0.5 + sin_a * uv_scale;
@@ -535,189 +532,70 @@ fn draw_node_geometry(
         ));
     }
 
-    // Road fan triangles
-    for i in 0..num_quads {
+    for i in 0..segments {
         let curr = road_ring_first + i as u32;
-        let next = road_ring_first + next_idx(i) as u32;
+        let next = road_ring_first + (i + 1) as u32;
         emit_tri_for_top(indices, vertices, center_idx, curr, next);
     }
 
-    // =========================================================================
-    // 2) SIDEWALK TOP - Annular ring from sw_inner to sw_outer
-    // =========================================================================
+    let sidewalk_mid_radius = (sw_inner + sw_outer) / 2.0;
+    let sidewalk_width = sw_outer - sw_inner;
+    let sidewalk_geom = create_circular_geom(sidewalk_mid_radius);
 
-    let sw_first_idx = vertices.len() as u32;
-    let sw_stride = 2u32;
+    build_ribbon_mesh(
+        terrain_renderer,
+        gizmo,
+        style,
+        &sidewalk_geom,
+        sidewalk_width,
+        road_type.sidewalk_height,
+        0.0,
+        road_type.sidewalk_material_id,
+        None,
+        (1.0 / config.uv_scale_u, 1.0 / config.uv_scale_v),
+        None,
+        None,
+        vertices,
+        indices,
+    );
 
-    for i in 0..num_verts {
-        let angle = start_angle + i as f32 * step_angle;
-        let (sin_a, cos_a) = angle.sin_cos();
-        let dir = Vec3::new(cos_a, 0.0, sin_a);
+    let inner_curb_geom = create_circular_geom(sw_inner);
 
-        let mut pos_inner = node_pos.add_vec3(dir * sw_inner, chunk_size);
-        let mut pos_outer = node_pos.add_vec3(dir * sw_outer, chunk_size);
+    build_vertical_face(
+        terrain_renderer,
+        style,
+        &inner_curb_geom,
+        0.0,
+        road_type.lane_height,
+        road_type.sidewalk_height,
+        road_type.sidewalk_material_id,
+        None,
+        (1.0 / config.uv_scale_u, 1.0 / config.uv_scale_v),
+        Some(1.0),
+        None,
+        None,
+        vertices,
+        indices,
+    );
 
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            road_type.structure(),
-            &mut pos_inner,
-        );
-        pos_inner.local.y += road_type.sidewalk_height;
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            road_type.structure(),
-            &mut pos_outer,
-        );
-        pos_outer.local.y += road_type.sidewalk_height;
+    let outer_curb_geom = create_circular_geom(sw_outer);
 
-        let arc_u = (angle - start_angle) * ((sw_inner + sw_outer) * 0.5) / config.uv_scale_u;
-
-        // Inner edge of sidewalk
-        vertices.push(road_vertex(
-            pos_inner,
-            up_normal,
-            road_type.sidewalk_material_id,
-            arc_u,
-            0.0,
-        ));
-
-        // Outer edge of sidewalk
-        vertices.push(road_vertex(
-            pos_inner,
-            up_normal,
-            road_type.sidewalk_material_id,
-            arc_u,
-            road_type.sidewalk_width / config.uv_scale_v,
-        ));
-    }
-
-    // Sidewalk top triangles
-    for i in 0..num_quads {
-        let ni = next_idx(i);
-        let inner_curr = sw_first_idx + (i as u32) * sw_stride;
-        let outer_curr = inner_curr + 1;
-        let inner_next = sw_first_idx + (ni as u32) * sw_stride;
-        let outer_next = inner_next + 1;
-
-        emit_tri_for_top(indices, vertices, inner_curr, outer_curr, inner_next);
-        emit_tri_for_top(indices, vertices, inner_next, outer_curr, outer_next);
-    }
-
-    // =========================================================================
-    // 3) INNER CURB - Vertical face at sw_inner (between road and sidewalk)
-    //    Normal faces INWARD (toward center)
-    // =========================================================================
-
-    let inner_curb_first = vertices.len() as u32;
-    let curb_stride = 2u32;
-
-    for i in 0..num_verts {
-        let angle = start_angle + i as f32 * step_angle;
-        let (sin_a, cos_a) = angle.sin_cos();
-        let dir = Vec3::new(cos_a, 0.0, sin_a);
-
-        let mut pos = node_pos.add_vec3(dir * sw_inner, chunk_size);
-        set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut pos);
-
-        let mut top_p = pos;
-        top_p.local.y += road_type.sidewalk_height;
-        let mut bottom_p = pos;
-        bottom_p.local.y += road_type.lane_height;
-
-        let inward_normal = [-dir.x, 0.0, -dir.z];
-        let arc_u = (angle - start_angle) * sw_inner / config.uv_scale_u;
-        let curb_height = road_type.sidewalk_height - road_type.lane_height;
-
-        vertices.push(road_vertex(
-            top_p,
-            inward_normal,
-            road_type.sidewalk_material_id,
-            arc_u,
-            curb_height / config.uv_scale_v,
-        ));
-        vertices.push(road_vertex(
-            bottom_p,
-            inward_normal,
-            road_type.sidewalk_material_id,
-            arc_u,
-            0.0,
-        ));
-    }
-
-    // Inner curb triangles (facing inward)
-    for i in 0..num_quads {
-        let ni = next_idx(i);
-        let top_curr = inner_curb_first + (i as u32) * curb_stride;
-        let bot_curr = top_curr + 1;
-        let top_next = inner_curb_first + (ni as u32) * curb_stride;
-        let bot_next = top_next + 1;
-
-        emit_tri_for_inner_curb(
-            indices, vertices, top_curr, bot_curr, top_next, node_pos, chunk_size,
-        );
-        emit_tri_for_inner_curb(
-            indices, vertices, top_next, bot_curr, bot_next, node_pos, chunk_size,
-        );
-    }
-
-    // =========================================================================
-    // 4) OUTER CURB - Vertical face at sw_outer (sidewalk edge to ground)
-    //    Normal faces OUTWARD (away from center)
-    // =========================================================================
-
-    let outer_curb_first = vertices.len() as u32;
-
-    for i in 0..num_verts {
-        let angle = start_angle + i as f32 * step_angle;
-        let (sin_a, cos_a) = angle.sin_cos();
-        let dir = Vec3::new(cos_a, 0.0, sin_a);
-
-        let mut pos = node_pos.add_vec3(dir * sw_outer, chunk_size);
-        set_point_height_with_structure_type(
-            terrain_renderer,
-            style.road_type().structure(),
-            &mut pos,
-        );
-
-        let mut top_p = pos;
-        top_p.local.y += road_type.sidewalk_height;
-        let mut bottom_p = pos;
-        bottom_p.local.y += road_type.lane_height;
-
-        let outward_normal = [dir.x, 0.0, dir.z];
-        let arc_u = (angle - start_angle) * sw_outer / config.uv_scale_u;
-
-        vertices.push(road_vertex(
-            top_p,
-            outward_normal,
-            road_type.sidewalk_material_id,
-            arc_u,
-            road_type.sidewalk_height / config.uv_scale_v,
-        ));
-        vertices.push(road_vertex(
-            bottom_p,
-            outward_normal,
-            road_type.sidewalk_material_id,
-            arc_u,
-            0.0,
-        ));
-    }
-
-    // Outer curb triangles (facing outward)
-    for i in 0..num_quads {
-        let ni = next_idx(i);
-        let top_curr = outer_curb_first + (i as u32) * curb_stride;
-        let bot_curr = top_curr + 1;
-        let top_next = outer_curb_first + (ni as u32) * curb_stride;
-        let bot_next = top_next + 1;
-
-        emit_tri_for_curb(
-            indices, vertices, top_curr, bot_curr, top_next, node_pos, chunk_size,
-        );
-        emit_tri_for_curb(
-            indices, vertices, top_next, bot_curr, bot_next, node_pos, chunk_size,
-        );
-    }
+    build_vertical_face(
+        terrain_renderer,
+        style,
+        &outer_curb_geom,
+        0.0,
+        road_type.lane_height,
+        road_type.sidewalk_height,
+        road_type.sidewalk_material_id,
+        None,
+        (1.0 / config.uv_scale_u, 1.0 / config.uv_scale_v),
+        Some(-1.0),
+        None,
+        None,
+        vertices,
+        indices,
+    );
 }
 
 /// Builds a ribbon mesh for a single lane or strip.
@@ -1211,6 +1089,7 @@ impl RoadMeshManager {
 
                 draw_node_geometry(
                     terrain_renderer,
+                    gizmo,
                     center,
                     connected_lanes_info.as_slice(),
                     cap_direction,
