@@ -26,8 +26,33 @@ use crate::terrain::roads::road_mesh_manager::{
 };
 use crate::terrain::roads::road_structs::*;
 use glam::Vec2;
-
+use smallvec::SmallVec;
+use std::collections::HashMap;
+use std::f32::consts::{PI, TAU};
 pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
+
+type PartitionId = u32;
+/// One physical "leg" of an intersection — a direction you can come from or go to.
+/// Arms are sorted by bearing angle (clockwise from north, or whatever convention).
+#[derive(Debug, Clone)]
+pub struct Arm {
+    segment: SegmentId,
+    bearing: f32, // radians, sorted ascending — angle from node center outward
+
+    incoming_lanes: SmallVec<[LaneId; 3]>,
+    outgoing_lanes: SmallVec<[LaneId; 3]>,
+
+    // === Sign-based routing data ===
+    /// Static: partitions reachable by leaving through this arm's outgoing lanes.
+    /// Built once at map construction, rebuilt on topology change.
+    reachable_partitions: Vec<PartitionId>,
+
+    /// Dynamic: learned travel times to partitions, updated by cars reporting back.
+    travel_times: HashMap<PartitionId, ExponentialMovingAverage>,
+
+    /// Current congestion estimate (0.0 = free flow, 1.0 = gridlocked)
+    congestion: f32,
+}
 
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
@@ -35,6 +60,8 @@ pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
 pub struct Node {
     pos: WorldPos,
     enabled: bool,
+    /// Sorted by bearing, clockwise
+    arms: Vec<Arm>,
     node_lanes: Vec<NodeLane>,
     incoming_lanes: Vec<LaneId>,
     outgoing_lanes: Vec<LaneId>,
@@ -47,6 +74,7 @@ impl Node {
         Self {
             pos,
             enabled: true,
+            arms: Vec::with_capacity(2),
             node_lanes: Vec::new(),
             incoming_lanes: Vec::new(),
             outgoing_lanes: Vec::new(),
@@ -2124,4 +2152,102 @@ fn line_intersects_box_2d(a: Vec2, b: Vec2, box_min: Vec2, box_max: Vec2) -> boo
         }
     }
     true
+}
+pub(crate) enum TurnType {
+    Straight,
+    Right,
+    Left,
+    UTurn,
+    SharpRight,
+    SharpLeft,
+}
+/// Wraps any angle into [0, 2π)
+fn normalize_angle(angle: f32) -> f32 {
+    let a = angle % TAU;
+    if a < 0.0 { a + TAU } else { a }
+}
+fn classify_turn(from_arm: &Arm, to_arm: &Arm, arm_count: usize) -> TurnType {
+    let angle_diff = normalize_angle(to_arm.bearing - from_arm.bearing);
+    // With arms sorted, you can also just use index distance:
+    // adjacent arm to the right = right turn, opposite = straight, etc.
+    match angle_diff {
+        a if a < 0.3 => TurnType::UTurn,
+        a if a < PI * 0.6 => TurnType::SharpRight,
+        a if a < PI * 0.85 => TurnType::Right,
+        a if a < PI * 1.15 => TurnType::Straight,
+        a if a < PI * 1.4 => TurnType::Left,
+        a if a < PI * 1.7 => TurnType::SharpLeft,
+        _ => TurnType::UTurn,
+    }
+}
+fn turn_cost(turn: TurnType) -> f32 {
+    match turn {
+        TurnType::Straight => 0.0,
+        TurnType::Right => 2.0, // seconds
+        TurnType::Left => 5.0,  // wait for gap
+        TurnType::UTurn => 12.0,
+        TurnType::SharpRight => 3.0,
+        TurnType::SharpLeft => 7.0,
+    }
+}
+// fn has_priority_over(&self, other_arm_idx: usize, my_arm_idx: usize) -> bool {
+//     // In clockwise-sorted arms, the arm to your right
+//     // is the previous index (wrapping)
+//     let right_of_me = (my_arm_idx + arms.len() - 1) % arms.len();
+//     other_arm_idx == right_of_me
+// }
+/// Tracks a running average that forgets old data exponentially.
+/// Recent reports matter more than ancient ones.
+#[derive(Debug, Clone)]
+pub struct ExponentialMovingAverage {
+    value: f32,
+    alpha: f32, // smoothing factor: 0.0 = never update, 1.0 = only latest
+    count: u32, // how many samples we've seen (useful for "is this trustworthy?")
+}
+
+impl ExponentialMovingAverage {
+    pub fn new(alpha: f32) -> Self {
+        Self {
+            value: 0.0,
+            alpha,
+            count: 0,
+        }
+    }
+
+    /// Seed with an initial estimate (e.g., Euclidean distance / speed limit)
+    /// so the first cars aren't completely blind.
+    pub fn with_initial(alpha: f32, initial: f32) -> Self {
+        Self {
+            value: initial,
+            alpha,
+            count: 1,
+        }
+    }
+
+    /// A car reports a new observed travel time.
+    pub fn update(&mut self, sample: f32) {
+        if self.count == 0 {
+            // First sample: just accept it wholesale
+            self.value = sample;
+        } else {
+            self.value = self.alpha * sample + (1.0 - self.alpha) * self.value;
+        }
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// Current best estimate of travel time.
+    pub fn get(&self) -> f32 {
+        self.value
+    }
+
+    /// How many reports this is based on.
+    /// Cars might trust high-count averages more than low-count ones.
+    pub fn sample_count(&self) -> u32 {
+        self.count
+    }
+
+    /// Is this estimate based on enough data to be meaningful?
+    pub fn is_reliable(&self, min_samples: u32) -> bool {
+        self.count >= min_samples
+    }
 }

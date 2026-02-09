@@ -3,10 +3,11 @@ use wgpu::{
     BufferDescriptor, BufferUsages, Device, Extent3d, Queue, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
-use wgpu_render_manager::compute_system::{ComputePipelineOptions, ComputeSystem};
+use wgpu_render_manager::compute_system::ComputePipelineOptions;
+use wgpu_render_manager::renderer::RenderManager;
 
 pub fn create_blue_noise_texture_gpu(
-    compute: &mut ComputeSystem,
+    render_manager: &mut RenderManager,
     device: &Device,
     queue: &Queue,
     size: u32,
@@ -84,7 +85,7 @@ pub fn create_blue_noise_texture_gpu(
     queue.write_buffer(&state, 0, bytemuck::bytes_of(&[target + 1, 0u32]));
 
     // Dispatch init pass once
-    compute.compute(
+    render_manager.compute(
         None,
         "blue_noise_init",
         vec![],
@@ -98,7 +99,7 @@ pub fn create_blue_noise_texture_gpu(
 
     // One dispatch per pruning iteration (CPU loop)
     for iteration in 0..target {
-        compute.compute(
+        render_manager.compute(
             None,
             "blue_noise_prune_step",
             vec![],
@@ -112,7 +113,7 @@ pub fn create_blue_noise_texture_gpu(
     }
 
     // Final output pass
-    compute.compute(
+    render_manager.compute(
         None,
         "blue_noise_output",
         vec![],

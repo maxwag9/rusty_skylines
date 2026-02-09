@@ -1,5 +1,5 @@
 use crate::components::camera::Camera;
-use rand::Rng;
+use rand::RngExt;
 use std::time::Instant;
 
 const MAX_CLOSE_JOBS: usize = 8;

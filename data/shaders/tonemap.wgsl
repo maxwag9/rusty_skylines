@@ -49,7 +49,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let dims = vec2<f32>(textureDimensions(hdr_tex, 0));
     let aspect = dims.x / dims.y;
 
-    let v = vignette(uv, 0.60, 0.75, 0.35, aspect);
+    let v = vignette(uv, 0.65, 0.70, 0.40, aspect);
 
     // Apply vignette in HDR (exposure domain)
     let hdr_v = hdr * v;

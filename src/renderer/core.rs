@@ -7,7 +7,7 @@ use crate::positions::WorldPos;
 use crate::renderer::astronomy::*;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
-use crate::renderer::gtao::gtao::GtaoBlurParams;
+use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
@@ -30,17 +30,16 @@ use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::wgt::PollType;
 use wgpu::{
-    Adapter, Backends, Color, ColorTargetState, ColorWrites, CommandEncoder,
-    CommandEncoderDescriptor, CompositeAlphaMode, Device, DeviceDescriptor, ExperimentalFeatures,
-    Features, Instance, InstanceDescriptor, Limits, LoadOp, MemoryHints, Operations,
-    PowerPreference, PresentMode, Queue, RenderPass, RenderPassColorAttachment,
-    RenderPassDepthStencilAttachment, RenderPassDescriptor, RequestAdapterOptions, StoreOp,
-    Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture, TextureFormat,
-    TextureFormatFeatureFlags, TextureFormatFeatures, TextureUsages, TextureView,
+    Adapter, Backends, BlendComponent, BlendFactor, BlendOperation, BlendState, Color,
+    ColorTargetState, ColorWrites, CommandEncoder, CommandEncoderDescriptor, CompositeAlphaMode,
+    Device, DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor, Limits,
+    LoadOp, MemoryHints, Operations, PowerPreference, PresentMode, Queue, RenderPass,
+    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
+    RequestAdapterOptions, StoreOp, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture,
+    TextureFormat, TextureFormatFeatureFlags, TextureFormatFeatures, TextureUsages, TextureView,
     TextureViewDescriptor, Trace,
 };
-// use wgpu::*;
-use wgpu_render_manager::compute_system::{ComputePipelineOptions, ComputeSystem};
+use wgpu_render_manager::compute_system::ComputePipelineOptions;
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
@@ -63,7 +62,6 @@ pub struct RenderCore {
     pub gizmo: Gizmo,
     astronomy: AstronomyState,
     profiler: GpuProfiler,
-    compute: ComputeSystem,
 }
 
 impl RenderCore {
@@ -79,12 +77,18 @@ impl RenderCore {
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderer::new(&device, settings);
         let road_renderer = RoadRenderSubsystem::new(&device);
-        let render_manager = RenderManager::new(&device, &queue, texture_dir());
+        let mut render_manager = RenderManager::new(&device, &queue, texture_dir());
         let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
-        let profiler = GpuProfiler::new(&device, 15, 3);
-        let mut compute = ComputeSystem::new(&device, &queue);
-        let pipelines = Pipelines::new(&mut compute, &device, &queue, &config, camera, settings)
-            .expect("Failed to create render pipelines");
+        let profiler = GpuProfiler::new(&device, 10, 3);
+        let pipelines = Pipelines::new(
+            &mut render_manager,
+            &device,
+            &queue,
+            &config,
+            camera,
+            settings,
+        )
+        .expect("Failed to create render pipelines");
         Self {
             adapter,
             surface,
@@ -101,7 +105,6 @@ impl RenderCore {
             gizmo,
             astronomy: AstronomyState::default(),
             profiler,
-            compute,
         }
     }
 
@@ -177,6 +180,7 @@ impl RenderCore {
         frame.present();
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui_loader.variables);
+        camera_bundle.camera.end_frame(aspect, settings);
     }
 
     pub fn update_render(
@@ -188,6 +192,8 @@ impl RenderCore {
         settings: &Settings,
         aspect: f32,
     ) {
+        self.update_defines();
+
         let camera = &mut camera_bundle.camera;
         self.check_shader_changes(ui_loader);
 
@@ -204,6 +210,7 @@ impl RenderCore {
         );
 
         let (view, proj, view_proj) = camera.matrices(aspect, settings);
+        let prev_view_proj = camera.prev_view_proj;
         let ray = WorldRay::from_mouse(
             glam::Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
             self.config.width as f32,
@@ -228,7 +235,15 @@ impl RenderCore {
             msaa_samples: self.msaa_samples,
         });
         self.update_uniforms(
-            camera, view, proj, view_proj, &astronomy, time, aspect, settings,
+            camera,
+            view,
+            proj,
+            view_proj,
+            prev_view_proj,
+            &astronomy,
+            time,
+            aspect,
+            settings,
         );
 
         // upload per-cascade shadow uniforms ONCE (outside encoder)
@@ -261,6 +276,7 @@ impl RenderCore {
         view: Mat4,
         proj: Mat4,
         view_proj: Mat4,
+        prev_view_proj: Mat4,
         astronomy: &AstronomyState,
         time: &TimeSystem,
         aspect: f32,
@@ -281,7 +297,7 @@ impl RenderCore {
         updater.update_sky_uniforms(astronomy.moon_phase);
         updater.update_water_uniforms();
         updater.update_tonemapping_uniforms(&settings.tonemapping_state);
-        updater.update_ssao_uniforms(time, settings);
+        updater.update_ssao_uniforms(time, settings, prev_view_proj);
     }
 
     fn update_subsystems(
@@ -418,7 +434,7 @@ impl RenderCore {
     ) {
         self.execute_world_pass(encoder, config, camera, settings, aspect);
 
-        self.execute_gtao_pass(encoder, settings);
+        self.execute_gtao_pass(encoder, settings, time);
 
         self.execute_fog_pass(encoder, settings);
 
@@ -505,225 +521,194 @@ impl RenderCore {
             );
         });
     }
-    fn execute_gtao_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+    fn execute_gtao_pass(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        settings: &Settings,
+        time: &TimeSystem,
+    ) {
         if !settings.show_world {
             return;
         }
+
         let msaa_on = settings.msaa_samples > 1;
-        gpu_timestamp!(encoder, &mut self.profiler, "Resolve_or_Convert_depth", {
-            if msaa_on {
-                self.compute.compute(
-                    Some(encoder),
-                    "resolve_depth_compute_pass",
-                    vec![&self.pipelines.msaa.depth_sample],
-                    vec![&self.pipelines.resolved.depth],
-                    &shader_dir().join("compute/resolve_depth.wgsl"),
-                    ComputePipelineOptions {
-                        dispatch_size: [
-                            self.pipelines.resolved.depth.texture().width() / 8,
-                            self.pipelines.resolved.depth.texture().height() / 8,
-                            1,
-                        ],
-                    },
-                    &[&self.pipelines.buffers.camera],
-                );
-            } else {
-                self.compute.compute(
-                    Some(encoder),
-                    "convert_depth_compute_pass",
-                    vec![&self.pipelines.msaa.depth_sample],
-                    vec![&self.pipelines.resolved.depth],
-                    &shader_dir().join("compute/resolve_depth_single_sample.wgsl"),
-                    ComputePipelineOptions {
-                        dispatch_size: [
-                            self.pipelines.msaa.depth_sample.texture().width() / 8,
-                            self.pipelines.msaa.depth_sample.texture().height() / 8,
-                            1,
-                        ],
-                    },
-                    &[&self.pipelines.buffers.camera],
-                );
-            }
-        });
+        let half_w = self.pipelines.post_fx.linear_depth_half.texture().width();
+        let half_h = self.pipelines.post_fx.linear_depth_half.texture().height();
+        let full_w = self.pipelines.resolved.hdr.texture().width();
+        let full_h = self.pipelines.resolved.hdr.texture().height();
+        let half_disp = [(half_w + 7) / 8, (half_h + 7) / 8, 1];
+        let full_disp = [(full_w + 7) / 8, (full_h + 7) / 8, 1];
 
-        let resolved_depth = &self.pipelines.resolved.depth;
+        // ── History ping-pong ───────────────────────────────────────────────
+        let read_idx = (time.frame_count % 2) as usize;
+        let write_idx = 1 - read_idx;
 
-        // Linearize depth pass
-        gpu_timestamp!(encoder, &mut self.profiler, "Linearize_depth", {
-            self.compute.compute(
+        // ── Pass 1: Prep ────────────────────────────────────────────────────
+        let prep_name = if msaa_on {
+            "gtao_prep_msaa"
+        } else {
+            "gtao_prep"
+        };
+
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Prep", {
+            self.render_manager.compute(
                 Some(encoder),
-                "linearize_depth_compute_pass",
-                vec![resolved_depth],
-                vec![&self.pipelines.post_fx.linear_depth_full],
-                &shader_dir().join("compute/linearize_depth.wgsl"),
+                prep_name,
+                vec![
+                    &self.pipelines.msaa.depth_sample,
+                    &self.pipelines.resolved.normal,
+                ],
+                vec![
+                    &self.pipelines.post_fx.linear_depth_half,
+                    &self.pipelines.post_fx.normal_half,
+                ],
+                &compute_shader_dir().join("gtao_prep.wgsl"),
                 ComputePipelineOptions {
-                    dispatch_size: [
-                        self.pipelines.resolved.depth.texture().width() / 8,
-                        self.pipelines.resolved.depth.texture().height() / 8,
-                        1,
-                    ],
+                    dispatch_size: half_disp,
                 },
                 &[&self.pipelines.buffers.camera],
             );
         });
 
-        // Downsample linear depth to half resolution
-        gpu_timestamp!(encoder, &mut self.profiler, "Downsample_depth", {
-            self.compute.compute(
-                Some(encoder),
-                "downsample_linear_depth_pass",
-                vec![&self.pipelines.post_fx.linear_depth_full],
-                vec![&self.pipelines.post_fx.linear_depth_half],
-                &shader_dir().join("compute/downsample_linear_depth.wgsl"),
-                ComputePipelineOptions {
-                    dispatch_size: [
-                        (self.pipelines.post_fx.linear_depth_half.texture().width() + 7) / 8,
-                        (self.pipelines.post_fx.linear_depth_half.texture().height() + 7) / 8,
-                        1,
-                    ],
-                },
-                &[],
-            );
-        });
+        // ── Pass 2: Generate + Temporal Accumulate ──────────────────────────
+        let hw = half_w as f32;
+        let hh = half_h as f32;
 
-        // Downsample normals to half resolution
-        gpu_timestamp!(encoder, &mut self.profiler, "Downsample_normals", {
-            self.compute.compute(
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Generate", {
+            self.render_manager.compute(
                 Some(encoder),
-                "downsample_normals_pass",
-                vec![&self.pipelines.resolved.normal],
-                vec![&self.pipelines.post_fx.normal_half],
-                &shader_dir().join("compute/downsample_normals.wgsl"),
-                ComputePipelineOptions {
-                    dispatch_size: [
-                        (self.pipelines.post_fx.normal_half.texture().width() + 7) / 8,
-                        (self.pipelines.post_fx.normal_half.texture().height() + 7) / 8,
-                        1,
-                    ],
-                },
-                &[],
-            );
-        });
-
-        // GTAO Generation Pass
-        let half_width = self.pipelines.post_fx.linear_depth_half.texture().width();
-        let half_height = self.pipelines.post_fx.linear_depth_half.texture().height();
-
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_generate", {
-            self.compute.compute(
-                Some(encoder),
-                "gtao_generate_pass",
+                "gtao_generate_temporal",
                 vec![
                     &self.pipelines.post_fx.linear_depth_half,
                     &self.pipelines.post_fx.normal_half,
                     &self.pipelines.resources.blue_noise,
+                    &self.pipelines.post_fx.gtao_history[read_idx],
                 ],
-                vec![&self.pipelines.post_fx.gtao_raw_half],
-                &shader_dir().join("compute/gtao_generate.wgsl"),
+                vec![&self.pipelines.post_fx.gtao_history[write_idx]],
+                &compute_shader_dir().join("gtao_generate.wgsl"),
                 ComputePipelineOptions {
-                    dispatch_size: [(half_width + 7) / 8, (half_height + 7) / 8, 1],
+                    dispatch_size: half_disp,
                 },
                 &[&self.pipelines.buffers.camera, &self.pipelines.buffers.gtao],
             );
         });
 
-        // === Horizontal Pass ===
-        let h_params = GtaoBlurParams::horizontal(half_width, half_height);
+        // ── Pass 3: 2D Bilateral Blur ───────────────────────────────────────
+        let blur_params = GtaoBlurParams {
+            depth_sigma: 0.02,
+            normal_sigma: 0.1,
+            kernel_radius: 4,
+            _padding: 0,
+        };
         self.queue.write_buffer(
             &self.pipelines.buffers.gtao_blur,
             0,
-            bytemuck::bytes_of(&h_params),
+            bytemuck::bytes_of(&blur_params),
         );
 
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_blur_H", {
-            self.compute.compute(
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur_2D", {
+            self.render_manager.compute(
                 Some(encoder),
-                "gtao_blur_horizontal",
+                "gtao_blur_2d",
                 vec![
-                    &self.pipelines.post_fx.gtao_raw_half,
-                    &self.pipelines.post_fx.linear_depth_half,
-                    &self.pipelines.post_fx.normal_half,
-                ],
-                vec![&self.pipelines.post_fx.gtao_blur_horiz_half],
-                &shader_dir().join("compute/gtao_blur.wgsl"),
-                ComputePipelineOptions {
-                    dispatch_size: [(half_width + 7) / 8, (half_height + 7) / 8, 1],
-                },
-                &[&self.pipelines.buffers.gtao_blur],
-            );
-        });
-
-        // === Vertical Pass ===
-        let v_params = GtaoBlurParams::vertical(half_width, half_height);
-        self.queue.write_buffer(
-            &self.pipelines.buffers.gtao_blur,
-            0,
-            bytemuck::bytes_of(&v_params),
-        );
-
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_blur_V", {
-            self.compute.compute(
-                Some(encoder),
-                "gtao_blur_vertical",
-                vec![
-                    &self.pipelines.post_fx.gtao_blur_horiz_half,
+                    &self.pipelines.post_fx.gtao_history[write_idx], // just-written accumulated AO
                     &self.pipelines.post_fx.linear_depth_half,
                     &self.pipelines.post_fx.normal_half,
                 ],
                 vec![&self.pipelines.post_fx.gtao_blurred_half],
-                &shader_dir().join("compute/gtao_blur.wgsl"),
+                &compute_shader_dir().join("gtao_blur_2d.wgsl"),
                 ComputePipelineOptions {
-                    dispatch_size: [(half_width + 7) / 8, (half_height + 7) / 8, 1],
+                    dispatch_size: half_disp,
                 },
                 &[&self.pipelines.buffers.gtao_blur],
             );
         });
 
-        let full_width = self.pipelines.post_fx.linear_depth_full.texture().width();
-        let full_height = self.pipelines.post_fx.linear_depth_full.texture().height();
+        // ── Pass 4: Upsample + Apply (render pass — blends into msaa/resolved HDR) ──
+        let fw = full_w as f32;
+        let fh = full_h as f32;
 
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_upsample", {
-            self.compute.compute(
-                Some(encoder),
-                "gtao_upsample_pass",
-                vec![
-                    &self.pipelines.post_fx.gtao_blurred_half,
-                    &self.pipelines.post_fx.linear_depth_half,
-                    &self.pipelines.post_fx.normal_half,
-                    &self.pipelines.post_fx.linear_depth_full,
-                    &self.pipelines.resolved.normal,
-                ],
-                vec![&self.pipelines.post_fx.gtao_final_full],
-                &compute_shader_dir().join("gtao_upsample.wgsl"),
-                ComputePipelineOptions {
-                    dispatch_size: [(full_width + 7) / 8, (full_height + 7) / 8, 1],
-                },
-                &[&self.pipelines.buffers.gtao_upsample],
+        let upsample_apply_params = GtaoUpsampleApplyParams {
+            full_size: [fw, fh],
+            half_size: [hw, hh],
+            inv_full_size: [1.0 / fw, 1.0 / fh],
+            inv_half_size: [1.0 / hw, 1.0 / hh],
+            depth_threshold: 0.05,
+            normal_threshold: 0.9,
+            use_normal_check: 1,
+            power: 1.5,
+            apply_intensity: 1.0,
+            min_ao: 0.1,
+            debug_mode: 0,
+            _padding: 0,
+        };
+        self.queue.write_buffer(
+            &self.pipelines.buffers.gtao_upsample_apply,
+            0,
+            bytemuck::bytes_of(&upsample_apply_params),
+        );
+
+        let apply_name = if msaa_on {
+            "gtao_upsample_apply_msaa"
+        } else {
+            "gtao_upsample_apply"
+        };
+
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Upsample_Apply", {
+            let color_attachment = create_color_attachment_load(
+                &self.pipelines.msaa.hdr,
+                &self.pipelines.resolved.hdr,
+                self.msaa_samples,
             );
-        });
 
-        self.execute_gtao_apply(encoder);
-    }
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("GTAO Upsample Apply"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
-    fn execute_gtao_apply(&mut self, encoder: &mut CommandEncoder) {
-        let full_width = self.pipelines.resolved.hdr.texture().width();
-        let full_height = self.pipelines.resolved.hdr.texture().height();
-
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_apply", {
-            self.compute.compute(
-                Some(encoder),
-                "gtao_apply_pass",
-                vec![
-                    &self.pipelines.resolved.hdr,
-                    &self.pipelines.post_fx.gtao_final_full,
-                ],
-                vec![&self.pipelines.resolved.hdr_with_ao],
-                &shader_dir().join("compute/gtao_apply.wgsl"),
-                ComputePipelineOptions {
-                    dispatch_size: [(full_width + 7) / 8, (full_height + 7) / 8, 1],
-                },
-                &[&self.pipelines.buffers.gtao_apply],
+            let options = PipelineOptions::default()
+                .with_topology(TriangleList)
+                .with_msaa(self.msaa_samples)
+                .with_target(ColorTargetState {
+                    format: self.pipelines.msaa.hdr.texture().format(),
+                    blend: Some(BlendState {
+                        color: BlendComponent {
+                            src_factor: BlendFactor::Zero,
+                            dst_factor: BlendFactor::Src,
+                            operation: BlendOperation::Add,
+                        },
+                        alpha: BlendComponent::OVER,
+                    }),
+                    write_mask: ColorWrites::ALL,
+                });
+            println!(
+                "{}",
+                self.pipelines.msaa.depth_sample.texture().sample_count()
             );
+            let textures: Vec<&TextureView> = vec![
+                &self.pipelines.post_fx.gtao_blurred_half,
+                &self.pipelines.post_fx.linear_depth_half,
+                &self.pipelines.post_fx.normal_half,
+                &self.pipelines.msaa.depth_sample,
+                &self.pipelines.resolved.normal,
+            ];
+
+            self.render_manager.render_with_textures(
+                &textures,
+                shader_dir().join("gtao_upsample_apply.wgsl").as_path(),
+                &options,
+                &[
+                    &self.pipelines.buffers.camera,
+                    &self.pipelines.buffers.gtao_upsample_apply,
+                ],
+                &mut pass,
+            );
+
+            pass.draw(0..3, 0..1);
         });
     }
 
@@ -732,28 +717,60 @@ impl RenderCore {
             return;
         }
 
-        let width = self.pipelines.resolved.hdr_fogged.texture().size().width;
-        let height = self.pipelines.resolved.hdr_fogged.texture().size().height;
-
-        let workgroup_size = 8;
-        let dispatch_x = (width + workgroup_size - 1) / workgroup_size;
-        let dispatch_y = (height + workgroup_size - 1) / workgroup_size;
+        let msaa_on = self.msaa_samples > 1;
 
         gpu_timestamp!(encoder, &mut self.profiler, "Fog", {
-            self.compute.compute(
-                Some(encoder),
-                "Fog Compute Pass",
-                vec![
-                    &self.pipelines.resolved.hdr_with_ao,
-                    &self.pipelines.post_fx.linear_depth_full,
-                ],
-                vec![&self.pipelines.resolved.hdr_fogged],
-                &compute_shader_dir().join("fog.wgsl"),
-                ComputePipelineOptions {
-                    dispatch_size: [dispatch_x, dispatch_y, 1],
-                },
-                &[&self.pipelines.buffers.camera, &self.pipelines.buffers.fog],
+            let color_attachment = create_color_attachment_load(
+                &self.pipelines.msaa.hdr,
+                &self.pipelines.resolved.hdr,
+                self.msaa_samples,
             );
+
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Fog Render Pass"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            // Blend: dst_color = fog_col * fog_amt + hdr_color * (1 - fog_amt)
+            //   src outputs: rgb = fog_col * fog_amt, a = 1 - fog_amt
+            //   color: src*One + dst*SrcAlpha  → fog_col*fog_amt + hdr*(1-fog_amt)
+            //   alpha: keep destination alpha
+            let options = PipelineOptions::default()
+                .with_topology(TriangleList)
+                .with_msaa(self.msaa_samples)
+                .with_target(ColorTargetState {
+                    format: self.pipelines.msaa.hdr.texture().format(),
+                    blend: Some(BlendState {
+                        color: BlendComponent {
+                            src_factor: BlendFactor::One,
+                            dst_factor: BlendFactor::SrcAlpha,
+                            operation: BlendOperation::Add,
+                        },
+                        alpha: BlendComponent::OVER,
+                    }),
+                    write_mask: ColorWrites::ALL,
+                });
+
+            let textures: Vec<&TextureView> = vec![
+                &self.pipelines.post_fx.linear_depth_half,
+                &self.pipelines.msaa.depth_sample,
+            ];
+
+            let shader_name = if msaa_on { "fog_msaa" } else { "fog" };
+
+            self.render_manager.render_with_textures(
+                &textures,
+                shader_dir().join("fog.wgsl").as_path(),
+                &options,
+                &[&self.pipelines.buffers.camera, &self.pipelines.buffers.fog],
+                &mut pass,
+            );
+
+            pass.draw(0..3, 0..1);
         });
     }
 
@@ -778,27 +795,6 @@ impl RenderCore {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-
-        {
-            let options = PipelineOptions::default()
-                .with_topology(TriangleList)
-                .with_msaa(self.msaa_samples)
-                .with_target(ColorTargetState {
-                    format: self.pipelines.msaa.hdr.texture().format(),
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                });
-
-            self.render_manager.render_with_textures(
-                &[&self.pipelines.resolved.hdr_fogged],
-                shader_dir().join("resolved_to_msaa_copy.wgsl").as_path(),
-                &options,
-                &[],
-                &mut pass,
-            );
-
-            pass.draw(0..3, 0..1);
-        }
 
         self.render_ui(&mut pass, ui_loader, time, input_state);
     }
@@ -848,8 +844,8 @@ impl RenderCore {
                 });
 
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.post_fx.linear_depth_full,
-                    DebugVisualization::LinearDepth,
+                    &self.pipelines.msaa.depth_sample,
+                    DebugVisualization::Depth,
                     &self.pipelines.msaa.hdr,
                     &mut pass,
                 );
@@ -871,7 +867,7 @@ impl RenderCore {
                 });
 
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.post_fx.gtao_raw_half,
+                    &self.pipelines.post_fx.gtao_history[0],
                     DebugVisualization::RedToGrayscale,
                     &self.pipelines.msaa.hdr,
                     &mut pass,
@@ -894,8 +890,8 @@ impl RenderCore {
                 });
 
                 self.render_manager.render_fullscreen_debug(
-                    &self.pipelines.resources.blue_noise,
-                    DebugVisualization::Color,
+                    &self.pipelines.post_fx.gtao_blurred_half,
+                    DebugVisualization::RedToGrayscale,
                     &self.pipelines.msaa.hdr,
                     &mut pass,
                 );
@@ -1028,6 +1024,12 @@ impl RenderCore {
         }
         self.render_manager
             .reload_render_shaders(changed.as_slice());
+    }
+
+    fn update_defines(&mut self) {
+        let msaa_on = self.msaa_samples > 1;
+        self.render_manager
+            .update_define("MSAA".to_string(), msaa_on);
     }
 }
 

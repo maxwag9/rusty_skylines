@@ -13,6 +13,7 @@ pub struct Camera {
     pub far: f32,
     pub fov: f32,
     pub chunk_size: ChunkSize,
+    pub prev_view_proj: Mat4,
 }
 
 impl Camera {
@@ -26,7 +27,12 @@ impl Camera {
             far: 10_000.0,
             fov: 55.0,
             chunk_size: 64,
+            prev_view_proj: Default::default(),
         }
+    }
+    pub fn end_frame(&mut self, aspect: f32, settings: &Settings) {
+        let (_, _, prev_view_proj) = self.matrices(aspect, settings);
+        self.prev_view_proj = prev_view_proj;
     }
     #[inline]
     pub fn orbit_offset(&self) -> Vec3 {

@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use wgpu::TextureFormat::{R32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
-use wgpu_render_manager::compute_system::ComputeSystem;
+use wgpu_render_manager::renderer::RenderManager;
 
 #[macro_export]
 macro_rules! time_call {
@@ -25,39 +25,22 @@ macro_rules! time_call {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FogUniforms {
-    pub screen_size: [f32; 2],
-    pub proj_params: [f32; 2],
     pub fog_density: f32,
     pub fog_height: f32,
-    pub cam_height: f32,
-    pub _pad0: f32,
-    pub fog_color: [f32; 3],
-    pub _pad1: f32,
-    pub fog_sky_factor: f32,
     pub fog_height_falloff: f32,
     pub fog_start: f32,
+
     pub fog_end: f32,
+    pub fog_sky_factor: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
+
+    pub fog_color: [f32; 3],
+    pub _pad2: f32,
 }
-impl Default for FogUniforms {
-    fn default() -> Self {
-        Self {
-            screen_size: [1920.0, 1080.0],
-            proj_params: [0.1, 1000.0],
-            fog_density: 1.0,
-            fog_height: 10.0, // Fog is thickest below y=10
-            cam_height: 50.0,
-            _pad0: 0.0,
-            fog_color: [0.7, 0.75, 0.8], // Light gray-blue
-            _pad1: 0.0,
-            fog_sky_factor: 0.3,
-            fog_height_falloff: 0.05, // How quickly fog thins above fog_height
-            fog_start: 1000.0,
-            fog_end: 10000.0,
-        }
-    }
-}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub enum ToneMappingState {
     #[default]
@@ -136,23 +119,14 @@ pub struct MsaaTextures {
 
 pub struct ResolvedTextures {
     pub hdr: TextureView,
-    pub hdr_with_ao: TextureView,
-    pub hdr_fogged: TextureView,
-    pub hdr_ui: TextureView,
     pub normal: TextureView,
-    pub depth: TextureView,
 }
 
 pub struct PostFxTextures {
-    pub linear_depth_full: TextureView,
     pub linear_depth_half: TextureView,
     pub normal_half: TextureView,
-
-    pub gtao_raw_half: TextureView,
-    pub gtao_blur_horiz_half: TextureView,
     pub gtao_blurred_half: TextureView,
-    pub gtao_history_half: TextureView,
-    pub gtao_final_full: TextureView,
+    pub gtao_history: [TextureView; 2], // half-res, R32Float, ping-pong
 }
 
 pub struct UniformBuffers {
@@ -164,8 +138,7 @@ pub struct UniformBuffers {
     pub pick: Buffer,
     pub gtao: Buffer,
     pub gtao_blur: Buffer,
-    pub gtao_upsample: Buffer,
-    pub gtao_apply: Buffer,
+    pub gtao_upsample_apply: Buffer,
 }
 
 pub struct SceneResources {
@@ -189,7 +162,7 @@ pub struct Pipelines {
 
 impl Pipelines {
     pub fn new(
-        compute: &mut ComputeSystem,
+        render_manager: &mut RenderManager,
         device: &Device,
         queue: &Queue,
         config: &SurfaceConfiguration,
@@ -199,7 +172,7 @@ impl Pipelines {
         let msaa = Self::create_msaa_textures(device, config, settings.msaa_samples);
         let resolved = Self::create_resolved_textures(device, config);
         let post_fx = Self::create_post_fx_textures(device, config);
-        let blue_noise = create_blue_noise_texture_gpu(compute, device, queue, 32, 69);
+        let blue_noise = create_blue_noise_texture_gpu(render_manager, device, queue, 32, 69);
         // ^ Only GTAO needs it, it doesn't give a shit. This is expensive O(size⁴) computation. 32 is enough, 64 is bigger and still doesn't hog the game, but it's no use.
 
         let csm_shadow_map = create_csm_shadow_texture(device, settings.shadow_map_size, "Sun CSM");
@@ -224,8 +197,7 @@ impl Pipelines {
             pick: create_pick_buffer(device),
             gtao: create_gtao_buffer(device, settings),
             gtao_blur: create_gtao_blur_buffer(device, settings),
-            gtao_upsample: create_gtao_upsample_buffer(device, settings),
-            gtao_apply: create_gtao_apply_buffer(device, settings),
+            gtao_upsample_apply: create_gtao_upsample_apply_buffer(device, settings),
         };
 
         Ok(Self {
@@ -266,40 +238,27 @@ impl Pipelines {
         device: &Device,
         config: &SurfaceConfiguration,
     ) -> ResolvedTextures {
-        let (hdr, hdr_with_ao, normal, depth) = create_resolved_targets(device, config);
-        let hdr_fogged = create_resolved_hdr(device, config, "Resolved Fogged HDR Texture");
-        let hdr_ui = create_resolved_hdr(device, config, "Resolved UI'd HDR Texture");
+        let (hdr, normal) = create_resolved_targets(device, config);
 
-        ResolvedTextures {
-            hdr,
-            hdr_with_ao,
-            hdr_fogged,
-            hdr_ui,
-            normal,
-            depth,
-        }
+        ResolvedTextures { hdr, normal }
     }
 
     fn create_post_fx_textures(device: &Device, config: &SurfaceConfiguration) -> PostFxTextures {
-        let linear_depth_full = create_linear_depth_texture(device, config, 1.0);
         let linear_depth_half = create_linear_depth_texture(device, config, 0.5);
         let normal_half = create_normals_texture(device, config, 0.5);
 
-        let (gtao_raw_half, gtao_blur_horiz_half, gtao_blurred_half) =
-            create_gtao_textures(device, config, 0.5);
+        let (gtao_raw_half, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
 
-        let gtao_history_half = create_gtao_texture(device, config, 0.5);
-        let gtao_final_full = create_gtao_texture(device, config, 1.0);
+        let gtao_history = [
+            create_gtao_texture(device, config, 0.5),
+            create_gtao_texture(device, config, 0.5),
+        ];
 
         PostFxTextures {
-            linear_depth_full,
             linear_depth_half,
             normal_half,
-            gtao_raw_half,
-            gtao_blur_horiz_half,
             gtao_blurred_half,
-            gtao_history_half,
-            gtao_final_full,
+            gtao_history,
         }
     }
 }
@@ -383,8 +342,9 @@ pub fn create_msaa_targets(
         usage: TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-
-    let color_view = color_texture.create_view(&TextureViewDescriptor::default());
+    let mut view_descriptor = TextureViewDescriptor::default();
+    view_descriptor.label = Some("MSAA Color View");
+    let color_view = color_texture.create_view(&view_descriptor);
     let normal_texture = device.create_texture(&TextureDescriptor {
         label: Some("MSAA Normals Texture"),
         size: Extent3d {
@@ -407,7 +367,7 @@ const NORMAL_FORMAT: TextureFormat = Rgba8Unorm;
 pub fn create_resolved_targets(
     device: &Device,
     config: &SurfaceConfiguration,
-) -> (TextureView, TextureView, TextureView, TextureView) {
+) -> (TextureView, TextureView) {
     let create_hdr = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),
@@ -429,7 +389,6 @@ pub fn create_resolved_targets(
     };
 
     let resolved_hdr = create_hdr("Resolved HDR Texture");
-    let resolved_hdr_with_ao = create_hdr("Resolved HDR with AO"); // For ping-pong
     let normal_texture = device.create_texture(&TextureDescriptor {
         label: Some("Resolved, non-MSAA Normals Texture"),
         size: Extent3d {
@@ -446,33 +405,7 @@ pub fn create_resolved_targets(
     });
 
     let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
-    let depth_texture = device.create_texture(&TextureDescriptor {
-        label: Some("Resolved Depth Texture (R16Float)"),
-        size: Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: TextureDimension::D2,
-        format: R32Float,
-        usage: TextureUsages::RENDER_ATTACHMENT
-            | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::STORAGE_BINDING,
-        view_formats: &[],
-    });
-
-    let depth_only_view = depth_texture.create_view(&TextureViewDescriptor {
-        label: Some("Resolved Depth Texture View"),
-        ..Default::default()
-    });
-    (
-        resolved_hdr,
-        resolved_hdr_with_ao,
-        normal_view,
-        depth_only_view,
-    )
+    (resolved_hdr, normal_view)
 }
 pub fn create_resolved_hdr(
     device: &Device,
@@ -548,10 +481,8 @@ fn create_depth_texture(
         view_formats: &[],
     });
 
-    // For using as depth-stencil attachment (can include stencil aspect)
     let attachment_view = texture.create_view(&TextureViewDescriptor::default());
 
-    // For sampling in fog shader: MUST be DepthOnly for Depth24PlusStencil8
     let depth_only_view = texture.create_view(&TextureViewDescriptor {
         label: Some("Depth Texture View (DepthOnly)"),
         aspect: TextureAspect::DepthOnly,
@@ -594,7 +525,7 @@ fn create_gtao_textures(
     device: &Device,
     config: &SurfaceConfiguration,
     resolution_factor: f32,
-) -> (TextureView, TextureView, TextureView) {
+) -> (TextureView, TextureView) {
     let make = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),
@@ -617,9 +548,8 @@ fn create_gtao_textures(
     };
 
     let gtao_view = make("GTAO Raw");
-    let gtao_horizontal_blur_view = make("GTAO Horizontally Blurred");
     let gtao_blurred_view = make("GTAO Blurred");
-    (gtao_view, gtao_horizontal_blur_view, gtao_blurred_view)
+    (gtao_view, gtao_blurred_view)
 }
 pub fn create_gtao_texture(
     device: &Device,

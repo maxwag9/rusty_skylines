@@ -23,7 +23,7 @@ pub type ChunkId = u64;
 // Constants & Configuration
 // ============================================================================
 
-pub const CLEARANCE: f32 = 0.02;
+pub const CLEARANCE: f32 = 0.08;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
 // ============================================================================

@@ -2,9 +2,7 @@ use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::mouse_ray::PickUniform;
 use crate::paths::data_dir;
-use crate::renderer::gtao::gtao::{
-    GtaoApplyParams, GtaoBlurParams, GtaoParams, GtaoUpsampleParams,
-};
+use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::{FogUniforms, MeshBuffers, ToneMappingUniforms, make_dummy_buf};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
@@ -79,44 +77,36 @@ pub fn create_pick_buffer(device: &Device) -> Buffer {
 }
 
 pub fn create_gtao_buffer(device: &Device, settings: &Settings) -> Buffer {
-    let params = GtaoParams::default();
-    let buffer = device.create_buffer_init(&BufferInitDescriptor {
+    let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("GTAO Uniform Buffer"),
-        contents: bytemuck::bytes_of(&params),
         usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        size: size_of::<GtaoParams>() as u64,
+        mapped_at_creation: false,
     });
 
     buffer
 }
 pub fn create_gtao_blur_buffer(device: &Device, settings: &Settings) -> Buffer {
-    let params = GtaoBlurParams::horizontal(512, 512);
-    let buffer = device.create_buffer_init(&BufferInitDescriptor {
+    let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("Blur Uniform Buffer"),
-        contents: bytemuck::bytes_of(&params),
         usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        size: size_of::<GtaoBlurParams>() as u64,
+        mapped_at_creation: false,
     });
 
     buffer
 }
-pub fn create_gtao_upsample_buffer(device: &Device, settings: &Settings) -> Buffer {
+pub fn create_gtao_upsample_apply_buffer(device: &Device, settings: &Settings) -> Buffer {
     let buffer = device.create_buffer(&BufferDescriptor {
         label: Some("GTAO Upsample Uniform Buffer"),
         usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        size: size_of::<GtaoUpsampleParams>() as u64,
+        size: size_of::<GtaoUpsampleApplyParams>() as u64,
         mapped_at_creation: false,
     });
 
     buffer
 }
-pub fn create_gtao_apply_buffer(device: &Device, settings: &Settings) -> Buffer {
-    let buffer = device.create_buffer(&BufferDescriptor {
-        label: Some("GTAO Apply Uniform Buffer"),
-        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        size: size_of::<GtaoApplyParams>() as u64,
-        mapped_at_creation: false,
-    });
-    buffer
-}
+
 pub fn create_water_buffer(device: &Device) -> Buffer {
     let wu = WaterUniform {
         sea_level: 0.0,
