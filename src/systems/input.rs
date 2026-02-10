@@ -63,7 +63,9 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     if wish.length_squared() > 0.0 {
         wish = wish.normalize();
-        let target_vel = wish * speed * speed_factor;
+        let baseline = 64.0;
+        let chunk_size_f = resources.renderer.core.terrain_renderer.chunk_size as f32;
+        let target_vel = wish * speed * speed_factor * (baseline / chunk_size_f);
         cam_ctrl.velocity = cam_ctrl.velocity.lerp(target_vel, 1.0 - (-15.0 * dt).exp());
     } else {
         let k = (1.0 - decay_rate * dt).max(0.0);

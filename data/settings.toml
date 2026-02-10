@@ -10,21 +10,30 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 70714.85433429443
+total_game_time = 71612.08010795606
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
 always_day = false
-msaa_samples = 8
+msaa_samples = 4
 shadow_map_size = 4096
-shadows_enabled = false
+shadows_enabled = true
 zoom_speed = 10.0
 render_lanes_gizmo = false
-render_chunk_bounds = true
-chunk_size = 64
+render_chunk_bounds = false
+chunk_size = 128
 tonemapping_state = "Cinematic"
 debug_view_state = "None"
 starting_menu = "None"
 lod_center = "Target"
 reversed_depth_z = true
 show_fog = true
+
+[player_pos.chunk]
+x = 101
+z = -9
+
+[player_pos.local]
+x = 11.918967
+y = 404.0826
+z = 123.65994

@@ -1,20 +1,27 @@
-use crate::ui::variables::UiVariableRegistry;
+// gpu_profiler.rs
+
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use wgpu::{
-    Buffer, BufferAsyncError, BufferDescriptor, BufferUsages, CommandEncoder, Device, MapMode,
-    PollType, QuerySet, QuerySetDescriptor, QueryType, Queue,
-};
+
+use wgpu::*;
+
+use crate::ui::variables::UiVariableRegistry;
+
+const MAX_PROFILE_PAIRS: u32 = 32;
+const MAX_PROFILE_ENTRIES: u32 = MAX_PROFILE_PAIRS * 2;
 
 #[macro_export]
 macro_rules! gpu_timestamp {
-    ($pass:expr, $profiler:expr, $label:literal, $body:block) => {{
-        let (start, end) = $profiler.get_range($label);
-        $pass.write_timestamp(&$profiler.query_set, start);
-        let r = { $body };
-        $pass.write_timestamp(&$profiler.query_set, end);
-        r
+    ($pass:expr, $profiler:expr, $label:expr, $body:block) => {{
+        let __label: &str = $label;
+        let (__start, __end) = $profiler.get_range(__label);
+        $profiler.mark_written(__start);
+        $pass.write_timestamp(&$profiler.query_set, __start);
+        let __r = { $body };
+        $pass.write_timestamp(&$profiler.query_set, __end);
+        __r
     }};
 }
 
@@ -22,36 +29,38 @@ struct Slot {
     resolve: Buffer,
     readback: Buffer,
     pending: Option<mpsc::Receiver<Result<(), BufferAsyncError>>>,
+    /// Which pairs were written when this slot was submitted.
+    written_pairs: Vec<bool>,
 }
 
 pub struct GpuProfiler {
     pub query_set: QuerySet,
     slots: Vec<Slot>,
-    capacity_entries: u32,
-    buffer_size: u64,
 
     frame: u64,
     slot_just_written: Option<usize>,
+
+    /// Tracks which pairs were written THIS frame (reset each frame via begin_frame).
+    written_this_frame: Vec<bool>,
 
     sums_ms: HashMap<String, f64>,
     samples: u32,
     last_print: Instant,
 
-    label_to_index: HashMap<String, u32>,
-    index_to_label: Vec<String>,
-    used_entries: u32,
+    label_to_pair: HashMap<String, u32>,
+    pair_to_label: Vec<String>,
+    used_pairs: u32,
 }
 
 impl GpuProfiler {
-    pub fn new(device: &Device, num_systems: usize, frames_in_flight: usize) -> Self {
+    pub fn new(device: &Device, frames_in_flight: usize) -> Self {
         assert!(frames_in_flight >= 3);
 
-        let num_entries = (num_systems * 2) as u32;
-        let buffer_size = num_entries as u64 * size_of::<u64>() as u64;
+        let buffer_size = MAX_PROFILE_ENTRIES as u64 * size_of::<u64>() as u64;
 
         let query_set = device.create_query_set(&QuerySetDescriptor {
             label: Some("Timestamp Query Set"),
-            count: num_entries,
+            count: MAX_PROFILE_ENTRIES,
             ty: QueryType::Timestamp,
         });
 
@@ -74,69 +83,123 @@ impl GpuProfiler {
                 resolve,
                 readback,
                 pending: None,
+                written_pairs: Vec::new(),
             });
         }
 
         Self {
             query_set,
             slots,
-            capacity_entries: num_entries,
-            buffer_size,
             frame: 0,
             slot_just_written: None,
-            sums_ms: HashMap::with_capacity(num_systems),
+            written_this_frame: Vec::new(),
+            sums_ms: HashMap::with_capacity(32),
             samples: 0,
             last_print: Instant::now(),
-            label_to_index: HashMap::new(),
-            index_to_label: vec![],
-            used_entries: 0,
+            label_to_pair: HashMap::new(),
+            pair_to_label: Vec::new(),
+            used_pairs: 0,
         }
     }
+
+    /// Call at the start of each frame before any gpu_timestamp! calls.
+    pub fn begin_frame(&mut self) {
+        for w in self.written_this_frame.iter_mut() {
+            *w = false;
+        }
+    }
+
+    /// Returns (start_entry, end_entry) for the given label.
     pub fn get_range(&mut self, label: &str) -> (u32, u32) {
         let key = label.to_lowercase();
 
-        if let Some(&start) = self.label_to_index.get(&key) {
+        if let Some(&pair) = self.label_to_pair.get(&key) {
+            let start = pair * 2;
             return (start, start + 1);
         }
 
-        let start = self.used_entries;
+        let pair = self.used_pairs;
+        let start = pair * 2;
         let end = start + 1;
 
         assert!(
-            end < self.capacity_entries,
-            "GpuProfiler: ran out of timestamp slots"
+            end < MAX_PROFILE_ENTRIES,
+            "GpuProfiler: ran out of timestamp slots (max {MAX_PROFILE_PAIRS} pairs)"
         );
 
-        self.label_to_index.insert(key.clone(), start);
-        self.index_to_label.push(key);
-        self.used_entries += 2;
+        self.label_to_pair.insert(key.clone(), pair);
+        self.pair_to_label.push(key);
+        self.used_pairs += 1;
+
+        if self.written_this_frame.len() <= pair as usize {
+            self.written_this_frame.resize(pair as usize + 1, false);
+        }
 
         (start, end)
     }
 
+    /// Mark a pair as written this frame.
+    pub fn mark_written(&mut self, start_entry: u32) {
+        let pair = (start_entry / 2) as usize;
+        if pair >= self.written_this_frame.len() {
+            self.written_this_frame.resize(pair + 1, false);
+        }
+        self.written_this_frame[pair] = true;
+    }
+
     /// Call while encoding, before submit.
     pub fn resolve(&mut self, encoder: &mut CommandEncoder) {
-        if self.used_entries == 0 {
-            // Nothing to resolve, skip
+        if self.used_pairs == 0 {
             self.slot_just_written = None;
             return;
         }
+
         let write_slot = (self.frame as usize) % self.slots.len();
 
-        // If still mapped/pending, skip profiling this frame (prevents submit validation error).
         if self.slots[write_slot].pending.is_some() {
             self.slot_just_written = None;
             return;
         }
 
-        let slot = &self.slots[write_slot];
-        encoder.resolve_query_set(&self.query_set, 0..self.capacity_entries, &slot.resolve, 0);
-        encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, self.buffer_size);
+        let num_pairs = self.used_pairs as usize;
 
+        // Resolve only contiguous ranges of written pairs
+        let mut i = 0;
+        while i < num_pairs {
+            if i >= self.written_this_frame.len() || !self.written_this_frame[i] {
+                i += 1;
+                continue;
+            }
+
+            let range_start = i;
+            while i < num_pairs && i < self.written_this_frame.len() && self.written_this_frame[i] {
+                i += 1;
+            }
+            let range_end = i;
+
+            let entry_start = (range_start * 2) as u32;
+            let entry_end = (range_end * 2) as u32;
+            let offset = entry_start as u64 * size_of::<u64>() as u64;
+
+            encoder.resolve_query_set(
+                &self.query_set,
+                entry_start..entry_end,
+                &self.slots[write_slot].resolve,
+                offset,
+            );
+        }
+
+        // Copy resolve -> readback for the used portion
+        let copy_size = self.used_pairs as u64 * 2 * size_of::<u64>() as u64;
+        let slot = &self.slots[write_slot];
+        encoder.copy_buffer_to_buffer(&slot.resolve, 0, &slot.readback, 0, copy_size);
+
+        // Snapshot which pairs were written
+        self.slots[write_slot].written_pairs = self.written_this_frame.clone();
         self.slot_just_written = Some(write_slot);
     }
 
-    /// Call once per frame AFTER `queue.submit()` and `frame.present()`.
+    /// Call once per frame AFTER `queue.submit()`.
     pub fn end_frame(
         &mut self,
         device: &Device,
@@ -147,7 +210,6 @@ impl GpuProfiler {
 
         self.collect_ready(queue);
 
-        // Start mapping the slot we JUST wrote this frame
         if let Some(i) = self.slot_just_written.take() {
             let slot = &mut self.slots[i];
             if slot.pending.is_none() {
@@ -177,12 +239,16 @@ impl GpuProfiler {
     }
 
     fn collect_ready(&mut self, queue: &Queue) {
-        if self.used_entries == 0 {
-            return; // nothing to collect
+        if self.used_pairs == 0 {
+            return;
         }
         let period = queue.get_timestamp_period() as f64;
 
-        for slot in &mut self.slots {
+        // We need to borrow pair_to_label and sums_ms while iterating slots,
+        // so we collect results first then apply them.
+        let mut results: Vec<(usize, Vec<(u32, f64)>)> = Vec::new();
+
+        for (slot_idx, slot) in self.slots.iter_mut().enumerate() {
             let Some(rx) = slot.pending.as_ref() else {
                 continue;
             };
@@ -193,7 +259,7 @@ impl GpuProfiler {
                     slot.pending = None;
                     continue;
                 }
-                Err(mpsc::TryRecvError::Empty) => false,
+                Err(mpsc::TryRecvError::Empty) => continue,
                 Err(_) => {
                     slot.pending = None;
                     continue;
@@ -208,32 +274,42 @@ impl GpuProfiler {
             let mapped = slice.get_mapped_range();
             let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
 
-            let max_pairs = (self.used_entries / 2) as usize;
-            let available_pairs = timestamps.len() / 2;
-            let pair_count = max_pairs.min(available_pairs);
+            let mut pairs = Vec::new();
+            for (pair_idx, &written) in slot.written_pairs.iter().enumerate() {
+                if !written {
+                    continue;
+                }
 
-            for i in 0..pair_count {
-                let s = i * 2;
+                let s = pair_idx * 2;
                 let e = s + 1;
+                if e >= timestamps.len() {
+                    break;
+                }
 
                 let start = timestamps[s];
                 let end = timestamps[e];
 
-                if end >= start {
+                if end >= start && start != 0 {
                     let ns = (end - start) as f64 * period;
                     let ms = ns / 1_000_000.0;
-
-                    if let Some(label) = self.index_to_label.get(i) {
-                        *self.sums_ms.entry(label.clone()).or_insert(0.0) += ms;
-                    }
+                    pairs.push((pair_idx as u32, ms));
                 }
             }
-
-            self.samples += 1;
 
             drop(mapped);
             slot.readback.unmap();
             slot.pending = None;
+
+            results.push((slot_idx, pairs));
+        }
+
+        for (_slot_idx, pairs) in results {
+            for (pair_idx, ms) in pairs {
+                if let Some(label) = self.pair_to_label.get(pair_idx as usize) {
+                    *self.sums_ms.entry(label.clone()).or_insert(0.0) += ms;
+                }
+            }
+            self.samples += 1;
         }
     }
 }

@@ -241,7 +241,7 @@ pub fn compute_csm_matrices(
         .min(DEFAULT_SHADOW_DISTANCE)
         .max(camera_near + 1.0);
 
-    let splits = cascade_splits_from_ratios(camera_near, shadow_far, [0.05, 0.15, 0.55, 1.0]);
+    let splits = cascade_splits_from_ratios(camera_near, shadow_far, [0.10, 0.25, 0.55, 1.0]);
 
     let (right, up, forward) = camera_basis_from_view_rotation_only(camera_view);
     let eye = Vec3::ZERO; // IMPORTANT: camera-relative space

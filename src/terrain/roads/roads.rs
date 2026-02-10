@@ -2153,6 +2153,7 @@ fn line_intersects_box_2d(a: Vec2, b: Vec2, box_min: Vec2, box_max: Vec2) -> boo
     }
     true
 }
+#[derive(Debug, Clone)]
 pub(crate) enum TurnType {
     Straight,
     Right,

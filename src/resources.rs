@@ -35,11 +35,12 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(window: Arc<Window>, world: &World) -> Self {
+    pub fn new(window: Arc<Window>, world: &mut World) -> Self {
         let settings = Settings::load(data_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
         let camera_entity = world.main_camera();
-        let camera = world.camera(camera_entity).unwrap();
+        let camera = world.camera_mut(camera_entity).unwrap();
+        camera.target = settings.player_pos;
         let renderer = Renderer::new(window.clone(), &settings, camera);
         let mut ui_loader = UiButtonLoader::new(
             editor_mode,

@@ -10,13 +10,13 @@ pub struct ChunkCoord {
     pub(crate) x: i32,
     pub(crate) z: i32,
 }
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalPos {
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) z: f32,
 }
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct WorldPos {
     pub(crate) chunk: ChunkCoord,
     pub(crate) local: LocalPos,
@@ -57,8 +57,8 @@ impl LocalPos {
     }
 
     #[inline]
-    pub fn as_vec3(&self) -> glam::Vec3 {
-        glam::Vec3::new(self.x, self.y, self.z)
+    pub fn as_vec3(&self) -> Vec3 {
+        Vec3::new(self.x, self.y, self.z)
     }
 }
 impl WorldPos {
@@ -317,5 +317,10 @@ impl WorldPos {
         let a = self.to_render_pos(origin, chunk_size);
         let b = rhs.to_render_pos(origin, chunk_size);
         a.dot(b)
+    }
+}
+impl Default for WorldPos {
+    fn default() -> Self {
+        WorldPos::zero()
     }
 }

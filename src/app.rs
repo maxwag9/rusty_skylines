@@ -127,8 +127,8 @@ impl ApplicationHandler for App {
                 .expect("Failed to create window"),
         );
 
-        let world = World::new();
-        let mut resources = Resources::new(window.clone(), &world);
+        let mut world = World::new();
+        let mut resources = Resources::new(window.clone(), &mut world);
         resources
             .time
             .set_tps(resources.settings.target_tps.max(1.0));
@@ -147,7 +147,11 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => {
-                let Some(resources) = self.resources.as_mut() else {
+                let (Some(world), Some(resources)) = (self.world.as_mut(), self.resources.as_mut())
+                else {
+                    return;
+                };
+                let Some(camera) = world.camera_mut(world.main_camera()) else {
                     return;
                 };
                 let variables = &mut resources.ui_loader.variables;
@@ -260,6 +264,7 @@ impl ApplicationHandler for App {
                 }
                 if input.action_pressed_once("Leave Game") {
                     settings.total_game_time = resources.time.total_game_time;
+                    settings.player_pos = camera.target;
                     match settings.save(data_dir("settings.toml")) {
                         Ok(_) => println!("Settings saved"),
                         Err(e) => eprintln!("Failed to save Settings: {e}"),
@@ -379,16 +384,16 @@ impl ApplicationHandler for App {
 
                     // update render time
                     let mut time_speed: f32 = 1.0f32; // f32 btw
-                    if resources.input.action_down("Speed up Time 20x") {
-                        time_speed = 20.0
-                    } else if resources.input.action_down("Speed up Time 8x") {
-                        time_speed = 8.0
+                    if resources.input.action_down("Speed up Time 100x") {
+                        time_speed = 100.0
+                    } else if resources.input.action_down("Speed up Time 16x") {
+                        time_speed = 16.0
                     } else if resources.input.action_down("Speed up Time 2x") {
                         time_speed = 2.0
-                    } else if resources.input.action_down("Reverse Time 20x") {
-                        time_speed = -20.0
-                    } else if resources.input.action_down("Reverse Time 8x") {
-                        time_speed = -8.0
+                    } else if resources.input.action_down("Reverse Time 100x") {
+                        time_speed = -100.0
+                    } else if resources.input.action_down("Reverse Time 16x") {
+                        time_speed = -16.0
                     } else if resources.input.action_down("Reverse Time 2x") {
                         time_speed = -2.0
                     }

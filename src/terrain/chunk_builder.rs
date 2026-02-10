@@ -1085,24 +1085,42 @@ impl ChunkBuilder {
     }
 }
 
-pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
-    let d = (dist2_chunks as f32).sqrt();
+pub fn lod_step_for_distance(dist2_chunks: i32, chunk_size: ChunkSize) -> LodStep {
+    if dist2_chunks <= 0 {
+        return 1; // center chunk always max detail
+    }
 
-    if d < 2.0 {
+    let dist_world2 = (dist2_chunks as f32) * (chunk_size as f32).powi(2);
+
+    if dist_world2 < 1024.0 {
         1
-    } else if d < 4.0 {
+    }
+    // < ~32 world units
+    else if dist_world2 < 4096.0 {
         2
-    } else if d < 8.0 {
+    }
+    // < ~64
+    else if dist_world2 < 16384.0 {
         4
-    } else if d < 16.0 {
+    }
+    // < ~128
+    else if dist_world2 < 65536.0 {
         8
-    } else if d < 32.0 {
+    }
+    // < ~256
+    else if dist_world2 < 262144.0 {
         16
-    } else if d < 64.0 {
+    }
+    // < ~512
+    else if dist_world2 < 1048576.0 {
         32
-    } else if d < 128.0 {
+    }
+    // < ~1024
+    else if dist_world2 < 4194304.0 {
         64
-    } else {
+    }
+    // < ~2048
+    else {
         128
     }
 }

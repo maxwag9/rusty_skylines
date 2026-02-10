@@ -22,7 +22,7 @@ use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 pub struct ChunkCoords {
     chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
-    dist3: i32,
+    dist2: i32,
 }
 pub struct VisibleChunk {
     pub coords: ChunkCoords,
@@ -98,8 +98,8 @@ impl TerrainRenderer {
         let terrain_gen = TerrainGenerator::new(terrain_params);
 
         let chunk_size: ChunkSize = settings.chunk_size;
-        let view_radius_render = 64;
-        let view_radius_generate = 32;
+        let view_radius_render = (64f32 * (64f32 / chunk_size as f32)) as usize;
+        let view_radius_generate = (32f32 * (64f32 / chunk_size as f32)) as usize;
 
         let arena = TerrainMeshArena::new(
             device,
@@ -189,7 +189,7 @@ impl TerrainRenderer {
         self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.visible.sort_unstable_by_key(|v| v.coords.dist3);
+        self.visible.sort_unstable_by_key(|v| v.coords.dist2);
         self.frame_timings.sort_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -212,6 +212,7 @@ impl TerrainRenderer {
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
+        // println!("{:#?}", self.frame_timings);
     }
 
     fn handle_terrain_editing(
@@ -399,7 +400,7 @@ impl TerrainRenderer {
                 visible.push(VisibleChunk {
                     coords: ChunkCoords {
                         chunk_coord: ChunkCoord::new(cx, cz),
-                        dist3,
+                        dist2: dist3,
                     },
                     id: chunk_coord_to_id(cx, cz),
                 });
@@ -409,58 +410,68 @@ impl TerrainRenderer {
     }
 
     fn compute_lod_for_visible(&mut self, r2_gen: i32) {
-        self.lod_map.clear();
+        // Cache visible once
+        let visible: Vec<_> = self.visible.iter().collect();
 
-        for v in self.visible.iter() {
-            let step = if v.coords.dist3 > r2_gen {
-                lod_step_for_distance(r2_gen + 1)
-            } else {
-                lod_step_for_distance(v.coords.dist3)
-            };
-            self.lod_map.insert(v.coords.chunk_coord, step);
+        let num_visible = visible.len();
+        if num_visible == 0 {
+            self.lod_map.clear();
+            return;
         }
 
-        // Smooth to prevent T-junctions: no chunk should be >2x finer than neighbors
-        for _ in 0..2 {
-            let current = self.lod_map.clone();
-            for v in self.visible.iter() {
-                let s = *current.get(&v.coords.chunk_coord).unwrap_or(&32);
+        // Precompute the step for chunks beyond generation radius
+        let beyond_step = lod_step_for_distance((r2_gen + 1), self.chunk_size);
 
-                let n0 = current
-                    .get(&ChunkCoord::new(
-                        v.coords.chunk_coord.x - 1,
-                        v.coords.chunk_coord.z,
-                    ))
-                    .copied()
-                    .unwrap_or(s);
-                let n1 = current
-                    .get(&ChunkCoord::new(
-                        v.coords.chunk_coord.x + 1,
-                        v.coords.chunk_coord.z,
-                    ))
-                    .copied()
-                    .unwrap_or(s);
-                let n2 = current
-                    .get(&ChunkCoord::new(
-                        v.coords.chunk_coord.x,
-                        v.coords.chunk_coord.z - 1,
-                    ))
-                    .copied()
-                    .unwrap_or(s);
-                let n3 = current
-                    .get(&ChunkCoord::new(
-                        v.coords.chunk_coord.x,
-                        v.coords.chunk_coord.z + 1,
-                    ))
-                    .copied()
-                    .unwrap_or(s);
+        // Build coord → index map once
+        let mut coord_to_index: HashMap<ChunkCoord, usize> = HashMap::with_capacity(num_visible);
+        let mut steps: Vec<LodStep> = Vec::with_capacity(num_visible);
 
-                // FIX: Prevent being more than 2x finer than the coarsest neighbor
-                let max_neighbor = n0.max(n1).max(n2).max(n3);
-                let min_allowed_step = (max_neighbor / 2).max(1);
-                self.lod_map
-                    .insert(v.coords.chunk_coord, s.max(min_allowed_step));
+        // Initial pass: assign distance-based LOD
+        for &v in &visible {
+            let dist2 = v.coords.dist2;
+            let step = if dist2 > r2_gen {
+                beyond_step
+            } else {
+                lod_step_for_distance(dist2, self.chunk_size)
+            };
+
+            let idx = steps.len();
+            steps.push(step);
+            coord_to_index.insert(v.coords.chunk_coord, idx);
+        }
+
+        for _ in 2..4 {
+            let mut new_steps = Vec::with_capacity(num_visible);
+
+            for i in 0..num_visible {
+                let v = visible[i];
+                let coord = v.coords.chunk_coord;
+                let s = steps[i];
+
+                // Start with s — missing neighbors default to self step
+                let mut max_neighbor = s;
+
+                // 4 axis-aligned neighbors only
+                for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let neigh_coord = ChunkCoord::new(coord.x + dx, coord.z + dz);
+                    if let Some(&j) = coord_to_index.get(&neigh_coord) {
+                        max_neighbor = max_neighbor.max(steps[j]);
+                    }
+                }
+
+                let min_allowed = (max_neighbor / 2).max(1);
+                new_steps.push(s.max(min_allowed));
             }
+
+            steps = new_steps;
+        }
+
+        // Write final results back to the real lod_map
+        self.lod_map.clear();
+        self.lod_map.reserve(num_visible);
+        for i in 0..num_visible {
+            let v = visible[i];
+            self.lod_map.insert(v.coords.chunk_coord, steps[i]);
         }
     }
 
@@ -621,6 +632,7 @@ impl TerrainRenderer {
         settings: &Settings,
         underwater: bool,
     ) {
+        let t_frame = Instant::now();
         let (_, _, view_proj) = camera.matrices(aspect, settings);
         let planes = extract_frustum_planes(view_proj);
 
@@ -700,6 +712,8 @@ impl TerrainRenderer {
                 pass.draw_indexed(start..start + count, h.base_vertex, 0..1);
             }
         }
+        let total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
+        // println!("{}", total_ms);
     }
 
     /// Pick a terrain point by casting a ray through loaded chunks.
@@ -760,7 +774,7 @@ impl TerrainRenderer {
                     let visible_chunk = VisibleChunk {
                         coords: ChunkCoords {
                             chunk_coord,
-                            dist3: 0,
+                            dist2: 0,
                         },
                         id: chunk_coord_to_id(cx, cz),
                     };
@@ -895,7 +909,7 @@ fn chunk_aabb_render(cx: i32, cz: i32, cs: ChunkSize, eye: WorldPos) -> (Vec3, V
     (min, max)
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FrameTimings {
     pub drain_ms: f32,
     pub collect_visible_ms: f32,

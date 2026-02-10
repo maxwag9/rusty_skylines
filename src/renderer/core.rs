@@ -24,8 +24,9 @@ use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
 use crate::world::CameraBundle;
 use glam::Mat4;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::wgt::PollType;
@@ -79,7 +80,7 @@ impl RenderCore {
         let road_renderer = RoadRenderSubsystem::new(&device);
         let mut render_manager = RenderManager::new(&device, &queue, texture_dir());
         let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
-        let profiler = GpuProfiler::new(&device, 10, 3);
+        let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
             &device,
@@ -140,6 +141,7 @@ impl RenderCore {
         input_state: &mut InputState,
         settings: &Settings,
     ) {
+        let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         self.update_render(
             camera_bundle,
@@ -162,20 +164,26 @@ impl RenderCore {
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-        // self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
-        self.execute_main_pass(
-            &mut encoder,
-            &surface_view,
-            &RenderPassConfig::from_settings(settings),
-            camera,
-            aspect,
-            time,
-            input_state,
-            ui_loader,
-            settings,
-        );
+        gpu_timestamp!(encoder, &mut self.profiler, "Total", {
+            gpu_timestamp!(encoder, &mut self.profiler, "Shadows", {
+                self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
+            });
+            self.execute_main_pass(
+                &mut encoder,
+                &surface_view,
+                &RenderPassConfig::from_settings(settings),
+                camera,
+                aspect,
+                time,
+                input_state,
+                ui_loader,
+                settings,
+            );
+        });
 
         self.profiler.resolve(&mut encoder);
+        let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
+        // println!("Total: {}", total_cpu_render_time);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.profiler
@@ -396,19 +404,19 @@ impl RenderCore {
             }
             let shadow_buf = &self.pipelines.resources.csm_shadows.shadow_mat_buffers[cascade];
 
-            if cascade != 0 && cascade != 1 {
-                render_terrain_shadows(
-                    &mut pass,
-                    &mut self.render_manager,
-                    &self.terrain_renderer,
-                    &self.pipelines,
-                    settings,
-                    camera,
-                    aspect,
-                    shadow_buf,
-                );
-            }
-
+            //if cascade != 0 && cascade != 1 {
+            render_terrain_shadows(
+                &mut pass,
+                &mut self.render_manager,
+                &self.terrain_renderer,
+                &self.pipelines,
+                settings,
+                camera,
+                aspect,
+                shadow_buf,
+            );
+            //}
+            //i32::MAX
             render_roads_shadows(
                 &mut pass,
                 &mut self.render_manager,
@@ -434,15 +442,21 @@ impl RenderCore {
     ) {
         self.execute_world_pass(encoder, config, camera, settings, aspect);
 
-        self.execute_gtao_pass(encoder, settings, time);
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO", {
+            self.execute_gtao_pass(encoder, settings, time);
+        });
 
         self.execute_fog_pass(encoder, settings);
 
-        self.execute_ui_pass(encoder, ui_loader, time, input_state);
+        gpu_timestamp!(encoder, &mut self.profiler, "UI", {
+            self.execute_ui_pass(encoder, ui_loader, time, input_state);
+        });
 
         self.execute_debug_preview_pass(encoder, settings);
 
-        self.execute_tonemap_pass(encoder, surface_view, settings);
+        gpu_timestamp!(encoder, &mut self.profiler, "Tonemap", {
+            self.execute_tonemap_pass(encoder, surface_view, settings);
+        });
     }
 
     fn execute_world_pass(
@@ -606,7 +620,7 @@ impl RenderCore {
             bytemuck::bytes_of(&blur_params),
         );
 
-        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur_2D", {
+        gpu_timestamp!(encoder, &mut self.profiler, "GTAO_Blur", {
             self.render_manager.compute(
                 Some(encoder),
                 "gtao_blur_2d",
@@ -685,10 +699,6 @@ impl RenderCore {
                     }),
                     write_mask: ColorWrites::ALL,
                 });
-            println!(
-                "{}",
-                self.pipelines.msaa.depth_sample.texture().sample_count()
-            );
             let textures: Vec<&TextureView> = vec![
                 &self.pipelines.post_fx.gtao_blurred_half,
                 &self.pipelines.post_fx.linear_depth_half,
@@ -989,8 +999,10 @@ impl RenderCore {
         self.render_manager.invalidate_bind_groups();
     }
 
-    fn reload_all_shaders(&mut self) -> anyhow::Result<()> {
+    fn reload_all_shaders(&mut self, changed: &[PathBuf]) -> anyhow::Result<()> {
         self.ui_renderer.reload_shaders()?;
+        self.render_manager.reload_render_shaders(changed);
+        self.render_manager.compute_system().invalidate_cache();
         Ok(())
     }
 
@@ -1010,7 +1022,7 @@ impl RenderCore {
             .collect::<Vec<_>>()
             .join(", ");
 
-        match self.reload_all_shaders() {
+        match self.reload_all_shaders(changed.as_slice()) {
             Ok(()) => {
                 let label = if summary.is_empty() {
                     "Shaders reloaded".to_string()
@@ -1022,8 +1034,6 @@ impl RenderCore {
             }
             Err(err) => ui_loader.log_console(format!("❌ Shader reload failed: {err}")),
         }
-        self.render_manager
-            .reload_render_shaders(changed.as_slice());
     }
 
     fn update_defines(&mut self) {

@@ -1,4 +1,5 @@
 #![allow(dead_code, unused_variables)]
+extern crate core;
 
 mod app;
 mod components;
@@ -14,6 +15,7 @@ mod systems;
 mod ui;
 mod world;
 
+mod cars;
 pub mod positions;
 mod terrain;
 

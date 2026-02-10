@@ -1,4 +1,4 @@
-use crate::positions::ChunkSize;
+use crate::positions::{ChunkSize, WorldPos};
 use crate::renderer::pipelines::ToneMappingState;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
@@ -147,6 +147,8 @@ pub struct Settings {
     pub reversed_depth_z: bool,
     #[serde(default)]
     pub show_fog: bool,
+    #[serde(default)]
+    pub player_pos: WorldPos,
 }
 
 impl Default for Settings {
@@ -177,6 +179,7 @@ impl Default for Settings {
             lod_center: LodCenterType::default(),
             reversed_depth_z: true,
             show_fog: true,
+            player_pos: WorldPos::default(),
         }
     }
 }

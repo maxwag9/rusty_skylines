@@ -135,19 +135,19 @@ struct VSOut {
 fn vs_main(@location(0) pos: vec3<f32>) -> VSOut {
     var out: VSOut;
 
-    // Camera-relative XZ placement
-    let world_xz =
-        vec2<f32>(pos.x, pos.z) +
-        uniforms.camera_local.xz;
+    // Absolute world position (for fragment shading)
+    let world_xz = vec2<f32>(pos.x, pos.z) + uniforms.camera_local.xz;
+    let world_y  = water.sea_level;
+    out.world = vec3<f32>(world_xz.x, world_y, world_xz.y);
 
-    // Absolute height
-    let world_y = water.sea_level;
+    // Camera-relative position (for projection)
+    let view_pos = vec3<f32>(
+        pos.x,
+        water.sea_level - uniforms.camera_local.y,
+        pos.z
+    );
+    out.pos = uniforms.view_proj * vec4<f32>(view_pos, 1.0);
 
-    let world_pos = vec3<f32>(world_xz.x, world_y, world_xz.y);
-
-    out.world = world_pos;
-
-    out.pos = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
     return out;
 }
 
@@ -199,8 +199,8 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let tile_lod = mix(tiling, tiling * 0.09, hf);
     let eps_scale = mix(1.0, 0.25, hf);
 
-    let n_near = layered_wave_normal(in.world.xz, tiling, strength, t, 1.0);
-    let n_far = layered_wave_normal(in.world.xz, tile_lod, strength * 0.6, t, eps_scale);
+    let n_near = layered_wave_normal(wave_xz, tiling, strength, t, 1.0);
+    let n_far  = layered_wave_normal(wave_xz, tile_lod, strength * 0.6, t, eps_scale);
     let n = normalize(mix(n_near, n_far, detail_lod));
 
     let n_dot_l = max(dot(n, sun_dir), 0.0);
@@ -220,8 +220,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 
     let half_vec = normalize(sun_dir + to_cam);
     let glitter_fade = clamp(dist / 600.0, 0.0, 1.0);
-    let glitter_mask =
-        fbm(in.world.xz * tile_lod * 4.0, t * 1.7, strength * 0.5) * 0.5 + 0.5;
+    let glitter_mask = fbm(wave_xz * tile_lod * 4.0, t * 1.7, strength * 0.5) * 0.5 + 0.5;
 
     let glossy =
         pow(max(dot(n, half_vec), 0.0), glossy_exp) *

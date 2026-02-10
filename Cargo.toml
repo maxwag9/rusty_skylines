@@ -28,7 +28,7 @@ smallvec = "1.15.1"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults
-opt-level = 1         # override with release-level speed (the same lol)
+opt-level = 3         # override with release-level speed (the same lol)
 debug = true           # keep debug symbols
 split-debuginfo = "packed"
 overflow-checks = true
