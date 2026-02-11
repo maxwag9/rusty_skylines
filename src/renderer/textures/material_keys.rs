@@ -77,6 +77,21 @@ pub fn road_material_keys() -> Vec<TextureKey> {
     ]
 }
 
+pub fn cars_material_keys() -> Vec<TextureKey> {
+    vec![TextureKey {
+        shader_id: "shiny_metal".to_string(),
+        params: TextureParams {
+            seed: 3,
+            scale: 16.0,
+            roughness: 0.4,
+            color_primary: [1.00, 1.00, 1.00, 1.0],
+            color_secondary: [0.80, 0.80, 0.80, 1.0],
+            ..Default::default()
+        },
+        resolution: 512,
+    }]
+}
+
 pub fn terrain_material_keys() -> Vec<TextureKey> {
     vec![
         TextureKey {

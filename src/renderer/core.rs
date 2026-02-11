@@ -1,3 +1,4 @@
+use crate::cars::car_subsystem::CarSubsystem;
 use crate::components::camera::*;
 use crate::data::{DebugViewState, Settings};
 use crate::gpu_timestamp;
@@ -12,7 +13,7 @@ use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
-    CSM_CASCADES, ShadowMatUniform, render_roads_shadows, render_terrain_shadows,
+    CSM_CASCADES, ShadowMatUniform, render_cars_shadows, render_roads_shadows,
 };
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
@@ -58,6 +59,7 @@ pub struct RenderCore {
     ui_renderer: UiRenderer,
     pub terrain_renderer: TerrainRenderer,
     pub road_renderer: RoadRenderSubsystem,
+    pub car_subsystem: CarSubsystem,
     shader_watcher: Option<ShaderWatcher>,
     render_manager: RenderManager,
     pub gizmo: Gizmo,
@@ -78,6 +80,7 @@ impl RenderCore {
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderer::new(&device, settings);
         let road_renderer = RoadRenderSubsystem::new(&device);
+        let car_subsystem = CarSubsystem::new(&device, &queue);
         let mut render_manager = RenderManager::new(&device, &queue, texture_dir());
         let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
         let profiler = GpuProfiler::new(&device, 3);
@@ -101,6 +104,7 @@ impl RenderCore {
             ui_renderer,
             terrain_renderer,
             road_renderer,
+            car_subsystem,
             shader_watcher,
             render_manager,
             gizmo,
@@ -360,6 +364,8 @@ impl RenderCore {
             camera,
             &mut self.gizmo,
         );
+        self.car_subsystem
+            .update(&self.terrain_renderer, input_state, time, camera.target);
         self.gizmo.update(
             &self.terrain_renderer,
             time.total_game_time,
@@ -379,12 +385,12 @@ impl RenderCore {
         _time: &TimeSystem,
         settings: &Settings,
     ) {
-        for cascade in 0..CSM_CASCADES {
+        for cascade_idx in 0..CSM_CASCADES {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("CSM Shadow Pass"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &self.pipelines.resources.csm_shadows.layer_views[cascade],
+                    view: &self.pipelines.resources.csm_shadows.layer_views[cascade_idx],
                     depth_ops: Some(Operations {
                         load: if settings.reversed_depth_z {
                             LoadOp::Clear(0.0)
@@ -402,21 +408,21 @@ impl RenderCore {
             if !settings.shadows_enabled {
                 continue;
             }
-            let shadow_buf = &self.pipelines.resources.csm_shadows.shadow_mat_buffers[cascade];
+            let shadow_buf = &self.pipelines.resources.csm_shadows.shadow_mat_buffers[cascade_idx];
 
-            //if cascade != 0 && cascade != 1 {
-            render_terrain_shadows(
-                &mut pass,
-                &mut self.render_manager,
-                &self.terrain_renderer,
-                &self.pipelines,
-                settings,
-                camera,
-                aspect,
-                shadow_buf,
-            );
+            //if cascade_idx != 0 && cascade_idx != 1 {
+            //     render_terrain_shadows(
+            //         &mut pass,
+            //         &mut self.render_manager,
+            //         &self.terrain_renderer,
+            //         &self.pipelines,
+            //         settings,
+            //         camera,
+            //         aspect,
+            //         shadow_buf,
+            //         cascade_idx
+            //     );
             //}
-            //i32::MAX
             render_roads_shadows(
                 &mut pass,
                 &mut self.render_manager,
@@ -424,7 +430,18 @@ impl RenderCore {
                 &self.pipelines,
                 settings,
                 shadow_buf,
+                cascade_idx,
             );
+            render_cars_shadows(
+                &mut pass,
+                &mut self.render_manager,
+                &mut self.car_subsystem,
+                &self.pipelines,
+                settings,
+                camera,
+                shadow_buf,
+                cascade_idx,
+            )
         }
     }
 
@@ -520,7 +537,7 @@ impl RenderCore {
                 self.msaa_samples,
             );
         });
-
+        // 5
         gpu_timestamp!(pass, &mut self.profiler, "Gizmo", {
             render_gizmo(
                 &mut pass,
@@ -532,6 +549,18 @@ impl RenderCore {
                 camera,
                 &self.device,
                 &self.queue,
+            );
+        });
+        // 6
+        gpu_timestamp!(pass, &mut self.profiler, "Cars", {
+            render_cars(
+                &mut pass,
+                &mut self.render_manager,
+                &mut self.car_subsystem,
+                &self.pipelines,
+                settings,
+                camera,
+                self.msaa_samples,
             );
         });
     }

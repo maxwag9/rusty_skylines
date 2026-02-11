@@ -46,6 +46,7 @@ pub enum CursorMode {
     None,
     Roads(RoadType),
     TerrainEditing,
+    Cars,
 }
 #[derive(Debug)]
 pub struct Cursor {
@@ -420,7 +421,7 @@ impl TerrainRenderer {
         }
 
         // Precompute the step for chunks beyond generation radius
-        let beyond_step = lod_step_for_distance((r2_gen + 1), self.chunk_size);
+        let beyond_step = lod_step_for_distance(r2_gen + 1, self.chunk_size);
 
         // Build coord → index map once
         let mut coord_to_index: HashMap<ChunkCoord, usize> = HashMap::with_capacity(num_visible);

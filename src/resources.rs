@@ -79,7 +79,7 @@ pub struct TimeSystem {
 
     pub sim_dt: f32,
     pub sim_accumulator: f32,
-    pub sim_target_step: f32,
+    pub target_sim_dt: f32,
 
     pub render_dt: f32,
     pub render_fps: f32,
@@ -100,7 +100,7 @@ impl TimeSystem {
 
             sim_dt: 0.0,
             sim_accumulator: 0.0,
-            sim_target_step: 0.0,
+            target_sim_dt: 0.0,
 
             render_dt: 0.0,
             render_fps: 0.0,
@@ -113,7 +113,7 @@ impl TimeSystem {
     }
 
     pub fn set_tps(&mut self, tps: f32) {
-        self.sim_target_step = 1.0 / tps;
+        self.target_sim_dt = 1.0 / tps;
         self.sim_accumulator = 0.0;
     }
 

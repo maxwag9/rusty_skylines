@@ -33,9 +33,13 @@ keys = ["KeyA"]
 
 ["Fly Camera Forward"]
 keys = ["KeyW"]
-
+["Fly Camera Backward"]
+keys = ["KeyS"]
 ["Fly Camera Right"]
 keys = ["KeyD"]
+
+["Handbrake"]
+keys = ["Space"]
 
 ["Navigate UI Right"]
 keys = ["Shift+ArrowRight"]
@@ -45,8 +49,7 @@ keys = ["KeyX"]
 
 ["Toggle Color Picker"]
 keys = ["KeyF"]
-["Fly Camera Backward"]
-keys = ["KeyS"]
+
 
 ["Move Cursor Right"]
 keys = ["ArrowRight"]
@@ -121,6 +124,8 @@ keys = ["MouseRight"]
 keys = ["MouseLeft"]
 ["Cancel"]
 keys = ["MouseRight"]
+["Place Car"]
+keys = ["MouseLeft"]
 
 ["Speed up Time 2x"]
 keys = ["ArrowRight"]

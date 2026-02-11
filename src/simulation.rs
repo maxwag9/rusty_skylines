@@ -1,4 +1,11 @@
+use crate::cars::car_player::drive_car;
+use crate::cars::car_subsystem::CarSubsystem;
+use crate::data::Settings;
 use crate::events::{Event, Events};
+use crate::renderer::world_renderer::TerrainRenderer;
+use crate::resources::TimeSystem;
+use crate::ui::input::InputState;
+use crate::world::CameraBundle;
 use std::time::Instant;
 
 pub struct Simulation {
@@ -51,13 +58,33 @@ impl Simulation {
             _ => {}
         }
     }
-    pub fn update(&mut self, _dt: f32) {
+    pub fn update(
+        &mut self,
+        terrain_renderer: &TerrainRenderer,
+        car_subsystem: &mut CarSubsystem,
+        settings: &Settings,
+        time: &TimeSystem,
+        input: &mut InputState,
+        camera_bundle: &mut CameraBundle,
+    ) {
         if !self.running {
             return;
         }
 
         self.tick += 1;
         self.last_update = Instant::now();
+        let camera = &mut camera_bundle.camera;
+        let cam_ctrl = &mut camera_bundle.controller;
+        drive_car(
+            car_subsystem,
+            terrain_renderer,
+            settings,
+            input,
+            cam_ctrl,
+            camera,
+            time.target_sim_dt,
+        );
+
         // TODO: Add simulation logic here
     }
 }

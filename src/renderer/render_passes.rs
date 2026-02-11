@@ -1,3 +1,6 @@
+use crate::cars::car_mesh::CarVertex;
+use crate::cars::car_render::CarInstance;
+use crate::cars::car_subsystem::CarSubsystem;
 use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::paths::shader_dir;
@@ -138,104 +141,6 @@ pub fn create_world_pass<'a>(
 
 // RENDER PASSES
 
-pub fn render_gizmo(
-    pass: &mut RenderPass,
-    render_manager: &mut RenderManager,
-    pipelines: &Pipelines,
-    _settings: &Settings,
-    msaa_samples: u32,
-    gizmo: &mut Gizmo,
-    camera: &Camera,
-    device: &Device,
-    queue: &Queue,
-) {
-    let targets = color_and_normals_targets(pipelines);
-    // Gizmo
-    render_manager.render(
-        &[],
-        shader_dir().join("lines.wgsl").as_path(),
-        &PipelineOptions {
-            topology: PrimitiveTopology::LineList,
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: CompareFunction::Always,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            msaa_samples,
-            vertex_layouts: Vec::from([LineVtxRender::layout()]),
-            targets,
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera],
-        pass,
-    );
-
-    let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
-    pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
-    pass.draw(0..vertex_count, 0..1);
-    gizmo.clear();
-}
-
-pub fn render_water(
-    pass: &mut RenderPass,
-    render_manager: &mut RenderManager,
-    pipelines: &Pipelines,
-    _settings: &Settings,
-    msaa_samples: u32,
-) {
-    let targets = color_and_normals_targets(pipelines);
-    // Water
-    render_manager.render(
-        &[],
-        shader_dir().join("water.wgsl").as_path(),
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::Always,
-                stencil: StencilState {
-                    front: StencilFaceState {
-                        compare: CompareFunction::Equal,
-                        fail_op: StencilOperation::Keep,
-                        depth_fail_op: StencilOperation::Keep,
-                        pass_op: StencilOperation::Keep,
-                    },
-                    back: StencilFaceState {
-                        compare: CompareFunction::Equal,
-                        fail_op: StencilOperation::Keep,
-                        depth_fail_op: StencilOperation::Keep,
-                        pass_op: StencilOperation::Keep,
-                    },
-                    read_mask: 0xFF,
-                    write_mask: 0x00,
-                },
-                bias: Default::default(),
-            }),
-            msaa_samples,
-            vertex_layouts: Vec::from([SimpleVertex::layout()]),
-            targets,
-            ..Default::default()
-        },
-        &[
-            &pipelines.buffers.camera,
-            &pipelines.buffers.water,
-            &pipelines.buffers.sky,
-        ],
-        pass,
-    );
-
-    pass.set_stencil_reference(1);
-    pass.set_vertex_buffer(0, pipelines.resources.water_meshes.vertex.slice(..));
-    pass.set_index_buffer(
-        pipelines.resources.water_meshes.index.slice(..),
-        IndexFormat::Uint32,
-    );
-    pass.draw_indexed(0..pipelines.resources.water_meshes.index_count, 0, 0..1);
-}
-
 pub fn render_sky(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
@@ -289,98 +194,6 @@ pub fn render_sky(
     );
     pass.draw(0..3, 0..1);
 }
-
-pub fn render_roads(
-    pass: &mut RenderPass,
-    render_manager: &mut RenderManager,
-    road_renderer: &RoadRenderSubsystem,
-    pipelines: &Pipelines,
-    settings: &Settings,
-    msaa_samples: u32,
-) {
-    let keys = road_material_keys();
-    let shader_path = shader_dir().join("road.wgsl");
-    let shadow = make_shadow_option(settings, pipelines);
-
-    fn road_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
-        let sign_i = if settings.reversed_depth_z { 1 } else { -1 };
-        let sign_f = sign_i as f32;
-
-        DepthBiasState {
-            constant: sign_i * constant.abs(),
-            slope_scale: sign_f * slope.abs(),
-            clamp: 0.0,
-        }
-    }
-    let base_bias = road_bias(settings, 3, 2.0);
-    let preview_bias = road_bias(settings, 4, 2.0);
-    let targets = color_and_normals_targets(pipelines);
-    // Roads
-    render_manager.render(
-        keys.as_slice(),
-        shader_path.as_path(),
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(road_depth_stencil(base_bias, settings)),
-            msaa_samples,
-            vertex_layouts: Vec::from([RoadVertex::layout()]),
-            cull_mode: Some(Face::Back),
-            targets: targets.clone(),
-            shadow: shadow.clone(),
-            ..Default::default()
-        },
-        &[
-            &pipelines.buffers.camera,
-            &road_renderer.road_appearance.normal_buffer,
-        ],
-        pass,
-    );
-
-    draw_visible_roads(pass, road_renderer);
-
-    if road_renderer.preview_gpu.is_empty() {
-        return;
-    }
-    let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
-    else {
-        return;
-    };
-    // Roads
-    render_manager.render(
-        keys.as_slice(),
-        shader_path.as_path(),
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(road_depth_stencil(preview_bias, settings)),
-            msaa_samples,
-            vertex_layouts: Vec::from([RoadVertex::layout()]),
-            cull_mode: Some(Face::Back),
-            targets,
-            shadow,
-            ..Default::default()
-        },
-        &[
-            &pipelines.buffers.camera,
-            &road_renderer.road_appearance.preview_buffer,
-        ],
-        pass,
-    );
-
-    pass.set_vertex_buffer(0, vb.slice(..));
-    pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
-    pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
-}
-
-pub fn draw_visible_roads(pass: &mut RenderPass, road_renderer: &RoadRenderSubsystem) {
-    for chunk_id in &road_renderer.visible_draw_list {
-        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
-            pass.set_vertex_buffer(0, gpu.vertex.slice(..));
-            pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
-            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
-        }
-    }
-}
-
 pub fn render_terrain(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
@@ -464,6 +277,218 @@ pub fn render_terrain(
     );
     terrain_renderer.render(pass, camera, aspect, settings, true);
 }
+pub fn render_water(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    _settings: &Settings,
+    msaa_samples: u32,
+) {
+    let targets = color_and_normals_targets(pipelines);
+    // Water
+    render_manager.render(
+        &[],
+        shader_dir().join("water.wgsl").as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: CompareFunction::Always,
+                stencil: StencilState {
+                    front: StencilFaceState {
+                        compare: CompareFunction::Equal,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Keep,
+                    },
+                    back: StencilFaceState {
+                        compare: CompareFunction::Equal,
+                        fail_op: StencilOperation::Keep,
+                        depth_fail_op: StencilOperation::Keep,
+                        pass_op: StencilOperation::Keep,
+                    },
+                    read_mask: 0xFF,
+                    write_mask: 0x00,
+                },
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([SimpleVertex::layout()]),
+            targets,
+            ..Default::default()
+        },
+        &[
+            &pipelines.buffers.camera,
+            &pipelines.buffers.water,
+            &pipelines.buffers.sky,
+        ],
+        pass,
+    );
+
+    pass.set_stencil_reference(1);
+    pass.set_vertex_buffer(0, pipelines.resources.water_meshes.vertex.slice(..));
+    pass.set_index_buffer(
+        pipelines.resources.water_meshes.index.slice(..),
+        IndexFormat::Uint32,
+    );
+    pass.draw_indexed(0..pipelines.resources.water_meshes.index_count, 0, 0..1);
+}
+pub fn render_roads(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    road_renderer: &RoadRenderSubsystem,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+) {
+    let keys = road_material_keys();
+    let shader_path = shader_dir().join("road.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+
+    fn road_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
+        let sign_i = if settings.reversed_depth_z { 1 } else { -1 };
+        let sign_f = sign_i as f32;
+
+        DepthBiasState {
+            constant: sign_i * constant.abs(),
+            slope_scale: sign_f * slope.abs(),
+            clamp: 0.0,
+        }
+    }
+    let base_bias = road_bias(settings, 3, 2.0);
+    let preview_bias = road_bias(settings, 4, 2.0);
+    let targets = color_and_normals_targets(pipelines);
+    // Roads
+    render_manager.render(
+        keys.as_slice(),
+        shader_path.as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(depth_stencil(base_bias, settings)),
+            msaa_samples,
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            cull_mode: Some(Face::Back),
+            targets: targets.clone(),
+            shadow: shadow.clone(),
+            ..Default::default()
+        },
+        &[
+            &pipelines.buffers.camera,
+            &road_renderer.road_appearance.normal_buffer,
+        ],
+        pass,
+    );
+
+    draw_visible_roads(pass, road_renderer);
+
+    if road_renderer.preview_gpu.is_empty() {
+        return;
+    }
+    let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
+    else {
+        return;
+    };
+    // Roads
+    render_manager.render(
+        keys.as_slice(),
+        shader_path.as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(depth_stencil(preview_bias, settings)),
+            msaa_samples,
+            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            cull_mode: Some(Face::Back),
+            targets,
+            shadow,
+            ..Default::default()
+        },
+        &[
+            &pipelines.buffers.camera,
+            &road_renderer.road_appearance.preview_buffer,
+        ],
+        pass,
+    );
+
+    pass.set_vertex_buffer(0, vb.slice(..));
+    pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
+    pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
+}
+
+pub fn render_gizmo(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    _settings: &Settings,
+    msaa_samples: u32,
+    gizmo: &mut Gizmo,
+    camera: &Camera,
+    device: &Device,
+    queue: &Queue,
+) {
+    let targets = color_and_normals_targets(pipelines);
+    // Gizmo
+    render_manager.render(
+        &[],
+        shader_dir().join("lines.wgsl").as_path(),
+        &PipelineOptions {
+            topology: PrimitiveTopology::LineList,
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            msaa_samples,
+            vertex_layouts: Vec::from([LineVtxRender::layout()]),
+            targets,
+            ..Default::default()
+        },
+        &[&pipelines.buffers.camera],
+        pass,
+    );
+
+    let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
+    pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
+    pass.draw(0..vertex_count, 0..1);
+    gizmo.clear();
+}
+
+pub fn render_cars(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    car_subsystem: &mut CarSubsystem,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    camera: &Camera,
+    msaa_samples: u32,
+) {
+    let keys = cars_material_keys();
+    let shader_path = shader_dir().join("car.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+
+    let targets = color_and_normals_targets(pipelines);
+    // Cars
+    render_manager.render(
+        keys.as_slice(),
+        shader_path.as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(depth_stencil(Default::default(), settings)),
+            msaa_samples,
+            vertex_layouts: Vec::from([CarVertex::layout(), CarInstance::layout()]),
+            cull_mode: Some(Face::Back),
+            targets: targets.clone(),
+            shadow: shadow.clone(),
+            ..Default::default()
+        },
+        &[&pipelines.buffers.camera],
+        pass,
+    );
+
+    car_subsystem.render(camera, pass);
+}
 
 fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {
     match settings.shadows_enabled {
@@ -518,7 +543,7 @@ pub fn color_target(
     })]
 }
 
-fn road_depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
+fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: true,
@@ -529,5 +554,14 @@ fn road_depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencil
         },
         stencil: Default::default(),
         bias,
+    }
+}
+pub fn draw_visible_roads(pass: &mut RenderPass, road_renderer: &RoadRenderSubsystem) {
+    for chunk_id in &road_renderer.visible_draw_list {
+        if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
+            pass.set_vertex_buffer(0, gpu.vertex.slice(..));
+            pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        }
     }
 }

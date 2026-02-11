@@ -1,3 +1,6 @@
+use crate::cars::car_mesh::CarVertex;
+use crate::cars::car_render::CarInstance;
+use crate::cars::car_subsystem::CarSubsystem;
 use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::paths::shader_dir;
@@ -28,10 +31,11 @@ pub struct CascadedShadowMap {
     pub layer_views: [TextureView; CSM_CASCADES],
     pub size: u32,
 
-    pub light_mats: [Mat4; 4],
-    pub splits: [f32; 4],
+    pub light_mats: [Mat4; CSM_CASCADES],
+    pub splits: [f32; CSM_CASCADES],
+    pub texels: [f32; CSM_CASCADES],
 
-    pub shadow_mat_buffers: [Buffer; CSM_CASCADES], // <- NEW
+    pub shadow_mat_buffers: [Buffer; CSM_CASCADES],
 }
 pub fn create_shadow_mat_uniform_buffer(device: &Device) -> Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
@@ -86,13 +90,30 @@ pub fn create_csm_shadow_texture(device: &Device, size: u32, label: &str) -> Cas
         size,
         light_mats: [Mat4::IDENTITY; 4],
         splits: [1.0; 4],
+        texels: [1.0; 4],
         shadow_mat_buffers: std::array::from_fn(|_| create_shadow_mat_uniform_buffer(device)),
     }
 }
 
 // Defaults (tweak later)
-pub const DEFAULT_SHADOW_DISTANCE: f32 = 200.0; // how far from camera to cast shadows
+pub const DEFAULT_SHADOW_DISTANCE: f32 = 400.0; // how far from camera to cast shadows
+pub const CSM_SPLIT_LAMBDA: f32 = 0.85; // 0=uniform, 1=log. 0.8-0.95 is typical.
+pub const CSM_OVERLAP: f32 = 0.06; // 0.03-0.10 helps hide seams between cascades.
 
+pub fn cascade_splits_practical(near: f32, far: f32, lambda: f32) -> [f32; CSM_CASCADES] {
+    let near = near.max(0.001);
+    let far = far.max(near + 0.001);
+    let n = CSM_CASCADES as f32;
+
+    let mut out = [0.0; CSM_CASCADES];
+    for i in 1..=CSM_CASCADES {
+        let p = i as f32 / n;
+        let log = near * (far / near).powf(p);
+        let lin = near + (far - near) * p;
+        out[i - 1] = lin * (1.0 - lambda) + log * lambda;
+    }
+    out
+}
 fn camera_basis_from_view_rotation_only(view: Mat4) -> (Vec3, Vec3, Vec3) {
     let inv = view.inverse();
     let right = inv.x_axis.truncate().normalize();
@@ -143,22 +164,21 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     shadow_map_size: u32,
     stabilize: bool,
     reversed_z: bool,
-) -> Mat4 {
-    let sun_dir_raw = sun_dir_surface_to_sun;
-    let sun_dir = if sun_dir_raw.length_squared() < 1e-8 {
+) -> (Mat4, f32) {
+    let sun_dir = if sun_dir_surface_to_sun.length_squared() < 1e-8 {
         Vec3::new(0.3, 1.0, 0.2).normalize()
     } else {
-        sun_dir_raw.normalize()
+        sun_dir_surface_to_sun.normalize()
     };
 
-    // Pick a stable "up"
+    // Stable up selection
     let up = if sun_dir.dot(Vec3::Y).abs() > 0.99 {
         Vec3::Z
     } else {
         Vec3::Y
     };
 
-    // Compute slice center + radius (bounding sphere)
+    // Center + bounding sphere radius (stable under rotation)
     let mut center = Vec3::ZERO;
     for &c in frustum_corners_ws.iter() {
         center += c;
@@ -169,33 +189,37 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     for &c in frustum_corners_ws.iter() {
         radius = radius.max((c - center).length());
     }
+    radius = (radius * 1.05).max(10.0); // small pad
 
-    // Slight pad to avoid clipping due to floating error
-    radius *= 1.05;
-
-    // Light view: place the light "behind" the slice along sun_dir, looking at center.
-    let light_eye = center + sun_dir * (radius * 3.0 + 10.0);
+    // Put light eye far enough away for stable look_at
+    let light_eye = center + sun_dir * (radius * 4.0 + 100.0);
     let light_view = Mat4::look_at_rh(light_eye, center, up);
 
-    // Center in light space
+    // Light-space center
     let center_ls = (light_view * Vec4::new(center.x, center.y, center.z, 1.0)).truncate();
 
-    // Snap center to texel grid (in LIGHT SPACE)
-    let mut snapped_center = center_ls;
-    if stabilize && shadow_map_size > 0 {
-        let diameter = 2.0 * radius;
-        let texel = diameter / shadow_map_size as f32;
-        snapped_center.x = (snapped_center.x / texel).round() * texel;
-        snapped_center.y = (snapped_center.y / texel).round() * texel;
-    }
+    // Symmetric XY bounds around center (stable)
+    let extent = 2.0 * radius;
+    let size = shadow_map_size.max(1) as f32;
+    let texel_world = (extent / size).max(1e-4);
 
-    // XY bounds are fixed by radius (stable)
-    let min_x = snapped_center.x - radius;
-    let max_x = snapped_center.x + radius;
-    let min_y = snapped_center.y - radius;
-    let max_y = snapped_center.y + radius;
+    // Texel snapping: snap the CENTER in light space
+    let snapped_center_xy = if stabilize {
+        Vec3::new(
+            (center_ls.x / texel_world).floor() * texel_world,
+            (center_ls.y / texel_world).floor() * texel_world,
+            center_ls.z,
+        )
+    } else {
+        center_ls
+    };
 
-    // Z bounds must still cover all corners (in light space)
+    let min_x = snapped_center_xy.x - radius;
+    let max_x = snapped_center_xy.x + radius;
+    let min_y = snapped_center_xy.y - radius;
+    let max_y = snapped_center_xy.y + radius;
+
+    // Tight-ish Z from corners (still padded)
     let mut min_z = f32::INFINITY;
     let mut max_z = f32::NEG_INFINITY;
     for &c in frustum_corners_ws.iter() {
@@ -204,27 +228,22 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
         max_z = max_z.max(p.z);
     }
 
-    // Convert light-space z extents to positive near/far distances for orthographic_rh().
-    // In RH view space, visible points typically have negative z, so distances are -z.
-    const Z_PAD: f32 = 150.0;
-    let near = (-max_z - Z_PAD).max(0.1);
-    let far = (-min_z + Z_PAD).max(near + 0.1);
+    // Convert to positive distances for orthographic_rh
+    let mut near_d = (-max_z).max(0.1);
+    let mut far_d = (-min_z).max(near_d + 0.1);
+
+    let z_range = (far_d - near_d).max(1.0);
+    let z_pad = (0.10 * z_range + 20.0).min(250.0);
+    near_d = (near_d - z_pad).max(0.1);
+    far_d = far_d + z_pad;
+
     let light_proj = if reversed_z {
-        // reversed Z: near maps to 1, far maps to 0
-        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, far, near)
+        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, far_d, near_d)
     } else {
-        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near, far)
+        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near_d, far_d)
     };
-    light_proj * light_view
-}
-pub fn cascade_splits_from_ratios(near: f32, far: f32, ratios: [f32; 4]) -> [f32; 4] {
-    let range = (far - near).max(1.0);
-    [
-        near + range * ratios[0],
-        near + range * ratios[1],
-        near + range * ratios[2],
-        near + range * ratios[3],
-    ]
+
+    (light_proj * light_view, texel_world)
 }
 pub fn compute_csm_matrices(
     camera_view: Mat4,
@@ -235,20 +254,32 @@ pub fn compute_csm_matrices(
     sun_dir_surface_to_sun: Vec3,
     shadow_map_size: u32,
     stabilize: bool,
-    reversed_z: bool, // <--- add
-) -> ([Mat4; CSM_CASCADES], [f32; 4]) {
+    reversed_z: bool,
+) -> (
+    [Mat4; CSM_CASCADES],
+    [f32; CSM_CASCADES],
+    [f32; CSM_CASCADES],
+) {
     let shadow_far = camera_far
         .min(DEFAULT_SHADOW_DISTANCE)
         .max(camera_near + 1.0);
 
-    let splits = cascade_splits_from_ratios(camera_near, shadow_far, [0.10, 0.25, 0.55, 1.0]);
+    let splits = cascade_splits_practical(camera_near, shadow_far, CSM_SPLIT_LAMBDA);
 
     let (right, up, forward) = camera_basis_from_view_rotation_only(camera_view);
-    let eye = Vec3::ZERO; // IMPORTANT: camera-relative space
+    let eye = Vec3::ZERO; // camera-relative space
 
-    let matrices: [Mat4; CSM_CASCADES] = std::array::from_fn(|i| {
+    let mut mats = [Mat4::IDENTITY; CSM_CASCADES];
+    let mut texels = [0.0f32; CSM_CASCADES];
+
+    for i in 0..CSM_CASCADES {
         let slice_near = if i == 0 { camera_near } else { splits[i - 1] };
-        let slice_far = splits[i];
+
+        // Add overlap to reduce seams (does not require shader change; just improves coverage).
+        let mut slice_far = splits[i];
+        if i + 1 < CSM_CASCADES {
+            slice_far = (slice_far * (1.0 + CSM_OVERLAP)).min(shadow_far);
+        }
 
         let corners = frustum_slice_corners_ws(
             eye,
@@ -261,16 +292,68 @@ pub fn compute_csm_matrices(
             slice_far,
         );
 
-        compute_light_matrix_fit_frustum_slice_stable(
+        let (m, texel_world) = compute_light_matrix_fit_frustum_slice_stable(
             &corners,
             sun_dir_surface_to_sun,
             shadow_map_size,
             stabilize,
-            reversed_z, // <--- pass through
-        )
-    });
+            reversed_z,
+        );
 
-    (matrices, splits)
+        mats[i] = m;
+        texels[i] = texel_world;
+    }
+
+    (mats, splits, texels)
+}
+pub fn shadow_bias_for_cascade(
+    cascade_idx: usize,
+    texel_world: f32,
+    reversed_z: bool,
+) -> DepthBiasState {
+    let c = cascade_idx as f32;
+
+    // Tune these two numbers; keep them tied to texel_world.
+    let slope = (2.0 + 1.25 * c).min(10.0);
+    let constant_f = (texel_world * 1800.0) + (250.0 * c);
+    let constant_abs = constant_f.clamp(50.0, 12000.0) as i32;
+
+    // IMPORTANT: flip sign for reversed-Z
+    let sign_i: i32 = if reversed_z { -1 } else { 1 };
+    let sign_f: f32 = if reversed_z { -1.0 } else { 1.0 };
+
+    DepthBiasState {
+        constant: sign_i * constant_abs,
+        slope_scale: sign_f * slope,
+        clamp: 0.02,
+    }
+}
+fn shadow_pipeline_options(
+    settings: &Settings,
+    bias: DepthBiasState,
+    vertex_layouts: Vec<wgpu::VertexBufferLayout<'static>>,
+    cull_mode: Face,
+) -> PipelineOptions {
+    PipelineOptions {
+        topology: TriangleList,
+        depth_stencil: Some(DepthStencilState {
+            format: Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: if settings.reversed_depth_z {
+                CompareFunction::GreaterEqual
+            } else {
+                CompareFunction::LessEqual
+            },
+            stencil: StencilState::default(),
+            bias,
+        }),
+        msaa_samples: 1,
+        vertex_layouts,
+        cull_mode: Some(cull_mode),
+        vertex_only: true,
+        targets: vec![],
+        ..Default::default()
+    }
 }
 pub fn render_roads_shadows(
     pass: &mut RenderPass,
@@ -279,87 +362,53 @@ pub fn render_roads_shadows(
     pipelines: &Pipelines,
     settings: &Settings,
     shadow_mat_buffer: &Buffer,
+    cascade_idx: usize,
 ) {
-    let bias = DepthBiasState {
-        constant: 0, // for Depth32Float, constants often need to be “large”
-        slope_scale: 0.5,
-        clamp: 0.0,
-    };
-    // This sets the road pipeline + texture array bind group (bind group 0)
-    let shadow_shader_path = shader_dir().join("shadows.wgsl");
-    // Roads Shadows
+    let bias = shadow_bias_for_cascade(
+        cascade_idx,
+        pipelines.resources.csm_shadows.texels[cascade_idx],
+        settings.reversed_depth_z,
+    );
+
+    let shader = shader_dir().join("shadows.wgsl");
+    let opts = shadow_pipeline_options(settings, bias, vec![RoadVertex::layout()], Face::Back);
+
     render_manager.render(
         &[],
-        shadow_shader_path.as_path(), // file containing shadow vertex-only shader
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(DepthStencilState {
-                format: Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: if settings.reversed_depth_z {
-                    CompareFunction::GreaterEqual
-                } else {
-                    CompareFunction::LessEqual
-                },
-                stencil: Default::default(),
-                bias,
-            }),
-            msaa_samples: 1,
-            vertex_layouts: Vec::from([RoadVertex::layout()]),
-            cull_mode: Some(Face::Back),
-            vertex_only: true,
-            targets: vec![],
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera, &shadow_mat_buffer],
+        shader.as_path(),
+        &opts,
+        &[&pipelines.buffers.camera, shadow_mat_buffer],
         pass,
     );
 
     draw_visible_roads(pass, road_renderer);
 
-    if road_renderer.preview_gpu.is_empty() {
-        return;
-    }
-    let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib)
-    else {
-        return;
-    };
+    // preview (optional extra bias)
+    if let (Some(vb), Some(ib)) = (&road_renderer.preview_gpu.vb, &road_renderer.preview_gpu.ib) {
+        let mut preview_bias = bias;
+        preview_bias.constant = (preview_bias.constant
+            + if settings.reversed_depth_z { -200 } else { 200 })
+        .clamp(-15000, 15000);
 
-    let nudge_bias = DepthBiasState {
-        constant: 1,
-        slope_scale: 0.5,
-        clamp: 0.0,
-    };
-    // Roads Preview Shadows
-    render_manager.render(
-        &[],
-        shadow_shader_path.as_path(), // file containing full vertex+fragment shader
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(DepthStencilState {
-                format: Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: if settings.reversed_depth_z {
-                    CompareFunction::GreaterEqual
-                } else {
-                    CompareFunction::LessEqual
-                },
-                stencil: Default::default(),
-                bias: nudge_bias,
-            }),
-            msaa_samples: 1,
-            vertex_layouts: Vec::from([RoadVertex::layout()]),
-            cull_mode: Some(Face::Back),
-            vertex_only: true,
-            targets: Vec::new(),
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera, &shadow_mat_buffer],
-        pass,
-    );
-    pass.set_vertex_buffer(0, vb.slice(..));
-    pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
-    pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
+        let opts2 = shadow_pipeline_options(
+            settings,
+            preview_bias,
+            vec![RoadVertex::layout()],
+            Face::Back,
+        );
+
+        render_manager.render(
+            &[],
+            shader.as_path(),
+            &opts2,
+            &[&pipelines.buffers.camera, shadow_mat_buffer],
+            pass,
+        );
+
+        pass.set_vertex_buffer(0, vb.slice(..));
+        pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
+        pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
+    }
 }
 pub fn render_terrain_shadows(
     pass: &mut RenderPass,
@@ -370,39 +419,56 @@ pub fn render_terrain_shadows(
     camera: &Camera,
     aspect: f32,
     shadow_mat_buffer: &Buffer,
+    cascade_idx: usize,
 ) {
-    let bias = DepthBiasState {
-        constant: 0, // for Depth32Float, constants often need to be “large”
-        slope_scale: 0.5,
-        clamp: 0.0,
-    };
-    let shadows_shader_path = shader_dir().join("shadows.wgsl");
-    // Terrain Pipeline (Above Water) Shadows
+    let bias = shadow_bias_for_cascade(
+        cascade_idx,
+        pipelines.resources.csm_shadows.texels[cascade_idx],
+        settings.reversed_depth_z,
+    );
+
+    let shader = shader_dir().join("shadows.wgsl");
+    let opts = shadow_pipeline_options(settings, bias, vec![Vertex::desc()], Face::Back);
+
     render_manager.render(
         &[],
-        shadows_shader_path.as_path(), // file containing vertex shader
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(DepthStencilState {
-                format: Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: if settings.reversed_depth_z {
-                    CompareFunction::GreaterEqual
-                } else {
-                    CompareFunction::LessEqual
-                },
-                stencil: StencilState::default(),
-                bias,
-            }),
-            msaa_samples: 1,
-            vertex_layouts: Vec::from([Vertex::desc()]),
-            cull_mode: Some(Face::Back),
-            vertex_only: true,
-            targets: Vec::new(),
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera, &shadow_mat_buffer],
+        shader.as_path(),
+        &opts,
+        &[&pipelines.buffers.camera, shadow_mat_buffer],
         pass,
     );
+
     terrain_renderer.render(pass, camera, aspect, settings, false);
+}
+pub fn render_cars_shadows(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    car_subsystem: &mut CarSubsystem,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    camera: &Camera,
+    shadow_mat_buffer: &Buffer,
+    cascade_idx: usize,
+) {
+    let mut bias = shadow_bias_for_cascade(
+        cascade_idx,
+        pipelines.resources.csm_shadows.texels[cascade_idx],
+        settings.reversed_depth_z,
+    );
+
+    // extra constant bias for closed meshes (keep sign correct)
+    bias.constant =
+        (bias.constant + if settings.reversed_depth_z { -150 } else { 150 }).clamp(-15000, 15000);
+
+    let shader = shader_dir().join("car_shadows.wgsl");
+    let opts = shadow_pipeline_options(
+        settings,
+        bias,
+        vec![CarVertex::layout(), CarInstance::layout()],
+        Face::Front, // render backfaces into shadow map
+    );
+
+    render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);
+
+    car_subsystem.render(camera, pass)
 }

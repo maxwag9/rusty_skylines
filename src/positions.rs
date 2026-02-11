@@ -10,6 +10,7 @@ pub struct ChunkCoord {
     pub(crate) x: i32,
     pub(crate) z: i32,
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalPos {
     pub(crate) x: f32,
@@ -39,6 +40,12 @@ impl ChunkCoord {
             x: self.x + dx,
             z: self.z + dz,
         }
+    }
+    #[inline]
+    pub fn dist2(&self, other: &ChunkCoord) -> u32 {
+        let dx = self.x - other.x;
+        let dz = self.z - other.z;
+        (dx * dx + dz * dz) as u32
     }
 }
 impl LocalPos {

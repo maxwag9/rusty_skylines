@@ -34,7 +34,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     let up = Vec3::Y;
 
     let mut wish = Vec3::ZERO;
-    if !resources.settings.editor_mode {
+    if !resources.settings.editor_mode && !resources.settings.drive_car {
         if resources.input.gameplay_down("Fly Camera Forward") {
             wish += forward;
         }

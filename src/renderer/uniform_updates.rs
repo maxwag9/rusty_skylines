@@ -34,7 +34,7 @@ impl<'a> UniformUpdater<'a> {
         settings: &Settings,
     ) {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
-        let (light_mats, splits) = compute_csm_matrices(
+        let (light_mats, splits, texels) = compute_csm_matrices(
             view,
             camera.fov.to_radians(),
             aspect,
@@ -45,7 +45,7 @@ impl<'a> UniformUpdater<'a> {
             /*stabilize:*/ true,
             settings.reversed_depth_z,
         );
-
+        self.pipelines.resources.csm_shadows.texels = texels;
         // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
         let new_uniforms = make_new_uniforms_csm(
             view,

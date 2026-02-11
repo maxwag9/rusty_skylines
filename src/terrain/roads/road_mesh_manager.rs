@@ -774,7 +774,6 @@ pub fn build_vertical_face(
     let mut included_indices = Vec::new();
     let last_idx = ref_geom.points.len() - 1;
 
-    // (Chunk filter logic remains the same, omitted for brevity but implied included)
     match chunk_filter {
         Some(cid) => {
             for i in 0..ref_geom.points.len() {

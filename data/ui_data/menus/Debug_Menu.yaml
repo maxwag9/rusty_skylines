@@ -24,7 +24,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'Rendering times per frame: Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
+        text: 'Rendering times per frame: Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
       - !Text
         id: gtao_frametimes_text
         x: 0.0008250045
@@ -32,8 +32,8 @@ layers:
         px: 0.01
         color:
           - 1.0
-          - 0.0
-          - 1.0
+          - 0.2
+          - 0.2
           - 1.0
         text: 'GTAO: Total: {(gtao_frametime):.2}ms, Prep: {(gtao_prep_frametime):.2}ms, Generate: {(gtao_generate_frametime):.2}ms, Blur: {(gtao_blur_frametime):.2}ms, Upsample/Apply: {(gtao_upsample_apply_frametime):.2}ms'
       - !Text
@@ -46,7 +46,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'Shadows: {(shadows_frametime):.2}ms, Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms'
+        text: 'Shadows: {(shadows_frametime):.2}ms, Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
       - !Text
         id: sky_info_text
         x: 0.001895523

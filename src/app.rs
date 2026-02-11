@@ -253,6 +253,9 @@ impl ApplicationHandler for App {
                     match resources.renderer.core.terrain_renderer.cursor.mode {
                         CursorMode::Roads(_) => resources
                             .events
+                            .send(Event::SetCursorMode(CursorMode::Cars)),
+                        CursorMode::Cars => resources
+                            .events
                             .send(Event::SetCursorMode(CursorMode::TerrainEditing)),
                         CursorMode::TerrainEditing => resources
                             .events
@@ -419,13 +422,13 @@ impl ApplicationHandler for App {
 
                     resources.time.sim_accumulator += resources.time.sim_dt;
 
-                    while resources.time.sim_accumulator >= resources.time.sim_target_step {
-                        resources.time.sim_dt = resources.time.sim_target_step;
+                    while resources.time.sim_accumulator >= resources.time.target_sim_dt {
+                        resources.time.sim_dt = resources.time.target_sim_dt;
 
                         self.schedule.run_inputs(world, resources);
                         self.schedule.run_events(world, resources);
                         self.schedule.run_sim(world, resources);
-                        resources.time.sim_accumulator -= resources.time.sim_target_step;
+                        resources.time.sim_accumulator -= resources.time.target_sim_dt;
                     }
 
                     self.schedule.run_render(world, resources);

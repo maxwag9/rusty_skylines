@@ -1,130 +1,252 @@
-use crate::positions::WorldPos;
+use crate::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::terrain::roads::road_structs::LaneId;
 use crate::terrain::roads::roads::{LaneRef, TurnType};
+use glam::{Quat, Vec3};
+use std::collections::HashMap;
 
 type SimTime = f64;
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct CarId {
-    index: u32,
-    generation: u16,
-}
-impl CarId {
-    #[inline]
-    pub fn new(index: u32, generation: u16) -> Self {
-        Self { index, generation }
-    }
-    #[inline]
-    pub fn index(&self) -> u32 {
-        self.index
-    }
-    #[inline]
-    pub fn generation(&self) -> u16 {
-        self.generation
-    }
-}
+
+pub type CarId = u32;
 
 type VehicleType = u32;
 type PartitionId = u32;
+#[derive(Debug, PartialEq)]
 pub enum CarChunkDistance {
     Close,
     Medium,
     Far,
 }
 
+impl CarChunkDistance {
+    #[inline]
+    fn from_dist2(dist2: u32, chunk_size: ChunkSize) -> Self {
+        const BASE_CHUNK_SIZE: f32 = 128.0;
+        const CLOSE_CHUNKS: f32 = 10.0;
+        const MEDIUM_CHUNKS: f32 = 100.0;
+
+        const CLOSE_DIST2_BASE: f32 = CLOSE_CHUNKS * CLOSE_CHUNKS;
+        const MEDIUM_DIST2_BASE: f32 = MEDIUM_CHUNKS * MEDIUM_CHUNKS;
+
+        let cs = chunk_size as f32;
+        let scale = BASE_CHUNK_SIZE / cs;
+        let close_thresh = CLOSE_DIST2_BASE * scale.powi(2);
+        let medium_thresh = MEDIUM_DIST2_BASE * scale.powi(2);
+
+        let d = dist2 as f32;
+        if d < close_thresh {
+            Self::Close
+        } else if d < medium_thresh {
+            Self::Medium
+        } else {
+            Self::Far
+        }
+    }
+}
 pub struct CarChunk {
     pub distance: CarChunkDistance,
     pub car_ids: Vec<CarId>,
 }
-pub struct CarSlot {
-    car: Option<Car>,
-    generation: u16,
+
+impl CarChunk {
+    pub fn new(distance: CarChunkDistance, car_ids: Vec<CarId>) -> Self {
+        Self { distance, car_ids }
+    }
+    pub fn empty(car_chunk_distance: CarChunkDistance) -> Self {
+        Self {
+            distance: car_chunk_distance,
+            car_ids: Vec::new(),
+        }
+    }
 }
 
 pub struct CarStorage {
-    cars: Vec<CarSlot>,
+    car_chunk_storage: CarChunkStorage,
+    cars: Vec<Option<Car>>,
     free_list: Vec<CarId>,
+    // Reverse mapping so I can remove from chunks in O(1) when despawning/moving
+    car_locations: HashMap<CarId, ChunkCoord>,
 }
+
+impl CarStorage {
+    pub(crate) fn move_car_between_chunks(
+        &mut self,
+        from: ChunkCoord,
+        to: ChunkCoord,
+        car_chunk_distance: CarChunkDistance,
+        car_id: CarId,
+    ) {
+        self.car_chunk_storage.remove_car(from, car_id);
+        self.car_chunk_storage
+            .add_car(to, car_chunk_distance, car_id);
+    }
+}
+
+impl CarStorage {
+    pub fn car_chunks(&self) -> &CarChunkStorage {
+        &self.car_chunk_storage
+    }
+    // pub fn car_chunks_mut(&mut self) -> &mut CarChunkStorage {
+    //     &mut self.car_chunk_storage
+    // }
+    // pub fn car_locations(&self) -> &HashMap<CarId, ChunkCoord> {
+    //     &self.car_locations
+    // }
+    // pub fn car_locations_mut(&mut self) -> &mut HashMap<CarId, ChunkCoord> {
+    //     &mut self.car_locations
+    // }
+    pub(crate) fn update_carchunk_distances(
+        &mut self,
+        target_pos: WorldPos,
+        chunk_size: ChunkSize,
+    ) {
+        let mut to_remove = Vec::new();
+        for (coord, carchunk) in self.car_chunk_storage.chunks.iter_mut() {
+            if carchunk.car_ids.is_empty() {
+                to_remove.push(*coord);
+                println!("removed car chunk");
+                continue;
+            }
+            let dist2 = target_pos.chunk.dist2(coord);
+            let distance_type = CarChunkDistance::from_dist2(dist2, chunk_size);
+            carchunk.distance = distance_type;
+        }
+        for coord in to_remove {
+            self.car_chunk_storage.chunks.remove(&coord);
+        }
+    }
+}
+
 impl CarStorage {
     pub fn new() -> Self {
         Self {
+            car_chunk_storage: CarChunkStorage::new(),
             cars: Vec::new(),
             free_list: Vec::new(),
+            car_locations: HashMap::new(),
         }
     }
 
-    pub fn spawn(&mut self, mut car: Car) -> CarId {
-        if let Some(index) = self.free_list.pop() {
-            let slot = &mut self.cars[index.index() as usize];
-
-            // generation already incremented on despawn
-            let generation = slot.generation;
-            car.id = CarId::new(index.index(), generation);
-
-            slot.car = Some(car);
-            CarId::new(index.index(), generation)
+    pub fn spawn(
+        &mut self,
+        chunk_coord: ChunkCoord,
+        car_chunk_distance: CarChunkDistance,
+        mut car: Car,
+    ) -> CarId {
+        let car_id = if let Some(reused_id) = self.free_list.pop() {
+            // Reuse slot - we know it's None because it's in free_list
+            car.id = reused_id;
+            self.cars[reused_id as usize] = Some(car);
+            reused_id
         } else {
-            let index = self.cars.len() as u32;
-            let generation = 0;
+            let new_id = self.cars.len() as u32;
+            car.id = new_id;
+            self.cars.push(Some(car));
+            new_id
+        };
 
-            car.id = CarId::new(index, generation);
+        // Add to chunk storage and record location
+        self.car_chunk_storage
+            .add_car(chunk_coord, car_chunk_distance, car_id);
+        self.car_locations.insert(car_id, chunk_coord);
 
-            self.cars.push(CarSlot {
-                car: Some(car),
-                generation,
-            });
-
-            CarId::new(index, generation)
-        }
+        car_id
     }
 
     pub fn despawn(&mut self, id: CarId) {
-        let index = id.index() as usize;
-
-        if let Some(slot) = self.cars.get_mut(index) {
-            // reject stale ids
-            if slot.generation != id.generation() {
-                return;
+        if self
+            .cars
+            .get(id as usize)
+            .and_then(|opt| opt.as_ref())
+            .is_some()
+        {
+            // Remove from chunk first using reverse lookup
+            if let Some(chunk_coord) = self.car_locations.remove(&id) {
+                self.car_chunk_storage.remove_car(chunk_coord, id);
             }
 
-            slot.car = None;
-            slot.generation = slot.generation.wrapping_add(1);
+            // Actually free the slot
+            self.cars[id as usize] = None;
             self.free_list.push(id);
         }
     }
 
     #[inline]
     pub fn get(&self, id: CarId) -> Option<&Car> {
-        let slot = self.cars.get(id.index() as usize)?;
-        if slot.generation == id.generation() {
-            slot.car.as_ref()
-        } else {
-            None
-        }
+        self.cars.get(id as usize)?.as_ref()
     }
 
     #[inline]
     pub fn get_mut(&mut self, id: CarId) -> Option<&mut Car> {
-        let slot = self.cars.get_mut(id.index() as usize)?;
-        if slot.generation == id.generation() {
-            slot.car.as_mut()
-        } else {
-            None
-        }
+        self.cars.get_mut(id as usize)?.as_mut()
     }
 }
 
+pub struct CarChunkStorage {
+    pub chunks: HashMap<ChunkCoord, CarChunk>,
+}
+
+impl CarChunkStorage {
+    pub fn new() -> Self {
+        Self {
+            chunks: HashMap::new(),
+        }
+    }
+
+    pub fn add_car(&mut self, chunk_coord: ChunkCoord, dist: CarChunkDistance, car_id: CarId) {
+        let chunk = if let Some(existing) = self.chunks.get_mut(&chunk_coord) {
+            // Enforce distance consistency - panic in debug if caller screws up
+            debug_assert_eq!(
+                existing.distance, dist,
+                "CarChunkDistance mismatch when adding to existing chunk"
+            );
+            existing
+        } else {
+            // New chunk
+            self.chunks
+                .entry(chunk_coord)
+                .or_insert_with(|| CarChunk::empty(dist))
+        };
+
+        chunk.car_ids.push(car_id);
+    }
+
+    pub fn remove_car(&mut self, chunk_coord: ChunkCoord, car_id: CarId) {
+        if let Some(chunk) = self.chunks.get_mut(&chunk_coord) {
+            chunk.car_ids.retain(|&x| x != car_id);
+            if chunk.car_ids.is_empty() {
+                self.chunks.remove(&chunk_coord);
+            }
+        }
+    }
+    pub fn close_cars(&self) -> Vec<CarId> {
+        let mut close_cars: Vec<CarId> = Vec::new();
+        for chunk in self.chunks.values() {
+            if chunk.distance == CarChunkDistance::Close {
+                close_cars.extend(&chunk.car_ids);
+            }
+        }
+        close_cars
+    }
+}
 #[derive(Debug)]
 pub struct Car {
     // === Identity ===
     pub id: CarId,
     pub vehicle_type: VehicleType, // bitmask index: car, bus, truck, emergency
+    pub color: [f32; 3],
 
     // === Physical state ===
     pub pos: WorldPos,
-    pub speed: f32,         // m/s
-    pub desired_speed: f32, // from lane speed limit + personality
-    pub length: f32,        // meters
-    pub accel: f32,         // m/s²
-    pub decel: f32,         // m/s² (positive value)
+    pub quat: Quat,
+    pub current_velocity: Vec3, // planar velocity (y = 0)
+    pub desired_velocity: Vec3, // Don't use
+    pub steering_angle: f32,    // road wheel angle (rad), +left
+    pub steering_vel: f32,      // (rad/s)
+    pub yaw_rate: f32,          // (rad/s) in SAE sign ( + = yaw left )
+    pub length: f32,            // meters
+    pub width: f32,
+    pub accel: f32, // m/s²
+    pub decel: f32, // m/s² (positive value)
 
     // === Topology state ===
     pub lane: LaneRef, // current lane
@@ -149,6 +271,40 @@ pub struct Car {
 
     pub driver_profile: DriverProfile,
 }
+
+impl Default for Car {
+    fn default() -> Car {
+        Self {
+            id: 0,
+            vehicle_type: 0,
+            color: [1.0, 0.0, 0.0],
+            pos: Default::default(),
+            quat: Quat::IDENTITY,
+            current_velocity: Vec3::ZERO,
+            desired_velocity: Vec3::ZERO, // Don't use
+
+            steering_angle: 0.0,
+            steering_vel: 0.0,
+            yaw_rate: 0.0,
+
+            length: 5.0,
+            width: 2.5,
+            accel: 2.5,
+            decel: 20.0,
+            lane: LaneRef::Segment(LaneId(0), 0),
+            lane_s: 0.0,
+            committed_arm: None,
+            committed_lane: None,
+            destination_addr: HierarchicalAddress { address: vec![] },
+            last_turn: None,
+            spawn_time: 0.0,
+            last_decision_time: 0.0,
+            entered_arm_time: None,
+            driver_profile: DriverProfile::Normal,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum DriverProfile {
     Normal,           // Normal-ass driver, why not?

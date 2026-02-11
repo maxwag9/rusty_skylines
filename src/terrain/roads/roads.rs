@@ -1776,7 +1776,7 @@ fn generate_intersection_preview(
     road_style_params: &RoadStyleParams,
     crossings: &[&CrossingPoint],
 ) -> Vec<RoadCommand> {
-    let mut commands = Vec::new();
+    let commands = Vec::new();
     for &crossing in crossings {
         match crossing.kind {
             CrossingKind::ExistingNode(n) => {

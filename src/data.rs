@@ -149,6 +149,8 @@ pub struct Settings {
     pub show_fog: bool,
     #[serde(default)]
     pub player_pos: WorldPos,
+    #[serde(default)]
+    pub drive_car: bool,
 }
 
 impl Default for Settings {
@@ -180,6 +182,7 @@ impl Default for Settings {
             reversed_depth_z: true,
             show_fog: true,
             player_pos: WorldPos::default(),
+            drive_car: false,
         }
     }
 }
