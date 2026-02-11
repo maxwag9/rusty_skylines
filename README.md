@@ -14,7 +14,13 @@ Terrain with shadows
 Sun and moon with moon phases and correct orbiting, both dependent on the sun. The sun oscillates with the orbital tilt of the earth, set at Munich.
 Stars rendered from a real life database (Hipparcos Catalogue) of 118k stars
 Water rendered with Moon and Sun reflections
-Beginnings of a procedural texture pipeline
+Roads and cars.
+
+More features:
+Procedural Texture Manager inside my entire RenderManager (see my wgpu_render_manager repository)
+GTAO Ambient Occlusion
+Vignette, Fog, Tonemapping
+Driving a car with WASD.
 
 A WIP GUI Editor with the ability to edit any GUI in-game and save it,
 allowing expressions and logic and animations to be available through modding. 
@@ -25,7 +31,7 @@ I won't hard-code any GUI, I'll just use the same thing I provide as modding,
 therefore creating great modding support. Win-Win!
 
 All graphics are MSAA anti-aliased. 
-(I didn't see a performance hit yet,but we'll see about that!)
+(I didn't see a performance hit yet, but we'll see about that!)
 
 <img width="3442" height="1442" alt="Screenshot_20251221_161420" src="https://github.com/user-attachments/assets/bf61deae-10b0-4bdf-b9a7-3418d378baaf" />
 
