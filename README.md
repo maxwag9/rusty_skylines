@@ -1,7 +1,9 @@
 # Rusty Skylines
-Cities: Skylines 2 but better!
+Drive the city. Build the city. Infinite scale. Tiny download. Real Sky. Procedural everything. Smart Traffic.
 
-The goal is to make rusty skylines: 
+### You can drive a car in your city.
+
+The goal is to make **Rusty Skylines**: 
 A Cities: Skylines inspired game featuring better features and way better performance as a priority.
 
 <img width="2562" height="1430" alt="Roads" src="https://github.com/user-attachments/assets/11597c41-9dca-4a05-aea6-fb61fac35a9e" />
