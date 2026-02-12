@@ -149,7 +149,7 @@ impl TerrainRenderer {
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
-            pick_radius_m: 1.0,
+            pick_radius_m: 5.0,
             last_picked: None,
 
             benchmark: Benchmark::default(),

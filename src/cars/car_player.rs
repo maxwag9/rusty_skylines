@@ -229,7 +229,7 @@ pub fn drive_car(
     if !settings.drive_car || dt <= 0.0 {
         return;
     }
-
+    drive_ai_cars(car_subsystem, terrain, dt);
     // ---------- tunables / physical-ish constants ----------
     const G: f32 = 9.81;
 
@@ -243,7 +243,7 @@ pub fn drive_car(
     const C_AR: f32 = 100000.0; // N/rad (rear axle cornering stiffness)
 
     // Longitudinal resistances (simple but better than pure linear)
-    const ROLL_DRAG: f32 = 0.02; // 1/s  (rough rolling resistance as accel)
+    const ROLL_DRAG: f32 = 0.1; // 1/s  (rough rolling resistance as accel)
     const AERO_DRAG: f32 = 0.0007; // 1/m  (accel = k*u*|u|)
 
     // Braking / handbrake behavior
@@ -313,7 +313,7 @@ pub fn drive_car(
         let mut ax_cmd = if forward {
             car.accel
         } else if backward {
-            -car.decel
+            -car.accel
         } else {
             0.0
         };
@@ -427,5 +427,147 @@ pub fn drive_car(
             CarChunkDistance::Close,
             car_id,
         );
+    }
+}
+pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainRenderer, dt: f32) {
+    if dt <= 0.0 {
+        return;
+    }
+
+    // ---------- Same constants as player ----------
+    const G: f32 = 9.81;
+    const MASS: f32 = 1500.0;
+    const IZ: f32 = 2500.0;
+    const MU: f32 = 1.05;
+    const C_AF: f32 = 90000.0;
+    const C_AR: f32 = 100000.0;
+    const ROLL_DRAG: f32 = 0.1;
+    const AERO_DRAG: f32 = 0.0007;
+    const STEER_RATE_MAX: f32 = 6.0;
+    const STEER_KP: f32 = 70.0;
+    const STEER_KD: f32 = 14.0;
+    const STEER_LOCK_LOW: f32 = 0.62;
+    const STEER_LOCK_HIGH: f32 = 0.14;
+    const STEER_LOCK_FADE_MPS: f32 = 28.0;
+    const MAX_STEP: f32 = 1.0 / 120.0;
+    const MIN_U: f32 = 0.5;
+
+    let chunk_size = terrain.chunk_size;
+    let cs = chunk_size as f64;
+
+    for car in car_subsystem.car_storage_mut().iter_mut_cars() {
+        let Some(car) = car else {
+            continue;
+        };
+        if car.id == 0 {
+            continue;
+        }
+
+        // === AI Inputs: smooth procedural wandering ===
+        let global_x = car.pos.chunk.x as f64 * cs + car.pos.local.x as f64;
+        let global_z = car.pos.chunk.z as f64 * cs + car.pos.local.z as f64;
+
+        let wander_phase = global_x * 0.012 + global_z * 0.008 + (car.id as f64 * 7.3);
+        let wander = wander_phase.sin() as f32;
+
+        let steer_input = wander * 0.55;
+        let throttle_input = 0.85 + wander * 0.15;
+        let brake_input = if wander.abs() > 0.8 { 0.3 } else { 0.0 };
+
+        // === FIX #1: Convert world velocity to LOCAL space via quaternion ===
+        let inv_q = car.quat.conjugate();
+        let local_v = inv_q * car.current_velocity;
+
+        let mut u = local_v.z; // forward speed (m/s)
+        let mut v = -local_v.x; // lateral speed, SAE left-positive (m/s)
+        let mut r = car.yaw_rate;
+
+        let wheelbase = car.length.max(0.1);
+        let a = 0.5 * wheelbase;
+        let b = wheelbase - a;
+
+        let fz_f = MASS * G * (b / wheelbase);
+        let fz_r = MASS * G * (a / wheelbase);
+
+        // === Speed-sensitive steering lock (same as player) ===
+        let speed = u.abs();
+        let t = (speed / STEER_LOCK_FADE_MPS).clamp(0.0, 1.0);
+        let steer_lock = STEER_LOCK_HIGH + (STEER_LOCK_LOW - STEER_LOCK_HIGH) * (1.0 - t).powf(1.7);
+
+        let delta_cmd = (steer_input * steer_lock).clamp(-steer_lock, steer_lock);
+
+        // === Longitudinal accel command ===
+        let ax_cmd = throttle_input * car.accel - brake_input * car.accel * 3.0;
+
+        // === FIX #2: Substep integration for stability ===
+        let mut time_left = dt;
+        while time_left > 0.0 {
+            let h = time_left.min(MAX_STEP);
+            time_left -= h;
+
+            // === FIX #3: Steering rack dynamics (2nd order, same as player) ===
+            let delta = car.steering_angle;
+            let mut delta_dot = car.steering_vel;
+
+            delta_dot += (STEER_KP * (delta_cmd - delta) - STEER_KD * delta_dot) * h;
+            delta_dot = delta_dot.clamp(-STEER_RATE_MAX, STEER_RATE_MAX);
+
+            let mut delta_new = delta + delta_dot * h;
+            delta_new = delta_new.clamp(-steer_lock, steer_lock);
+
+            car.steering_angle = delta_new;
+            car.steering_vel = delta_dot;
+
+            // Safe forward speed for slip calculations
+            let u_safe = if u.abs() < MIN_U {
+                MIN_U * u.signum().max(1.0)
+            } else {
+                u
+            };
+
+            // === FIX #4: Correct slip angle formula with atan2 ===
+            let alpha_f = (v + a * r).atan2(u_safe) - car.steering_angle;
+            let alpha_r = (v - b * r).atan2(u_safe);
+
+            // Lateral tire forces (linear + saturation)
+            let fy_f_lin = -C_AF * alpha_f;
+            let fy_r_lin = -C_AR * alpha_r;
+
+            let fy_f_max = MU * fz_f;
+            let fy_r_max = MU * fz_r;
+
+            let fy_f = fy_f_lin.clamp(-fy_f_max, fy_f_max);
+            let fy_r = fy_r_lin.clamp(-fy_r_max, fy_r_max);
+
+            // Drag
+            let ax_drag = -ROLL_DRAG * u - AERO_DRAG * u * u.abs();
+
+            // Bicycle model dynamics
+            let u_dot = (ax_cmd + ax_drag) + r * v;
+            let v_dot = (fy_f + fy_r) / MASS - r * u;
+            let r_dot = (a * fy_f - b * fy_r) / IZ;
+
+            u += u_dot * h;
+            v += v_dot * h;
+            r += r_dot * h;
+        }
+
+        // Store yaw rate
+        car.yaw_rate = r;
+
+        // === FIX #5: Proper orientation integration ===
+        let yaw_delta_world = -r * dt;
+        if yaw_delta_world.abs() > 0.0 {
+            let yaw_q = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
+            car.quat = (yaw_q * car.quat).normalize();
+        }
+
+        // === Reconstruct world velocity from local (u,v) ===
+        let new_local_v = Vec3::new(-v, 0.0, u);
+        car.current_velocity = car.quat * new_local_v;
+
+        // Position integration + terrain snap
+        car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
+        car.pos.local.y = terrain.get_height_at(car.pos) + CLEARANCE;
     }
 }

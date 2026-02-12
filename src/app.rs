@@ -226,6 +226,10 @@ impl ApplicationHandler for App {
                     settings.show_world = !settings.show_world;
                     variables.set_bool("show_world", settings.show_world);
                 }
+                if input.action_repeat("Toggle drive car") {
+                    settings.drive_car = !settings.drive_car;
+                    variables.set_bool("drive_car", settings.drive_car);
+                }
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
                     settings.show_gui = !settings.show_gui;
@@ -285,7 +289,8 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    event_loop.exit()
+                    event_loop.exit();
+                    std::process::exit(69); // Die.
                 }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
@@ -419,8 +424,6 @@ impl ApplicationHandler for App {
 
                     // simulation timing
                     resources.time.update_sim();
-
-                    resources.time.sim_accumulator += resources.time.sim_dt;
 
                     while resources.time.sim_accumulator >= resources.time.target_sim_dt {
                         resources.time.sim_dt = resources.time.target_sim_dt;

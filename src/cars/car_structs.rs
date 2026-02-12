@@ -3,6 +3,7 @@ use crate::terrain::roads::road_structs::LaneId;
 use crate::terrain::roads::roads::{LaneRef, TurnType};
 use glam::{Quat, Vec3};
 use std::collections::HashMap;
+use std::slice::{Iter, IterMut};
 
 type SimTime = f64;
 
@@ -19,7 +20,7 @@ pub enum CarChunkDistance {
 
 impl CarChunkDistance {
     #[inline]
-    fn from_dist2(dist2: u32, chunk_size: ChunkSize) -> Self {
+    pub fn from_dist2(dist2: u32, chunk_size: ChunkSize) -> Self {
         const BASE_CHUNK_SIZE: f32 = 128.0;
         const CLOSE_CHUNKS: f32 = 10.0;
         const MEDIUM_CHUNKS: f32 = 100.0;
@@ -40,6 +41,15 @@ impl CarChunkDistance {
         } else {
             Self::Far
         }
+    }
+    #[inline]
+    pub fn from_chunk_positions(
+        center_chunk: ChunkCoord,
+        other: ChunkCoord,
+        chunk_size: ChunkSize,
+    ) -> Self {
+        let dist2 = center_chunk.dist2(&other);
+        CarChunkDistance::from_dist2(dist2, chunk_size)
     }
 }
 pub struct CarChunk {
@@ -78,6 +88,12 @@ impl CarStorage {
         self.car_chunk_storage.remove_car(from, car_id);
         self.car_chunk_storage
             .add_car(to, car_chunk_distance, car_id);
+    }
+    pub(crate) fn iter_cars(&mut self) -> Iter<Option<Car>> {
+        self.cars.iter()
+    }
+    pub(crate) fn iter_mut_cars(&mut self) -> IterMut<Option<Car>> {
+        self.cars.iter_mut()
     }
 }
 
@@ -287,10 +303,10 @@ impl Default for Car {
             steering_vel: 0.0,
             yaw_rate: 0.0,
 
-            length: 5.0,
-            width: 2.5,
+            length: 4.0,
+            width: 2.2,
             accel: 2.5,
-            decel: 20.0,
+            decel: 5.0,
             lane: LaneRef::Segment(LaneId(0), 0),
             lane_s: 0.0,
             committed_arm: None,

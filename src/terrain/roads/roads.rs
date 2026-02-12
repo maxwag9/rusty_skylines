@@ -15,6 +15,7 @@
 // ID Newtypes
 // ============================================================================
 
+use crate::cars::car_subsystem::CarSubsystem;
 use crate::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
@@ -29,6 +30,7 @@ use glam::Vec2;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
+
 pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
 
 type PartitionId = u32;
@@ -67,6 +69,8 @@ pub struct Node {
     outgoing_lanes: Vec<LaneId>,
     attached_controls: Vec<AttachedControl>,
     next_control_id: u32,
+
+    car_spawning_rate: f32,
 }
 
 impl Node {
@@ -80,6 +84,7 @@ impl Node {
             outgoing_lanes: Vec::new(),
             attached_controls: Vec::new(),
             next_control_id: 0,
+            car_spawning_rate: 10.0,
         }
     }
 
@@ -168,6 +173,10 @@ impl Node {
     #[inline]
     pub fn connection_count(&self) -> usize {
         self.incoming_lanes.len() + self.outgoing_lanes.len()
+    }
+    #[inline]
+    pub fn car_spawning_rate(&self) -> f32 {
+        self.car_spawning_rate
     }
 }
 
@@ -1405,6 +1414,7 @@ pub enum CommandResult {
 pub fn apply_command(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
+    car_subsystem: &mut CarSubsystem,
     storage: &mut RoadStorage,
     road_style_params: &RoadStyleParams,
     command: RoadEditorCommand,
@@ -1419,6 +1429,9 @@ pub fn apply_command(
             let result = match road_command {
                 RoadCommand::AddNode { world_pos } => {
                     let id = storage.add_node(world_pos);
+                    if !is_preview {
+                        car_subsystem.add_spawning_node(id);
+                    }
                     let chunk_id = world_pos_chunk_to_id(world_pos);
                     affected_chunk = Some(chunk_id);
                     CommandResult::NodeCreated(chunk_id, id)
@@ -1646,6 +1659,7 @@ pub fn apply_commands(
     terrain_renderer: &TerrainRenderer,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
+    car_subsystem: &mut CarSubsystem,
     road_style_params: &RoadStyleParams,
     is_preview: bool,
     gizmo: &mut Gizmo,
@@ -1657,6 +1671,7 @@ pub fn apply_commands(
             apply_command(
                 terrain_renderer,
                 road_mesh_manager,
+                car_subsystem,
                 storage,
                 road_style_params,
                 cmd,
@@ -1674,6 +1689,7 @@ pub fn apply_preview_commands(
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
+    car_subsystem: &mut CarSubsystem,
     road_style_params: &RoadStyleParams,
     gizmo: &mut Gizmo,
     commands: &[RoadEditorCommand],
@@ -1686,6 +1702,7 @@ pub fn apply_preview_commands(
             apply_command(
                 terrain_renderer,
                 road_mesh_manager,
+                car_subsystem,
                 preview_storage,
                 road_style_params,
                 cmd.clone(),
@@ -1759,6 +1776,7 @@ pub fn apply_preview_commands(
         apply_command(
             terrain_renderer,
             road_mesh_manager,
+            car_subsystem,
             preview_storage,
             road_style_params,
             RoadEditorCommand::Road(cmd),

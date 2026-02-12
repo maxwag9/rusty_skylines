@@ -242,7 +242,7 @@ impl RenderCore {
         self.render_manager.update_depth_params(DepthDebugParams {
             near: camera.near,
             far: camera.far,
-            power: 20.0,
+            power: 30.0,
             reversed_z: settings.reversed_depth_z as u32,
             msaa_samples: self.msaa_samples,
         });
@@ -357,6 +357,7 @@ impl RenderCore {
         );
         self.road_renderer.update(
             &self.terrain_renderer,
+            &mut self.car_subsystem,
             &self.device,
             &self.queue,
             input_state,
@@ -364,8 +365,7 @@ impl RenderCore {
             camera,
             &mut self.gizmo,
         );
-        self.car_subsystem
-            .update(&self.terrain_renderer, input_state, time, camera.target);
+
         self.gizmo.update(
             &self.terrain_renderer,
             time.total_game_time,

@@ -4,6 +4,7 @@ use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
 use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
 
+use crate::cars::car_subsystem::CarSubsystem;
 use crate::components::camera::Camera;
 use crate::renderer::gizmo::Gizmo;
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
@@ -52,6 +53,7 @@ impl RoadRenderSubsystem {
     pub fn update(
         &mut self,
         terrain_renderer: &TerrainRenderer,
+        car_subsystem: &mut CarSubsystem,
         device: &Device,
         queue: &Queue,
         input: &mut InputState,
@@ -73,6 +75,7 @@ impl RoadRenderSubsystem {
             &mut self.mesh_manager,
             &mut self.road_manager.preview_roads, // preview RoadStorage
             &self.road_manager.roads,
+            car_subsystem,
             &self.style,
             gizmo,
             &road_commands,
@@ -87,6 +90,7 @@ impl RoadRenderSubsystem {
                 terrain_renderer,
                 &mut self.mesh_manager,
                 &mut self.road_manager.roads,
+                car_subsystem,
                 &self.style,
                 false,
                 gizmo,

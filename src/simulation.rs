@@ -4,6 +4,7 @@ use crate::data::Settings;
 use crate::events::{Event, Events};
 use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::TimeSystem;
+use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
 use crate::ui::input::InputState;
 use crate::world::CameraBundle;
 use std::time::Instant;
@@ -61,6 +62,7 @@ impl Simulation {
     pub fn update(
         &mut self,
         terrain_renderer: &TerrainRenderer,
+        road_renderer: &RoadRenderSubsystem,
         car_subsystem: &mut CarSubsystem,
         settings: &Settings,
         time: &TimeSystem,
@@ -75,6 +77,13 @@ impl Simulation {
         self.last_update = Instant::now();
         let camera = &mut camera_bundle.camera;
         let cam_ctrl = &mut camera_bundle.controller;
+        car_subsystem.update(
+            &road_renderer.road_manager,
+            &terrain_renderer,
+            input,
+            time,
+            camera.target,
+        );
         drive_car(
             car_subsystem,
             terrain_renderer,

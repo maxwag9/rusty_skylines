@@ -112,6 +112,8 @@ keys = ["F7"]
 keys = ["F1"]
 ["Toggle show world"]
 keys = ["Shift+F1"]
+["Toggle drive car"]
+keys = ["Shift+R"]
 ["Leave Game"]
 keys = ["ESC"]
 

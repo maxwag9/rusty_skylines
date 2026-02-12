@@ -6,13 +6,30 @@ use crate::hsv::hsv_to_rgb;
 use crate::positions::WorldPos;
 use crate::renderer::world_renderer::{CursorMode, TerrainRenderer};
 use crate::resources::TimeSystem;
+use crate::terrain::roads::road_structs::NodeId;
+use crate::terrain::roads::roads::RoadManager;
 use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
 use glam::{Mat4, Vec3};
 use rand::prelude::IndexedRandom;
+use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
 use std::time::{Duration, Instant};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, IndexFormat, Queue, RenderPass};
+
+pub struct SpawningNode {
+    pub node_id: NodeId,
+    pub spawn_accumulator: f32, // in seconds
+}
+
+impl SpawningNode {
+    fn new(node_id: NodeId) -> Self {
+        Self {
+            node_id,
+            spawn_accumulator: 0.0,
+        }
+    }
+}
 
 struct CarSubsystemTiming {
     carchunk_update_last: Instant,
@@ -81,13 +98,16 @@ impl CarSubsystemRender {
 
 pub struct CarSubsystem {
     car_storage: CarStorage,
+    spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
     render: CarSubsystemRender,
 }
+
 impl CarSubsystem {
     pub fn new(device: &Device, queue: &Queue) -> Self {
         Self {
             car_storage: CarStorage::new(),
+            spawning_nodes: vec![],
             timing: CarSubsystemTiming::new(),
             render: CarSubsystemRender::new(device.clone(), queue.clone()),
         }
@@ -100,26 +120,20 @@ impl CarSubsystem {
     }
     pub fn update(
         &mut self,
+        road_manager: &RoadManager,
         terrain_renderer: &TerrainRenderer,
         input_state: &mut InputState,
         time_system: &TimeSystem,
         target_pos: WorldPos,
     ) {
+        self.spawn_cars(road_manager, terrain_renderer, target_pos, time_system);
+
         match terrain_renderer.cursor.mode {
             CursorMode::Cars => {
                 if let Some(picked) = &terrain_renderer.last_picked {
                     if input_state.gameplay_repeat("Place Car") {
-                        let mut car = Car::default();
-                        car.pos = picked.pos;
                         let mut rng = rng();
-                        let hsv = sample_car_color(&mut rng);
-                        let rgb = hsv_to_rgb(hsv);
-
-                        car.color = Vec3::new(rgb[0], rgb[1], rgb[2]).to_array();
-                        let random_length_scale = rng.random_range(0.8..1.3);
-                        let random_width_scale = rng.random_range(0.8..1.2);
-                        car.length = car.length * random_length_scale;
-                        car.width = car.width * random_width_scale;
+                        let car = make_random_car(picked.pos, &mut rng);
                         self.car_storage
                             .spawn(picked.pos.chunk, CarChunkDistance::Close, car);
                     }
@@ -193,4 +207,82 @@ impl CarSubsystem {
 
         pass.draw_indexed(0..render.index_count, 0, 0..instance_count);
     }
+
+    fn spawn_cars(
+        &mut self,
+        road_manager: &RoadManager,
+        terrain_renderer: &TerrainRenderer,
+        target_pos: WorldPos,
+        time_system: &TimeSystem,
+    ) {
+        let mut rng = rng();
+        let dt = time_system.sim_dt;
+        let mut to_remove: Vec<usize> = Vec::new();
+        for (idx, spawning_node) in self.spawning_nodes.iter_mut().enumerate() {
+            let Some(node) = road_manager.roads.node(spawning_node.node_id) else {
+                continue;
+            };
+
+            if !node.is_enabled() {
+                to_remove.push(idx);
+                continue;
+            }
+
+            let spawning_rate = node.car_spawning_rate(); // Cars per minute: f32
+            if !(spawning_rate > 0.0) {
+                to_remove.push(idx);
+                continue;
+            }
+
+            let seconds_per_car = 60.0 / spawning_rate;
+            spawning_node.spawn_accumulator += dt;
+
+            // Clamp to prevent burst-spawning after lag spikes or large dt
+            let max_accumulator = seconds_per_car * 2.0; // spawn at most 2 cars per update
+            spawning_node.spawn_accumulator = spawning_node.spawn_accumulator.min(max_accumulator);
+
+            while spawning_node.spawn_accumulator >= seconds_per_car {
+                spawning_node.spawn_accumulator -= seconds_per_car;
+
+                // Pick ONE lane, don't spawn on ALL outgoing lanes
+                let outgoing = node.outgoing_lanes();
+                if outgoing.is_empty() {
+                    break;
+                }
+                let lane_id = outgoing[rng.random_range(0..outgoing.len())];
+                let lane = road_manager.roads.lane(&lane_id);
+                let polyline = lane.polyline();
+                let first_point = polyline.first().unwrap();
+                let car_chunk_distance = CarChunkDistance::from_chunk_positions(
+                    target_pos.chunk,
+                    first_point.chunk,
+                    terrain_renderer.chunk_size,
+                );
+                self.car_storage.spawn(
+                    first_point.chunk,
+                    car_chunk_distance,
+                    make_random_car(*first_point, &mut rng),
+                );
+            }
+        }
+        for idx in to_remove.into_iter().rev() {
+            self.spawning_nodes.remove(idx);
+        }
+    }
+    pub fn add_spawning_node(&mut self, id: NodeId) {
+        self.spawning_nodes.push(SpawningNode::new(id))
+    }
+}
+pub fn make_random_car(position: WorldPos, mut rng: &mut ThreadRng) -> Car {
+    let mut car = Car::default();
+    car.pos = position;
+    let hsv = sample_car_color(&mut rng);
+    let rgb = hsv_to_rgb(hsv);
+
+    car.color = Vec3::new(rgb[0], rgb[1], rgb[2]).to_array();
+    let random_length_scale = rng.random_range(0.8..1.3);
+    let random_width_scale = rng.random_range(0.8..1.2);
+    car.length = car.length * random_length_scale;
+    car.width = car.width * random_width_scale;
+    car
 }
