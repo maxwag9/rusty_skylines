@@ -3,7 +3,6 @@
 use crate::positions::WorldPos;
 use crate::terrain::roads::roads::{RoadCommand, RoadStorage};
 use glam::Vec3;
-use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
@@ -283,26 +282,26 @@ pub struct RoadType {
 impl Default for RoadType {
     fn default() -> Self {
         Self {
-            name: "Medium Road",
+            name: "Small Road",
 
             lanes_each_direction: (1, 1),
 
-            lane_width: 2.75,
+            lane_width: 3.1,
             lane_height: 0.0,
             lane_material_id: 2, // asphalt
 
-            sidewalk_width: 1.75,
+            sidewalk_width: 1.40,
             sidewalk_height: 0.15,
             sidewalk_material_id: 0, // concrete
 
-            median_width: 0.3,
+            median_width: 0.0,
             median_height: 0.15,
             median_material_id: 0, // concrete
 
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.7,
+            turn_tightness: 1.0,
         }
     }
 }
@@ -576,17 +575,4 @@ pub struct IntersectionArm {
     pub(crate) direction: Vec3,
     pub(crate) half_width: f32,
     pub(crate) lane_ids: Vec<LaneId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct IntersectionCorner {
-    pub(crate) position: WorldPos,
-}
-
-#[derive(Clone, Debug)]
-pub struct IntersectionGeometry {
-    pub(crate) center: WorldPos,
-    pub(crate) arms: Vec<IntersectionArm>,
-    pub(crate) corners: Vec<IntersectionCorner>,
-    pub(crate) clearance_per_lane: HashMap<LaneId, f32>,
 }

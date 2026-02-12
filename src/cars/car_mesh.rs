@@ -33,8 +33,8 @@ pub static CAR_COLOR_DISTRIBUTION: &[WeightedHsv] = &[
         h_max: 1.0,
         s_min: 0.00,
         s_max: 0.05,
-        v_min: 0.001,
-        v_max: 0.05,
+        v_min: 0.02,
+        v_max: 0.07,
     },
     WeightedHsv {
         // Gray / Silver

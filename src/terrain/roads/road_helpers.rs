@@ -1,14 +1,12 @@
 use crate::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::intersections::{IntersectionPolygon, OuterNodeLane};
-use crate::terrain::roads::road_editor::IntersectionBuildParams;
+use crate::terrain::roads::intersections::{IntersectionBuildParams, IntersectionPolygon};
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
-use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, SegmentId, StructureType};
-use crate::terrain::roads::roads::{LaneRef, NodeLane, RoadCommand, RoadStorage};
+use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, StructureType};
+use crate::terrain::roads::roads::RoadCommand;
 use glam::Vec3;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::f32::consts::PI;
 
 /// Offset an entire polyline by a fixed distance.
@@ -27,67 +25,6 @@ pub fn offset_polyline_f32(poly: &[WorldPos], offset: f32, chunk_size: ChunkSize
             pt.add_vec3(normal * offset, chunk_size)
         })
         .collect()
-}
-
-pub fn select_outermost_lanes(
-    node_lanes: &[NodeLane],
-    storage: &RoadStorage,
-    chunk_size: ChunkSize,
-) -> Vec<OuterNodeLane> {
-    let mut by_src: HashMap<SegmentId, Vec<(&NodeLane, i8, i8, SegmentId)>> = HashMap::new();
-
-    for nl in node_lanes {
-        let Some(&LaneRef::Segment(src_id, _)) = nl.merging().first() else {
-            continue;
-        };
-        let Some(&LaneRef::Segment(dst_id, _)) = nl.splitting().first() else {
-            continue;
-        };
-
-        let src = storage.lane(&src_id);
-        let dst = storage.lane(&dst_id);
-
-        if src.segment() == dst.segment() {
-            continue;
-        }
-
-        by_src.entry(src.segment()).or_default().push((
-            nl,
-            src.lane_index().abs(),
-            dst.lane_index().abs(),
-            src.segment(), // Track segment ID
-        ));
-    }
-
-    let mut result = Vec::new();
-
-    for (_seg, entries) in by_src {
-        if entries.is_empty() {
-            continue;
-        }
-
-        let max_src = entries.iter().map(|&(_, s, _, _)| s).max().unwrap();
-        let max_dst = entries.iter().map(|&(_, _, d, _)| d).max().unwrap();
-
-        let winner = entries
-            .into_iter()
-            .filter(|&(_, s, d, _)| s == max_src && d == max_dst)
-            .max_by(|(a, _, _, _), (b, _, _, _)| {
-                let sa = right_turn_score(a.polyline(), chunk_size);
-                let sb = right_turn_score(b.polyline(), chunk_size);
-                sa.partial_cmp(&sb).unwrap()
-            });
-
-        if let Some((nl, _, _, seg_id)) = winner {
-            result.push(OuterNodeLane {
-                node_lane: nl.id(),
-                outward_sign: 1,
-                segment_id: seg_id,
-            });
-        }
-    }
-
-    result
 }
 
 /// Calculate a right turn score for a polyline.
@@ -401,7 +338,7 @@ pub fn ray_to_polygon(
     }
 
     if let Some(hit) = best_hit {
-        gizmo.cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0);
+        //gizmo.cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0);
     }
 
     best_hit

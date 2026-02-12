@@ -199,15 +199,15 @@ fn mesh_segment_with_boundaries(
         .filter(|p| p.ring.len() >= 3);
     let end_clip = end_result.map(|r| &r.polygon).filter(|p| p.ring.len() >= 3);
     if let Some(start_clip) = start_clip {
-        gizmo.polyline(&start_clip.ring, [0.2, 0.1, 0.8], 10.0, 25.0);
+        //gizmo.polyline(&start_clip.ring, [0.2, 0.1, 0.8], 10.0, 25.0);
         for p in start_clip.ring.iter() {
-            gizmo.cross(*p, 0.3, [0.2, 0.1, 0.8], 25.0);
+            //gizmo.cross(*p, 0.3, [0.2, 0.1, 0.8], 25.0);
         }
     }
     if let Some(end_clip) = end_clip {
-        gizmo.polyline(&end_clip.ring, [0.8, 0.1, 0.2], 5.0, 25.0);
+        //gizmo.polyline(&end_clip.ring, [0.8, 0.1, 0.2], 5.0, 25.0);
         for p in end_clip.ring.iter() {
-            gizmo.cross(*p, 0.2, [0.8, 0.1, 0.2], 25.0);
+            //gizmo.cross(*p, 0.2, [0.8, 0.1, 0.2], 25.0);
         }
     }
     let mut lane_data: Vec<(i8, LaneGeometry)> = Vec::new();

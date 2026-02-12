@@ -19,15 +19,13 @@ use crate::cars::car_subsystem::CarSubsystem;
 use crate::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::world_renderer::TerrainRenderer;
-use crate::terrain::roads::road_editor::{
-    IntersectionBuildParams, build_intersection_at_node, offset_polyline,
-};
+use crate::terrain::roads::intersections::{IntersectionBuildParams, build_intersection_at_node};
+use crate::terrain::roads::road_editor::offset_polyline;
 use crate::terrain::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
 };
 use crate::terrain::roads::road_structs::*;
-use glam::Vec2;
-use smallvec::SmallVec;
+use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 
@@ -39,10 +37,17 @@ type PartitionId = u32;
 #[derive(Debug, Clone)]
 pub struct Arm {
     segment: SegmentId,
-    bearing: f32, // radians, sorted ascending — angle from node center outward
+    /// Bearing angle in radians [0, 2π), CCW from +X axis
+    bearing: f32,
+    /// Direction vector pointing AWAY from node center (normalized)
+    direction: Vec3,
+    /// Half-width of the road at this arm (lanes + sidewalk)
+    half_width: f32,
+    /// Whether the segment points toward this node (end == node_id)
+    points_to_node: bool,
 
-    incoming_lanes: SmallVec<[LaneId; 3]>,
-    outgoing_lanes: SmallVec<[LaneId; 3]>,
+    incoming_lanes: Vec<LaneId>,
+    outgoing_lanes: Vec<LaneId>,
 
     // === Sign-based routing data ===
     /// Static: partitions reachable by leaving through this arm's outgoing lanes.
@@ -55,7 +60,171 @@ pub struct Arm {
     /// Current congestion estimate (0.0 = free flow, 1.0 = gridlocked)
     congestion: f32,
 }
+impl Arm {
+    pub fn new(
+        segment: SegmentId,
+        bearing: f32,
+        direction: Vec3,
+        half_width: f32,
+        points_to_node: bool,
+    ) -> Self {
+        Self {
+            segment,
+            bearing,
+            direction: direction.normalize_or_zero(),
+            half_width,
+            points_to_node,
+            incoming_lanes: Vec::new(),
+            outgoing_lanes: Vec::new(),
+            reachable_partitions: Vec::new(),
+            travel_times: HashMap::new(),
+            congestion: 0.0,
+        }
+    }
 
+    // === Getters ===
+
+    pub fn segment(&self) -> SegmentId {
+        self.segment
+    }
+
+    pub fn bearing(&self) -> f32 {
+        self.bearing
+    }
+
+    pub fn direction(&self) -> Vec3 {
+        self.direction
+    }
+
+    pub fn half_width(&self) -> f32 {
+        self.half_width
+    }
+
+    pub fn points_to_node(&self) -> bool {
+        self.points_to_node
+    }
+
+    pub fn incoming_lanes(&self) -> &[LaneId] {
+        &self.incoming_lanes
+    }
+
+    pub fn outgoing_lanes(&self) -> &[LaneId] {
+        &self.outgoing_lanes
+    }
+
+    pub fn congestion(&self) -> f32 {
+        self.congestion
+    }
+
+    pub fn reachable_partitions(&self) -> &[PartitionId] {
+        &self.reachable_partitions
+    }
+
+    // === Lane Management ===
+
+    pub fn add_incoming_lane(&mut self, lane_id: LaneId) {
+        if !self.incoming_lanes.contains(&lane_id) {
+            self.incoming_lanes.push(lane_id);
+        }
+    }
+
+    pub fn add_outgoing_lane(&mut self, lane_id: LaneId) {
+        if !self.outgoing_lanes.contains(&lane_id) {
+            self.outgoing_lanes.push(lane_id);
+        }
+    }
+
+    pub fn clear_lanes(&mut self) {
+        self.incoming_lanes.clear();
+        self.outgoing_lanes.clear();
+    }
+
+    /// Sort lanes by lane index (rightmost first for proper turn ordering)
+    pub fn sort_lanes_by_index(&mut self, storage: &RoadStorage) {
+        self.incoming_lanes.sort_by(|a, b| {
+            let idx_a = storage.lane(a).lane_index();
+            let idx_b = storage.lane(b).lane_index();
+            idx_b.cmp(&idx_a) // Descending (rightmost first)
+        });
+
+        self.outgoing_lanes.sort_by(|a, b| {
+            let idx_a = storage.lane(a).lane_index();
+            let idx_b = storage.lane(b).lane_index();
+            idx_a.cmp(&idx_b) // Ascending (rightmost first for outgoing)
+        });
+    }
+
+    // === Routing Data ===
+
+    pub fn set_reachable_partitions(&mut self, partitions: Vec<PartitionId>) {
+        self.reachable_partitions = partitions;
+    }
+
+    pub fn add_reachable_partition(&mut self, partition: PartitionId) {
+        if !self.reachable_partitions.contains(&partition) {
+            self.reachable_partitions.push(partition);
+        }
+    }
+
+    pub fn travel_time_to(&self, partition: PartitionId) -> Option<f32> {
+        self.travel_times.get(&partition).map(|ema| ema.get())
+    }
+
+    pub fn update_travel_time(&mut self, partition: PartitionId, time: f32) {
+        self.travel_times
+            .entry(partition)
+            .or_insert_with(|| ExponentialMovingAverage::new(0.1))
+            .update(time);
+    }
+
+    pub fn clear_travel_times(&mut self) {
+        self.travel_times.clear();
+    }
+
+    // === Congestion ===
+
+    pub fn update_congestion(&mut self, new_value: f32) {
+        // Smooth congestion updates
+        const CONGESTION_ALPHA: f32 = 0.2;
+        self.congestion = CONGESTION_ALPHA * new_value.clamp(0.0, 1.0)
+            + (1.0 - CONGESTION_ALPHA) * self.congestion;
+    }
+
+    pub fn set_congestion(&mut self, value: f32) {
+        self.congestion = value.clamp(0.0, 1.0);
+    }
+
+    // === Geometry Helpers ===
+
+    /// Get perpendicular vector pointing to the RIGHT of this arm's direction
+    pub fn right_perpendicular(&self) -> Vec3 {
+        // Rotate direction 90° clockwise in XZ plane: (x, z) -> (z, -x)
+        Vec3::new(self.direction.z, 0.0, -self.direction.x)
+    }
+
+    /// Get perpendicular vector pointing to the LEFT of this arm's direction
+    pub fn left_perpendicular(&self) -> Vec3 {
+        // Rotate direction 90° counter-clockwise in XZ plane: (x, z) -> (-z, x)
+        Vec3::new(-self.direction.z, 0.0, self.direction.x)
+    }
+
+    /// Get the position of the right edge at a given distance from center
+    pub fn right_edge_at(
+        &self,
+        center: WorldPos,
+        distance: f32,
+        chunk_size: ChunkSize,
+    ) -> WorldPos {
+        let offset = self.direction * distance + self.right_perpendicular() * self.half_width;
+        center.add_vec3(offset, chunk_size)
+    }
+
+    /// Get the position of the left edge at a given distance from center
+    pub fn left_edge_at(&self, center: WorldPos, distance: f32, chunk_size: ChunkSize) -> WorldPos {
+        let offset = self.direction * distance + self.left_perpendicular() * self.half_width;
+        center.add_vec3(offset, chunk_size)
+    }
+}
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
 #[derive(Debug, Clone)]
@@ -2215,6 +2384,7 @@ fn turn_cost(turn: TurnType) -> f32 {
 //     let right_of_me = (my_arm_idx + arms.len() - 1) % arms.len();
 //     other_arm_idx == right_of_me
 // }
+
 /// Tracks a running average that forgets old data exponentially.
 /// Recent reports matter more than ancient ones.
 #[derive(Debug, Clone)]

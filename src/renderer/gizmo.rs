@@ -10,7 +10,7 @@ use std::f32::consts::{PI, TAU};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 const CIRCLE_SEGMENT_COUNT: usize = 16;
-pub const DEBUG_DRAW_DURATION: f32 = 10.0; // Seconds
+pub const DEBUG_DRAW_DURATION: f32 = 20.0; // Seconds
 pub struct PendingGizmoRender {
     pub vertices: Vec<LineVtxWorld>,
     pub duration: f32,

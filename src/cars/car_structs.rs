@@ -11,7 +11,7 @@ pub type CarId = u32;
 
 type VehicleType = u32;
 type PartitionId = u32;
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum CarChunkDistance {
     Close,
     Medium,
@@ -52,19 +52,26 @@ impl CarChunkDistance {
         CarChunkDistance::from_dist2(dist2, chunk_size)
     }
 }
+#[derive(Clone, Debug)]
 pub struct CarChunk {
     pub distance: CarChunkDistance,
     pub car_ids: Vec<CarId>,
+    pub last_update_time: SimTime,
 }
 
 impl CarChunk {
     pub fn new(distance: CarChunkDistance, car_ids: Vec<CarId>) -> Self {
-        Self { distance, car_ids }
+        Self {
+            distance,
+            car_ids,
+            last_update_time: 0.0,
+        }
     }
     pub fn empty(car_chunk_distance: CarChunkDistance) -> Self {
         Self {
             distance: car_chunk_distance,
             car_ids: Vec::new(),
+            last_update_time: 0.0,
         }
     }
 }
@@ -75,24 +82,35 @@ pub struct CarStorage {
     free_list: Vec<CarId>,
     // Reverse mapping so I can remove from chunks in O(1) when despawning/moving
     car_locations: HashMap<CarId, ChunkCoord>,
+    chunk_size: ChunkSize,
+    center_chunk: ChunkCoord,
 }
 
 impl CarStorage {
+    pub(crate) fn update_target_and_chunk_size(
+        &mut self,
+        target_chunk: ChunkCoord,
+        chunk_size: ChunkSize,
+    ) {
+        self.center_chunk = target_chunk;
+        self.chunk_size = chunk_size;
+    }
     pub(crate) fn move_car_between_chunks(
         &mut self,
         from: ChunkCoord,
         to: ChunkCoord,
-        car_chunk_distance: CarChunkDistance,
         car_id: CarId,
     ) {
         self.car_chunk_storage.remove_car(from, car_id);
+        let car_chunk_distance =
+            CarChunkDistance::from_chunk_positions(self.center_chunk, to, self.chunk_size);
         self.car_chunk_storage
             .add_car(to, car_chunk_distance, car_id);
     }
-    pub(crate) fn iter_cars(&mut self) -> Iter<Option<Car>> {
+    pub(crate) fn iter_cars(&mut self) -> Iter<'_, Option<Car>> {
         self.cars.iter()
     }
-    pub(crate) fn iter_mut_cars(&mut self) -> IterMut<Option<Car>> {
+    pub(crate) fn iter_mut_cars(&mut self) -> IterMut<'_, Option<Car>> {
         self.cars.iter_mut()
     }
 }
@@ -139,6 +157,8 @@ impl CarStorage {
             cars: Vec::new(),
             free_list: Vec::new(),
             car_locations: HashMap::new(),
+            chunk_size: 128,
+            center_chunk: ChunkCoord::zero(),
         }
     }
 
@@ -305,8 +325,8 @@ impl Default for Car {
 
             length: 4.0,
             width: 2.2,
-            accel: 2.5,
-            decel: 5.0,
+            accel: 5.0,
+            decel: 10.0,
             lane: LaneRef::Segment(LaneId(0), 0),
             lane_s: 0.0,
             committed_arm: None,

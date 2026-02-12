@@ -6,10 +6,11 @@ use crate::renderer::pipelines::{
     FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
 };
 use crate::renderer::shadows::compute_csm_matrices;
+use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::TimeSystem;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
-use glam::Mat4;
+use glam::{Mat4, UVec2};
 use wgpu::Queue;
 
 pub struct UniformUpdater<'a> {
@@ -24,6 +25,7 @@ impl<'a> UniformUpdater<'a> {
 
     pub fn update_camera_uniforms(
         &mut self,
+        terrain_renderer: &TerrainRenderer,
         view: Mat4,
         proj: Mat4,
         view_proj: Mat4,
@@ -32,18 +34,20 @@ impl<'a> UniformUpdater<'a> {
         total_time: f64,
         aspect: f32,
         settings: &Settings,
+        screen_size: UVec2,
     ) {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
         let (light_mats, splits, texels) = compute_csm_matrices(
+            terrain_renderer,
             view,
-            camera.fov.to_radians(),
+            camera,
             aspect,
-            camera.near,
-            camera.far,
+            <(u32, u32)>::from(screen_size),
             astronomy.sun_dir,
-            /*shadow_map_size:*/ self.pipelines.resources.csm_shadows.size,
-            /*stabilize:*/ true,
+            self.pipelines.resources.csm_shadows.size,
+            true,
             settings.reversed_depth_z,
+            200.0,
         );
         self.pipelines.resources.csm_shadows.texels = texels;
         // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
@@ -147,7 +151,7 @@ impl<'a> UniformUpdater<'a> {
             radius_world: 2.0,
             intensity: 1.6,
             bias: 0.02,
-            frame_index: time.frame_count,
+            frame_index: time.frame_count as u32,
             screen_size: [hw, hh],
             inv_screen_size: [1.0 / hw, 1.0 / hh],
             temporal_blend,

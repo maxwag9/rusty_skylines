@@ -3,7 +3,6 @@ use crate::positions::*;
 use crate::renderer::world_renderer::TerrainRenderer;
 use glam::{Mat4, Vec3};
 
-#[derive(Debug, Clone)]
 pub struct Camera {
     pub target: WorldPos,
     pub orbit_radius: f32,
@@ -100,11 +99,11 @@ impl CameraController {
             zoom_velocity: 0.0,
             target_yaw: camera.yaw,
             target_pitch: camera.pitch,
-            orbit_smoothness: 0.25,
+            orbit_smoothness: 0.35,
             yaw_velocity: 0.0,
             pitch_velocity: 0.0,
-            orbit_damping_release: 2.0,
-            zoom_damping: 12.0,
+            orbit_damping_release: 3.0,
+            zoom_damping: 13.0,
         }
     }
 }

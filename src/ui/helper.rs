@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use wgpu::*;
 
 pub fn calc_move_speed(input: &InputState) -> f32 {
-    let mut base = 4.0;
+    let mut base = 8.0;
 
     match (input.shift, input.ctrl) {
         (true, false) => base *= 12.0, // fast

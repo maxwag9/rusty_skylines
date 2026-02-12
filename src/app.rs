@@ -3,6 +3,7 @@ use crate::paths::data_dir;
 use crate::renderer::world_renderer::CursorMode;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
+use crate::systems::car_events::run_car_events;
 use crate::systems::input::camera_input_system;
 use crate::systems::render::render_system;
 use crate::systems::simulation::simulation_system;
@@ -22,6 +23,17 @@ use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
+
+const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
+    ("Speed up Time 100x", 100.0),
+    ("Speed up Time 16x", 16.0),
+    ("Speed up Time 2x", 2.0),
+    ("Reverse Time 100x", -100.0),
+    ("Reverse Time 16x", -16.0),
+    ("Reverse Time 2x", -2.0),
+    ("Slow down Time 2x", 0.5),
+];
+const MAX_SIM_STEPS_PER_FRAME: usize = 1_000;
 
 pub struct App {
     window: Option<Arc<Window>>,
@@ -88,6 +100,11 @@ impl Schedule {
             // order is explicit and intentional
             resources.simulation.process_event(&event);
             cursor_system(&mut resources.renderer.core.terrain_renderer.cursor, &event);
+            run_car_events(
+                event,
+                &mut resources.renderer.core.car_subsystem,
+                &resources.renderer.core.road_renderer,
+            );
             // later:
             // audio_event_system(...)
             // ui_event_system(...)
@@ -390,56 +407,111 @@ impl ApplicationHandler for App {
                 {
                     let frame_start = Instant::now();
 
-                    // update render time
-                    let mut time_speed: f32 = 1.0f32; // f32 btw
-                    if resources.input.action_down("Speed up Time 100x") {
-                        time_speed = 100.0
-                    } else if resources.input.action_down("Speed up Time 16x") {
-                        time_speed = 16.0
-                    } else if resources.input.action_down("Speed up Time 2x") {
-                        time_speed = 2.0
-                    } else if resources.input.action_down("Reverse Time 100x") {
-                        time_speed = -100.0
-                    } else if resources.input.action_down("Reverse Time 16x") {
-                        time_speed = -16.0
-                    } else if resources.input.action_down("Reverse Time 2x") {
-                        time_speed = -2.0
+                    // -----------------------------
+                    // Time controls (incl. real toggle stop)
+                    // -----------------------------
+                    let can_time_control = !resources.settings.editor_mode
+                        && !resources.settings.drive_car
+                        && resources.settings.show_world;
+
+                    if can_time_control && resources.input.action_pressed_once("Toggle Stop Time") {
+                        resources.simulation.toggle();
+
+                        // Important: kill any backlog so the sim stops immediately.
+                        if !resources.simulation.running {
+                            resources.time.clear_sim_accumulator();
+                        }
                     }
+
+                    // Base timescale from "stopped" state
+                    let mut time_speed = if resources.simulation.running {
+                        1.0
+                    } else {
+                        0.0
+                    };
+
+                    // Optional override from held bindings (also resumes time)
+                    for (action, speed) in TIME_SPEED_BINDINGS {
+                        if resources.input.action_down(action) {
+                            time_speed = speed;
+                            resources.simulation.running = true; // resume if user is explicitly controlling time
+                            break;
+                        }
+                    }
+
+                    // Ensure stop always wins if it's enabled (even if other keys are held)
+                    if !resources.simulation.running {
+                        time_speed = 0.0;
+                    }
+
                     resources
                         .ui_loader
                         .variables
                         .set_f32("time_speed", time_speed);
-                    resources.time.update_render(time_speed);
+
+                    // -----------------------------
+                    // Frame timing (accumulator lives here)
+                    // -----------------------------
+                    resources.time.begin_frame(time_speed);
+
+                    // UI globals
+                    {
+                        let ui = &mut resources.ui_loader;
+                        ui.variables.set_f32("fps", resources.time.render_fps);
+                        ui.variables.set_f32("render_dt", resources.time.render_dt);
+                        ui.variables.set_f32("sim_dt", resources.time.target_sim_dt);
+                        ui.variables
+                            .set_f32("total_game_time", resources.time.total_game_time as f32);
+                    }
+
+                    // -----------------------------
+                    // Fixed-step simulation with budget + spiral-of-death protection
+                    // -----------------------------
+                    // Do input/events once per render frame (prevents "pressed_once" from firing N times).
+                    self.schedule.run_inputs(world, resources);
+                    self.schedule.run_events(world, resources);
+
+                    // Clamp runaway backlog (e.g., window drag / breakpoint)
+                    resources
+                        .time
+                        .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
+
+                    let sim_budget =
+                        Duration::from_secs_f32((resources.time.target_frametime * 0.7).max(0.0));
+                    let sim_deadline = Instant::now() + sim_budget;
+
+                    let mut steps = 0usize;
+                    while resources.time.can_step_sim()
+                        && steps < MAX_SIM_STEPS_PER_FRAME
+                        && Instant::now() < sim_deadline
+                    {
+                        self.schedule.run_sim(world, resources);
+                        resources.time.consume_sim_step();
+                        steps += 1;
+                    }
+
+                    let achieved_speed = if resources.time.render_dt > 0.0 {
+                        (steps as f32 * resources.time.target_sim_dt) / resources.time.render_dt
+                    } else {
+                        0.0
+                    };
                     resources
                         .ui_loader
                         .variables
-                        .set_f32("total_game_time", resources.time.total_game_time as f32);
+                        .set_f32("achieved_time_speed", achieved_speed);
 
-                    // update UI global vars
-                    let ui = &mut resources.ui_loader;
-
-                    ui.variables.set_f32("fps", resources.time.render_fps);
-                    ui.variables.set_f32("render_dt", resources.time.render_dt);
-                    ui.variables.set_f32("sim_dt", resources.time.sim_dt);
-
-                    // simulation timing
-                    resources.time.update_sim();
-
-                    while resources.time.sim_accumulator >= resources.time.target_sim_dt {
-                        resources.time.sim_dt = resources.time.target_sim_dt;
-
-                        self.schedule.run_inputs(world, resources);
-                        self.schedule.run_events(world, resources);
-                        self.schedule.run_sim(world, resources);
-                        resources.time.sim_accumulator -= resources.time.target_sim_dt;
-                    }
-
+                    // -----------------------------
+                    // Render
+                    // -----------------------------
                     self.schedule.run_render(world, resources);
+
+                    // -----------------------------
+                    // FPS cap
+                    // -----------------------------
                     let elapsed = frame_start.elapsed();
-                    if elapsed < Duration::from_secs_f32(resources.time.target_frametime) {
-                        thread::sleep(
-                            Duration::from_secs_f32(resources.time.target_frametime) - elapsed,
-                        );
+                    let target = Duration::from_secs_f32(resources.time.target_frametime.max(0.0));
+                    if target > Duration::ZERO && elapsed < target {
+                        thread::sleep(target - elapsed);
                     }
                 }
 
@@ -447,6 +519,7 @@ impl ApplicationHandler for App {
                     window.request_redraw();
                 }
             }
+
             WindowEvent::Focused(false) | WindowEvent::Focused(true) => {
                 if let Some(resources) = self.resources.as_mut() {
                     resources.input.reset_all(resources.time.total_time);

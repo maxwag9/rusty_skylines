@@ -71,77 +71,111 @@ impl Resources {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct TimeSystem {
-    pub last_sim: Instant,
-    pub last_render: Instant,
+    pub last_frame: Instant,
     pub start: Instant,
 
-    pub sim_dt: f32,
-    pub sim_accumulator: f32,
-    pub target_sim_dt: f32,
-
+    // Render timing
     pub render_dt: f32,
     pub render_fps: f32,
     pub target_fps: f32,
     pub target_frametime: f32,
+
+    // Fixed-step simulation timing
+    pub sim_accumulator: f32,
+    pub target_sim_dt: f32,
+
+    // Totals
     pub total_time: f64,
     pub total_game_time: f64,
-    pub frame_count: u32,
+    pub frame_count: u64,
+
+    // Safety
+    pub max_frame_dt: f32,
 }
 
 impl TimeSystem {
     pub fn new() -> Self {
         let now = Instant::now();
-        Self {
-            last_sim: now,
-            last_render: now,
-            start: now,
+        let target_fps = 100.0;
+        let target_frametime = 1.0 / target_fps;
 
-            sim_dt: 0.0,
-            sim_accumulator: 0.0,
-            target_sim_dt: 0.0,
+        let tps = 60.0;
+        let target_sim_dt = 1.0 / tps;
+
+        Self {
+            last_frame: now,
+            start: now,
 
             render_dt: 0.0,
             render_fps: 0.0,
-            target_fps: 100.0,
-            target_frametime: 0.0,
+            target_fps,
+            target_frametime,
+
+            sim_accumulator: 0.0,
+            target_sim_dt,
+
             total_time: 0.0,
             total_game_time: 0.0,
             frame_count: 0,
+
+            max_frame_dt: 0.25, // clamp big stalls (250ms)
         }
     }
 
     pub fn set_tps(&mut self, tps: f32) {
+        let tps = tps.max(1.0);
         self.target_sim_dt = 1.0 / tps;
         self.sim_accumulator = 0.0;
     }
 
     pub fn set_fps(&mut self, target_fps: f32) {
-        self.target_fps = target_fps;
-        self.target_frametime = 1.0 / target_fps;
+        self.target_fps = target_fps.max(1.0);
+        self.target_frametime = 1.0 / self.target_fps;
     }
 
-    pub fn update_sim(&mut self) {
+    /// Call once per render frame.
+    pub fn begin_frame(&mut self, time_speed: f32) {
         let now = Instant::now();
-        let dt = (now - self.last_sim).as_secs_f32();
-        self.last_sim = now;
-        self.sim_dt = dt;
-    }
+        let mut dt = (now - self.last_frame).as_secs_f32();
+        self.last_frame = now;
 
-    pub fn update_render(&mut self, time_speed: f32) {
-        let now = Instant::now();
-        let dt = (now - self.last_render).as_secs_f32();
-        self.last_render = now;
+        // clamp dt to avoid massive accumulator spikes
+        dt = dt.clamp(0.0, self.max_frame_dt);
 
         self.render_dt = dt;
         self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
         self.total_time += dt as f64;
-        self.total_game_time += dt as f64 * time_speed as f64;
+        self.total_game_time += (dt as f64) * (time_speed as f64);
         self.frame_count += 1;
 
-        self.sim_accumulator += dt;
+        if time_speed.is_sign_positive() {
+            self.sim_accumulator += dt * time_speed;
+        } else {
+            self.sim_accumulator += dt;
+        }
+    }
+
+    pub fn clear_sim_accumulator(&mut self) {
+        self.sim_accumulator = 0.0;
+    }
+
+    pub fn clamp_sim_accumulator(&mut self, max_steps: usize) {
+        let max = self.target_sim_dt * max_steps as f32;
+        if self.sim_accumulator > max {
+            self.sim_accumulator = max;
+        }
+    }
+
+    #[inline]
+    pub fn can_step_sim(&self) -> bool {
+        self.target_sim_dt > 0.0 && self.sim_accumulator >= self.target_sim_dt
+    }
+
+    #[inline]
+    pub fn consume_sim_step(&mut self) {
+        self.sim_accumulator -= self.target_sim_dt;
     }
 }
 

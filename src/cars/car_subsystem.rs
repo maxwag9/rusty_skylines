@@ -11,7 +11,6 @@ use crate::terrain::roads::roads::RoadManager;
 use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
 use glam::{Mat4, Vec3};
-use rand::prelude::IndexedRandom;
 use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
 use std::time::{Duration, Instant};
@@ -126,6 +125,8 @@ impl CarSubsystem {
         time_system: &TimeSystem,
         target_pos: WorldPos,
     ) {
+        self.car_storage
+            .update_target_and_chunk_size(target_pos.chunk, terrain_renderer.chunk_size);
         self.spawn_cars(road_manager, terrain_renderer, target_pos, time_system);
 
         match terrain_renderer.cursor.mode {
@@ -216,7 +217,7 @@ impl CarSubsystem {
         time_system: &TimeSystem,
     ) {
         let mut rng = rng();
-        let dt = time_system.sim_dt;
+        let dt = time_system.target_sim_dt;
         let mut to_remove: Vec<usize> = Vec::new();
         for (idx, spawning_node) in self.spawning_nodes.iter_mut().enumerate() {
             let Some(node) = road_manager.roads.node(spawning_node.node_id) else {

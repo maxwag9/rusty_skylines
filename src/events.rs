@@ -1,11 +1,13 @@
 #![allow(dead_code)]
 
+use crate::cars::car_structs::CarChunk;
 use crate::renderer::world_renderer::CursorMode;
 
 #[derive(Debug, Clone)]
 pub enum Event {
     SetCursorMode(CursorMode),
     ToggleSimulation,
+    CarNavigate(Vec<CarChunk>),
 }
 
 #[derive(Default)]

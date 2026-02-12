@@ -50,6 +50,7 @@ impl Simulation {
             match event {
                 Event::ToggleSimulation => self.toggle(),
                 Event::SetCursorMode(mode) => {}
+                _ => {}
             }
         }
     }
@@ -93,7 +94,5 @@ impl Simulation {
             camera,
             time.target_sim_dt,
         );
-
-        // TODO: Add simulation logic here
     }
 }

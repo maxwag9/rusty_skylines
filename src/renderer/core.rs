@@ -24,7 +24,7 @@ use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
 use crate::world::CameraBundle;
-use glam::Mat4;
+use glam::{Mat4, UVec2};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -147,6 +147,7 @@ impl RenderCore {
     ) {
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
+        let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         self.update_render(
             camera_bundle,
             ui_loader,
@@ -154,6 +155,7 @@ impl RenderCore {
             input_state,
             settings,
             aspect,
+            screen_size,
         );
 
         let camera = &camera_bundle.camera;
@@ -203,6 +205,7 @@ impl RenderCore {
         input_state: &mut InputState,
         settings: &Settings,
         aspect: f32,
+        screen_size: UVec2,
     ) {
         self.update_defines();
 
@@ -256,6 +259,7 @@ impl RenderCore {
             time,
             aspect,
             settings,
+            screen_size,
         );
 
         // upload per-cascade shadow uniforms ONCE (outside encoder)
@@ -293,9 +297,11 @@ impl RenderCore {
         time: &TimeSystem,
         aspect: f32,
         settings: &Settings,
+        screen_size: UVec2,
     ) {
         let mut updater = UniformUpdater::new(&self.queue, &mut self.pipelines);
         updater.update_camera_uniforms(
+            &self.terrain_renderer,
             view,
             proj,
             view_proj,
@@ -304,6 +310,7 @@ impl RenderCore {
             time.total_time,
             aspect,
             settings,
+            screen_size,
         );
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy.moon_phase);
