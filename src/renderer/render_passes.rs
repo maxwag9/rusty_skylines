@@ -3,8 +3,10 @@ use crate::cars::car_render::CarInstance;
 use crate::cars::car_subsystem::CarSubsystem;
 use crate::components::camera::Camera;
 use crate::data::Settings;
+use crate::gpu_timestamp;
 use crate::paths::shader_dir;
 use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::textures::material_keys::*;
 use crate::renderer::world_renderer::TerrainRenderer;
@@ -144,6 +146,7 @@ pub fn create_world_pass<'a>(
 pub fn render_sky(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
+    profiler: &mut GpuProfiler,
     pipelines: &Pipelines,
     settings: &Settings,
     msaa_samples: u32,
@@ -160,39 +163,44 @@ pub fn render_sky(
         bias: Default::default(),
     });
     let targets = color_and_normals_targets(pipelines);
-    // Stars
-    render_manager.render(
-        &[],
-        shader_dir().join("stars.wgsl").as_path(),
-        &PipelineOptions {
-            topology: PrimitiveTopology::TriangleStrip,
-            depth_stencil: sky_depth_stencil.clone(),
-            msaa_samples,
-            vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
-            targets: targets.clone(),
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera, &pipelines.buffers.sky],
-        pass,
-    );
-    pass.set_vertex_buffer(0, pipelines.resources.stars_meshes.vertex.slice(..));
-    pass.draw(0..4, 0..STAR_COUNT);
-    // Sky
-    render_manager.render(
-        &[],
-        shader_dir().join("sky.wgsl").as_path(),
-        &PipelineOptions {
-            topology: Default::default(),
-            depth_stencil: sky_depth_stencil,
-            msaa_samples,
-            vertex_layouts: Vec::new(),
-            targets,
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera, &pipelines.buffers.sky],
-        pass,
-    );
-    pass.draw(0..3, 0..1);
+    gpu_timestamp!(pass, profiler, "Stars", {
+        // Stars
+        render_manager.render(
+            &[],
+            shader_dir().join("stars.wgsl").as_path(),
+            &PipelineOptions {
+                topology: PrimitiveTopology::TriangleStrip,
+                depth_stencil: sky_depth_stencil.clone(),
+                msaa_samples,
+                vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
+                targets: targets.clone(),
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera, &pipelines.buffers.sky],
+            pass,
+        );
+        pass.set_vertex_buffer(0, pipelines.resources.stars_meshes.vertex.slice(..));
+        pass.draw(0..4, 0..STAR_COUNT);
+    });
+
+    gpu_timestamp!(pass, profiler, "Sky", {
+        // Sky
+        render_manager.render(
+            &[],
+            shader_dir().join("sky.wgsl").as_path(),
+            &PipelineOptions {
+                topology: Default::default(),
+                depth_stencil: sky_depth_stencil,
+                msaa_samples,
+                vertex_layouts: Vec::new(),
+                targets,
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera, &pipelines.buffers.sky],
+            pass,
+        );
+        pass.draw(0..3, 0..1);
+    });
 }
 pub fn render_terrain(
     pass: &mut RenderPass,
@@ -237,14 +245,15 @@ pub fn render_terrain(
         }
     };
     let targets = color_and_normals_targets(pipelines);
-    pass.set_stencil_reference(0);
-    // Terrain Pipeline (Above Water)
+
+    // Terrain Pipeline (Underwater)
+    pass.set_stencil_reference(1);
     render_manager.render(
         keys.as_slice(),
         shader_path.as_path(),
         &PipelineOptions {
             topology: TriangleList,
-            depth_stencil: Some(make_stencil(0)),
+            depth_stencil: Some(make_stencil(0xFF)),
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
@@ -255,16 +264,16 @@ pub fn render_terrain(
         &[&pipelines.buffers.camera, &pipelines.buffers.pick],
         pass,
     );
-    terrain_renderer.render(pass, camera, aspect, settings, false);
+    terrain_renderer.render(pass, camera, aspect, settings, true);
 
-    pass.set_stencil_reference(1);
-    // Terrain Pipeline (Underwater)
+    // Terrain Pipeline (Above Water)
+    pass.set_stencil_reference(0);
     render_manager.render(
         keys.as_slice(),
         shader_path.as_path(),
         &PipelineOptions {
             topology: TriangleList,
-            depth_stencil: Some(make_stencil(0xFF)),
+            depth_stencil: Some(make_stencil(0)),
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
@@ -275,7 +284,7 @@ pub fn render_terrain(
         &[&pipelines.buffers.camera, &pipelines.buffers.pick],
         pass,
     );
-    terrain_renderer.render(pass, camera, aspect, settings, true);
+    terrain_renderer.render(pass, camera, aspect, settings, false);
 }
 pub fn render_water(
     pass: &mut RenderPass,
@@ -285,7 +294,9 @@ pub fn render_water(
     msaa_samples: u32,
 ) {
     let targets = color_and_normals_targets(pipelines);
+
     // Water
+    pass.set_stencil_reference(1);
     render_manager.render(
         &[],
         shader_dir().join("water.wgsl").as_path(),
@@ -326,7 +337,6 @@ pub fn render_water(
         pass,
     );
 
-    pass.set_stencil_reference(1);
     pass.set_vertex_buffer(0, pipelines.resources.water_meshes.vertex.slice(..));
     pass.set_index_buffer(
         pipelines.resources.water_meshes.index.slice(..),

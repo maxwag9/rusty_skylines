@@ -24,7 +24,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'Rendering times per frame: Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
+        text: 'Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Stars: {(stars_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
       - !Text
         id: gtao_frametimes_text
         x: 0.0008250045

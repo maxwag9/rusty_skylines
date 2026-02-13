@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
+use wgpu::hal::DynQueue;
 use wgpu::wgt::PollType;
 use wgpu::{
     Adapter, Backends, BlendComponent, BlendFactor, BlendOperation, BlendState, Color,
@@ -159,6 +160,7 @@ impl RenderCore {
         );
 
         let camera = &camera_bundle.camera;
+        let t = Instant::now();
         let Some(frame) = acquire_frame(&self.surface, &self.device, &self.config) else {
             return;
         };
@@ -170,6 +172,7 @@ impl RenderCore {
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+
         gpu_timestamp!(encoder, &mut self.profiler, "Total", {
             gpu_timestamp!(encoder, &mut self.profiler, "Shadows", {
                 self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
@@ -187,9 +190,10 @@ impl RenderCore {
             );
         });
 
+        println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
-        // println!("Total: {}", total_cpu_render_time);
+        //println!("Total: {}", total_cpu_render_time);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.profiler
@@ -497,16 +501,16 @@ impl RenderCore {
             return;
         }
         // 1. Sky
-        gpu_timestamp!(pass, &mut self.profiler, "Sky", {
-            // All frame time names must be lowercase, I decided. (Doesn't matter anyway, cuz I .lowercase() anyway.)
-            render_sky(
-                &mut pass,
-                &mut self.render_manager,
-                &self.pipelines,
-                settings,
-                self.msaa_samples,
-            );
-        });
+
+        // All frame time names must be lowercase, I decided. (Doesn't matter anyway, cuz I .lowercase() anyway.)
+        render_sky(
+            &mut pass,
+            &mut self.render_manager,
+            &mut self.profiler,
+            &self.pipelines,
+            settings,
+            self.msaa_samples,
+        );
 
         // 2. Terrain
         gpu_timestamp!(pass, &mut self.profiler, "Terrain", {

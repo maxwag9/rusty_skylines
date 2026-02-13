@@ -42,12 +42,10 @@ impl<'a> UniformUpdater<'a> {
             view,
             camera,
             aspect,
-            <(u32, u32)>::from(screen_size),
             astronomy.sun_dir,
             self.pipelines.resources.csm_shadows.size,
             true,
             settings.reversed_depth_z,
-            200.0,
         );
         self.pipelines.resources.csm_shadows.texels = texels;
         // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
@@ -124,11 +122,11 @@ impl<'a> UniformUpdater<'a> {
     pub fn update_water_uniforms(&self) {
         let wu = WaterUniform {
             sea_level: 0.0,
-            _pad0: [0.0; 3],
+            _pad0: [1.0; 3],
             color: [0.05, 0.25, 0.35, 0.95],
             wave_tiling: 0.5,
             wave_strength: 0.1,
-            _pad1: [0.0; 2],
+            _pad1: [1.0; 2],
         };
 
         self.queue
