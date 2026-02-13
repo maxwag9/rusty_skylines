@@ -1,15 +1,15 @@
-use crate::components::camera::Camera;
 use crate::data::Settings;
-use crate::renderer::astronomy::AstronomyState;
 use crate::renderer::gtao::gtao::GtaoParams;
 use crate::renderer::pipelines::{
     FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
 };
 use crate::renderer::shadows::compute_csm_matrices;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::TimeSystem;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
+use crate::world::astronomy::AstronomyState;
+use crate::world::camera::Camera;
 use glam::{Mat4, UVec2};
 use wgpu::Queue;
 
@@ -25,10 +25,7 @@ impl<'a> UniformUpdater<'a> {
 
     pub fn update_camera_uniforms(
         &mut self,
-        terrain_renderer: &TerrainRenderer,
-        view: Mat4,
-        proj: Mat4,
-        view_proj: Mat4,
+        terrain_renderer: &TerrainSubsystem,
         astronomy: &AstronomyState,
         camera: &Camera,
         total_time: f64,
@@ -39,7 +36,6 @@ impl<'a> UniformUpdater<'a> {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
         let (light_mats, splits, texels) = compute_csm_matrices(
             terrain_renderer,
-            view,
             camera,
             aspect,
             astronomy.sun_dir,
@@ -50,9 +46,6 @@ impl<'a> UniformUpdater<'a> {
         self.pipelines.resources.csm_shadows.texels = texels;
         // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
         let new_uniforms = make_new_uniforms_csm(
-            view,
-            proj,
-            view_proj,
             astronomy.sun_dir,
             astronomy.moon_dir,
             total_time,

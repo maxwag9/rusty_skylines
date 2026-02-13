@@ -1,15 +1,17 @@
 //! road_mesh_renderer.rs
-use crate::renderer::world_renderer::{PickedPoint, TerrainRenderer};
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
-use crate::terrain::roads::roads::{RoadManager, apply_commands, apply_preview_commands};
+use crate::terrain::roads::roads::{
+    RoadManager, apply_commands_world, apply_preview_commands_world, collect_affected_chunks,
+};
 
 use crate::cars::car_subsystem::CarSubsystem;
-use crate::components::camera::Camera;
 use crate::renderer::gizmo::Gizmo;
 use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
-use crate::terrain::roads::road_structs::RoadStyleParams;
+use crate::terrain::roads::road_structs::RoadEditorCommand;
 use crate::ui::input::InputState;
+use crate::world::camera::Camera;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
@@ -23,12 +25,8 @@ pub struct ChunkGpuMesh {
 pub struct RoadRenderSubsystem {
     pub mesh_manager: RoadMeshManager,
 
-    pub style: RoadStyleParams,
     pub chunk_gpu: HashMap<ChunkId, ChunkGpuMesh>,
     pub visible_draw_list: Vec<ChunkId>,
-
-    pub road_manager: RoadManager,
-    pub road_editor: RoadEditor,
 
     pub preview_state: RoadPreviewState,
     pub preview_gpu: PreviewGpuMesh,
@@ -38,76 +36,54 @@ impl RoadRenderSubsystem {
     pub fn new(device: &Device) -> Self {
         Self {
             mesh_manager: RoadMeshManager::new(MeshConfig::default()),
-            style: RoadStyleParams::default(),
             chunk_gpu: Default::default(),
             visible_draw_list: vec![],
-            road_manager: RoadManager::new(),
-            road_editor: RoadEditor::new(),
             preview_state: RoadPreviewState::new(),
             preview_gpu: PreviewGpuMesh::new(),
             road_appearance: RoadAppearanceGpu::new(device),
         }
     }
 
-    /// Called each frame with visible chunk IDs
+    /// Render-only update: processes commands for preview/mesh, rebuilds chunk meshes, uploads to GPU.
     pub fn update(
         &mut self,
-        terrain_renderer: &TerrainRenderer,
-        car_subsystem: &mut CarSubsystem,
+        terrain_renderer: &TerrainSubsystem,
+        road_subsystem: &RoadSubsystem,
         device: &Device,
         queue: &Queue,
-        input: &mut InputState,
-        picked_point: &Option<PickedPoint>,
         camera: &Camera,
         gizmo: &mut Gizmo,
     ) {
-        // Get commands from road editor
-        let road_commands = self.road_editor.update(
-            &self.road_manager,
+        // --- Preview mesh ---
+        // Rebuild preview mesh from the (already-mutated) preview_roads
+        let preview_mesh = self.mesh_manager.build_preview_mesh(
             terrain_renderer,
-            &mut self.style,
-            input,
-            picked_point,
-        );
-        // Apply preview commands to create preview geometry
-        apply_preview_commands(
-            terrain_renderer,
-            &mut self.mesh_manager,
-            &mut self.road_manager.preview_roads, // preview RoadStorage
-            &self.road_manager.roads,
-            car_subsystem,
-            &self.style,
+            &road_subsystem.road_manager.preview_roads,
+            &road_subsystem.road_editor.style,
             gizmo,
-            &road_commands,
         );
-        self.preview_state.ingest(&road_commands);
+        self.preview_gpu.upload(device, &preview_mesh);
+
+        // Preview appearance state
+        self.preview_state
+            .ingest(road_subsystem.road_commands.as_slice());
         self.road_appearance
             .update_preview_buffer(queue, &self.preview_state, camera.orbit_radius);
-        // Apply real topology commands
-        if !road_commands.is_empty() {
-            //println!("{:?}", road_commands);
-            let _results = apply_commands(
+
+        // --- Chunk meshes for committed roads ---
+        // Rebuild any dirty chunk meshes from commands
+        let affected_chunks = collect_affected_chunks(road_subsystem.road_commands.as_slice());
+        for chunk_id in &affected_chunks {
+            self.mesh_manager.update_chunk_mesh(
                 terrain_renderer,
-                &mut self.mesh_manager,
-                &mut self.road_manager.roads,
-                car_subsystem,
-                &self.style,
-                false,
+                *chunk_id,
+                &road_subsystem.road_manager.roads,
+                &road_subsystem.road_editor.style,
                 gizmo,
-                road_commands,
             );
         }
 
-        let preview_mesh = self.mesh_manager.build_preview_mesh(
-            terrain_renderer,
-            &self.road_manager.preview_roads,
-            &self.style,
-            gizmo,
-        );
-
-        self.preview_gpu.upload(device, &preview_mesh);
-
-        // === Existing chunk mesh update logic ===
+        // --- Visible draw list ---
         self.visible_draw_list.clear();
 
         for v in &terrain_renderer.visible {
@@ -115,7 +91,7 @@ impl RoadRenderSubsystem {
 
             let needs_rebuild = self.mesh_manager.chunk_needs_update(
                 chunk_id,
-                &self.road_manager.roads,
+                &road_subsystem.road_manager.roads,
                 terrain_renderer.chunk_size,
             );
 
@@ -123,8 +99,8 @@ impl RoadRenderSubsystem {
                 self.mesh_manager.update_chunk_mesh(
                     terrain_renderer,
                     chunk_id,
-                    &self.road_manager.roads,
-                    &self.style,
+                    &road_subsystem.road_manager.roads,
+                    &road_subsystem.road_editor.style,
                     gizmo,
                 )
             } else {
@@ -175,6 +151,54 @@ impl RoadRenderSubsystem {
     }
 }
 
+pub struct RoadSubsystem {
+    pub road_manager: RoadManager,
+    pub road_editor: RoadEditor,
+    road_commands: Vec<RoadEditorCommand>,
+}
+impl RoadSubsystem {
+    pub fn new() -> Self {
+        Self {
+            road_manager: RoadManager::new(),
+            road_editor: RoadEditor::new(),
+            road_commands: vec![],
+        }
+    }
+    /// World-only update: runs the editor, applies commands to road storage and car subsystem.
+    /// Returns the commands so the render subsystem can process previews/meshes.
+    pub fn update(
+        &mut self,
+        terrain_renderer: &TerrainSubsystem,
+        car_subsystem: &mut CarSubsystem,
+        input: &mut InputState,
+        gizmo: &mut Gizmo,
+    ) {
+        self.road_commands = self
+            .road_editor
+            .update(&self.road_manager, terrain_renderer, input);
+
+        // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
+        apply_preview_commands_world(
+            terrain_renderer,
+            &self.road_editor.style,
+            &mut self.road_manager.preview_roads,
+            &self.road_manager.roads,
+            car_subsystem,
+            &self.road_commands,
+            gizmo,
+        );
+
+        // Apply real commands to roads storage
+        if !self.road_commands.is_empty() {
+            apply_commands_world(
+                &mut self.road_manager.roads,
+                car_subsystem,
+                gizmo,
+                &self.road_commands,
+            );
+        }
+    }
+}
 pub const _WGSL_SDF_TEXT_OVERLAY: &str = r#"
 @group(1) @binding(0) var glyph_atlas: texture_2d_array<f32>;
 @group(1) @binding(1) var glyph_sampler: sampler;

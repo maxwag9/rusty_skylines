@@ -1,15 +1,15 @@
 use crate::data::Settings;
-use crate::events::Events;
-use crate::paths::data_dir;
-use crate::renderer::Renderer;
+use crate::helpers::paths::data_dir;
+use crate::renderer::render_core::{
+    RenderCore, create_device, create_surface_and_adapter, create_surface_config,
+};
 use crate::renderer::shadows::CSM_CASCADES;
-use crate::simulation::Simulation;
 use crate::ui::actions::CommandQueue;
-use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::world::World;
+use crate::world::world_core::WorldCore;
 use std::sync::Arc;
 use std::time::Instant;
+use wgpu::Surface;
 use winit::window::Window;
 
 pub struct CommandQueues {
@@ -24,24 +24,37 @@ impl CommandQueues {
 }
 pub struct Resources {
     pub settings: Settings,
-    pub time: TimeSystem,
-    pub input: InputState,
-    pub renderer: Renderer,
-    pub simulation: Simulation,
-    pub ui_loader: UiButtonLoader,
-    pub events: Events,
     pub window: Arc<Window>,
     pub command_queues: CommandQueues,
+
+    // The simulation & world core:
+    pub world_core: WorldCore,
+
+    // The GPU + render-only subsystems:
+    pub render_core: RenderCore,
+
+    pub ui_loader: UiButtonLoader,
+    pub surface: Surface<'static>,
 }
 
 impl Resources {
-    pub fn new(window: Arc<Window>, world: &mut World) -> Self {
-        let settings = Settings::load(data_dir("settings.toml"));
+    pub fn new(window: Arc<Window>) -> Self {
+        let mut settings = Settings::load(data_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
-        let camera_entity = world.main_camera();
-        let camera = world.camera_mut(camera_entity).unwrap();
+
+        let (surface, adapter, size) = create_surface_and_adapter(window.clone());
+        let (config, msaa_samples) = create_surface_config(&surface, &adapter, &mut settings, size);
+        let (device, queue) = &create_device(&adapter);
+
+        surface.configure(device, &config);
+
+        let mut world_core = WorldCore::new(device, &settings);
+        let camera_entity = world_core.world_state.main_camera();
+        let camera = world_core.world_state.camera_mut(camera_entity).unwrap();
         camera.target = settings.player_pos;
-        let renderer = Renderer::new(window.clone(), &settings, camera);
+
+        let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
+
         let mut ui_loader = UiButtonLoader::new(
             editor_mode,
             settings.override_mode,
@@ -54,19 +67,16 @@ impl Resources {
             .set_bool("editor_mode", settings.editor_mode);
         let mut command_queues = CommandQueues::new();
         ui_loader.set_starting_menu(&settings, &mut command_queues.ui_command_queue);
-        let mut time = TimeSystem::new();
-        time.total_game_time = settings.total_game_time;
+        world_core.time.total_game_time = settings.total_game_time;
 
         Self {
+            surface,
             settings,
-            time,
-            input: InputState::new(),
-            renderer,
-            simulation: Simulation::new(),
             ui_loader,
-            events: Events::new(),
             window,
             command_queues,
+            world_core,
+            render_core,
         }
     }
 }

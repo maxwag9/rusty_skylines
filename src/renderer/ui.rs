@@ -1,4 +1,4 @@
-use crate::paths::shader_dir;
+use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::color_target;
 use crate::renderer::ui_pipelines::UiPipelines;

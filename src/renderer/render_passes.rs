@@ -1,20 +1,21 @@
 use crate::cars::car_mesh::CarVertex;
 use crate::cars::car_render::CarInstance;
-use crate::cars::car_subsystem::CarSubsystem;
-use crate::components::camera::Camera;
+use crate::cars::car_structs::CarStorage;
+use crate::cars::car_subsystem::CarRenderSubsystem;
 use crate::data::Settings;
 use crate::gpu_timestamp;
-use crate::paths::shader_dir;
+use crate::helpers::paths::shader_dir;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
+use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::renderer::textures::material_keys::*;
-use crate::renderer::world_renderer::TerrainRenderer;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
 use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::terrain::water::SimpleVertex;
 use crate::ui::vertex::{LineVtxRender, Vertex};
+use crate::world::camera::Camera;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{PipelineOptions, ShadowOptions};
@@ -205,7 +206,8 @@ pub fn render_sky(
 pub fn render_terrain(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
-    terrain_renderer: &TerrainRenderer,
+    terrain_renderer: &TerrainRenderSubsystem,
+    terrain_subsystem: &TerrainSubsystem,
     pipelines: &Pipelines,
     settings: &Settings,
     msaa_samples: u32,
@@ -264,7 +266,7 @@ pub fn render_terrain(
         &[&pipelines.buffers.camera, &pipelines.buffers.pick],
         pass,
     );
-    terrain_renderer.render(pass, camera, aspect, settings, true);
+    terrain_renderer.render(pass, terrain_subsystem, camera, aspect, settings, true);
 
     // Terrain Pipeline (Above Water)
     pass.set_stencil_reference(0);
@@ -284,7 +286,7 @@ pub fn render_terrain(
         &[&pipelines.buffers.camera, &pipelines.buffers.pick],
         pass,
     );
-    terrain_renderer.render(pass, camera, aspect, settings, false);
+    terrain_renderer.render(pass, terrain_subsystem, camera, aspect, settings, false);
 }
 pub fn render_water(
     pass: &mut RenderPass,
@@ -468,7 +470,8 @@ pub fn render_gizmo(
 pub fn render_cars(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
-    car_subsystem: &mut CarSubsystem,
+    car_renderer: &mut CarRenderSubsystem,
+    car_storage: &CarStorage,
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,
@@ -497,7 +500,7 @@ pub fn render_cars(
         pass,
     );
 
-    car_subsystem.render(camera, pass);
+    car_renderer.render(car_storage, camera, pass);
 }
 
 fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {

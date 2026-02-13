@@ -1,6 +1,6 @@
 use crate::events::Event;
-use crate::paths::data_dir;
-use crate::renderer::world_renderer::CursorMode;
+use crate::helpers::paths::data_dir;
+use crate::renderer::terrain_subsystem::CursorMode;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
 use crate::systems::car_events::run_car_events;
@@ -13,7 +13,7 @@ use crate::terrain::roads::road_structs::RoadType;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
-use crate::world::World;
+use crate::world::world_core::WorldCore;
 use glam::Vec2;
 use std::sync::Arc;
 use std::thread;
@@ -37,7 +37,6 @@ const MAX_SIM_STEPS_PER_FRAME: usize = 1_000;
 
 pub struct App {
     window: Option<Arc<Window>>,
-    world: Option<World>,
     resources: Option<Resources>,
     schedule: Schedule,
 }
@@ -46,7 +45,6 @@ impl App {
     pub fn new() -> Self {
         Self {
             window: None,
-            world: None,
             resources: None,
             schedule: Schedule::new(),
         }
@@ -65,7 +63,7 @@ struct Schedule {
     input_systems: Vec<SystemFn>,
 }
 
-type SystemFn = fn(&mut World, &mut Resources);
+type SystemFn = fn(&mut Resources);
 
 impl Schedule {
     fn new() -> Self {
@@ -76,35 +74,47 @@ impl Schedule {
         }
     }
 
-    pub fn run_sim(&self, world: &mut World, resources: &mut Resources) {
+    pub fn run_sim(&self, resources: &mut Resources) {
         for system in &self.sim_systems {
-            system(world, resources);
+            system(resources);
         }
     }
 
-    pub fn run_render(&self, world: &mut World, resources: &mut Resources) {
+    pub fn run_render(&self, resources: &mut Resources) {
+        let aspect =
+            resources.render_core.config.width as f32 / resources.render_core.config.height as f32;
+        let settings = &resources.settings;
+        resources
+            .world_core
+            .world_state
+            .camera_mut(resources.world_core.world_state.main_camera())
+            .unwrap()
+            .compute_matrices(aspect, settings);
         for system in &self.render_systems {
-            system(world, resources);
+            system(resources);
         }
+        resources
+            .world_core
+            .world_state
+            .camera_mut(resources.world_core.world_state.main_camera())
+            .unwrap()
+            .end_frame();
     }
 
-    pub fn run_inputs(&self, world: &mut World, resources: &mut Resources) {
+    pub fn run_inputs(&self, resources: &mut Resources) {
         for system in &self.input_systems {
-            system(world, resources);
+            system(resources);
         }
     }
-    pub fn run_events(&self, _world: &mut World, resources: &mut Resources) {
-        resources.events.flip();
+    pub fn run_events(&self, resources: &mut Resources) {
+        let world = &mut resources.world_core;
+        world.events.flip();
 
-        for event in resources.events.drain() {
+        for event in world.events.drain() {
             // order is explicit and intentional
-            resources.simulation.process_event(&event);
-            cursor_system(&mut resources.renderer.core.terrain_renderer.cursor, &event);
-            run_car_events(
-                event,
-                &mut resources.renderer.core.car_subsystem,
-                &resources.renderer.core.road_renderer,
-            );
+            world.simulation.process_event(&event);
+            cursor_system(&mut world.terrain_subsystem.cursor, &event);
+            run_car_events(event, &mut world.car_subsystem, &world.road_subsystem);
             // later:
             // audio_event_system(...)
             // ui_event_system(...)
@@ -115,10 +125,13 @@ impl Schedule {
 impl ApplicationHandler for App {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
         if let Some(resources) = self.resources.as_mut() {
-            resources.input.mouse.delta = Vec2::ZERO;
-            resources.input.begin_frame(resources.time.total_time);
-            let pos = resources.input.mouse.pos;
-            let delta = resources.input.mouse.delta;
+            let world = &mut resources.world_core;
+            let input = &mut world.input;
+            let time = &world.time;
+            input.mouse.delta = Vec2::ZERO;
+            input.begin_frame(time.total_time);
+            let pos = input.mouse.pos;
+            let delta = input.mouse.delta;
 
             resources.ui_loader.variables.set_f32("mouse_pos.x", pos.x);
             resources
@@ -144,16 +157,12 @@ impl ApplicationHandler for App {
                 .expect("Failed to create window"),
         );
 
-        let mut world = World::new();
-        let mut resources = Resources::new(window.clone(), &mut world);
-        resources
-            .time
-            .set_tps(resources.settings.target_tps.max(1.0));
-        resources
-            .time
-            .set_fps(resources.settings.target_fps.max(1.0));
+        let mut resources = Resources::new(window.clone());
+        let world = &mut resources.world_core;
+        let time = &mut world.time;
+        time.set_tps(resources.settings.target_tps.max(1.0));
+        time.set_fps(resources.settings.target_fps.max(1.0));
         self.window = Some(window.clone());
-        self.world = Some(world);
         self.resources = Some(resources);
 
         event_loop.set_control_flow(ControlFlow::Poll);
@@ -164,17 +173,21 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => {
-                let (Some(world), Some(resources)) = (self.world.as_mut(), self.resources.as_mut())
-                else {
+                let Some(resources) = self.resources.as_mut() else {
                     return;
                 };
-                let Some(camera) = world.camera_mut(world.main_camera()) else {
+                let world = &mut resources.world_core;
+                let Some(camera) = world
+                    .world_state
+                    .camera_mut(world.world_state.main_camera())
+                else {
                     return;
                 };
                 let variables = &mut resources.ui_loader.variables;
                 let settings = &mut resources.settings;
                 let ui_options = &mut resources.ui_loader.touch_manager.options;
-                let input = &mut resources.input;
+                let input = &mut world.input;
+                let time = &world.time;
                 let down = event.state == ElementState::Pressed;
 
                 // physical
@@ -214,7 +227,7 @@ impl ApplicationHandler for App {
 
                 // MSAA cycle
                 if input.action_repeat("Cycle MSAA") {
-                    resources.renderer.core.cycle_msaa(settings);
+                    resources.render_core.cycle_msaa(settings);
                 }
 
                 if input.action_repeat("Switch Debug Render Mode") {
@@ -271,23 +284,23 @@ impl ApplicationHandler for App {
                     }
                 }
                 if input.action_pressed_once("Toggle Cursor Mode") {
-                    match resources.renderer.core.terrain_renderer.cursor.mode {
-                        CursorMode::Roads(_) => resources
-                            .events
-                            .send(Event::SetCursorMode(CursorMode::Cars)),
-                        CursorMode::Cars => resources
+                    match world.terrain_subsystem.cursor.mode {
+                        CursorMode::Roads(_) => {
+                            world.events.send(Event::SetCursorMode(CursorMode::Cars))
+                        }
+                        CursorMode::Cars => world
                             .events
                             .send(Event::SetCursorMode(CursorMode::TerrainEditing)),
-                        CursorMode::TerrainEditing => resources
-                            .events
-                            .send(Event::SetCursorMode(CursorMode::None)),
-                        CursorMode::None => resources
+                        CursorMode::TerrainEditing => {
+                            world.events.send(Event::SetCursorMode(CursorMode::None))
+                        }
+                        CursorMode::None => world
                             .events
                             .send(Event::SetCursorMode(CursorMode::Roads(RoadType::default()))),
                     }
                 }
                 if input.action_pressed_once("Leave Game") {
-                    settings.total_game_time = resources.time.total_game_time;
+                    settings.total_game_time = time.total_game_time;
                     settings.player_pos = camera.target;
                     match settings.save(data_dir("settings.toml")) {
                         Ok(_) => println!("Settings saved"),
@@ -295,9 +308,8 @@ impl ApplicationHandler for App {
                     }
                     if settings.show_world {
                         match resources
-                            .renderer
-                            .core
-                            .terrain_renderer
+                            .world_core
+                            .terrain_subsystem
                             .terrain_editor
                             .save_edits(data_dir("edited_chunks"))
                         {
@@ -322,7 +334,7 @@ impl ApplicationHandler for App {
                             &mut resources.ui_loader.touch_manager,
                             &mut resources.ui_loader.menus,
                             &mut resources.ui_loader.variables,
-                            &resources.input.mouse,
+                            &input.mouse,
                         )
                     }
                 }
@@ -330,16 +342,20 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.input.handle_mouse_button(button, state);
+                    resources
+                        .world_core
+                        .input
+                        .handle_mouse_button(button, state);
                 }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.input.handle_mouse_move(position.x, position.y);
+                    let input = &mut resources.world_core.input;
+                    input.handle_mouse_move(position.x, position.y);
 
-                    let pos = resources.input.mouse.pos;
-                    let delta = resources.input.mouse.delta;
+                    let pos = input.mouse.pos;
+                    let delta = input.mouse.delta;
 
                     resources.ui_loader.variables.set_f32("mouse_pos.x", pos.x);
                     resources
@@ -352,20 +368,20 @@ impl ApplicationHandler for App {
                         .variables
                         .set_f32("mouse_pos_delta.y", delta.y);
                     // camera rotation ONLY if needed & dragging
-                    if resources.input.mouse.middle_pressed {
-                        if let Some(world) = self.world.as_mut() {
-                            if let Some(controller) =
-                                world.camera_controller_mut(world.main_camera())
-                            {
-                                let pitch_s = 0.002;
-                                let yaw_s = 0.0016;
+                    if input.mouse.middle_pressed {
+                        if let Some(controller) = resources
+                            .world_core
+                            .world_state
+                            .camera_controller_mut(resources.world_core.world_state.main_camera())
+                        {
+                            let pitch_s = 0.002;
+                            let yaw_s = 0.0016;
 
-                                controller.target_yaw += delta.x * yaw_s;
-                                controller.target_pitch += delta.y * pitch_s;
+                            controller.target_yaw += delta.x * yaw_s;
+                            controller.target_pitch += delta.y * pitch_s;
 
-                                controller.yaw_velocity = delta.x * yaw_s;
-                                controller.pitch_velocity = delta.y * pitch_s;
-                            }
+                            controller.yaw_velocity = delta.x * yaw_s;
+                            controller.pitch_velocity = delta.y * pitch_s;
                         }
                     }
                 }
@@ -373,146 +389,99 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let scroll = resources.input.handle_mouse_wheel(delta);
+                    let scroll = resources.world_core.input.handle_mouse_wheel(delta);
 
                     if !resources.settings.editor_mode {
-                        if let Some(world) = self.world.as_mut() {
-                            let cam = world.main_camera();
+                        let cam = resources.world_core.world_state.main_camera();
 
-                            if let Some(controller) = world.camera_controller_mut(cam) {
-                                let zoom_factor = 10.0;
-                                controller.zoom_velocity -= scroll.y * zoom_factor;
-                            }
+                        if let Some(controller) =
+                            resources.world_core.world_state.camera_controller_mut(cam)
+                        {
+                            let zoom_factor = 10.0;
+                            controller.zoom_velocity -= scroll.y * zoom_factor;
                         }
                     }
                 }
             }
             WindowEvent::Resized(size) => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.renderer.resize(size);
+                    resources.render_core.resize(&resources.surface, size);
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(resources) = self.resources.as_mut() {
                     let size = resources.window.inner_size(); // << get the real physical size
                     if size.width > 0 && size.height > 0 {
-                        resources.renderer.resize(size);
+                        resources.render_core.resize(&resources.surface, size);
                     }
                 }
             }
 
             WindowEvent::RedrawRequested => {
-                if let (Some(world), Some(resources)) =
-                    (self.world.as_mut(), self.resources.as_mut())
+                let Some(resources) = self.resources.as_mut() else {
+                    event_loop.exit();
+                    return;
+                };
+                let frame_start = Instant::now();
+                update_time_and_ui(resources);
+
+                // -----------------------------
+                // Fixed-step simulation with budget + spiral-of-death protection
+                // -----------------------------
+                // Do input/events once per render frame (prevents "pressed_once" from firing N times).
+                self.schedule.run_inputs(resources);
+                self.schedule.run_events(resources);
+
+                // Clamp runaway backlog (e.g., window drag / breakpoint)
+                resources
+                    .world_core
+                    .time
+                    .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
+
+                let sim_budget = Duration::from_secs_f32(
+                    (resources.world_core.time.target_frametime * 0.7).max(0.0),
+                );
+                let sim_deadline = Instant::now() + sim_budget;
+
+                let mut steps = 0usize;
+                while resources.world_core.time.can_step_sim()
+                    && steps < MAX_SIM_STEPS_PER_FRAME
+                    && Instant::now() < sim_deadline
                 {
-                    let frame_start = Instant::now();
+                    self.schedule.run_sim(resources);
+                    resources.world_core.time.consume_sim_step();
+                    steps += 1;
+                }
 
-                    // -----------------------------
-                    // Time controls (incl. real toggle stop)
-                    // -----------------------------
-                    let can_time_control = !resources.settings.editor_mode
-                        && !resources.settings.drive_car
-                        && resources.settings.show_world;
+                let achieved_speed = if resources.world_core.time.render_dt > 0.0 {
+                    (steps as f32 * resources.world_core.time.target_sim_dt)
+                        / resources.world_core.time.render_dt
+                } else {
+                    0.0
+                };
+                resources
+                    .ui_loader
+                    .variables
+                    .set_f32("achieved_time_speed", achieved_speed);
 
-                    if can_time_control && resources.input.action_pressed_once("Toggle Stop Time") {
-                        resources.simulation.toggle();
+                // -----------------------------
+                // Render
+                // -----------------------------
+                resources.world_core.world_state.update(
+                    &mut resources.ui_loader,
+                    &resources.world_core.time,
+                    &resources.settings,
+                );
+                self.schedule.run_render(resources);
 
-                        // Important: kill any backlog so the sim stops immediately.
-                        if !resources.simulation.running {
-                            resources.time.clear_sim_accumulator();
-                        }
-                    }
-
-                    // Base timescale from "stopped" state
-                    let mut time_speed = if resources.simulation.running {
-                        1.0
-                    } else {
-                        0.0
-                    };
-
-                    // Optional override from held bindings (also resumes time)
-                    for (action, speed) in TIME_SPEED_BINDINGS {
-                        if resources.input.action_down(action) {
-                            time_speed = speed;
-                            resources.simulation.running = true; // resume if user is explicitly controlling time
-                            break;
-                        }
-                    }
-
-                    // Ensure stop always wins if it's enabled (even if other keys are held)
-                    if !resources.simulation.running {
-                        time_speed = 0.0;
-                    }
-
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_f32("time_speed", time_speed);
-
-                    // -----------------------------
-                    // Frame timing (accumulator lives here)
-                    // -----------------------------
-                    resources.time.begin_frame(time_speed);
-
-                    // UI globals
-                    {
-                        let ui = &mut resources.ui_loader;
-                        ui.variables.set_f32("fps", resources.time.render_fps);
-                        ui.variables.set_f32("render_dt", resources.time.render_dt);
-                        ui.variables.set_f32("sim_dt", resources.time.target_sim_dt);
-                        ui.variables
-                            .set_f32("total_game_time", resources.time.total_game_time as f32);
-                    }
-
-                    // -----------------------------
-                    // Fixed-step simulation with budget + spiral-of-death protection
-                    // -----------------------------
-                    // Do input/events once per render frame (prevents "pressed_once" from firing N times).
-                    self.schedule.run_inputs(world, resources);
-                    self.schedule.run_events(world, resources);
-
-                    // Clamp runaway backlog (e.g., window drag / breakpoint)
-                    resources
-                        .time
-                        .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
-
-                    let sim_budget =
-                        Duration::from_secs_f32((resources.time.target_frametime * 0.7).max(0.0));
-                    let sim_deadline = Instant::now() + sim_budget;
-
-                    let mut steps = 0usize;
-                    while resources.time.can_step_sim()
-                        && steps < MAX_SIM_STEPS_PER_FRAME
-                        && Instant::now() < sim_deadline
-                    {
-                        self.schedule.run_sim(world, resources);
-                        resources.time.consume_sim_step();
-                        steps += 1;
-                    }
-
-                    let achieved_speed = if resources.time.render_dt > 0.0 {
-                        (steps as f32 * resources.time.target_sim_dt) / resources.time.render_dt
-                    } else {
-                        0.0
-                    };
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_f32("achieved_time_speed", achieved_speed);
-
-                    // -----------------------------
-                    // Render
-                    // -----------------------------
-                    self.schedule.run_render(world, resources);
-
-                    // -----------------------------
-                    // FPS cap
-                    // -----------------------------
-                    let elapsed = frame_start.elapsed();
-                    let target = Duration::from_secs_f32(resources.time.target_frametime.max(0.0));
-                    if target > Duration::ZERO && elapsed < target {
-                        thread::sleep(target - elapsed);
-                    }
+                // -----------------------------
+                // FPS cap
+                // -----------------------------
+                let elapsed = frame_start.elapsed();
+                let target =
+                    Duration::from_secs_f32(resources.world_core.time.target_frametime.max(0.0));
+                if target > Duration::ZERO && elapsed < target {
+                    thread::sleep(target - elapsed);
                 }
 
                 if let Some(window) = &self.window {
@@ -522,11 +491,80 @@ impl ApplicationHandler for App {
 
             WindowEvent::Focused(false) | WindowEvent::Focused(true) => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.input.reset_all(resources.time.total_time);
+                    let input = &mut resources.world_core.input;
+                    let time = &mut resources.world_core.time;
+                    input.reset_all(time.total_time);
                 }
             }
 
             _ => {}
         }
+    }
+}
+
+fn update_time_and_ui(resources: &mut Resources) {
+    let Resources {
+        world_core,
+        settings,
+        ui_loader,
+        ..
+    } = resources;
+    let WorldCore {
+        world_state,
+        time,
+        input,
+        simulation,
+        ..
+    } = world_core;
+
+    // -----------------------------
+    // Time controls (incl. real toggle stop)
+    // -----------------------------
+    let can_time_control = !settings.editor_mode && !settings.drive_car && settings.show_world;
+
+    if can_time_control && input.action_pressed_once("Toggle Stop Time") {
+        simulation.toggle();
+
+        // Important: kill any backlog so the sim stops immediately.
+        if !simulation.running {
+            time.clear_sim_accumulator();
+        }
+    }
+
+    // Base timescale from "stopped" state
+    let mut time_speed = if simulation.running { 1.0 } else { 0.0 };
+
+    // Optional override from held bindings (also resumes time)
+    for (action, speed) in TIME_SPEED_BINDINGS {
+        if input.action_down(action) {
+            time_speed = speed;
+            simulation.running = true; // resume if user is explicitly controlling time
+            break;
+        }
+    }
+
+    // Ensure stop always wins if it's enabled (even if other keys are held)
+    if !simulation.running {
+        time_speed = 0.0;
+    }
+
+    resources
+        .ui_loader
+        .variables
+        .set_f32("time_speed", time_speed);
+
+    // -----------------------------
+    // Frame timing (accumulator lives here)
+    // -----------------------------
+    time.begin_frame(time_speed);
+
+    // UI globals
+    {
+        let ui = &mut resources.ui_loader;
+        ui.variables.set_f32("fps", time.render_fps);
+        ui.variables.set_f32("render_dt", time.render_dt);
+        ui.variables.set_f32("sim_dt", time.target_sim_dt);
+        ui.variables
+            .set_f32("total_game_time", time.total_game_time as f32);
     }
 }

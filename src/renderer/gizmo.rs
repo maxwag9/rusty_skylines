@@ -1,10 +1,10 @@
 #![allow(dead_code)]
-use crate::components::camera::Camera;
 use crate::data::Settings;
-use crate::positions::{ChunkSize, LocalPos, WorldPos};
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld};
+use crate::world::camera::Camera;
 use glam::Vec3;
 use std::f32::consts::{PI, TAU};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
@@ -464,7 +464,7 @@ impl Gizmo {
 
     pub fn update(
         &mut self,
-        terrain_renderer: &TerrainRenderer,
+        terrain_subsystem: &TerrainSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,
         settings: &Settings,
@@ -477,11 +477,11 @@ impl Gizmo {
         // self.sphere(camera.eye_world(), 400.0, [1.0, 1.0, 1.0], 0.0);
 
         if settings.render_chunk_bounds {
-            if terrain_renderer.chunks.contains_key(&target.chunk) {
+            if terrain_subsystem.chunks.contains_key(&target.chunk) {
                 let chunk_size_f = self.chunk_size as f32;
                 let corner = WorldPos::new(
                     target.chunk,
-                    LocalPos::new(0.0, terrain_renderer.get_height_at(target), 0.0),
+                    LocalPos::new(0.0, terrain_subsystem.get_height_at(target), 0.0),
                 );
                 self.box_xz(
                     corner.add_vec3(

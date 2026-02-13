@@ -1,8 +1,8 @@
 // intersections.rs - Fixed Clipper2 API usage
 
-use crate::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::terrain::roads::road_helpers::*;
 use crate::terrain::roads::road_mesh_manager::*;
@@ -761,7 +761,7 @@ pub fn triangulate_polygon_with_hole(
 // ============================================================================
 
 pub fn build_intersection_mesh(
-    terrain: &TerrainRenderer,
+    terrain: &TerrainSubsystem,
     _node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,
@@ -911,7 +911,7 @@ fn gather_arms_from_node_lanes(
 }
 
 fn build_sidewalk_ring(
-    terrain: &TerrainRenderer,
+    terrain: &TerrainSubsystem,
     center: WorldPos,
     inner: &[Vec2],
     outer: &[Vec2],
@@ -963,7 +963,7 @@ fn build_sidewalk_ring(
 }
 
 fn build_curb_faces(
-    terrain: &TerrainRenderer,
+    terrain: &TerrainSubsystem,
     center: WorldPos,
     inner_ring: &[Vec2],
     road_type: &RoadType,

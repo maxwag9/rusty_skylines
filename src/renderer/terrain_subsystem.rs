@@ -1,8 +1,7 @@
-use crate::components::camera::Camera;
 use crate::data::{LodCenterType, Settings};
-use crate::mouse_ray::*;
-use crate::paths::data_dir;
-use crate::positions::*;
+use crate::helpers::mouse_ray::*;
+use crate::helpers::paths::data_dir;
+use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::resources::TimeSystem;
@@ -14,6 +13,7 @@ use crate::terrain::terrain_editing::*;
 use crate::terrain::threads::{ChunkJob, ChunkWorkerPool};
 use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
+use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -61,24 +61,254 @@ impl Cursor {
     }
 }
 
-pub struct TerrainRenderer {
-    pub cursor: Cursor,
-    pub arena: TerrainMeshArena,
-
-    pub chunks: HashMap<ChunkCoord, ChunkMeshLod>,
-    pub pending: HashMap<ChunkCoord, (u64, LodStep)>,
-    pub terrain_editor: TerrainEditor,
-
-    pub terrain_gen: TerrainGenerator,
-    pub chunk_size: ChunkSize,
-    pub view_radius_generate: usize,
-    pub view_radius_render: usize,
-
+pub struct TerrainJobs {
     pub workers: ChunkWorkerPool,
+    pub pending: HashMap<ChunkCoord, (u64, LodStep)>,
+    pub job_config: ChunkJobConfig,
     pub max_close_jobs_per_frame: usize,
     pub max_close_chunks_per_batch: usize,
     pub max_far_chunks_per_batch: usize,
     pub max_far_jobs_per_frame: usize,
+}
+
+impl TerrainJobs {
+    fn new(workers: ChunkWorkerPool) -> Self {
+        Self {
+            pending: HashMap::new(),
+            workers,
+            job_config: ChunkJobConfig::default(),
+            max_close_jobs_per_frame: 1,
+            max_close_chunks_per_batch: 2,
+            max_far_chunks_per_batch: 100,
+            max_far_jobs_per_frame: 1,
+        }
+    }
+    fn dispatch_jobs_for_visible(
+        &mut self,
+        terrain_editor: &TerrainEditor,
+        chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
+        visible: &Vec<VisibleChunk>,
+        lod_map: &HashMap<ChunkCoord, LodStep>,
+    ) {
+        let mut close_batch = Vec::new();
+        let mut far_batch = Vec::new();
+
+        let mut close_jobs_sent = 0usize;
+        let mut far_batches_sent = 0usize;
+
+        for v in visible.iter() {
+            let cx = v.coords.chunk_coord.x;
+            let cz = v.coords.chunk_coord.z;
+            if close_jobs_sent >= self.max_close_jobs_per_frame
+                && far_batches_sent >= self.max_far_jobs_per_frame
+            {
+                break;
+            }
+
+            let coord = v.coords.chunk_coord;
+            let desired_step = *lod_map.get(&coord).unwrap_or(&1);
+
+            // Already good?
+            if let Some(ch) = chunks.get(&coord) {
+                if ch.step == desired_step {
+                    continue;
+                }
+            }
+            // Already pending same step?
+            if let Some((_ver, pending_step)) = self.pending.get(&coord).copied() {
+                if pending_step == desired_step {
+                    continue;
+                }
+            }
+            let has_edits = terrain_editor
+                .edited_chunks
+                .get(&coord)
+                .map_or(false, |e| !e.accumulated_deltas.is_empty());
+            // Neighbor LODs (fallback to step if neighbor not visible)
+            let step = desired_step;
+            let n_x_neg = *lod_map.get(&ChunkCoord::new(cx - 1, cz)).unwrap_or(&step);
+            let n_x_pos = *lod_map.get(&ChunkCoord::new(cx + 1, cz)).unwrap_or(&step);
+            let n_z_neg = *lod_map.get(&ChunkCoord::new(cx, cz - 1)).unwrap_or(&step);
+            let n_z_pos = *lod_map.get(&ChunkCoord::new(cx, cz + 1)).unwrap_or(&step);
+
+            if step <= 2 {
+                if close_jobs_sent < self.max_close_jobs_per_frame {
+                    let (version, version_atomic) = self.workers.new_version_for(coord);
+                    self.pending.insert(coord, (version, step));
+
+                    close_batch.push((
+                        coord,
+                        step,
+                        n_x_neg,
+                        n_x_pos,
+                        n_z_neg,
+                        n_z_pos,
+                        version,
+                        version_atomic,
+                        has_edits,
+                    ));
+
+                    if close_batch.len() >= self.max_close_chunks_per_batch {
+                        let job = ChunkJob {
+                            chunks: std::mem::take(&mut close_batch),
+                        };
+                        let _ = self.workers.job_tx.send(job);
+                        close_jobs_sent += 1;
+                    }
+                }
+            } else {
+                if far_batches_sent < self.max_far_jobs_per_frame {
+                    let (version, version_atomic) = self.workers.new_version_for(coord);
+                    self.pending.insert(coord, (version, step));
+
+                    far_batch.push((
+                        coord,
+                        step,
+                        n_x_neg,
+                        n_x_pos,
+                        n_z_neg,
+                        n_z_pos,
+                        version,
+                        version_atomic,
+                        has_edits,
+                    ));
+
+                    if far_batch.len() >= self.max_far_chunks_per_batch {
+                        let job = ChunkJob {
+                            chunks: std::mem::take(&mut far_batch),
+                        };
+                        let _ = self.workers.job_tx.send(job);
+                        far_batches_sent += 1;
+                    }
+                }
+            }
+        }
+        if !close_batch.is_empty() && close_jobs_sent < self.max_close_jobs_per_frame {
+            let job = ChunkJob {
+                chunks: close_batch,
+            };
+            let _ = self.workers.job_tx.send(job);
+        }
+
+        if !far_batch.is_empty() && far_batches_sent < self.max_far_jobs_per_frame {
+            let job = ChunkJob { chunks: far_batch };
+            let _ = self.workers.job_tx.send(job);
+        }
+    }
+}
+
+pub struct TerrainRenderSubsystem {}
+impl TerrainRenderSubsystem {
+    pub fn new() -> Self {
+        Self { /* fields */ }
+    }
+    pub fn render(
+        &self,
+        pass: &mut RenderPass,
+        terrain_subsystem: &TerrainSubsystem,
+        camera: &Camera,
+        aspect: f32,
+        settings: &Settings,
+        underwater: bool,
+    ) {
+        let t_frame = Instant::now();
+        let view_proj = camera.view_proj();
+        let planes = extract_frustum_planes(view_proj);
+
+        let cs = terrain_subsystem.chunk_size;
+        let target_pos = camera.target;
+        let target_cx = target_pos.chunk.x;
+        let target_cz = target_pos.chunk.z;
+
+        let r = terrain_subsystem.view_radius_render as i32;
+        let r2 = r * r;
+
+        let mut per_page: Vec<Vec<GpuChunkHandle>> =
+            vec![Vec::new(); terrain_subsystem.arena.pages.len()];
+
+        for (&chunk_coord, chunk) in terrain_subsystem.chunks.iter() {
+            let dx = chunk_coord.x - target_cx;
+            let dz = chunk_coord.z - target_cz;
+            if dx * dx + dz * dz > r2 {
+                continue;
+            }
+
+            let (min, max) =
+                chunk_aabb_render(chunk_coord.x, chunk_coord.z, cs, camera.eye_world());
+            if !aabb_in_frustum(&planes, min, max) {
+                continue;
+            }
+
+            let p = chunk.handle.page as usize;
+            if p < per_page.len() {
+                per_page[p].push(chunk.handle);
+            }
+        }
+        let mut total_indices: usize = 0;
+        let mut total_vertices: usize = 0;
+
+        for handles in &per_page {
+            for h in handles {
+                let count = if underwater {
+                    h.index_count_under as usize
+                } else {
+                    h.index_count_above as usize
+                };
+
+                total_indices += count;
+
+                // Worst-case but correct for GPU memory usage
+                // base_vertex + max index touched
+                total_vertices += count; // triangles already expanded
+            }
+        }
+
+        let index_bytes = total_indices * 4;
+        let vertex_bytes = total_vertices * VERTEX_SIZE_BYTES;
+        let _total_bytes = index_bytes + vertex_bytes;
+
+        // println!(
+        //     "render: {} vertices, {} indices, {:.2} MB total",
+        //     total_vertices,
+        //     total_indices,
+        //     _total_bytes as f32 / 1024.0 / 1024.0
+        // );
+
+        for (pi, handles) in per_page.iter().enumerate() {
+            if handles.is_empty() {
+                continue;
+            }
+
+            let page = &terrain_subsystem.arena.pages[pi];
+            pass.set_vertex_buffer(0, page.vertex_buf.slice(..));
+            pass.set_index_buffer(page.index_buf.slice(..), IndexFormat::Uint32);
+
+            for h in handles {
+                let (start, count) = if underwater {
+                    (h.first_index_under, h.index_count_under)
+                } else {
+                    (h.first_index_above, h.index_count_above)
+                };
+                pass.draw_indexed(start..start + count, h.base_vertex, 0..1);
+            }
+        }
+        let total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
+        // println!("{}", total_ms);
+    }
+}
+
+pub struct TerrainSubsystem {
+    pub cursor: Cursor,
+    pub arena: TerrainMeshArena,
+
+    pub chunks: HashMap<ChunkCoord, ChunkMeshLod>,
+    pub terrain_editor: TerrainEditor,
+
+    pub chunk_size: ChunkSize,
+    pub view_radius_generate: usize,
+    pub view_radius_render: usize,
+
+    pub terrain_jobs: TerrainJobs,
 
     pub spiral: Vec<ChunkCoord>,
     pub lod_map: HashMap<ChunkCoord, LodStep>,
@@ -88,16 +318,12 @@ pub struct TerrainRenderer {
 
     pub benchmark: Benchmark,
     pub frame_timings: FrameTimings,
-    pub job_config: ChunkJobConfig,
     pub visible: Vec<VisibleChunk>,
+    pub terrain_gen: TerrainGenerator,
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
-impl TerrainRenderer {
+impl TerrainSubsystem {
     pub fn new(device: &Device, settings: &Settings) -> Self {
-        let mut terrain_params = TerrainParams::default();
-        terrain_params.seed = 144;
-        let terrain_gen = TerrainGenerator::new(terrain_params);
-
         let chunk_size: ChunkSize = settings.chunk_size;
         let view_radius_render = (64f32 * (64f32 / chunk_size as f32)) as usize;
         let view_radius_generate = (32f32 * (64f32 / chunk_size as f32)) as usize;
@@ -108,10 +334,6 @@ impl TerrainRenderer {
             128 * 1024 * 1024, // index bytes per page
         );
 
-        let threads = num_cpus::get_physical().saturating_sub(1).max(1);
-        println!("Using {} chunk workers", threads);
-
-        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size);
         let terrain_editor: TerrainEditor;
         if settings.show_world {
             terrain_editor = match TerrainEditor::load_edits(data_dir("edited_chunks")) {
@@ -128,24 +350,27 @@ impl TerrainRenderer {
             terrain_editor = TerrainEditor::default();
         }
 
+        let mut terrain_params = TerrainParams::default();
+        terrain_params.seed = 144;
+        let terrain_gen = TerrainGenerator::new(terrain_params);
+
+        let threads = num_cpus::get_physical().saturating_sub(1).max(1);
+        println!("Using {} chunk workers", threads);
+
+        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size);
         Self {
             cursor: Cursor::new(),
             arena,
             chunks: HashMap::new(),
-            pending: HashMap::new(),
             terrain_editor,
 
-            terrain_gen,
             chunk_size,
             view_radius_generate,
             view_radius_render,
 
-            workers,
-            job_config: ChunkJobConfig::default(),
-            max_close_jobs_per_frame: 1,
-            max_close_chunks_per_batch: 2,
-            max_far_chunks_per_batch: 100,
-            max_far_jobs_per_frame: 1,
+            terrain_jobs: TerrainJobs::new(workers),
+
+            terrain_gen,
 
             spiral: generate_spiral_offsets(view_radius_generate as i32),
             lod_map: HashMap::new(),
@@ -162,7 +387,7 @@ impl TerrainRenderer {
         &mut self,
         device: &Device,
         queue: &Queue,
-        camera: &mut Camera,
+        camera: &Camera,
         aspect: f32,
         settings: &Settings,
         input_state: &mut InputState,
@@ -172,9 +397,9 @@ impl TerrainRenderer {
 
         if settings.world_generation_benchmark_mode {
             self.benchmark
-                .run(camera, self.chunks.len(), &mut self.job_config, || {
+                .run(self.chunks.len(), &mut self.terrain_jobs.job_config, || {
                     self.chunks.clear();
-                    self.pending.clear();
+                    self.terrain_jobs.pending.clear();
                     self.lod_map.clear();
                 });
         }
@@ -198,7 +423,12 @@ impl TerrainRenderer {
         self.frame_timings.lod_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
-        self.dispatch_jobs_for_visible();
+        self.terrain_jobs.dispatch_jobs_for_visible(
+            &self.terrain_editor,
+            &self.chunks,
+            &self.visible,
+            &self.lod_map,
+        );
         self.frame_timings.dispatch_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -280,7 +510,7 @@ impl TerrainRenderer {
             LodCenterType::Target => camera.target,
         };
 
-        let (_, _, view_proj) = camera.matrices(aspect, settings);
+        let view_proj = camera.view_proj();
         let planes = extract_frustum_planes(view_proj);
 
         let r_render = self.view_radius_render as i32;
@@ -296,10 +526,14 @@ impl TerrainRenderer {
     }
 
     pub fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
-        while let Ok(cpu) = self.workers.result_rx.try_recv() {
+        while let Ok(cpu) = self.terrain_jobs.workers.result_rx.try_recv() {
             let coord = cpu.chunk_coord;
 
-            if !self.workers.is_current_version(coord, cpu.version) {
+            if !self
+                .terrain_jobs
+                .workers
+                .is_current_version(coord, cpu.version)
+            {
                 continue;
             }
 
@@ -375,13 +609,13 @@ impl TerrainRenderer {
     }
     fn remove_chunk(&mut self, coord: ChunkCoord) {
         // remove pending job
-        self.pending.remove(&coord);
+        self.terrain_jobs.pending.remove(&coord);
         // remove GPU chunk
         if let Some(old) = self.chunks.remove(&coord) {
             self.arena.free::<Vertex>(old.handle);
         }
         // tell workers to forget it
-        self.workers.forget_chunk(coord);
+        self.terrain_jobs.workers.forget_chunk(coord);
     }
 
     fn collect_visible(&self, camera: &Camera, frame: &FrameState) -> Vec<VisibleChunk> {
@@ -476,126 +710,6 @@ impl TerrainRenderer {
         }
     }
 
-    fn dispatch_jobs_for_visible(&mut self) {
-        let mut close_batch = Vec::new();
-        let mut far_batch = Vec::new();
-
-        let mut close_jobs_sent = 0usize;
-        let mut far_batches_sent = 0usize;
-
-        for v in self.visible.iter() {
-            let cx = v.coords.chunk_coord.x;
-            let cz = v.coords.chunk_coord.z;
-            if close_jobs_sent >= self.max_close_jobs_per_frame
-                && far_batches_sent >= self.max_far_jobs_per_frame
-            {
-                break;
-            }
-
-            let coord = v.coords.chunk_coord;
-            let desired_step = *self.lod_map.get(&coord).unwrap_or(&1);
-
-            // Already good?
-            if let Some(ch) = self.chunks.get(&coord) {
-                if ch.step == desired_step {
-                    continue;
-                }
-            }
-            // Already pending same step?
-            if let Some((_ver, pending_step)) = self.pending.get(&coord).copied() {
-                if pending_step == desired_step {
-                    continue;
-                }
-            }
-            let has_edits = self
-                .terrain_editor
-                .edited_chunks
-                .get(&coord)
-                .map_or(false, |e| !e.accumulated_deltas.is_empty());
-            // Neighbor LODs (fallback to step if neighbor not visible)
-            let step = desired_step;
-            let n_x_neg = *self
-                .lod_map
-                .get(&ChunkCoord::new(cx - 1, cz))
-                .unwrap_or(&step);
-            let n_x_pos = *self
-                .lod_map
-                .get(&ChunkCoord::new(cx + 1, cz))
-                .unwrap_or(&step);
-            let n_z_neg = *self
-                .lod_map
-                .get(&ChunkCoord::new(cx, cz - 1))
-                .unwrap_or(&step);
-            let n_z_pos = *self
-                .lod_map
-                .get(&ChunkCoord::new(cx, cz + 1))
-                .unwrap_or(&step);
-
-            if step <= 2 {
-                if close_jobs_sent < self.max_close_jobs_per_frame {
-                    let (version, version_atomic) = self.workers.new_version_for(coord);
-                    self.pending.insert(coord, (version, step));
-
-                    close_batch.push((
-                        coord,
-                        step,
-                        n_x_neg,
-                        n_x_pos,
-                        n_z_neg,
-                        n_z_pos,
-                        version,
-                        version_atomic,
-                        has_edits,
-                    ));
-
-                    if close_batch.len() >= self.max_close_chunks_per_batch {
-                        let job = ChunkJob {
-                            chunks: std::mem::take(&mut close_batch),
-                        };
-                        let _ = self.workers.job_tx.send(job);
-                        close_jobs_sent += 1;
-                    }
-                }
-            } else {
-                if far_batches_sent < self.max_far_jobs_per_frame {
-                    let (version, version_atomic) = self.workers.new_version_for(coord);
-                    self.pending.insert(coord, (version, step));
-
-                    far_batch.push((
-                        coord,
-                        step,
-                        n_x_neg,
-                        n_x_pos,
-                        n_z_neg,
-                        n_z_pos,
-                        version,
-                        version_atomic,
-                        has_edits,
-                    ));
-
-                    if far_batch.len() >= self.max_far_chunks_per_batch {
-                        let job = ChunkJob {
-                            chunks: std::mem::take(&mut far_batch),
-                        };
-                        let _ = self.workers.job_tx.send(job);
-                        far_batches_sent += 1;
-                    }
-                }
-            }
-        }
-        if !close_batch.is_empty() && close_jobs_sent < self.max_close_jobs_per_frame {
-            let job = ChunkJob {
-                chunks: close_batch,
-            };
-            let _ = self.workers.job_tx.send(job);
-        }
-
-        if !far_batch.is_empty() && far_batches_sent < self.max_far_jobs_per_frame {
-            let job = ChunkJob { chunks: far_batch };
-            let _ = self.workers.job_tx.send(job);
-        }
-    }
-
     fn unload_out_of_range(&mut self, frame: &FrameState) {
         // Avoid thrash: unload outside render radius + generous margin.
         let margin = 4;
@@ -623,98 +737,6 @@ impl TerrainRenderer {
         for coord in to_remove {
             self.remove_chunk(coord);
         }
-    }
-
-    pub fn render(
-        &self,
-        pass: &mut RenderPass,
-        camera: &Camera,
-        aspect: f32,
-        settings: &Settings,
-        underwater: bool,
-    ) {
-        let t_frame = Instant::now();
-        let (_, _, view_proj) = camera.matrices(aspect, settings);
-        let planes = extract_frustum_planes(view_proj);
-
-        let cs = self.chunk_size;
-        let target_pos = camera.target;
-        let target_cx = target_pos.chunk.x;
-        let target_cz = target_pos.chunk.z;
-
-        let r = self.view_radius_render as i32;
-        let r2 = r * r;
-
-        let mut per_page: Vec<Vec<GpuChunkHandle>> = vec![Vec::new(); self.arena.pages.len()];
-
-        for (&chunk_coord, chunk) in self.chunks.iter() {
-            let dx = chunk_coord.x - target_cx;
-            let dz = chunk_coord.z - target_cz;
-            if dx * dx + dz * dz > r2 {
-                continue;
-            }
-
-            let (min, max) =
-                chunk_aabb_render(chunk_coord.x, chunk_coord.z, cs, camera.eye_world());
-            if !aabb_in_frustum(&planes, min, max) {
-                continue;
-            }
-
-            let p = chunk.handle.page as usize;
-            if p < per_page.len() {
-                per_page[p].push(chunk.handle);
-            }
-        }
-        let mut total_indices: usize = 0;
-        let mut total_vertices: usize = 0;
-
-        for handles in &per_page {
-            for h in handles {
-                let count = if underwater {
-                    h.index_count_under as usize
-                } else {
-                    h.index_count_above as usize
-                };
-
-                total_indices += count;
-
-                // Worst-case but correct for GPU memory usage
-                // base_vertex + max index touched
-                total_vertices += count; // triangles already expanded
-            }
-        }
-
-        let index_bytes = total_indices * 4;
-        let vertex_bytes = total_vertices * VERTEX_SIZE_BYTES;
-        let _total_bytes = index_bytes + vertex_bytes;
-
-        // println!(
-        //     "render: {} vertices, {} indices, {:.2} MB total",
-        //     total_vertices,
-        //     total_indices,
-        //     _total_bytes as f32 / 1024.0 / 1024.0
-        // );
-
-        for (pi, handles) in per_page.iter().enumerate() {
-            if handles.is_empty() {
-                continue;
-            }
-
-            let page = &self.arena.pages[pi];
-            pass.set_vertex_buffer(0, page.vertex_buf.slice(..));
-            pass.set_index_buffer(page.index_buf.slice(..), IndexFormat::Uint32);
-
-            for h in handles {
-                let (start, count) = if underwater {
-                    (h.first_index_under, h.index_count_under)
-                } else {
-                    (h.first_index_above, h.index_count_above)
-                };
-                pass.draw_indexed(start..start + count, h.base_vertex, 0..1);
-            }
-        }
-        let total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
-        // println!("{}", total_ms);
     }
 
     /// Pick a terrain point by casting a ray through loaded chunks.
@@ -806,18 +828,12 @@ impl TerrainRenderer {
         None
     }
 
-    pub fn make_pick_uniforms(
-        &self,
-        queue: &Queue,
-        pick_uniform_buffer: &Buffer,
-        camera: &Camera,
-        chunk_size: ChunkSize,
-    ) {
+    pub fn make_pick_uniforms(&self, queue: &Queue, pick_uniform_buffer: &Buffer, camera: &Camera) {
         let u = if let Some(p) = &self.last_picked {
             PickUniform {
                 pos: p
                     .pos
-                    .to_render_pos(camera.eye_world(), chunk_size)
+                    .to_render_pos(camera.eye_world(), self.chunk_size)
                     .to_array(),
                 radius: self.pick_radius_m,
                 underwater: 1,

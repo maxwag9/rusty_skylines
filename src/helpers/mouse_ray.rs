@@ -1,4 +1,4 @@
-use crate::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::terrain::chunk_builder::ChunkHeightGrid;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 #[repr(C)]

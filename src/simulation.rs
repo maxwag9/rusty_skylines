@@ -2,12 +2,17 @@ use crate::cars::car_player::drive_car;
 use crate::cars::car_subsystem::CarSubsystem;
 use crate::data::Settings;
 use crate::events::{Event, Events};
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::helpers::mouse_ray::WorldRay;
+use crate::renderer::gizmo::Gizmo;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::TimeSystem;
-use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
+use crate::terrain::roads::road_subsystem::RoadSubsystem;
 use crate::ui::input::InputState;
-use crate::world::CameraBundle;
+use crate::world::camera::Camera;
+use crate::world::world::CameraBundle;
+use glam::Vec2;
 use std::time::Instant;
+use wgpu::{Device, Queue, SurfaceConfiguration};
 
 pub struct Simulation {
     pub running: bool,
@@ -62,13 +67,17 @@ impl Simulation {
     }
     pub fn update(
         &mut self,
-        terrain_renderer: &TerrainRenderer,
-        road_renderer: &RoadRenderSubsystem,
+        terrain_subsystem: &mut TerrainSubsystem,
+        road_subsystem: &mut RoadSubsystem,
         car_subsystem: &mut CarSubsystem,
         settings: &Settings,
         time: &TimeSystem,
         input: &mut InputState,
         camera_bundle: &mut CameraBundle,
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+        gizmo: &mut Gizmo,
     ) {
         if !self.running {
             return;
@@ -77,17 +86,21 @@ impl Simulation {
         self.tick += 1;
         self.last_update = Instant::now();
         let camera = &mut camera_bundle.camera;
+        update_picked_pos(terrain_subsystem, camera, settings, config, input);
+        let aspect = config.width as f32 / config.height as f32;
+        terrain_subsystem.update(device, queue, camera, aspect, settings, input, time);
         let cam_ctrl = &mut camera_bundle.controller;
+        road_subsystem.update(terrain_subsystem, car_subsystem, input, gizmo);
         car_subsystem.update(
-            &road_renderer.road_manager,
-            &terrain_renderer,
+            &road_subsystem.road_manager,
+            &terrain_subsystem,
             input,
             time,
             camera.target,
         );
         drive_car(
             car_subsystem,
-            terrain_renderer,
+            terrain_subsystem,
             settings,
             input,
             cam_ctrl,
@@ -95,4 +108,24 @@ impl Simulation {
             time.target_sim_dt,
         );
     }
+}
+
+fn update_picked_pos(
+    terrain_subsystem: &mut TerrainSubsystem,
+    camera: &Camera,
+    settings: &Settings,
+    config: &SurfaceConfiguration,
+    input_state: &InputState,
+) {
+    let (view, proj, view_proj) = camera.matrices();
+    let ray = WorldRay::from_mouse(
+        Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
+        config.width as f32,
+        config.height as f32,
+        view,
+        proj,
+        camera.eye_world(),
+        settings.chunk_size,
+    );
+    terrain_subsystem.pick_terrain_point(ray);
 }

@@ -1,4 +1,4 @@
-use crate::paths::shader_dir;
+use crate::helpers::paths::shader_dir;
 use notify::{Event, EventKind, RecursiveMode, Watcher, recommended_watcher};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};

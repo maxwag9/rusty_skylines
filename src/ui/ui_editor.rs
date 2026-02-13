@@ -3,9 +3,9 @@
 //! Uses Command pattern for all undoable operations.
 
 use crate::data::{BendMode, Settings};
-use crate::hsv::{HSV, rgb_to_hsv};
-use crate::paths::data_dir;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::helpers::hsv::{HSV, rgb_to_hsv};
+use crate::helpers::paths::data_dir;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::{CommandQueues, TimeSystem};
 use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
@@ -156,7 +156,7 @@ impl UiButtonLoader {
         dt: f32,
         input_state: &mut InputState,
         time_system: &TimeSystem,
-        world_renderer: &mut TerrainRenderer,
+        world_renderer: &mut TerrainSubsystem,
         window_size: PhysicalSize<u32>,
         road_style_params: &mut RoadStyleParams,
         command_queues: &mut CommandQueues,

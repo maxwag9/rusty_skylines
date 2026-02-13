@@ -1,6 +1,6 @@
 use crate::data::Settings;
-use crate::positions::*;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::helpers::positions::*;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use glam::{Mat4, Vec3};
 
 pub struct Camera {
@@ -13,6 +13,9 @@ pub struct Camera {
     pub fov: f32,
     pub chunk_size: ChunkSize,
     pub prev_view_proj: Mat4,
+    view: Mat4,
+    proj: Mat4,
+    view_proj: Mat4,
 }
 
 impl Camera {
@@ -27,11 +30,14 @@ impl Camera {
             fov: 55.0,
             chunk_size: 64,
             prev_view_proj: Default::default(),
+            view: Default::default(),
+            proj: Default::default(),
+            view_proj: Default::default(),
         }
     }
-    pub fn end_frame(&mut self, aspect: f32, settings: &Settings) {
-        let (_, _, prev_view_proj) = self.matrices(aspect, settings);
-        self.prev_view_proj = prev_view_proj;
+    #[inline]
+    pub fn end_frame(&mut self) {
+        self.prev_view_proj = self.view_proj;
     }
     #[inline]
     pub fn orbit_offset(&self) -> Vec3 {
@@ -47,7 +53,7 @@ impl Camera {
         )
     }
 
-    pub fn matrices(&self, aspect: f32, settings: &Settings) -> (Mat4, Mat4, Mat4) {
+    pub fn compute_matrices(&mut self, aspect: f32, settings: &Settings) {
         let eye = Vec3::ZERO;
         let target = -self.orbit_offset();
 
@@ -57,8 +63,25 @@ impl Camera {
         } else {
             Mat4::perspective_rh(self.fov.to_radians(), aspect, self.near, self.far)
         };
-
-        (view, proj, proj * view)
+        self.view = view;
+        self.proj = proj;
+        self.view_proj = proj * view;
+    }
+    #[inline]
+    pub fn view(&self) -> Mat4 {
+        self.view
+    }
+    #[inline]
+    pub fn proj(&self) -> Mat4 {
+        self.proj
+    }
+    #[inline]
+    pub fn view_proj(&self) -> Mat4 {
+        self.view_proj
+    }
+    #[inline]
+    pub fn matrices(&self) -> (Mat4, Mat4, Mat4) {
+        (self.view, self.proj, self.view_proj)
     }
     #[inline]
     pub fn eye_world(&self) -> WorldPos {
@@ -110,7 +133,7 @@ impl CameraController {
 pub fn ground_camera_target(
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    terrain: &TerrainRenderer,
+    terrain: &TerrainSubsystem,
     min_clearance: f32,
 ) {
     let ground_y = terrain.get_height_at(camera.target);
@@ -124,7 +147,7 @@ pub fn ground_camera_target(
 pub fn resolve_pitch_by_search(
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    world_renderer: &TerrainRenderer,
+    world_renderer: &TerrainSubsystem,
 ) {
     let target = camera.target;
     let orbit_radius = camera.orbit_radius;

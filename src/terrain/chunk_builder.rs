@@ -1,4 +1,4 @@
-use crate::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
 use crate::terrain::terrain::TerrainGenerator;
 use crate::terrain::terrain_editing::EditedChunk;
 use crate::terrain::threads::ChunkWorkerPool;

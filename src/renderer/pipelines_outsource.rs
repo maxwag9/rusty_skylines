@@ -1,12 +1,12 @@
-use crate::components::camera::Camera;
 use crate::data::Settings;
-use crate::mouse_ray::PickUniform;
-use crate::paths::data_dir;
+use crate::helpers::mouse_ray::PickUniform;
+use crate::helpers::paths::data_dir;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::{FogUniforms, MeshBuffers, ToneMappingUniforms, make_dummy_buf};
 use crate::resources::Uniforms;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::{SimpleVertex, WaterUniform};
+use crate::world::camera::Camera;
 use std::fs;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::*;

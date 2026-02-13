@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
 pub mod drag_hue_point;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::TimeSystem;
 use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::actions::drag_hue_point::drag_hue_point;
@@ -445,7 +445,7 @@ pub struct CommandContext<'a> {
     pub loader: &'a mut UiButtonLoader,
     pub input_state: &'a InputState,
     pub time: &'a TimeSystem,
-    pub world_renderer: &'a mut TerrainRenderer,
+    pub world_renderer: &'a mut TerrainSubsystem,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
     pub road_style_params: &'a mut RoadStyleParams,
@@ -1388,7 +1388,7 @@ pub fn process_commands(
     top_hit: &Option<HitResult>,
     input_state: &InputState,
     time: &TimeSystem,
-    world_renderer: &mut TerrainRenderer,
+    world_renderer: &mut TerrainSubsystem,
     window_size: PhysicalSize<u32>,
     road_style_params: &mut RoadStyleParams,
 ) {

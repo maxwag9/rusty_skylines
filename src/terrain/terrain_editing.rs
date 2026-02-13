@@ -1,4 +1,4 @@
-use crate::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, gather_neighbor_edge_heights,

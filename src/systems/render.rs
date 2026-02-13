@@ -1,15 +1,21 @@
 use crate::resources::Resources;
-use crate::world::World;
 
-pub fn render_system(world: &mut World, resources: &mut Resources) {
-    let camera_entity = world.main_camera();
-    if let Some(camera_bundle) = world.camera_and_controller_mut(camera_entity) {
-        resources.renderer.render(
-            camera_bundle,
-            &mut resources.ui_loader,
-            &resources.time,
-            &mut resources.input,
-            &resources.settings,
-        );
-    }
+pub fn render_system(resources: &mut Resources) {
+    let world = &mut resources.world_core;
+    let renderer = &mut resources.render_core;
+    let Some(camera) = world.world_state.camera(world.world_state.main_camera()) else {
+        return;
+    };
+    renderer.render(
+        &resources.surface,
+        camera,
+        &mut resources.ui_loader,
+        &world.time,
+        &mut world.input,
+        &resources.settings,
+        &world.terrain_subsystem,
+        &world.road_subsystem,
+        &world.car_subsystem,
+        &world.world_state.astronomy,
+    );
 }

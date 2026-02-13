@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables)]
-use crate::paths::data_dir;
+use crate::helpers::paths::data_dir;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

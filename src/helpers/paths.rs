@@ -13,7 +13,7 @@ pub fn data_dir(path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
 
     // 1. Try runtime path beside the executable
-    let runtime = exe_dir().join("data").join(path);
+    let runtime = exe_dir().join("../../data").join(path);
     if runtime.exists() {
         return runtime;
     }
@@ -21,7 +21,7 @@ pub fn data_dir(path: impl AsRef<Path>) -> PathBuf {
     // 2. Fallback: use project directory during development
     // (CARGO_MANIFEST_DIR only exists in debug / IDE)
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
+        .join("../../data")
         .join(path);
 
     dev

@@ -1,10 +1,10 @@
 use crate::cars::car_structs::Car;
 use crate::cars::car_subsystem::CarSubsystem;
-use crate::components::camera::{Camera, CameraController};
 use crate::data::Settings;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::road_mesh_manager::CLEARANCE;
 use crate::ui::input::InputState;
+use crate::world::camera::{Camera, CameraController};
 use glam::{Quat, Vec3};
 
 #[derive(Clone, Copy, Debug)]
@@ -128,7 +128,7 @@ fn quat_from_yaw_and_up(yaw: f32, ground_normal: Vec3) -> Quat {
     sanitize_quat(tilt * yaw_q)
 }
 
-fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainRenderer) -> (f32, Vec3) {
+fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainSubsystem) -> (f32, Vec3) {
     let chunk_size = terrain.chunk_size;
 
     let planar_fwd = planar_forward_from_yaw(yaw);
@@ -183,7 +183,7 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainRenderer) -> (f32,
     (avg_y, n)
 }
 
-pub fn conform_car_to_terrain(car: &mut Car, terrain: &TerrainRenderer, dt: f32) -> GroundFit {
+pub fn conform_car_to_terrain(car: &mut Car, terrain: &TerrainSubsystem, dt: f32) -> GroundFit {
     car.quat = sanitize_quat(car.quat);
 
     let yaw = yaw_from_quat(car.quat);
@@ -219,7 +219,7 @@ fn axis(right: bool, left: bool) -> f32 {
 
 pub fn drive_car(
     car_subsystem: &mut CarSubsystem,
-    terrain: &TerrainRenderer,
+    terrain: &TerrainSubsystem,
     settings: &Settings,
     input: &mut InputState,
     _cam_ctrl: &mut CameraController,
@@ -510,7 +510,7 @@ pub fn drive_car(
             .move_car_between_chunks(previous_chunk, new_chunk, car_id);
     }
 }
-pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainRenderer, dt: f32) {
+pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsystem, dt: f32) {
     if dt <= 0.0 {
         return;
     }

@@ -1,4 +1,4 @@
-use crate::paths::compute_shader_dir;
+use crate::helpers::paths::compute_shader_dir;
 use wgpu::{
     BufferDescriptor, BufferUsages, Device, Extent3d, Queue, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,

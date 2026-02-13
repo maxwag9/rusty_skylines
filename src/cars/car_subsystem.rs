@@ -1,15 +1,15 @@
 use crate::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::cars::car_render::CarInstance;
 use crate::cars::car_structs::{Car, CarChunkDistance, CarStorage};
-use crate::components::camera::Camera;
-use crate::hsv::hsv_to_rgb;
-use crate::positions::WorldPos;
-use crate::renderer::world_renderer::{CursorMode, TerrainRenderer};
+use crate::helpers::hsv::hsv_to_rgb;
+use crate::helpers::positions::WorldPos;
+use crate::renderer::terrain_subsystem::{CursorMode, TerrainSubsystem};
 use crate::resources::TimeSystem;
 use crate::terrain::roads::road_structs::NodeId;
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
+use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
@@ -41,7 +41,7 @@ impl CarSubsystemTiming {
         }
     }
 }
-pub struct CarSubsystemRender {
+pub struct CarRenderSubsystem {
     pub device: Device,
     pub queue: Queue,
     pub vb: Buffer,
@@ -50,8 +50,8 @@ pub struct CarSubsystemRender {
     pub index_count: u32,
     pub current_instance_count: u32,
 }
-impl CarSubsystemRender {
-    pub fn new(device: Device, queue: Queue) -> Self {
+impl CarRenderSubsystem {
+    pub fn new(device: &Device, queue: &Queue) -> Self {
         // Calculate exact sizes from procedural mesh (generate temporarily, discard data)
         let (vertices, indices) = create_procedural_car();
         let vb_size = (vertices.len() * size_of::<Vertex>()) as u64;
@@ -84,8 +84,8 @@ impl CarSubsystemRender {
         queue.write_buffer(&vb, 0, bytemuck::cast_slice(&vertices));
         queue.write_buffer(&ib, 0, bytemuck::cast_slice(&indices));
         Self {
-            device,
-            queue,
+            device: device.clone(),
+            queue: queue.clone(),
             vb,
             ib,
             instance_buf,
@@ -93,22 +93,77 @@ impl CarSubsystemRender {
             current_instance_count: 0,
         }
     }
+    pub fn render(&mut self, car_storage: &CarStorage, camera: &Camera, pass: &mut RenderPass) {
+        const BASE_LENGTH: f32 = 4.5;
+        const BASE_WIDTH: f32 = 2.5;
+        let close_ids = car_storage.car_chunks().close_cars();
+
+        let mut instances: Vec<CarInstance> = Vec::with_capacity(close_ids.len());
+
+        for &car_id in &close_ids {
+            if let Some(car) = car_storage.get(car_id) {
+                let render_pos = car.pos.to_render_pos(camera.eye_world(), camera.chunk_size);
+
+                let quat = car.quat.normalize();
+
+                let length_scale = car.length / BASE_LENGTH;
+                let width_scale = car.width / BASE_WIDTH;
+                let scale = Vec3::new(width_scale, 1.0, length_scale);
+                let model = Mat4::from_scale_rotation_translation(scale, quat, render_pos);
+
+                instances.push(CarInstance {
+                    model: model.to_cols_array_2d(),
+                    color: car.color,
+                    _pad: 0.0,
+                });
+            }
+        }
+
+        let instance_count = instances.len() as u32;
+
+        if instance_count == 0 {
+            return;
+        }
+
+        // Smart buffer resize — only recreate when too small, double size for growth
+        let needed_bytes = (instances.len() * size_of::<CarInstance>()) as u64;
+        if needed_bytes > self.instance_buf.size() {
+            let new_size = (needed_bytes * 2).next_multiple_of(256);
+            self.instance_buf = self.device.create_buffer(&BufferDescriptor {
+                label: Some("Car Instance Buffer (resized)"),
+                size: new_size,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
+        // Upload instance data
+        self.queue
+            .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&instances));
+
+        self.current_instance_count = instance_count;
+
+        // Bind and draw — one call for ALL close cars
+        pass.set_vertex_buffer(0, self.vb.slice(..));
+        pass.set_vertex_buffer(1, self.instance_buf.slice(..));
+        pass.set_index_buffer(self.ib.slice(..), IndexFormat::Uint32);
+
+        pass.draw_indexed(0..self.index_count, 0, 0..instance_count);
+    }
 }
 
 pub struct CarSubsystem {
     car_storage: CarStorage,
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
-    render: CarSubsystemRender,
 }
 
 impl CarSubsystem {
-    pub fn new(device: &Device, queue: &Queue) -> Self {
+    pub fn new() -> Self {
         Self {
             car_storage: CarStorage::new(),
             spawning_nodes: vec![],
             timing: CarSubsystemTiming::new(),
-            render: CarSubsystemRender::new(device.clone(), queue.clone()),
         }
     }
     pub fn car_storage(&self) -> &CarStorage {
@@ -120,7 +175,7 @@ impl CarSubsystem {
     pub fn update(
         &mut self,
         road_manager: &RoadManager,
-        terrain_renderer: &TerrainRenderer,
+        terrain_renderer: &TerrainSubsystem,
         input_state: &mut InputState,
         time_system: &TimeSystem,
         target_pos: WorldPos,
@@ -149,70 +204,10 @@ impl CarSubsystem {
         }
     }
 
-    pub fn render(&mut self, camera: &Camera, pass: &mut RenderPass) {
-        let render = &mut self.render;
-        const BASE_LENGTH: f32 = 4.5;
-        const BASE_WIDTH: f32 = 2.5;
-        let close_ids = self.car_storage.car_chunks().close_cars();
-
-        let mut instances: Vec<CarInstance> = Vec::with_capacity(close_ids.len());
-
-        for &car_id in &close_ids {
-            if let Some(car) = self.car_storage.get(car_id) {
-                let render_pos = car.pos.to_render_pos(camera.eye_world(), camera.chunk_size);
-
-                let quat = car.quat.normalize();
-
-                let length_scale = car.length / BASE_LENGTH;
-                let width_scale = car.width / BASE_WIDTH;
-                let scale = Vec3::new(width_scale, 1.0, length_scale);
-                let model = Mat4::from_scale_rotation_translation(scale, quat, render_pos);
-
-                instances.push(CarInstance {
-                    model: model.to_cols_array_2d(),
-                    color: car.color,
-                    _pad: 0.0,
-                });
-            }
-        }
-
-        let instance_count = instances.len() as u32;
-
-        if instance_count == 0 {
-            return;
-        }
-
-        // Smart buffer resize — only recreate when too small, double size for growth
-        let needed_bytes = (instances.len() * size_of::<CarInstance>()) as u64;
-        if needed_bytes > render.instance_buf.size() {
-            let new_size = (needed_bytes * 2).next_multiple_of(256);
-            render.instance_buf = render.device.create_buffer(&BufferDescriptor {
-                label: Some("Car Instance Buffer (resized)"),
-                size: new_size,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-
-        // Upload instance data
-        render
-            .queue
-            .write_buffer(&render.instance_buf, 0, bytemuck::cast_slice(&instances));
-
-        render.current_instance_count = instance_count;
-
-        // Bind and draw — one call for ALL close cars
-        pass.set_vertex_buffer(0, render.vb.slice(..));
-        pass.set_vertex_buffer(1, render.instance_buf.slice(..));
-        pass.set_index_buffer(render.ib.slice(..), IndexFormat::Uint32);
-
-        pass.draw_indexed(0..render.index_count, 0, 0..instance_count);
-    }
-
     fn spawn_cars(
         &mut self,
         road_manager: &RoadManager,
-        terrain_renderer: &TerrainRenderer,
+        terrain_renderer: &TerrainSubsystem,
         target_pos: WorldPos,
         time_system: &TimeSystem,
     ) {

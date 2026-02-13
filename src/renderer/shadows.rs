@@ -1,15 +1,16 @@
 use crate::cars::car_mesh::CarVertex;
 use crate::cars::car_render::CarInstance;
-use crate::cars::car_subsystem::CarSubsystem;
-use crate::components::camera::Camera;
+use crate::cars::car_structs::CarStorage;
+use crate::cars::car_subsystem::CarRenderSubsystem;
 use crate::data::Settings;
-use crate::paths::shader_dir;
+use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::draw_visible_roads;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
 use crate::ui::vertex::Vertex;
+use crate::world::camera::Camera;
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
@@ -280,8 +281,7 @@ fn compute_shadow_distance(eye_height_agl: f32, orbit_radius: f32) -> f32 {
 }
 
 pub fn compute_csm_matrices(
-    terrain_renderer: &TerrainRenderer,
-    camera_view: Mat4,
+    terrain_renderer: &TerrainSubsystem,
     camera: &Camera,
     aspect: f32,
     sun_dir_surface_to_sun: Vec3,
@@ -301,7 +301,7 @@ pub fn compute_csm_matrices(
     let camera_near = camera.near.max(0.01);
     let camera_far = camera.far.max(camera_near + 1.0);
 
-    let (right, up, forward) = camera_basis_from_view_rotation_only(camera_view);
+    let (right, up, forward) = camera_basis_from_view_rotation_only(camera.view());
 
     let looking_down_t = smoothstep01(((-forward.y) - 0.25) / 0.65);
     let orbit_t = smoothstep01((camera.orbit_radius - 30.0) / 850.0);
@@ -459,7 +459,8 @@ pub fn render_roads_shadows(
 pub fn render_terrain_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
-    terrain_renderer: &TerrainRenderer,
+    terrain_renderer: &TerrainRenderSubsystem,
+    terrain_subsystem: &TerrainSubsystem,
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,
@@ -484,12 +485,13 @@ pub fn render_terrain_shadows(
         pass,
     );
 
-    terrain_renderer.render(pass, camera, aspect, settings, false);
+    terrain_renderer.render(pass, terrain_subsystem, camera, aspect, settings, false);
 }
 pub fn render_cars_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
-    car_subsystem: &mut CarSubsystem,
+    car_renderer: &mut CarRenderSubsystem,
+    car_storage: &CarStorage,
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,
@@ -516,5 +518,5 @@ pub fn render_cars_shadows(
 
     render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);
 
-    car_subsystem.render(camera, pass)
+    car_renderer.render(car_storage, camera, pass)
 }

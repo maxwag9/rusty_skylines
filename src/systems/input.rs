@@ -1,26 +1,29 @@
-use crate::components::camera::{ground_camera_target, resolve_pitch_by_search};
 use crate::resources::Resources;
 use crate::ui::helper::calc_move_speed;
-use crate::world::World;
+use crate::world::camera::{ground_camera_target, resolve_pitch_by_search};
 use glam::Vec3;
 
-pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
-    let dt = resources.time.target_sim_dt;
+pub fn camera_input_system(resources: &mut Resources) {
+    let world = &mut resources.world_core;
+    let dt = world.time.target_sim_dt;
     if dt <= 0.0 {
         return;
     }
-
-    let entity = world.main_camera();
-    let Some(camera_bundle) = world.camera_and_controller_mut(entity) else {
+    let terrain_subsystem = &world.terrain_subsystem;
+    let Some(camera_bundle) = world
+        .world_state
+        .camera_and_controller_mut(world.world_state.main_camera())
+    else {
         return;
     };
     let camera = &mut camera_bundle.camera;
     let cam_ctrl = &mut camera_bundle.controller;
-    camera.chunk_size = resources.settings.chunk_size;
+    let input = &mut world.input;
+    let time = &world.time;
+    let chunk_size = resources.settings.chunk_size;
+    camera.chunk_size = chunk_size;
     let eye = camera.eye_world();
-    let mut fwd3d = camera
-        .target
-        .delta_to(eye, resources.renderer.core.terrain_renderer.chunk_size);
+    let mut fwd3d = camera.target.delta_to(eye, chunk_size);
     if fwd3d.length_squared() > 0.0 {
         fwd3d = fwd3d.normalize();
     }
@@ -35,27 +38,27 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
 
     let mut wish = Vec3::ZERO;
     if !resources.settings.editor_mode && !resources.settings.drive_car {
-        if resources.input.gameplay_down("Fly Camera Forward") {
+        if input.gameplay_down("Fly Camera Forward") {
             wish += forward;
         }
-        if resources.input.gameplay_down("Fly Camera Backward") {
+        if input.gameplay_down("Fly Camera Backward") {
             wish -= forward;
         }
-        if resources.input.gameplay_down("Fly Camera Left") {
+        if input.gameplay_down("Fly Camera Left") {
             wish -= right;
         }
-        if resources.input.gameplay_down("Fly Camera Right") {
+        if input.gameplay_down("Fly Camera Right") {
             wish += right;
         }
-        if resources.input.gameplay_down("Fly Camera Up") {
+        if input.gameplay_down("Fly Camera Up") {
             wish += up;
         }
-        if resources.input.gameplay_down("Fly Camera Down") {
+        if input.gameplay_down("Fly Camera Down") {
             wish -= up;
         }
     }
 
-    let speed = calc_move_speed(&resources.input);
+    let speed = calc_move_speed(input);
 
     let decay_rate = 3.0;
     let dist = camera.orbit_radius;
@@ -64,7 +67,7 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     if wish.length_squared() > 0.0 {
         wish = wish.normalize();
         let baseline = 64.0;
-        let chunk_size_f = resources.renderer.core.terrain_renderer.chunk_size as f32;
+        let chunk_size_f = chunk_size as f32;
         let target_vel = wish * speed * speed_factor * (baseline / chunk_size_f);
         cam_ctrl.velocity = cam_ctrl.velocity.lerp(target_vel, 1.0 - (-15.0 * dt).exp());
     } else {
@@ -111,21 +114,13 @@ pub fn camera_input_system(world: &mut World, resources: &mut Resources) {
     cam_ctrl.yaw_velocity *= dv;
     cam_ctrl.pitch_velocity *= dv;
 
-    if !resources.input.action_down("Orbit") {
+    if !input.action_down("Orbit") {
         cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
         cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
     }
-    camera.target = camera.target.add_vec3(
-        cam_ctrl.velocity * dt,
-        resources.renderer.core.terrain_renderer.chunk_size,
-    );
-    ground_camera_target(
-        camera,
-        cam_ctrl,
-        &resources.renderer.core.terrain_renderer,
-        0.1,
-    );
-    resolve_pitch_by_search(camera, cam_ctrl, &resources.renderer.core.terrain_renderer);
+    camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt, chunk_size);
+    ground_camera_target(camera, cam_ctrl, terrain_subsystem, 0.1);
+    resolve_pitch_by_search(camera, cam_ctrl, terrain_subsystem);
     // SMOOTH target → camera
     let t = 1.0 - (-cam_ctrl.orbit_smoothness * 60.0 * dt).exp();
 

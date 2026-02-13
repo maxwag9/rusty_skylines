@@ -1,4 +1,4 @@
-use crate::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::pipelines::ToneMappingState;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};

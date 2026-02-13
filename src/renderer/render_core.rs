@@ -1,11 +1,9 @@
-use crate::cars::car_subsystem::CarSubsystem;
-use crate::components::camera::*;
+use crate::cars::car_structs::CarStorage;
+use crate::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
 use crate::data::{DebugViewState, Settings};
 use crate::gpu_timestamp;
-use crate::mouse_ray::*;
-use crate::paths::{compute_shader_dir, shader_dir, texture_dir};
-use crate::positions::WorldPos;
-use crate::renderer::astronomy::*;
+use crate::helpers::paths::{compute_shader_dir, shader_dir, texture_dir};
+use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
@@ -15,16 +13,16 @@ use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
     CSM_CASCADES, ShadowMatUniform, render_cars_shadows, render_roads_shadows,
 };
+use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
-use crate::renderer::world_renderer::TerrainRenderer;
 use crate::resources::TimeSystem;
-use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
+use crate::terrain::roads::road_subsystem::{RoadRenderSubsystem, RoadSubsystem};
 use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
-use crate::ui::variables::update_ui_variables;
-use crate::world::CameraBundle;
-use glam::{Mat4, UVec2};
+use crate::world::astronomy::*;
+use crate::world::camera::Camera;
+use glam::UVec2;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,45 +48,49 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 pub struct RenderCore {
-    adapter: Adapter,
-    pub surface: Surface<'static>,
+    // gpu objects
+    pub adapter: Adapter,
     pub device: Device,
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub msaa_samples: u32,
+
+    // render-only subsystems & caches
+    pub render_manager: RenderManager,
+    pub shader_watcher: Option<ShaderWatcher>,
     pub pipelines: Pipelines,
-    ui_renderer: UiRenderer,
-    pub terrain_renderer: TerrainRenderer,
+    pub ui_renderer: UiRenderer,
+    pub terrain_renderer: TerrainRenderSubsystem,
+    pub profiler: GpuProfiler,
     pub road_renderer: RoadRenderSubsystem,
-    pub car_subsystem: CarSubsystem,
-    shader_watcher: Option<ShaderWatcher>,
-    render_manager: RenderManager,
+    pub car_renderer: CarRenderSubsystem,
     pub gizmo: Gizmo,
-    astronomy: AstronomyState,
-    profiler: GpuProfiler,
 }
 
 impl RenderCore {
-    pub fn new(window: Arc<Window>, settings: &Settings, camera: &Camera) -> Self {
-        let (surface, adapter, size) = create_surface_and_adapter(window);
-        let (config, msaa_samples) = create_surface_config(&surface, &adapter, settings, size);
-        let (device, queue) = create_device(&adapter);
-        surface.configure(&device, &config);
-
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+        size: PhysicalSize<u32>,
+        adapter: Adapter,
+        settings: &Settings,
+        camera: &Camera,
+    ) -> Self {
         let shader_watcher = ShaderWatcher::new().ok();
 
-        let ui_renderer = UiRenderer::new(&device, config.format, size, msaa_samples)
+        let ui_renderer = UiRenderer::new(device, config.format, size, settings.msaa_samples)
             .expect("Failed to create UI pipelines");
-        let terrain_renderer = TerrainRenderer::new(&device, settings);
-        let road_renderer = RoadRenderSubsystem::new(&device);
-        let car_subsystem = CarSubsystem::new(&device, &queue);
-        let mut render_manager = RenderManager::new(&device, &queue, texture_dir());
-        let gizmo = Gizmo::new(&device, terrain_renderer.chunk_size);
+        let terrain_renderer = TerrainRenderSubsystem::new();
+        let road_renderer = RoadRenderSubsystem::new(device);
+        let car_renderer = CarRenderSubsystem::new(device, queue);
+        let mut render_manager = RenderManager::new(device, queue, texture_dir());
+        let gizmo = Gizmo::new(device, settings.chunk_size);
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
-            &device,
-            &queue,
+            device,
+            queue,
             &config,
             camera,
             settings,
@@ -96,25 +98,23 @@ impl RenderCore {
         .expect("Failed to create render pipelines");
         Self {
             adapter,
-            surface,
-            device,
-            queue,
-            config,
+            device: device.clone(),
+            queue: queue.clone(),
+            config: config.clone(),
             pipelines,
-            msaa_samples,
+            msaa_samples: settings.msaa_samples,
             ui_renderer,
             terrain_renderer,
             road_renderer,
-            car_subsystem,
+            car_renderer,
             shader_watcher,
             render_manager,
             gizmo,
-            astronomy: AstronomyState::default(),
             profiler,
         }
     }
 
-    pub(crate) fn resize(&mut self, new_size: PhysicalSize<u32>) {
+    pub(crate) fn resize(&mut self, surface: &Surface, new_size: PhysicalSize<u32>) {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
@@ -133,35 +133,43 @@ impl RenderCore {
                 result
             )
         }
-        self.surface.configure(&self.device, &self.config);
+        surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.render_manager.invalidate_bind_groups();
     }
 
     pub(crate) fn render(
         &mut self,
-        camera_bundle: &mut CameraBundle,
+        surface: &Surface,
+        camera: &Camera,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &mut InputState,
         settings: &Settings,
+        terrain_subsystem: &TerrainSubsystem,
+        road_subsystem: &RoadSubsystem,
+        car_subsystem: &CarSubsystem,
+        astronomy: &AstronomyState,
     ) {
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         self.update_render(
-            camera_bundle,
+            camera,
+            terrain_subsystem,
             ui_loader,
             time,
             input_state,
             settings,
+            road_subsystem,
+            car_subsystem,
+            astronomy,
             aspect,
             screen_size,
         );
 
-        let camera = &camera_bundle.camera;
         let t = Instant::now();
-        let Some(frame) = acquire_frame(&self.surface, &self.device, &self.config) else {
+        let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
 
@@ -175,7 +183,14 @@ impl RenderCore {
 
         gpu_timestamp!(encoder, &mut self.profiler, "Total", {
             gpu_timestamp!(encoder, &mut self.profiler, "Shadows", {
-                self.execute_shadow_pass(&mut encoder, camera, aspect, time, settings);
+                self.execute_shadow_pass(
+                    &mut encoder,
+                    car_subsystem.car_storage(),
+                    camera,
+                    aspect,
+                    time,
+                    settings,
+                );
             });
             self.execute_main_pass(
                 &mut encoder,
@@ -186,6 +201,8 @@ impl RenderCore {
                 time,
                 input_state,
                 ui_loader,
+                terrain_subsystem,
+                &car_subsystem.car_storage(),
                 settings,
             );
         });
@@ -198,54 +215,30 @@ impl RenderCore {
         frame.present();
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui_loader.variables);
-        camera_bundle.camera.end_frame(aspect, settings);
     }
 
     pub fn update_render(
         &mut self,
-        camera_bundle: &mut CameraBundle,
+        camera: &Camera,
+        terrain_subsystem: &TerrainSubsystem,
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         input_state: &mut InputState,
         settings: &Settings,
+        road_subsystem: &RoadSubsystem,
+        car_subsystem: &CarSubsystem,
+        astronomy: &AstronomyState,
         aspect: f32,
         screen_size: UVec2,
     ) {
         self.update_defines();
 
-        let camera = &mut camera_bundle.camera;
         self.check_shader_changes(ui_loader);
 
-        let time_scales = TimeScales::from_game_time(time.total_game_time, settings.always_day);
-        let observer = ObserverParams::new(time_scales.day_angle);
-        let astronomy = compute_astronomy(&time_scales);
-
-        update_ui_variables(
-            ui_loader,
-            &time_scales,
-            &astronomy,
-            observer.obliquity,
-            settings,
-        );
-
-        let (view, proj, view_proj) = camera.matrices(aspect, settings);
+        let (view, proj, view_proj) = camera.matrices();
         let prev_view_proj = camera.prev_view_proj;
-        let ray = WorldRay::from_mouse(
-            glam::Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
-            self.config.width as f32,
-            self.config.height as f32,
-            view,
-            proj,
-            camera.eye_world(),
-            self.terrain_renderer.chunk_size,
-        );
-        self.terrain_renderer.pick_terrain_point(ray);
-        self.terrain_renderer.make_pick_uniforms(
-            &self.queue,
-            &self.pipelines.buffers.pick,
-            camera,
-            self.terrain_renderer.chunk_size,
-        );
+
+        terrain_subsystem.make_pick_uniforms(&self.queue, &self.pipelines.buffers.pick, camera);
         self.render_manager.update_depth_params(DepthDebugParams {
             near: camera.near,
             far: camera.far,
@@ -255,13 +248,10 @@ impl RenderCore {
         });
         self.update_uniforms(
             camera,
-            view,
-            proj,
-            view_proj,
-            prev_view_proj,
-            &astronomy,
+            astronomy,
             time,
             aspect,
+            terrain_subsystem,
             settings,
             screen_size,
         );
@@ -285,30 +275,26 @@ impl RenderCore {
             input_state,
             time,
             ui_loader,
-            &astronomy,
+            terrain_subsystem,
+            road_subsystem,
+            car_subsystem,
+            astronomy,
         );
-        self.astronomy = astronomy;
     }
 
     fn update_uniforms(
         &mut self,
         camera: &Camera,
-        view: Mat4,
-        proj: Mat4,
-        view_proj: Mat4,
-        prev_view_proj: Mat4,
         astronomy: &AstronomyState,
         time: &TimeSystem,
         aspect: f32,
+        terrain_subsystem: &TerrainSubsystem,
         settings: &Settings,
         screen_size: UVec2,
     ) {
         let mut updater = UniformUpdater::new(&self.queue, &mut self.pipelines);
         updater.update_camera_uniforms(
-            &self.terrain_renderer,
-            view,
-            proj,
-            view_proj,
+            terrain_subsystem,
             astronomy,
             camera,
             time.total_time,
@@ -320,17 +306,20 @@ impl RenderCore {
         updater.update_sky_uniforms(astronomy.moon_phase);
         updater.update_water_uniforms();
         updater.update_tonemapping_uniforms(&settings.tonemapping_state);
-        updater.update_ssao_uniforms(time, settings, prev_view_proj);
+        updater.update_ssao_uniforms(time, settings, camera.prev_view_proj);
     }
 
     fn update_subsystems(
         &mut self,
-        camera: &mut Camera,
+        camera: &Camera,
         aspect: f32,
         settings: &Settings,
         input_state: &mut InputState,
         time: &TimeSystem,
         ui_loader: &mut UiButtonLoader,
+        terrain_subsystem: &TerrainSubsystem,
+        road_subsystem: &RoadSubsystem,
+        car_subsystem: &CarSubsystem,
         astronomy: &AstronomyState,
     ) {
         let eye = camera.target;
@@ -350,15 +339,7 @@ impl RenderCore {
         ui_loader
             .variables
             .set_f32("target_pos_z", target_pos_render.z);
-        self.terrain_renderer.update(
-            &self.device,
-            &self.queue,
-            camera,
-            aspect,
-            settings,
-            input_state,
-            time,
-        );
+
         self.ui_renderer.update(
             ui_loader,
             time,
@@ -367,20 +348,18 @@ impl RenderCore {
             &PhysicalSize::new(self.config.width, self.config.height),
         );
         self.road_renderer.update(
-            &self.terrain_renderer,
-            &mut self.car_subsystem,
+            terrain_subsystem,
+            road_subsystem,
             &self.device,
             &self.queue,
-            input_state,
-            &self.terrain_renderer.last_picked,
             camera,
             &mut self.gizmo,
         );
 
         self.gizmo.update(
-            &self.terrain_renderer,
+            terrain_subsystem,
             time.total_game_time,
-            &self.road_renderer.road_manager,
+            &road_subsystem.road_manager,
             settings,
             camera,
         );
@@ -391,6 +370,7 @@ impl RenderCore {
     fn execute_shadow_pass(
         &mut self,
         encoder: &mut CommandEncoder,
+        car_storage: &CarStorage,
         camera: &Camera,
         aspect: f32,
         _time: &TimeSystem,
@@ -446,7 +426,8 @@ impl RenderCore {
             render_cars_shadows(
                 &mut pass,
                 &mut self.render_manager,
-                &mut self.car_subsystem,
+                &mut self.car_renderer,
+                car_storage,
                 &self.pipelines,
                 settings,
                 camera,
@@ -466,9 +447,19 @@ impl RenderCore {
         time: &TimeSystem,
         input_state: &InputState,
         ui_loader: &mut UiButtonLoader,
+        terrain_subsystem: &TerrainSubsystem,
+        car_storage: &CarStorage,
         settings: &Settings,
     ) {
-        self.execute_world_pass(encoder, config, camera, settings, aspect);
+        self.execute_world_pass(
+            encoder,
+            config,
+            camera,
+            terrain_subsystem,
+            car_storage,
+            settings,
+            aspect,
+        );
 
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO", {
             self.execute_gtao_pass(encoder, settings, time);
@@ -492,6 +483,8 @@ impl RenderCore {
         encoder: &mut CommandEncoder,
         config: &RenderPassConfig,
         camera: &Camera,
+        terrain_subsystem: &TerrainSubsystem,
+        car_storage: &CarStorage,
         settings: &Settings,
         aspect: f32,
     ) {
@@ -518,6 +511,7 @@ impl RenderCore {
                 &mut pass,
                 &mut self.render_manager,
                 &self.terrain_renderer,
+                terrain_subsystem,
                 &self.pipelines,
                 settings,
                 self.msaa_samples,
@@ -567,7 +561,8 @@ impl RenderCore {
             render_cars(
                 &mut pass,
                 &mut self.render_manager,
-                &mut self.car_subsystem,
+                &mut self.car_renderer,
+                car_storage,
                 &self.pipelines,
                 settings,
                 camera,
@@ -1083,7 +1078,7 @@ impl RenderCore {
     }
 }
 
-fn create_surface_and_adapter(
+pub(crate) fn create_surface_and_adapter(
     window: Arc<Window>,
 ) -> (Surface<'static>, Adapter, PhysicalSize<u32>) {
     let instance = Instance::new(&InstanceDescriptor {
@@ -1110,10 +1105,10 @@ fn create_surface_and_adapter(
     (surface, adapter, size)
 }
 
-fn create_surface_config(
+pub(crate) fn create_surface_config(
     surface: &Surface,
     adapter: &Adapter,
-    settings: &Settings,
+    settings: &mut Settings,
     size: PhysicalSize<u32>,
 ) -> (SurfaceConfiguration, u32) {
     let surface_caps = surface.get_capabilities(adapter);
@@ -1148,11 +1143,11 @@ fn create_surface_config(
 
     let caps = adapter.get_texture_format_features(config.format);
     let msaa_samples = clamp_to_supported_msaa(caps, settings.msaa_samples);
-
+    settings.msaa_samples = msaa_samples;
     (config, msaa_samples)
 }
 
-fn create_device(adapter: &Adapter) -> (Device, Queue) {
+pub(crate) fn create_device(adapter: &Adapter) -> (Device, Queue) {
     pollster::block_on(adapter.request_device(&DeviceDescriptor {
         label: Some("Device"),
         required_features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES

@@ -1,4 +1,4 @@
-use crate::paths::shader_dir;
+use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::load_shader;
 use crate::renderer::ui::ScreenUniform;
 use crate::renderer::ui_text_rendering::TextAtlas;

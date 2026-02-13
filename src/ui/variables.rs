@@ -1,6 +1,6 @@
 use crate::data::Settings;
-use crate::renderer::astronomy::{AstronomyState, TimeScales};
 use crate::ui::ui_editor::UiButtonLoader;
+use crate::world::astronomy::{AstronomyState, TimeScales};
 use std::collections::HashMap;
 use std::fmt;
 

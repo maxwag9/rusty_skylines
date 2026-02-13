@@ -1,5 +1,5 @@
-use crate::hsv::{HSV, hsv_to_rgb, lerp_hsv};
-use crate::positions::{ChunkSize, WorldPos};
+use crate::helpers::hsv::{HSV, hsv_to_rgb, lerp_hsv};
+use crate::helpers::positions::{ChunkSize, WorldPos};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use std::f32::consts::PI;
 

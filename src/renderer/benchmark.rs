@@ -1,4 +1,3 @@
-use crate::components::camera::Camera;
 use rand::RngExt;
 use std::time::Instant;
 
@@ -53,13 +52,10 @@ impl Default for Benchmark {
 impl Benchmark {
     pub fn run(
         &mut self,
-        _camera: &mut Camera,
         chunk_count: usize,
         config: &mut ChunkJobConfig,
         clear_state: impl FnOnce(),
     ) {
-        //camera.target.x += 220.0;
-
         if self.state.is_none() {
             self.state = Some(BenchmarkState {
                 active: true,

@@ -1,7 +1,7 @@
 use crate::cars::car_subsystem::CarSubsystem;
 use crate::events::*;
-use crate::positions::{ChunkCoord, WorldPos};
-use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
+use crate::helpers::positions::{ChunkCoord, WorldPos};
+use crate::terrain::roads::road_subsystem::RoadSubsystem;
 
 #[derive(Debug)]
 pub enum CarChangeEvent {
@@ -14,7 +14,7 @@ pub enum CarChangeEvent {
 pub fn run_car_events(
     event: Event,
     car_subsystem: &mut CarSubsystem,
-    road_render_subsystem: &RoadRenderSubsystem,
+    road_subsystem: &RoadSubsystem,
 ) {
     match event {
         Event::CarNavigate(car_chunks) => { // owned car chunks so I can consume them in the thread.

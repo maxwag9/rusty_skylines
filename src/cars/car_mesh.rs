@@ -1,4 +1,4 @@
-use crate::hsv::HSV;
+use crate::helpers::hsv::HSV;
 use bytemuck::{Pod, Zeroable};
 use rand::{Rng, RngExt};
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};

@@ -1,9 +1,9 @@
-use crate::components::camera::Camera;
 use crate::data::Settings;
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
 use crate::resources::Uniforms;
+use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -575,9 +575,6 @@ pub fn create_gtao_texture(
 }
 
 pub fn make_new_uniforms_csm(
-    view: Mat4,
-    proj: Mat4,
-    view_proj: Mat4,
     sun: Vec3,
     moon: Vec3,
     total_time: f64,
@@ -587,6 +584,7 @@ pub fn make_new_uniforms_csm(
     settings: &Settings,
 ) -> Uniforms {
     let eye = camera.eye_world();
+    let (view, proj, view_proj) = camera.matrices();
     Uniforms {
         view: view.to_cols_array_2d(),
         inv_view: view.inverse().to_cols_array_2d(),

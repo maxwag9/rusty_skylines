@@ -1,4 +1,9 @@
-use crate::components::camera::{Camera, CameraController};
+use crate::data::Settings;
+use crate::resources::TimeSystem;
+use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::variables::update_ui_variables;
+use crate::world::astronomy::{AstronomyState, ObserverParams, TimeScales, compute_astronomy};
+use crate::world::camera::{Camera, CameraController};
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -9,18 +14,20 @@ pub struct CameraBundle {
     pub controller: CameraController,
 }
 
-pub struct World {
+pub struct WorldState {
     next_entity: u32,
     main_camera: Entity,
     cameras: HashMap<Entity, CameraBundle>,
+    pub(crate) astronomy: AstronomyState,
 }
 
-impl World {
+impl WorldState {
     pub fn new() -> Self {
         let mut world = Self {
             next_entity: 0,
             main_camera: Entity(0),
             cameras: HashMap::new(),
+            astronomy: AstronomyState::default(),
         };
         let camera = world.spawn_camera(Camera::new());
         world.main_camera = camera;
@@ -63,5 +70,25 @@ impl World {
 
     pub fn camera_and_controller_mut(&mut self, entity: Entity) -> Option<&mut CameraBundle> {
         self.cameras.get_mut(&entity)
+    }
+
+    pub fn update(
+        &mut self,
+        ui_loader: &mut UiButtonLoader,
+        time: &TimeSystem,
+        settings: &Settings,
+    ) {
+        let time_scales = TimeScales::from_game_time(time.total_game_time, settings.always_day);
+        let observer = ObserverParams::new(time_scales.day_angle);
+        let astronomy = compute_astronomy(&time_scales);
+
+        update_ui_variables(
+            ui_loader,
+            &time_scales,
+            &astronomy,
+            observer.obliquity,
+            settings,
+        );
+        self.astronomy = astronomy;
     }
 }

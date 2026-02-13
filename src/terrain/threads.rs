@@ -1,4 +1,4 @@
-use crate::positions::{ChunkCoord, ChunkSize, LodStep};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LodStep};
 use crate::terrain::chunk_builder::{ChunkBuilder, CpuChunkMesh};
 use crate::terrain::terrain::TerrainGenerator;
 use crossbeam_channel::{Receiver, Sender, unbounded};

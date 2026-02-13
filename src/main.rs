@@ -2,22 +2,17 @@
 extern crate core;
 
 mod app;
-mod components;
+mod cars;
 mod data;
 mod events;
-pub mod hsv;
-mod mouse_ray;
-mod paths;
+mod helpers;
 mod renderer;
 mod resources;
 mod simulation;
 mod systems;
-mod ui;
-mod world;
-
-mod cars;
-pub mod positions;
 mod terrain;
+mod ui;
+pub mod world;
 
 use app::App;
 use winit::event_loop::{ControlFlow, EventLoop};

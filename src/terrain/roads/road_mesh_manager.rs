@@ -4,9 +4,9 @@
 //! Produces deterministic, chunked CPU mesh buffers from immutable road topology.
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
-use crate::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
 use crate::renderer::gizmo::Gizmo;
-use crate::renderer::world_renderer::TerrainRenderer;
+use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::intersections::{
     IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh, road_vertex,
 };
@@ -175,7 +175,7 @@ impl Default for MeshConfig {
 
 /// Mesh a segment, clipping endpoints against intersection polygons
 fn mesh_segment_with_boundaries(
-    terrain_renderer: &TerrainRenderer,
+    terrain_renderer: &TerrainSubsystem,
     gizmo: &mut Gizmo,
     _seg_id: SegmentId,
     segment: &Segment,
@@ -443,7 +443,7 @@ fn mesh_segment_with_boundaries(
 }
 
 fn draw_node_geometry(
-    terrain_renderer: &TerrainRenderer,
+    terrain_renderer: &TerrainSubsystem,
     gizmo: &mut Gizmo,
     node_pos: WorldPos,
     connected_lanes_info: &[(i8, f32)],
@@ -600,7 +600,7 @@ fn draw_node_geometry(
 
 /// Builds a ribbon mesh for a single lane or strip.
 pub fn build_ribbon_mesh(
-    terrain_renderer: &TerrainRenderer,
+    terrain_renderer: &TerrainSubsystem,
     gizmo: &mut Gizmo,
     style: &RoadStyleParams,
     lane_geom: &LaneGeometry,
@@ -748,7 +748,7 @@ pub fn build_ribbon_mesh(
 /// Builds vertical faces between two parallel strips (e.g., Curb).
 /// Updated to accept start/end overrides to snap to intersection boundaries.
 pub fn build_vertical_face(
-    terrain_renderer: &TerrainRenderer,
+    terrain_renderer: &TerrainSubsystem,
     style: &RoadStyleParams,
     ref_geom: &LaneGeometry,
     offset_lateral: f32,
@@ -1026,7 +1026,7 @@ impl RoadMeshManager {
     /// Build mesh for a chunk (Some) or all geometry (None for previews)
     pub fn build_mesh(
         &self,
-        terrain_renderer: &TerrainRenderer,
+        terrain_renderer: &TerrainSubsystem,
         chunk_id: Option<ChunkId>,
         storage: &RoadStorage,
         style: &RoadStyleParams,
@@ -1149,7 +1149,7 @@ impl RoadMeshManager {
     }
     pub fn update_chunk_mesh(
         &mut self,
-        terrain_renderer: &TerrainRenderer,
+        terrain_renderer: &TerrainSubsystem,
         chunk_id: ChunkId,
         storage: &RoadStorage,
         style: &RoadStyleParams,
@@ -1163,7 +1163,7 @@ impl RoadMeshManager {
     /// Convenience wrapper for building preview meshes (no chunking)
     pub fn build_preview_mesh(
         &self,
-        terrain_renderer: &TerrainRenderer,
+        terrain_renderer: &TerrainSubsystem,
         preview_storage: &RoadStorage,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,

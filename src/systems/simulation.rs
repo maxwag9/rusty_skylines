@@ -1,17 +1,25 @@
 use crate::resources::Resources;
-use crate::world::World;
 
-pub fn simulation_system(world: &mut World, resources: &mut Resources) {
-    let Some(camera_bundle) = world.camera_and_controller_mut(world.main_camera()) else {
+pub fn simulation_system(resources: &mut Resources) {
+    let world = &mut resources.world_core;
+    let renderer = &mut resources.render_core;
+    let Some(camera_bundle) = world
+        .world_state
+        .camera_and_controller_mut(world.world_state.main_camera())
+    else {
         return;
     };
-    resources.simulation.update(
-        &resources.renderer.core.terrain_renderer,
-        &resources.renderer.core.road_renderer,
-        &mut resources.renderer.core.car_subsystem,
+    world.simulation.update(
+        &mut world.terrain_subsystem,
+        &mut world.road_subsystem,
+        &mut world.car_subsystem,
         &resources.settings,
-        &resources.time,
-        &mut resources.input,
+        &world.time,
+        &mut world.input,
         camera_bundle,
+        &renderer.device,
+        &renderer.queue,
+        &renderer.config,
+        &mut renderer.gizmo,
     );
 }
