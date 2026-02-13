@@ -10,13 +10,13 @@ use winit::dpi::PhysicalSize;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct LineVtxRender {
-    pub(crate) pos: [f32; 3],
-    pub(crate) color: [f32; 3],
+pub struct LineVtxRender {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
 }
 
 impl LineVtxRender {
-    pub(crate) fn layout<'a>() -> VertexBufferLayout<'a> {
+    pub fn layout<'a>() -> VertexBufferLayout<'a> {
         const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         VertexBufferLayout {
             array_stride: size_of::<LineVtxRender>() as u64,

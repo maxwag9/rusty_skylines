@@ -341,7 +341,7 @@ impl TerrainEditor {
             edited.dirty = true;
         }
     }
-    pub fn upload_dirty_chunks(
+    pub(crate) fn upload_dirty_chunks(
         &mut self,
         device: &Device,
         queue: &Queue,

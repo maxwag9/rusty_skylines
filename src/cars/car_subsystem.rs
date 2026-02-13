@@ -3,6 +3,8 @@ use crate::cars::car_render::CarInstance;
 use crate::cars::car_structs::{Car, CarChunkDistance, CarStorage};
 use crate::helpers::hsv::hsv_to_rgb;
 use crate::helpers::positions::WorldPos;
+use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
+use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::terrain_subsystem::{CursorMode, TerrainSubsystem};
 use crate::resources::TimeSystem;
 use crate::terrain::roads::road_structs::NodeId;
@@ -15,6 +17,9 @@ use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
 use std::time::{Duration, Instant};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, IndexFormat, Queue, RenderPass};
+
+pub const CAR_BASE_LENGTH: f32 = 4.5;
+pub const CAR_BASE_WIDTH: f32 = 2.5;
 
 pub struct SpawningNode {
     pub node_id: NodeId,
@@ -51,9 +56,14 @@ pub struct CarRenderSubsystem {
     pub current_instance_count: u32,
 }
 impl CarRenderSubsystem {
-    pub fn new(device: &Device, queue: &Queue) -> Self {
+    pub fn new(device: &Device, queue: &Queue, rt_subsystem: &mut RTSubsystem) -> Self {
         // Calculate exact sizes from procedural mesh (generate temporarily, discard data)
         let (vertices, indices) = create_procedural_car();
+        // Convert CarVertex positions to [f32; 3]
+        let positions: Vec<[f32; 3]> = vertices.iter().map(|v| v.position).collect();
+
+        // Build BLAS for car mesh
+        rt_subsystem.init_car_blas(&device, &queue, &positions, &indices);
         let vb_size = (vertices.len() * size_of::<Vertex>()) as u64;
         let ib_size = (indices.len() * size_of::<u32>()) as u64;
 
@@ -93,9 +103,13 @@ impl CarRenderSubsystem {
             current_instance_count: 0,
         }
     }
-    pub fn render(&mut self, car_storage: &CarStorage, camera: &Camera, pass: &mut RenderPass) {
-        const BASE_LENGTH: f32 = 4.5;
-        const BASE_WIDTH: f32 = 2.5;
+    pub fn render(
+        &mut self,
+        rt_subsystem: &mut RTSubsystem,
+        car_storage: &CarStorage,
+        camera: &Camera,
+        pass: &mut RenderPass,
+    ) {
         let close_ids = car_storage.car_chunks().close_cars();
 
         let mut instances: Vec<CarInstance> = Vec::with_capacity(close_ids.len());
@@ -106,8 +120,8 @@ impl CarRenderSubsystem {
 
                 let quat = car.quat.normalize();
 
-                let length_scale = car.length / BASE_LENGTH;
-                let width_scale = car.width / BASE_WIDTH;
+                let length_scale = car.length / CAR_BASE_LENGTH;
+                let width_scale = car.width / CAR_BASE_WIDTH;
                 let scale = Vec3::new(width_scale, 1.0, length_scale);
                 let model = Mat4::from_scale_rotation_translation(scale, quat, render_pos);
 
@@ -118,6 +132,8 @@ impl CarRenderSubsystem {
                 });
             }
         }
+
+        update_rt_instances(rt_subsystem, &self.device, &self.queue, car_storage, camera);
 
         let instance_count = instances.len() as u32;
 

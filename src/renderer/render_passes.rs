@@ -8,6 +8,7 @@ use crate::helpers::paths::shader_dir;
 use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
+use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::renderer::textures::material_keys::*;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
@@ -470,6 +471,7 @@ pub fn render_gizmo(
 pub fn render_cars(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
+    rt_subsystem: &mut RTSubsystem,
     car_renderer: &mut CarRenderSubsystem,
     car_storage: &CarStorage,
     pipelines: &Pipelines,
@@ -500,7 +502,7 @@ pub fn render_cars(
         pass,
     );
 
-    car_renderer.render(car_storage, camera, pass);
+    car_renderer.render(rt_subsystem, car_storage, camera, pass);
 }
 
 fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {

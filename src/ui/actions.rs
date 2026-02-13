@@ -497,7 +497,7 @@ impl CommandQueue {
     }
 
     /// Queue commands from a UI hit result.
-    pub fn push_from_hit(&mut self, hit: &HitResult) {
+    pub(crate) fn push_from_hit(&mut self, hit: &HitResult) {
         if let Some(action_str) = &hit.action {
             if !action_str.is_empty() && action_str != "None" {
                 self.push_str(action_str);

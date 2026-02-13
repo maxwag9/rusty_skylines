@@ -6,6 +6,7 @@ mod gtao;
 pub(crate) mod mesh_arena;
 pub(crate) mod pipelines;
 pub mod pipelines_outsource;
+pub mod ray_tracing;
 pub(crate) mod render_core;
 pub mod render_passes;
 pub(crate) mod shader_watcher;

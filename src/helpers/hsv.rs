@@ -59,3 +59,20 @@ pub fn lerp_hsv(a: HSV, b: HSV, t: f32) -> HSV {
         v: lerp(a.v, b.v, t),
     }
 }
+
+/// Convert depth to rainbow color for BVH visualization
+pub fn depth_to_color(depth: u32, max_depth: u32) -> [f32; 3] {
+    let t = if max_depth > 0 {
+        (depth as f32 / max_depth as f32).min(1.0)
+    } else {
+        0.0
+    };
+
+    // Rainbow: red -> yellow -> green -> cyan -> blue
+    let hue = t * 0.7;
+    hsv_to_rgb(HSV {
+        h: hue,
+        s: 0.9,
+        v: 1.0,
+    })
+}

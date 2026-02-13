@@ -126,7 +126,9 @@ pub struct PostFxTextures {
     pub linear_depth_half: TextureView,
     pub normal_half: TextureView,
     pub gtao_blurred_half: TextureView,
-    pub gtao_history: [TextureView; 2], // half-res, R32Float, ping-pong
+    pub gtao_history: [TextureView; 2],
+    pub rt_raw_half: TextureView,
+    pub rt_denoised_half: TextureView,
 }
 
 pub struct UniformBuffers {
@@ -247,7 +249,8 @@ impl Pipelines {
         let linear_depth_half = create_linear_depth_texture(device, config, 0.5);
         let normal_half = create_normals_texture(device, config, 0.5);
 
-        let (gtao_raw_half, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
+        let (_, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
+        let (rt_raw_half, rt_denoised_half) = create_rt_textures(device, config, 0.5);
 
         let gtao_history = [
             create_gtao_texture(device, config, 0.5),
@@ -259,6 +262,8 @@ impl Pipelines {
             normal_half,
             gtao_blurred_half,
             gtao_history,
+            rt_raw_half,
+            rt_denoised_half,
         }
     }
 }
@@ -550,6 +555,37 @@ fn create_gtao_textures(
     let gtao_view = make("GTAO Raw");
     let gtao_blurred_view = make("GTAO Blurred");
     (gtao_view, gtao_blurred_view)
+}
+const RT_FORMAT: TextureFormat = TextureFormat::R8Unorm;
+fn create_rt_textures(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    resolution_factor: f32,
+) -> (TextureView, TextureView) {
+    let make = |label: &str| {
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: (config.width as f32 * resolution_factor) as u32,
+                height: (config.height as f32 * resolution_factor) as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: RT_FORMAT,
+            usage: TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        view
+    };
+
+    let rt_view = make("RT Raw");
+    let rt_blurred_view = make("RT Blurred");
+    (rt_view, rt_blurred_view)
 }
 pub fn create_gtao_texture(
     device: &Device,

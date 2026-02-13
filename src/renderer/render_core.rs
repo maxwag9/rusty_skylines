@@ -8,6 +8,8 @@ use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::Pipelines;
+use crate::renderer::ray_tracing::rt_pass::render_ray_tracing;
+use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
@@ -28,7 +30,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
-use wgpu::hal::DynQueue;
 use wgpu::wgt::PollType;
 use wgpu::{
     Adapter, Backends, BlendComponent, BlendFactor, BlendOperation, BlendState, Color,
@@ -40,7 +41,7 @@ use wgpu::{
     TextureFormat, TextureFormatFeatureFlags, TextureFormatFeatures, TextureUsages, TextureView,
     TextureViewDescriptor, Trace,
 };
-use wgpu_render_manager::compute_system::ComputePipelineOptions;
+use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
@@ -60,8 +61,9 @@ pub struct RenderCore {
     pub shader_watcher: Option<ShaderWatcher>,
     pub pipelines: Pipelines,
     pub ui_renderer: UiRenderer,
-    pub terrain_renderer: TerrainRenderSubsystem,
     pub profiler: GpuProfiler,
+    pub rt_subsystem: RTSubsystem,
+    pub terrain_renderer: TerrainRenderSubsystem,
     pub road_renderer: RoadRenderSubsystem,
     pub car_renderer: CarRenderSubsystem,
     pub gizmo: Gizmo,
@@ -79,11 +81,12 @@ impl RenderCore {
     ) -> Self {
         let shader_watcher = ShaderWatcher::new().ok();
 
+        let mut rt_subsystem = RTSubsystem::new();
         let ui_renderer = UiRenderer::new(device, config.format, size, settings.msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderSubsystem::new();
         let road_renderer = RoadRenderSubsystem::new(device);
-        let car_renderer = CarRenderSubsystem::new(device, queue);
+        let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let mut render_manager = RenderManager::new(device, queue, texture_dir());
         let gizmo = Gizmo::new(device, settings.chunk_size);
         let profiler = GpuProfiler::new(&device, 3);
@@ -111,6 +114,7 @@ impl RenderCore {
             render_manager,
             gizmo,
             profiler,
+            rt_subsystem,
         }
     }
 
@@ -358,6 +362,7 @@ impl RenderCore {
 
         self.gizmo.update(
             terrain_subsystem,
+            &self.rt_subsystem,
             time.total_game_time,
             &road_subsystem.road_manager,
             settings,
@@ -426,6 +431,7 @@ impl RenderCore {
             render_cars_shadows(
                 &mut pass,
                 &mut self.render_manager,
+                &mut self.rt_subsystem,
                 &mut self.car_renderer,
                 car_storage,
                 &self.pipelines,
@@ -459,6 +465,14 @@ impl RenderCore {
             car_storage,
             settings,
             aspect,
+        );
+
+        render_ray_tracing(
+            encoder,
+            &self.config,
+            &mut self.rt_subsystem,
+            &mut self.render_manager,
+            &self.pipelines,
         );
 
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO", {
@@ -561,6 +575,7 @@ impl RenderCore {
             render_cars(
                 &mut pass,
                 &mut self.render_manager,
+                &mut self.rt_subsystem,
                 &mut self.car_renderer,
                 car_storage,
                 &self.pipelines,
@@ -615,7 +630,7 @@ impl RenderCore {
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
-                &[&self.pipelines.buffers.camera],
+                &[BufferSet::from_uniform(&self.pipelines.buffers.camera)],
             );
         });
 
@@ -638,7 +653,10 @@ impl RenderCore {
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
-                &[&self.pipelines.buffers.camera, &self.pipelines.buffers.gtao],
+                &[
+                    BufferSet::from_uniform(&self.pipelines.buffers.camera),
+                    BufferSet::from_uniform(&self.pipelines.buffers.gtao),
+                ],
             );
         });
 
@@ -669,7 +687,7 @@ impl RenderCore {
                 ComputePipelineOptions {
                     dispatch_size: half_disp,
                 },
-                &[&self.pipelines.buffers.gtao_blur],
+                &[BufferSet::from_uniform(&self.pipelines.buffers.gtao_blur)],
             );
         });
 

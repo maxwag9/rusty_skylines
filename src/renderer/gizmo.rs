@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 use crate::data::Settings;
+use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
 use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
+use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
+use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
 use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld};
@@ -465,6 +468,7 @@ impl Gizmo {
     pub fn update(
         &mut self,
         terrain_subsystem: &TerrainSubsystem,
+        rt_subsystem: &RTSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,
         settings: &Settings,
@@ -475,7 +479,18 @@ impl Gizmo {
         let target = camera.target;
 
         // self.sphere(camera.eye_world(), 400.0, [1.0, 1.0, 1.0], 0.0);
-
+        if settings.render_rt_gizmo {
+            self.visualize_rt(
+                rt_subsystem,
+                camera.eye_world(), // reference position
+                false,              // show TLAS instances
+                true,               // show TLAS BVH
+                8,                  // TLAS BVH max depth to show
+                false,              // show BLAS (usually false - it's object-space)
+                8,                  // BLAS BVH max depth
+                0.0,                // duration (0 = single frame)
+            );
+        }
         if settings.render_chunk_bounds {
             if terrain_subsystem.chunks.contains_key(&target.chunk) {
                 let chunk_size_f = self.chunk_size as f32;
@@ -630,6 +645,196 @@ impl Gizmo {
             .then_some(orbit_radius * 0.1)
             .unwrap_or(1.0);
         self.axes_with_sun(target, scale, sun_direction, 0.0);
+    }
+
+    /// Draw a 3D wireframe axis-aligned bounding box
+    pub fn aabb(&mut self, aabb: &Aabb, reference: WorldPos, color: [f32; 3], duration: f32) {
+        if !aabb.is_valid() {
+            return;
+        }
+
+        let cs = self.chunk_size;
+        let min = Vec3::new(aabb.min[0], aabb.min[1], aabb.min[2]);
+        let max = Vec3::new(aabb.max[0], aabb.max[1], aabb.max[2]);
+
+        // 8 corners of the box
+        let c = [
+            reference.add_vec3(Vec3::new(min.x, min.y, min.z), cs),
+            reference.add_vec3(Vec3::new(max.x, min.y, min.z), cs),
+            reference.add_vec3(Vec3::new(max.x, max.y, min.z), cs),
+            reference.add_vec3(Vec3::new(min.x, max.y, min.z), cs),
+            reference.add_vec3(Vec3::new(min.x, min.y, max.z), cs),
+            reference.add_vec3(Vec3::new(max.x, min.y, max.z), cs),
+            reference.add_vec3(Vec3::new(max.x, max.y, max.z), cs),
+            reference.add_vec3(Vec3::new(min.x, max.y, max.z), cs),
+        ];
+
+        // 12 edges of the box
+        let edges: [(usize, usize); 12] = [
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0), // bottom face
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4), // top face
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7), // vertical edges
+        ];
+
+        for (i, j) in edges {
+            self.line(c[i], c[j], color, duration);
+        }
+    }
+
+    /// Visualize BVH nodes with depth-based coloring
+    pub fn visualize_bvh_nodes(
+        &mut self,
+        nodes: &[BvhNode],
+        reference: WorldPos,
+        max_depth: u32,
+        leaves_only: bool,
+        duration: f32,
+    ) {
+        if nodes.is_empty() {
+            return;
+        }
+        self.visualize_bvh_recursive(nodes, 0, reference, 0, max_depth, leaves_only, duration);
+    }
+
+    fn visualize_bvh_recursive(
+        &mut self,
+        nodes: &[BvhNode],
+        node_idx: usize,
+        reference: WorldPos,
+        depth: u32,
+        max_depth: u32,
+        leaves_only: bool,
+        duration: f32,
+    ) {
+        if node_idx >= nodes.len() || depth > max_depth {
+            return;
+        }
+
+        let node = &nodes[node_idx];
+        let is_leaf = node.is_leaf();
+
+        // Draw this node's AABB
+        if !leaves_only || is_leaf {
+            let aabb = Aabb::new(node.aabb_min, node.aabb_max);
+            let color = depth_to_color(depth, max_depth);
+            self.aabb(&aabb, reference, color, duration);
+        }
+
+        // Recurse into children if not a leaf
+        if !is_leaf {
+            let left_idx = node.child_or_tri_offset as usize;
+            let right_idx = node.tri_count_or_right as usize;
+
+            self.visualize_bvh_recursive(
+                nodes,
+                left_idx,
+                reference,
+                depth + 1,
+                max_depth,
+                leaves_only,
+                duration,
+            );
+            self.visualize_bvh_recursive(
+                nodes,
+                right_idx,
+                reference,
+                depth + 1,
+                max_depth,
+                leaves_only,
+                duration,
+            );
+        }
+    }
+
+    /// Visualize TLAS (Top Level Acceleration Structure)
+    pub fn visualize_tlas(
+        &mut self,
+        tlas: &Tlas,
+        reference: WorldPos,
+        show_instances: bool,
+        show_bvh: bool,
+        bvh_max_depth: u32,
+        duration: f32,
+    ) {
+        // Draw instance AABBs in cyan
+        if show_instances {
+            for (i, inst) in tlas.instances.iter().enumerate() {
+                let aabb = Aabb::new(inst.aabb_min, inst.aabb_max);
+                // Alternate colors for different instances
+                let hue = (i as f32 * 0.618033988749895) % 1.0; // golden ratio for spread
+                let color = hsv_to_rgb(HSV {
+                    h: hue,
+                    s: 0.7,
+                    v: 0.9,
+                });
+                self.aabb(&aabb, reference, color, duration);
+            }
+        }
+
+        // Draw BVH structure with depth coloring
+        if show_bvh && !tlas.bvh_nodes.is_empty() {
+            self.visualize_bvh_nodes(&tlas.bvh_nodes, reference, bvh_max_depth, false, duration);
+        }
+    }
+
+    /// Visualize BLAS (Bottom Level Acceleration Structure)
+    pub fn visualize_blas(
+        &mut self,
+        blas: &Blas,
+        reference: WorldPos,
+        show_root: bool,
+        show_bvh: bool,
+        bvh_max_depth: u32,
+        duration: f32,
+    ) {
+        // Draw root AABB in magenta
+        if show_root {
+            self.aabb(blas.root_aabb(), reference, [1.0, 0.0, 1.0], duration);
+        }
+
+        // Draw BVH structure
+        if show_bvh {
+            self.visualize_bvh_nodes(&blas.bvh_nodes, reference, bvh_max_depth, false, duration);
+        }
+    }
+
+    /// Visualize entire RT subsystem
+    pub fn visualize_rt(
+        &mut self,
+        rt_subsystem: &RTSubsystem,
+        reference: WorldPos,
+        show_tlas_instances: bool,
+        show_tlas_bvh: bool,
+        tlas_bvh_depth: u32,
+        show_blas: bool,
+        blas_bvh_depth: u32,
+        duration: f32,
+    ) {
+        // Visualize TLAS
+        self.visualize_tlas(
+            &rt_subsystem.tlas,
+            reference,
+            show_tlas_instances,
+            show_tlas_bvh,
+            tlas_bvh_depth,
+            duration,
+        );
+
+        // Visualize BLAS (at origin reference - instances handle world transforms)
+        if show_blas {
+            if let Some(blas) = &rt_subsystem.car_blas {
+                self.visualize_blas(blas, reference, true, true, blas_bvh_depth, duration);
+            }
+        }
     }
 }
 #[inline]

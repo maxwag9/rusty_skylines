@@ -3,7 +3,7 @@ use wgpu::{
     BufferDescriptor, BufferUsages, Device, Extent3d, Queue, TextureDescriptor, TextureDimension,
     TextureFormat, TextureUsages, TextureView, TextureViewDescriptor,
 };
-use wgpu_render_manager::compute_system::ComputePipelineOptions;
+use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 
 pub fn create_blue_noise_texture_gpu(
@@ -94,7 +94,12 @@ pub fn create_blue_noise_texture_gpu(
         ComputePipelineOptions {
             dispatch_size: [(n + 255) / 256, 1, 1],
         },
-        &[&binary, &ranks, &energy, &params],
+        &[
+            BufferSet::from_storage(&binary, false),
+            BufferSet::from_storage(&ranks, false),
+            BufferSet::from_storage(&energy, false),
+            BufferSet::from_uniform(&params),
+        ],
     );
 
     // One dispatch per pruning iteration (CPU loop)
@@ -108,7 +113,14 @@ pub fn create_blue_noise_texture_gpu(
             ComputePipelineOptions {
                 dispatch_size: [(n + 255) / 256, 1, 1],
             },
-            &[&binary, &ranks, &energy, &extremum, &params, &state],
+            &[
+                BufferSet::from_storage(&binary, false),
+                BufferSet::from_storage(&ranks, false),
+                BufferSet::from_storage(&energy, false),
+                BufferSet::from_storage(&extremum, false),
+                BufferSet::from_uniform(&params),
+                BufferSet::from_storage(&state, false),
+            ],
         );
     }
 
@@ -122,7 +134,10 @@ pub fn create_blue_noise_texture_gpu(
         ComputePipelineOptions {
             dispatch_size: [(n + 255) / 256, 1, 1],
         },
-        &[&ranks, &params],
+        &[
+            BufferSet::from_storage(&ranks, false),
+            BufferSet::from_uniform(&params),
+        ],
     );
 
     view

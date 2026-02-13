@@ -5,6 +5,7 @@ use crate::cars::car_subsystem::CarRenderSubsystem;
 use crate::data::Settings;
 use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
+use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::draw_visible_roads;
 use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
@@ -490,6 +491,7 @@ pub fn render_terrain_shadows(
 pub fn render_cars_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
+    rt_subsystem: &mut RTSubsystem,
     car_renderer: &mut CarRenderSubsystem,
     car_storage: &CarStorage,
     pipelines: &Pipelines,
@@ -518,5 +520,5 @@ pub fn render_cars_shadows(
 
     render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);
 
-    car_renderer.render(car_storage, camera, pass)
+    car_renderer.render(rt_subsystem, car_storage, camera, pass)
 }

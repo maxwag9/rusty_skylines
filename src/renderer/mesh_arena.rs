@@ -206,7 +206,7 @@ impl TerrainMeshArena {
         });
     }
 
-    pub fn alloc_and_upload<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
+    pub(crate) fn alloc_and_upload<V: bytemuck::Pod + VertexWithPosition + Clone + Copy>(
         &mut self,
         device: &Device,
         queue: &Queue,
@@ -244,7 +244,7 @@ impl TerrainMeshArena {
         None
     }
 
-    pub fn free<V>(&mut self, handle: GpuChunkHandle) {
+    pub(crate) fn free<V>(&mut self, handle: GpuChunkHandle) {
         let page = &mut self.pages[handle.page as usize];
         let stride = size_of::<V>() as u64;
 

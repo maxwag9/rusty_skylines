@@ -151,6 +151,8 @@ pub struct Settings {
     pub player_pos: WorldPos,
     #[serde(default)]
     pub drive_car: bool,
+    #[serde(default)]
+    pub render_rt_gizmo: bool,
 }
 
 impl Default for Settings {
@@ -183,6 +185,7 @@ impl Default for Settings {
             show_fog: true,
             player_pos: WorldPos::default(),
             drive_car: false,
+            render_rt_gizmo: false,
         }
     }
 }
