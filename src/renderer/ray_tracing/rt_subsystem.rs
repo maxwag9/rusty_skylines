@@ -1,6 +1,12 @@
+use crate::helpers::positions::WorldPos;
+use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, RTVertex, Tlas, TlasInstance};
+use crate::world::camera::Camera;
+use bytemuck::{Pod, Zeroable};
+use glam::{Mat4, Quat, Vec3};
 // rt_subsystem.rs
 use std::mem::size_of;
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 use wgpu_render_manager::compute_system::BufferSet;
 // ============================================================================
@@ -43,10 +49,27 @@ pub struct RTSubsystem {
     // Stats
     frames_since_rebuild: u32,
     pub buffer_sets: Option<Vec<BufferSet>>,
+    rt_params_buffer: Buffer,
 }
 
 impl RTSubsystem {
-    pub fn new() -> Self {
+    pub fn new(device: &Device) -> Self {
+        let rt_params = RTParams {
+            max_distance: 200.0, // e.g. 200.0
+            normal_bias: 0.05,   // e.g. 0.05
+            origin_bias: 0.02,   // e.g. 0.02
+            ndotl_fade: 0.10,    // e.g. 0.10  (smooth ramp around N·L=0)
+
+            soft_start: 5.0,          // e.g. 5.0   (close blockers = hard/dark)
+            soft_end: 80.0,           // e.g. 80.0  (far blockers = softer/lighter)
+            far_hit_visibility: 0.85, // e.g. 0.85  (visibility when blocked very far)
+            _pad0: 0.0,
+        };
+        let rt_params_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("RT Params Uniforms"),
+            contents: bytemuck::bytes_of(&rt_params),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
         Self {
             car_blas_gpu: None,
             tlas_gpu: None,
@@ -56,6 +79,7 @@ impl RTSubsystem {
             tlas_node_capacity: 0,
             frames_since_rebuild: 0,
             buffer_sets: None,
+            rt_params_buffer,
         }
     }
 
@@ -128,6 +152,7 @@ impl RTSubsystem {
         &mut self,
         device: &Device,
         queue: &Queue,
+        pipelines: &Pipelines,
         instances: Vec<TlasInstance>,
         force_rebuild: bool,
     ) {
@@ -151,10 +176,10 @@ impl RTSubsystem {
             self.tlas.refit(&instances);
         }
 
-        self.upload_tlas(device, queue);
+        self.upload_tlas(device, queue, pipelines);
     }
 
-    fn upload_tlas(&mut self, device: &Device, queue: &Queue) {
+    fn upload_tlas(&mut self, device: &Device, queue: &Queue, pipelines: &Pipelines) {
         let instances = &self.tlas.instances;
         let nodes = &self.tlas.bvh_nodes;
 
@@ -212,6 +237,9 @@ impl RTSubsystem {
             );
             queue.write_buffer(&tlas_gpu.bvh_buffer, 0, bytemuck::cast_slice(nodes));
         }
+        if need_inst_resize || need_node_resize || self.tlas_gpu.is_none() {
+            self.ensure_rt_buffer_sets(pipelines, false);
+        }
     }
 
     /// Get car BLAS root AABB (for instance creation)
@@ -244,8 +272,8 @@ impl RTSubsystem {
     }
 
     /// Create buffer sets for the compute system (all read-only storage buffers)
-    pub fn ensure_rt_buffer_sets(&mut self) -> bool {
-        if self.buffer_sets.is_some() {
+    pub fn ensure_rt_buffer_sets(&mut self, pipelines: &Pipelines, just_ensure: bool) -> bool {
+        if self.buffer_sets.is_some() && just_ensure {
             return true;
         }
 
@@ -277,23 +305,19 @@ impl RTSubsystem {
                 buffer: tlas.bvh_buffer.clone(),
                 read_only: true,
             },
+            BufferSet::from_uniform(&pipelines.buffers.camera.clone()),
+            BufferSet::from_uniform(&self.rt_params_buffer.clone()),
         ]);
 
         true
     }
 
     /// Get cached buffer sets, or None if not ready
-    pub fn get_buffer_sets(&mut self) -> Option<&Vec<BufferSet>> {
-        if !self.ensure_rt_buffer_sets() {
+    pub fn get_buffer_sets(&mut self, pipelines: &Pipelines) -> Option<&Vec<BufferSet>> {
+        if !self.ensure_rt_buffer_sets(pipelines, true) {
             return None;
         }
         Some(self.buffer_sets.as_ref().unwrap())
-    }
-}
-
-impl Default for RTSubsystem {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -304,4 +328,50 @@ pub struct RTStats {
     pub tlas_instances: usize,
     pub tlas_nodes: usize,
     pub tlas_quality: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct RTParams {
+    max_distance: f32, // e.g. 200.0
+    normal_bias: f32,  // e.g. 0.05
+    origin_bias: f32,  // e.g. 0.02
+    ndotl_fade: f32,   // e.g. 0.10  (smooth ramp around N·L=0)
+
+    soft_start: f32,         // e.g. 5.0   (close blockers = hard/dark)
+    soft_end: f32,           // e.g. 80.0  (far blockers = softer/lighter)
+    far_hit_visibility: f32, // e.g. 0.85  (visibility when blocked very far)
+    _pad0: f32,
+}
+
+pub fn make_render_space_transform(
+    world_pos: WorldPos,
+    rot: Quat,
+    scale: Vec3,
+    camera: &Camera,
+) -> Mat4 {
+    let eye = camera.eye_world();
+    let t_render: Vec3 = world_pos.to_render_pos(eye, camera.chunk_size);
+    Mat4::from_scale_rotation_translation(scale, rot, t_render)
+}
+
+pub fn build_render_space_instances(
+    objects: impl Iterator<
+        Item = (
+            u32, /*instance_id*/
+            WorldPos,
+            Quat,
+            Vec3, /*scale*/
+            u32,  /*blas_root*/
+        ),
+    >,
+    camera: &Camera,
+    blas_root_aabb: &Aabb,
+) -> Vec<TlasInstance> {
+    objects
+        .map(|(instance_id, world_pos, rot, scale, blas_root)| {
+            let m = make_render_space_transform(world_pos, rot, scale, camera);
+            TlasInstance::new(m.to_cols_array_2d(), blas_root_aabb, blas_root, instance_id)
+        })
+        .collect()
 }

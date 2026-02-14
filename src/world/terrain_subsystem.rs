@@ -21,7 +21,7 @@ use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 pub struct ChunkCoords {
-    chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC.
+    chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
     dist2: i32,
 }
 pub struct VisibleChunk {
@@ -227,9 +227,17 @@ impl TerrainRenderSubsystem {
             vec![Vec::new(); terrain_subsystem.arena.pages.len()];
 
         for (&chunk_coord, chunk) in terrain_subsystem.chunks.iter() {
-            let dx = chunk_coord.x - target_cx;
-            let dz = chunk_coord.z - target_cz;
-            if dx * dx + dz * dz > r2 {
+            let dx = (chunk_coord.x - target_cx).abs();
+            if dx > r {
+                continue;
+            }
+
+            let dz = (chunk_coord.z - target_cz).abs();
+            if dz > r {
+                continue;
+            }
+
+            if (dx as i64 * dx as i64 + dz as i64 * dz as i64) > r2 as i64 {
                 continue;
             }
 
@@ -727,9 +735,10 @@ impl TerrainSubsystem {
             if visible_set.contains(&coord) {
                 continue;
             }
-            let dx = chunk_coord.x - frame.cam_pos.chunk.x;
-            let dz = chunk_coord.z - frame.cam_pos.chunk.z;
-            if dx * dx + dz * dz > r2 {
+            let dx = i64::from(chunk_coord.x) - i64::from(frame.cam_pos.chunk.x);
+            let dz = i64::from(chunk_coord.z) - i64::from(frame.cam_pos.chunk.z);
+
+            if dx * dx + dz * dz > r2 as i64 {
                 to_remove.push(coord);
             }
         }

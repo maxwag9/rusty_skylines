@@ -1,10 +1,9 @@
 use crate::cars::car_structs::Car;
 use crate::cars::car_subsystem::CarSubsystem;
 use crate::data::Settings;
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
-use crate::terrain::roads::road_mesh_manager::CLEARANCE;
 use crate::ui::input::InputState;
 use crate::world::camera::{Camera, CameraController};
+use crate::world::terrain_subsystem::TerrainSubsystem;
 use glam::{Quat, Vec3};
 
 #[derive(Clone, Copy, Debug)]
@@ -299,7 +298,7 @@ pub fn drive_car(
         (if steer_left { 1.0 } else { 0.0 }) - (if steer_right { 1.0 } else { 0.0 });
 
     let (car_id, previous_chunk, new_chunk) = {
-        let Some(car) = car_subsystem.car_storage_mut().get_mut(0) else {
+        let Some(car) = car_subsystem.get_player_car() else {
             return;
         };
 
@@ -483,7 +482,7 @@ pub fn drive_car(
         // Integrate position
         let prev_chunk = car.pos.chunk;
         car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
-        car.pos.local.y = terrain.get_height_at(car.pos) + CLEARANCE;
+        car.pos.local.y = terrain.get_height_at(car.pos);
 
         camera.target = car.pos;
 
@@ -534,13 +533,14 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
     const MIN_U: f32 = 0.5;
 
     let chunk_size = terrain.chunk_size;
+    let player_car_id = car_subsystem.player_car_id();
     let cs = chunk_size as f64;
 
     for car in car_subsystem.car_storage_mut().iter_mut_cars() {
         let Some(car) = car else {
             continue;
         };
-        if car.id == 0 {
+        if car.id == player_car_id {
             continue;
         }
 
@@ -649,6 +649,6 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
 
         // Position integration + terrain snap
         car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
-        car.pos.local.y = terrain.get_height_at(car.pos) + CLEARANCE;
+        car.pos.local.y = terrain.get_height_at(car.pos);
     }
 }

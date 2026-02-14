@@ -7,11 +7,11 @@ use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::draw_visible_roads;
-use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
+use crate::world::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
@@ -520,5 +520,5 @@ pub fn render_cars_shadows(
 
     render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);
 
-    car_renderer.render(rt_subsystem, car_storage, camera, pass)
+    car_renderer.render(pipelines, rt_subsystem, car_storage, camera, pass)
 }

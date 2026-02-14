@@ -9,7 +9,6 @@ use crate::renderer::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::renderer::textures::material_keys::*;
 use crate::terrain::roads::road_mesh_manager::RoadVertex;
 use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
@@ -17,6 +16,7 @@ use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::terrain::water::SimpleVertex;
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use crate::world::camera::Camera;
+use crate::world::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{PipelineOptions, ShadowOptions};
@@ -41,66 +41,80 @@ impl RenderPassConfig {
     }
 }
 
-pub fn create_color_attachment<'a>(
-    msaa_hdr_view: &'a TextureView,
-    resolved_hdr_view: &'a TextureView,
+#[inline]
+fn load_op_from_optional_clear(clear_color: Option<Color>) -> LoadOp<Color> {
+    match clear_color {
+        Some(c) => LoadOp::Clear(c),
+        None => LoadOp::Load,
+    }
+}
+
+/// Generic color attachment factory that handles MSAA <-> resolved and optionally clears.
+pub fn make_color_attachment<'a>(
+    msaa_view: &'a TextureView,
+    resolved_view: &'a TextureView,
     msaa_samples: u32,
-    background_color: Color,
+    clear_color: Option<Color>, // Some(color) -> Clear, None -> Load
 ) -> RenderPassColorAttachment<'a> {
+    let load_op = load_op_from_optional_clear(clear_color);
     if msaa_samples > 1 {
         RenderPassColorAttachment {
-            view: msaa_hdr_view,
-            resolve_target: Some(resolved_hdr_view),
+            view: msaa_view,
+            resolve_target: Some(resolved_view),
             depth_slice: None,
             ops: Operations {
-                load: LoadOp::Clear(background_color),
+                load: load_op,
                 store: StoreOp::Store,
             },
         }
     } else {
         RenderPassColorAttachment {
-            view: resolved_hdr_view,
+            view: resolved_view,
             resolve_target: None,
             depth_slice: None,
             ops: Operations {
-                load: LoadOp::Clear(background_color),
+                load: load_op,
                 store: StoreOp::Store,
             },
         }
     }
 }
-pub fn create_normal_attachment<'a>(
-    msaa_normal_view: &'a TextureView,
-    resolved_normal_view: &'a TextureView,
+
+/// Special-case instance attachment factory.
+/// If msaa_samples > 1 it will write into `msaa_instance_view` and resolve into `resolved_instance_view`.
+/// clear_color controls whether the resolved instance texture is cleared (Some) or left intact (None).
+pub fn make_instance_attachment<'a>(
+    msaa_instance_view: &'a TextureView,
+    resolved_instance_view: &'a TextureView,
     msaa_samples: u32,
+    clear: bool,
 ) -> RenderPassColorAttachment<'a> {
-    if msaa_samples > 1 {
-        RenderPassColorAttachment {
-            view: msaa_normal_view,
-            resolve_target: Some(resolved_normal_view),
-            depth_slice: None,
-            ops: Operations {
-                load: LoadOp::Clear(Color::BLACK),
-                store: StoreOp::Store,
-            },
-        }
-    } else {
-        RenderPassColorAttachment {
-            view: resolved_normal_view,
-            resolve_target: None,
-            depth_slice: None,
-            ops: Operations {
-                load: LoadOp::Clear(Color::BLACK),
-                store: StoreOp::Store,
-            },
-        }
-    }
+    let clear_color = if clear { Some(Color::BLACK) } else { None };
+    make_color_attachment(
+        msaa_instance_view,
+        resolved_instance_view,
+        msaa_samples,
+        clear_color,
+    )
 }
-pub fn create_depth_attachment<'a>(
+
+/// Depth attachment factory — clear or load depending on `clear`.
+pub fn make_depth_attachment<'a>(
     depth_view: &'a TextureView,
     config: &RenderPassConfig,
+    clear: bool,
 ) -> RenderPassDepthStencilAttachment<'a> {
-    let clear_z = LoadOp::Clear(if config.reversed_z { 0.0 } else { 1.0 });
+    let clear_z = if clear {
+        // Choose clear value depending on reversed z convention
+        if config.reversed_z {
+            LoadOp::Clear(0.0)
+        } else {
+            LoadOp::Clear(1.0)
+        }
+    } else {
+        LoadOp::Load
+    };
+
     RenderPassDepthStencilAttachment {
         view: depth_view,
         depth_ops: Some(Operations {
@@ -108,35 +122,90 @@ pub fn create_depth_attachment<'a>(
             store: StoreOp::Store,
         }),
         stencil_ops: Some(Operations {
-            load: LoadOp::Clear(0),
+            load: if clear {
+                LoadOp::Clear(0)
+            } else {
+                LoadOp::Load
+            },
             store: StoreOp::Store,
         }),
     }
 }
 
+/// World pass: clears the main targets (color + normal + depth).
 pub fn create_world_pass<'a>(
     encoder: &'a mut CommandEncoder,
     pipelines: &'a Pipelines,
     config: &'a RenderPassConfig,
     msaa_samples: u32,
 ) -> RenderPass<'a> {
-    let color_attachment = create_color_attachment(
+    let color_attachment = make_color_attachment(
         &pipelines.msaa.hdr,
         &pipelines.resolved.hdr,
         msaa_samples,
-        config.background_color,
+        Some(config.background_color),
     );
 
-    let normal_attachment = create_normal_attachment(
+    let normal_attachment = make_color_attachment(
         &pipelines.msaa.normal,
         &pipelines.resolved.normal,
         msaa_samples,
+        Some(Color::BLACK),
     );
 
     encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("World Pass"),
         color_attachments: &[Some(color_attachment), Some(normal_attachment)],
-        depth_stencil_attachment: Some(create_depth_attachment(&pipelines.msaa.depth, config)),
+        depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, true)),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
+/// Instanced pass: re-uses existing resolved color/normal and instance textures (does NOT clear them).
+/// This uses the dummy MSAA view for the instance slot if needed so sample-counts match.
+/// IMPORTANT: pass `clear_instance_target = false` to avoid wiping instance texture.
+pub fn create_instanced_pass<'a>(
+    encoder: &'a mut CommandEncoder,
+    pipelines: &'a Pipelines,
+    config: &'a RenderPassConfig,
+    msaa_samples: u32,
+) -> RenderPass<'a> {
+    // For the instanced pass we want to LOAD previous color/normal contents (no clear).
+    let color_attachment = make_color_attachment(
+        &pipelines.msaa.hdr,
+        &pipelines.resolved.hdr,
+        msaa_samples,
+        None, // load existing hdr
+    );
+
+    let normal_attachment = make_color_attachment(
+        &pipelines.msaa.normal,
+        &pipelines.resolved.normal,
+        msaa_samples,
+        None, // load existing normals
+    );
+
+    // Instance attachment: use dummy MSAA view -> resolved instance view.
+    // Do NOT clear the resolved instance texture here (preserve); pass `clear = false`.
+    let instance_attachment = make_instance_attachment(
+        &pipelines.post_fx.dummy_msaa_rt_instance, // dummy MSAA view (must match msaa_samples)
+        &pipelines.post_fx.rt_instance,            // resolved R32Uint instance texture
+        msaa_samples,
+        true,
+    );
+
+    encoder.begin_render_pass(&RenderPassDescriptor {
+        label: Some("Instanced World Pass"),
+        color_attachments: &[
+            Some(color_attachment),
+            Some(normal_attachment),
+            Some(instance_attachment),
+        ],
+        // Use same MSAA depth view as world pass so sample counts match.
+        // We choose to LOAD depth so we don't stomp depth from the world pass.
+        depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, false)),
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
@@ -483,7 +552,7 @@ pub fn render_cars(
     let shader_path = shader_dir().join("car.wgsl");
     let shadow = make_shadow_option(settings, pipelines);
 
-    let targets = color_and_normals_targets(pipelines);
+    let targets = color_and_normals_and_instance_targets(pipelines);
     // Cars
     render_manager.render(
         keys.as_slice(),
@@ -502,7 +571,7 @@ pub fn render_cars(
         pass,
     );
 
-    car_renderer.render(rt_subsystem, car_storage, camera, pass);
+    car_renderer.render(pipelines, rt_subsystem, car_storage, camera, pass);
 }
 
 fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {
@@ -546,7 +615,25 @@ fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetSta
         }),
     ]
 }
-
+fn color_and_normals_and_instance_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
+    vec![
+        Some(ColorTargetState {
+            format: pipelines.msaa.hdr.texture().format(),
+            blend: Some(BlendState::ALPHA_BLENDING),
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: pipelines.msaa.normal.texture().format(),
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: pipelines.post_fx.rt_instance.texture().format(),
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }),
+    ]
+}
 pub fn color_target(
     pipelines: &Pipelines,
     blend: Option<BlendState>,

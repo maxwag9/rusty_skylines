@@ -1,7 +1,9 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::cars::car_subsystem::make_random_car;
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::terrain::roads::road_structs::LaneId;
 use crate::terrain::roads::roads::{LaneRef, TurnType};
 use glam::{Quat, Vec3};
+use rand::rngs::ThreadRng;
 use std::collections::HashMap;
 use std::slice::{Iter, IterMut};
 
@@ -152,9 +154,19 @@ impl CarStorage {
 
 impl CarStorage {
     pub fn new() -> Self {
+        let mut cars: Vec<Option<Car>> = Vec::new();
+        let mut rng = ThreadRng::default();
+        let car = make_random_car(
+            WorldPos::new(
+                ChunkCoord::new(-69420, -69420),
+                LocalPos::new(0.1, 50.5, 20.0),
+            ),
+            &mut rng,
+        );
+        cars.push(Some(car)); // reserve index 0 — never use it for a real car, because car 0 doesn't get RTX shadows.
         Self {
             car_chunk_storage: CarChunkStorage::new(),
-            cars: Vec::new(),
+            cars,
             free_list: Vec::new(),
             car_locations: HashMap::new(),
             chunk_size: 128,
@@ -169,7 +181,7 @@ impl CarStorage {
         mut car: Car,
     ) -> CarId {
         let car_id = if let Some(reused_id) = self.free_list.pop() {
-            // Reuse slot - we know it's None because it's in free_list
+            // Reuse slot - III know it's None because it's in free_list
             car.id = reused_id;
             self.cars[reused_id as usize] = Some(car);
             reused_id
@@ -189,6 +201,10 @@ impl CarStorage {
     }
 
     pub fn despawn(&mut self, id: CarId) {
+        if id == 0 {
+            // index 0 is reserved, ignore attempts to despawn it
+            return;
+        }
         if self
             .cars
             .get(id as usize)

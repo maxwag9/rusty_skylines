@@ -1,6 +1,5 @@
 use crate::events::Event;
 use crate::helpers::paths::data_dir;
-use crate::renderer::terrain_subsystem::CursorMode;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
 use crate::systems::car_events::run_car_events;
@@ -13,6 +12,7 @@ use crate::terrain::roads::road_structs::RoadType;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
+use crate::world::terrain_subsystem::CursorMode;
 use crate::world::world_core::WorldCore;
 use glam::Vec2;
 use std::sync::Arc;

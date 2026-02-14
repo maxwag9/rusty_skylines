@@ -5,7 +5,6 @@
 use crate::data::{BendMode, Settings};
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::{CommandQueues, TimeSystem};
 use crate::terrain::roads::road_structs::RoadStyleParams;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
@@ -28,6 +27,7 @@ use crate::ui::ui_touch_manager::{
 };
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
+use crate::world::terrain_subsystem::TerrainSubsystem;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;

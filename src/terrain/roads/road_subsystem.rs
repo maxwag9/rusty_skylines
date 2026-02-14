@@ -1,10 +1,10 @@
 //! road_mesh_renderer.rs
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::road_editor::RoadEditor;
 use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
 use crate::terrain::roads::roads::{
     RoadManager, apply_commands_world, apply_preview_commands_world, collect_affected_chunks,
 };
+use crate::world::terrain_subsystem::TerrainSubsystem;
 
 use crate::cars::car_subsystem::CarSubsystem;
 use crate::renderer::gizmo::Gizmo;

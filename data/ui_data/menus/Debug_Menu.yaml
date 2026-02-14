@@ -46,7 +46,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'Shadows: {(shadows_frametime):.2}ms, Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
+        text: 'Shadows: {(shadows_frametime):.2}ms, RTX: {(rtx_frametime):.2}ms, Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
       - !Text
         id: sky_info_text
         x: 0.001895523

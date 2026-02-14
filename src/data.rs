@@ -55,6 +55,7 @@ pub enum DebugViewState {
     Depth,
     GtaoRaw,
     GtaoBlurred,
+    RTRaw,
 }
 impl Default for DebugViewState {
     fn default() -> Self {
@@ -69,7 +70,8 @@ impl DebugViewState {
             Normals => Depth,
             Depth => GtaoRaw,
             GtaoRaw => GtaoBlurred,
-            GtaoBlurred => None,
+            GtaoBlurred => RTRaw,
+            RTRaw => None,
         }
     }
 }

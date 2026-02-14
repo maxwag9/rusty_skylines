@@ -10,7 +10,7 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 94515.27496786114
+total_game_time = 109970.98463386834
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
@@ -23,19 +23,19 @@ render_lanes_gizmo = false
 render_chunk_bounds = false
 chunk_size = 128
 tonemapping_state = "Cinematic"
-debug_view_state = "None"
+debug_view_state = "RTRaw"
 starting_menu = "None"
 lod_center = "Target"
 reversed_depth_z = true
 show_fog = true
 drive_car = false
-render_rt_gizmo = false
+render_rt_gizmo = true
 
 [player_pos.chunk]
-x = -171
-z = 142
+x = -5
+z = -5
 
 [player_pos.local]
-x = 62.899643
-y = 23.021555
-z = 33.674767
+x = 71.43298
+y = 602.9961
+z = 45.373173

@@ -15,7 +15,6 @@ use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
     CSM_CASCADES, ShadowMatUniform, render_cars_shadows, render_roads_shadows,
 };
-use crate::renderer::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::TimeSystem;
@@ -24,6 +23,7 @@ use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::astronomy::*;
 use crate::world::camera::Camera;
+use crate::world::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use glam::UVec2;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,7 +81,7 @@ impl RenderCore {
     ) -> Self {
         let shader_watcher = ShaderWatcher::new().ok();
 
-        let mut rt_subsystem = RTSubsystem::new();
+        let mut rt_subsystem = RTSubsystem::new(device);
         let ui_renderer = UiRenderer::new(device, config.format, size, settings.msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderSubsystem::new();
@@ -158,6 +158,8 @@ impl RenderCore {
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
+
+        //let t = Instant::now();
         self.update_render(
             camera,
             terrain_subsystem,
@@ -172,7 +174,6 @@ impl RenderCore {
             screen_size,
         );
 
-        let t = Instant::now();
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
@@ -208,13 +209,14 @@ impl RenderCore {
                 terrain_subsystem,
                 &car_subsystem.car_storage(),
                 settings,
+                astronomy,
             );
         });
 
-        println!("World CPU Time: {:?}", t.elapsed());
+        //println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
-        //println!("Total: {}", total_cpu_render_time);
+        println!("Total: {}", total_cpu_render_time);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.profiler
@@ -456,6 +458,7 @@ impl RenderCore {
         terrain_subsystem: &TerrainSubsystem,
         car_storage: &CarStorage,
         settings: &Settings,
+        astronomy: &AstronomyState,
     ) {
         self.execute_world_pass(
             encoder,
@@ -467,18 +470,22 @@ impl RenderCore {
             aspect,
         );
 
-        render_ray_tracing(
-            encoder,
-            &self.config,
-            &mut self.rt_subsystem,
-            &mut self.render_manager,
-            &self.pipelines,
-        );
-
         gpu_timestamp!(encoder, &mut self.profiler, "GTAO", {
             self.execute_gtao_pass(encoder, settings, time);
         });
 
+        gpu_timestamp!(encoder, &mut self.profiler, "RTX", {
+            let sun_up = astronomy.sun_dir.y > 0.0;
+            if sun_up {
+                render_ray_tracing(
+                    encoder,
+                    &self.config,
+                    &mut self.rt_subsystem,
+                    &mut self.render_manager,
+                    &self.pipelines,
+                );
+            }
+        });
         self.execute_fog_pass(encoder, settings);
 
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
@@ -544,7 +551,6 @@ impl RenderCore {
                 self.msaa_samples,
             );
         });
-
         // 4. Roads
         gpu_timestamp!(pass, &mut self.profiler, "Roads", {
             render_roads(
@@ -556,6 +562,7 @@ impl RenderCore {
                 self.msaa_samples,
             );
         });
+
         // 5
         gpu_timestamp!(pass, &mut self.profiler, "Gizmo", {
             render_gizmo(
@@ -570,6 +577,8 @@ impl RenderCore {
                 &self.queue,
             );
         });
+        pass.forget_lifetime();
+        let mut pass = create_instanced_pass(encoder, &self.pipelines, config, self.msaa_samples);
         // 6
         gpu_timestamp!(pass, &mut self.profiler, "Cars", {
             render_cars(
@@ -954,6 +963,29 @@ impl RenderCore {
 
                 self.render_manager.render_fullscreen_debug(
                     &self.pipelines.post_fx.gtao_blurred_half,
+                    DebugVisualization::RedToGrayscale,
+                    &self.pipelines.msaa.hdr,
+                    &mut pass,
+                );
+            }
+            DebugViewState::RTRaw => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
+                    self.msaa_samples,
+                );
+
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Debug Raw Ray Tracing Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                self.render_manager.render_fullscreen_debug(
+                    &self.pipelines.post_fx.rt_raw_half,
                     DebugVisualization::RedToGrayscale,
                     &self.pipelines.msaa.hdr,
                     &mut pass,

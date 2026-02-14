@@ -1,15 +1,15 @@
 use crate::data::Settings;
 use crate::renderer::gtao::gtao::GtaoParams;
 use crate::renderer::pipelines::{
-    FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_uniforms_csm,
+    FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_camera_uniforms,
 };
 use crate::renderer::shadows::compute_csm_matrices;
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::TimeSystem;
 use crate::terrain::sky::SkyUniform;
 use crate::terrain::water::WaterUniform;
 use crate::world::astronomy::AstronomyState;
 use crate::world::camera::Camera;
+use crate::world::terrain_subsystem::TerrainSubsystem;
 use glam::{Mat4, UVec2};
 use wgpu::Queue;
 
@@ -45,7 +45,7 @@ impl<'a> UniformUpdater<'a> {
         );
         self.pipelines.resources.csm_shadows.texels = texels;
         // This is the uniforms used for *normal* rendering (shadow_cascade_index unused there).
-        let new_uniforms = make_new_uniforms_csm(
+        let new_uniforms = make_new_camera_uniforms(
             astronomy.sun_dir,
             astronomy.moon_dir,
             total_time,

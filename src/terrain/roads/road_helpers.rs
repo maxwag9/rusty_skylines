@@ -1,10 +1,10 @@
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::Gizmo;
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::terrain::roads::intersections::{IntersectionBuildParams, IntersectionPolygon};
 use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::terrain::roads::road_structs::{NodeId, RoadStyleParams, StructureType};
 use crate::terrain::roads::roads::RoadCommand;
+use crate::world::terrain_subsystem::TerrainSubsystem;
 use glam::Vec3;
 use std::cmp::Ordering;
 use std::f32::consts::PI;

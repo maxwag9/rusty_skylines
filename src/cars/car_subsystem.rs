@@ -1,17 +1,18 @@
 use crate::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::cars::car_render::CarInstance;
-use crate::cars::car_structs::{Car, CarChunkDistance, CarStorage};
+use crate::cars::car_structs::{Car, CarChunkDistance, CarId, CarStorage};
 use crate::helpers::hsv::hsv_to_rgb;
 use crate::helpers::positions::WorldPos;
+use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::renderer::terrain_subsystem::{CursorMode, TerrainSubsystem};
 use crate::resources::TimeSystem;
 use crate::terrain::roads::road_structs::NodeId;
 use crate::terrain::roads::roads::RoadManager;
 use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
+use crate::world::terrain_subsystem::{CursorMode, TerrainSubsystem};
 use glam::{Mat4, Vec3};
 use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
@@ -105,6 +106,7 @@ impl CarRenderSubsystem {
     }
     pub fn render(
         &mut self,
+        pipelines: &Pipelines,
         rt_subsystem: &mut RTSubsystem,
         car_storage: &CarStorage,
         camera: &Camera,
@@ -133,7 +135,14 @@ impl CarRenderSubsystem {
             }
         }
 
-        update_rt_instances(rt_subsystem, &self.device, &self.queue, car_storage, camera);
+        update_rt_instances(
+            rt_subsystem,
+            &self.device,
+            &self.queue,
+            pipelines,
+            car_storage,
+            camera,
+        );
 
         let instance_count = instances.len() as u32;
 
@@ -172,6 +181,17 @@ pub struct CarSubsystem {
     car_storage: CarStorage,
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
+    player_car_id: CarId,
+}
+
+impl CarSubsystem {
+    pub(crate) fn player_car_id(&self) -> u32 {
+        self.player_car_id
+    }
+    pub(crate) fn get_player_car(&mut self) -> Option<&mut Car> {
+        let id = self.player_car_id;
+        self.car_storage_mut().get_mut(id)
+    }
 }
 
 impl CarSubsystem {
@@ -180,6 +200,7 @@ impl CarSubsystem {
             car_storage: CarStorage::new(),
             spawning_nodes: vec![],
             timing: CarSubsystemTiming::new(),
+            player_car_id: 1,
         }
     }
     pub fn car_storage(&self) -> &CarStorage {

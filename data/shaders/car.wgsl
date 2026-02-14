@@ -1,25 +1,25 @@
 #include "includes/shadow.wgsl"
 
 struct Uniforms {
-    view: mat4x4<f32>,
-    inv_view: mat4x4<f32>,
-    proj: mat4x4<f32>,
-    inv_proj: mat4x4<f32>,
-    view_proj: mat4x4<f32>,
-    inv_view_proj: mat4x4<f32>,
-    lighting_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    sun_direction: vec3<f32>,
-    time: f32,
-    camera_local: vec3<f32>,
-    chunk_size: f32,
-    camera_chunk: vec2<i32>,
-    _pad_cam: vec2<i32>,
-    moon_direction: vec3<f32>,
-    orbit_radius: f32,
-    reversed_depth_z: u32,
-    shadows_enabled: u32,
-    _pad_2: vec2<u32>,
+    view:                mat4x4<f32>,
+    inv_view:            mat4x4<f32>,
+    proj:                mat4x4<f32>,
+    inv_proj:            mat4x4<f32>,
+    view_proj:           mat4x4<f32>,
+    inv_view_proj:       mat4x4<f32>,
+    lighting_view_proj:  array<mat4x4<f32>, 4>,
+    cascade_splits:      vec4<f32>,
+    sun_direction:       vec3<f32>,
+    time:                f32,
+    camera_local:        vec3<f32>,
+    chunk_size:          f32,
+    camera_chunk:        vec2<i32>,
+    _pad_cam:            vec2<i32>,
+    moon_direction:      vec3<f32>,
+    orbit_radius:        f32,
+    reversed_depth_z:    u32,
+    shadows_enabled:     u32,
+    near_far_depth:      vec2<f32>,
 };
 
 struct VertexInput {
@@ -43,7 +43,10 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) world_pos: vec3<f32>,
     @location(3) @interpolate(flat) instance_color: vec3<f32>,
+
+    @location(4) @interpolate(flat) instance_id: u32,
 };
+
 
 @group(0) @binding(0) var car_sampler: sampler;
 @group(0) @binding(1) var tex0: texture_2d<f32>;
@@ -73,12 +76,13 @@ fn g_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
 }
 
 struct FragmentOut {
-    @location(0) color: vec4<f32>,
-    @location(1) normal: vec4<f32>,
+    @location(0) color: vec4<f32>,     // color target
+    @location(1) normal: vec4<f32>,    // normal target
+    @location(2) instance_id: u32,     // R32Uint instance id target for RAY TRACING
 };
 
 @vertex
-fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
+fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
     var out: VertexOutput;
 
     let model = mat4x4<f32>(
@@ -95,6 +99,9 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.world_normal = normalize((model * vec4<f32>(vertex.normal, 0.0)).xyz);
     out.world_pos = world_pos.xyz;
     out.instance_color = instance.color.rgb;
+
+    // pass instance id (instanced draws only)
+    out.instance_id = instance_index;
 
     return out;
 }
@@ -148,5 +155,6 @@ fn fs_main(input: VertexOutput) -> FragmentOut {
 
     out.color = vec4<f32>(rgb, 1.0);
     out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
+    out.instance_id = input.instance_id;
     return out;
 }

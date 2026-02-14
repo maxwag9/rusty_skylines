@@ -1,11 +1,11 @@
 use crate::cars::car_subsystem::CarSubsystem;
 use crate::data::Settings;
 use crate::events::Events;
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
 use crate::resources::TimeSystem;
 use crate::simulation::Simulation;
 use crate::terrain::roads::road_subsystem::RoadSubsystem;
 use crate::ui::input::InputState;
+use crate::world::terrain_subsystem::TerrainSubsystem;
 use crate::world::world::WorldState;
 use wgpu::Device;
 

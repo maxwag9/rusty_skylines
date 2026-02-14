@@ -1,4 +1,4 @@
-mod benchmark;
+pub mod benchmark;
 pub mod general_mesh_arena;
 pub mod gizmo;
 mod gpu_profiler;
@@ -11,7 +11,6 @@ pub(crate) mod render_core;
 pub mod render_passes;
 pub(crate) mod shader_watcher;
 pub mod shadows;
-pub(crate) mod terrain_subsystem;
 pub(crate) mod textures;
 pub(crate) mod ui;
 pub(crate) mod ui_pipelines;

@@ -2,10 +2,9 @@ use crate::cars::car_structs::CarStorage;
 use crate::cars::car_subsystem::{CAR_BASE_LENGTH, CAR_BASE_WIDTH};
 use crate::helpers::paths::compute_shader_dir;
 use crate::renderer::pipelines::Pipelines;
-use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::renderer::ray_tracing::structs::TlasInstance;
+use crate::renderer::ray_tracing::rt_subsystem::{RTSubsystem, build_render_space_instances};
 use crate::world::camera::Camera;
-use glam::{Mat4, Vec3};
+use glam::Vec3;
 use wgpu::{CommandEncoder, Device, Queue, SurfaceConfiguration};
 use wgpu_render_manager::compute_system::ComputePipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
@@ -14,6 +13,7 @@ pub fn update_rt_instances(
     rt: &mut RTSubsystem,
     device: &Device,
     queue: &Queue,
+    pipelines: &Pipelines,
     car_storage: &CarStorage,
     camera: &Camera,
 ) {
@@ -23,31 +23,25 @@ pub fn update_rt_instances(
 
     let close_cars = car_storage.car_chunks().close_cars();
 
-    let mut instances: Vec<TlasInstance> = Vec::with_capacity(close_cars.len());
+    let instances = build_render_space_instances(
+        close_cars.iter().filter_map(|&car_id| {
+            let car = car_storage.get(car_id)?;
 
-    for (idx, &car_id) in close_cars.iter().enumerate() {
-        if let Some(car) = car_storage.get(car_id) {
-            let render_pos = car.pos.to_render_pos(camera.eye_world(), camera.chunk_size);
-
-            let quat = car.quat.normalize();
+            let rot = car.quat.normalize();
             let scale = Vec3::new(
                 car.width / CAR_BASE_WIDTH,
                 1.0,
                 car.length / CAR_BASE_LENGTH,
             );
 
-            let model = Mat4::from_scale_rotation_translation(scale, quat, render_pos);
-            let model_arr = model.to_cols_array_2d();
+            let blas_root = 0u32; // car BLAS root node index
+            Some((car_id as u32, car.pos, rot, scale, blas_root))
+        }),
+        camera,
+        blas_aabb,
+    );
 
-            instances.push(TlasInstance::new(
-                model_arr, blas_aabb, 0,          // blas_index: 0 for cars
-                idx as u32, // instance_id
-            ));
-        }
-    }
-
-    // Update TLAS (automatically decides rebuild vs refit)
-    rt.update_tlas(device, queue, instances, false);
+    rt.update_tlas(device, queue, pipelines, instances, false);
 }
 
 pub fn render_ray_tracing(
@@ -67,7 +61,7 @@ pub fn render_ray_tracing(
 
     let options = make_ray_tracing_options(dispatch_size);
 
-    let Some(buffer_sets) = rt.get_buffer_sets() else {
+    let Some(buffer_sets) = rt.get_buffer_sets(pipelines) else {
         return;
     };
     let buffer_sets = buffer_sets.as_slice();
@@ -76,8 +70,12 @@ pub fn render_ray_tracing(
     render_manager.compute(
         Some(encoder),
         "Ray Tracing Pass",
-        vec![],
-        vec![],
+        vec![
+            &pipelines.post_fx.linear_depth_half,
+            &pipelines.post_fx.normal_half,
+            &pipelines.post_fx.rt_instance,
+        ],
+        vec![&pipelines.post_fx.rt_raw_half],
         shader_path,
         options,
         buffer_sets,

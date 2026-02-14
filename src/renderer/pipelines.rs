@@ -129,6 +129,8 @@ pub struct PostFxTextures {
     pub gtao_history: [TextureView; 2],
     pub rt_raw_half: TextureView,
     pub rt_denoised_half: TextureView,
+    pub rt_instance: TextureView,
+    pub dummy_msaa_rt_instance: TextureView,
 }
 
 pub struct UniformBuffers {
@@ -173,7 +175,7 @@ impl Pipelines {
     ) -> anyhow::Result<Self> {
         let msaa = Self::create_msaa_textures(device, config, settings.msaa_samples);
         let resolved = Self::create_resolved_textures(device, config);
-        let post_fx = Self::create_post_fx_textures(device, config);
+        let post_fx = Self::create_post_fx_textures(device, config, settings.msaa_samples);
         let blue_noise = create_blue_noise_texture_gpu(render_manager, device, queue, 32, 69);
         // ^ Only GTAO needs it, it doesn't give a shit. This is expensive O(size⁴) computation. 32 is enough, 64 is bigger and still doesn't hog the game, but it's no use.
 
@@ -217,7 +219,7 @@ impl Pipelines {
         self.config = config.clone();
         self.msaa = Self::create_msaa_textures(&self.device, &self.config, msaa_samples);
         self.resolved = Self::create_resolved_textures(&self.device, &self.config);
-        self.post_fx = Self::create_post_fx_textures(&self.device, &self.config);
+        self.post_fx = Self::create_post_fx_textures(&self.device, &self.config, msaa_samples);
     }
 
     fn create_msaa_textures(
@@ -245,12 +247,19 @@ impl Pipelines {
         ResolvedTextures { hdr, normal }
     }
 
-    fn create_post_fx_textures(device: &Device, config: &SurfaceConfiguration) -> PostFxTextures {
+    fn create_post_fx_textures(
+        device: &Device,
+        config: &SurfaceConfiguration,
+        msaa_samples: u32,
+    ) -> PostFxTextures {
         let linear_depth_half = create_linear_depth_texture(device, config, 0.5);
         let normal_half = create_normals_texture(device, config, 0.5);
 
         let (_, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
         let (rt_raw_half, rt_denoised_half) = create_rt_textures(device, config, 0.5);
+
+        let dummy_msaa_rt_instance = create_instance_texture(device, config, 1.0, msaa_samples);
+        let rt_instance = create_instance_texture(device, config, 1.0, 1);
 
         let gtao_history = [
             create_gtao_texture(device, config, 0.5),
@@ -262,6 +271,8 @@ impl Pipelines {
             normal_half,
             gtao_blurred_half,
             gtao_history,
+            dummy_msaa_rt_instance,
+            rt_instance,
             rt_raw_half,
             rt_denoised_half,
         }
@@ -587,6 +598,42 @@ fn create_rt_textures(
     let rt_blurred_view = make("RT Blurred");
     (rt_view, rt_blurred_view)
 }
+const RT_INSTANCE_FORMAT: TextureFormat = TextureFormat::R32Uint;
+fn create_instance_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    resolution_factor: f32,
+    msaa_samples: u32,
+) -> TextureView {
+    let make = |label: &str| {
+        let usage = if msaa_samples > 1 {
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING
+        } else {
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING
+        };
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: (config.width as f32 * resolution_factor) as u32,
+                height: (config.height as f32 * resolution_factor) as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: msaa_samples,
+            dimension: TextureDimension::D2,
+            format: RT_INSTANCE_FORMAT,
+            usage,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        view
+    };
+
+    let rt_view = make("RT Instances");
+    rt_view
+}
 pub fn create_gtao_texture(
     device: &Device,
     config: &SurfaceConfiguration,
@@ -610,7 +657,7 @@ pub fn create_gtao_texture(
     tex.create_view(&Default::default())
 }
 
-pub fn make_new_uniforms_csm(
+pub fn make_new_camera_uniforms(
     sun: Vec3,
     moon: Vec3,
     total_time: f64,

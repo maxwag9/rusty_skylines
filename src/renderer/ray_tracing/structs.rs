@@ -1,4 +1,6 @@
 use bytemuck::{Pod, Zeroable};
+use glam::Mat4;
+use std::collections::HashMap;
 use std::mem::size_of;
 
 const SAH_BINS: usize = 12;
@@ -348,6 +350,7 @@ pub struct Tlas {
     pub bvh_nodes: Vec<BvhNode>,
     pub dirty: bool,
     refit_quality: f32, // Track quality degradation for auto-rebuild
+    id_to_index: HashMap<u32, usize>,
 }
 
 impl Tlas {
@@ -357,6 +360,7 @@ impl Tlas {
             bvh_nodes: vec![],
             dirty: true,
             refit_quality: 1.0,
+            id_to_index: HashMap::new(),
         }
     }
 
@@ -402,6 +406,7 @@ impl Tlas {
             .iter()
             .map(|&i| old_instances[i as usize])
             .collect();
+        self.rebuild_id_map();
     }
 
     fn build_recursive(
@@ -579,29 +584,26 @@ impl Tlas {
     /// Use when instances move but count stays same
     pub fn refit(&mut self, updated_instances: &[TlasInstance]) {
         if updated_instances.len() != self.instances.len() {
-            // Topology changed - must rebuild
             self.rebuild(updated_instances.to_vec());
             return;
         }
-
         if self.bvh_nodes.is_empty() {
             return;
         }
 
-        // Update instance AABBs
-        for (i, inst) in updated_instances.iter().enumerate() {
-            self.instances[i].model = inst.model;
-            self.instances[i].aabb_min = inst.aabb_min;
-            self.instances[i].aabb_max = inst.aabb_max;
+        // Update instance transforms/AABBs by instance_id (order-independent input)
+        for inst in updated_instances {
+            if let Some(&dst) = self.id_to_index.get(&inst.instance_id) {
+                self.instances[dst] = *inst;
+            }
         }
 
-        // Bottom-up refit
+        // Bottom-up refit (unchanged)
         let old_root_sa =
             Aabb::new(self.bvh_nodes[0].aabb_min, self.bvh_nodes[0].aabb_max).surface_area();
 
         Self::refit_recursive(&mut self.bvh_nodes, &self.instances, 0);
 
-        // Track quality degradation
         let new_root_sa =
             Aabb::new(self.bvh_nodes[0].aabb_min, self.bvh_nodes[0].aabb_max).surface_area();
 
@@ -660,6 +662,14 @@ impl Tlas {
     pub fn node_count(&self) -> usize {
         self.bvh_nodes.len()
     }
+
+    fn rebuild_id_map(&mut self) {
+        self.id_to_index.clear();
+        self.id_to_index.reserve(self.instances.len());
+        for (i, inst) in self.instances.iter().enumerate() {
+            self.id_to_index.insert(inst.instance_id, i);
+        }
+    }
 }
 
 impl Default for Tlas {
@@ -696,17 +706,19 @@ impl BvhNode {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 pub struct TlasInstance {
-    pub model: [[f32; 4]; 4],
-    pub aabb_min: [f32; 3],
-    pub _pad0: f32,
-    pub aabb_max: [f32; 3],
-    pub _pad1: f32,
-    pub blas_index: u32,
+    pub transform: [[f32; 4]; 4],
+    pub inv_transform: [[f32; 4]; 4],
+
+    pub blas_root: u32,
     pub instance_id: u32,
-    pub flags: u32,
-    pub _pad2: u32,
+    pub _pad0: [u32; 2],
+
+    pub aabb_min: [f32; 3],
+    pub _pad1: f32,
+    pub aabb_max: [f32; 3],
+    pub _pad2: f32,
 }
 
 impl TlasInstance {
@@ -716,29 +728,39 @@ impl TlasInstance {
 
     /// Create instance from transform matrix and BLAS
     pub fn new(
-        model: [[f32; 4]; 4],
+        transform: [[f32; 4]; 4],
         blas_root_aabb: &Aabb,
-        blas_index: u32,
+        blas_root: u32,
         instance_id: u32,
     ) -> Self {
-        let world_aabb = blas_root_aabb.transform(&model);
+        let m = Mat4::from_cols_array_2d(&transform);
+        let inv = m.inverse();
+        let inv_transform = inv.to_cols_array_2d();
+
+        let world_aabb = blas_root_aabb.transform(&transform);
+
         Self {
-            model,
-            aabb_min: world_aabb.min,
-            _pad0: 0.0,
-            aabb_max: world_aabb.max,
-            _pad1: 0.0,
-            blas_index,
+            transform,
+            inv_transform,
+            blas_root,
             instance_id,
-            flags: 0,
-            _pad2: 0,
+            _pad0: [0; 2],
+            aabb_min: world_aabb.min,
+            _pad1: 0.0,
+            aabb_max: world_aabb.max,
+            _pad2: 0.0,
         }
     }
 
     /// Update transform and recompute world AABB
-    pub fn update_transform(&mut self, model: [[f32; 4]; 4], blas_root_aabb: &Aabb) {
-        self.model = model;
-        let world_aabb = blas_root_aabb.transform(&model);
+    pub fn update_transform(&mut self, transform: [[f32; 4]; 4], blas_root_aabb: &Aabb) {
+        let m = Mat4::from_cols_array_2d(&transform);
+        let inv = m.inverse();
+
+        self.transform = transform;
+        self.inv_transform = inv.to_cols_array_2d();
+
+        let world_aabb = blas_root_aabb.transform(&transform);
         self.aabb_min = world_aabb.min;
         self.aabb_max = world_aabb.max;
     }

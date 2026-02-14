@@ -1,6 +1,6 @@
 use crate::data::Settings;
 use crate::helpers::positions::*;
-use crate::renderer::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain_subsystem::TerrainSubsystem;
 use glam::{Mat4, Vec3};
 
 pub struct Camera {

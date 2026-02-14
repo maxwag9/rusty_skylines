@@ -22,7 +22,7 @@ const AO_FADE_END_FAR_RATIO:   f32 = 0.10;
 // ----------------------------------------------------------------------------
 // Uniforms
 // ----------------------------------------------------------------------------
-struct CameraUniforms {
+struct Uniforms {
     view:                mat4x4<f32>,
     inv_view:            mat4x4<f32>,
     proj:                mat4x4<f32>,
@@ -58,7 +58,7 @@ struct AOParams {
     prev_view_proj:  mat4x4<f32>,
 };
 
-@group(2) @binding(0) var<uniform> camera:    CameraUniforms;
+@group(2) @binding(0) var<uniform> camera:    Uniforms;
 @group(2) @binding(1) var<uniform> ao_params: AOParams;
 
 @group(0) @binding(0) var linear_depth_half: texture_2d<f32>;
