@@ -17,8 +17,8 @@ layers:
       - !Text
         id: frametime_main_pass_text
         x: 0.0008250045
-        y: 0.0702857145
-        px: 0.01
+        y: 0.070285715
+        px: 0.009507986
         color:
           - 1.0
           - 0.0
@@ -29,7 +29,7 @@ layers:
         id: gtao_frametimes_text
         x: 0.0008250045
         y: 0.095
-        px: 0.01
+        px: 0.009507986
         color:
           - 1.0
           - 0.2
@@ -39,18 +39,29 @@ layers:
       - !Text
         id: fog_frametime_text
         x: 0.0008250045
-        y: 0.12
-        px: 0.01
+        y: 0.11657142
+        px: 0.009507986
         color:
           - 1.0
           - 0.0
           - 1.0
           - 1.0
-        text: 'Shadows: {(shadows_frametime):.2}ms, RTX: {(rtx_frametime):.2}ms, Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
+        text: 'Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
+      - !Text
+        id: shadows_frametime_text
+        x: 0.0008250045
+        y: 0.13942835
+        px: 0.009507986
+        color:
+          - 1.0
+          - 0.0
+          - 1.0
+          - 1.0
+        text: 'CSM Shadows: {(csm_frametime):.2}ms, RTX Total: {(rtx_frametime):.2}ms, RTX Rays: {(rtx_tracing_frametime):.2}ms, RTX Upsampling: {(rtx_upsample_frametime):.2}ms, RTX Apply: {(rtx_apply_frametime):.2}ms'
       - !Text
         id: sky_info_text
         x: 0.001895523
-        y: 0.027415771
+        y: 0.0274163
         px: 0.013205536
         color:
           - 0.3
@@ -61,7 +72,7 @@ layers:
       - !Text
         id: player_info_text
         x: 0.001895523
-        y: 0.04241577
+        y: 0.046987172
         px: 0.013205536
         color:
           - 0.0

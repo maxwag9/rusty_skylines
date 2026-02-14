@@ -16,6 +16,7 @@ pub struct Camera {
     view: Mat4,
     proj: Mat4,
     view_proj: Mat4,
+    prev_eye_world: WorldPos,
 }
 
 impl Camera {
@@ -33,11 +34,13 @@ impl Camera {
             view: Default::default(),
             proj: Default::default(),
             view_proj: Default::default(),
+            prev_eye_world: Default::default(),
         }
     }
     #[inline]
     pub fn end_frame(&mut self) {
         self.prev_view_proj = self.view_proj;
+        self.prev_eye_world = self.eye_world();
     }
     #[inline]
     pub fn orbit_offset(&self) -> Vec3 {
@@ -88,7 +91,10 @@ impl Camera {
         self.target
             .add_render_offset(self.orbit_offset(), self.chunk_size)
     }
-
+    #[inline]
+    pub fn prev_eye_world(&self) -> WorldPos {
+        self.prev_eye_world
+    }
     #[inline]
     pub fn _world_to_render(&self, pos: WorldPos) -> Vec3 {
         let eye = self.eye_world();

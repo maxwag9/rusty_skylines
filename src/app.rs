@@ -233,6 +233,9 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Switch Debug Render Mode") {
                     settings.debug_view_state = settings.debug_view_state.next();
                 }
+                if input.action_repeat("Cycle Shadow Type") {
+                    settings.shadow_type = settings.shadow_type.next();
+                }
                 if input.action_repeat("Toggle Reversed Depth Z") {
                     settings.reversed_depth_z = !settings.reversed_depth_z;
                 }

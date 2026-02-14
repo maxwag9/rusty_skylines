@@ -1,6 +1,6 @@
 use crate::cars::car_structs::CarStorage;
 use crate::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
-use crate::data::{DebugViewState, Settings};
+use crate::data::{DebugViewState, Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::paths::{compute_shader_dir, shader_dir, texture_dir};
 use crate::helpers::positions::WorldPos;
@@ -187,7 +187,7 @@ impl RenderCore {
             });
 
         gpu_timestamp!(encoder, &mut self.profiler, "Total", {
-            gpu_timestamp!(encoder, &mut self.profiler, "Shadows", {
+            gpu_timestamp!(encoder, &mut self.profiler, "CSM", {
                 self.execute_shadow_pass(
                     &mut encoder,
                     car_subsystem.car_storage(),
@@ -252,15 +252,7 @@ impl RenderCore {
             reversed_z: settings.reversed_depth_z as u32,
             msaa_samples: self.msaa_samples,
         });
-        self.update_uniforms(
-            camera,
-            astronomy,
-            time,
-            aspect,
-            terrain_subsystem,
-            settings,
-            screen_size,
-        );
+        self.update_uniforms(camera, astronomy, time, aspect, terrain_subsystem, settings);
 
         // upload per-cascade shadow uniforms ONCE (outside encoder)
         for i in 0..CSM_CASCADES {
@@ -296,17 +288,16 @@ impl RenderCore {
         aspect: f32,
         terrain_subsystem: &TerrainSubsystem,
         settings: &Settings,
-        screen_size: UVec2,
     ) {
         let mut updater = UniformUpdater::new(&self.queue, &mut self.pipelines);
         updater.update_camera_uniforms(
             terrain_subsystem,
             astronomy,
             camera,
-            time.total_time,
+            time,
             aspect,
             settings,
-            screen_size,
+            &self.config,
         );
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy.moon_phase);
@@ -403,7 +394,7 @@ impl RenderCore {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !settings.shadows_enabled {
+            if settings.shadow_type != ShadowType::CSM {
                 continue;
             }
             let shadow_buf = &self.pipelines.resources.csm_shadows.shadow_mat_buffers[cascade_idx];
@@ -476,13 +467,15 @@ impl RenderCore {
 
         gpu_timestamp!(encoder, &mut self.profiler, "RTX", {
             let sun_up = astronomy.sun_dir.y > 0.0;
-            if sun_up {
+            if sun_up && (settings.shadow_type == ShadowType::RT) {
                 render_ray_tracing(
                     encoder,
                     &self.config,
                     &mut self.rt_subsystem,
                     &mut self.render_manager,
                     &self.pipelines,
+                    &mut self.profiler,
+                    self.msaa_samples,
                 );
             }
         });
@@ -632,6 +625,7 @@ impl RenderCore {
                     &self.pipelines.resolved.normal,
                 ],
                 vec![
+                    &self.pipelines.post_fx.linear_depth_full,
                     &self.pipelines.post_fx.linear_depth_half,
                     &self.pipelines.post_fx.normal_half,
                 ],
@@ -1078,6 +1072,8 @@ impl RenderCore {
 
         println!("MSAA changed to {}x", self.msaa_samples);
 
+        self.render_manager
+            .update_define("MSAA".to_string(), self.msaa_samples > 1);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
         self.ui_renderer.pipelines.rebuild_pipelines();
@@ -1322,7 +1318,7 @@ pub fn acquire_frame(
         }
     }
 }
-fn create_color_attachment_load<'a>(
+pub fn create_color_attachment_load<'a>(
     msaa_view: &'a TextureView,
     surface_view: &'a TextureView,
     msaa_samples: u32,

@@ -1111,9 +1111,9 @@ dependencies = [
 
 [[package]]
 name = "notify"
-version = "9.0.0-rc.1"
+version = "9.0.0-rc.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d1f660da45085290c8c3cfde8e99b5992afd363f574e25d61692c27814e7a16"
+checksum = "c8b6510a5042c64929d0278a8d24f5f90aa3a9b5be52e08e4f8bf7403adb01dc"
 dependencies = [
  "bitflags 2.10.0",
  "inotify",
@@ -1126,6 +1126,7 @@ dependencies = [
  "objc2-core-services",
  "walkdir",
  "windows-sys 0.61.2",
+    "xxhash-rust",
 ]
 
 [[package]]
@@ -2566,9 +2567,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu_render_manager"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d22271973d840331455ac61a19dd816fc6646bb34b254dbaf2cc895186746db"
+checksum = "a3a5feee9e0b50fdaba3e4f8c9260983308c95cc31e01fcb36b217c658a5bbe4"
 dependencies = [
  "bytemuck",
  "wgpu",
@@ -3068,6 +3069,12 @@ name = "xml-rs"
 version = "0.8.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fd8403733700263c6eb89f192880191f1b83e332f7a20371ddcf421c4a337c7"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "zerocopy"

@@ -2,7 +2,7 @@ use crate::cars::car_mesh::CarVertex;
 use crate::cars::car_render::CarInstance;
 use crate::cars::car_structs::CarStorage;
 use crate::cars::car_subsystem::CarRenderSubsystem;
-use crate::data::Settings;
+use crate::data::{Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::paths::shader_dir;
 use crate::renderer::gizmo::Gizmo;
@@ -575,8 +575,8 @@ pub fn render_cars(
 }
 
 fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {
-    match settings.shadows_enabled {
-        true => match settings.reversed_depth_z {
+    match settings.shadow_type {
+        ShadowType::CSM => match settings.reversed_depth_z {
             true => Some(ShadowOptions {
                 sampler: pipelines
                     .resources
@@ -590,7 +590,7 @@ fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<Shad
                 view: pipelines.resources.csm_shadows.array_view.clone(),
             }),
         },
-        false => Some(ShadowOptions {
+        _ => Some(ShadowOptions {
             sampler: pipelines
                 .resources
                 .shadow_samplers

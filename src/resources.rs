@@ -192,22 +192,44 @@ impl TimeSystem {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
+    // ── Current frame matrices ──────────────────────────────────
     pub view: [[f32; 4]; 4],
     pub inv_view: [[f32; 4]; 4],
     pub proj: [[f32; 4]; 4],
     pub inv_proj: [[f32; 4]; 4],
     pub view_proj: [[f32; 4]; 4],
     pub inv_view_proj: [[f32; 4]; 4],
+
+    // ── Previous frame reprojection ─────────────────────────────
+    pub prev_view_proj: [[f32; 4]; 4],
+
+    // ── Shadow cascades ─────────────────────────────────────────
     pub lighting_view_proj: [[[f32; 4]; 4]; CSM_CASCADES],
-    pub cascade_splits: [f32; 4], // end distance of each cascade in view-space units
+    pub cascade_splits: [f32; 4],
+
+    // ── Lighting ────────────────────────────────────────────────
     pub sun_direction: [f32; 3],
     pub time: f32,
-    pub camera_local: [f32; 3], // eye_world.local (x,y,z) where x/z are within chunk
-    pub chunk_size: f32,
-    pub camera_chunk: [i32; 2], // eye_world.chunk (x,z)
-    pub _pad_cam: [u32; 2],     // padding to 16 bytes
     pub moon_direction: [f32; 3],
     pub orbit_radius: f32,
+
+    // ── Current camera (chunk-relative) ─────────────────────────
+    pub camera_local: [f32; 3], // vec3<f32> + 1 float pad
+    pub chunk_size: f32,
+    pub camera_chunk: [i32; 2], // vec2<i32>
+    pub _pad_cam: [u32; 2],     // align to 16
+
+    // ── Previous camera (chunk-relative) ────────────────────────
+    pub prev_camera_local: [f32; 3], // vec3<f32> + 1 float pad
+    pub _pad_prev0: f32,
+    pub prev_camera_chunk: [i32; 2], // vec2<i32>
+    pub _pad_prev1: [i32; 2],        // align to 16
+
+    // ── TAA jitter ──────────────────────────────────────────────
+    pub curr_jitter: [f32; 2],
+    pub prev_jitter: [f32; 2],
+
+    // ── Misc settings ───────────────────────────────────────────
     pub reversed_depth_z: u32,
     pub shadows_enabled: u32,
     pub near_far_depth: [f32; 2],

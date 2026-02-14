@@ -1,8 +1,9 @@
-use crate::data::Settings;
+use crate::data::{Settings, ShadowType};
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
+use crate::renderer::taa::taa_jitter_pair;
 use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
-use crate::resources::Uniforms;
+use crate::resources::{TimeSystem, Uniforms};
 use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
@@ -128,9 +129,10 @@ pub struct PostFxTextures {
     pub gtao_blurred_half: TextureView,
     pub gtao_history: [TextureView; 2],
     pub rt_raw_half: TextureView,
-    pub rt_denoised_half: TextureView,
+    pub rt_full: TextureView,
     pub rt_instance: TextureView,
     pub dummy_msaa_rt_instance: TextureView,
+    pub linear_depth_full: TextureView,
 }
 
 pub struct UniformBuffers {
@@ -252,11 +254,13 @@ impl Pipelines {
         config: &SurfaceConfiguration,
         msaa_samples: u32,
     ) -> PostFxTextures {
+        let linear_depth_full = create_linear_depth_texture(device, config, 1.0);
         let linear_depth_half = create_linear_depth_texture(device, config, 0.5);
         let normal_half = create_normals_texture(device, config, 0.5);
 
         let (_, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
-        let (rt_raw_half, rt_denoised_half) = create_rt_textures(device, config, 0.5);
+        let rt_raw_half = create_rt_texture(device, config, 0.5);
+        let rt_full = create_rt_texture(device, config, 1.0);
 
         let dummy_msaa_rt_instance = create_instance_texture(device, config, 1.0, msaa_samples);
         let rt_instance = create_instance_texture(device, config, 1.0, 1);
@@ -267,6 +271,7 @@ impl Pipelines {
         ];
 
         PostFxTextures {
+            linear_depth_full,
             linear_depth_half,
             normal_half,
             gtao_blurred_half,
@@ -274,7 +279,7 @@ impl Pipelines {
             dummy_msaa_rt_instance,
             rt_instance,
             rt_raw_half,
-            rt_denoised_half,
+            rt_full,
         }
     }
 }
@@ -568,11 +573,11 @@ fn create_gtao_textures(
     (gtao_view, gtao_blurred_view)
 }
 const RT_FORMAT: TextureFormat = TextureFormat::R8Unorm;
-fn create_rt_textures(
+fn create_rt_texture(
     device: &Device,
     config: &SurfaceConfiguration,
     resolution_factor: f32,
-) -> (TextureView, TextureView) {
+) -> TextureView {
     let make = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),
@@ -594,9 +599,8 @@ fn create_rt_textures(
         view
     };
 
-    let rt_view = make("RT Raw");
-    let rt_blurred_view = make("RT Blurred");
-    (rt_view, rt_blurred_view)
+    let rt_view = make(format!("RT {}", resolution_factor).as_str());
+    rt_view
 }
 const RT_INSTANCE_FORMAT: TextureFormat = TextureFormat::R32Uint;
 fn create_instance_texture(
@@ -660,14 +664,18 @@ pub fn create_gtao_texture(
 pub fn make_new_camera_uniforms(
     sun: Vec3,
     moon: Vec3,
-    total_time: f64,
+    time_system: &TimeSystem,
     light_view_proj: [Mat4; CSM_CASCADES],
     cascade_splits: [f32; 4],
     camera: &Camera,
     settings: &Settings,
+    config: &SurfaceConfiguration,
 ) -> Uniforms {
+    let prev_eye = camera.prev_eye_world();
     let eye = camera.eye_world();
     let (view, proj, view_proj) = camera.matrices();
+    let (prev_jitter, curr_jitter) =
+        taa_jitter_pair(time_system.frame_count, config.width, config.height);
     Uniforms {
         view: view.to_cols_array_2d(),
         inv_view: view.inverse().to_cols_array_2d(),
@@ -675,21 +683,36 @@ pub fn make_new_camera_uniforms(
         inv_proj: proj.inverse().to_cols_array_2d(),
         view_proj: view_proj.to_cols_array_2d(),
         inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+
+        prev_view_proj: camera.prev_view_proj.to_cols_array_2d(),
+
         lighting_view_proj: light_view_proj.map(|m| m.to_cols_array_2d()),
         cascade_splits,
+
         sun_direction: sun.to_array(),
-        time: total_time as f32,
+        time: time_system.total_time as f32,
+        moon_direction: moon.to_array(),
+        orbit_radius: camera.orbit_radius,
 
         camera_local: [eye.local.x, eye.local.y, eye.local.z],
         chunk_size: camera.chunk_size as f32,
         camera_chunk: [eye.chunk.x, eye.chunk.z],
+        _pad_cam: [0, 0],
 
-        _pad_cam: [1, 1],
-        moon_direction: moon.to_array(),
-        orbit_radius: camera.orbit_radius,
+        prev_camera_local: [prev_eye.local.x, prev_eye.local.y, prev_eye.local.z],
+        _pad_prev0: 0.0,
+        prev_camera_chunk: [prev_eye.chunk.x, prev_eye.chunk.z],
+        _pad_prev1: [0, 0],
+
+        curr_jitter,
+        prev_jitter,
+
         reversed_depth_z: settings.reversed_depth_z as u32,
-        shadows_enabled: settings.shadows_enabled as u32,
-
+        shadows_enabled: if settings.shadow_type == ShadowType::CSM {
+            1
+        } else {
+            0
+        },
         near_far_depth: [camera.near, camera.far],
     }
 }

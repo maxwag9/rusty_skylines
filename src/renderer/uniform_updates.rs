@@ -10,8 +10,8 @@ use crate::terrain::water::WaterUniform;
 use crate::world::astronomy::AstronomyState;
 use crate::world::camera::Camera;
 use crate::world::terrain_subsystem::TerrainSubsystem;
-use glam::{Mat4, UVec2};
-use wgpu::Queue;
+use glam::Mat4;
+use wgpu::{Queue, SurfaceConfiguration};
 
 pub struct UniformUpdater<'a> {
     queue: &'a Queue,
@@ -28,10 +28,10 @@ impl<'a> UniformUpdater<'a> {
         terrain_renderer: &TerrainSubsystem,
         astronomy: &AstronomyState,
         camera: &Camera,
-        total_time: f64,
+        time_system: &TimeSystem,
         aspect: f32,
         settings: &Settings,
-        screen_size: UVec2,
+        config: &SurfaceConfiguration,
     ) {
         // Build 4 cascade matrices + splits (defaults baked in: shadow distance, lambda, padding).
         let (light_mats, splits, texels) = compute_csm_matrices(
@@ -48,11 +48,12 @@ impl<'a> UniformUpdater<'a> {
         let new_uniforms = make_new_camera_uniforms(
             astronomy.sun_dir,
             astronomy.moon_dir,
-            total_time,
+            time_system,
             light_mats,
             splits,
             camera,
             settings,
+            config,
         );
 
         self.queue.write_buffer(

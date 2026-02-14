@@ -95,7 +95,27 @@ impl Default for LodCenterType {
         Self::Target
     }
 }
-
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum ShadowType {
+    OFF,
+    CSM,
+    RT,
+}
+impl Default for ShadowType {
+    fn default() -> Self {
+        Self::CSM
+    }
+}
+impl ShadowType {
+    pub fn next(&self) -> Self {
+        use crate::data::ShadowType::*;
+        match self {
+            OFF => CSM,
+            CSM => RT,
+            RT => OFF,
+        }
+    }
+}
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct Settings {
@@ -128,7 +148,7 @@ pub struct Settings {
     #[serde(default)]
     pub shadow_map_size: u32,
     #[serde(default)]
-    pub shadows_enabled: bool,
+    pub shadow_type: ShadowType,
     #[serde(default)]
     pub zoom_speed: f32,
     #[serde(default)]
@@ -174,7 +194,7 @@ impl Default for Settings {
             always_day: false,
             msaa_samples: 4,
             shadow_map_size: 4096,
-            shadows_enabled: true,
+            shadow_type: ShadowType::default(),
             zoom_speed: 10.0,
             render_lanes_gizmo: false,
             render_chunk_bounds: false,

@@ -3,17 +3,6 @@ layers:
   - name: adding_elements
     order: 2
     elements:
-      - !Text
-        id: player_info_text
-        x: 0.001895523
-        y: 0.04241577
-        px: 0.013205536
-        color:
-          - 0.0
-          - 0.5
-          - 1.0
-          - 1.0
-        text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
       - !Circle
         id: Add Circle
         action: add_circle

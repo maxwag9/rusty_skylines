@@ -24,7 +24,7 @@ pub static CAR_COLOR_DISTRIBUTION: &[WeightedHsv] = &[
         s_min: 0.00,
         s_max: 0.05,
         v_min: 0.90,
-        v_max: 1.00,
+        v_max: 0.980,
     },
     WeightedHsv {
         // Black

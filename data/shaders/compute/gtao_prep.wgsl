@@ -19,8 +19,10 @@
 // ----------------------------------------------------------------------------
 // Group 1: Output Storage (half resolution)
 // ----------------------------------------------------------------------------
-@group(1) @binding(0) var output_linear_depth_half: texture_storage_2d<r32float, write>;
-@group(1) @binding(1) var output_normals_half:      texture_storage_2d<rgba8unorm, write>;
+@group(1) @binding(0) var output_linear_depth_full: texture_storage_2d<r32float, write>;
+@group(1) @binding(1) var output_linear_depth_half: texture_storage_2d<r32float, write>;
+@group(1) @binding(2) var output_normals_half:      texture_storage_2d<rgba8unorm, write>;
+
 
 // ----------------------------------------------------------------------------
 // Group 2: Uniforms
@@ -98,6 +100,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ld10 = linearize_depth(resolve_depth_at(dc10, is_reversed), z_near, z_far, is_reversed);
     let ld01 = linearize_depth(resolve_depth_at(dc01, is_reversed), z_near, z_far, is_reversed);
     let ld11 = linearize_depth(resolve_depth_at(dc11, is_reversed), z_near, z_far, is_reversed);
+
+    // write full-res linear depth for those 4 pixels
+    textureStore(output_linear_depth_full, dc00, vec4<f32>(ld00, 0.0, 0.0, 1.0));
+    textureStore(output_linear_depth_full, dc10, vec4<f32>(ld10, 0.0, 0.0, 1.0));
+    textureStore(output_linear_depth_full, dc01, vec4<f32>(ld01, 0.0, 0.0, 1.0));
+    textureStore(output_linear_depth_full, dc11, vec4<f32>(ld11, 0.0, 0.0, 1.0));
 
     let min_depth = min(min(ld00, ld10), min(ld01, ld11));
     textureStore(output_linear_depth_half, out_coords, vec4<f32>(min_depth, 0.0, 0.0, 1.0));

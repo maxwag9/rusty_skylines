@@ -1,3 +1,4 @@
+#include "../includes/uniforms.wgsl"
 // ============================================================
 // Sun Shadow Ray Tracing - Optimized for City Builder
 // Single sample, binary output, exit-on-first-hit
@@ -34,28 +35,6 @@ struct TlasInstance {
     _pad1: f32,
     aabb_max: vec3<f32>,
     _pad2: f32,
-};
-
-struct Uniforms {
-    view:                mat4x4<f32>,
-    inv_view:            mat4x4<f32>,
-    proj:                mat4x4<f32>,
-    inv_proj:            mat4x4<f32>,
-    view_proj:           mat4x4<f32>,
-    inv_view_proj:       mat4x4<f32>,
-    lighting_view_proj:  array<mat4x4<f32>, 4>,
-    cascade_splits:      vec4<f32>,
-    sun_direction:       vec3<f32>,
-    time:                f32,
-    camera_local:        vec3<f32>,
-    chunk_size:          f32,
-    camera_chunk:        vec2<i32>,
-    _pad_cam:            vec2<i32>,
-    moon_direction:      vec3<f32>,
-    orbit_radius:        f32,
-    reversed_depth_z:    u32,
-    shadows_enabled:     u32,
-    near_far_depth:      vec2<f32>,
 };
 
 struct SunShadowParams {
