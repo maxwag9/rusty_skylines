@@ -1,9 +1,9 @@
-use crate::cars::car_structs::Car;
-use crate::cars::car_subsystem::CarSubsystem;
 use crate::data::Settings;
 use crate::ui::input::InputState;
 use crate::world::camera::{Camera, CameraController};
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::cars::car_structs::Car;
+use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use glam::{Quat, Vec3};
 
 #[derive(Clone, Copy, Debug)]

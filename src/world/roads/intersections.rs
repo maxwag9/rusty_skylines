@@ -2,12 +2,12 @@
 
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
-use crate::terrain::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
-use crate::terrain::roads::road_helpers::*;
-use crate::terrain::roads::road_mesh_manager::*;
-use crate::terrain::roads::road_structs::*;
-use crate::terrain::roads::roads::*;
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
+use crate::world::roads::road_helpers::*;
+use crate::world::roads::road_mesh_manager::*;
+use crate::world::roads::road_structs::*;
+use crate::world::roads::roads::*;
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use clipper2::{EndType, JoinType, Path, Paths};
 use earcutr;
 use glam::{Vec2, Vec3};

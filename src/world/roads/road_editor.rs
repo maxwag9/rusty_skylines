@@ -1,14 +1,14 @@
 use crate::helpers::positions::{ChunkSize, WorldPos};
-use crate::terrain::roads::intersections::IntersectionBuildParams;
-use crate::terrain::roads::road_helpers::*;
-use crate::terrain::roads::road_mesh_manager::{CLEARANCE, ChunkId};
-use crate::terrain::roads::road_structs::*;
-use crate::terrain::roads::roads::{
+use crate::ui::input::InputState;
+use crate::world::roads::intersections::IntersectionBuildParams;
+use crate::world::roads::road_helpers::*;
+use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
+use crate::world::roads::road_structs::*;
+use crate::world::roads::roads::{
     Lane, LaneGeometry, METERS_PER_LANE_POLYLINE_STEP, RoadCommand, RoadManager, RoadStorage,
     nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
-use crate::ui::input::InputState;
-use crate::world::terrain_subsystem::{CursorMode, TerrainSubsystem};
+use crate::world::terrain::terrain_subsystem::{CursorMode, TerrainSubsystem};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
 

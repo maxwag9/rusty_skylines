@@ -1,6 +1,6 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LodStep};
-use crate::terrain::chunk_builder::{ChunkBuilder, CpuChunkMesh};
-use crate::terrain::terrain::TerrainGenerator;
+use crate::world::terrain::chunk_builder::{ChunkBuilder, CpuChunkMesh};
+use crate::world::terrain::terrain::TerrainGenerator;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

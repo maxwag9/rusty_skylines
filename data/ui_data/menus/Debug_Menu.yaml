@@ -13,7 +13,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
+        text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Render CPU: {(total_cpu_render_time):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
       - !Text
         id: frametime_main_pass_text
         x: 0.0008250045
@@ -80,6 +80,17 @@ layers:
           - 1.0
           - 1.0
         text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
+      - !Text
+        id: world_info_text
+        x: 0.001895523
+        y: 0.15898716
+        px: 0.010564429
+        color:
+          - 0.0
+          - 0.3
+          - 0.7
+          - 1.0
+        text: 'Car Count: {car_count}'
       - !Circle
         id: '967'
         x: 0.9281143

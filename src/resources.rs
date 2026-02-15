@@ -221,7 +221,7 @@ pub struct Uniforms {
 
     // ── Previous camera (chunk-relative) ────────────────────────
     pub prev_camera_local: [f32; 3], // vec3<f32> + 1 float pad
-    pub _pad_prev0: f32,
+    pub frame_index: u32,
     pub prev_camera_chunk: [i32; 2], // vec2<i32>
     pub _pad_prev1: [i32; 2],        // align to 16
 
@@ -231,6 +231,6 @@ pub struct Uniforms {
 
     // ── Misc settings ───────────────────────────────────────────
     pub reversed_depth_z: u32,
-    pub shadows_enabled: u32,
+    pub csm_enabled: u32,
     pub near_far_depth: [f32; 2],
 }

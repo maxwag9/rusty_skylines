@@ -1,17 +1,17 @@
 //! road_mesh_renderer.rs
-use crate::terrain::roads::road_editor::RoadEditor;
-use crate::terrain::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
-use crate::terrain::roads::roads::{
+use crate::world::roads::road_editor::RoadEditor;
+use crate::world::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
+use crate::world::roads::roads::{
     RoadManager, apply_commands_world, apply_preview_commands_world, collect_affected_chunks,
 };
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 
-use crate::cars::car_subsystem::CarSubsystem;
 use crate::renderer::gizmo::Gizmo;
-use crate::terrain::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
-use crate::terrain::roads::road_structs::RoadEditorCommand;
 use crate::ui::input::InputState;
 use crate::world::camera::Camera;
+use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
+use crate::world::roads::road_structs::RoadEditorCommand;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};

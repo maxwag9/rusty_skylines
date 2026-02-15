@@ -1,7 +1,7 @@
-use crate::cars::car_subsystem::CarSubsystem;
 use crate::events::*;
 use crate::helpers::positions::{ChunkCoord, WorldPos};
-use crate::terrain::roads::road_subsystem::RoadSubsystem;
+use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::roads::road_subsystem::RoadSubsystem;
 
 #[derive(Debug)]
 pub enum CarChangeEvent {

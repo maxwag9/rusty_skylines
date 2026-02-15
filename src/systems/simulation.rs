@@ -16,6 +16,7 @@ pub fn simulation_system(resources: &mut Resources) {
         &resources.settings,
         &world.time,
         &mut world.input,
+        &mut resources.ui_loader.variables,
         camera_bundle,
         &renderer.device,
         &renderer.queue,

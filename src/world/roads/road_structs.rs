@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::helpers::positions::WorldPos;
-use crate::terrain::roads::roads::{RoadCommand, RoadStorage};
+use crate::world::roads::roads::{RoadCommand, RoadStorage};
 use glam::Vec3;
 
 #[derive(Clone, Debug)]

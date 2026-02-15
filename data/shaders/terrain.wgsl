@@ -152,7 +152,7 @@ fn fs_main(in: VertexOut) -> FragmentOut {
     let sun_direct = mix(sun_diffuse, sun_wrapped, grass_amount) * sun_amount;
 
     var sun_shadow: f32 = 1.0;
-    if (uniforms.shadows_enabled != 0u && sun_amount > 0.0 && sun_direct > 0.0001) {
+    if (uniforms.csm_enabled != 0u && sun_amount > 0.0 && sun_direct > 0.0001) {
         sun_shadow = fetch_shadow(in.world_pos, n, sun_l);
     }
 

@@ -1,5 +1,3 @@
-use crate::cars::car_structs::CarStorage;
-use crate::cars::car_subsystem::{CAR_BASE_LENGTH, CAR_BASE_WIDTH};
 use crate::gpu_timestamp;
 use crate::helpers::paths::{compute_shader_dir, shader_dir};
 use crate::renderer::gpu_profiler::GpuProfiler;
@@ -7,6 +5,8 @@ use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::{RTSubsystem, build_render_space_instances};
 use crate::renderer::render_core::create_color_attachment_load;
 use crate::world::camera::Camera;
+use crate::world::cars::car_structs::CarStorage;
+use crate::world::cars::car_subsystem::{CAR_BASE_LENGTH, CAR_BASE_WIDTH};
 use glam::Vec3;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::{
@@ -101,6 +101,7 @@ pub fn render_ray_tracing(
             Some(encoder),
             "RTX Upsample",
             vec![
+                &pipelines.post_fx.rt_full_history,
                 &pipelines.post_fx.rt_raw_half,
                 &pipelines.post_fx.linear_depth_full,
             ],
@@ -148,7 +149,7 @@ pub fn render_ray_tracing(
             &[&pipelines.post_fx.rt_full],
             shader_dir().join("ray_tracing_apply.wgsl").as_path(),
             &options,
-            &[],
+            &[&pipelines.buffers.camera],
             &mut pass,
         );
 

@@ -2,7 +2,6 @@
 extern crate core;
 
 mod app;
-mod cars;
 mod data;
 mod events;
 mod helpers;
@@ -10,7 +9,6 @@ mod renderer;
 mod resources;
 mod simulation;
 mod systems;
-mod terrain;
 mod ui;
 pub mod world;
 

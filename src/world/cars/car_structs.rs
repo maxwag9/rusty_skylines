@@ -1,7 +1,7 @@
-use crate::cars::car_subsystem::make_random_car;
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
-use crate::terrain::roads::road_structs::LaneId;
-use crate::terrain::roads::roads::{LaneRef, TurnType};
+use crate::world::cars::car_subsystem::make_random_car;
+use crate::world::roads::road_structs::LaneId;
+use crate::world::roads::roads::{LaneRef, TurnType};
 use glam::{Quat, Vec3};
 use rand::rngs::ThreadRng;
 use std::collections::HashMap;
@@ -222,6 +222,10 @@ impl CarStorage {
         }
     }
 
+    pub fn car_count(&self) -> usize {
+        self.cars.len() - self.free_list.len() - 1
+    }
+
     #[inline]
     pub fn get(&self, id: CarId) -> Option<&Car> {
         self.cars.get(id as usize)?.as_ref()
@@ -341,7 +345,7 @@ impl Default for Car {
 
             length: 4.0,
             width: 2.2,
-            accel: 5.0,
+            accel: 7.0,
             decel: 10.0,
             lane: LaneRef::Segment(LaneId(0), 0),
             lane_s: 0.0,

@@ -13,7 +13,11 @@ struct InstanceInput {
     @location(5) model_col1: vec4<f32>,
     @location(6) model_col2: vec4<f32>,
     @location(7) model_col3: vec4<f32>,
-    @location(8) color: vec4<f32>, // rgb + pad
+    @location(8) prev_model_col0: vec4<f32>,
+    @location(9) prev_model_col1: vec4<f32>,
+    @location(10) prev_model_col2: vec4<f32>,
+    @location(11) prev_model_col3: vec4<f32>,
+    @location(12) color: vec4<f32>, // rgb + pad
 };
 
 struct VertexOutput {
@@ -24,6 +28,7 @@ struct VertexOutput {
     @location(3) @interpolate(flat) instance_color: vec3<f32>,
 
     @location(4) @interpolate(flat) instance_id: u32,
+    @location(5) prev_pos_cs: vec4<f32>,  // previous clip-space
 };
 
 
@@ -58,6 +63,7 @@ struct FragmentOut {
     @location(0) color: vec4<f32>,     // color target
     @location(1) normal: vec4<f32>,    // normal target
     @location(2) instance_id: u32,     // R32Uint instance id target for RAY TRACING
+    @location(3) motion: vec2<f32>,
 };
 
 @vertex
@@ -69,6 +75,12 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index
         instance.model_col1,
         instance.model_col2,
         instance.model_col3,
+    );
+    let prev_model = mat4x4<f32>(
+        instance.prev_model_col0,
+        instance.prev_model_col1,
+        instance.prev_model_col2,
+        instance.prev_model_col3,
     );
 
     let world_pos = model * vec4<f32>(vertex.position, 1.0);
@@ -82,6 +94,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index
     // pass instance id (instanced draws only)
     out.instance_id = instance_index;
 
+    out.prev_pos_cs = uniforms.prev_view_proj * prev_model * vec4(vertex.position, 1.0);
     return out;
 }
 
@@ -135,5 +148,15 @@ fn fs_main(input: VertexOutput) -> FragmentOut {
     out.color = vec4<f32>(rgb, 1.0);
     out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
     out.instance_id = input.instance_id;
+
+    if (input.clip_position.w <= 0.0 || input.prev_pos_cs.w <= 0.0) {
+        out.motion = vec2<f32>(0.0);
+        return out;
+    }
+    let curr_ndc = input.clip_position.xy / input.clip_position.w;
+    let prev_ndc = input.prev_pos_cs.xy / input.prev_pos_cs.w;
+    let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5 - uniforms.curr_jitter;
+    let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5 - uniforms.prev_jitter;
+    out.motion = curr_uv - prev_uv;
     return out;
 }

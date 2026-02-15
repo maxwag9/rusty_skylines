@@ -1,5 +1,3 @@
-use crate::cars::car_structs::CarStorage;
-use crate::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
 use crate::data::{DebugViewState, Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::paths::{compute_shader_dir, shader_dir, texture_dir};
@@ -18,12 +16,14 @@ use crate::renderer::shadows::{
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::TimeSystem;
-use crate::terrain::roads::road_subsystem::{RoadRenderSubsystem, RoadSubsystem};
 use crate::ui::input::InputState;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::astronomy::*;
 use crate::world::camera::Camera;
-use crate::world::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::cars::car_structs::CarStorage;
+use crate::world::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
+use crate::world::roads::road_subsystem::{RoadRenderSubsystem, RoadSubsystem};
+use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use glam::UVec2;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -216,7 +216,9 @@ impl RenderCore {
         //println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
-        println!("Total: {}", total_cpu_render_time);
+        ui_loader
+            .variables
+            .set_f32("total_cpu_render_time", total_cpu_render_time);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.profiler
@@ -596,18 +598,13 @@ impl RenderCore {
         if !settings.show_world {
             return;
         }
-
+        if settings.is_gtao_prep_off() {
+            return;
+        }
         let msaa_on = settings.msaa_samples > 1;
         let half_w = self.pipelines.post_fx.linear_depth_half.texture().width();
         let half_h = self.pipelines.post_fx.linear_depth_half.texture().height();
-        let full_w = self.pipelines.resolved.hdr.texture().width();
-        let full_h = self.pipelines.resolved.hdr.texture().height();
         let half_disp = [(half_w + 7) / 8, (half_h + 7) / 8, 1];
-        let full_disp = [(full_w + 7) / 8, (full_h + 7) / 8, 1];
-
-        // ── History ping-pong ───────────────────────────────────────────────
-        let read_idx = (time.frame_count % 2) as usize;
-        let write_idx = 1 - read_idx;
 
         // ── Pass 1: Prep ────────────────────────────────────────────────────
         let prep_name = if msaa_on {
@@ -621,7 +618,7 @@ impl RenderCore {
                 Some(encoder),
                 prep_name,
                 vec![
-                    &self.pipelines.msaa.depth_sample,
+                    &self.pipelines.msaa.depth_sample, // Can be non-msaa
                     &self.pipelines.resolved.normal,
                 ],
                 vec![
@@ -636,8 +633,13 @@ impl RenderCore {
                 &[BufferSet::from_uniform(&self.pipelines.buffers.camera)],
             );
         });
-
+        if !settings.gtao_enabled {
+            return;
+        }
         // ── Pass 2: Generate + Temporal Accumulate ──────────────────────────
+        // ── History ping-pong ───────────────────────────────────────────────
+        let read_idx = (time.frame_count % 2) as usize;
+        let write_idx = 1 - read_idx;
         let hw = half_w as f32;
         let hh = half_h as f32;
 
@@ -695,8 +697,8 @@ impl RenderCore {
         });
 
         // ── Pass 4: Upsample + Apply (render pass — blends into msaa/resolved HDR) ──
-        let fw = full_w as f32;
-        let fh = full_h as f32;
+        let fw = self.pipelines.resolved.hdr.texture().width() as f32;
+        let fh = self.pipelines.resolved.hdr.texture().height() as f32;
 
         let upsample_apply_params = GtaoUpsampleApplyParams {
             full_size: [fw, fh],
@@ -867,7 +869,7 @@ impl RenderCore {
 
     fn execute_debug_preview_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
         match settings.debug_view_state {
-            DebugViewState::None => {
+            DebugViewState::Off => {
                 return;
             }
             DebugViewState::Normals => {
@@ -981,6 +983,29 @@ impl RenderCore {
                 self.render_manager.render_fullscreen_debug(
                     &self.pipelines.post_fx.rt_raw_half,
                     DebugVisualization::RedToGrayscale,
+                    &self.pipelines.msaa.hdr,
+                    &mut pass,
+                );
+            }
+            DebugViewState::Motion => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
+                    self.msaa_samples,
+                );
+
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Motion Vectors Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                self.render_manager.render_fullscreen_debug(
+                    &self.pipelines.post_fx.motion_full,
+                    DebugVisualization::Color,
                     &self.pipelines.msaa.hdr,
                     &mut pass,
                 );

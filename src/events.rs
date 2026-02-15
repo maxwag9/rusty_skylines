@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use crate::cars::car_structs::CarChunk;
-use crate::world::terrain_subsystem::CursorMode;
+use crate::world::cars::car_structs::CarChunk;
+use crate::world::terrain::terrain_subsystem::CursorMode;
 
 #[derive(Debug, Clone)]
 pub enum Event {

@@ -50,28 +50,30 @@ fn default_chunk_size() -> ChunkSize {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DebugViewState {
-    None,
+    Off,
     Normals,
     Depth,
     GtaoRaw,
     GtaoBlurred,
     RTRaw,
+    Motion,
 }
 impl Default for DebugViewState {
     fn default() -> Self {
-        Self::None
+        Self::Off
     }
 }
 impl DebugViewState {
     pub fn next(&self) -> Self {
         use DebugViewState::*;
         match self {
-            None => Normals,
+            Off => Normals,
             Normals => Depth,
             Depth => GtaoRaw,
             GtaoRaw => GtaoBlurred,
             GtaoBlurred => RTRaw,
-            RTRaw => None,
+            RTRaw => Motion,
+            Motion => Off,
         }
     }
 }
@@ -150,6 +152,8 @@ pub struct Settings {
     #[serde(default)]
     pub shadow_type: ShadowType,
     #[serde(default)]
+    pub gtao_enabled: bool,
+    #[serde(default)]
     pub zoom_speed: f32,
     #[serde(default)]
     pub render_lanes_gizmo: bool,
@@ -177,6 +181,14 @@ pub struct Settings {
     pub render_rt_gizmo: bool,
 }
 
+impl Settings {
+    pub(crate) fn is_gtao_prep_off(&self) -> bool {
+        !self.gtao_enabled
+            && (self.shadow_type == ShadowType::OFF || self.shadow_type == ShadowType::CSM)
+            && !self.show_fog
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -195,12 +207,13 @@ impl Default for Settings {
             msaa_samples: 4,
             shadow_map_size: 4096,
             shadow_type: ShadowType::default(),
+            gtao_enabled: true,
             zoom_speed: 10.0,
             render_lanes_gizmo: false,
             render_chunk_bounds: false,
             chunk_size: default_chunk_size(),
             tonemapping_state: ToneMappingState::default(),
-            debug_view_state: DebugViewState::None,
+            debug_view_state: DebugViewState::Off,
             starting_menu: InternalMenu::default(),
             lod_center: LodCenterType::default(),
             reversed_depth_z: true,

@@ -14,7 +14,7 @@ dependencies = [
  "fastnoise-lite",
  "fontdue",
  "glam",
-    "log",
+ "log",
  "notify",
  "num_cpus",
  "pollster",
@@ -1126,7 +1126,7 @@ dependencies = [
  "objc2-core-services",
  "walkdir",
  "windows-sys 0.61.2",
-    "xxhash-rust",
+ "xxhash-rust",
 ]
 
 [[package]]

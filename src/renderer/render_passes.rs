@@ -1,7 +1,3 @@
-use crate::cars::car_mesh::CarVertex;
-use crate::cars::car_render::CarInstance;
-use crate::cars::car_structs::CarStorage;
-use crate::cars::car_subsystem::CarRenderSubsystem;
 use crate::data::{Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::paths::shader_dir;
@@ -10,13 +6,17 @@ use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
-use crate::terrain::roads::road_mesh_manager::RoadVertex;
-use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
-use crate::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
-use crate::terrain::water::SimpleVertex;
 use crate::ui::vertex::{LineVtxRender, Vertex};
 use crate::world::camera::Camera;
-use crate::world::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::cars::car_mesh::CarVertex;
+use crate::world::cars::car_render::CarInstance;
+use crate::world::cars::car_structs::CarStorage;
+use crate::world::cars::car_subsystem::CarRenderSubsystem;
+use crate::world::roads::road_mesh_manager::RoadVertex;
+use crate::world::roads::road_subsystem::RoadRenderSubsystem;
+use crate::world::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
+use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::terrain::water::SimpleVertex;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{PipelineOptions, ShadowOptions};
@@ -187,11 +187,16 @@ pub fn create_instanced_pass<'a>(
         None, // load existing normals
     );
 
-    // Instance attachment: use dummy MSAA view -> resolved instance view.
-    // Do NOT clear the resolved instance texture here (preserve); pass `clear = false`.
     let instance_attachment = make_instance_attachment(
         &pipelines.post_fx.dummy_msaa_rt_instance, // dummy MSAA view (must match msaa_samples)
         &pipelines.post_fx.rt_instance,            // resolved R32Uint instance texture
+        msaa_samples,
+        true,
+    );
+
+    let motion_attachment = make_instance_attachment(
+        &pipelines.post_fx.dummy_motion, // dummy MSAA view (must match msaa_samples)
+        &pipelines.post_fx.motion_full,  // resolved motion texture
         msaa_samples,
         true,
     );
@@ -202,9 +207,8 @@ pub fn create_instanced_pass<'a>(
             Some(color_attachment),
             Some(normal_attachment),
             Some(instance_attachment),
+            Some(motion_attachment),
         ],
-        // Use same MSAA depth view as world pass so sample counts match.
-        // We choose to LOAD depth so we don't stomp depth from the world pass.
         depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, false)),
         timestamp_writes: None,
         occlusion_query_set: None,
@@ -629,6 +633,11 @@ fn color_and_normals_and_instance_targets(pipelines: &Pipelines) -> Vec<Option<C
         }),
         Some(ColorTargetState {
             format: pipelines.post_fx.rt_instance.texture().format(),
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: pipelines.post_fx.motion_full.texture().format(),
             blend: None,
             write_mask: ColorWrites::ALL,
         }),

@@ -130,9 +130,12 @@ pub struct PostFxTextures {
     pub gtao_history: [TextureView; 2],
     pub rt_raw_half: TextureView,
     pub rt_full: TextureView,
+    pub rt_full_history: TextureView,
     pub rt_instance: TextureView,
     pub dummy_msaa_rt_instance: TextureView,
     pub linear_depth_full: TextureView,
+    pub motion_full: TextureView,
+    pub dummy_motion: TextureView,
 }
 
 pub struct UniformBuffers {
@@ -261,6 +264,9 @@ impl Pipelines {
         let (_, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
         let rt_raw_half = create_rt_texture(device, config, 0.5);
         let rt_full = create_rt_texture(device, config, 1.0);
+        let rt_full_history = create_rt_texture(device, config, 1.0);
+        let motion_full = create_motion_texture(device, config, 1.0, 1);
+        let dummy_motion = create_motion_texture(device, config, 1.0, msaa_samples);
 
         let dummy_msaa_rt_instance = create_instance_texture(device, config, 1.0, msaa_samples);
         let rt_instance = create_instance_texture(device, config, 1.0, 1);
@@ -280,6 +286,9 @@ impl Pipelines {
             rt_instance,
             rt_raw_half,
             rt_full,
+            rt_full_history,
+            motion_full,
+            dummy_motion,
         }
     }
 }
@@ -400,7 +409,7 @@ pub fn create_resolved_targets(
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba16Float,
+            format: Rgba16Float,
             usage: TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::STORAGE_BINDING, // Added for compute
@@ -602,6 +611,42 @@ fn create_rt_texture(
     let rt_view = make(format!("RT {}", resolution_factor).as_str());
     rt_view
 }
+const MOTION_FORMAT: TextureFormat = TextureFormat::Rg16Float;
+fn create_motion_texture(
+    device: &Device,
+    config: &SurfaceConfiguration,
+    resolution_factor: f32,
+    msaa_samples: u32,
+) -> TextureView {
+    let make = |label: &str| {
+        let usage = if msaa_samples > 1 {
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING
+        } else {
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::STORAGE_BINDING
+        };
+        let tex = device.create_texture(&TextureDescriptor {
+            label: Some(label),
+            size: Extent3d {
+                width: (config.width as f32 * resolution_factor) as u32,
+                height: (config.height as f32 * resolution_factor) as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: msaa_samples,
+            dimension: TextureDimension::D2,
+            format: MOTION_FORMAT,
+            usage,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&TextureViewDescriptor::default());
+        view
+    };
+
+    let motion = make(format!("Motion {}", resolution_factor).as_str());
+    motion
+}
 const RT_INSTANCE_FORMAT: TextureFormat = TextureFormat::R32Uint;
 fn create_instance_texture(
     device: &Device,
@@ -700,7 +745,7 @@ pub fn make_new_camera_uniforms(
         _pad_cam: [0, 0],
 
         prev_camera_local: [prev_eye.local.x, prev_eye.local.y, prev_eye.local.z],
-        _pad_prev0: 0.0,
+        frame_index: time_system.frame_count as u32,
         prev_camera_chunk: [prev_eye.chunk.x, prev_eye.chunk.z],
         _pad_prev1: [0, 0],
 
@@ -708,7 +753,7 @@ pub fn make_new_camera_uniforms(
         prev_jitter,
 
         reversed_depth_z: settings.reversed_depth_z as u32,
-        shadows_enabled: if settings.shadow_type == ShadowType::CSM {
+        csm_enabled: if settings.shadow_type == ShadowType::CSM {
             1
         } else {
             0

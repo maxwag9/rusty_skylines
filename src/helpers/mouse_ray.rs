@@ -1,5 +1,5 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
-use crate::terrain::chunk_builder::ChunkHeightGrid;
+use crate::world::terrain::chunk_builder::ChunkHeightGrid;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

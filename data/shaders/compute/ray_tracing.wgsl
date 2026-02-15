@@ -66,13 +66,46 @@ struct SunShadowParams {
 @group(2) @binding(5) var<uniform> uniforms: Uniforms;
 @group(2) @binding(6) var<uniform> params: SunShadowParams;
 
-// ============================================================
-// Constants - tuned for performance
-// ============================================================
 
-const TLAS_STACK_SIZE = 24u;    // Enough for ~16M instances
-const BLAS_STACK_SIZE = 24u;    // Enough for ~16M triangles
+const TLAS_STACK_SIZE = 22u;
+const BLAS_STACK_SIZE = 16u;
 const TRI_EPSILON = 0.00001;
+
+struct StackDebug {
+    tlas_overflow: bool,
+    blas_overflow: bool,
+};
+// PUSH helper
+fn tlas_push(
+    stack: ptr<function, array<u32, TLAS_STACK_SIZE>>,
+    ptr_idx: ptr<function, i32>,
+    v: u32,
+    dbg: ptr<function, StackDebug>
+) {
+    let next = (*ptr_idx) + 1;
+    if (next >= i32(TLAS_STACK_SIZE)) {
+        (*dbg).tlas_overflow = true;
+        return;
+    }
+    *ptr_idx = next;
+    (*stack)[*ptr_idx] = v;
+}
+
+fn blas_push(
+    stack: ptr<function, array<u32, BLAS_STACK_SIZE>>,
+    ptr_idx: ptr<function, i32>,
+    v: u32,
+    dbg: ptr<function, StackDebug>
+) {
+    let next = (*ptr_idx) + 1;
+    if (next >= i32(BLAS_STACK_SIZE)) {
+        (*dbg).blas_overflow = true;
+        return;
+    }
+    *ptr_idx = next;
+    (*stack)[*ptr_idx] = v;
+}
+
 
 // ============================================================
 // Ray structure - precompute inv_dir once
@@ -161,7 +194,7 @@ fn triangle_hit_t(r: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> f32 {
 // ============================================================
 
 
-fn traverse_blas_first_t(ray: Ray, root: u32) -> f32 {
+fn traverse_blas_first_t(ray: Ray, root: u32, dbg: ptr<function, StackDebug>) -> f32 {
     var stack: array<u32, BLAS_STACK_SIZE>;
     var pter: i32 = 0;
     stack[0] = root;
@@ -209,11 +242,11 @@ fn traverse_blas_first_t(ray: Ray, root: u32) -> f32 {
             let right_t = aabb_entry_t(ray, blas_bvh[right].aabb_min, blas_bvh[right].aabb_max);
 
             if (left_t < right_t) {
-                pter++; stack[pter] = right;
-                pter++; stack[pter] = left;
+                blas_push(&stack, &pter, right, dbg);
+                blas_push(&stack, &pter, left, dbg);
             } else {
-                pter++; stack[pter] = left;
-                pter++; stack[pter] = right;
+                blas_push(&stack, &pter, left, dbg);
+                blas_push(&stack, &pter, right, dbg);
             }
         }
     }
@@ -351,6 +384,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var hit = false;
     var hit_t_world = INF_F32;
+    var dbg = StackDebug(false, false);
 
     loop {
         if (tlas_ptr < 0 || hit) { break; }
@@ -377,7 +411,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
                 let lx = transform_ray_to_local_xform(ray, inst.inv_transform);
 
-                let t_local = traverse_blas_first_t(lx.ray, inst.blas_root);
+                let t_local = traverse_blas_first_t(lx.ray, inst.blas_root, &dbg);
+
                 if (t_local < INF_F32) {
                     hit = true;
                     hit_t_world = t_local * lx.local_t_to_world;
@@ -391,11 +426,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let right_t = aabb_entry_t(ray, tlas_bvh[right].aabb_min, tlas_bvh[right].aabb_max);
 
             if (left_t < right_t) {
-                tlas_ptr++; tlas_stack[tlas_ptr] = right;
-                tlas_ptr++; tlas_stack[tlas_ptr] = left;
+                tlas_push(&tlas_stack, &tlas_ptr, right, &dbg);
+                tlas_push(&tlas_stack, &tlas_ptr, left, &dbg);
             } else {
-                tlas_ptr++; tlas_stack[tlas_ptr] = left;
-                tlas_ptr++; tlas_stack[tlas_ptr] = right;
+                tlas_push(&tlas_stack, &tlas_ptr, left, &dbg);
+                tlas_push(&tlas_stack, &tlas_ptr, right, &dbg);
             }
         }
     }
@@ -408,11 +443,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var visibility = 1.0;
 
     if (hit) {
-        let s = smoothstep(params.soft_start, params.soft_end, hit_t_world);
-        visibility = mix(0.0, params.far_hit_visibility, s);
+        // let s = smoothstep(params.soft_start, params.soft_end, hit_t_world);
+        visibility = 0.0;
     }
 
     visibility = saturate(visibility * normal_term);
+    let debug_frame = (uniforms.frame_index & 1u) == 0u;
+
+    if (debug_frame && (dbg.tlas_overflow || dbg.blas_overflow)) {
+        // In r8unorm, flash between 0 and 1 — the ONLY values
+        // that will be visually obvious in the final composite
+        textureStore(rt_out, pixel, vec4(0.0, 0.0, 0.0, 0.0)); // full shadow
+        return;
+    }
+    if (!debug_frame && (dbg.tlas_overflow || dbg.blas_overflow)) {
+        textureStore(rt_out, pixel, vec4(1.0, 0.0, 0.0, 0.0)); // full light
+        return;
+    }
 
     textureStore(rt_out, pixel, vec4(visibility, 0.0, 0.0, 0.0));
 }

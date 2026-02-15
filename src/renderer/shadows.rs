@@ -1,17 +1,17 @@
-use crate::cars::car_mesh::CarVertex;
-use crate::cars::car_render::CarInstance;
-use crate::cars::car_structs::CarStorage;
-use crate::cars::car_subsystem::CarRenderSubsystem;
 use crate::data::Settings;
 use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::draw_visible_roads;
-use crate::terrain::roads::road_mesh_manager::RoadVertex;
-use crate::terrain::roads::road_subsystem::RoadRenderSubsystem;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
-use crate::world::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::cars::car_mesh::CarVertex;
+use crate::world::cars::car_render::CarInstance;
+use crate::world::cars::car_structs::CarStorage;
+use crate::world::cars::car_subsystem::CarRenderSubsystem;
+use crate::world::roads::road_mesh_manager::RoadVertex;
+use crate::world::roads::road_subsystem::RoadRenderSubsystem;
+use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
@@ -500,22 +500,18 @@ pub fn render_cars_shadows(
     shadow_mat_buffer: &Buffer,
     cascade_idx: usize,
 ) {
-    let mut bias = shadow_bias_for_cascade(
+    let bias = shadow_bias_for_cascade(
         cascade_idx,
         pipelines.resources.csm_shadows.texels[cascade_idx],
         settings.reversed_depth_z,
     );
-
-    // extra constant bias for closed meshes (keep sign correct)
-    bias.constant =
-        (bias.constant + if settings.reversed_depth_z { -150 } else { 150 }).clamp(-15000, 15000);
 
     let shader = shader_dir().join("car_shadows.wgsl");
     let opts = shadow_pipeline_options(
         settings,
         bias,
         vec![CarVertex::layout(), CarInstance::layout()],
-        Face::Front, // render backfaces into shadow map
+        Face::Front,
     );
 
     render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);

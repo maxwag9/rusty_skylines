@@ -1,5 +1,7 @@
 pub mod astronomy;
 pub mod camera;
-pub(crate) mod terrain_subsystem;
+pub mod cars;
+pub mod roads;
+pub mod terrain;
 pub mod world;
 pub mod world_core;

@@ -1,5 +1,7 @@
-@group(0) @binding(0) var rt_visibility_half : texture_2d<f32>;
-@group(0) @binding(1) var depth_full_tex     : texture_2d<f32>;
+#include "../includes/uniforms.wgsl"
+@group(0) @binding(0) var rt_visibility_full_history : texture_2d<u32>;
+@group(0) @binding(1) var rt_visibility_half : texture_2d<f32>;
+@group(0) @binding(2) var depth_full_tex     : texture_2d<f32>;
 @group(1) @binding(0) var rt_visibility_full : texture_storage_2d<r8unorm, write>;
 
 const WG: u32 = 8u;

@@ -1,11 +1,11 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
-use crate::terrain::chunk_builder::{
+use crate::ui::vertex::Vertex;
+use crate::world::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, gather_neighbor_edge_heights,
     regenerate_vertices_from_height_grid,
 };
-use crate::terrain::terrain::TerrainGenerator;
-use crate::ui::vertex::Vertex;
+use crate::world::terrain::terrain::TerrainGenerator;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;

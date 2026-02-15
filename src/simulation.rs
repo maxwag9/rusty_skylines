@@ -1,14 +1,15 @@
-use crate::cars::car_player::drive_car;
-use crate::cars::car_subsystem::CarSubsystem;
 use crate::data::Settings;
 use crate::events::{Event, Events};
 use crate::helpers::mouse_ray::WorldRay;
 use crate::renderer::gizmo::Gizmo;
 use crate::resources::TimeSystem;
-use crate::terrain::roads::road_subsystem::RoadSubsystem;
 use crate::ui::input::InputState;
+use crate::ui::variables::UiVariableRegistry;
 use crate::world::camera::Camera;
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::cars::car_player::drive_car;
+use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::roads::road_subsystem::RoadSubsystem;
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use crate::world::world::CameraBundle;
 use glam::Vec2;
 use std::time::Instant;
@@ -73,6 +74,7 @@ impl Simulation {
         settings: &Settings,
         time: &TimeSystem,
         input: &mut InputState,
+        variables: &mut UiVariableRegistry,
         camera_bundle: &mut CameraBundle,
         device: &Device,
         queue: &Queue,
@@ -96,6 +98,7 @@ impl Simulation {
             &terrain_subsystem,
             input,
             time,
+            variables,
             camera.target,
         );
         drive_car(

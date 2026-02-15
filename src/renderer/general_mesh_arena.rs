@@ -3,8 +3,8 @@ use std::mem::size_of;
 
 use wgpu::{Buffer, BufferUsages, Device, Queue};
 
-use crate::terrain::chunk_builder::GpuChunkHandle;
 use crate::ui::vertex::VertexWithPosition;
+use crate::world::terrain::chunk_builder::GpuChunkHandle;
 
 /// Represents a free byte range inside a GPU buffer
 #[derive(Clone, Copy, Debug)]

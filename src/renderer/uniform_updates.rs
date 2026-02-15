@@ -5,11 +5,11 @@ use crate::renderer::pipelines::{
 };
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::resources::TimeSystem;
-use crate::terrain::sky::SkyUniform;
-use crate::terrain::water::WaterUniform;
 use crate::world::astronomy::AstronomyState;
 use crate::world::camera::Camera;
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::sky::SkyUniform;
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::water::WaterUniform;
 use glam::Mat4;
 use wgpu::{Queue, SurfaceConfiguration};
 

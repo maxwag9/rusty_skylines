@@ -1,21 +1,23 @@
-use crate::cars::car_mesh::{create_procedural_car, sample_car_color};
-use crate::cars::car_render::CarInstance;
-use crate::cars::car_structs::{Car, CarChunkDistance, CarId, CarStorage};
 use crate::helpers::hsv::hsv_to_rgb;
 use crate::helpers::positions::WorldPos;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::resources::TimeSystem;
-use crate::terrain::roads::road_structs::NodeId;
-use crate::terrain::roads::roads::RoadManager;
 use crate::ui::input::InputState;
+use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
-use crate::world::terrain_subsystem::{CursorMode, TerrainSubsystem};
+use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
+use crate::world::cars::car_render::CarInstance;
+use crate::world::cars::car_structs::{Car, CarChunkDistance, CarId, CarStorage};
+use crate::world::roads::road_structs::NodeId;
+use crate::world::roads::roads::RoadManager;
+use crate::world::terrain::terrain_subsystem::{CursorMode, TerrainSubsystem};
 use glam::{Mat4, Vec3};
 use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, IndexFormat, Queue, RenderPass};
 
@@ -47,6 +49,7 @@ impl CarSubsystemTiming {
         }
     }
 }
+
 pub struct CarRenderSubsystem {
     pub device: Device,
     pub queue: Queue,
@@ -55,12 +58,15 @@ pub struct CarRenderSubsystem {
     pub instance_buf: Buffer,
     pub index_count: u32,
     pub current_instance_count: u32,
+
+    // NEW: map from car id -> previous model matrix (column-major [[f32;4];4])
+    prev_models: HashMap<u64, [[f32; 4]; 4]>,
 }
+
 impl CarRenderSubsystem {
     pub fn new(device: &Device, queue: &Queue, rt_subsystem: &mut RTSubsystem) -> Self {
         // Calculate exact sizes from procedural mesh (generate temporarily, discard data)
         let (vertices, indices) = create_procedural_car();
-        // Convert CarVertex positions to [f32; 3]
         let positions: Vec<[f32; 3]> = vertices.iter().map(|v| v.position).collect();
 
         // Build BLAS for car mesh
@@ -86,14 +92,16 @@ impl CarRenderSubsystem {
         let instance_size = (initial_instances * size_of::<CarInstance>()) as u64;
 
         let instance_buf = device.create_buffer(&BufferDescriptor {
-            label: Some("Cars IB"),
+            label: Some("Cars Instance Buffer"),
             size: instance_size,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
         // UPLOAD THE FUCKING DATA
         queue.write_buffer(&vb, 0, bytemuck::cast_slice(&vertices));
         queue.write_buffer(&ib, 0, bytemuck::cast_slice(&indices));
+
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -102,8 +110,10 @@ impl CarRenderSubsystem {
             instance_buf,
             index_count: indices.len() as u32,
             current_instance_count: 0,
+            prev_models: HashMap::with_capacity(initial_instances),
         }
     }
+
     pub fn render(
         &mut self,
         pipelines: &Pipelines,
@@ -112,7 +122,8 @@ impl CarRenderSubsystem {
         camera: &Camera,
         pass: &mut RenderPass,
     ) {
-        let close_ids = car_storage.car_chunks().close_cars();
+        let mut close_ids = car_storage.car_chunks().close_cars();
+        close_ids.sort_unstable();
 
         let mut instances: Vec<CarInstance> = Vec::with_capacity(close_ids.len());
 
@@ -125,13 +136,25 @@ impl CarRenderSubsystem {
                 let length_scale = car.length / CAR_BASE_LENGTH;
                 let width_scale = car.width / CAR_BASE_WIDTH;
                 let scale = Vec3::new(width_scale, 1.0, length_scale);
-                let model = Mat4::from_scale_rotation_translation(scale, quat, render_pos);
+                let model_mat: Mat4 =
+                    Mat4::from_scale_rotation_translation(scale, quat, render_pos);
+
+                let key = car_id as u64;
+                let prev_mat_array = self
+                    .prev_models
+                    .get(&key)
+                    .copied()
+                    .unwrap_or_else(|| model_mat.to_cols_array_2d());
 
                 instances.push(CarInstance {
-                    model: model.to_cols_array_2d(),
+                    model: model_mat.to_cols_array_2d(),
+                    prev_model: prev_mat_array,
                     color: car.color,
                     _pad: 0.0,
                 });
+
+                // Update stored previous matrix for next frame
+                self.prev_models.insert(key, model_mat.to_cols_array_2d());
             }
         }
 
@@ -215,8 +238,10 @@ impl CarSubsystem {
         terrain_renderer: &TerrainSubsystem,
         input_state: &mut InputState,
         time_system: &TimeSystem,
+        variables: &mut UiVariableRegistry,
         target_pos: WorldPos,
     ) {
+        variables.set_i32("car_count", self.car_storage.car_count() as i32);
         self.car_storage
             .update_target_and_chunk_size(target_pos.chunk, terrain_renderer.chunk_size);
         self.spawn_cars(road_manager, terrain_renderer, target_pos, time_system);

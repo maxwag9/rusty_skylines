@@ -1,8 +1,8 @@
 use crate::renderer::general_mesh_arena::{
     FreeRange, commit_alloc, find_fit, free_insert_and_coalesce,
 };
-use crate::terrain::chunk_builder::GpuChunkHandle;
 use crate::ui::vertex::VertexWithPosition;
+use crate::world::terrain::chunk_builder::GpuChunkHandle;
 use wgpu::{Buffer, BufferUsages, Device, Queue};
 
 struct AllocationOffsets {

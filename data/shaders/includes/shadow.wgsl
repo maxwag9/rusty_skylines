@@ -234,7 +234,7 @@ fn shadow_eval_cascade(
 }
 
 fn fetch_shadow(world_pos: vec3<f32>, N: vec3<f32>, L: vec3<f32>) -> f32 {
-    if (uniforms.shadows_enabled == 0u) {
+    if (uniforms.csm_enabled == 0u) {
         return 1.0;
     }
 

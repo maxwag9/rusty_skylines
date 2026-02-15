@@ -15,16 +15,16 @@
 // ID Newtypes
 // ============================================================================
 
-use crate::cars::car_subsystem::CarSubsystem;
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::Gizmo;
-use crate::terrain::roads::intersections::{IntersectionBuildParams, build_intersection_at_node};
-use crate::terrain::roads::road_editor::offset_polyline;
-use crate::terrain::roads::road_mesh_manager::{
+use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::roads::intersections::{IntersectionBuildParams, build_intersection_at_node};
+use crate::world::roads::road_editor::offset_polyline;
+use crate::world::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
 };
-use crate::terrain::roads::road_structs::*;
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::roads::road_structs::*;
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};

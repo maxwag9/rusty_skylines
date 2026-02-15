@@ -56,13 +56,13 @@ impl RTSubsystem {
     pub fn new(device: &Device) -> Self {
         let rt_params = RTParams {
             max_distance: 200.0, // e.g. 200.0
-            normal_bias: 0.05,   // e.g. 0.05
-            origin_bias: 0.02,   // e.g. 0.02
-            ndotl_fade: 0.10,    // e.g. 0.10  (smooth ramp around N·L=0)
+            normal_bias: 0.20,   // e.g. 0.20
+            origin_bias: 0.00,   // e.g. 0.00
+            ndotl_fade: 0.0,     // e.g. 0.10  (smooth ramp around N·L=0)
 
-            soft_start: 5.0,          // e.g. 5.0   (close blockers = hard/dark)
-            soft_end: 80.0,           // e.g. 80.0  (far blockers = softer/lighter)
-            far_hit_visibility: 0.85, // e.g. 0.85  (visibility when blocked very far)
+            soft_start: 5.0,         // e.g. 5.0   (close blockers = hard/dark)
+            soft_end: 80.0,          // e.g. 80.0  (far blockers = softer/lighter)
+            far_hit_visibility: 1.0, // e.g. 0.85  (visibility when blocked very far)
             _pad0: 0.0,
         };
         let rt_params_buffer = device.create_buffer_init(&BufferInitDescriptor {

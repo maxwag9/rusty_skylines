@@ -6,13 +6,13 @@
 
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
 use crate::renderer::gizmo::Gizmo;
-use crate::terrain::roads::intersections::{
+use crate::world::roads::intersections::{
     IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh, road_vertex,
 };
-use crate::terrain::roads::road_helpers::*;
-use crate::terrain::roads::road_structs::*;
-use crate::terrain::roads::roads::{LaneGeometry, Node, RoadStorage, Segment};
-use crate::world::terrain_subsystem::TerrainSubsystem;
+use crate::world::roads::road_helpers::*;
+use crate::world::roads::road_structs::*;
+use crate::world::roads::roads::{LaneGeometry, Node, RoadStorage, Segment};
+use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use glam::Vec3;
 use std::collections::HashMap;
 use wgpu::{VertexAttribute, VertexFormat};

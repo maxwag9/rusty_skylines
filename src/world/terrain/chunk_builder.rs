@@ -1,8 +1,8 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
-use crate::terrain::terrain::TerrainGenerator;
-use crate::terrain::terrain_editing::EditedChunk;
-use crate::terrain::threads::ChunkWorkerPool;
 use crate::ui::vertex::Vertex;
+use crate::world::terrain::terrain::TerrainGenerator;
+use crate::world::terrain::terrain_editing::EditedChunk;
+use crate::world::terrain::threads::ChunkWorkerPool;
 use glam::Vec3;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -396,7 +396,7 @@ struct MergedQuad {
 
 impl ChunkBuilder {
     // Tunable thresholds for greedy merging
-    const HEIGHT_TOLERANCE: f32 = 0.005; // Max height variance to consider "flat"
+    const HEIGHT_TOLERANCE: f32 = 0.05; // Max height variance to consider "flat"
     const COLOR_TOLERANCE: f32 = 0.02; // Max color difference per channel
 
     pub fn build_chunk_cpu(
@@ -499,7 +499,7 @@ impl ChunkBuilder {
 
     /// Build a simple grid mesh where vertices[gx * nz + gz] = vertex at grid position (gx, gz).
     /// This layout is required for in-place height updates on edited chunks.
-    fn build_simple_grid(
+    pub fn build_simple_grid(
         chunk_coord: ChunkCoord,
         step: usize,
         verts_x: usize,
