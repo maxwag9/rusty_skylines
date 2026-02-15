@@ -5,6 +5,7 @@ use crate::world::cars::car_structs::Car;
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use glam::{Quat, Vec3};
+use rayon::iter::ParallelIterator;
 
 #[derive(Clone, Copy, Debug)]
 pub struct GroundFit {
@@ -232,50 +233,50 @@ pub fn drive_car(
 
     const G: f32 = 9.81;
 
-    const MASS: f32 = 1620.0; // kg (curb weight + driver)
-    const IZ: f32 = 2850.0; // kg·m² yaw moment of inertia
-    const WHEELBASE: f32 = 2.851; // m (BMW G20 actual wheelbase)
-    const CG_HEIGHT: f32 = 0.54; // m above ground (typical sedan)
-    const FRONT_WEIGHT_BIAS: f32 = 0.52; // 52% front (RWD sedan, engine in front)
-    const ENGINE_POWER: f32 = 275_000.0; // W (275 kW)
-    const DRIVETRAIN_EFFICIENCY: f32 = 0.85; // 15% loss through transmission/diff
-    const WHEEL_POWER: f32 = ENGINE_POWER * DRIVETRAIN_EFFICIENCY; // ~234 kW at wheels
+    const MASS: f32 = 1620.0;
+    const IZ: f32 = 2850.0;
+    const WHEELBASE: f32 = 2.851;
+    const CG_HEIGHT: f32 = 0.54;
+    const FRONT_WEIGHT_BIAS: f32 = 0.52;
+    const ENGINE_POWER: f32 = 275_000.0;
+    const DRIVETRAIN_EFFICIENCY: f32 = 0.85;
+    const WHEEL_POWER: f32 = ENGINE_POWER * DRIVETRAIN_EFFICIENCY;
 
-    const BRAKE_DECEL_MAX: f32 = 10.5; // m/s² (~1.07g)
-    const BRAKE_FRONT_BIAS: f32 = 0.68; // 68% front bias (typical)
+    const BRAKE_DECEL_MAX: f32 = 10.5;
+    const BRAKE_FRONT_BIAS: f32 = 0.68;
 
-    const MU_PEAK: f32 = 1.08; // Peak friction coefficient (dry tarmac)
-    const MU_SLIDE: f32 = 0.95; // Sliding friction
+    const MU_PEAK: f32 = 1.08;
+    const MU_SLIDE: f32 = 0.95;
 
-    const C_ALPHA_F: f32 = 115_000.0; // N/rad front axle
-    const C_ALPHA_R: f32 = 128_000.0; // N/rad rear axle (wider tires, more grip)
+    const C_ALPHA_F: f32 = 115_000.0;
+    const C_ALPHA_R: f32 = 128_000.0;
 
-    const SLIP_ANGLE_PEAK: f32 = 0.14; // rad (~8°) where peak grip occurs
+    const SLIP_ANGLE_PEAK: f32 = 0.14;
 
-    const FRONTAL_AREA: f32 = 2.22; // m² (typical sedan)
-    const CD: f32 = 0.28; // Drag coefficient (modern sedan)
-    const AIR_DENSITY: f32 = 1.225; // kg/m³ at sea level, 15°C
+    const FRONTAL_AREA: f32 = 2.22;
+    const CD: f32 = 0.28;
+    const AIR_DENSITY: f32 = 1.225;
 
     const AERO_DRAG_COEFF: f32 = 0.5 * AIR_DENSITY * CD * FRONTAL_AREA;
 
-    const CL: f32 = 0.12; // Slight lift (sedans aren't aerodynamic)
+    const CL: f32 = 0.12;
     const AERO_LIFT_COEFF: f32 = 0.5 * AIR_DENSITY * CL * FRONTAL_AREA;
 
     const ROLL_RESISTANCE_COEFF: f32 = 0.010;
 
-    const HANDBRAKE_REAR_GRIP_MULT: f32 = 0.30; // Locked wheels ≈ 30% of peak grip
-    const HANDBRAKE_DECEL_MAX: f32 = 5.5; // m/s² (limited by rear weight)
+    const HANDBRAKE_REAR_GRIP_MULT: f32 = 0.30;
+    const HANDBRAKE_DECEL_MAX: f32 = 5.5;
 
-    const STEER_RATE_MAX: f32 = 6.5; // rad/s max rack velocity
-    const STEER_SPRING: f32 = 75.0; // N·m/rad spring rate (rack centering)
-    const STEER_DAMPING: f32 = 13.0; // N·m·s/rad damping
+    const STEER_RATE_MAX: f32 = 6.5;
+    const STEER_SPRING: f32 = 75.0;
+    const STEER_DAMPING: f32 = 18.0;
 
-    const STEER_ANGLE_PARKING: f32 = 0.60; // rad (~34°)
-    const STEER_ANGLE_HIGHWAY: f32 = 0.09; // rad (~5°)
-    const STEER_ANGLE_FADE_SPEED: f32 = 35.0; // m/s (~126 km/h) for full fade
+    const STEER_ANGLE_PARKING: f32 = 0.60;
+    const STEER_ANGLE_HIGHWAY: f32 = 0.09;
+    const STEER_ANGLE_FADE_SPEED: f32 = 35.0;
 
-    const SUBSTEP_DT: f32 = 1.0 / 360.0; // 360 Hz substeps for stability
-    const MIN_SPEED_FOR_SLIP: f32 = 0.4; // Avoid division by zero
+    const SUBSTEP_DT: f32 = 1.0 / 120.0;
+    const MIN_SPEED_FOR_SLIP: f32 = 0.4;
 
     let chunk_size = terrain.chunk_size;
 
@@ -303,20 +304,20 @@ pub fn drive_car(
         };
 
         let wheelbase = car.length.max(WHEELBASE);
-        let a = wheelbase * (1.0 - FRONT_WEIGHT_BIAS); // CG to front axle (~1.37m)
-        let b = wheelbase * FRONT_WEIGHT_BIAS; // CG to rear axle (~1.48m)
+        let a = wheelbase * (1.0 - FRONT_WEIGHT_BIAS);
+        let b = wheelbase * FRONT_WEIGHT_BIAS;
 
         let inv_quat = car.quat.conjugate();
         let local_vel = inv_quat * car.current_velocity;
 
-        let mut u = local_vel.z; // Forward velocity
-        let mut v = -local_vel.x; // Lateral velocity (left positive)
-        let mut r = car.yaw_rate; // Yaw rate (CCW positive from above)
+        let mut u = local_vel.z;
+        let mut v = -local_vel.x;
+        let mut r = car.yaw_rate;
 
         let forward_speed = u.max(0.0);
 
         let speed_ratio = (forward_speed / STEER_ANGLE_FADE_SPEED).clamp(0.0, 1.0);
-        let lock_blend = 1.0 - speed_ratio.powf(1.5); // Smoother than linear
+        let lock_blend = 1.0 - speed_ratio.powf(1.5);
         let max_steer_angle =
             STEER_ANGLE_HIGHWAY + (STEER_ANGLE_PARKING - STEER_ANGLE_HIGHWAY) * lock_blend;
 
@@ -329,25 +330,25 @@ pub fn drive_car(
             let power_limited = if forward_speed > 2.0 {
                 WHEEL_POWER / (MASS * forward_speed)
             } else {
-                traction_limited // Use traction limit at very low speed
+                traction_limited
             };
 
             ax_command = throttle * traction_limited.min(power_limited);
         }
 
         if brake > 0.01 {
-            // Braking force, opposing motion
             ax_command -= brake * BRAKE_DECEL_MAX;
         }
 
         if handbrake_engaged && u.abs() > 0.5 {
-            // Handbrake: adds braking from locked rear wheels
             ax_command -= HANDBRAKE_DECEL_MAX * u.signum();
         }
 
+        let fz_static_f = MASS * G * (b / wheelbase);
+        let fz_static_r = MASS * G * (a / wheelbase);
+        let previous_chunk = car.pos.chunk;
+
         let mut time_remaining = dt;
-        let mut fy_rear = 0.0;
-        let mut fy_front = 0.0;
         while time_remaining > 0.0 {
             let h = time_remaining.min(SUBSTEP_DT);
             time_remaining -= h;
@@ -355,7 +356,6 @@ pub fn drive_car(
             let delta = car.steering_angle;
             let delta_vel = car.steering_vel;
 
-            // PD control toward commanded angle
             let delta_accel = STEER_SPRING * (delta_command - delta) - STEER_DAMPING * delta_vel;
 
             let mut new_delta_vel = delta_vel + delta_accel * h;
@@ -369,41 +369,32 @@ pub fn drive_car(
 
             let weight_transfer_x = (CG_HEIGHT / wheelbase) * MASS * ax_command;
 
-            // Aero lift reduces total downforce at speed (v² effect)
             let aero_lift = AERO_LIFT_COEFF * forward_speed * forward_speed;
-
-            // Normal loads on each axle (N)
-            let fz_static_f = MASS * G * (b / wheelbase);
-            let fz_static_r = MASS * G * (a / wheelbase);
 
             let fz_front = (fz_static_f - weight_transfer_x - aero_lift * 0.5).max(500.0);
             let fz_rear = (fz_static_r + weight_transfer_x - aero_lift * 0.5).max(500.0);
 
             let u_safe = if u.abs() < MIN_SPEED_FOR_SLIP {
-                MIN_SPEED_FOR_SLIP * if u >= 0.0 { 1.0 } else { -1.0 }
+                MIN_SPEED_FOR_SLIP * u.signum().max(1.0)
             } else {
                 u
             };
 
-            let alpha_front = ((v + a * r) / u_safe).atan() - car.steering_angle;
-            let alpha_rear = ((v - b * r) / u_safe).atan();
+            let alpha_front = (v + a * r).atan2(u_safe) - car.steering_angle;
+            let alpha_rear = (v - b * r).atan2(u_safe);
 
             fn tire_lateral_force(alpha: f32, c_alpha: f32, fz: f32, mu: f32) -> f32 {
                 let f_max = mu * fz;
                 let f_linear = -c_alpha * alpha;
 
-                // Normalized slip: how far into saturation
                 let slip_ratio = f_linear.abs() / f_max;
 
-                // Smooth saturation curve (approximates Pacejka shape)
-                // tanh provides ~95% of peak at slip_ratio ≈ 2
                 let saturation = if slip_ratio > 0.01 {
                     slip_ratio.tanh() / slip_ratio
                 } else {
                     1.0
                 };
 
-                // Peak force slightly exceeds linear at optimal slip angle
                 let peak_mult = 1.02;
 
                 f_linear * saturation * peak_mult
@@ -411,13 +402,13 @@ pub fn drive_car(
 
             let mu_front = MU_PEAK;
             let mu_rear = if handbrake_engaged {
-                MU_SLIDE * HANDBRAKE_REAR_GRIP_MULT // Locked wheels = sliding friction
+                MU_SLIDE * HANDBRAKE_REAR_GRIP_MULT
             } else {
                 MU_PEAK
             };
 
-            fy_front = tire_lateral_force(alpha_front, C_ALPHA_F, fz_front, mu_front);
-            fy_rear = tire_lateral_force(alpha_rear, C_ALPHA_R, fz_rear, mu_rear);
+            let fy_front = tire_lateral_force(alpha_front, C_ALPHA_F, fz_front, mu_front);
+            let fy_rear = tire_lateral_force(alpha_rear, C_ALPHA_R, fz_rear, mu_rear);
 
             let f_rolling = -ROLL_RESISTANCE_COEFF * (fz_front + fz_rear) * u.signum();
 
@@ -428,13 +419,10 @@ pub fn drive_car(
             let cos_delta = car.steering_angle.cos();
             let sin_delta = car.steering_angle.sin();
 
-            // Longitudinal acceleration
             let u_dot = ax_command + ax_resist - (fy_front * sin_delta) / MASS + r * v;
 
-            // Lateral acceleration
             let v_dot = (fy_front * cos_delta + fy_rear) / MASS - r * u;
 
-            // Yaw acceleration
             let r_dot = (a * fy_front * cos_delta - b * fy_rear) / IZ;
 
             u += u_dot * h;
@@ -442,13 +430,11 @@ pub fn drive_car(
             r += r_dot * h;
 
             if u.abs() < 0.8 && throttle < 0.01 && brake < 0.01 {
-                // Apply artificial damping when nearly stopped
                 let decay = 0.92_f32.powf(h * 60.0);
                 u *= decay;
                 v *= decay;
                 r *= decay;
 
-                // Hard stop below threshold
                 if u.abs() < 0.05 {
                     u = 0.0;
                 }
@@ -460,28 +446,28 @@ pub fn drive_car(
                 }
             }
 
-            const MAX_SPEED: f32 = 90.0; // ~324 km/h
-            const MAX_YAW_RATE: f32 = 4.0; // rad/s (~230°/s)
+            const MAX_SPEED: f32 = 90.0;
+            const MAX_YAW_RATE: f32 = 4.0;
 
             u = u.clamp(-MAX_SPEED, MAX_SPEED);
             v = v.clamp(-MAX_SPEED * 0.5, MAX_SPEED * 0.5);
             r = r.clamp(-MAX_YAW_RATE, MAX_YAW_RATE);
+
+            // Integrate yaw per substep
+            let yaw_delta_world = -r * h;
+            if yaw_delta_world.abs() > 0.0 {
+                let rotation = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
+                car.quat = (rotation * car.quat).normalize();
+            }
+
+            // Reconstruct world velocity and integrate position per substep
+            let local_velocity = Vec3::new(-v, 0.0, u);
+            car.current_velocity = car.quat * local_velocity;
+            car.pos = car.pos.add_vec3(car.current_velocity * h, chunk_size);
         }
 
         car.yaw_rate = r;
 
-        let yaw_delta_world = -r * dt;
-        if yaw_delta_world.abs() > 1e-8 {
-            let rotation = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
-            car.quat = (rotation * car.quat).normalize();
-        }
-
-        let local_velocity = Vec3::new(-v, 0.0, u);
-        car.current_velocity = car.quat * local_velocity;
-
-        // Integrate position
-        let prev_chunk = car.pos.chunk;
-        car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
         car.pos.local.y = terrain.get_height_at(car.pos);
 
         camera.target = car.pos;
@@ -493,14 +479,14 @@ pub fn drive_car(
         } else {
             0.0
         };
-        let lat_g = (v * r + (fy_front + fy_rear) / MASS) / G;
+        let lat_g = (v * r) / G;
 
         println!(
             "{:6.1} km/h │ δ={:+5.1}° │ β={:+5.1}° │ ṙ={:+5.2} │ Lat≈{:+4.2}g",
             speed_kmh, steer_deg, body_slip, r, lat_g
         );
 
-        (car.id, prev_chunk, car.pos.chunk)
+        (car.id, previous_chunk, car.pos.chunk)
     };
 
     if previous_chunk != new_chunk {
@@ -509,12 +495,12 @@ pub fn drive_car(
             .move_car_between_chunks(previous_chunk, new_chunk, car_id);
     }
 }
+
 pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsystem, dt: f32) {
     if dt <= 0.0 {
         return;
     }
 
-    // ---------- Same constants as player ----------
     const G: f32 = 9.81;
     const MASS: f32 = 1500.0;
     const IZ: f32 = 2500.0;
@@ -536,119 +522,127 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
     let player_car_id = car_subsystem.player_car_id();
     let cs = chunk_size as f64;
 
-    for car in car_subsystem.car_storage_mut().iter_mut_cars() {
-        let Some(car) = car else {
-            continue;
-        };
-        if car.id == player_car_id {
-            continue;
-        }
+    let car_storage = car_subsystem.car_storage_mut();
 
-        // === AI Inputs: smooth procedural wandering ===
-        let global_x = car.pos.chunk.x as f64 * cs + car.pos.local.x as f64;
-        let global_z = car.pos.chunk.z as f64 * cs + car.pos.local.z as f64;
+    // Parallel physics computation over all cars, collecting chunk moves
+    let moves: Vec<_> = car_storage
+        .par_iter_mut_cars()
+        .filter_map(|car| {
+            let car = car.as_mut()?;
+            if car.id == player_car_id {
+                return None;
+            }
 
-        let wander_phase = global_x * 0.012 + global_z * 0.008 + (car.id as f64 * 7.3);
-        let wander = wander_phase.sin() as f32;
+            let previous_chunk = car.pos.chunk;
 
-        let steer_input = wander * 0.55;
-        let throttle_input = 0.85 + wander * 0.15;
-        let brake_input = if wander.abs() > 0.8 { 0.3 } else { 0.0 };
+            // === AI Inputs: smooth procedural wandering ===
+            let global_x = car.pos.chunk.x as f64 * cs + car.pos.local.x as f64;
+            let global_z = car.pos.chunk.z as f64 * cs + car.pos.local.z as f64;
 
-        // === FIX #1: Convert world velocity to LOCAL space via quaternion ===
-        let inv_q = car.quat.conjugate();
-        let local_v = inv_q * car.current_velocity;
+            let wander_phase = global_x * 0.012 + global_z * 0.008 + (car.id as f64 * 7.3);
+            let wander = wander_phase.sin() as f32;
 
-        let mut u = local_v.z; // forward speed (m/s)
-        let mut v = -local_v.x; // lateral speed, SAE left-positive (m/s)
-        let mut r = car.yaw_rate;
+            let steer_input = wander * 0.55;
+            let throttle_input = 0.85 + wander * 0.15;
+            let brake_input = if wander.abs() > 0.8 { 0.3 } else { 0.0 };
 
-        let wheelbase = car.length.max(0.1);
-        let a = 0.5 * wheelbase;
-        let b = wheelbase - a;
+            // === Convert world velocity to LOCAL space via quaternion ===
+            let inv_q = car.quat.conjugate();
+            let local_v = inv_q * car.current_velocity;
 
-        let fz_f = MASS * G * (b / wheelbase);
-        let fz_r = MASS * G * (a / wheelbase);
+            let mut u = local_v.z;
+            let mut v = -local_v.x;
+            let mut r = car.yaw_rate;
 
-        // === Speed-sensitive steering lock (same as player) ===
-        let speed = u.abs();
-        let t = (speed / STEER_LOCK_FADE_MPS).clamp(0.0, 1.0);
-        let steer_lock = STEER_LOCK_HIGH + (STEER_LOCK_LOW - STEER_LOCK_HIGH) * (1.0 - t).powf(1.7);
+            let wheelbase = car.length.max(0.1);
+            let a = 0.5 * wheelbase;
+            let b = wheelbase - a;
 
-        let delta_cmd = (steer_input * steer_lock).clamp(-steer_lock, steer_lock);
+            let fz_f = MASS * G * (b / wheelbase);
+            let fz_r = MASS * G * (a / wheelbase);
 
-        // === Longitudinal accel command ===
-        let ax_cmd = throttle_input * car.accel - brake_input * car.accel * 3.0;
+            // === Speed-sensitive steering lock ===
+            let speed = u.abs();
+            let t = (speed / STEER_LOCK_FADE_MPS).clamp(0.0, 1.0);
+            let steer_lock =
+                STEER_LOCK_HIGH + (STEER_LOCK_LOW - STEER_LOCK_HIGH) * (1.0 - t).powf(1.7);
 
-        // === FIX #2: Substep integration for stability ===
-        let mut time_left = dt;
-        while time_left > 0.0 {
-            let h = time_left.min(MAX_STEP);
-            time_left -= h;
+            let delta_cmd = (steer_input * steer_lock).clamp(-steer_lock, steer_lock);
 
-            // === FIX #3: Steering rack dynamics (2nd order, same as player) ===
-            let delta = car.steering_angle;
-            let mut delta_dot = car.steering_vel;
+            // === Longitudinal accel command ===
+            let ax_cmd = throttle_input * car.accel - brake_input * car.accel * 3.0;
 
-            delta_dot += (STEER_KP * (delta_cmd - delta) - STEER_KD * delta_dot) * h;
-            delta_dot = delta_dot.clamp(-STEER_RATE_MAX, STEER_RATE_MAX);
+            // === Substep integration ===
+            let mut time_left = dt;
+            while time_left > 0.0 {
+                let h = time_left.min(MAX_STEP);
+                time_left -= h;
 
-            let mut delta_new = delta + delta_dot * h;
-            delta_new = delta_new.clamp(-steer_lock, steer_lock);
+                let delta = car.steering_angle;
+                let mut delta_dot = car.steering_vel;
 
-            car.steering_angle = delta_new;
-            car.steering_vel = delta_dot;
+                delta_dot += (STEER_KP * (delta_cmd - delta) - STEER_KD * delta_dot) * h;
+                delta_dot = delta_dot.clamp(-STEER_RATE_MAX, STEER_RATE_MAX);
 
-            // Safe forward speed for slip calculations
-            let u_safe = if u.abs() < MIN_U {
-                MIN_U * u.signum().max(1.0)
+                let mut delta_new = delta + delta_dot * h;
+                delta_new = delta_new.clamp(-steer_lock, steer_lock);
+
+                car.steering_angle = delta_new;
+                car.steering_vel = delta_dot;
+
+                let u_safe = if u.abs() < MIN_U {
+                    MIN_U * u.signum().max(1.0)
+                } else {
+                    u
+                };
+
+                let alpha_f = (v + a * r).atan2(u_safe) - car.steering_angle;
+                let alpha_r = (v - b * r).atan2(u_safe);
+
+                let fy_f_lin = -C_AF * alpha_f;
+                let fy_r_lin = -C_AR * alpha_r;
+
+                let fy_f_max = MU * fz_f;
+                let fy_r_max = MU * fz_r;
+
+                let fy_f = fy_f_lin.clamp(-fy_f_max, fy_f_max);
+                let fy_r = fy_r_lin.clamp(-fy_r_max, fy_r_max);
+
+                let ax_drag = -ROLL_DRAG * u - AERO_DRAG * u * u.abs();
+
+                let u_dot = (ax_cmd + ax_drag) + r * v;
+                let v_dot = (fy_f + fy_r) / MASS - r * u;
+                let r_dot = (a * fy_f - b * fy_r) / IZ;
+
+                u += u_dot * h;
+                v += v_dot * h;
+                r += r_dot * h;
+            }
+
+            car.yaw_rate = r;
+
+            let yaw_delta_world = -r * dt;
+            if yaw_delta_world.abs() > 0.0 {
+                let yaw_q = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
+                car.quat = (yaw_q * car.quat).normalize();
+            }
+
+            let new_local_v = Vec3::new(-v, 0.0, u);
+            car.current_velocity = car.quat * new_local_v;
+
+            car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
+            car.pos.local.y = terrain.get_height_at(car.pos);
+
+            if previous_chunk != car.pos.chunk {
+                Some((previous_chunk, car.pos.chunk, car.id))
             } else {
-                u
-            };
+                None
+            }
+        })
+        .collect();
 
-            // === FIX #4: Correct slip angle formula with atan2 ===
-            let alpha_f = (v + a * r).atan2(u_safe) - car.steering_angle;
-            let alpha_r = (v - b * r).atan2(u_safe);
-
-            // Lateral tire forces (linear + saturation)
-            let fy_f_lin = -C_AF * alpha_f;
-            let fy_r_lin = -C_AR * alpha_r;
-
-            let fy_f_max = MU * fz_f;
-            let fy_r_max = MU * fz_r;
-
-            let fy_f = fy_f_lin.clamp(-fy_f_max, fy_f_max);
-            let fy_r = fy_r_lin.clamp(-fy_r_max, fy_r_max);
-
-            // Drag
-            let ax_drag = -ROLL_DRAG * u - AERO_DRAG * u * u.abs();
-
-            // Bicycle model dynamics
-            let u_dot = (ax_cmd + ax_drag) + r * v;
-            let v_dot = (fy_f + fy_r) / MASS - r * u;
-            let r_dot = (a * fy_f - b * fy_r) / IZ;
-
-            u += u_dot * h;
-            v += v_dot * h;
-            r += r_dot * h;
-        }
-
-        // Store yaw rate
-        car.yaw_rate = r;
-
-        // === FIX #5: Proper orientation integration ===
-        let yaw_delta_world = -r * dt;
-        if yaw_delta_world.abs() > 0.0 {
-            let yaw_q = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
-            car.quat = (yaw_q * car.quat).normalize();
-        }
-
-        // === Reconstruct world velocity from local (u,v) ===
-        let new_local_v = Vec3::new(-v, 0.0, u);
-        car.current_velocity = car.quat * new_local_v;
-
-        // Position integration + terrain snap
-        car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
-        car.pos.local.y = terrain.get_height_at(car.pos);
+    // Apply chunk moves sequentially (requires &mut access to spatial index)
+    for (prev, new, id) in moves {
+        car_storage.move_car_between_chunks(prev, new, id);
     }
 }

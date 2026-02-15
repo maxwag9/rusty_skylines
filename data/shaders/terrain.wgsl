@@ -30,15 +30,16 @@ struct VertexOut {
     @location(0) world_normal: vec3<f32>,
     @location(1) color: vec3<f32>,
     @location(2) world_pos: vec3<f32>,
-    @location(3) quad_uv: vec2<f32>,  // For edge detection
-    @location(4) chunk_xz: vec2<f32>, // To fix swimming UVs
+    @location(3) quad_uv: vec2<f32>,
+    @location(4) chunk_xz: vec2<f32>,
+    @location(5) curr_clip: vec4<f32>,
+    @location(6) prev_clip: vec4<f32>,
 };
 
 @vertex
 fn vs_main(in: VertexIn) -> VertexOut {
     var out: VertexOut;
 
-    // Camera-relative render position (keeps precision stable)
     let dc: vec2<i32> = in.chunk_xz - uniforms.camera_chunk;
 
     let rx = f32(dc.x) * uniforms.chunk_size + (in.position.x - uniforms.camera_local.x);
@@ -47,7 +48,9 @@ fn vs_main(in: VertexIn) -> VertexOut {
 
     let render_pos = vec3<f32>(rx, ry, rz);
 
-    out.position = uniforms.view_proj * vec4<f32>(render_pos, 1.0);
+    let clip = uniforms.view_proj * vec4<f32>(render_pos, 1.0);
+    out.position = clip;
+    out.curr_clip = clip;
     out.world_pos = render_pos;
     out.quad_uv = in.quad_uv;
 
@@ -58,6 +61,15 @@ fn vs_main(in: VertexIn) -> VertexOut {
         f32(in.chunk_xz.x) * uniforms.chunk_size + in.position.x,
         f32(in.chunk_xz.y) * uniforms.chunk_size + in.position.z
     );
+
+    // Previous frame: same world-space vertex, relative to previous camera
+    let prev_dc = in.chunk_xz - uniforms.prev_camera_chunk;
+    let prev_rx = f32(prev_dc.x) * uniforms.chunk_size + (in.position.x - uniforms.prev_camera_local.x);
+    let prev_ry = in.position.y - uniforms.prev_camera_local.y;
+    let prev_rz = f32(prev_dc.y) * uniforms.chunk_size + (in.position.z - uniforms.prev_camera_local.z);
+
+    let prev_render_pos = vec3<f32>(prev_rx, prev_ry, prev_rz);
+    out.prev_clip = uniforms.prev_view_proj * vec4<f32>(prev_render_pos, 1.0);
 
     return out;
 }
@@ -105,8 +117,9 @@ const EDGE_ENABLED: bool = false;
 const SHOW_DIAGONAL: bool = true;   // Show triangle diagonal too
 
 struct FragmentOut {
-    @location(0) color : vec4<f32>,
-    @location(1) normal : vec4<f32>
+    @location(0) color: vec4<f32>,
+    @location(1) normal: vec4<f32>,
+    @location(2) motion: vec2<f32>,
 };
 
 @fragment
@@ -239,5 +252,12 @@ fn fs_main(in: VertexOut) -> FragmentOut {
 
     out.color = vec4<f32>(final_color, 1.0);
     out.normal = vec4<f32>(n * 0.5 + 0.5, 1.0);
+
+    let curr_ndc = in.curr_clip.xy / in.curr_clip.w;
+    let prev_ndc = in.prev_clip.xy / in.prev_clip.w;
+    let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5;
+    let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5;
+    out.motion = curr_uv - prev_uv;
+
     return out;
 }

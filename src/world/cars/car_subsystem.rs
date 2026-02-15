@@ -208,7 +208,7 @@ pub struct CarSubsystem {
 }
 
 impl CarSubsystem {
-    pub(crate) fn player_car_id(&self) -> u32 {
+    pub(crate) fn player_car_id(&self) -> CarId {
         self.player_car_id
     }
     pub(crate) fn get_player_car(&mut self) -> Option<&mut Car> {

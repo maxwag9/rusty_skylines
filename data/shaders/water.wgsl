@@ -109,31 +109,56 @@ fn layered_wave_normal(
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) world: vec3<f32>,
+    @location(1) curr_clip: vec4<f32>,
+    @location(2) prev_clip: vec4<f32>,
 };
 
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>) -> VSOut {
     var out: VSOut;
 
-    // Absolute world position (for fragment shading)
     let world_xz = vec2<f32>(pos.x, pos.z) + uniforms.camera_local.xz;
-    let world_y  = water.sea_level;
+    let world_y = water.sea_level;
     out.world = vec3<f32>(world_xz.x, world_y, world_xz.y);
 
-    // Camera-relative position (for projection)
     let view_pos = vec3<f32>(
         pos.x,
         water.sea_level - uniforms.camera_local.y,
         pos.z
     );
-    out.pos = uniforms.view_proj * vec4<f32>(view_pos, 1.0);
+
+    let clip = uniforms.view_proj * vec4<f32>(view_pos, 1.0);
+    out.pos = clip;
+    out.curr_clip = clip;
+
+    // Previous frame: same world point, but relative to previous camera
+    var prev_view_pos = vec3<f32>(
+        out.world.x - uniforms.prev_camera_local.x,
+        water.sea_level - uniforms.prev_camera_local.y,
+        out.world.z - uniforms.prev_camera_local.z
+    );
+    let chunk_delta = vec2<f32>(
+        f32(uniforms.camera_chunk.x - uniforms.prev_camera_chunk.x) * uniforms.chunk_size,
+        f32(uniforms.camera_chunk.y - uniforms.prev_camera_chunk.y) * uniforms.chunk_size
+    );
+    prev_view_pos = vec3<f32>(
+        prev_view_pos.x + chunk_delta.x,
+        prev_view_pos.y,
+        prev_view_pos.z + chunk_delta.y
+    );
+    out.prev_clip = uniforms.prev_view_proj * vec4<f32>(prev_view_pos, 1.0);
 
     return out;
 }
 
+struct FragOut {
+    @location(0) color: vec4<f32>,
+    @location(2) motion: vec2<f32>,
+};
 
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VSOut) -> FragOut {
+    var out: FragOut;
     let sun_dir = normalize(uniforms.sun_direction);
     let moon_dir = normalize(uniforms.moon_direction);
 
@@ -329,5 +354,14 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
 
     // Alpha
     let alpha = clamp(water.color.a + foam * 0.2, 0.0, 1.0);
-    return vec4<f32>(color, alpha);
+    out.color = vec4<f32>(color, alpha);
+
+    // Motion vector
+    let curr_ndc = in.curr_clip.xy / in.curr_clip.w;
+    let prev_ndc = in.prev_clip.xy / in.prev_clip.w;
+    let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5;
+    let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5;
+    out.motion = curr_uv - prev_uv;
+
+    return out;
 }

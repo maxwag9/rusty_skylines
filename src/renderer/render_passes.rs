@@ -153,9 +153,20 @@ pub fn create_world_pass<'a>(
         Some(Color::BLACK),
     );
 
+    let motion_attachment = make_instance_attachment(
+        &pipelines.post_fx.dummy_motion, // dummy MSAA view (must match msaa_samples)
+        &pipelines.post_fx.motion_full,  // resolved motion texture
+        msaa_samples,
+        true,
+    );
+
     encoder.begin_render_pass(&RenderPassDescriptor {
         label: Some("World Pass"),
-        color_attachments: &[Some(color_attachment), Some(normal_attachment)],
+        color_attachments: &[
+            Some(color_attachment),
+            Some(normal_attachment),
+            Some(motion_attachment),
+        ],
         depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, true)),
         timestamp_writes: None,
         occlusion_query_set: None,
@@ -198,7 +209,7 @@ pub fn create_instanced_pass<'a>(
         &pipelines.post_fx.dummy_motion, // dummy MSAA view (must match msaa_samples)
         &pipelines.post_fx.motion_full,  // resolved motion texture
         msaa_samples,
-        true,
+        false,
     );
 
     encoder.begin_render_pass(&RenderPassDescriptor {
@@ -237,7 +248,7 @@ pub fn render_sky(
         stencil: Default::default(),
         bias: Default::default(),
     });
-    let targets = color_and_normals_targets(pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
     gpu_timestamp!(pass, profiler, "Stars", {
         // Stars
         render_manager.render(
@@ -320,7 +331,7 @@ pub fn render_terrain(
             bias: Default::default(),
         }
     };
-    let targets = color_and_normals_targets(pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
 
     // Terrain Pipeline (Underwater)
     pass.set_stencil_reference(1);
@@ -369,7 +380,7 @@ pub fn render_water(
     _settings: &Settings,
     msaa_samples: u32,
 ) {
-    let targets = color_and_normals_targets(pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
 
     // Water
     pass.set_stencil_reference(1);
@@ -444,7 +455,7 @@ pub fn render_roads(
     }
     let base_bias = road_bias(settings, 3, 2.0);
     let preview_bias = road_bias(settings, 4, 2.0);
-    let targets = color_and_normals_targets(pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
     // Roads
     render_manager.render(
         keys.as_slice(),
@@ -512,7 +523,7 @@ pub fn render_gizmo(
     device: &Device,
     queue: &Queue,
 ) {
-    let targets = color_and_normals_targets(pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
     // Gizmo
     render_manager.render(
         &[],
@@ -605,7 +616,7 @@ fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<Shad
     }
 }
 
-fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
+fn color_and_normals_and_motion_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
     vec![
         Some(ColorTargetState {
             format: pipelines.msaa.hdr.texture().format(),
@@ -614,6 +625,11 @@ fn color_and_normals_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetSta
         }),
         Some(ColorTargetState {
             format: pipelines.msaa.normal.texture().format(),
+            blend: None,
+            write_mask: ColorWrites::ALL,
+        }),
+        Some(ColorTargetState {
+            format: pipelines.post_fx.motion_full.texture().format(),
             blend: None,
             write_mask: ColorWrites::ALL,
         }),

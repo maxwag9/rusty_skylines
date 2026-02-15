@@ -20,11 +20,11 @@ struct VSOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) dir: vec3<f32>,
     @location(1) ndc: vec2<f32>,
+    @location(2) prev_clip: vec4<f32>,
 };
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
-    // Branchless fullscreen triangle
     let clip_xy = vec2<f32>(
         f32((vid << 1u) & 2u) * 2.0 - 1.0,
         f32(vid & 2u) * 2.0 - 1.0
@@ -38,11 +38,22 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VSOut {
     out.clip = clip;
     out.dir = world_dir;
     out.ndc = clip_xy;
+
+    // Reproject: same world direction through previous view_proj
+    // w=0 means direction only (infinitely far)
+    out.prev_clip = u.prev_view_proj * vec4<f32>(world_dir, 0.0);
+
     return out;
 }
 
+struct FragOut {
+    @location(0) color: vec4<f32>,
+    @location(2) motion: vec2<f32>,
+};
+
 @fragment
-fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
+fn fs_main(input: VSOut) -> FragOut {
+    var out: FragOut;
     let view_dir = normalize(input.dir);
     let sun_dir = u.sun_direction;
     let moon_dir = u.moon_direction;
@@ -189,5 +200,14 @@ fn fs_main(input: VSOut) -> @location(0) vec4<f32> {
     let lum = dot(mapped, vec3<f32>(0.2126, 0.7152, 0.0722));
     let blue = saturate((mapped.b - max(mapped.r, mapped.g)) * 4.0);
 
-    return vec4<f32>(mapped, saturate(lum + blue * (1.0 - lum)));
+    out.color = vec4<f32>(mapped, saturate(lum + blue * (1.0 - lum)));
+
+    // Motion vector
+    let curr_ndc = input.ndc;
+    let prev_ndc = input.prev_clip.xy / input.prev_clip.w;
+    let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5;
+    let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5;
+    out.motion = curr_uv - prev_uv;
+
+    return out;
 }

@@ -118,8 +118,10 @@ pub fn camera_input_system(resources: &mut Resources) {
         cam_ctrl.target_yaw += cam_ctrl.yaw_velocity;
         cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
     }
-    camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt, chunk_size);
-    ground_camera_target(camera, cam_ctrl, terrain_subsystem, 0.1);
+    if !resources.settings.drive_car {
+        camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt, chunk_size);
+        ground_camera_target(camera, cam_ctrl, terrain_subsystem, 0.1);
+    }
     resolve_pitch_by_search(camera, cam_ctrl, terrain_subsystem);
     // SMOOTH target → camera
     let t = 1.0 - (-cam_ctrl.orbit_smoothness * 60.0 * dt).exp();

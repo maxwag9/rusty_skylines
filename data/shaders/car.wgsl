@@ -29,6 +29,7 @@ struct VertexOutput {
 
     @location(4) @interpolate(flat) instance_id: u32,
     @location(5) prev_pos_cs: vec4<f32>,  // previous clip-space
+    @location(6) curr_pos_cs: vec4<f32>,
 };
 
 
@@ -84,6 +85,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index
     );
 
     let world_pos = model * vec4<f32>(vertex.position, 1.0);
+    let prev_world_pos = prev_model * vec4<f32>(vertex.position, 1.0);
 
     out.clip_position = uniforms.view_proj * world_pos;
     out.uv = vertex.uv;
@@ -93,8 +95,8 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index
 
     // pass instance id (instanced draws only)
     out.instance_id = instance_index;
-
-    out.prev_pos_cs = uniforms.prev_view_proj * prev_model * vec4(vertex.position, 1.0);
+    out.curr_pos_cs = out.clip_position;
+    out.prev_pos_cs = uniforms.prev_view_proj * prev_world_pos;
     return out;
 }
 
@@ -153,10 +155,10 @@ fn fs_main(input: VertexOutput) -> FragmentOut {
         out.motion = vec2<f32>(0.0);
         return out;
     }
-    let curr_ndc = input.clip_position.xy / input.clip_position.w;
+    let curr_ndc = input.curr_pos_cs.xy / input.curr_pos_cs.w;
     let prev_ndc = input.prev_pos_cs.xy / input.prev_pos_cs.w;
-    let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5 - uniforms.curr_jitter;
-    let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5 - uniforms.prev_jitter;
+    let curr_uv = curr_ndc * vec2(0.5, -0.5) + 0.5;
+    let prev_uv = prev_ndc * vec2(0.5, -0.5) + 0.5;
     out.motion = curr_uv - prev_uv;
     return out;
 }

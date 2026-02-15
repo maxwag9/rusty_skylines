@@ -4,6 +4,7 @@ use crate::world::roads::road_structs::LaneId;
 use crate::world::roads::roads::{LaneRef, TurnType};
 use glam::{Quat, Vec3};
 use rand::rngs::ThreadRng;
+use rayon::iter::IntoParallelRefMutIterator;
 use std::collections::HashMap;
 use std::slice::{Iter, IterMut};
 
@@ -114,6 +115,11 @@ impl CarStorage {
     }
     pub(crate) fn iter_mut_cars(&mut self) -> IterMut<'_, Option<Car>> {
         self.cars.iter_mut()
+    }
+    /// Returns a parallel mutable iterator over car slots.
+    /// Each slot is independent, so this is safe for rayon.
+    pub fn par_iter_mut_cars(&mut self) -> rayon::slice::IterMut<'_, Option<Car>> {
+        self.cars.par_iter_mut()
     }
 }
 

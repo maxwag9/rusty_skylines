@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.5.17"
+version = "0.5.18"
 edition = "2024"
 
 [dependencies]
@@ -27,6 +27,7 @@ wgpu_render_manager = "0.2.5"
 earcutr = "0.5.0"
 clipper2 = "0.5.3"
 log = "0.4.29"
+rayon = "1.11.0"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults

@@ -94,6 +94,12 @@ pub struct TimeSystem {
     // Fixed-step simulation timing
     pub sim_accumulator: f32,
     pub target_sim_dt: f32,
+    pub prev_time_scale: f32,
+
+    // Achieved speed measurement (windowed)
+    pub achieved_speed: f32,
+    achieved_speed_window_time: f32,
+    achieved_speed_window_steps: u32,
 
     // Totals
     pub total_time: f64,
@@ -102,6 +108,10 @@ pub struct TimeSystem {
 
     // Safety
     pub max_frame_dt: f32,
+
+    // Speed-change detection
+    pub speed_just_changed: bool,
+    pub current_time_speed: f32,
 }
 
 impl TimeSystem {
@@ -125,11 +135,20 @@ impl TimeSystem {
             sim_accumulator: 0.0,
             target_sim_dt,
 
+            prev_time_scale: 1.0,
+
+            achieved_speed: 1.0,
+            achieved_speed_window_time: 0.0,
+            achieved_speed_window_steps: 0,
+
             total_time: 0.0,
             total_game_time: 0.0,
             frame_count: 0,
 
-            max_frame_dt: 0.25, // clamp big stalls (250ms)
+            max_frame_dt: 0.25,
+
+            speed_just_changed: false,
+            current_time_speed: 1.0,
         }
     }
 
@@ -150,7 +169,6 @@ impl TimeSystem {
         let mut dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
 
-        // clamp dt to avoid massive accumulator spikes
         dt = dt.clamp(0.0, self.max_frame_dt);
 
         self.render_dt = dt;
@@ -160,10 +178,47 @@ impl TimeSystem {
         self.total_game_time += (dt as f64) * (time_speed as f64);
         self.frame_count += 1;
 
-        if time_speed.is_sign_positive() {
+        // Detect speed change: flush accumulator immediately on ANY speed transition
+        let speed_changed = (time_speed - self.current_time_speed).abs() > 1e-6;
+        self.speed_just_changed = speed_changed;
+
+        if speed_changed {
+            self.sim_accumulator = 0.0;
+            self.prev_time_scale = self.current_time_speed;
+            self.current_time_speed = time_speed;
+            // Reset measurement window on speed change
+            self.achieved_speed = time_speed;
+            self.achieved_speed_window_time = 0.0;
+            self.achieved_speed_window_steps = 0;
+        }
+
+        // Accumulate wall-clock time for the measurement window
+        self.achieved_speed_window_time += dt;
+
+        // Accumulate sim time at current speed
+        if time_speed >= 0.0 {
             self.sim_accumulator += dt * time_speed;
-        } else {
-            self.sim_accumulator += dt;
+        }
+    }
+
+    /// Call after sim stepping is done for this frame, passing how many steps were taken.
+    pub fn update_achieved_speed(&mut self, steps: u32) {
+        self.achieved_speed_window_steps += steps;
+
+        // Evaluate every 0.5 seconds of wall-clock time
+        const WINDOW_DURATION: f32 = 0.5;
+
+        if self.achieved_speed_window_time >= WINDOW_DURATION {
+            let sim_time = self.achieved_speed_window_steps as f32 * self.target_sim_dt;
+            self.achieved_speed = if self.achieved_speed_window_time > 0.0 {
+                sim_time / self.achieved_speed_window_time
+            } else {
+                0.0
+            };
+
+            // Reset window
+            self.achieved_speed_window_time = 0.0;
+            self.achieved_speed_window_steps = 0;
         }
     }
 

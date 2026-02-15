@@ -431,41 +431,39 @@ impl ApplicationHandler for App {
                 // -----------------------------
                 // Fixed-step simulation with budget + spiral-of-death protection
                 // -----------------------------
-                // Do input/events once per render frame (prevents "pressed_once" from firing N times).
                 self.schedule.run_inputs(resources);
                 self.schedule.run_events(resources);
 
-                // Clamp runaway backlog (e.g., window drag / breakpoint)
-                resources
-                    .world_core
-                    .time
-                    .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
+                let mut steps = 0u32;
 
-                let sim_budget = Duration::from_secs_f32(
-                    (resources.world_core.time.target_frametime * 0.7).max(0.0),
-                );
-                let sim_deadline = Instant::now() + sim_budget;
+                // If speed just changed, skip sim this frame for clean transition
+                if !resources.world_core.time.speed_just_changed {
+                    resources
+                        .world_core
+                        .time
+                        .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
 
-                let mut steps = 0usize;
-                while resources.world_core.time.can_step_sim()
-                    && steps < MAX_SIM_STEPS_PER_FRAME
-                    && Instant::now() < sim_deadline
-                {
-                    self.schedule.run_sim(resources);
-                    resources.world_core.time.consume_sim_step();
-                    steps += 1;
+                    let sim_budget = Duration::from_secs_f32(
+                        (resources.world_core.time.target_frametime * 0.7).max(0.0),
+                    );
+                    let sim_deadline = Instant::now() + sim_budget;
+
+                    while resources.world_core.time.can_step_sim()
+                        && (steps as usize) < MAX_SIM_STEPS_PER_FRAME
+                        && Instant::now() < sim_deadline
+                    {
+                        self.schedule.run_sim(resources);
+                        resources.world_core.time.consume_sim_step();
+                        steps += 1;
+                    }
                 }
 
-                let achieved_speed = if resources.world_core.time.render_dt > 0.0 {
-                    (steps as f32 * resources.world_core.time.target_sim_dt)
-                        / resources.world_core.time.render_dt
-                } else {
-                    0.0
-                };
-                resources
-                    .ui_loader
-                    .variables
-                    .set_f32("achieved_time_speed", achieved_speed);
+                // Update achieved speed (windowed measurement)
+                resources.world_core.time.update_achieved_speed(steps);
+                resources.ui_loader.variables.set_f32(
+                    "achieved_time_speed",
+                    resources.world_core.time.achieved_speed,
+                );
 
                 // -----------------------------
                 // Render
@@ -521,32 +519,28 @@ fn update_time_and_ui(resources: &mut Resources) {
     } = world_core;
 
     // -----------------------------
-    // Time controls (incl. real toggle stop)
+    // Time controls
     // -----------------------------
     let can_time_control = !settings.editor_mode && !settings.drive_car && settings.show_world;
 
     if can_time_control && input.action_pressed_once("Toggle Stop Time") {
         simulation.toggle();
 
-        // Important: kill any backlog so the sim stops immediately.
         if !simulation.running {
             time.clear_sim_accumulator();
         }
     }
 
-    // Base timescale from "stopped" state
     let mut time_speed = if simulation.running { 1.0 } else { 0.0 };
 
-    // Optional override from held bindings (also resumes time)
     for (action, speed) in TIME_SPEED_BINDINGS {
         if input.action_down(action) {
             time_speed = speed;
-            simulation.running = true; // resume if user is explicitly controlling time
+            simulation.running = true;
             break;
         }
     }
 
-    // Ensure stop always wins if it's enabled (even if other keys are held)
     if !simulation.running {
         time_speed = 0.0;
     }
@@ -556,12 +550,9 @@ fn update_time_and_ui(resources: &mut Resources) {
         .variables
         .set_f32("time_speed", time_speed);
 
-    // -----------------------------
-    // Frame timing (accumulator lives here)
-    // -----------------------------
+    // begin_frame now detects speed changes internally and flushes accumulator
     time.begin_frame(time_speed);
 
-    // UI globals
     {
         let ui = &mut resources.ui_loader;
         ui.variables.set_f32("fps", time.render_fps);

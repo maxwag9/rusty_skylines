@@ -467,7 +467,7 @@ impl RenderCore {
             self.execute_gtao_pass(encoder, settings, time);
         });
 
-        gpu_timestamp!(encoder, &mut self.profiler, "RTX", {
+        gpu_timestamp!(encoder, &mut self.profiler, "RTwd", {
             let sun_up = astronomy.sun_dir.y > 0.0;
             if sun_up && (settings.shadow_type == ShadowType::RT) {
                 render_ray_tracing(
@@ -475,7 +475,7 @@ impl RenderCore {
                     &self.config,
                     &mut self.rt_subsystem,
                     &mut self.render_manager,
-                    &self.pipelines,
+                    &mut self.pipelines,
                     &mut self.profiler,
                     self.msaa_samples,
                 );

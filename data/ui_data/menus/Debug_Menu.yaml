@@ -57,7 +57,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'CSM Shadows: {(csm_frametime):.2}ms, RTX Total: {(rtx_frametime):.2}ms, RTX Rays: {(rtx_tracing_frametime):.2}ms, RTX Upsampling: {(rtx_upsample_frametime):.2}ms, RTX Apply: {(rtx_apply_frametime):.2}ms'
+        text: 'CSM Shadows: {(csm_frametime):.2}ms, RT Total: {(rt_frametime):.2}ms, RT Rays: {(rt_tracing_frametime):.2}ms, RT Upsampling: {(rt_upsample_frametime):.2}ms, RT Apply: {(rt_apply_frametime):.2}ms'
       - !Text
         id: sky_info_text
         x: 0.001895523

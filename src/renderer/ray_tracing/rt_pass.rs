@@ -57,7 +57,7 @@ pub fn render_ray_tracing(
     config: &SurfaceConfiguration,
     rt: &mut RTSubsystem,
     render_manager: &mut RenderManager,
-    pipelines: &Pipelines,
+    pipelines: &mut Pipelines,
     profiler: &mut GpuProfiler,
     msaa_samples: u32,
 ) {
@@ -73,7 +73,7 @@ pub fn render_ray_tracing(
         return;
     };
 
-    gpu_timestamp!(encoder, profiler, "RTX_Tracing", {
+    gpu_timestamp!(encoder, profiler, "RT_Tracing", {
         render_manager.compute(
             Some(encoder),
             "Ray Tracing Pass",
@@ -96,16 +96,23 @@ pub fn render_ray_tracing(
         1,
     ];
 
-    gpu_timestamp!(encoder, profiler, "RTX_Upsample", {
+    // rt_full and rt_full_history swap roles each frame
+    gpu_timestamp!(encoder, profiler, "RT_Upsample", {
+        // swap for next frame
+        std::mem::swap(
+            &mut pipelines.post_fx.rt_full,
+            &mut pipelines.post_fx.rt_full_history,
+        );
         render_manager.compute(
             Some(encoder),
-            "RTX Upsample",
+            "RT Upsample + TAA",
             vec![
-                &pipelines.post_fx.rt_full_history,
-                &pipelines.post_fx.rt_raw_half,
-                &pipelines.post_fx.linear_depth_full,
+                &pipelines.post_fx.rt_full_history, // @group(0) @binding(0) - TAA history (full res)
+                &pipelines.post_fx.rt_raw_half,     // @group(0) @binding(1) - raw half-res RT
+                &pipelines.post_fx.linear_depth_full, // @group(0) @binding(2) - depth
+                &pipelines.post_fx.motion_full,     // @group(0) @binding(3) - motion vectors
             ],
-            vec![&pipelines.post_fx.rt_full],
+            vec![&pipelines.post_fx.rt_full], // @group(1) @binding(0) - output (write)
             &compute_shader_dir().join("ray_tracing_upsample.wgsl"),
             make_ray_tracing_options(upsample_dispatch),
             &[],
@@ -113,7 +120,7 @@ pub fn render_ray_tracing(
     });
 
     // === Pass 3: Apply shadow to HDR (trivial per-sample cost) ===
-    gpu_timestamp!(encoder, profiler, "RTX_Apply", {
+    gpu_timestamp!(encoder, profiler, "RT_Apply", {
         let color_attachment = create_color_attachment_load(
             &pipelines.msaa.hdr,
             &pipelines.resolved.hdr,
@@ -121,7 +128,7 @@ pub fn render_ray_tracing(
         );
 
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("RTX Shadow Apply"),
+            label: Some("RT Shadow Apply"),
             color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: None,
             timestamp_writes: None,

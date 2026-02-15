@@ -90,7 +90,10 @@ impl Simulation {
         let camera = &mut camera_bundle.camera;
         update_picked_pos(terrain_subsystem, camera, settings, config, input);
         let aspect = config.width as f32 / config.height as f32;
-        terrain_subsystem.update(device, queue, camera, aspect, settings, input, time);
+
+        if self.tick % 2 == 0 {
+            terrain_subsystem.update(device, queue, camera, aspect, settings, input, time);
+        }
         let cam_ctrl = &mut camera_bundle.controller;
         road_subsystem.update(terrain_subsystem, car_subsystem, input, gizmo);
         car_subsystem.update(
@@ -110,6 +113,7 @@ impl Simulation {
             camera,
             time.target_sim_dt,
         );
+        //println!("Simulation finished: {}", time.frame_count);
     }
 }
 

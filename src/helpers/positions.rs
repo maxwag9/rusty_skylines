@@ -43,8 +43,8 @@ impl ChunkCoord {
     }
     #[inline]
     pub fn dist2(&self, other: &ChunkCoord) -> u32 {
-        let dx = self.x - other.x;
-        let dz = self.z - other.z;
+        let dx = self.x as i64 - other.x as i64;
+        let dz = self.z as i64 - other.z as i64;
         (dx * dx + dz * dz) as u32
     }
 }

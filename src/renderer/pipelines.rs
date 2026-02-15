@@ -721,6 +721,8 @@ pub fn make_new_camera_uniforms(
     let (view, proj, view_proj) = camera.matrices();
     let (prev_jitter, curr_jitter) =
         taa_jitter_pair(time_system.frame_count, config.width, config.height);
+    //println!("{:?}, {:?}", prev_jitter, curr_jitter);
+    //println!("{:?}, {:?}", camera.prev_view_proj, view_proj);
     Uniforms {
         view: view.to_cols_array_2d(),
         inv_view: view.inverse().to_cols_array_2d(),
