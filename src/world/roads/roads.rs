@@ -18,7 +18,9 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::Gizmo;
 use crate::world::cars::car_subsystem::CarSubsystem;
-use crate::world::roads::intersections::{IntersectionBuildParams, build_intersection_at_node};
+use crate::world::roads::intersections::{
+    IntersectionBuildParams, build_intersection_at_node, gather_arms,
+};
 use crate::world::roads::road_editor::offset_polyline;
 use crate::world::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
@@ -301,6 +303,11 @@ impl Node {
     pub fn node_lanes(&self) -> &[NodeLane] {
         &self.node_lanes
     }
+    /// Every segment is kind of an arm by design.
+    #[inline]
+    pub fn arms(&self) -> &[Arm] {
+        &self.arms
+    }
     #[inline]
     pub fn add_node_lanes<I>(&mut self, lanes: I)
     where
@@ -494,7 +501,10 @@ impl Lane {
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
-
+    #[inline]
+    pub fn is_disabled(&self) -> bool {
+        !self.enabled
+    }
     #[inline]
     pub fn speed_limit(&self) -> f32 {
         self.speed_limit
@@ -1878,6 +1888,9 @@ pub fn apply_command_world(
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
             }
+            let arms = gather_arms(storage, *node_id, params, gizmo.chunk_size, gizmo);
+
+            storage.node_mut(*node_id).arms = arms;
             build_intersection_at_node(storage, *node_id, params, *clear, gizmo);
             CommandResult::Ok
         }
@@ -1934,6 +1947,13 @@ pub fn apply_command(
             let result = match road_command {
                 RoadCommand::AddNode { world_pos } => {
                     let id = storage.add_node(world_pos);
+                    gather_arms(
+                        storage,
+                        id,
+                        &IntersectionBuildParams::from_style(road_style_params),
+                        terrain_renderer.chunk_size,
+                        gizmo,
+                    );
                     if !is_preview {
                         car_subsystem.add_spawning_node(id);
                     }
@@ -2117,7 +2137,9 @@ pub fn apply_command(
                     if node_id.raw() as usize >= storage.node_count() {
                         return CommandResult::InvalidReference;
                     }
+                    let arms = gather_arms(storage, node_id, &params, gizmo.chunk_size, gizmo);
 
+                    storage.node_mut(node_id).arms = arms;
                     build_intersection_at_node(storage, node_id, &params, clear, gizmo);
 
                     affected_chunk = Some(chunk_id);

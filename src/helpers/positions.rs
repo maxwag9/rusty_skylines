@@ -162,20 +162,26 @@ impl WorldPos {
     pub(crate) fn sub_vec3(self, rhs: Vec3, chunk_size: ChunkSize) -> WorldPos {
         self.add_vec3(-rhs, chunk_size)
     }
-    /// WorldPos - WorldPos = delta meters (Vec3)
+
+    /// Vector (delta meters) from `self` to `rhs`  (rhs - self)
     #[inline]
     pub(crate) fn delta_to(self, rhs: Self, chunk_size: ChunkSize) -> Vec3 {
         let cs = chunk_size as f32;
-        let dcx = self.chunk.x as i64 - rhs.chunk.x as i64;
-        let dcz = self.chunk.z as i64 - rhs.chunk.z as i64;
+
+        let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
+        let dcz = rhs.chunk.z as i64 - self.chunk.z as i64;
 
         Vec3::new(
-            dcx as f32 * cs + (self.local.x - rhs.local.x),
-            self.local.y - rhs.local.y,
-            dcz as f32 * cs + (self.local.z - rhs.local.z),
+            dcx as f32 * cs + (rhs.local.x - self.local.x),
+            rhs.local.y - self.local.y,
+            dcz as f32 * cs + (rhs.local.z - self.local.z),
         )
     }
-
+    /// This is the SAME as delta_to(), wraps it, made for clarity!
+    #[inline]
+    pub(crate) fn direction_to(self, rhs: Self, chunk_size: ChunkSize) -> Vec3 {
+        self.delta_to(rhs, chunk_size)
+    }
     #[inline]
     fn sub_assign_vec3(&mut self, rhs: Vec3, chunk_size: ChunkSize) {
         *self = self.add_vec3(rhs, chunk_size);
@@ -293,17 +299,43 @@ impl WorldPos {
         }
     }
 
-    /// Distance between two WorldPos in meters.
+    /// Distance between two WorldPos in meters (computed in WorldPos space).
     #[inline]
     pub fn distance_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {
-        self.to_render_pos(rhs, chunk_size).length()
+        let cs = chunk_size as f64;
+
+        // lossless chunk delta
+        let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
+        let dcz = rhs.chunk.z as i64 - self.chunk.z as i64;
+
+        // full-precision meter delta
+        let dx = dcx as f64 * cs + (rhs.local.x as f64 - self.local.x as f64);
+        let dy = rhs.local.y as f64 - self.local.y as f64;
+        let dz = dcz as f64 * cs + (rhs.local.z as f64 - self.local.z as f64);
+
+        (dx * dx + dy * dy + dz * dz).sqrt() as f32
     }
-    /// Distance between two WorldPos in meters.
+
+    /// Same as distance_to
     #[inline]
     pub fn length_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {
         self.distance_to(rhs, chunk_size)
     }
 
+    /// Often useful to avoid sqrt.
+    #[inline]
+    pub fn distance_squared_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
+        let cs = chunk_size as f64;
+
+        let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
+        let dcz = rhs.chunk.z as i64 - self.chunk.z as i64;
+
+        let dx = dcx as f64 * cs + (rhs.local.x as f64 - self.local.x as f64);
+        let dy = rhs.local.y as f64 - self.local.y as f64;
+        let dz = dcz as f64 * cs + (rhs.local.z as f64 - self.local.z as f64);
+
+        dx * dx + dy * dy + dz * dz
+    }
     /// Distance squared (cheaper, for comparisons).
     #[inline]
     pub fn distance_squared(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {

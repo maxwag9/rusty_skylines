@@ -23,7 +23,7 @@ pub fn camera_input_system(resources: &mut Resources) {
     let chunk_size = resources.settings.chunk_size;
     camera.chunk_size = chunk_size;
     let eye = camera.eye_world();
-    let mut fwd3d = camera.target.delta_to(eye, chunk_size);
+    let mut fwd3d = eye.direction_to(camera.target, chunk_size);
     if fwd3d.length_squared() > 0.0 {
         fwd3d = fwd3d.normalize();
     }

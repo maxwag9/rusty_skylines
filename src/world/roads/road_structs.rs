@@ -301,7 +301,7 @@ impl Default for RoadType {
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.0,
+            turn_tightness: 1.2,
         }
     }
 }

@@ -404,7 +404,11 @@ pub fn polyline_direction_at(poly: &[WorldPos], index: usize, chunk_size: ChunkS
     dir.normalize_or_zero()
 }
 
-pub fn tangent_and_lateral(points: &[WorldPos], i: usize, chunk_size: ChunkSize) -> (Vec3, Vec3) {
+pub fn tangent_and_lateral_right(
+    points: &[WorldPos],
+    i: usize,
+    chunk_size: ChunkSize,
+) -> (Vec3, Vec3) {
     let tangent = if i + 1 < points.len() {
         points[i]
             .delta_to(points[i + 1], chunk_size)
@@ -417,6 +421,7 @@ pub fn tangent_and_lateral(points: &[WorldPos], i: usize, chunk_size: ChunkSize)
         Vec3::X
     };
 
-    let lateral = Vec3::new(-tangent.z, 0.0, tangent.x).normalize_or_zero();
-    (tangent, lateral)
+    let lateral_right = Vec3::Y.cross(tangent).normalize_or_zero();
+    // equivalent to: Vec3::new(tangent.z, 0.0, -tangent.x)
+    (tangent, lateral_right)
 }

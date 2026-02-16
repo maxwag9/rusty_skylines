@@ -160,10 +160,10 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainSubsystem) -> (f32
     let avg_y = 0.25 * (h_fl + h_fr + h_rl + h_rr);
 
     // Convert corner positions into car-local delta vectors, centered on avg_y.
-    let d_fl = fl.delta_to(car.pos, chunk_size);
-    let d_fr = fr.delta_to(car.pos, chunk_size);
-    let d_rl = rl.delta_to(car.pos, chunk_size);
-    let d_rr = rr.delta_to(car.pos, chunk_size);
+    let d_fl = fl.direction_to(car.pos, chunk_size);
+    let d_fr = fr.direction_to(car.pos, chunk_size);
+    let d_rl = rl.direction_to(car.pos, chunk_size);
+    let d_rr = rr.direction_to(car.pos, chunk_size);
 
     let p_fl = Vec3::new(d_fl.x, h_fl - avg_y, d_fl.z);
     let p_fr = Vec3::new(d_fr.x, h_fr - avg_y, d_fr.z);

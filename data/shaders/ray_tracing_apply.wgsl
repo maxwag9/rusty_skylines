@@ -27,7 +27,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let vis = textureSample(rt_visibility_full, samp, uv).r;
 
     // Ambient floor - shadows never fully black
-    let base_shadow = vis * 0.9 + 0.1;
+    let base_shadow = vis * 0.70 + 0.30;
 
     let elev = max(uniforms.sun_direction.y, 0.0);
     let shadow_strength = clamp(1.0 - exp2(-elev * 20.0), 0.0, 1.0);

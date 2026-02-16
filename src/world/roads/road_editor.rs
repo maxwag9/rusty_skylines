@@ -545,6 +545,8 @@ impl RoadEditor {
         self.deduplicate_crossings(crossings)
     }
 
+    /// I FIXED A BUG HERE WHERE A ROAD "INTERSECTED" WITH THE ROAD I WAS BUILDING FROM AT SHALLOW ANGLES,
+    /// LEADING TO A FAKE INTERSECTION RUINING THE GEOMETRY! JUST AS INFO, BEWARE!
     fn get_excluded_segments(
         &self,
         storage: &RoadStorage,
@@ -553,14 +555,23 @@ impl RoadEditor {
     ) -> HashSet<SegmentId> {
         let mut excluded = HashSet::new();
 
-        if let PlannedNode::Split { lane_id, .. } = &start_anchor.planned_node {
-            let lane = storage.lane(lane_id);
-            excluded.insert(lane.segment());
-        }
-
-        if let PlannedNode::Split { lane_id, .. } = &end_anchor.planned_node {
-            let lane = storage.lane(lane_id);
-            excluded.insert(lane.segment());
+        for anchor in [start_anchor, end_anchor] {
+            match &anchor.planned_node {
+                PlannedNode::Split { lane_id, .. } => {
+                    excluded.insert(storage.lane(lane_id).segment());
+                }
+                PlannedNode::Existing(node_id) => {
+                    if let Some(node) = storage.node(*node_id) {
+                        for lane_id in node.incoming_lanes() {
+                            excluded.insert(storage.lane(lane_id).segment());
+                        }
+                        for lane_id in node.outgoing_lanes() {
+                            excluded.insert(storage.lane(lane_id).segment());
+                        }
+                    }
+                }
+                PlannedNode::New { .. } => {}
+            }
         }
 
         excluded
@@ -783,7 +794,7 @@ impl RoadEditor {
             start,
             end,
         );
-
+        //println!("Crossing points: {:?}", crossings.len());
         // Build waypoint list
         let mut waypoints: Vec<ResolvedWaypoint> = Vec::new();
 
@@ -896,7 +907,6 @@ impl RoadEditor {
 
         // Generate intersections for all waypoint nodes
         for waypoint in &waypoints {
-            // Use a generic intersection push for intermediate nodes
             push_intersection_for_node(&mut cmds, waypoint.node_id, &self.style, chunk_id);
         }
 
@@ -949,7 +959,6 @@ impl RoadEditor {
                 )
             }
         }
-        // trim_polyline_both_ends(segment_centerline.as_slice(), 3)
     }
 
     // ==================== EXISTING METHODS (unchanged) ====================

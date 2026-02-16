@@ -10,15 +10,13 @@ use crate::world::roads::roads::*;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use clipper2::{EndType, JoinType, Path, Paths};
 use earcutr;
-use glam::{Vec2, Vec3};
-use std::collections::HashMap;
-use std::f32::consts::TAU;
+use glam::{Vec2, Vec3, Vec3Swizzles};
+use std::collections::HashSet;
+use std::f32::consts::{FRAC_PI_2, TAU};
 
-// ============================================================================
-// Constants
-// ============================================================================
-
-const DEFAULT_CORRIDOR_LENGTH: f32 = 30.0;
+const DEFAULT_CORRIDOR_LENGTH: f32 = 6.0;
+const MAX_CORRIDOR_LENGTH: f32 = 10000.0;
+const MIN_ANGLE_FOR_DYNAMIC: f32 = 0.02;
 
 // ============================================================================
 // Intersection Polygon
@@ -206,14 +204,14 @@ impl LocalPolygon {
     }
 
     /// Create a corridor rectangle from origin along a direction.
-    fn corridor(direction: Vec2, half_width: f32, fwd_len: f32, back_len: f32) -> Self {
+    fn corridor(direction: Vec2, half_width: f32, fwd_len: f32) -> Self {
         let dir = direction.normalize_or_zero();
         if dir == Vec2::ZERO {
             return Self::new(Vec::new());
         }
         let perp = Vec2::new(-dir.y, dir.x);
 
-        let a = -dir * back_len;
+        let a = -dir * 0.0;
         let b = dir * fwd_len;
 
         let points = vec![
@@ -250,9 +248,95 @@ impl LocalPolygon {
     }
 }
 
-// ============================================================================
-// Clipper2 Operations (Fixed API)
-// ============================================================================
+fn normalize_angle_positive(angle: f32) -> f32 {
+    let mut a = angle % TAU;
+    if a < 0.0 {
+        a += TAU;
+    }
+    a
+}
+
+fn compute_corridor_lengths(arms: &[Arm], sidewalk_width: f32) -> Vec<f32> {
+    let n = arms.len();
+    if n == 0 {
+        return vec![];
+    }
+    if n == 1 {
+        return vec![DEFAULT_CORRIDOR_LENGTH];
+    }
+
+    arms.iter()
+        .enumerate()
+        .map(|(i, arm)| {
+            let prev_idx = (i + n - 1) % n;
+            let next_idx = (i + 1) % n;
+
+            let angle_to_prev = normalize_angle_positive(arm.bearing() - arms[prev_idx].bearing());
+            let angle_to_next = normalize_angle_positive(arms[next_idx].bearing() - arm.bearing());
+
+            let mut corridor_len = DEFAULT_CORRIDOR_LENGTH;
+
+            update_corridor_len(
+                &mut corridor_len,
+                angle_to_prev,
+                arm,
+                &arms[prev_idx],
+                sidewalk_width,
+            );
+
+            update_corridor_len(
+                &mut corridor_len,
+                angle_to_next,
+                arm,
+                &arms[next_idx],
+                sidewalk_width,
+            );
+
+            corridor_len
+        })
+        .collect()
+}
+
+fn update_corridor_len(
+    corridor_len: &mut f32,
+    angle: f32,
+    arm: &Arm,
+    other_arm: &Arm,
+    sidewalk_width: f32,
+) {
+    if angle > MIN_ANGLE_FOR_DYNAMIC && angle < FRAC_PI_2 {
+        let combined_width = arm.half_width() + other_arm.half_width() - sidewalk_width * 1.5;
+        let len = combined_width / (angle * 0.5).tan().max(0.01);
+        *corridor_len = corridor_len.max(len.min(MAX_CORRIDOR_LENGTH));
+    }
+}
+
+fn create_corridor_end_clips(
+    arms: &[Arm],
+    corridor_lengths: &[f32],
+    sidewalk_width: f32,
+) -> Vec<LocalPolygon> {
+    arms.iter()
+        .zip(corridor_lengths.iter())
+        .map(|(arm, &corridor_len)| {
+            let dir = Vec2::new(arm.direction().x, arm.direction().z).normalize_or_zero();
+            let perp = Vec2::new(-dir.y, dir.x);
+
+            let half_width = arm.half_width() + sidewalk_width + 2.0;
+            let clip_start = corridor_len - 0.05;
+            let clip_end = corridor_len + sidewalk_width + 10.0;
+
+            LocalPolygon::new(vec![
+                dir * clip_start - perp * half_width,
+                dir * clip_end - perp * half_width,
+                dir * clip_end + perp * half_width,
+                dir * clip_start + perp * half_width,
+            ])
+        })
+        .collect()
+}
+
+// Clipper2 Stuff
 
 /// Compute signed area of polygon (positive for CCW, negative for CW)
 fn polygon_signed_area(points: &[Vec2]) -> f32 {
@@ -349,6 +433,45 @@ fn offset_polygon(polygon: &LocalPolygon, offset: f32, round_corners: bool) -> V
         .collect()
 }
 
+fn difference_polygons(subject: &LocalPolygon, clips: &[LocalPolygon]) -> Vec<LocalPolygon> {
+    use clipper2::{FillRule, difference};
+
+    if subject.points.len() < 3 {
+        return vec![];
+    }
+
+    let valid_clips: Vec<_> = clips.iter().filter(|c| c.points.len() >= 3).collect();
+    if valid_clips.is_empty() {
+        return vec![subject.clone()];
+    }
+
+    let subject_coords: Vec<(f64, f64)> = subject
+        .points
+        .iter()
+        .map(|p| (p.x as f64, p.y as f64))
+        .collect();
+
+    let clip_coords: Vec<Vec<(f64, f64)>> = valid_clips
+        .iter()
+        .map(|c| c.points.iter().map(|p| (p.x as f64, p.y as f64)).collect())
+        .collect();
+
+    let subject_paths: Paths = vec![subject_coords].into();
+    let clip_paths: Paths = clip_coords.into();
+
+    match difference(subject_paths, clip_paths, FillRule::NonZero) {
+        Ok(result) => {
+            let output: Vec<Vec<(f64, f64)>> = result.into();
+            output
+                .into_iter()
+                .filter(|path| path.len() >= 3)
+                .map(LocalPolygon::from_clipper_coords)
+                .collect()
+        }
+        Err(_) => vec![subject.clone()],
+    }
+}
+
 /// Simplify a polygon to remove redundant vertices.
 fn simplify_clipper(polygon: &LocalPolygon, tolerance: f32) -> LocalPolygon {
     if polygon.points.len() < 4 || tolerance <= 0.0 {
@@ -399,7 +522,6 @@ pub struct IntersectionMeshResult {
 
 #[derive(Clone, Debug)]
 pub struct IntersectionBuildParams {
-    pub corridor_length: f32,
     pub turn_samples: usize,
     pub lane_width_m: f32,
     pub turn_tightness: f32,
@@ -411,7 +533,6 @@ pub struct IntersectionBuildParams {
 impl Default for IntersectionBuildParams {
     fn default() -> Self {
         Self {
-            corridor_length: DEFAULT_CORRIDOR_LENGTH,
             turn_samples: 12,
             lane_width_m: 3.5,
             turn_tightness: 1.0,
@@ -448,7 +569,9 @@ pub fn build_intersection_at_node(
     let chunk_size = gizmo.chunk_size;
 
     if recalc_clearance {
-        if let Some(geom) = compute_intersection_geometry(storage, node_id, params, chunk_size) {
+        if let Some(geom) =
+            compute_intersection_geometry(storage, node_id, params, chunk_size, gizmo)
+        {
             debug_draw_polygon(&geom.polygon, [0.0, 0.8, 0.2], gizmo);
             if let Some(ref sw) = geom.sidewalk_polygon {
                 debug_draw_polygon(sw, [0.5, 0.5, 0.5], gizmo);
@@ -459,7 +582,7 @@ pub fn build_intersection_at_node(
     }
 
     storage.node_mut(node_id).clear_node_lanes();
-    let node_lanes = build_node_lanes_for_intersection(storage, node_id, params, chunk_size);
+    let node_lanes = build_node_lanes_for_intersection(storage, node_id, params, chunk_size, gizmo);
     storage.node_mut(node_id).add_node_lanes(node_lanes);
 }
 
@@ -474,37 +597,117 @@ fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut G
     }
 }
 
+fn create_corner_fillers(
+    arms: &[Arm],
+    half_widths: &[f32],
+    round_corners: bool,
+) -> Vec<LocalPolygon> {
+    use std::f32::consts::PI;
+    let n = arms.len();
+
+    if n < 2 || half_widths.len() != n {
+        return vec![];
+    }
+
+    let mut fillers = Vec::new();
+
+    for i in 0..n {
+        let next_idx = (i + 1) % n;
+
+        let angle_between = normalize_angle_positive(arms[next_idx].bearing() - arms[i].bearing());
+
+        if angle_between > PI {
+            let arm_i = &arms[i];
+            let arm_next = &arms[next_idx];
+
+            let dir_i = arm_i.direction().xz().normalize_or_zero();
+            let dir_next = arm_next.direction().xz().normalize_or_zero();
+
+            let perp_i = Vec2::new(-dir_i.y, dir_i.x);
+            let perp_next = Vec2::new(-dir_next.y, dir_next.x);
+
+            let hw_i = half_widths[i];
+            let hw_next = half_widths[next_idx];
+
+            let edge_i = perp_i * hw_i;
+            let edge_next = -perp_next * hw_next;
+
+            if round_corners {
+                let radius = (hw_i + hw_next) / 2.0;
+                let filler = create_rounded_wedge(Vec2::ZERO, edge_i, edge_next, radius);
+                fillers.push(filler);
+            } else {
+                fillers.push(LocalPolygon::new(vec![Vec2::ZERO, edge_i, edge_next]));
+            }
+        }
+    }
+
+    fillers
+}
+
+fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> LocalPolygon {
+    use std::f32::consts::{PI, TAU};
+
+    let start_angle = (start - center).y.atan2((start - center).x);
+    let end_angle = (end - center).y.atan2((end - center).x);
+
+    let mut sweep = end_angle - start_angle;
+    while sweep > PI {
+        sweep -= TAU;
+    }
+    while sweep < -PI {
+        sweep += TAU;
+    }
+
+    let arc_len = sweep.abs() * radius;
+    let steps = ((arc_len / 0.5) as usize).clamp(4, 48);
+
+    let mut points = vec![center];
+    for s in 0..=steps {
+        let t = s as f32 / steps as f32;
+        let angle = start_angle + sweep * t;
+        points.push(center + Vec2::new(angle.cos() * radius, angle.sin() * radius));
+    }
+
+    LocalPolygon::new(points)
+}
+
 fn compute_intersection_geometry(
     storage: &RoadStorage,
     node_id: NodeId,
     params: &IntersectionBuildParams,
     chunk_size: ChunkSize,
+    gizmo: &mut Gizmo,
 ) -> Option<IntersectionGeometry> {
     let node = storage.node(node_id)?;
     let center = node.position();
 
-    let arms = gather_arms(storage, node_id, params, chunk_size);
+    let arms = node.arms();
+
     if arms.len() < 2 {
         return None;
     }
 
-    // Extend back_len to ensure lane endpoints are strictly inside, not on boundary
-    let back_len = params.corridor_length * 0.0;
+    let corridor_lengths = compute_corridor_lengths(&arms, params.sidewalk_width);
 
-    let corridors: Vec<LocalPolygon> = arms
+    let mut corridors: Vec<LocalPolygon> = arms
         .iter()
-        .map(|arm| {
+        .zip(corridor_lengths.iter())
+        .map(|(arm, &len)| {
             let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
-            LocalPolygon::corridor(dir_2d, arm.half_width(), params.corridor_length, back_len)
+            LocalPolygon::corridor(dir_2d, arm.half_width(), len)
         })
         .collect();
+
+    let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
+    let corner_fillers = create_corner_fillers(&arms, &full_hw, params.round_corners);
+    corridors.extend(corner_fillers);
 
     let unioned = union_polygons(&corridors);
     if unioned.is_empty() {
         return None;
     }
 
-    // Take the largest outer boundary
     let main_poly = unioned.into_iter().max_by(|a, b| {
         polygon_area(&a.points)
             .partial_cmp(&polygon_area(&b.points))
@@ -522,22 +725,46 @@ fn compute_intersection_geometry(
     let polygon = IntersectionPolygon::new(ring, center, chunk_size);
 
     let sidewalk_polygon = if params.sidewalk_width > 0.01 {
-        let offset_polys = offset_polygon(&simplified, params.sidewalk_width, params.round_corners);
-        offset_polys.into_iter().next().map(|p| {
-            let ring: Vec<WorldPos> = p
-                .points
-                .iter()
-                .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
-                .collect();
-            IntersectionPolygon::new(ring, center, chunk_size)
-        })
+        let mut asphalt_corridors: Vec<LocalPolygon> = arms
+            .iter()
+            .zip(corridor_lengths.iter())
+            .map(|(arm, &len)| {
+                let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
+                let asphalt_half_width = (arm.half_width() - params.sidewalk_width).max(0.5);
+                LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
+            })
+            .collect();
+
+        let asphalt_hw: Vec<f32> = arms
+            .iter()
+            .map(|a| (a.half_width() - params.sidewalk_width).max(0.5))
+            .collect();
+        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+        asphalt_corridors.extend(asphalt_corners);
+
+        let asphalt_union = union_polygons(&asphalt_corridors);
+        asphalt_union
+            .into_iter()
+            .max_by(|a, b| {
+                polygon_area(&a.points)
+                    .partial_cmp(&polygon_area(&b.points))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| {
+                let ring: Vec<WorldPos> = p
+                    .points
+                    .iter()
+                    .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
+                    .collect();
+                IntersectionPolygon::new(ring, center, chunk_size)
+            })
     } else {
         None
     };
 
     Some(IntersectionGeometry {
         center,
-        arms,
+        arms: arms.to_vec(),
         polygon,
         sidewalk_polygon,
     })
@@ -554,72 +781,6 @@ fn polygon_area(points: &[Vec2]) -> f32 {
         area += cross_2d(a, b);
     }
     area.abs() * 0.5
-}
-
-fn gather_arms(
-    storage: &RoadStorage,
-    node_id: NodeId,
-    params: &IntersectionBuildParams,
-    chunk_size: ChunkSize,
-) -> Vec<Arm> {
-    let segment_ids = storage.enabled_segments_connected_to_node(node_id);
-    let node = match storage.node(node_id) {
-        Some(n) => n,
-        None => return Vec::new(),
-    };
-
-    let mut arms: Vec<Arm> = segment_ids
-        .into_iter()
-        .filter_map(|seg_id| {
-            let segment = storage.segment(seg_id);
-            let points_to_node = segment.end() == node_id;
-
-            let lane_ids: Vec<LaneId> = segment
-                .lanes()
-                .iter()
-                .copied()
-                .filter(|id| storage.lane(id).is_enabled())
-                .collect();
-
-            if lane_ids.is_empty() {
-                return None;
-            }
-
-            let node_pos = node.position();
-            let direction = compute_arm_direction(storage, &lane_ids, node_pos, chunk_size)?;
-
-            let mut bearing = direction.z.atan2(direction.x);
-            if bearing < 0.0 {
-                bearing += TAU;
-            }
-
-            let lane_count = lane_ids.len();
-            let half_width = lane_count as f32 * params.lane_width_m * 0.5 + params.sidewalk_width;
-
-            let mut arm = Arm::new(seg_id, bearing, direction, half_width, points_to_node);
-
-            for lane_id in &lane_ids {
-                let lane = storage.lane(lane_id);
-                let flows_to_node = lane.lane_index() > 0;
-                if flows_to_node {
-                    arm.add_incoming_lane(*lane_id);
-                } else {
-                    arm.add_outgoing_lane(*lane_id);
-                }
-            }
-
-            arm.sort_lanes_by_index(storage);
-            Some(arm)
-        })
-        .collect();
-
-    arms.sort_by(|a, b| {
-        a.bearing()
-            .partial_cmp(&b.bearing())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    arms
 }
 
 // ============================================================================
@@ -712,8 +873,13 @@ pub fn triangulate_polygon(ring: &[Vec2], base_index: u32, indices: &mut Vec<u32
         return false;
     }
 
-    for idx in tri_indices {
-        indices.push(base_index + idx as u32);
+    for tri in tri_indices.chunks_exact(3) {
+        let i0 = base_index + tri[0] as u32;
+        let i1 = base_index + tri[1] as u32;
+        let i2 = base_index + tri[2] as u32;
+
+        // Flip winding
+        indices.extend_from_slice(&[i0, i2, i1]);
     }
 
     true
@@ -749,20 +915,128 @@ pub fn triangulate_polygon_with_hole(
         return false;
     }
 
-    for idx in tri_indices {
-        indices.push(base_index + idx as u32);
+    for tri in tri_indices.chunks_exact(3) {
+        let i0 = base_index + tri[0] as u32;
+        let i1 = base_index + tri[1] as u32;
+        let i2 = base_index + tri[2] as u32;
+
+        indices.extend_from_slice(&[i0, i2, i1]);
     }
 
     true
 }
 
-// ============================================================================
 // Intersection Mesh Builder
-// ============================================================================
+
+fn build_polygon_curbs(
+    terrain: &TerrainSubsystem,
+    center: WorldPos,
+    ring: &[Vec2],
+    road_type: &RoadType,
+    bottom_height: f32,
+    top_height: f32,
+    face_inward: bool,
+    config: &MeshConfig,
+    vertices: &mut Vec<RoadVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let chunk_size = terrain.chunk_size;
+    let height_diff = top_height - bottom_height;
+
+    if height_diff.abs() < 0.001 || ring.len() < 3 {
+        return;
+    }
+
+    let n = ring.len();
+
+    for i in 0..n {
+        let next = (i + 1) % n;
+        let a = ring[i];
+        let b = ring[next];
+
+        let edge = b - a;
+        let edge_len = edge.length();
+        if edge_len < 0.001 {
+            continue;
+        }
+
+        let edge_dir = edge / edge_len;
+        let right_perp = Vec2::new(edge_dir.y, -edge_dir.x);
+        let normal_2d = if face_inward { -right_perp } else { right_perp };
+        let normal = Vec3::new(normal_2d.x, 0.0, normal_2d.y);
+
+        let mut pos_a = center.add_vec3(Vec3::new(a.x, 0.0, a.y), chunk_size);
+        let mut pos_b = center.add_vec3(Vec3::new(b.x, 0.0, b.y), chunk_size);
+
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_a);
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_b);
+
+        let base = vertices.len() as u32;
+
+        let mut p0 = pos_a;
+        p0.local.y += bottom_height;
+        let mut p1 = pos_b;
+        p1.local.y += bottom_height;
+        let mut p2 = pos_b;
+        p2.local.y += top_height;
+        let mut p3 = pos_a;
+        p3.local.y += top_height;
+
+        let u0 = 0.0;
+        let u1 = edge_len * config.uv_scale_u;
+        let v0 = 0.0;
+        let v1 = height_diff.abs() * config.uv_scale_v;
+
+        vertices.push(road_vertex(
+            p0,
+            normal.to_array(),
+            road_type.sidewalk_material_id,
+            u0,
+            v0,
+        ));
+        vertices.push(road_vertex(
+            p1,
+            normal.to_array(),
+            road_type.sidewalk_material_id,
+            u1,
+            v0,
+        ));
+        vertices.push(road_vertex(
+            p2,
+            normal.to_array(),
+            road_type.sidewalk_material_id,
+            u1,
+            v1,
+        ));
+        vertices.push(road_vertex(
+            p3,
+            normal.to_array(),
+            road_type.sidewalk_material_id,
+            u0,
+            v1,
+        ));
+
+        if face_inward {
+            indices.push(base);
+            indices.push(base + 1);
+            indices.push(base + 2);
+            indices.push(base);
+            indices.push(base + 2);
+            indices.push(base + 3);
+        } else {
+            indices.push(base);
+            indices.push(base + 3);
+            indices.push(base + 2);
+            indices.push(base);
+            indices.push(base + 2);
+            indices.push(base + 1);
+        }
+    }
+}
 
 pub fn build_intersection_mesh(
     terrain: &TerrainSubsystem,
-    _node_id: NodeId,
+    node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,
     style: &RoadStyleParams,
@@ -775,37 +1049,40 @@ pub fn build_intersection_mesh(
     let node_lanes = node.node_lanes();
     let chunk_size = terrain.chunk_size;
 
-    if node_lanes.len() < 2 {
-        return IntersectionMeshResult::default();
-    }
+    // if node_lanes.len() < 2 {
+    //     return IntersectionMeshResult::default();
+    // }
 
     let road_type = style.road_type();
     let params = IntersectionBuildParams::from_style(style);
 
-    let arms = gather_arms_from_node_lanes(node_lanes, storage, chunk_size, &params);
+    let arms = node.arms();
     if arms.len() < 2 {
         return IntersectionMeshResult::default();
     }
 
-    // Extend back_len to ensure corridors overlap at center
-    let back_len = params.corridor_length * 0.5;
+    let corridor_lengths = compute_corridor_lengths(&arms, params.sidewalk_width);
 
-    let corridors: Vec<LocalPolygon> = arms
+    let mut asphalt_corridors: Vec<LocalPolygon> = arms
         .iter()
-        .map(|arm| {
-            let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
-            LocalPolygon::corridor(
-                dir_2d,
-                arm.half_width() * 1.2,
-                params.corridor_length,
-                back_len,
-            )
+        .zip(corridor_lengths.iter())
+        .map(|(arm, &len)| {
+            let dir_2d = arm.direction().xz();
+            let asphalt_half_width = (arm.half_width() - params.sidewalk_width).max(0.5);
+            LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
         })
         .collect();
 
-    let unioned = union_polygons(&corridors);
+    let asphalt_hw: Vec<f32> = arms
+        .iter()
+        .map(|a| (a.half_width() - params.sidewalk_width).max(0.5))
+        .collect();
+    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+    asphalt_corridors.extend(asphalt_corners);
 
-    let Some(main_poly) = unioned.into_iter().max_by(|a, b| {
+    let asphalt_union = union_polygons(&asphalt_corridors);
+
+    let Some(asphalt_poly) = asphalt_union.into_iter().max_by(|a, b| {
         polygon_area(&a.points)
             .partial_cmp(&polygon_area(&b.points))
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -813,14 +1090,14 @@ pub fn build_intersection_mesh(
         return IntersectionMeshResult::default();
     };
 
-    let simplified = simplify_clipper(&main_poly, params.simplify_tolerance);
-    if simplified.points.len() < 3 {
+    let asphalt_simplified = simplify_clipper(&asphalt_poly, params.simplify_tolerance);
+    if asphalt_simplified.points.len() < 3 {
         return IntersectionMeshResult::default();
     }
 
     let asphalt_base = vertices.len() as u32;
 
-    for p2d in &simplified.points {
+    for p2d in &asphalt_simplified.points {
         let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos);
         pos.local.y += road_type.lane_height;
@@ -835,31 +1112,107 @@ pub fn build_intersection_mesh(
         ));
     }
 
-    triangulate_polygon(&simplified.points, asphalt_base, indices);
+    triangulate_polygon(&asphalt_simplified.points, asphalt_base, indices);
 
     if road_type.sidewalk_width > 0.01 {
-        let offset_polys =
-            offset_polygon(&simplified, road_type.sidewalk_width, params.round_corners);
+        let mut full_corridors: Vec<LocalPolygon> = arms
+            .iter()
+            .zip(corridor_lengths.iter())
+            .map(|(arm, &len)| {
+                let dir_2d = arm.direction().xz();
+                LocalPolygon::corridor(dir_2d, arm.half_width(), len)
+            })
+            .collect();
 
-        if let Some(outer_poly) = offset_polys.into_iter().next() {
-            let outer_simplified = simplify_clipper(&outer_poly, params.simplify_tolerance);
+        let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
+        let full_corners = create_corner_fillers(&arms, &full_hw, params.round_corners);
+        full_corridors.extend(full_corners);
 
-            if outer_simplified.points.len() >= 3 {
-                build_sidewalk_ring(
-                    terrain,
-                    center,
-                    &simplified.points,
-                    &outer_simplified.points,
-                    road_type,
-                    config,
-                    vertices,
-                    indices,
-                );
+        let mut asphalt_corridors_for_sw: Vec<LocalPolygon> = arms
+            .iter()
+            .zip(corridor_lengths.iter())
+            .map(|(arm, &len)| {
+                let dir_2d = arm.direction().xz();
+                let asphalt_half_width = (arm.half_width() - params.sidewalk_width).max(0.5);
+                LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
+            })
+            .collect();
+
+        let asphalt_corners_for_sw =
+            create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+        asphalt_corridors_for_sw.extend(asphalt_corners_for_sw);
+
+        let end_clips = create_corridor_end_clips(&arms, &corridor_lengths, params.sidewalk_width);
+
+        let sidewalk_polys =
+            compute_sidewalk_ring_polygons(&full_corridors, &asphalt_corridors_for_sw, &end_clips);
+
+        for sidewalk_poly in &sidewalk_polys {
+            if sidewalk_poly.points.len() >= 3 {
+                let simplified = simplify_clipper(sidewalk_poly, params.simplify_tolerance);
+                if simplified.points.len() >= 3 {
+                    build_simple_sidewalk_mesh(
+                        terrain,
+                        center,
+                        &simplified.points,
+                        road_type,
+                        config,
+                        vertices,
+                        indices,
+                    );
+                }
+            }
+        }
+
+        let mut inner_ccw = asphalt_simplified.points.clone();
+        if polygon_signed_area(&inner_ccw) < 0.0 {
+            inner_ccw.reverse();
+        }
+        build_polygon_curbs(
+            terrain,
+            center,
+            &inner_ccw,
+            road_type,
+            road_type.lane_height,
+            road_type.sidewalk_height,
+            true,
+            config,
+            vertices,
+            indices,
+        );
+
+        let full_union = union_polygons(&full_corridors);
+        if let Some(full_poly) = full_union.into_iter().max_by(|a, b| {
+            polygon_area(&a.points)
+                .partial_cmp(&polygon_area(&b.points))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            let clipped_results = difference_polygons(&full_poly, &end_clips);
+            for outer_poly in clipped_results {
+                let simplified = simplify_clipper(&outer_poly, params.simplify_tolerance);
+                if simplified.points.len() >= 3 {
+                    let mut outer_ccw = simplified.points.clone();
+                    if polygon_signed_area(&outer_ccw) < 0.0 {
+                        outer_ccw.reverse();
+                    }
+                    build_polygon_curbs(
+                        terrain,
+                        center,
+                        &outer_ccw,
+                        road_type,
+                        road_type.lane_height,
+                        road_type.sidewalk_height,
+                        false,
+                        config,
+                        vertices,
+                        indices,
+                    );
+                }
             }
         }
     }
 
-    let ring: Vec<WorldPos> = simplified
+    let ring: Vec<WorldPos> = asphalt_simplified
         .points
         .iter()
         .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
@@ -870,169 +1223,298 @@ pub fn build_intersection_mesh(
     }
 }
 
+fn compute_sidewalk_ring_polygons(
+    full_corridors: &[LocalPolygon],
+    asphalt_corridors: &[LocalPolygon],
+    end_clips: &[LocalPolygon],
+) -> Vec<LocalPolygon> {
+    use clipper2::{FillRule, difference, union};
+
+    let full_coords: Vec<Vec<(f64, f64)>> = full_corridors
+        .iter()
+        .filter(|p| p.points.len() >= 3)
+        .map(|p| {
+            p.points
+                .iter()
+                .map(|pt| (pt.x as f64, pt.y as f64))
+                .collect()
+        })
+        .collect();
+
+    if full_coords.is_empty() {
+        return vec![];
+    }
+
+    let full_paths: Paths = full_coords.into();
+    let empty: Paths = Vec::<Vec<(f64, f64)>>::new().into();
+
+    let full_union = match union(full_paths, empty, FillRule::NonZero) {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let asphalt_coords: Vec<Vec<(f64, f64)>> = asphalt_corridors
+        .iter()
+        .filter(|p| p.points.len() >= 3)
+        .map(|p| {
+            p.points
+                .iter()
+                .map(|pt| (pt.x as f64, pt.y as f64))
+                .collect()
+        })
+        .collect();
+
+    if asphalt_coords.is_empty() {
+        return vec![];
+    }
+
+    let asphalt_paths: Paths = asphalt_coords.into();
+
+    let ring_result = match difference(full_union, asphalt_paths, FillRule::NonZero) {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let clip_coords: Vec<Vec<(f64, f64)>> = end_clips
+        .iter()
+        .filter(|p| p.points.len() >= 3)
+        .map(|p| {
+            p.points
+                .iter()
+                .map(|pt| (pt.x as f64, pt.y as f64))
+                .collect()
+        })
+        .collect();
+
+    let final_result = if clip_coords.is_empty() {
+        ring_result
+    } else {
+        let clip_paths: Paths = clip_coords.into();
+        match difference(ring_result, clip_paths, FillRule::NonZero) {
+            Ok(r) => r,
+            Err(_) => return vec![],
+        }
+    };
+
+    let output: Vec<Vec<(f64, f64)>> = final_result.into();
+
+    output
+        .into_iter()
+        .filter(|path| path.len() >= 3)
+        .map(LocalPolygon::from_clipper_coords)
+        .collect()
+}
+
+fn build_simple_sidewalk_mesh(
+    terrain: &TerrainSubsystem,
+    center: WorldPos,
+    ring: &[Vec2],
+    road_type: &RoadType,
+    config: &MeshConfig,
+    vertices: &mut Vec<RoadVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let chunk_size = terrain.chunk_size;
+
+    if ring.len() < 3 {
+        return;
+    }
+
+    let base = vertices.len() as u32;
+
+    for p2d in ring {
+        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos);
+        pos.local.y += road_type.sidewalk_height;
+
+        let (u, v) = radial_uv(center, pos, chunk_size, config);
+        vertices.push(road_vertex(
+            pos,
+            [0.0, 1.0, 0.0],
+            road_type.sidewalk_material_id,
+            u,
+            v,
+        ));
+    }
+
+    triangulate_polygon(ring, base, indices);
+}
+
+pub(crate) fn gather_arms(
+    storage: &RoadStorage,
+    node_id: NodeId,
+    intersection_build_params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+    gizmo: &mut Gizmo,
+) -> Vec<Arm> {
+    let segment_ids = storage.enabled_segments_connected_to_node(node_id);
+    let node = match storage.node(node_id) {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+
+    let lane_width = intersection_build_params.lane_width_m;
+    let sidewalk_width = intersection_build_params.sidewalk_width;
+
+    let mut arms: Vec<Arm> = segment_ids
+        .into_iter()
+        .filter_map(|seg_id| {
+            let segment = storage.segment(seg_id);
+            let points_to_node = segment.end() == node_id;
+
+            let lane_ids: Vec<LaneId> = segment
+                .lanes()
+                .iter()
+                .copied()
+                .filter(|id| storage.lane(id).is_enabled())
+                .collect();
+
+            if lane_ids.is_empty() {
+                return None;
+            }
+
+            let direction =
+                segment_direction_at_node(segment, node_id, storage, chunk_size, gizmo)?;
+
+            let mut bearing = direction.z.atan2(direction.x);
+            if bearing < 0.0 {
+                bearing += TAU;
+            }
+
+            let lane_count = lane_ids.len();
+            let half_width = lane_count as f32 * lane_width * 0.5 + sidewalk_width;
+
+            let mut arm = Arm::new(seg_id, bearing, direction, half_width, points_to_node);
+
+            for lane_id in &lane_ids {
+                let lane = storage.lane(lane_id);
+                let flows_to_node = lane.lane_index() > 0;
+                if flows_to_node {
+                    arm.add_incoming_lane(*lane_id);
+                } else {
+                    arm.add_outgoing_lane(*lane_id);
+                }
+            }
+
+            arm.sort_lanes_by_index(storage);
+            Some(arm)
+        })
+        .collect();
+
+    arms.sort_by(|a, b| {
+        a.bearing()
+            .partial_cmp(&b.bearing())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    arms
+}
+
 fn gather_arms_from_node_lanes(
+    node_id: NodeId,
     node_lanes: &[NodeLane],
     storage: &RoadStorage,
     chunk_size: ChunkSize,
     params: &IntersectionBuildParams,
+    gizmo: &mut Gizmo,
 ) -> Vec<Arm> {
-    let mut segment_dirs: HashMap<SegmentId, (Vec3, f32)> = HashMap::new();
+    let mut seen_segments: HashSet<SegmentId> = HashSet::new();
 
     for nl in node_lanes {
-        if let Some(&LaneRef::Segment(lane_id, _)) = nl.merging().first() {
-            let lane = storage.lane(&lane_id);
-            let seg_id = lane.segment();
-
-            let poly = nl.polyline();
-            if poly.len() >= 2 {
-                let dir = poly[0].delta_to(poly[1], chunk_size);
-                let dir = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-
-                if dir != Vec3::ZERO {
-                    let segment = storage.segment(seg_id);
-                    let half_width = segment.lanes().len() as f32 * params.lane_width_m * 0.5
-                        + params.sidewalk_width;
-                    segment_dirs.insert(seg_id, (dir, half_width));
-                }
+        for lane_ref in nl.merging() {
+            if let LaneRef::Segment(lane_id, _) = lane_ref {
+                let lane = storage.lane(lane_id);
+                seen_segments.insert(lane.segment());
+            }
+        }
+        for lane_ref in nl.merging() {
+            if let LaneRef::Segment(lane_id, _) = lane_ref {
+                let lane = storage.lane(lane_id);
+                seen_segments.insert(lane.segment());
             }
         }
     }
 
-    segment_dirs
+    let mut arms: Vec<Arm> = seen_segments
         .into_iter()
-        .map(|(seg_id, (dir, half_width))| {
-            let mut bearing = dir.z.atan2(dir.x);
+        .filter_map(|seg_id| {
+            let segment = storage.segment(seg_id);
+            let direction =
+                segment_direction_at_node(segment, node_id, storage, chunk_size, gizmo)?;
+
+            let mut bearing = direction.z.atan2(direction.x);
             if bearing < 0.0 {
                 bearing += TAU;
             }
-            Arm::new(seg_id, bearing, dir, half_width, false)
+
+            let lane_count = segment.lanes().len();
+            let half_width = lane_count as f32 * params.lane_width_m * 0.5 + params.sidewalk_width;
+
+            let points_to_node = segment.end() == node_id;
+
+            Some(Arm::new(
+                seg_id,
+                bearing,
+                direction,
+                half_width,
+                points_to_node,
+            ))
         })
-        .collect()
+        .collect();
+
+    arms.sort_by(|a, b| {
+        a.bearing()
+            .partial_cmp(&b.bearing())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    arms
 }
 
-fn build_sidewalk_ring(
-    terrain: &TerrainSubsystem,
-    center: WorldPos,
-    inner: &[Vec2],
-    outer: &[Vec2],
-    road_type: &RoadType,
-    config: &MeshConfig,
-    vertices: &mut Vec<RoadVertex>,
-    indices: &mut Vec<u32>,
-) {
-    let chunk_size = terrain.chunk_size;
-    let base = vertices.len() as u32;
+/// Compute bridge triangles for reflex angles (> 180°) between adjacent arms.
+/// When the angle between consecutive arms exceeds 180°, the corridor rectangles
+/// don't naturally meet at the outer corner, creating a gap. This function creates
+/// triangles to fill those gaps.
+fn compute_bridge_triangles(
+    arms: &[Arm],
+    corridor_lengths: &[f32],
+    half_widths: &[f32],
+) -> Vec<LocalPolygon> {
+    use std::f32::consts::PI;
 
-    // Outer ring vertices
-    for p2d in outer {
-        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos);
-        pos.local.y += road_type.sidewalk_height;
-
-        let (u, v) = radial_uv(center, pos, chunk_size, config);
-        vertices.push(road_vertex(
-            pos,
-            [0.0, 1.0, 0.0],
-            road_type.sidewalk_material_id,
-            u,
-            v,
-        ));
+    let n = arms.len();
+    if n < 2 {
+        return vec![];
     }
 
-    // Inner ring vertices (reversed for hole winding)
-    let inner_reversed: Vec<Vec2> = inner.iter().rev().copied().collect();
-    for p2d in &inner_reversed {
-        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos);
-        pos.local.y += road_type.sidewalk_height;
+    let mut bridges = Vec::new();
 
-        let (u, v) = radial_uv(center, pos, chunk_size, config);
-        vertices.push(road_vertex(
-            pos,
-            [0.0, 1.0, 0.0],
-            road_type.sidewalk_material_id,
-            u,
-            v,
-        ));
+    for i in 0..n {
+        let next_idx = (i + 1) % n;
+
+        // Angle from this arm to next (going CCW in bearing order)
+        let angle = normalize_angle_positive(arms[next_idx].bearing() - arms[i].bearing());
+
+        // If angle > PI (180°), there's a gap at the outer corner
+        if angle > PI {
+            let dir = arms[i].direction().xz();
+            let next_dir = arms[next_idx].direction().xz();
+            let perp = Vec2::new(-dir.y, dir.x);
+            let next_perp = Vec2::new(-next_dir.y, next_dir.x);
+
+            // Arm i's far-right corner (facing the gap)
+            let corner_i = dir * corridor_lengths[i] - perp * half_widths[i];
+
+            // Arm i+1's far-left corner (facing the gap)
+            let corner_next =
+                next_dir * corridor_lengths[next_idx] + next_perp * half_widths[next_idx];
+
+            // CCW winding for valid polygon: origin -> corner_next -> corner_i
+            bridges.push(LocalPolygon::new(vec![Vec2::ZERO, corner_next, corner_i]));
+        }
     }
 
-    triangulate_polygon_with_hole(outer, &inner_reversed, base, indices);
-
-    // Curb faces
-    build_curb_faces(terrain, center, inner, road_type, config, vertices, indices);
-}
-
-fn build_curb_faces(
-    terrain: &TerrainSubsystem,
-    center: WorldPos,
-    inner_ring: &[Vec2],
-    road_type: &RoadType,
-    config: &MeshConfig,
-    vertices: &mut Vec<RoadVertex>,
-    indices: &mut Vec<u32>,
-) {
-    let chunk_size = terrain.chunk_size;
-    let curb_height = road_type.sidewalk_height - road_type.lane_height;
-
-    if curb_height < 0.01 || inner_ring.len() < 3 {
-        return;
-    }
-
-    for i in 0..inner_ring.len() {
-        let p0 = inner_ring[i];
-        let p1 = inner_ring[(i + 1) % inner_ring.len()];
-
-        let mut pos0_low = center.add_vec3(Vec3::new(p0.x, 0.0, p0.y), chunk_size);
-        let mut pos1_low = center.add_vec3(Vec3::new(p1.x, 0.0, p1.y), chunk_size);
-
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos0_low);
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos1_low);
-
-        pos0_low.local.y += road_type.lane_height;
-        pos1_low.local.y += road_type.lane_height;
-
-        let mut pos0_high = pos0_low;
-        let mut pos1_high = pos1_low;
-        pos0_high.local.y += curb_height;
-        pos1_high.local.y += curb_height;
-
-        let edge = Vec2::new(p1.x - p0.x, p1.y - p0.y);
-        let normal_2d = Vec2::new(edge.y, -edge.x).normalize_or_zero();
-        let normal = [normal_2d.x, 0.0, normal_2d.y];
-
-        let base = vertices.len() as u32;
-
-        vertices.push(road_vertex(
-            pos0_low,
-            normal,
-            road_type.sidewalk_material_id,
-            0.0,
-            0.0,
-        ));
-        vertices.push(road_vertex(
-            pos1_low,
-            normal,
-            road_type.sidewalk_material_id,
-            1.0,
-            0.0,
-        ));
-        vertices.push(road_vertex(
-            pos1_high,
-            normal,
-            road_type.sidewalk_material_id,
-            1.0,
-            1.0,
-        ));
-        vertices.push(road_vertex(
-            pos0_high,
-            normal,
-            road_type.sidewalk_material_id,
-            0.0,
-            1.0,
-        ));
-
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
+    bridges
 }
 
 fn radial_uv(
@@ -1076,90 +1558,156 @@ fn build_node_lanes_for_intersection(
     node_id: NodeId,
     params: &IntersectionBuildParams,
     chunk_size: ChunkSize,
+    gizmo: &mut Gizmo,
 ) -> Vec<NodeLane> {
     let Some(node) = storage.node(node_id) else {
         return Vec::new();
     };
 
-    let incoming = node.incoming_lanes();
-    let outgoing = node.outgoing_lanes();
+    let node_pos = node.position();
+
+    // Gather ALL lanes connected to this node and classify them geometrically
+    let connected_segments = storage.enabled_segments_connected_to_node(node_id);
+
+    let mut incoming_lanes: Vec<(LaneId, usize, WorldPos, Vec3)> = Vec::new(); // (id, node_idx, endpoint, direction_into_node)
+    let mut outgoing_lanes: Vec<(LaneId, usize, WorldPos, Vec3)> = Vec::new(); // (id, node_idx, endpoint, direction_out_of_node)
+
+    for seg_id in connected_segments {
+        let segment = storage.segment(seg_id);
+        let segment_starts_here = segment.start() == node_id;
+        let segment_ends_here = segment.end() == node_id;
+
+        for lane_id in segment.lanes() {
+            let lane = storage.lane(lane_id);
+            if !lane.is_enabled() {
+                continue;
+            }
+
+            let pts = lane.polyline();
+            if pts.len() < 2 {
+                continue;
+            }
+
+            // Find which endpoint is actually at the node (geometrically)
+            let Some(node_idx) = endpoint_index_near_node(pts, node_pos, chunk_size) else {
+                continue;
+            };
+
+            let endpoint = pts[node_idx];
+
+            // Determine if this lane is incoming or outgoing based on:
+            // 1. Which end of the segment is at this node
+            // 2. The lane_index convention (positive = toward segment end, negative = toward segment start)
+            //
+            // Actually, let's be more robust - determine from geometry + segment topology:
+            let lane_idx = lane.lane_index();
+
+            // In typical road setups:
+            // - Positive lane indices flow in segment direction (start → end)
+            // - Negative lane indices flow against segment direction (end → start)
+            let flows_toward_end = lane_idx >= 0;
+
+            let is_incoming = if segment_ends_here {
+                // Segment ends at this node
+                // Incoming if traffic flows toward segment end
+                flows_toward_end
+            } else if segment_starts_here {
+                // Segment starts at this node
+                // Incoming if traffic flows toward segment start (against segment direction)
+                !flows_toward_end
+            } else {
+                continue; // Segment doesn't connect to this node??
+            };
+
+            // Compute direction based on actual geometry
+            let (direction, endpoint) =
+                compute_lane_tangent_at_node(pts, node_idx, is_incoming, chunk_size);
+
+            let Some(direction) = direction else {
+                continue;
+            };
+
+            if is_incoming {
+                // Debug: green for incoming
+                gizmo.cross(endpoint, 0.3, [0.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
+                gizmo.direction(endpoint, direction, [0.0, 0.8, 0.0], DEBUG_DRAW_DURATION);
+                incoming_lanes.push((*lane_id, node_idx, endpoint, direction));
+            } else {
+                // Debug: red for outgoing
+                gizmo.cross(endpoint, 0.3, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
+                gizmo.direction(endpoint, direction, [0.8, 0.0, 0.0], DEBUG_DRAW_DURATION);
+                outgoing_lanes.push((*lane_id, node_idx, endpoint, direction));
+            }
+        }
+    }
+
+    // Debug: print lane counts
+    if incoming_lanes.is_empty() || outgoing_lanes.is_empty() {
+        gizmo.cross(node_pos, 1.0, [1.0, 0.0, 1.0], DEBUG_DRAW_DURATION); // Magenta = missing in/out
+        return Vec::new();
+    }
 
     let mut node_lanes = Vec::new();
-    let lane_idx = storage.node_lane_count_for_node(node_id);
+    let lane_idx_base = storage.node_lane_count_for_node(node_id);
 
-    for in_id in incoming {
+    for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
         let in_lane = storage.lane(in_id);
-        if !in_lane.is_enabled() {
-            continue;
-        }
 
-        let in_pts = in_lane.polyline();
-        if in_pts.len() < 2 {
-            continue;
-        }
-
-        let in_segment = storage.segment(in_lane.segment());
-        let in_node_idx = if in_segment.end() == node_id {
-            in_pts.len() - 1
-        } else {
-            0
-        };
-        let in_pt = in_pts[in_node_idx];
-
-        let Some(in_dir) = compute_lane_dir_at_node(in_pts, in_node_idx, true, chunk_size) else {
-            continue;
-        };
-
-        for out_id in outgoing {
+        for (out_id, out_node_idx, out_pt, out_dir) in &outgoing_lanes {
+            // Skip same lane
             if in_id == out_id {
                 continue;
             }
 
+            // Skip same segment (no U-turns within same road)
             let out_lane = storage.lane(out_id);
-            if !out_lane.is_enabled() || in_lane.segment() == out_lane.segment() {
+            if in_lane.segment() == out_lane.segment() {
                 continue;
             }
 
-            let out_pts = out_lane.polyline();
-            if out_pts.len() < 2 {
+            // Angle-based filtering
+            // in_dir points INTO the intersection (direction of incoming traffic)
+            // out_dir points OUT OF the intersection (direction of outgoing traffic)
+            //
+            // For a straight-through: in_dir ≈ out_dir → dot ≈ 1
+            // For 90° turn: dot ≈ 0
+            // For U-turn (180°): dot ≈ -1
+            let dot = in_dir.dot(*out_dir);
+
+            // Filter out U-turns and very sharp turns
+            if dot < -0.7 {
                 continue;
             }
 
-            let out_segment = storage.segment(out_lane.segment());
-            let out_node_idx = if out_segment.end() == node_id {
-                out_pts.len() - 1
-            } else {
-                0
-            };
-            let out_pt = out_pts[out_node_idx];
-
-            let Some(out_dir) = compute_lane_dir_at_node(out_pts, out_node_idx, false, chunk_size)
-            else {
-                continue;
-            };
-
-            if in_dir.dot(out_dir) < -0.8 {
-                continue;
-            }
-
-            let chord = in_pt.distance_to(out_pt, chunk_size);
-            let dot = in_dir.dot(out_dir);
+            // Compute turn geometry
+            let chord = in_pt.distance_to(*out_pt, chunk_size);
             let tightness = compute_turn_tightness(chord, dot, params);
 
             let geom = generate_turn_geometry(
-                in_pt,
-                in_dir,
-                out_pt,
-                out_dir,
+                *in_pt,
+                *in_dir,
+                *out_pt,
+                *out_dir,
                 params.turn_samples,
                 tightness,
                 chunk_size,
             );
 
+            // Debug: draw the turn curve
+            let turn_pts = &geom.points;
+            for i in 0..turn_pts.len().saturating_sub(1) {
+                gizmo.line(
+                    turn_pts[i],
+                    turn_pts[i + 1],
+                    [1.0, 1.0, 0.0],
+                    DEBUG_DRAW_DURATION,
+                );
+            }
+
             let nl = NodeLane::new(
-                (lane_idx + node_lanes.len()) as NodeLaneId,
-                vec![LaneRef::Segment(*in_id, in_node_idx as PolyIdx)],
-                vec![LaneRef::Segment(*out_id, out_node_idx as PolyIdx)],
+                (lane_idx_base + node_lanes.len()) as NodeLaneId,
+                vec![LaneRef::Segment(*in_id, *in_node_idx as PolyIdx)],
+                vec![LaneRef::Segment(*out_id, *out_node_idx as PolyIdx)],
                 geom,
                 0.0,
                 0.0,
@@ -1169,6 +1717,11 @@ fn build_node_lanes_for_intersection(
 
             node_lanes.push(nl);
         }
+    }
+
+    // Debug: orange if no node lanes generated
+    if node_lanes.is_empty() {
+        gizmo.cross(node_pos, 1.5, [1.0, 0.5, 0.0], DEBUG_DRAW_DURATION);
     }
 
     node_lanes
@@ -1227,9 +1780,9 @@ fn compute_turn_tightness(chord: f32, dot: f32, params: &IntersectionBuildParams
 
 pub fn generate_turn_geometry(
     start: WorldPos,
-    start_dir: Vec3,
+    start_dir: Vec3, // Direction INTO intersection (incoming traffic direction)
     end: WorldPos,
-    end_dir: Vec3,
+    end_dir: Vec3, // Direction OUT OF intersection (outgoing traffic direction)
     samples: usize,
     tightness: f32,
     chunk_size: ChunkSize,
@@ -1240,14 +1793,22 @@ pub fn generate_turn_geometry(
         return LaneGeometry::from_polyline(vec![start, end], chunk_size);
     }
 
+    // Control point distance scales with chord length and tightness
+    // Longer control arms = smoother curves
     let control_len = dist * 0.4 * tightness;
+
+    // ctrl1: Extend from start in the direction traffic is going (INTO intersection)
+    //        This is start_dir itself
     let ctrl1 = start.add_vec3(start_dir * control_len, chunk_size);
+
+    // ctrl2: Extend from end BACKWARD against traffic flow
+    //        Traffic goes OUT in end_dir direction, so backward is -end_dir
     let ctrl2 = end.add_vec3(-end_dir * control_len, chunk_size);
 
     let n = samples.clamp(4, 64);
-    let points: Vec<WorldPos> = (0..n)
+    let points: Vec<WorldPos> = (0..=n) // Note: 0..=n for n+1 points
         .map(|i| {
-            let t = i as f32 / (n - 1) as f32;
+            let t = i as f32 / n as f32;
             bezier3(start, ctrl1, ctrl2, end, t, chunk_size)
         })
         .collect();
@@ -1366,27 +1927,86 @@ fn lane_dir_away_from_node(pts: &[WorldPos], node_pos: WorldPos, chunk: ChunkSiz
     let v = Vec3::new(d.x, 0.0, d.z).normalize_or_zero();
     (v != Vec3::ZERO).then_some(v)
 }
-
-fn compute_arm_direction(
+fn segment_direction_at_node(
+    segment: &Segment,
+    node_id: NodeId,
     storage: &RoadStorage,
-    lane_ids: &[LaneId],
-    node_pos: WorldPos,
     chunk_size: ChunkSize,
+    gizmo: &mut Gizmo,
 ) -> Option<Vec3> {
-    let mut sum = Vec3::ZERO;
-    let mut count = 0;
+    let lane_id = *segment.lanes().first()?;
+    let pts = storage.lane(&lane_id).polyline();
 
-    for lane_id in lane_ids {
-        let pts = storage.lane(lane_id).polyline();
-        if let Some(dir) = lane_dir_away_from_node(pts, node_pos, chunk_size) {
-            sum += dir;
-            count += 1;
-        }
-    }
-
-    if count == 0 {
+    if pts.len() < 2 {
         return None;
     }
-    let avg = (sum / count as f32).normalize_or_zero();
-    (avg != Vec3::ZERO).then_some(avg)
+
+    let (a, b) = if segment.start() == node_id {
+        (pts[0], pts[1])
+    } else {
+        let n = pts.len();
+        (pts[n - 1], pts[n - 2])
+    };
+    // gizmo.cross(a, 0.5, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
+    // gizmo.cross(b, 0.6, [0.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
+    let d = a.delta_to(b, chunk_size);
+
+    let v = Vec3::new(d.x, 0.0, d.z).normalize_or_zero();
+
+    // gizmo.direction(a, v, [1.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
+
+    (v != Vec3::ZERO).then_some(v)
+}
+
+/// Compute the tangent direction of a lane at the node endpoint.
+///
+/// For incoming lanes: returns direction pointing INTO the intersection (traffic flow direction)
+/// For outgoing lanes: returns direction pointing OUT OF the intersection (traffic flow direction)
+fn compute_lane_tangent_at_node(
+    pts: &[WorldPos],
+    node_idx: usize,
+    is_incoming: bool,
+    chunk_size: ChunkSize,
+) -> (Option<Vec3>, WorldPos) {
+    if pts.len() < 2 {
+        return (None, pts.get(0).copied().unwrap_or(WorldPos::zero()));
+    }
+
+    let endpoint = pts[node_idx];
+
+    // For incoming: we want direction of traffic as it arrives at the node
+    //   = direction from previous point toward the node endpoint
+    // For outgoing: we want direction of traffic as it leaves the node
+    //   = direction from node endpoint toward next point
+
+    let direction = if node_idx == 0 {
+        if is_incoming {
+            // Traffic arrives at index 0 from index 1
+            // Direction = from pts[1] toward pts[0]
+            pts[1].delta_to(pts[0], chunk_size)
+        } else {
+            // Traffic leaves from index 0 toward index 1
+            // Direction = from pts[0] toward pts[1]
+            pts[0].delta_to(pts[1], chunk_size)
+        }
+    } else {
+        let n = pts.len();
+        if is_incoming {
+            // Traffic arrives at index n-1 from index n-2
+            // Direction = from pts[n-2] toward pts[n-1]
+            pts[n - 2].delta_to(pts[n - 1], chunk_size)
+        } else {
+            // Traffic leaves from index n-1 toward index n-2
+            // Direction = from pts[n-1] toward pts[n-2]
+            pts[n - 1].delta_to(pts[n - 2], chunk_size)
+        }
+    };
+
+    let dir = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero();
+
+    if dir == Vec3::ZERO {
+        (None, endpoint)
+    } else {
+        (Some(dir), endpoint)
+    }
 }

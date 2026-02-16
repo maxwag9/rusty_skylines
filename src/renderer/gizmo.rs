@@ -184,6 +184,16 @@ impl Gizmo {
         }
     }
 
+    pub fn direction(&mut self, center: WorldPos, direction: Vec3, color: [f32; 3], duration: f32) {
+        self.arrow(
+            center,
+            center.add_vec3(direction, self.chunk_size),
+            color,
+            false,
+            duration,
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Axes gizmo
     // ─────────────────────────────────────────────────────────────────────────
@@ -342,6 +352,10 @@ impl Gizmo {
         // Place arrows along polyline
         let mut t = arrow_spacing;
         let mut idx = 0;
+        if t == 0.0 {
+            self.push(verts, duration);
+            return;
+        }
         while t < total_len {
             let (pos, dir) = sample_at(t);
             if dir.length_squared() < 0.0001 {
@@ -588,19 +602,23 @@ impl Gizmo {
     /// Render a whole number centered at position.
     pub fn number(
         &mut self,
-        mut value: usize,
+        value: isize,
         center: WorldPos,
         scale: f32,
         color: [f32; 3],
         duration: f32,
     ) {
-        let digits: Vec<u8> = if value == 0 {
+        let is_negative = value < 0;
+        let abs_value = value.unsigned_abs();
+
+        let digits: Vec<u8> = if abs_value == 0 {
             vec![0]
         } else {
             let mut ds = Vec::new();
-            while value > 0 {
-                ds.push((value % 10) as u8);
-                value /= 10;
+            let mut v = abs_value;
+            while v > 0 {
+                ds.push((v % 10) as u8);
+                v /= 10;
             }
             ds.reverse();
             ds
@@ -608,12 +626,28 @@ impl Gizmo {
 
         let cs = self.chunk_size;
         let spacing = scale * 1.2;
-        let total_width = (digits.len() as f32 - 1.0) * spacing;
+
+        let sign_slots = if is_negative { 1 } else { 0 };
+        let total_slots = digits.len() + sign_slots;
+        let total_width = (total_slots as f32 - 1.0) * spacing;
         let start_offset = -total_width * 0.5;
 
-        for (i, &d) in digits.iter().enumerate() {
-            let offset = Vec3::new(start_offset + i as f32 * spacing, 0.0, 0.0);
+        let mut slot = 0;
+
+        if is_negative {
+            let offset = Vec3::new(start_offset, 0.0, 0.0);
+            let sign_pos = center.add_vec3(offset, cs);
+            let half = scale * 0.35;
+            let left = sign_pos.add_vec3(Vec3::new(-half, 0.0, 0.0), cs);
+            let right = sign_pos.add_vec3(Vec3::new(half, 0.0, 0.0), cs);
+            self.line(left, right, color, duration);
+            slot += 1;
+        }
+
+        for &d in &digits {
+            let offset = Vec3::new(start_offset + slot as f32 * spacing, 0.0, 0.0);
             self.digit(d, center.add_vec3(offset, cs), scale, color, duration);
+            slot += 1;
         }
     }
 
