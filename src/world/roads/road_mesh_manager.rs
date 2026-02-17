@@ -15,6 +15,7 @@ use crate::world::roads::roads::{LaneGeometry, Node, RoadStorage, Segment};
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use glam::Vec3;
 use std::collections::HashMap;
+use std::f32::consts::{FRAC_PI_2, TAU};
 use wgpu::{VertexAttribute, VertexFormat};
 
 pub type ChunkId = u64;
@@ -466,12 +467,9 @@ fn draw_node_geometry(
     let (start_angle, end_angle) = if let Some(dir) = cap_direction {
         let forward = dir.normalize();
         let heading = forward.z.atan2(forward.x);
-        (
-            heading - std::f32::consts::FRAC_PI_2,
-            heading + std::f32::consts::FRAC_PI_2,
-        )
+        (heading - FRAC_PI_2, heading + FRAC_PI_2)
     } else {
-        (0.0_f32, std::f32::consts::TAU)
+        (0.0_f32, TAU)
     };
 
     let segments = NODE_ANGULAR_SEGMENTS;
@@ -494,7 +492,12 @@ fn draw_node_geometry(
     let up_normal = [0.0_f32, 1.0, 0.0];
 
     let mut center_p = node_pos;
-    set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut center_p);
+    set_point_height_with_structure_type(
+        terrain_renderer,
+        road_type.structure(),
+        &mut center_p,
+        true,
+    );
     center_p.local.y += road_type.lane_height;
     let center_idx = vertices.len() as u32;
 
@@ -511,7 +514,12 @@ fn draw_node_geometry(
 
     for i in 0..road_geom.points.len() {
         let mut outer_p = road_geom.points[i];
-        set_point_height_with_structure_type(terrain_renderer, road_type.structure(), &mut outer_p);
+        set_point_height_with_structure_type(
+            terrain_renderer,
+            road_type.structure(),
+            &mut outer_p,
+            true,
+        );
         outer_p.local.y += road_type.lane_height;
 
         let t = i as f32 / segments as f32;
@@ -616,6 +624,7 @@ pub fn build_ribbon_mesh(
     if lane_geom.points.len() < 2 {
         return;
     }
+    let high_res_height = chunk_filter.is_some();
     let chunk_size = terrain_renderer.chunk_size;
     let half_width = width * 0.5;
     let base_vertex = vertices.len() as u32;
@@ -690,11 +699,13 @@ pub fn build_ribbon_mesh(
             terrain_renderer,
             style.road_type().structure(),
             &mut left_pos,
+            high_res_height,
         );
         set_point_height_with_structure_type(
             terrain_renderer,
             style.road_type().structure(),
             &mut right_pos,
+            high_res_height,
         );
 
         left_pos.local.y += height;
@@ -767,6 +778,7 @@ pub fn build_vertical_face(
     if ref_geom.points.len() < 2 {
         return;
     }
+    let high_res_height = chunk_filter.is_some();
     let chunk_size = terrain_renderer.chunk_size;
     let base_vertex = vertices.len() as u32;
     let mut included_indices = Vec::new();
@@ -827,6 +839,7 @@ pub fn build_vertical_face(
             terrain_renderer,
             style.road_type().structure(),
             &mut p_bottom,
+            high_res_height,
         );
         p_bottom.local.y += bottom_height;
         let mut p_top = face_pos;
@@ -834,6 +847,7 @@ pub fn build_vertical_face(
             terrain_renderer,
             style.road_type().structure(),
             &mut p_top,
+            high_res_height,
         );
         p_top.local.y += top_height;
         let u = ref_geom.lengths[i] * uv_config.0;
@@ -1024,7 +1038,7 @@ impl RoadMeshManager {
     /// Build mesh for a chunk (Some) or all geometry (None for previews)
     pub fn build_mesh(
         &self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain: &TerrainSubsystem,
         chunk_id: Option<ChunkId>,
         storage: &RoadStorage,
         style: &RoadStyleParams,
@@ -1052,7 +1066,7 @@ impl RoadMeshManager {
 
             if segment_count >= 2 {
                 let result = build_intersection_mesh(
-                    terrain_renderer,
+                    terrain,
                     *node_id,
                     node,
                     storage,
@@ -1081,16 +1095,11 @@ impl RoadMeshManager {
                     continue;
                 }
 
-                let cap_direction = compute_cap_direction(
-                    gizmo,
-                    *node_id,
-                    node,
-                    storage,
-                    terrain_renderer.chunk_size,
-                );
+                let cap_direction =
+                    compute_cap_direction(gizmo, *node_id, node, storage, terrain.chunk_size);
 
                 draw_node_geometry(
-                    terrain_renderer,
+                    terrain,
                     gizmo,
                     center,
                     connected_lanes_info.as_slice(),
@@ -1106,10 +1115,8 @@ impl RoadMeshManager {
         // === PASS 2: Build segment meshes using intersection boundary data ===
         let segment_ids: Vec<SegmentId> = match chunk_id {
             Some(cid) => {
-                let mut ids = storage.segment_ids_touching_chunk(
-                    chunk_id_to_coord(cid),
-                    terrain_renderer.chunk_size,
-                );
+                let mut ids =
+                    storage.segment_ids_touching_chunk(chunk_id_to_coord(cid), terrain.chunk_size);
                 ids.sort_unstable();
                 ids
             }
@@ -1127,7 +1134,7 @@ impl RoadMeshManager {
             let end_boundary = intersection_results.get(&segment.end());
 
             mesh_segment_with_boundaries(
-                terrain_renderer,
+                terrain,
                 gizmo,
                 seg_id,
                 segment,
@@ -1146,19 +1153,19 @@ impl RoadMeshManager {
             vertices,
             indices,
             topo_version: chunk_id
-                .map(|cid| compute_topo_version(cid, storage, terrain_renderer.chunk_size))
+                .map(|cid| compute_topo_version(cid, storage, terrain.chunk_size))
                 .unwrap_or(0),
         }
     }
     pub fn update_chunk_mesh(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain: &TerrainSubsystem,
         chunk_id: ChunkId,
         storage: &RoadStorage,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,
     ) -> &ChunkMesh {
-        let mesh = self.build_mesh(terrain_renderer, Some(chunk_id), storage, style, gizmo);
+        let mesh = self.build_mesh(terrain, Some(chunk_id), storage, style, gizmo);
         self.chunk_cache.insert(chunk_id, mesh);
         self.chunk_cache.get(&chunk_id).unwrap()
     }
@@ -1166,12 +1173,12 @@ impl RoadMeshManager {
     /// Convenience wrapper for building preview meshes (no chunking)
     pub fn build_preview_mesh(
         &self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain: &TerrainSubsystem,
         preview_storage: &RoadStorage,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,
     ) -> ChunkMesh {
-        self.build_mesh(terrain_renderer, None, preview_storage, style, gizmo)
+        self.build_mesh(terrain, None, preview_storage, style, gizmo)
     }
 }
 

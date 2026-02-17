@@ -1,9 +1,9 @@
-use crate::events::Event;
+use crate::commands::Command;
 use crate::world::terrain::terrain_subsystem::Cursor;
 
-pub fn cursor_system(cursor: &mut Cursor, event: &Event) {
+pub fn cursor_system(cursor: &mut Cursor, event: &Command) {
     match event {
-        Event::SetCursorMode(mode) => {
+        Command::SetCursorMode(mode) => {
             cursor.mode = *mode;
         }
         _ => {}

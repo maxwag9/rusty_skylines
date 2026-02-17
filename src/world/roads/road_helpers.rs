@@ -375,13 +375,14 @@ pub fn set_point_height_with_structure_type(
     terrain_renderer: &TerrainSubsystem,
     structure_type: StructureType,
     p: &mut WorldPos,
+    high_res: bool,
 ) {
     match structure_type {
         StructureType::Surface => {
-            p.local.y = terrain_renderer.get_height_at(*p) + CLEARANCE;
+            p.local.y = terrain_renderer.get_height_at(*p, high_res) + CLEARANCE;
         }
         StructureType::Bridge => {
-            p.local.y = p.local.y.max(terrain_renderer.get_height_at(*p)) + CLEARANCE;
+            p.local.y = p.local.y.max(terrain_renderer.get_height_at(*p, high_res)) + CLEARANCE;
         }
         StructureType::Tunnel => {
             p.local.y = p.local.y + CLEARANCE;

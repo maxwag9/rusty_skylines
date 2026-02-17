@@ -152,10 +152,10 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainSubsystem) -> (f32
         .add_vec3(-planar_fwd * half_len + planar_right * half_wid, chunk_size);
 
     // Heights
-    let h_fl = terrain.get_height_at(fl.into());
-    let h_fr = terrain.get_height_at(fr.into());
-    let h_rl = terrain.get_height_at(rl.into());
-    let h_rr = terrain.get_height_at(rr.into());
+    let h_fl = terrain.get_height_at(fl.into(), true);
+    let h_fr = terrain.get_height_at(fr.into(), true);
+    let h_rl = terrain.get_height_at(rl.into(), true);
+    let h_rr = terrain.get_height_at(rr.into(), true);
 
     let avg_y = 0.25 * (h_fl + h_fr + h_rl + h_rr);
 
@@ -468,7 +468,7 @@ pub fn drive_car(
 
         car.yaw_rate = r;
 
-        car.pos.local.y = terrain.get_height_at(car.pos);
+        car.pos.local.y = terrain.get_height_at(car.pos, true);
 
         camera.target = car.pos;
 
@@ -631,7 +631,7 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
             car.current_velocity = car.quat * new_local_v;
 
             car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
-            car.pos.local.y = terrain.get_height_at(car.pos);
+            car.pos.local.y = terrain.get_height_at(car.pos, false);
 
             if previous_chunk != car.pos.chunk {
                 Some((previous_chunk, car.pos.chunk, car.id))

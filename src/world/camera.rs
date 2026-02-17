@@ -142,7 +142,7 @@ pub fn ground_camera_target(
     terrain: &TerrainSubsystem,
     min_clearance: f32,
 ) {
-    let ground_y = terrain.get_height_at(camera.target);
+    let ground_y = terrain.get_height_at(camera.target, true);
     let penetration = (ground_y + min_clearance) - camera.target.local.y;
 
     if penetration > 0.0 {
@@ -167,7 +167,7 @@ pub fn resolve_pitch_by_search(
         let t = i as f32 / samples as f32;
         let sample_pos: WorldPos = target.add_vec3(offset * t, world_renderer.chunk_size); // uses WorldPos + Vec3
 
-        let terrain_y = world_renderer.get_height_at(sample_pos);
+        let terrain_y = world_renderer.get_height_at(sample_pos, true);
         max_terrain_y = max_terrain_y.max(terrain_y);
     }
 

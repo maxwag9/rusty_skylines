@@ -357,6 +357,93 @@ impl WorldPos {
         let b = rhs.to_render_pos(origin, chunk_size);
         a.dot(b)
     }
+
+    #[inline]
+    pub fn quadratic_bezier_xz(
+        p0: WorldPos,
+        p1: WorldPos,
+        p2: WorldPos,
+        t: f32,
+        chunk_size: ChunkSize,
+    ) -> WorldPos {
+        let cs = chunk_size as f64;
+        let t64 = t as f64;
+        let omt = 1.0 - t64;
+
+        let c0 = omt * omt;
+        let c1 = 2.0 * omt * t64;
+        let c2 = t64 * t64;
+
+        let p0_x = p0.chunk.x as f64 * cs + p0.local.x as f64;
+        let p0_z = p0.chunk.z as f64 * cs + p0.local.z as f64;
+
+        let p1_x = p1.chunk.x as f64 * cs + p1.local.x as f64;
+        let p1_z = p1.chunk.z as f64 * cs + p1.local.z as f64;
+
+        let p2_x = p2.chunk.x as f64 * cs + p2.local.x as f64;
+        let p2_z = p2.chunk.z as f64 * cs + p2.local.z as f64;
+
+        let result_x = c0 * p0_x + c1 * p1_x + c2 * p2_x;
+        let result_z = c0 * p0_z + c1 * p1_z + c2 * p2_z;
+
+        let chunk_x = (result_x / cs).floor() as i32;
+        let chunk_z = (result_z / cs).floor() as i32;
+
+        WorldPos {
+            chunk: ChunkCoord::new(chunk_x, chunk_z),
+            local: LocalPos::new(
+                (result_x - chunk_x as f64 * cs) as f32,
+                0.0,
+                (result_z - chunk_z as f64 * cs) as f32,
+            ),
+        }
+    }
+
+    #[inline]
+    pub fn cubic_bezier_xz(
+        p0: WorldPos,
+        p1: WorldPos,
+        p2: WorldPos,
+        p3: WorldPos,
+        t: f32,
+        chunk_size: ChunkSize,
+    ) -> WorldPos {
+        let cs = chunk_size as f64;
+        let t64 = t as f64;
+        let omt = 1.0 - t64;
+
+        let c0 = omt * omt * omt;
+        let c1 = 3.0 * omt * omt * t64;
+        let c2 = 3.0 * omt * t64 * t64;
+        let c3 = t64 * t64 * t64;
+
+        let p0_x = p0.chunk.x as f64 * cs + p0.local.x as f64;
+        let p0_z = p0.chunk.z as f64 * cs + p0.local.z as f64;
+
+        let p1_x = p1.chunk.x as f64 * cs + p1.local.x as f64;
+        let p1_z = p1.chunk.z as f64 * cs + p1.local.z as f64;
+
+        let p2_x = p2.chunk.x as f64 * cs + p2.local.x as f64;
+        let p2_z = p2.chunk.z as f64 * cs + p2.local.z as f64;
+
+        let p3_x = p3.chunk.x as f64 * cs + p3.local.x as f64;
+        let p3_z = p3.chunk.z as f64 * cs + p3.local.z as f64;
+
+        let result_x = c0 * p0_x + c1 * p1_x + c2 * p2_x + c3 * p3_x;
+        let result_z = c0 * p0_z + c1 * p1_z + c2 * p2_z + c3 * p3_z;
+
+        let chunk_x = (result_x / cs).floor() as i32;
+        let chunk_z = (result_z / cs).floor() as i32;
+
+        WorldPos {
+            chunk: ChunkCoord::new(chunk_x, chunk_z),
+            local: LocalPos::new(
+                (result_x - chunk_x as f64 * cs) as f32,
+                p0.local.y,
+                (result_z - chunk_z as f64 * cs) as f32,
+            ),
+        }
+    }
 }
 impl Default for WorldPos {
     fn default() -> Self {

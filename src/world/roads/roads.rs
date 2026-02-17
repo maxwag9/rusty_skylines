@@ -1612,6 +1612,7 @@ pub enum CommandResult {
 /// Applies only the world-state mutations from real (non-preview) commands.
 /// No mesh rebuilding — that's the render subsystem's job.
 pub fn apply_commands_world(
+    terrain: &mut TerrainSubsystem,
     storage: &mut RoadStorage,
     car_subsystem: &mut CarSubsystem,
     gizmo: &mut Gizmo,
@@ -1619,14 +1620,14 @@ pub fn apply_commands_world(
 ) {
     for cmd in commands {
         if let RoadEditorCommand::Road(road_command) = cmd {
-            apply_command_world(storage, car_subsystem, gizmo, road_command, false);
+            apply_command_world(terrain, storage, car_subsystem, gizmo, road_command, false);
         }
     }
 }
 
 /// Applies world-state mutations for preview commands (populates preview_storage).
 pub fn apply_preview_commands_world(
-    terrain_renderer: &TerrainSubsystem,
+    terrain: &mut TerrainSubsystem,
     road_style_params: &RoadStyleParams,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
@@ -1639,7 +1640,14 @@ pub fn apply_preview_commands_world(
     // 1) Apply explicit Road commands to preview storage
     for cmd in commands {
         if let RoadEditorCommand::Road(road_command) = cmd {
-            apply_command_world(preview_storage, car_subsystem, gizmo, road_command, true);
+            apply_command_world(
+                terrain,
+                preview_storage,
+                car_subsystem,
+                gizmo,
+                road_command,
+                true,
+            );
         }
     }
 
@@ -1664,7 +1672,7 @@ pub fn apply_preview_commands_world(
     // 3) Crossing preview
     if !crossing_previews.is_empty() {
         road_commands.extend(generate_intersection_preview(
-            terrain_renderer,
+            terrain,
             preview_storage,
             real_storage,
             &mut allocator,
@@ -1677,14 +1685,14 @@ pub fn apply_preview_commands_world(
     if let Some(seg) = segment_preview {
         if seg.is_valid {
             road_commands.extend(generate_segment_preview(
-                terrain_renderer,
+                terrain,
                 &mut allocator,
                 road_style_params,
                 seg,
             ));
         } else {
             road_commands.extend(generate_invalid_segment_preview(
-                terrain_renderer,
+                terrain,
                 &mut allocator,
                 road_style_params,
                 seg,
@@ -1695,7 +1703,7 @@ pub fn apply_preview_commands_world(
     // 5) Hover nodes
     if segment_preview.is_none() && !node_previews.is_empty() {
         road_commands.extend(generate_hover_preview(
-            terrain_renderer,
+            terrain,
             &mut allocator,
             road_style_params,
             &node_previews,
@@ -1704,12 +1712,13 @@ pub fn apply_preview_commands_world(
 
     // 6) Apply generated preview commands to preview storage (world-only)
     for cmd in road_commands {
-        apply_command_world(preview_storage, car_subsystem, gizmo, &cmd, true);
+        apply_command_world(terrain, preview_storage, car_subsystem, gizmo, &cmd, true);
     }
 }
 
 /// Single command application — world state only, no mesh rebuild.
 pub fn apply_command_world(
+    terrain: &mut TerrainSubsystem,
     storage: &mut RoadStorage,
     car_subsystem: &mut CarSubsystem,
     gizmo: &mut Gizmo,
@@ -1891,7 +1900,7 @@ pub fn apply_command_world(
             let arms = gather_arms(storage, *node_id, params, gizmo.chunk_size, gizmo);
 
             storage.node_mut(*node_id).arms = arms;
-            build_intersection_at_node(storage, *node_id, params, *clear, gizmo);
+            build_intersection_at_node(terrain, storage, *node_id, params, *clear, gizmo);
             CommandResult::Ok
         }
         RoadCommand::UpgradeSegmentBegin {
@@ -1930,7 +1939,7 @@ pub fn collect_affected_chunks(commands: &[RoadEditorCommand]) -> Vec<ChunkId> {
 /// Panics only on programmer errors (debug assertions).
 /// Applies a command to the road manager deterministically and updates the mesh.
 pub fn apply_command(
-    terrain_renderer: &TerrainSubsystem,
+    terrain: &mut TerrainSubsystem,
     road_mesh_manager: &mut RoadMeshManager,
     car_subsystem: &mut CarSubsystem,
     storage: &mut RoadStorage,
@@ -1951,7 +1960,7 @@ pub fn apply_command(
                         storage,
                         id,
                         &IntersectionBuildParams::from_style(road_style_params),
-                        terrain_renderer.chunk_size,
+                        terrain.chunk_size,
                         gizmo,
                     );
                     if !is_preview {
@@ -2140,7 +2149,7 @@ pub fn apply_command(
                     let arms = gather_arms(storage, node_id, &params, gizmo.chunk_size, gizmo);
 
                     storage.node_mut(node_id).arms = arms;
-                    build_intersection_at_node(storage, node_id, &params, clear, gizmo);
+                    build_intersection_at_node(terrain, storage, node_id, &params, clear, gizmo);
 
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
@@ -2166,7 +2175,7 @@ pub fn apply_command(
             if !is_preview {
                 if let Some(chunk_id) = affected_chunk {
                     road_mesh_manager.update_chunk_mesh(
-                        terrain_renderer,
+                        terrain,
                         chunk_id,
                         storage,
                         road_style_params,
@@ -2183,7 +2192,7 @@ pub fn apply_command(
 
 /// Applies a batch of commands in order, ensuring deterministic execution.
 pub fn apply_commands(
-    terrain_renderer: &TerrainSubsystem,
+    terrain: &mut TerrainSubsystem,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
     car_subsystem: &mut CarSubsystem,
@@ -2196,7 +2205,7 @@ pub fn apply_commands(
         .into_iter()
         .map(|cmd| {
             apply_command(
-                terrain_renderer,
+                terrain,
                 road_mesh_manager,
                 car_subsystem,
                 storage,
@@ -2212,7 +2221,7 @@ pub fn apply_commands(
 /// Processes preview commands and generates preview road geometry.
 /// Called every frame after RoadEditor::update().
 pub fn apply_preview_commands(
-    terrain_renderer: &TerrainSubsystem,
+    terrain: &mut TerrainSubsystem,
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
@@ -2227,7 +2236,7 @@ pub fn apply_preview_commands(
     for cmd in commands {
         if let RoadEditorCommand::Road(_) = cmd {
             apply_command(
-                terrain_renderer,
+                terrain,
                 road_mesh_manager,
                 car_subsystem,
                 preview_storage,
@@ -2260,7 +2269,7 @@ pub fn apply_preview_commands(
     // 3) Crossing preview (independent)
     if !crossing_previews.is_empty() {
         road_commands.extend(generate_intersection_preview(
-            terrain_renderer,
+            terrain,
             preview_storage,
             real_storage,
             &mut allocator,
@@ -2273,14 +2282,14 @@ pub fn apply_preview_commands(
     if let Some(seg) = segment_preview {
         if seg.is_valid {
             road_commands.extend(generate_segment_preview(
-                terrain_renderer,
+                terrain,
                 &mut allocator,
                 road_style_params,
                 seg,
             ));
         } else {
             road_commands.extend(generate_invalid_segment_preview(
-                terrain_renderer,
+                terrain,
                 &mut allocator,
                 road_style_params,
                 seg,
@@ -2291,7 +2300,7 @@ pub fn apply_preview_commands(
     // 5) Hover nodes (independent, lower priority visually)
     if segment_preview.is_none() && !node_previews.is_empty() {
         road_commands.extend(generate_hover_preview(
-            terrain_renderer,
+            terrain,
             &mut allocator,
             road_style_params,
             &node_previews,
@@ -2301,7 +2310,7 @@ pub fn apply_preview_commands(
     // 6) Apply all generated preview commands
     for cmd in road_commands {
         apply_command(
-            terrain_renderer,
+            terrain,
             road_mesh_manager,
             car_subsystem,
             preview_storage,
@@ -2617,29 +2626,6 @@ fn compute_lane_geometries(
     lanes
 }
 
-/// Cubic Bézier interpolation.
-pub(crate) fn bezier3(
-    p0: WorldPos,
-    p1: WorldPos,
-    p2: WorldPos,
-    p3: WorldPos,
-    t: f32,
-    cs: ChunkSize,
-) -> WorldPos {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-    let mt3 = mt2 * mt;
-
-    // Convert to Vec3 relative to p0 for calculation
-    let v1 = p1.to_render_pos(p0, cs);
-    let v2 = p2.to_render_pos(p0, cs);
-    let v3 = p3.to_render_pos(p0, cs);
-
-    let result = v1 * (3.0 * mt2 * t) + v2 * (3.0 * mt * t2) + v3 * t3;
-    p0.add_vec3(result, cs)
-}
 /// More precise segment-chunk intersection test.
 fn segment_touches_chunk_precise(
     start: WorldPos,

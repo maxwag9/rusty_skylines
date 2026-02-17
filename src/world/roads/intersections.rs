@@ -1,12 +1,13 @@
 // intersections.rs - Fixed Clipper2 API usage
 
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
 use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_mesh_manager::*;
 use crate::world::roads::road_structs::*;
 use crate::world::roads::roads::*;
+use crate::world::terrain::terrain_editing::TerrainEditor;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use clipper2::{EndType, JoinType, Path, Paths};
 use earcutr;
@@ -256,13 +257,64 @@ fn normalize_angle_positive(angle: f32) -> f32 {
     a
 }
 
-fn compute_corridor_lengths(arms: &[Arm], sidewalk_width: f32) -> Vec<f32> {
+fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage, chunk_size: ChunkSize) -> f32 {
+    const SAFETY_MARGIN: f32 = 0.5;
+
+    let all_lanes: Vec<LaneId> = arm
+        .incoming_lanes()
+        .iter()
+        .chain(arm.outgoing_lanes().iter())
+        .copied()
+        .collect();
+
+    if all_lanes.is_empty() {
+        return MAX_CORRIDOR_LENGTH;
+    }
+
+    let mut min_available = MAX_CORRIDOR_LENGTH;
+
+    for lane_id in all_lanes {
+        let lane = storage.lane(&lane_id);
+        let pts = lane.polyline();
+
+        if pts.len() < 3 {
+            return SAFETY_MARGIN;
+        }
+
+        let mut total_len = 0.0f32;
+        for i in 0..pts.len() - 1 {
+            total_len += pts[i].distance_to(pts[i + 1], chunk_size);
+        }
+
+        let is_incoming = arm.incoming_lanes().contains(&lane_id);
+
+        let preserve_len = if is_incoming {
+            pts[0].distance_to(pts[1], chunk_size)
+        } else {
+            let n = pts.len();
+            pts[n - 2].distance_to(pts[n - 1], chunk_size)
+        };
+
+        let available = (total_len - preserve_len - SAFETY_MARGIN).max(0.0);
+        min_available = min_available.min(available);
+    }
+
+    min_available
+}
+
+fn compute_corridor_lengths(
+    arms: &[Arm],
+    sidewalk_width: f32,
+    storage: &RoadStorage,
+    chunk_size: ChunkSize,
+) -> Vec<f32> {
     let n = arms.len();
     if n == 0 {
         return vec![];
     }
     if n == 1 {
-        return vec![DEFAULT_CORRIDOR_LENGTH];
+        let max_from_lanes = compute_max_corridor_for_arm(&arms[0], storage, chunk_size);
+        return vec![DEFAULT_CORRIDOR_LENGTH.min(max_from_lanes)];
     }
 
     arms.iter()
@@ -292,7 +344,8 @@ fn compute_corridor_lengths(arms: &[Arm], sidewalk_width: f32) -> Vec<f32> {
                 sidewalk_width,
             );
 
-            corridor_len
+            let max_from_lanes = compute_max_corridor_for_arm(arm, storage, chunk_size);
+            corridor_len.min(max_from_lanes)
         })
         .collect()
 }
@@ -523,22 +576,20 @@ pub struct IntersectionMeshResult {
 #[derive(Clone, Debug)]
 pub struct IntersectionBuildParams {
     pub turn_samples: usize,
-    pub lane_width_m: f32,
     pub turn_tightness: f32,
-    pub sidewalk_width: f32,
     pub round_corners: bool,
     pub simplify_tolerance: f32,
+    pub road_type: RoadType,
 }
 
 impl Default for IntersectionBuildParams {
     fn default() -> Self {
         Self {
             turn_samples: 12,
-            lane_width_m: 3.5,
             turn_tightness: 1.0,
-            sidewalk_width: 2.0,
             round_corners: true,
             simplify_tolerance: 0.1,
+            road_type: Default::default(),
         }
     }
 }
@@ -547,9 +598,8 @@ impl IntersectionBuildParams {
     pub fn from_style(style: &RoadStyleParams) -> Self {
         let road_type = style.road_type();
         Self {
-            lane_width_m: road_type.lane_width,
+            road_type: road_type.clone(),
             turn_tightness: style.turn_tightness(),
-            sidewalk_width: road_type.sidewalk_width,
             ..Default::default()
         }
     }
@@ -560,13 +610,15 @@ impl IntersectionBuildParams {
 // ============================================================================
 
 pub fn build_intersection_at_node(
+    terrain: &mut TerrainSubsystem,
     storage: &mut RoadStorage,
     node_id: NodeId,
     params: &IntersectionBuildParams,
     recalc_clearance: bool,
     gizmo: &mut Gizmo,
-) {
-    let chunk_size = gizmo.chunk_size;
+) -> HashSet<ChunkCoord> {
+    let chunk_size = terrain.chunk_size;
+    let mut affected_chunks = HashSet::new();
 
     if recalc_clearance {
         if let Some(geom) =
@@ -578,12 +630,75 @@ pub fn build_intersection_at_node(
             }
 
             carve_lanes_with_polygon(storage, node_id, &geom, chunk_size, gizmo);
+
+            let flattening_polygon = if let Some(ref sw_poly) = geom.sidewalk_polygon {
+                &sw_poly.ring
+            } else {
+                &geom.polygon.ring
+            };
+
+            if flattening_polygon.len() >= 3 {
+                let center_height = compute_intersection_center_height(
+                    terrain,
+                    &geom.center,
+                    flattening_polygon,
+                    chunk_size,
+                );
+
+                let road_type = params.road_type;
+
+                affected_chunks = terrain
+                    .terrain_editor
+                    .apply_intersection_polygon_flattening(
+                        node_id,
+                        flattening_polygon,
+                        center_height,
+                        -road_type.lane_height - 0.05,
+                        params.road_type.sidewalk_width + 1.0,
+                        chunk_size,
+                        &terrain.chunks,
+                    );
+            }
         }
     }
 
     storage.node_mut(node_id).clear_node_lanes();
-    let node_lanes = build_node_lanes_for_intersection(storage, node_id, params, chunk_size, gizmo);
+    let node_lanes =
+        build_node_lanes_for_intersection(terrain, storage, node_id, params, chunk_size, gizmo);
     storage.node_mut(node_id).add_node_lanes(node_lanes);
+
+    affected_chunks
+}
+
+pub fn remove_intersection_at_node(
+    terrain_editor: &mut TerrainEditor,
+    node_id: NodeId,
+) -> HashSet<ChunkCoord> {
+    terrain_editor.remove_intersection_flattening(node_id)
+}
+
+fn compute_intersection_center_height(
+    terrain: &TerrainSubsystem,
+    center: &WorldPos,
+    polygon: &[WorldPos],
+    chunk_size: ChunkSize,
+) -> f32 {
+    if polygon.is_empty() {
+        return terrain.get_height_at(*center, true);
+    }
+
+    let mut sum = terrain.get_height_at(*center, true);
+    let mut count = 1.0f32;
+
+    let sample_count = polygon.len().min(8);
+    let step = polygon.len() / sample_count;
+
+    for i in (0..polygon.len()).step_by(step.max(1)) {
+        sum += terrain.get_height_at(polygon[i], true);
+        count += 1.0;
+    }
+
+    sum / count
 }
 
 fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut Gizmo) {
@@ -600,7 +715,7 @@ fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut G
 fn create_corner_fillers(
     arms: &[Arm],
     half_widths: &[f32],
-    round_corners: bool,
+    _round_corners: bool,
 ) -> Vec<LocalPolygon> {
     use std::f32::consts::PI;
     let n = arms.len();
@@ -632,24 +747,83 @@ fn create_corner_fillers(
             let edge_i = perp_i * hw_i;
             let edge_next = -perp_next * hw_next;
 
-            if round_corners {
-                let radius = (hw_i + hw_next) / 2.0;
-                let filler = create_rounded_wedge(Vec2::ZERO, edge_i, edge_next, radius);
-                fillers.push(filler);
-            } else {
-                fillers.push(LocalPolygon::new(vec![Vec2::ZERO, edge_i, edge_next]));
-            }
+            fillers.push(LocalPolygon::new(vec![Vec2::ZERO, edge_i, edge_next]));
         }
     }
 
     fillers
 }
 
-fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> LocalPolygon {
+fn round_polygon_corners(polygon: &LocalPolygon, radius: f32) -> LocalPolygon {
+    if polygon.points.len() < 3 || radius <= 0.001 {
+        return polygon.clone();
+    }
+
+    let coords: Vec<(f64, f64)> = polygon
+        .points
+        .iter()
+        .map(|p| (p.x as f64, p.y as f64))
+        .collect();
+
+    let paths: Paths = vec![coords].into();
+
+    let shrunk = paths.inflate(-radius as f64, JoinType::Miter, EndType::Polygon, 2.0);
+    let expanded = shrunk.inflate(radius as f64, JoinType::Round, EndType::Polygon, 2.0);
+
+    let output: Vec<Vec<(f64, f64)>> = expanded.into();
+
+    output
+        .into_iter()
+        .filter(|path| path.len() >= 3)
+        .map(LocalPolygon::from_clipper_coords)
+        .max_by(|a, b| {
+            polygon_area(&a.points)
+                .partial_cmp(&polygon_area(&b.points))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or_else(|| polygon.clone())
+}
+fn is_edge_at_corridor_entrance(
+    edge_start: Vec2,
+    edge_end: Vec2,
+    arms: &[Arm],
+    corridor_lengths: &[f32],
+    tolerance: f32,
+) -> bool {
+    let edge_mid = (edge_start + edge_end) * 0.5;
+    let edge_vec = edge_end - edge_start;
+    let edge_len = edge_vec.length();
+
+    if edge_len < 0.001 {
+        return false;
+    }
+
+    let edge_dir = edge_vec / edge_len;
+
+    for (arm, &corridor_len) in arms.iter().zip(corridor_lengths.iter()) {
+        let arm_dir = arm.direction().xz().normalize_or_zero();
+
+        let proj = edge_mid.dot(arm_dir);
+
+        if (proj - corridor_len).abs() < tolerance {
+            let dot = edge_dir.dot(arm_dir).abs();
+            if dot < 0.5 {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, _radius: f32) -> LocalPolygon {
     use std::f32::consts::{PI, TAU};
 
-    let start_angle = (start - center).y.atan2((start - center).x);
-    let end_angle = (end - center).y.atan2((end - center).x);
+    let start_offset = start - center;
+    let end_offset = end - center;
+
+    let start_angle = start_offset.y.atan2(start_offset.x);
+    let end_angle = end_offset.y.atan2(end_offset.x);
 
     let mut sweep = end_angle - start_angle;
     while sweep > PI {
@@ -659,115 +833,22 @@ fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> Lo
         sweep += TAU;
     }
 
-    let arc_len = sweep.abs() * radius;
+    let start_radius = start_offset.length();
+    let end_radius = end_offset.length();
+
+    let avg_radius = (start_radius + end_radius) / 2.0;
+    let arc_len = sweep.abs() * avg_radius;
     let steps = ((arc_len / 0.5) as usize).clamp(4, 48);
 
     let mut points = vec![center];
     for s in 0..=steps {
         let t = s as f32 / steps as f32;
         let angle = start_angle + sweep * t;
+        let radius = start_radius + (end_radius - start_radius) * t;
         points.push(center + Vec2::new(angle.cos() * radius, angle.sin() * radius));
     }
 
     LocalPolygon::new(points)
-}
-
-fn compute_intersection_geometry(
-    storage: &RoadStorage,
-    node_id: NodeId,
-    params: &IntersectionBuildParams,
-    chunk_size: ChunkSize,
-    gizmo: &mut Gizmo,
-) -> Option<IntersectionGeometry> {
-    let node = storage.node(node_id)?;
-    let center = node.position();
-
-    let arms = node.arms();
-
-    if arms.len() < 2 {
-        return None;
-    }
-
-    let corridor_lengths = compute_corridor_lengths(&arms, params.sidewalk_width);
-
-    let mut corridors: Vec<LocalPolygon> = arms
-        .iter()
-        .zip(corridor_lengths.iter())
-        .map(|(arm, &len)| {
-            let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
-            LocalPolygon::corridor(dir_2d, arm.half_width(), len)
-        })
-        .collect();
-
-    let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
-    let corner_fillers = create_corner_fillers(&arms, &full_hw, params.round_corners);
-    corridors.extend(corner_fillers);
-
-    let unioned = union_polygons(&corridors);
-    if unioned.is_empty() {
-        return None;
-    }
-
-    let main_poly = unioned.into_iter().max_by(|a, b| {
-        polygon_area(&a.points)
-            .partial_cmp(&polygon_area(&b.points))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })?;
-
-    let simplified = simplify_clipper(&main_poly, params.simplify_tolerance);
-
-    let ring: Vec<WorldPos> = simplified
-        .points
-        .iter()
-        .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
-        .collect();
-
-    let polygon = IntersectionPolygon::new(ring, center, chunk_size);
-
-    let sidewalk_polygon = if params.sidewalk_width > 0.01 {
-        let mut asphalt_corridors: Vec<LocalPolygon> = arms
-            .iter()
-            .zip(corridor_lengths.iter())
-            .map(|(arm, &len)| {
-                let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
-                let asphalt_half_width = (arm.half_width() - params.sidewalk_width).max(0.5);
-                LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
-            })
-            .collect();
-
-        let asphalt_hw: Vec<f32> = arms
-            .iter()
-            .map(|a| (a.half_width() - params.sidewalk_width).max(0.5))
-            .collect();
-        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
-        asphalt_corridors.extend(asphalt_corners);
-
-        let asphalt_union = union_polygons(&asphalt_corridors);
-        asphalt_union
-            .into_iter()
-            .max_by(|a, b| {
-                polygon_area(&a.points)
-                    .partial_cmp(&polygon_area(&b.points))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|p| {
-                let ring: Vec<WorldPos> = p
-                    .points
-                    .iter()
-                    .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
-                    .collect();
-                IntersectionPolygon::new(ring, center, chunk_size)
-            })
-    } else {
-        None
-    };
-
-    Some(IntersectionGeometry {
-        center,
-        arms: arms.to_vec(),
-        polygon,
-        sidewalk_polygon,
-    })
 }
 
 fn polygon_area(points: &[Vec2]) -> f32 {
@@ -928,10 +1009,12 @@ pub fn triangulate_polygon_with_hole(
 
 // Intersection Mesh Builder
 
-fn build_polygon_curbs(
+fn build_polygon_curbs_filtered(
     terrain: &TerrainSubsystem,
     center: WorldPos,
     ring: &[Vec2],
+    arms: &[Arm],
+    corridor_lengths: &[f32],
     road_type: &RoadType,
     bottom_height: f32,
     top_height: f32,
@@ -954,6 +1037,10 @@ fn build_polygon_curbs(
         let a = ring[i];
         let b = ring[next];
 
+        if is_edge_at_corridor_entrance(a, b, arms, corridor_lengths, 0.5) {
+            continue;
+        }
+
         let edge = b - a;
         let edge_len = edge.length();
         if edge_len < 0.001 {
@@ -968,8 +1055,8 @@ fn build_polygon_curbs(
         let mut pos_a = center.add_vec3(Vec3::new(a.x, 0.0, a.y), chunk_size);
         let mut pos_b = center.add_vec3(Vec3::new(b.x, 0.0, b.y), chunk_size);
 
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_a);
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_b);
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_a, true);
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_b, true);
 
         let base = vertices.len() as u32;
 
@@ -1034,6 +1121,118 @@ fn build_polygon_curbs(
     }
 }
 
+struct AdaptiveVertex {
+    pos_2d: Vec2,
+    height: f32,
+}
+
+fn adaptive_triangulate_polygon(
+    terrain: &TerrainSubsystem,
+    center: WorldPos,
+    polygon_2d: &[Vec2],
+    base_height_offset: f32,
+    chunk_size: ChunkSize,
+    structure_type: StructureType,
+) -> (Vec<AdaptiveVertex>, Vec<u32>) {
+    let mut verts: Vec<AdaptiveVertex> = polygon_2d
+        .iter()
+        .map(|p| {
+            let mut world_pos = center.add_vec3(Vec3::new(p.x, 0.0, p.y), chunk_size);
+            set_point_height_with_structure_type(terrain, structure_type, &mut world_pos, true);
+            AdaptiveVertex {
+                pos_2d: *p,
+                height: world_pos.local.y + base_height_offset,
+            }
+        })
+        .collect();
+
+    let mut initial_indices = Vec::new();
+    triangulate_polygon(polygon_2d, 0, &mut initial_indices);
+
+    let mut final_indices = Vec::new();
+    let mut tri_stack: Vec<(u32, u32, u32, u32)> = Vec::new();
+
+    for chunk in initial_indices.chunks(3) {
+        if chunk.len() == 3 {
+            tri_stack.push((chunk[0], chunk[1], chunk[2], 0));
+        }
+    }
+
+    const MAX_DEPTH: u32 = 3;
+    const TERRAIN_MARGIN: f32 = 0.02;
+
+    while let Some((i0, i1, i2, depth)) = tri_stack.pop() {
+        if depth >= MAX_DEPTH {
+            final_indices.extend_from_slice(&[i0, i1, i2]);
+            continue;
+        }
+
+        let v0 = &verts[i0 as usize];
+        let v1 = &verts[i1 as usize];
+        let v2 = &verts[i2 as usize];
+
+        let centroid_2d = Vec2::new(
+            (v0.pos_2d.x + v1.pos_2d.x + v2.pos_2d.x) / 3.0,
+            (v0.pos_2d.y + v1.pos_2d.y + v2.pos_2d.y) / 3.0,
+        );
+
+        let mesh_height_at_centroid = (v0.height + v1.height + v2.height) / 3.0;
+
+        let mut centroid_world =
+            center.add_vec3(Vec3::new(centroid_2d.x, 0.0, centroid_2d.y), chunk_size);
+        set_point_height_with_structure_type(terrain, structure_type, &mut centroid_world, true);
+        let terrain_height_at_centroid = centroid_world.local.y + base_height_offset;
+
+        if terrain_height_at_centroid > mesh_height_at_centroid + TERRAIN_MARGIN {
+            let new_idx = verts.len() as u32;
+            verts.push(AdaptiveVertex {
+                pos_2d: centroid_2d,
+                height: terrain_height_at_centroid,
+            });
+
+            tri_stack.push((i0, i1, new_idx, depth + 1));
+            tri_stack.push((i1, i2, new_idx, depth + 1));
+            tri_stack.push((i2, i0, new_idx, depth + 1));
+        } else {
+            final_indices.extend_from_slice(&[i0, i1, i2]);
+        }
+    }
+
+    (verts, final_indices)
+}
+
+fn emit_adaptive_mesh(
+    center: WorldPos,
+    adaptive_verts: &[AdaptiveVertex],
+    adaptive_indices: &[u32],
+    chunk_size: ChunkSize,
+    config: &MeshConfig,
+    material_id: u32,
+    vertices: &mut Vec<RoadVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let base = vertices.len() as u32;
+
+    for av in adaptive_verts {
+        let pos = WorldPos {
+            chunk: center.chunk,
+            local: LocalPos::new(
+                center.local.x + av.pos_2d.x,
+                av.height,
+                center.local.z + av.pos_2d.y,
+            ),
+        }
+        .normalize(chunk_size);
+
+        let (u, v) = radial_uv(center, pos, chunk_size, config);
+        vertices.push(road_vertex(pos, [0.0, 1.0, 0.0], material_id, u, v));
+    }
+
+    for &idx in adaptive_indices {
+        indices.push(base + idx);
+    }
+}
+
 pub fn build_intersection_mesh(
     terrain: &TerrainSubsystem,
     node_id: NodeId,
@@ -1046,12 +1245,7 @@ pub fn build_intersection_mesh(
     gizmo: &mut Gizmo,
 ) -> IntersectionMeshResult {
     let center = node.position();
-    let node_lanes = node.node_lanes();
     let chunk_size = terrain.chunk_size;
-
-    // if node_lanes.len() < 2 {
-    //     return IntersectionMeshResult::default();
-    // }
 
     let road_type = style.road_type();
     let params = IntersectionBuildParams::from_style(style);
@@ -1061,23 +1255,25 @@ pub fn build_intersection_mesh(
         return IntersectionMeshResult::default();
     }
 
-    let corridor_lengths = compute_corridor_lengths(&arms, params.sidewalk_width);
+    let corridor_lengths =
+        compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
+    let corner_rounding_radius = if params.round_corners { 0.5 } else { 0.0 };
 
     let mut asphalt_corridors: Vec<LocalPolygon> = arms
         .iter()
         .zip(corridor_lengths.iter())
         .map(|(arm, &len)| {
             let dir_2d = arm.direction().xz();
-            let asphalt_half_width = (arm.half_width() - params.sidewalk_width).max(0.5);
+            let asphalt_half_width = (arm.half_width() - params.road_type.sidewalk_width).max(0.5);
             LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
         })
         .collect();
 
     let asphalt_hw: Vec<f32> = arms
         .iter()
-        .map(|a| (a.half_width() - params.sidewalk_width).max(0.5))
+        .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
         .collect();
-    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, false);
     asphalt_corridors.extend(asphalt_corners);
 
     let asphalt_union = union_polygons(&asphalt_corridors);
@@ -1090,19 +1286,29 @@ pub fn build_intersection_mesh(
         return IntersectionMeshResult::default();
     };
 
-    let asphalt_simplified = simplify_clipper(&asphalt_poly, params.simplify_tolerance);
+    let asphalt_rounded = if params.round_corners {
+        round_polygon_corners(&asphalt_poly, corner_rounding_radius)
+    } else {
+        asphalt_poly
+    };
+
+    let asphalt_simplified = simplify_clipper(&asphalt_rounded, params.simplify_tolerance);
     if asphalt_simplified.points.len() < 3 {
         return IntersectionMeshResult::default();
     }
+
+    let asphalt_centroid: Vec2 = asphalt_simplified.points.iter().copied().sum::<Vec2>()
+        / asphalt_simplified.points.len() as f32;
 
     let asphalt_base = vertices.len() as u32;
 
     for p2d in &asphalt_simplified.points {
         let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos);
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos, true);
         pos.local.y += road_type.lane_height;
-
-        let (u, v) = radial_uv(center, pos, chunk_size, config);
+        let local = *p2d - asphalt_centroid;
+        let u = (local.x * config.uv_scale_u) + 0.5;
+        let v = (local.y * config.uv_scale_v) + 0.5;
         vertices.push(road_vertex(
             pos,
             [0.0, 1.0, 0.0],
@@ -1125,33 +1331,71 @@ pub fn build_intersection_mesh(
             .collect();
 
         let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
-        let full_corners = create_corner_fillers(&arms, &full_hw, params.round_corners);
+        let full_corners = create_corner_fillers(&arms, &full_hw, false);
         full_corridors.extend(full_corners);
+
+        let full_union = union_polygons(&full_corridors);
+
+        let full_poly = match full_union.into_iter().max_by(|a, b| {
+            polygon_area(&a.points)
+                .partial_cmp(&polygon_area(&b.points))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            Some(p) => p,
+            None => return IntersectionMeshResult::default(),
+        };
+
+        let full_rounded = if params.round_corners {
+            round_polygon_corners(&full_poly, corner_rounding_radius)
+        } else {
+            full_poly
+        };
 
         let mut asphalt_corridors_for_sw: Vec<LocalPolygon> = arms
             .iter()
             .zip(corridor_lengths.iter())
             .map(|(arm, &len)| {
                 let dir_2d = arm.direction().xz();
-                let asphalt_half_width = (arm.half_width() - params.sidewalk_width).max(0.5);
+                let asphalt_half_width =
+                    (arm.half_width() - params.road_type.sidewalk_width).max(0.5);
                 LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
             })
             .collect();
 
-        let asphalt_corners_for_sw =
-            create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+        let asphalt_corners_for_sw = create_corner_fillers(&arms, &asphalt_hw, false);
         asphalt_corridors_for_sw.extend(asphalt_corners_for_sw);
 
-        let end_clips = create_corridor_end_clips(&arms, &corridor_lengths, params.sidewalk_width);
+        let asphalt_union_for_sw = union_polygons(&asphalt_corridors_for_sw);
+        let asphalt_poly_for_sw = asphalt_union_for_sw.into_iter().max_by(|a, b| {
+            polygon_area(&a.points)
+                .partial_cmp(&polygon_area(&b.points))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let sidewalk_polys =
-            compute_sidewalk_ring_polygons(&full_corridors, &asphalt_corridors_for_sw, &end_clips);
+        let asphalt_rounded_for_sw = if let Some(ap) = asphalt_poly_for_sw {
+            if params.round_corners {
+                round_polygon_corners(&ap, corner_rounding_radius)
+            } else {
+                ap
+            }
+        } else {
+            asphalt_simplified.clone()
+        };
+
+        let end_clips =
+            create_corridor_end_clips(&arms, &corridor_lengths, params.road_type.sidewalk_width);
+
+        let sidewalk_polys = compute_sidewalk_ring_polygons(
+            &[full_rounded.clone()],
+            &[asphalt_rounded_for_sw],
+            &end_clips,
+        );
 
         for sidewalk_poly in &sidewalk_polys {
             if sidewalk_poly.points.len() >= 3 {
                 let simplified = simplify_clipper(sidewalk_poly, params.simplify_tolerance);
                 if simplified.points.len() >= 3 {
-                    build_simple_sidewalk_mesh(
+                    build_sidewalk_mesh(
                         terrain,
                         center,
                         &simplified.points,
@@ -1168,10 +1412,12 @@ pub fn build_intersection_mesh(
         if polygon_signed_area(&inner_ccw) < 0.0 {
             inner_ccw.reverse();
         }
-        build_polygon_curbs(
+        build_polygon_curbs_filtered(
             terrain,
             center,
             &inner_ccw,
+            &arms,
+            &corridor_lengths,
             road_type,
             road_type.lane_height,
             road_type.sidewalk_height,
@@ -1181,34 +1427,26 @@ pub fn build_intersection_mesh(
             indices,
         );
 
-        let full_union = union_polygons(&full_corridors);
-        if let Some(full_poly) = full_union.into_iter().max_by(|a, b| {
-            polygon_area(&a.points)
-                .partial_cmp(&polygon_area(&b.points))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            let clipped_results = difference_polygons(&full_poly, &end_clips);
-            for outer_poly in clipped_results {
-                let simplified = simplify_clipper(&outer_poly, params.simplify_tolerance);
-                if simplified.points.len() >= 3 {
-                    let mut outer_ccw = simplified.points.clone();
-                    if polygon_signed_area(&outer_ccw) < 0.0 {
-                        outer_ccw.reverse();
-                    }
-                    build_polygon_curbs(
-                        terrain,
-                        center,
-                        &outer_ccw,
-                        road_type,
-                        road_type.lane_height,
-                        road_type.sidewalk_height,
-                        false,
-                        config,
-                        vertices,
-                        indices,
-                    );
-                }
+        let full_simplified = simplify_clipper(&full_rounded, params.simplify_tolerance);
+        if full_simplified.points.len() >= 3 {
+            let mut outer_ccw = full_simplified.points.clone();
+            if polygon_signed_area(&outer_ccw) < 0.0 {
+                outer_ccw.reverse();
             }
+            build_polygon_curbs_filtered(
+                terrain,
+                center,
+                &outer_ccw,
+                &arms,
+                &corridor_lengths,
+                road_type,
+                road_type.lane_height,
+                road_type.sidewalk_height,
+                false,
+                config,
+                vertices,
+                indices,
+            );
         }
     }
 
@@ -1221,6 +1459,118 @@ pub fn build_intersection_mesh(
     IntersectionMeshResult {
         polygon: IntersectionPolygon::new(ring, center, chunk_size),
     }
+}
+
+fn compute_intersection_geometry(
+    storage: &RoadStorage,
+    node_id: NodeId,
+    params: &IntersectionBuildParams,
+    chunk_size: ChunkSize,
+    gizmo: &mut Gizmo,
+) -> Option<IntersectionGeometry> {
+    let node = storage.node(node_id)?;
+    let center = node.position();
+
+    let arms = node.arms();
+
+    if arms.len() < 2 {
+        return None;
+    }
+
+    let corridor_lengths =
+        compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
+    let corner_rounding_radius = if params.round_corners { 0.5 } else { 0.0 };
+
+    let mut corridors: Vec<LocalPolygon> = arms
+        .iter()
+        .zip(corridor_lengths.iter())
+        .map(|(arm, &len)| {
+            let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
+            LocalPolygon::corridor(dir_2d, arm.half_width(), len)
+        })
+        .collect();
+
+    let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
+    let corner_fillers = create_corner_fillers(&arms, &full_hw, false);
+    corridors.extend(corner_fillers);
+
+    let unioned = union_polygons(&corridors);
+    if unioned.is_empty() {
+        return None;
+    }
+
+    let main_poly = unioned.into_iter().max_by(|a, b| {
+        polygon_area(&a.points)
+            .partial_cmp(&polygon_area(&b.points))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+
+    let rounded = if params.round_corners {
+        round_polygon_corners(&main_poly, corner_rounding_radius)
+    } else {
+        main_poly
+    };
+
+    let simplified = simplify_clipper(&rounded, params.simplify_tolerance);
+
+    let ring: Vec<WorldPos> = simplified
+        .points
+        .iter()
+        .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
+        .collect();
+
+    let polygon = IntersectionPolygon::new(ring, center, chunk_size);
+
+    let sidewalk_polygon = if params.road_type.sidewalk_width > 0.01 {
+        let mut asphalt_corridors: Vec<LocalPolygon> = arms
+            .iter()
+            .zip(corridor_lengths.iter())
+            .map(|(arm, &len)| {
+                let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
+                let asphalt_half_width =
+                    (arm.half_width() - params.road_type.sidewalk_width).max(0.5);
+                LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
+            })
+            .collect();
+
+        let asphalt_hw: Vec<f32> = arms
+            .iter()
+            .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
+            .collect();
+        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, false);
+        asphalt_corridors.extend(asphalt_corners);
+
+        let asphalt_union = union_polygons(&asphalt_corridors);
+        asphalt_union
+            .into_iter()
+            .max_by(|a, b| {
+                polygon_area(&a.points)
+                    .partial_cmp(&polygon_area(&b.points))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| {
+                let p = if params.round_corners {
+                    round_polygon_corners(&p, corner_rounding_radius)
+                } else {
+                    p
+                };
+                let ring: Vec<WorldPos> = p
+                    .points
+                    .iter()
+                    .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
+                    .collect();
+                IntersectionPolygon::new(ring, center, chunk_size)
+            })
+    } else {
+        None
+    };
+
+    Some(IntersectionGeometry {
+        center,
+        arms: arms.to_vec(),
+        polygon,
+        sidewalk_polygon,
+    })
 }
 
 fn compute_sidewalk_ring_polygons(
@@ -1305,7 +1655,7 @@ fn compute_sidewalk_ring_polygons(
         .collect()
 }
 
-fn build_simple_sidewalk_mesh(
+fn build_sidewalk_mesh(
     terrain: &TerrainSubsystem,
     center: WorldPos,
     ring: &[Vec2],
@@ -1320,14 +1670,18 @@ fn build_simple_sidewalk_mesh(
         return;
     }
 
+    let centroid: Vec2 = ring.iter().copied().sum::<Vec2>() / ring.len() as f32;
+
     let base = vertices.len() as u32;
 
     for p2d in ring {
         let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
-        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos);
+        set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos, true);
         pos.local.y += road_type.sidewalk_height;
 
-        let (u, v) = radial_uv(center, pos, chunk_size, config);
+        let local = *p2d - centroid;
+        let u = (local.x * config.uv_scale_u) + 0.5;
+        let v = (local.y * config.uv_scale_v) + 0.5;
         vertices.push(road_vertex(
             pos,
             [0.0, 1.0, 0.0],
@@ -1353,8 +1707,8 @@ pub(crate) fn gather_arms(
         None => return Vec::new(),
     };
 
-    let lane_width = intersection_build_params.lane_width_m;
-    let sidewalk_width = intersection_build_params.sidewalk_width;
+    let lane_width = intersection_build_params.road_type.lane_width;
+    let sidewalk_width = intersection_build_params.road_type.sidewalk_width;
 
     let mut arms: Vec<Arm> = segment_ids
         .into_iter()
@@ -1448,7 +1802,8 @@ fn gather_arms_from_node_lanes(
             }
 
             let lane_count = segment.lanes().len();
-            let half_width = lane_count as f32 * params.lane_width_m * 0.5 + params.sidewalk_width;
+            let half_width = lane_count as f32 * params.road_type.lane_width * 0.5
+                + params.road_type.sidewalk_width;
 
             let points_to_node = segment.end() == node_id;
 
@@ -1554,6 +1909,7 @@ pub fn road_vertex(world_pos: WorldPos, normal: [f32; 3], mat: u32, u: f32, v: f
 // ============================================================================
 
 fn build_node_lanes_for_intersection(
+    terrain: &TerrainSubsystem,
     storage: &RoadStorage,
     node_id: NodeId,
     params: &IntersectionBuildParams,
@@ -1684,6 +2040,7 @@ fn build_node_lanes_for_intersection(
             let tightness = compute_turn_tightness(chord, dot, params);
 
             let geom = generate_turn_geometry(
+                terrain,
                 *in_pt,
                 *in_dir,
                 *out_pt,
@@ -1779,6 +2136,7 @@ fn compute_turn_tightness(chord: f32, dot: f32, params: &IntersectionBuildParams
 }
 
 pub fn generate_turn_geometry(
+    terrain: &TerrainSubsystem,
     start: WorldPos,
     start_dir: Vec3, // Direction INTO intersection (incoming traffic direction)
     end: WorldPos,
@@ -1809,38 +2167,16 @@ pub fn generate_turn_geometry(
     let points: Vec<WorldPos> = (0..=n) // Note: 0..=n for n+1 points
         .map(|i| {
             let t = i as f32 / n as f32;
-            bezier3(start, ctrl1, ctrl2, end, t, chunk_size)
+            let mut p = WorldPos::cubic_bezier_xz(start, ctrl1, ctrl2, end, t, chunk_size);
+            p.local.y = terrain.get_height_at(p, true);
+            p
         })
         .collect();
 
     LaneGeometry::from_polyline(points, chunk_size)
 }
 
-fn bezier3(
-    p0: WorldPos,
-    p1: WorldPos,
-    p2: WorldPos,
-    p3: WorldPos,
-    t: f32,
-    chunk_size: ChunkSize,
-) -> WorldPos {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-    let mt3 = mt2 * mt;
-
-    let v1 = p1.to_render_pos(p0, chunk_size);
-    let v2 = p2.to_render_pos(p0, chunk_size);
-    let v3 = p3.to_render_pos(p0, chunk_size);
-
-    let result = v1 * (3.0 * mt2 * t) + v2 * (3.0 * mt * t2) + v3 * t3;
-    p0.add_vec3(result, chunk_size)
-}
-
-// ============================================================================
 // Polyline Modification
-// ============================================================================
 
 pub fn modify_polyline_start(
     points: &[WorldPos],

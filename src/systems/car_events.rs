@@ -1,4 +1,4 @@
-use crate::events::*;
+use crate::commands::*;
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::roads::road_subsystem::RoadSubsystem;
@@ -12,12 +12,12 @@ pub enum CarChangeEvent {
 }
 
 pub fn run_car_events(
-    event: Event,
+    event: Command,
     car_subsystem: &mut CarSubsystem,
     road_subsystem: &RoadSubsystem,
 ) {
     match event {
-        Event::CarNavigate(car_chunks) => { // owned car chunks so I can consume them in the thread.
+        Command::CarNavigate(car_chunks) => { // owned car chunks so I can consume them in the thread.
             // idk spawn threads, send and receive stuff, how?! And this must make as many threads as my cpu has, kinda (
             //        let threads = num_cpus::get_physical().saturating_sub(1).max(1); i think)
             // send the car_chunks to update, then it will update async and receive will take the output cars and car chunks (car chunks to replace the ones in the car storage,

@@ -510,7 +510,7 @@ impl Gizmo {
                 let chunk_size_f = self.chunk_size as f32;
                 let corner = WorldPos::new(
                     target.chunk,
-                    LocalPos::new(0.0, terrain_subsystem.get_height_at(target), 0.0),
+                    LocalPos::new(0.0, terrain_subsystem.get_height_at(target, false), 0.0),
                 );
                 self.box_xz(
                     corner.add_vec3(

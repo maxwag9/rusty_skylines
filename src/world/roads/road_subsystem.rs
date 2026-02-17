@@ -7,6 +7,8 @@ use crate::world::roads::roads::{
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 
 use crate::renderer::gizmo::Gizmo;
+use crate::resources::TimeSystem;
+use crate::simulation::Ticker;
 use crate::ui::input::InputState;
 use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::CarSubsystem;
@@ -47,7 +49,7 @@ impl RoadRenderSubsystem {
     /// Render-only update: processes commands for preview/mesh, rebuilds chunk meshes, uploads to GPU.
     pub fn update(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain: &mut TerrainSubsystem,
         road_subsystem: &RoadSubsystem,
         device: &Device,
         queue: &Queue,
@@ -57,7 +59,7 @@ impl RoadRenderSubsystem {
         // --- Preview mesh ---
         // Rebuild preview mesh from the (already-mutated) preview_roads
         let preview_mesh = self.mesh_manager.build_preview_mesh(
-            terrain_renderer,
+            terrain,
             &road_subsystem.road_manager.preview_roads,
             &road_subsystem.road_editor.style,
             gizmo,
@@ -75,7 +77,7 @@ impl RoadRenderSubsystem {
         let affected_chunks = collect_affected_chunks(road_subsystem.road_commands.as_slice());
         for chunk_id in &affected_chunks {
             self.mesh_manager.update_chunk_mesh(
-                terrain_renderer,
+                terrain,
                 *chunk_id,
                 &road_subsystem.road_manager.roads,
                 &road_subsystem.road_editor.style,
@@ -86,18 +88,18 @@ impl RoadRenderSubsystem {
         // --- Visible draw list ---
         self.visible_draw_list.clear();
 
-        for v in &terrain_renderer.visible {
+        for v in &terrain.visible {
             let chunk_id = v.id;
 
             let needs_rebuild = self.mesh_manager.chunk_needs_update(
                 chunk_id,
                 &road_subsystem.road_manager.roads,
-                terrain_renderer.chunk_size,
+                terrain.chunk_size,
             );
 
             let mesh = if needs_rebuild {
                 self.mesh_manager.update_chunk_mesh(
-                    terrain_renderer,
+                    terrain,
                     chunk_id,
                     &road_subsystem.road_manager.roads,
                     &road_subsystem.road_editor.style,
@@ -155,10 +157,12 @@ pub struct RoadSubsystem {
     pub road_manager: RoadManager,
     pub road_editor: RoadEditor,
     road_commands: Vec<RoadEditorCommand>,
+    pub tick_20hz: Ticker,
 }
 impl RoadSubsystem {
     pub fn new() -> Self {
         Self {
+            tick_20hz: Ticker::new(20.0),
             road_manager: RoadManager::new(),
             road_editor: RoadEditor::new(),
             road_commands: vec![],
@@ -168,18 +172,19 @@ impl RoadSubsystem {
     /// Returns the commands so the render subsystem can process previews/meshes.
     pub fn update(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain: &mut TerrainSubsystem,
         car_subsystem: &mut CarSubsystem,
         input: &mut InputState,
+        time: &TimeSystem,
         gizmo: &mut Gizmo,
     ) {
         self.road_commands = self
             .road_editor
-            .update(&self.road_manager, terrain_renderer, input);
+            .update(&self.road_manager, terrain, input, gizmo);
 
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
         apply_preview_commands_world(
-            terrain_renderer,
+            terrain,
             &self.road_editor.style,
             &mut self.road_manager.preview_roads,
             &self.road_manager.roads,
@@ -191,6 +196,7 @@ impl RoadSubsystem {
         // Apply real commands to roads storage
         if !self.road_commands.is_empty() {
             apply_commands_world(
+                terrain,
                 &mut self.road_manager.roads,
                 car_subsystem,
                 gizmo,

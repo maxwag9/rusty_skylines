@@ -30,10 +30,10 @@ pub fn road_material_keys() -> Vec<TextureKey> {
             shader_id: "asphalt".to_string(),
             params: TextureParams {
                 seed: 0,
-                scale: 16.0,
-                roughness: 0.5,
-                color_primary: [0.004, 0.004, 0.004, 1.0],
-                color_secondary: [0.015, 0.015, 0.015, 1.0],
+                scale: 20.0,
+                roughness: 0.7,
+                color_primary: [0.05, 0.05, 0.05, 1.0],
+                color_secondary: [0.06, 0.06, 0.08, 1.0],
                 ..Default::default()
             },
             resolution: 512,
@@ -55,9 +55,9 @@ pub fn road_material_keys() -> Vec<TextureKey> {
             params: TextureParams {
                 seed: 2,
                 scale: 16.0,
-                roughness: 0.5,
+                roughness: 0.7,
                 color_primary: [0.04, 0.04, 0.006, 1.0],
-                color_secondary: [0.120, 0.120, 0.120, 1.0],
+                color_secondary: [0.070, 0.070, 0.070, 1.0],
                 ..Default::default()
             },
             resolution: 512,

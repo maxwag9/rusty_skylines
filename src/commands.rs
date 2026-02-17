@@ -4,19 +4,19 @@ use crate::world::cars::car_structs::CarChunk;
 use crate::world::terrain::terrain_subsystem::CursorMode;
 
 #[derive(Debug, Clone)]
-pub enum Event {
+pub enum Command {
     SetCursorMode(CursorMode),
     ToggleSimulation,
     CarNavigate(Vec<CarChunk>),
 }
 
 #[derive(Default)]
-pub struct Events {
-    write: Vec<Event>,
-    read: Vec<Event>,
+pub struct CommandBuffer {
+    write: Vec<Command>,
+    read: Vec<Command>,
 }
 
-impl Events {
+impl CommandBuffer {
     pub fn new() -> Self {
         Self {
             write: Vec::with_capacity(64),
@@ -25,7 +25,7 @@ impl Events {
     }
 
     /// Push an event for the *next* tick
-    pub fn send(&mut self, event: Event) {
+    pub fn send(&mut self, event: Command) {
         self.write.push(event);
     }
 
@@ -36,7 +36,7 @@ impl Events {
     }
 
     /// Drain events for this tick
-    pub fn drain(&mut self) -> impl Iterator<Item = Event> + '_ {
+    pub fn drain(&mut self) -> impl Iterator<Item = Command> + '_ {
         self.read.drain(..)
     }
 }

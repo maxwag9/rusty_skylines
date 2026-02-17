@@ -1,4 +1,4 @@
-use crate::events::Event;
+use crate::commands::Command;
 use crate::helpers::paths::data_dir;
 use crate::resources::Resources;
 use crate::systems::audio::audio_system;
@@ -74,12 +74,61 @@ impl Schedule {
         }
     }
 
+    pub fn run_inputs(&self, resources: &mut Resources) {
+        for system in &self.input_systems {
+            system(resources);
+        }
+    }
+    pub fn apply_commands(&self, resources: &mut Resources) {
+        let world = &mut resources.world_core;
+        world.events.flip();
+
+        for event in world.events.drain() {
+            // order is explicit and intentional
+            world.simulation.process_simulation_state_commands(&event);
+            cursor_system(&mut world.terrain_subsystem.cursor, &event);
+            run_car_events(event, &mut world.car_subsystem, &world.road_subsystem);
+            // later:
+            // audio_event_system(...)
+            // ui_event_system(...)
+        }
+    }
+    pub fn run_ticked(&self, resources: &mut Resources) {
+        let world = &mut resources.world_core;
+        let renderer = &mut resources.render_core;
+        let Some(camera) = world
+            .world_state
+            .camera_mut(world.world_state.main_camera())
+        else {
+            return;
+        };
+        let (time, terrain, roads, cars, input) = (
+            &mut world.time,
+            &mut world.terrain_subsystem,
+            &mut world.road_subsystem,
+            &mut world.car_subsystem,
+            &mut world.input,
+        );
+        let (settings, gizmo, device, queue) = (
+            &mut resources.settings,
+            &mut renderer.gizmo,
+            &renderer.device,
+            &renderer.queue,
+        );
+        let aspect = renderer.config.width as f32 / renderer.config.height as f32;
+
+        if world.simulation.running {
+            terrain.update(device, queue, camera, aspect, settings, input, time);
+        }
+
+        roads.update(terrain, cars, input, time, gizmo);
+    }
+
     pub fn run_sim(&self, resources: &mut Resources) {
         for system in &self.sim_systems {
             system(resources);
         }
     }
-
     pub fn run_render(&self, resources: &mut Resources) {
         let aspect =
             resources.render_core.config.width as f32 / resources.render_core.config.height as f32;
@@ -99,26 +148,6 @@ impl Schedule {
             .camera_mut(resources.world_core.world_state.main_camera())
             .unwrap()
             .end_frame();
-    }
-
-    pub fn run_inputs(&self, resources: &mut Resources) {
-        for system in &self.input_systems {
-            system(resources);
-        }
-    }
-    pub fn run_events(&self, resources: &mut Resources) {
-        let world = &mut resources.world_core;
-        world.events.flip();
-
-        for event in world.events.drain() {
-            // order is explicit and intentional
-            world.simulation.process_event(&event);
-            cursor_system(&mut world.terrain_subsystem.cursor, &event);
-            run_car_events(event, &mut world.car_subsystem, &world.road_subsystem);
-            // later:
-            // audio_event_system(...)
-            // ui_event_system(...)
-        }
     }
 }
 
@@ -289,17 +318,17 @@ impl ApplicationHandler for App {
                 if input.action_pressed_once("Toggle Cursor Mode") {
                     match world.terrain_subsystem.cursor.mode {
                         CursorMode::Roads(_) => {
-                            world.events.send(Event::SetCursorMode(CursorMode::Cars))
+                            world.events.send(Command::SetCursorMode(CursorMode::Cars))
                         }
                         CursorMode::Cars => world
                             .events
-                            .send(Event::SetCursorMode(CursorMode::TerrainEditing)),
+                            .send(Command::SetCursorMode(CursorMode::TerrainEditing)),
                         CursorMode::TerrainEditing => {
-                            world.events.send(Event::SetCursorMode(CursorMode::None))
+                            world.events.send(Command::SetCursorMode(CursorMode::None))
                         }
-                        CursorMode::None => world
-                            .events
-                            .send(Event::SetCursorMode(CursorMode::Roads(RoadType::default()))),
+                        CursorMode::None => world.events.send(Command::SetCursorMode(
+                            CursorMode::Roads(RoadType::default()),
+                        )),
                     }
                 }
                 if input.action_pressed_once("Leave Game") {
@@ -432,8 +461,9 @@ impl ApplicationHandler for App {
                 // Fixed-step simulation with budget + spiral-of-death protection
                 // -----------------------------
                 self.schedule.run_inputs(resources);
-                self.schedule.run_events(resources);
+                self.schedule.apply_commands(resources);
 
+                self.schedule.run_ticked(resources);
                 let mut steps = 0u32;
 
                 // If speed just changed, skip sim this frame for clean transition
@@ -473,7 +503,7 @@ impl ApplicationHandler for App {
                     &resources.world_core.time,
                     &resources.settings,
                 );
-                self.schedule.run_render(resources);
+                self.schedule.run_render(resources); // use commands output
 
                 // -----------------------------
                 // FPS cap

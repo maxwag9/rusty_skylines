@@ -295,7 +295,7 @@ pub fn compute_csm_matrices(
     [f32; CSM_CASCADES],
 ) {
     let eye_ws = camera.eye_world();
-    let terrain_y = terrain_renderer.get_height_at(eye_ws);
+    let terrain_y = terrain_renderer.get_height_at(eye_ws, false);
     let eye_height_agl = (eye_ws.local.y - terrain_y).max(0.0);
 
     let camera_fov_y_radians = camera.fov.to_radians();

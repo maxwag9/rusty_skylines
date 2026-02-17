@@ -1,4 +1,5 @@
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
+use crate::renderer::gizmo::Gizmo;
 use crate::ui::input::InputState;
 use crate::world::roads::intersections::IntersectionBuildParams;
 use crate::world::roads::road_helpers::*;
@@ -39,6 +40,7 @@ impl RoadEditor {
         road_manager: &RoadManager,
         terrain_renderer: &TerrainSubsystem,
         input: &mut InputState,
+        gizmo: &mut Gizmo,
     ) -> Vec<RoadEditorCommand> {
         let Some(road_type) = (match terrain_renderer.cursor.mode {
             CursorMode::Roads(r) => Some(r),
@@ -64,7 +66,7 @@ impl RoadEditor {
         };
 
         let chunk_id = picked.chunk.id;
-        let snap = self.find_best_snap(storage, terrain_renderer, picked.pos);
+        let snap = self.find_best_snap(storage, terrain_renderer, picked.pos, gizmo);
 
         output.push(RoadEditorCommand::PreviewSnap(SnapPreview {
             world_pos: snap.world_pos,
@@ -101,6 +103,7 @@ impl RoadEditor {
                     place_pressed,
                     chunk_id,
                     &mut output,
+                    gizmo,
                 );
             }
             EditorState::CurvePickControl { start } => {
@@ -123,6 +126,7 @@ impl RoadEditor {
                     place_pressed,
                     chunk_id,
                     &mut output,
+                    gizmo,
                 );
             }
         }
@@ -165,6 +169,7 @@ impl RoadEditor {
         place_pressed: bool,
         chunk_id: ChunkId,
         output: &mut Vec<RoadEditorCommand>,
+        gizmo: &mut Gizmo,
     ) {
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
@@ -197,6 +202,7 @@ impl RoadEditor {
             None,
             start,
             &end_anchor,
+            gizmo,
         );
         // println!("{:?}", reason);
         let seg_preview = SegmentPreview {
@@ -236,6 +242,7 @@ impl RoadEditor {
                 None,
                 chunk_id,
                 output,
+                gizmo,
             );
             for cmd in road_cmds {
                 output.push(RoadEditorCommand::Road(cmd));
@@ -306,6 +313,7 @@ impl RoadEditor {
         place_pressed: bool,
         chunk_id: ChunkId,
         output: &mut Vec<RoadEditorCommand>,
+        gizmo: &mut Gizmo,
     ) {
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
@@ -347,6 +355,7 @@ impl RoadEditor {
             Some(control),
             start,
             &end_anchor,
+            gizmo,
         );
 
         let seg_preview = SegmentPreview {
@@ -385,6 +394,7 @@ impl RoadEditor {
                 Some(control),
                 chunk_id,
                 output,
+                gizmo,
             );
             for cmd in road_cmds {
                 output.push(RoadEditorCommand::Road(cmd));
@@ -409,12 +419,12 @@ impl RoadEditor {
         control: Option<WorldPos>,
         start_anchor: &Anchor,
         end_anchor: &Anchor,
+        gizmo: &mut Gizmo,
     ) -> Vec<CrossingPoint> {
         let chunk_size = terrain_renderer.chunk_size;
         let mut crossings = Vec::new();
         let mut crossed_segments: HashSet<SegmentId> = HashSet::new();
 
-        // Build test polyline for intersection testing
         let test_polyline = match control {
             Some(c) => {
                 let est_len = estimate_bezier_arc_length(
@@ -437,35 +447,44 @@ impl RoadEditor {
             None => vec![start_pos, end_pos],
         };
 
-        // Get segments that are excluded (already being split at start/end)
         let excluded_segments = self.get_excluded_segments(storage, start_anchor, end_anchor);
 
-        // Check lane crossings - only one crossing per segment
         for (lane_id, _) in storage.iter_enabled_lanes() {
             let lane = storage.lane(&lane_id);
             let seg_id = lane.segment();
 
-            // Skip if we've already found a crossing on this segment
             if crossed_segments.contains(&seg_id) {
                 continue;
             }
 
-            // Skip excluded segments (being split at start/end)
             if excluded_segments.contains(&seg_id) {
                 continue;
             }
 
-            if let Some(crossing) = self.find_lane_crossing_point(
+            if self
+                .find_lane_crossing_point(
+                    storage,
+                    terrain_renderer,
+                    &test_polyline,
+                    start_pos,
+                    end_pos,
+                    control,
+                    &lane_id,
+                )
+                .is_none()
+            {
+                continue;
+            }
+
+            if let Some(crossing) = self.find_segment_center_crossing(
                 storage,
                 terrain_renderer,
                 &test_polyline,
                 start_pos,
                 end_pos,
                 control,
-                &lane_id,
+                seg_id,
             ) {
-                let lane = storage.lane(&lane_id);
-                let seg_id = lane.segment();
                 let segment = storage.segment(seg_id);
 
                 let start_node = storage.node(segment.start).unwrap();
@@ -480,14 +499,12 @@ impl RoadEditor {
                 if dist_to_start < CROSSING_SNAP_TO_NODE_RADIUS
                     || dist_to_end < CROSSING_SNAP_TO_NODE_RADIUS
                 {
-                    // Snap to the closest endpoint node
                     let (closest_node_id, closest_pos) = if dist_to_start <= dist_to_end {
                         (segment.start, start_node_pos)
                     } else {
                         (segment.end, end_node_pos)
                     };
 
-                    // Project the node position back onto our new road to get an accurate t
                     if let Some((new_t, _proj_dist)) = self.project_point_to_path(
                         start_pos,
                         end_pos,
@@ -495,7 +512,6 @@ impl RoadEditor {
                         closest_pos,
                         chunk_size,
                     ) {
-                        // Only add if the new t is still in valid range (should almost always be true)
                         if new_t > ENDPOINT_T_EPS && new_t < 1.0 - ENDPOINT_T_EPS {
                             crossings.push(CrossingPoint {
                                 t: new_t,
@@ -503,11 +519,11 @@ impl RoadEditor {
                                 kind: CrossingKind::ExistingNode(closest_node_id),
                             });
                             crossed_segments.insert(seg_id);
-                            continue; // skip adding a lane crossing split
+                            continue;
                         }
                     }
                 }
-                // Check if not too close to our road's endpoints
+
                 if crossing.t > ENDPOINT_T_EPS && crossing.t < 1.0 - ENDPOINT_T_EPS {
                     crossed_segments.insert(seg_id);
                     crossings.push(crossing);
@@ -515,9 +531,7 @@ impl RoadEditor {
             }
         }
 
-        // Check for existing nodes close to our path (not start/end nodes)
         for (node_id, node) in storage.iter_enabled_nodes() {
-            // Skip nodes that are our start or end
             if self.is_node_in_anchor(node_id, start_anchor)
                 || self.is_node_in_anchor(node_id, end_anchor)
             {
@@ -538,11 +552,108 @@ impl RoadEditor {
             }
         }
 
-        // Sort by t (position along our road)
         crossings.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
 
-        // Deduplicate crossings that are too close together
-        self.deduplicate_crossings(crossings)
+        let crossings = self.deduplicate_crossings(crossings);
+
+        for crossing in crossings.iter() {
+            gizmo.cross(crossing.world_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
+        }
+        crossings
+    }
+
+    fn find_segment_center_crossing(
+        &self,
+        storage: &RoadStorage,
+        terrain_renderer: &TerrainSubsystem,
+        test_polyline: &[WorldPos],
+        start_pos: WorldPos,
+        end_pos: WorldPos,
+        control: Option<WorldPos>,
+        segment_id: SegmentId,
+    ) -> Option<CrossingPoint> {
+        let segment = storage.segment(segment_id);
+
+        let mut lane_plus_1: Option<(LaneId, &Lane)> = None;
+        let mut lane_minus_1: Option<(LaneId, &Lane)> = None;
+        let mut closest_to_zero: Option<(LaneId, &Lane)> = None;
+        let mut closest_abs_idx = i8::MAX;
+
+        for lane_id in segment.lanes() {
+            let lane = storage.lane(lane_id);
+            if !lane.is_enabled() {
+                continue;
+            }
+
+            let idx = lane.lane_index();
+            if idx == 1 {
+                lane_plus_1 = Some((*lane_id, lane));
+            } else if idx == -1 {
+                lane_minus_1 = Some((*lane_id, lane));
+            }
+
+            if idx.abs() < closest_abs_idx {
+                closest_abs_idx = idx.abs();
+                closest_to_zero = Some((*lane_id, lane));
+            }
+        }
+
+        if let (Some((id1, _)), Some((id2, _))) = (&lane_plus_1, &lane_minus_1) {
+            let cross1 = self.find_lane_crossing_point(
+                storage,
+                terrain_renderer,
+                test_polyline,
+                start_pos,
+                end_pos,
+                control,
+                id1,
+            );
+            let cross2 = self.find_lane_crossing_point(
+                storage,
+                terrain_renderer,
+                test_polyline,
+                start_pos,
+                end_pos,
+                control,
+                id2,
+            );
+
+            match (cross1, cross2) {
+                (Some(c1), Some(c2)) => {
+                    let avg_t = (c1.t + c2.t) * 0.5;
+                    let center_pos =
+                        self.sample_path_at_t(terrain_renderer, start_pos, end_pos, control, avg_t);
+
+                    let lane_t = match c1.kind {
+                        CrossingKind::LaneCrossing { lane_t, .. } => lane_t,
+                        _ => 0.5,
+                    };
+
+                    Some(CrossingPoint {
+                        t: avg_t,
+                        world_pos: center_pos,
+                        kind: CrossingKind::LaneCrossing {
+                            lane_id: *id1,
+                            lane_t,
+                        },
+                    })
+                }
+                (Some(c), None) | (None, Some(c)) => Some(c),
+                (None, None) => None,
+            }
+        } else if let Some((id, _)) = &closest_to_zero {
+            self.find_lane_crossing_point(
+                storage,
+                terrain_renderer,
+                test_polyline,
+                start_pos,
+                end_pos,
+                control,
+                id,
+            )
+        } else {
+            None
+        }
     }
 
     /// I FIXED A BUG HERE WHERE A ROAD "INTERSECTED" WITH THE ROAD I WAS BUILDING FROM AT SHALLOW ANGLES,
@@ -735,7 +846,7 @@ impl RoadEditor {
         };
 
         // Get height from terrain
-        let height = terrain_renderer.get_height_at(pos);
+        let height = terrain_renderer.get_height_at(pos, true);
         pos.local.y = height + CLEARANCE;
         pos
     }
@@ -771,6 +882,7 @@ impl RoadEditor {
         control: Option<WorldPos>,
         chunk_id: ChunkId,
         output: &mut Vec<RoadEditorCommand>,
+        gizmo: &mut Gizmo,
     ) -> Vec<RoadCommand> {
         let mut cmds = Vec::new();
 
@@ -793,6 +905,7 @@ impl RoadEditor {
             control,
             start,
             end,
+            gizmo,
         );
         //println!("Crossing points: {:?}", crossings.len());
         // Build waypoint list
@@ -961,13 +1074,12 @@ impl RoadEditor {
         }
     }
 
-    // ==================== EXISTING METHODS (unchanged) ====================
-
     fn find_best_snap(
         &self,
         storage: &RoadStorage,
         terrain_renderer: &TerrainSubsystem,
         pos: WorldPos,
+        gizmo: &mut Gizmo,
     ) -> SnapResult {
         if let Some((node_id, node_pos, dist)) =
             self.find_nearest_node(storage, pos, terrain_renderer.chunk_size)
@@ -980,7 +1092,7 @@ impl RoadEditor {
         }
 
         if let Some((lane_id, t, projected_pos, dist)) =
-            self.find_nearest_lane_snap(storage, terrain_renderer, pos)
+            self.find_nearest_lane_snap(storage, terrain_renderer, pos, gizmo)
         {
             return SnapResult {
                 world_pos: projected_pos,
@@ -1023,32 +1135,112 @@ impl RoadEditor {
         storage: &RoadStorage,
         terrain_renderer: &TerrainSubsystem,
         pos: WorldPos,
+        gizmo: &mut Gizmo,
     ) -> Option<(LaneId, f32, WorldPos, f32)> {
-        let lane_id = nearest_lane_to_point(storage, pos, terrain_renderer.chunk_size)?;
-        let lane = storage.lane(&lane_id);
-        let (t, dist_sq) =
-            project_point_to_lane_xz(lane, pos, storage, terrain_renderer.chunk_size)?;
-        let dist = dist_sq.sqrt();
+        let nearest_lane_id = nearest_lane_to_point(storage, pos, terrain_renderer.chunk_size)?;
+        let nearest_lane = storage.lane(&nearest_lane_id);
+        let segment_id = nearest_lane.segment();
+        let segment = storage.segment(segment_id);
+
+        let (raw_t, _) =
+            project_point_to_lane_xz(nearest_lane, pos, storage, terrain_renderer.chunk_size)?;
+
+        let nearest_is_forward = nearest_lane.from_node() == segment.start;
+        let segment_t = if nearest_is_forward {
+            raw_t
+        } else {
+            1.0 - raw_t
+        };
+
+        let mut lane_plus_1: Option<(LaneId, &Lane)> = None;
+        let mut lane_minus_1: Option<(LaneId, &Lane)> = None;
+        let mut closest_to_zero: Option<(LaneId, &Lane)> = None;
+        let mut closest_abs_idx = i8::MAX;
+
+        for lane_id in segment.lanes() {
+            let lane = storage.lane(lane_id);
+            if !lane.is_enabled() {
+                continue;
+            }
+
+            let idx = lane.lane_index();
+            if idx == 1 {
+                lane_plus_1 = Some((*lane_id, lane));
+            } else if idx == -1 {
+                lane_minus_1 = Some((*lane_id, lane));
+            }
+
+            if idx.abs() < closest_abs_idx {
+                closest_abs_idx = idx.abs();
+                closest_to_zero = Some((*lane_id, lane));
+            }
+        }
+
+        let (rep_lane_id, center_pos, rep_t) =
+            if let (Some((id1, l1)), Some((_, l2))) = (lane_plus_1, lane_minus_1) {
+                let l1_forward = l1.from_node() == segment.start;
+                let l2_forward = l2.from_node() == segment.start;
+
+                let t1 = if l1_forward {
+                    segment_t
+                } else {
+                    1.0 - segment_t
+                };
+                let t2 = if l2_forward {
+                    segment_t
+                } else {
+                    1.0 - segment_t
+                };
+
+                let p1 = sample_lane_position(l1, t1, storage, terrain_renderer.chunk_size)?;
+                let p2 = sample_lane_position(l2, t2, storage, terrain_renderer.chunk_size)?;
+
+                let center = WorldPos {
+                    chunk: p1.chunk,
+                    local: LocalPos::new(
+                        (p1.local.x + p2.local.x) * 0.5,
+                        (p1.local.y + p2.local.y) * 0.5,
+                        (p1.local.z + p2.local.z) * 0.5,
+                    ),
+                };
+                (id1, center, t1)
+            } else if let Some((id, lane)) = closest_to_zero {
+                let is_forward = lane.from_node() == segment.start;
+                let lane_t = if is_forward {
+                    segment_t
+                } else {
+                    1.0 - segment_t
+                };
+                let p = sample_lane_position(lane, lane_t, storage, terrain_renderer.chunk_size)?;
+                (id, p, lane_t)
+            } else {
+                return None;
+            };
+
+        let mut final_pos = center_pos;
+        final_pos.local.y = terrain_renderer.get_height_at(final_pos, true) + CLEARANCE;
+
+        let dist = pos.distance_to(final_pos, terrain_renderer.chunk_size);
 
         if dist >= LANE_SNAP_RADIUS {
             return None;
         }
 
-        if t < ENDPOINT_T_EPS {
-            let node_id = lane.from_node();
+        let rep_lane = storage.lane(&rep_lane_id);
+
+        if rep_t < ENDPOINT_T_EPS {
+            let node_id = rep_lane.from_node();
             let node = storage.node(node_id)?;
-            return Some((lane_id, 0.0, node.position(), dist));
+            return Some((rep_lane_id, 0.0, node.position(), dist));
         }
 
-        if t > 1.0 - ENDPOINT_T_EPS {
-            let node_id = lane.to_node();
+        if rep_t > 1.0 - ENDPOINT_T_EPS {
+            let node_id = rep_lane.to_node();
             let node = storage.node(node_id)?;
-            return Some((lane_id, 1.0, node.position(), dist));
+            return Some((rep_lane_id, 1.0, node.position(), dist));
         }
-
-        let mut p = sample_lane_position(lane, t, storage, terrain_renderer.chunk_size)?;
-        p.local.y = terrain_renderer.get_height_at(p) + CLEARANCE;
-        Some((lane_id, t, p, dist))
+        // gizmo.cross(final_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
+        Some((rep_lane_id, rep_t, final_pos, dist))
     }
 
     fn build_anchor_from_snap(&self, snap: &SnapResult) -> Anchor {
@@ -1152,10 +1344,10 @@ impl RoadEditor {
         for i in 0..sample_count {
             let sample_t = i as f32 / (sample_count - 1) as f32;
             let mut s = sample_lane_position(lane, sample_t, storage, terrain_renderer.chunk_size)?;
-            s.local.y = terrain_renderer.get_height_at(s) + CLEARANCE;
+            s.local.y = terrain_renderer.get_height_at(s, false) + CLEARANCE;
             sample_points.push(s);
         }
-        p.local.y = terrain_renderer.get_height_at(p) + CLEARANCE;
+        p.local.y = terrain_renderer.get_height_at(p, false) + CLEARANCE;
         Some(LanePreview {
             lane_id,
             projected_t: t,
@@ -1418,7 +1610,7 @@ fn make_straight_centerline(
         .map(|i| {
             let t = i as f32 / samples as f32;
             let mut p = start_pos.lerp(end_pos, t, terrain_renderer.chunk_size);
-            set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
+            set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, false);
             p
         })
         .collect()
@@ -1528,7 +1720,7 @@ pub fn sample_quadratic_bezier(
         let blend = v1 * (2.0 * one_minus_t * t) + v2 * (t * t);
         let mut p = p0.add_vec3(blend, terrain_renderer.chunk_size);
 
-        set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
+        set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, true);
         points.push(p);
     }
     points
@@ -1575,7 +1767,7 @@ pub fn offset_polyline(
             let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             let right = Vec3::new(-dir_xz.z, 0.0, dir_xz.x);
             let mut p = pt.add_vec3(right * offset, terrain_renderer.chunk_size);
-            set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p);
+            set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, true);
             p
         })
         .collect()

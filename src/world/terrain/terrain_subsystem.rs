@@ -5,6 +5,7 @@ use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::resources::TimeSystem;
+use crate::simulation::Ticker;
 use crate::ui::input::InputState;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
@@ -306,6 +307,7 @@ impl TerrainRenderSubsystem {
 }
 
 pub struct TerrainSubsystem {
+    pub tick: Ticker,
     pub cursor: Cursor,
     pub arena: TerrainMeshArena,
 
@@ -367,6 +369,7 @@ impl TerrainSubsystem {
 
         let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size);
         Self {
+            tick: Ticker::new(60.0),
             cursor: Cursor::new(),
             arena,
             chunks: HashMap::new(),
@@ -599,7 +602,14 @@ impl TerrainSubsystem {
             }
 
             // Append skirts to hide LOD seam gaps
-            append_edge_skirts(&mut vertices, &mut indices, &height_grid, coord);
+            append_edge_skirts(
+                &self.terrain_gen,
+                &mut vertices,
+                &mut indices,
+                &height_grid,
+                coord,
+                self.chunk_size,
+            );
 
             let handle = self.arena.alloc_and_upload(
                 device,
@@ -869,12 +879,14 @@ impl TerrainSubsystem {
 
         queue.write_buffer(pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
-    pub fn get_height_at(&self, pos: WorldPos) -> f32 {
+    pub fn get_height_at(&self, pos: WorldPos, high_res: bool) -> f32 {
         let chunk = match self.chunks.get(&pos.chunk) {
             Some(c) => c,
             None => return self.terrain_gen.height(&pos, self.chunk_size),
         };
-
+        if high_res && chunk.step != 1 {
+            return self.terrain_gen.height(&pos, self.chunk_size);
+        }
         height_bilinear_world(&chunk.height_grid, pos)
     }
 
@@ -1015,108 +1027,139 @@ pub struct FrameTimings {
 /// Skirt depth below terrain surface
 const SKIRT_DEPTH: f32 = 8.0;
 
+fn make_vertex(
+    terrain_generator: &TerrainGenerator,
+    chunk_coord: ChunkCoord,
+    chunk_size: ChunkSize,
+    pos: [f32; 3],
+    normal: [f32; 3],
+    uv: [f32; 2],
+    chunk_xz: [i32; 2],
+) -> Vertex {
+    let world_pos = WorldPos::new(chunk_coord, LocalPos::new(pos[0], pos[1], pos[2]));
+    let h = pos[1];
+    let moisture = terrain_generator.moisture(&world_pos, h, chunk_size);
+    let color = terrain_generator.color(&world_pos, h, moisture, chunk_size);
+    Vertex {
+        local_position: pos,
+        normal,
+        color,
+        chunk_xz,
+        quad_uv: uv,
+    }
+}
+
 /// Append skirt geometry for +X and +Z edges of the chunk.
-/// Skirts are vertical strips that extend downward, hiding LOD seam gaps.
+/// Skirts are vertical strips that extend downward, TRYING to hide LOD seam gaps.
 pub fn append_edge_skirts(
+    terrain_generator: &TerrainGenerator,
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
     height_grid: &ChunkHeightGrid,
     chunk_coord: ChunkCoord,
+    chunk_size: ChunkSize,
 ) {
     let nx = height_grid.nx;
     let nz = height_grid.nz;
     let cell = height_grid.cell_f32();
     let chunk_xz = [chunk_coord.x, chunk_coord.z];
 
-    // +X edge skirt (gx = nx - 1)
+    // +X edge skirt
     let gx = nx - 1;
     let x = gx as f32 * cell;
-
     for gz in 0..(nz - 1) {
         let z0 = gz as f32 * cell;
         let z1 = (gz + 1) as f32 * cell;
-
         let h0 = height_grid.heights[gx * nz + gz];
         let h1 = height_grid.heights[gx * nz + gz + 1];
-
         let base = vertices.len() as u32;
 
-        // Top edge vertices (at terrain surface)
-        vertices.push(Vertex {
-            local_position: [x, h0, z0],
-            normal: [1.0, 0.0, 0.0],
-            color: [1.0, 0.0, 0.0], //terrain_generator.color(&WorldPos::new(chunk_coord, LocalPos::new(x, h0, z0)), 128 as f32),
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x, h0, z0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0],
             chunk_xz,
-            quad_uv: [0.0, 0.0],
-        });
-        vertices.push(Vertex {
-            local_position: [x, h1, z1],
-            normal: [1.0, 0.0, 0.0],
-            color: [0.0, 0.0, 0.0],
+        ));
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x, h1, z1],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0],
             chunk_xz,
-            quad_uv: [1.0, 0.0],
-        });
-        // Bottom edge vertices (extended downward)
-        vertices.push(Vertex {
-            local_position: [x, h0 - SKIRT_DEPTH, z0],
-            normal: [1.0, 0.0, 0.0],
-            color: [0.0, 0.0, 0.0],
+        ));
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x, h0 - SKIRT_DEPTH, z0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0],
             chunk_xz,
-            quad_uv: [0.0, 1.0],
-        });
-        vertices.push(Vertex {
-            local_position: [x, h1 - SKIRT_DEPTH, z1],
-            normal: [1.0, 0.0, 0.0],
-            color: [0.0, 0.0, 0.0],
+        ));
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x, h1 - SKIRT_DEPTH, z1],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0],
             chunk_xz,
-            quad_uv: [1.0, 1.0],
-        });
+        ));
 
-        // Two triangles forming the skirt quad
         indices.extend_from_slice(&[base, base + 2, base + 1, base + 1, base + 2, base + 3]);
     }
 
-    // +Z edge skirt (gz = nz - 1)
+    // +Z edge skirt
     let gz = nz - 1;
     let z = gz as f32 * cell;
-
     for gx in 0..(nx - 1) {
         let x0 = gx as f32 * cell;
         let x1 = (gx + 1) as f32 * cell;
-
         let h0 = height_grid.heights[gx * nz + gz];
         let h1 = height_grid.heights[(gx + 1) * nz + gz];
-
         let base = vertices.len() as u32;
 
-        vertices.push(Vertex {
-            local_position: [x0, h0, z],
-            normal: [0.0, 0.0, 1.0],
-            color: [0.0, 0.0, 0.0],
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x0, h0, z],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0],
             chunk_xz,
-            quad_uv: [0.0, 0.0],
-        });
-        vertices.push(Vertex {
-            local_position: [x1, h1, z],
-            normal: [0.0, 0.0, 1.0],
-            color: [0.0, 0.0, 0.0],
+        ));
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x1, h1, z],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0],
             chunk_xz,
-            quad_uv: [1.0, 0.0],
-        });
-        vertices.push(Vertex {
-            local_position: [x0, h0 - SKIRT_DEPTH, z],
-            normal: [0.0, 0.0, 1.0],
-            color: [0.0, 0.0, 0.0],
+        ));
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x0, h0 - SKIRT_DEPTH, z],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0],
             chunk_xz,
-            quad_uv: [0.0, 1.0],
-        });
-        vertices.push(Vertex {
-            local_position: [x1, h1 - SKIRT_DEPTH, z],
-            normal: [0.0, 0.0, 1.0],
-            color: [0.0, 0.0, 0.0],
+        ));
+        vertices.push(make_vertex(
+            terrain_generator,
+            chunk_coord,
+            chunk_size,
+            [x1, h1 - SKIRT_DEPTH, z],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0],
             chunk_xz,
-            quad_uv: [1.0, 1.0],
-        });
+        ));
 
         indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
     }

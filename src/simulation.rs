@@ -1,5 +1,5 @@
+use crate::commands::Command;
 use crate::data::Settings;
-use crate::events::{Event, Events};
 use crate::helpers::mouse_ray::WorldRay;
 use crate::renderer::gizmo::Gizmo;
 use crate::resources::TimeSystem;
@@ -51,24 +51,15 @@ impl Simulation {
         self.running = false;
     }
 
-    pub fn process_events(&mut self, events: &mut Events) {
-        for event in events.drain() {
-            match event {
-                Event::ToggleSimulation => self.toggle(),
-                Event::SetCursorMode(mode) => {}
-                _ => {}
-            }
-        }
-    }
-    pub fn process_event(&mut self, event: &Event) {
-        match event {
-            Event::ToggleSimulation => self.toggle(),
+    pub fn process_simulation_state_commands(&mut self, command: &Command) {
+        match command {
+            Command::ToggleSimulation => self.toggle(),
             _ => {}
         }
     }
     pub fn update(
         &mut self,
-        terrain_subsystem: &mut TerrainSubsystem,
+        terrain: &mut TerrainSubsystem,
         road_subsystem: &mut RoadSubsystem,
         car_subsystem: &mut CarSubsystem,
         settings: &Settings,
@@ -88,17 +79,14 @@ impl Simulation {
         self.tick += 1;
         self.last_update = Instant::now();
         let camera = &mut camera_bundle.camera;
-        update_picked_pos(terrain_subsystem, camera, settings, config, input);
+        update_picked_pos(terrain, camera, settings, config, input);
         let aspect = config.width as f32 / config.height as f32;
 
-        if self.tick % 2 == 0 {
-            terrain_subsystem.update(device, queue, camera, aspect, settings, input, time);
-        }
         let cam_ctrl = &mut camera_bundle.controller;
-        road_subsystem.update(terrain_subsystem, car_subsystem, input, gizmo);
+
         car_subsystem.update(
             &road_subsystem.road_manager,
-            &terrain_subsystem,
+            &terrain,
             input,
             time,
             variables,
@@ -106,7 +94,7 @@ impl Simulation {
         );
         drive_car(
             car_subsystem,
-            terrain_subsystem,
+            terrain,
             settings,
             input,
             cam_ctrl,
@@ -135,4 +123,28 @@ fn update_picked_pos(
         settings.chunk_size,
     );
     terrain_subsystem.pick_terrain_point(ray);
+}
+
+pub struct Ticker {
+    interval: f32, // seconds per tick
+    accumulator: f32,
+}
+
+impl Ticker {
+    pub fn new(hz: f32) -> Self {
+        Self {
+            interval: 1.0 / hz,
+            accumulator: 0.0,
+        }
+    }
+
+    pub fn tick(&mut self, dt: f32) -> bool {
+        self.accumulator += dt;
+        if self.accumulator >= self.interval {
+            self.accumulator -= self.interval;
+            true
+        } else {
+            false
+        }
+    }
 }

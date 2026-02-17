@@ -13,7 +13,7 @@ pub fn render_system(resources: &mut Resources) {
         &world.time,
         &mut world.input,
         &resources.settings,
-        &world.terrain_subsystem,
+        &mut world.terrain_subsystem,
         &world.road_subsystem,
         &world.car_subsystem,
         &world.world_state.astronomy,

@@ -396,7 +396,7 @@ struct MergedQuad {
 
 impl ChunkBuilder {
     // Tunable thresholds for greedy merging
-    const HEIGHT_TOLERANCE: f32 = 0.05; // Max height variance to consider "flat"
+    const HEIGHT_TOLERANCE: f32 = 0.003; // Max height variance to consider "flat"
     const COLOR_TOLERANCE: f32 = 0.02; // Max color difference per channel
 
     pub fn build_chunk_cpu(
@@ -1087,40 +1087,38 @@ impl ChunkBuilder {
 
 pub fn lod_step_for_distance(dist2_chunks: i32, chunk_size: ChunkSize) -> LodStep {
     if dist2_chunks <= 0 {
-        return 1; // center chunk always max detail
+        return 1;
     }
 
-    let dist_world2 = (dist2_chunks as f32) * (chunk_size as f32).powi(2);
+    // Scale thresholds to maintain consistent world-space LOD boundaries.
+    // Reference size is 128; smaller chunks get proportionally larger thresholds.
+    // For chunk_size > 128, minimum thresholds ensure at least 9 chunks at LOD 1.
+    let cs = chunk_size as i32;
+    let scale = (128 / cs).max(1);
+    let scale2 = scale * scale;
 
-    if dist_world2 < 1024.0 {
+    // Each LOD level covers ~2x the world-space distance of the previous.
+    // Thresholds quadruple per level (distance² relationship).
+    // Base thresholds calibrated for chunk_size=128:
+    //   LOD 1: dist² ≤ 2  → center + 8 neighbors (~181 world units)
+    //   LOD 2: dist² ≤ 8  → ~362 world units (2x)
+    //   LOD 4: dist² ≤ 32 → ~724 world units (2x)
+    //   etc.
+    if dist2_chunks <= 2 * scale2 {
         1
-    }
-    // < ~32 world units
-    else if dist_world2 < 4096.0 {
+    } else if dist2_chunks <= 8 * scale2 {
         2
-    }
-    // < ~64
-    else if dist_world2 < 16384.0 {
+    } else if dist2_chunks <= 32 * scale2 {
         4
-    }
-    // < ~128
-    else if dist_world2 < 65536.0 {
+    } else if dist2_chunks <= 128 * scale2 {
         8
-    }
-    // < ~256
-    else if dist_world2 < 262144.0 {
+    } else if dist2_chunks <= 512 * scale2 {
         16
-    }
-    // < ~512
-    else if dist_world2 < 1048576.0 {
+    } else if dist2_chunks <= 2048 * scale2 {
         32
-    }
-    // < ~1024
-    else if dist_world2 < 4194304.0 {
+    } else if dist2_chunks <= 8192 * scale2 {
         64
-    }
-    // < ~2048
-    else {
+    } else {
         128
     }
 }

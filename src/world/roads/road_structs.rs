@@ -3,6 +3,7 @@
 use crate::helpers::positions::WorldPos;
 use crate::world::roads::roads::{RoadCommand, RoadStorage};
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
@@ -58,7 +59,7 @@ impl Default for RoadStyleParams {
 }
 
 /// Stable, monotonically increasing node identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct NodeId(pub u32);
 
@@ -89,7 +90,7 @@ impl From<NodeId> for u32 {
 }
 
 /// Stable, monotonically increasing segment identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct SegmentId(pub u32);
 

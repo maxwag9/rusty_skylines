@@ -42,6 +42,7 @@ struct AOParams {
 @group(0) @binding(1) var normals_half:      texture_2d<f32>;
 @group(0) @binding(2) var blue_noise_tex:    texture_2d<f32>;
 @group(0) @binding(3) var ao_history:        texture_2d<f32>; // prev frame
+@group(0) @binding(4) var motion:            texture_2d<f32>; // rg16float: curr_uv - prev_uv
 
 @group(1) @binding(0) var ao_output: texture_storage_2d<r32float, write>;
 
@@ -180,6 +181,30 @@ fn sample_history_bilinear(uv: vec2<f32>, dims: vec2<i32>) -> f32 {
     return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
 }
 
+// ----------------------------------------------------------------------------
+// Sample motion vector with bilinear interpolation
+// ----------------------------------------------------------------------------
+fn sample_motion_bilinear(uv: vec2<f32>) -> vec2<f32> {
+    let dims = textureDimensions(motion);
+    let dims_i = vec2<i32>(i32(dims.x), i32(dims.y));
+
+    let texel = uv * vec2<f32>(dims) - 0.5;
+    let base  = vec2<i32>(floor(texel));
+    let f     = texel - vec2<f32>(base);
+
+    let p00 = clamp(base,                   vec2<i32>(0), dims_i - 1);
+    let p10 = clamp(base + vec2<i32>(1, 0), vec2<i32>(0), dims_i - 1);
+    let p01 = clamp(base + vec2<i32>(0, 1), vec2<i32>(0), dims_i - 1);
+    let p11 = clamp(base + vec2<i32>(1, 1), vec2<i32>(0), dims_i - 1);
+
+    let m00 = textureLoad(motion, p00, 0).rg;
+    let m10 = textureLoad(motion, p10, 0).rg;
+    let m01 = textureLoad(motion, p01, 0).rg;
+    let m11 = textureLoad(motion, p11, 0).rg;
+
+    return mix(mix(m00, m10, f.x), mix(m01, m11, f.x), f.y);
+}
+
 // Main
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -257,53 +282,59 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ao_unfaded = saturate(1.0 - total_occ * ao_params.intensity);
     let raw_ao_dist_faded = mix(1.0, ao_unfaded, dist_fade);
 
-    // Fade to 1.0 when radius is tiny (kills the far speckle without needing “close” far fades)
+    // Fade to 1.0 when radius is tiny (kills the far speckle without needing "close" far fades)
     let raw_ao = mix(1.0, raw_ao_dist_faded, radius_fade);
+
     // Fast path: no temporal accumulation requested
     if (ao_params.temporal_blend >= 0.999) {
         textureStore(ao_output, pixel, vec4<f32>(raw_ao, 0.0, 0.0, 1.0));
         return;
     }
 
-    // Temporal accumulation (unchanged logic)
+    // ========================================================================
+    // Temporal accumulation using motion vectors
+    // ========================================================================
     var final_ao = raw_ao;
 
-    let world_pos = camera.inv_view * vec4<f32>(view_pos, 1.0);
-    let prev_clip = ao_params.prev_view_proj * world_pos;
+    // Sample motion vector (bilinear since motion may be at different resolution)
+    // Motion format: motion = curr_uv - prev_uv
+    let motion_vec = sample_motion_bilinear(uv);
 
-    if (prev_clip.w > 0.001) {
-        let prev_ndc = prev_clip.xy / prev_clip.w;
-        let prev_uv  = vec2<f32>(prev_ndc.x * 0.5 + 0.5,
-                                 1.0 - (prev_ndc.y * 0.5 + 0.5));
+    // Compute where this pixel was in the previous frame
+    let prev_uv = uv - motion_vec;
 
-        if (prev_uv.x >= 0.0 && prev_uv.x <= 1.0 &&
-            prev_uv.y >= 0.0 && prev_uv.y <= 1.0) {
+    // Check if reprojected UV is within valid bounds
+    if (prev_uv.x >= 0.0 && prev_uv.x <= 1.0 &&
+        prev_uv.y >= 0.0 && prev_uv.y <= 1.0) {
 
-            let history_ao = sample_history_bilinear(prev_uv, dims_i);
+        let history_ao = sample_history_bilinear(prev_uv, dims_i);
 
-            let neigh_offsets = array<vec2<i32>, 4>(
-                vec2<i32>(-1,  0), vec2<i32>( 1, 0),
-                vec2<i32>( 0, -1), vec2<i32>( 0, 1)
-            );
+        // Depth-based edge rejection (detect disocclusion/edges)
+        let neigh_offsets = array<vec2<i32>, 4>(
+            vec2<i32>(-1,  0), vec2<i32>( 1, 0),
+            vec2<i32>( 0, -1), vec2<i32>( 0, 1)
+        );
 
-            var depth_variance: f32 = 0.0;
-            for (var i = 0; i < 4; i++) {
-                let nc = clamp(pixel + neigh_offsets[i], vec2<i32>(0), dims_i - 1);
-                let nd = textureLoad(linear_depth_half, nc, 0).r;
-                let rel_diff = abs(nd - linear_z) / max(linear_z, 0.001);
-                depth_variance = max(depth_variance, rel_diff);
-            }
-
-            let edge_rejection = smoothstep(0.05, 0.15, depth_variance);
-            let motion_uv = length(prev_uv - uv);
-            let motion_px = motion_uv * dims_f.y; // approx pixels using height
-            let motion_reject = smoothstep(0.5, 2.0, motion_px); // reject if moved > ~1px
-
-            var alpha = clamp(ao_params.temporal_blend + edge_rejection,
-                              ao_params.temporal_blend, 1.0);
-            alpha = max(alpha, motion_reject);
-            final_ao = mix(history_ao, raw_ao, alpha);
+        var depth_variance: f32 = 0.0;
+        for (var i = 0; i < 4; i++) {
+            let nc = clamp(pixel + neigh_offsets[i], vec2<i32>(0), dims_i - 1);
+            let nd = textureLoad(linear_depth_half, nc, 0).r;
+            let rel_diff = abs(nd - linear_z) / max(linear_z, 0.001);
+            depth_variance = max(depth_variance, rel_diff);
         }
+
+        let edge_rejection = smoothstep(0.05, 0.15, depth_variance);
+
+        // Motion-based rejection: large motion = less history (reduces ghosting)
+        let motion_px = length(motion_vec) * max(dims_f.x, dims_f.y);
+        let motion_reject = smoothstep(1.0, 8.0, motion_px);
+
+        // Combine rejection factors
+        var alpha = ao_params.temporal_blend;
+        alpha = max(alpha, edge_rejection);
+        alpha = max(alpha, motion_reject);
+
+        final_ao = mix(history_ao, raw_ao, alpha);
     }
 
     textureStore(ao_output, pixel, vec4<f32>(final_ao, 0.0, 0.0, 1.0));

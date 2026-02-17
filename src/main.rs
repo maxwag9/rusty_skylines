@@ -2,8 +2,8 @@
 extern crate core;
 
 mod app;
+mod commands;
 mod data;
-mod events;
 mod helpers;
 mod renderer;
 mod resources;

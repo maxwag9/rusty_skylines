@@ -1,5 +1,5 @@
+use crate::commands::CommandBuffer;
 use crate::data::Settings;
-use crate::events::Events;
 use crate::resources::TimeSystem;
 use crate::simulation::Simulation;
 use crate::ui::input::InputState;
@@ -12,8 +12,8 @@ use wgpu::Device;
 pub struct WorldCore {
     pub world_state: WorldState,
     pub time: TimeSystem,
-    pub input: InputState, // main-thread owned
-    pub events: Events,    // main-thread swap/flips, core consumes on sim tick
+    pub input: InputState,     // main-thread owned
+    pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub simulation: Simulation,
     pub terrain_subsystem: TerrainSubsystem,
     pub road_subsystem: RoadSubsystem,
@@ -32,7 +32,7 @@ impl WorldCore {
             terrain_subsystem: TerrainSubsystem::new(device, settings),
             road_subsystem: RoadSubsystem::new(),
             car_subsystem: CarSubsystem::new(),
-            events: Events::new(),
+            events: CommandBuffer::new(),
         }
     }
 }
