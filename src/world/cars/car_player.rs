@@ -15,54 +15,22 @@ pub struct GroundFit {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct DriveTuning {
-    // Smoothing (Hz-ish)
+struct TerrainConformTuning {
     height_conform_hz: f32,
     orient_conform_hz: f32,
-    grip_hz: f32,
-    drift_grip_hz: f32,
-
-    // Steering
-    turn_rate_low_speed: f32,
-    turn_rate_high_speed: f32,
-    stop_speed_epsilon: f32,
-
-    // Longitudinal
-    reverse_max: f32,
-    idle_cruise_frac: f32,
-    handbrake_decel_mul: f32,
-
-    // Safety caps
-    absolute_speed_cap: f32,
-
-    // Ground response shaping
     min_traction: f32,
     min_engine_mult: f32,
 }
 
-const DRIVE: DriveTuning = DriveTuning {
+const TERRAIN: TerrainConformTuning = TerrainConformTuning {
     height_conform_hz: 22.0,
     orient_conform_hz: 16.0,
-    grip_hz: 50.0,
-    drift_grip_hz: 8.0,
-
-    turn_rate_low_speed: 3.0,
-    turn_rate_high_speed: 0.6,
-    stop_speed_epsilon: 0.05,
-
-    reverse_max: 6.0,
-    idle_cruise_frac: 0.95,
-    handbrake_decel_mul: 4.0,
-
-    absolute_speed_cap: 200.0,
-
     min_traction: 0.20,
     min_engine_mult: 0.15,
 };
 
 #[inline]
 fn exp_alpha(hz: f32, dt: f32) -> f32 {
-    // alpha = 1 - e^(-hz*dt), stable for small dt, clamps to [0,1] for sane inputs
     if hz > 0.0 && dt > 0.0 {
         (1.0 - (-hz * dt).exp()).clamp(0.0, 1.0)
     } else {
@@ -90,7 +58,6 @@ fn sanitize_quat(q: Quat) -> Quat {
 
 #[inline]
 fn yaw_from_quat(q: Quat) -> f32 {
-    // World yaw from the car's forward (Z) direction projected onto XZ plane.
     let fwd = q * Vec3::Z;
     fwd.x.atan2(fwd.z)
 }
@@ -105,17 +72,12 @@ fn planar_right_from_forward(planar_fwd: Vec3) -> Vec3 {
     Vec3::new(planar_fwd.z, 0.0, -planar_fwd.x)
 }
 
-/// Build an orientation that preserves *world yaw* while conforming the local-up to `ground_normal`.
 fn quat_from_yaw_and_up(yaw: f32, ground_normal: Vec3) -> Quat {
     let up = safe_unit(ground_normal, Vec3::Y);
-
-    // Start with yaw around world Y.
     let yaw_q = Quat::from_rotation_y(yaw);
-
-    // Then tilt so that (yaw_q * Y) becomes the ground normal.
     let current_up = safe_unit(yaw_q * Vec3::Y, Vec3::Y);
+
     let tilt = if current_up.dot(up) < -0.9999 {
-        // 180° case: choose any stable orthogonal axis
         let mut axis = current_up.cross(Vec3::X);
         if axis.length_squared() < 1e-8 {
             axis = current_up.cross(Vec3::Z);
@@ -130,14 +92,12 @@ fn quat_from_yaw_and_up(yaw: f32, ground_normal: Vec3) -> Quat {
 
 fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainSubsystem) -> (f32, Vec3) {
     let chunk_size = terrain.chunk_size;
-
     let planar_fwd = planar_forward_from_yaw(yaw);
     let planar_right = planar_right_from_forward(planar_fwd);
 
-    let half_len = 0.5 * car.length.max(0.001);
-    let half_wid = 0.5 * car.width.max(0.001);
+    let half_len = 0.5 * car.length.max(0.01);
+    let half_wid = 0.5 * car.width.max(0.01);
 
-    // Four corners in world space (via chunk-aware add).
     let fl = car
         .pos
         .add_vec3(planar_fwd * half_len - planar_right * half_wid, chunk_size);
@@ -151,7 +111,6 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainSubsystem) -> (f32
         .pos
         .add_vec3(-planar_fwd * half_len + planar_right * half_wid, chunk_size);
 
-    // Heights
     let h_fl = terrain.get_height_at(fl.into(), true);
     let h_fr = terrain.get_height_at(fr.into(), true);
     let h_rl = terrain.get_height_at(rl.into(), true);
@@ -159,20 +118,18 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &TerrainSubsystem) -> (f32
 
     let avg_y = 0.25 * (h_fl + h_fr + h_rl + h_rr);
 
-    // Convert corner positions into car-local delta vectors, centered on avg_y.
-    let d_fl = fl.direction_to(car.pos, chunk_size);
-    let d_fr = fr.direction_to(car.pos, chunk_size);
-    let d_rl = rl.direction_to(car.pos, chunk_size);
-    let d_rr = rr.direction_to(car.pos, chunk_size);
+    let d_fl = car.pos.direction_to(fl, chunk_size);
+    let d_fr = car.pos.direction_to(fr, chunk_size);
+    let d_rl = car.pos.direction_to(rl, chunk_size);
+    let d_rr = car.pos.direction_to(rr, chunk_size);
 
     let p_fl = Vec3::new(d_fl.x, h_fl - avg_y, d_fl.z);
     let p_fr = Vec3::new(d_fr.x, h_fr - avg_y, d_fr.z);
     let p_rl = Vec3::new(d_rl.x, h_rl - avg_y, d_rl.z);
     let p_rr = Vec3::new(d_rr.x, h_rr - avg_y, d_rr.z);
 
-    // Two-triangle normal estimate (averaged).
     let n1 = (p_fr - p_fl).cross(p_rl - p_fl);
-    let n2 = (p_rr - p_fr).cross(p_fl - p_fr);
+    let n2 = (p_rr - p_fr).cross(p_rl - p_rr);
     let mut n = n1 + n2;
 
     n = safe_unit(n, Vec3::Y);
@@ -189,32 +146,22 @@ pub fn conform_car_to_terrain(car: &mut Car, terrain: &TerrainSubsystem, dt: f32
     let yaw = yaw_from_quat(car.quat);
     let (target_y, normal) = sample_terrain_plane(car, yaw, terrain);
 
-    // Height conform (local chunk y only).
-    let h_alpha = exp_alpha(DRIVE.height_conform_hz, dt);
+    let h_alpha = exp_alpha(TERRAIN.height_conform_hz, dt);
     car.pos.local.y += (target_y - car.pos.local.y) * h_alpha;
 
-    // Orientation conform (preserve yaw, match up to normal).
     let target_rot = quat_from_yaw_and_up(yaw, normal);
-    let r_alpha = exp_alpha(DRIVE.orient_conform_hz, dt);
+    let r_alpha = exp_alpha(TERRAIN.orient_conform_hz, dt);
     car.quat = sanitize_quat(car.quat.slerp(target_rot, r_alpha));
 
-    // Ground response scalars.
-    let traction = normal.dot(Vec3::Y).clamp(DRIVE.min_traction, 1.0);
-
-    // “Uphill” based on car forward pitch after conform.
+    let traction = normal.dot(Vec3::Y).clamp(TERRAIN.min_traction, 1.0);
     let uphill = (car.quat * Vec3::Z).y.max(0.0);
-    let engine_mult = ((1.0 - 1.8 * uphill) * traction).clamp(DRIVE.min_engine_mult, 1.0);
+    let engine_mult = ((1.0 - 1.8 * uphill) * traction).clamp(TERRAIN.min_engine_mult, 1.0);
 
     GroundFit {
         normal,
         traction,
         engine_mult,
     }
-}
-
-#[inline]
-fn axis(right: bool, left: bool) -> f32 {
-    (right as i8 - left as i8) as f32
 }
 
 pub fn drive_car(
@@ -232,7 +179,6 @@ pub fn drive_car(
     }
 
     const G: f32 = 9.81;
-
     const MASS: f32 = 1620.0;
     const IZ: f32 = 2850.0;
     const WHEELBASE: f32 = 2.851;
@@ -241,42 +187,30 @@ pub fn drive_car(
     const ENGINE_POWER: f32 = 275_000.0;
     const DRIVETRAIN_EFFICIENCY: f32 = 0.85;
     const WHEEL_POWER: f32 = ENGINE_POWER * DRIVETRAIN_EFFICIENCY;
-
     const BRAKE_DECEL_MAX: f32 = 10.5;
-    const BRAKE_FRONT_BIAS: f32 = 0.68;
-
     const MU_PEAK: f32 = 1.08;
     const MU_SLIDE: f32 = 0.95;
-
     const C_ALPHA_F: f32 = 115_000.0;
     const C_ALPHA_R: f32 = 128_000.0;
-
-    const SLIP_ANGLE_PEAK: f32 = 0.14;
-
     const FRONTAL_AREA: f32 = 2.22;
     const CD: f32 = 0.28;
     const AIR_DENSITY: f32 = 1.225;
-
     const AERO_DRAG_COEFF: f32 = 0.5 * AIR_DENSITY * CD * FRONTAL_AREA;
-
     const CL: f32 = 0.12;
     const AERO_LIFT_COEFF: f32 = 0.5 * AIR_DENSITY * CL * FRONTAL_AREA;
-
     const ROLL_RESISTANCE_COEFF: f32 = 0.010;
-
     const HANDBRAKE_REAR_GRIP_MULT: f32 = 0.30;
     const HANDBRAKE_DECEL_MAX: f32 = 5.5;
-
     const STEER_RATE_MAX: f32 = 6.5;
     const STEER_SPRING: f32 = 75.0;
     const STEER_DAMPING: f32 = 18.0;
-
     const STEER_ANGLE_PARKING: f32 = 0.60;
     const STEER_ANGLE_HIGHWAY: f32 = 0.09;
     const STEER_ANGLE_FADE_SPEED: f32 = 35.0;
-
     const SUBSTEP_DT: f32 = 1.0 / 120.0;
     const MIN_SPEED_FOR_SLIP: f32 = 0.4;
+    const MAX_SPEED: f32 = 90.0;
+    const MAX_YAW_RATE: f32 = 4.0;
 
     let chunk_size = terrain.chunk_size;
 
@@ -293,8 +227,6 @@ pub fn drive_car(
     let steer_left = input.gameplay_down("Fly Camera Left");
     let steer_right = input.gameplay_down("Fly Camera Right");
     let handbrake_engaged = input.gameplay_down("Handbrake");
-
-    // Steering input: -1 = full left, +1 = full right
     let steer_input: f32 =
         (if steer_left { 1.0 } else { 0.0 }) - (if steer_right { 1.0 } else { 0.0 });
 
@@ -315,12 +247,10 @@ pub fn drive_car(
         let mut r = car.yaw_rate;
 
         let forward_speed = u.max(0.0);
-
         let speed_ratio = (forward_speed / STEER_ANGLE_FADE_SPEED).clamp(0.0, 1.0);
         let lock_blend = 1.0 - speed_ratio.powf(1.5);
         let max_steer_angle =
             STEER_ANGLE_HIGHWAY + (STEER_ANGLE_PARKING - STEER_ANGLE_HIGHWAY) * lock_blend;
-
         let delta_command = -steer_input * max_steer_angle;
 
         let mut ax_command = 0.0;
@@ -332,7 +262,6 @@ pub fn drive_car(
             } else {
                 traction_limited
             };
-
             ax_command = throttle * traction_limited.min(power_limited);
         }
 
@@ -355,7 +284,6 @@ pub fn drive_car(
 
             let delta = car.steering_angle;
             let delta_vel = car.steering_vel;
-
             let delta_accel = STEER_SPRING * (delta_command - delta) - STEER_DAMPING * delta_vel;
 
             let mut new_delta_vel = delta_vel + delta_accel * h;
@@ -368,7 +296,6 @@ pub fn drive_car(
             car.steering_vel = new_delta_vel;
 
             let weight_transfer_x = (CG_HEIGHT / wheelbase) * MASS * ax_command;
-
             let aero_lift = AERO_LIFT_COEFF * forward_speed * forward_speed;
 
             let fz_front = (fz_static_f - weight_transfer_x - aero_lift * 0.5).max(500.0);
@@ -386,18 +313,13 @@ pub fn drive_car(
             fn tire_lateral_force(alpha: f32, c_alpha: f32, fz: f32, mu: f32) -> f32 {
                 let f_max = mu * fz;
                 let f_linear = -c_alpha * alpha;
-
                 let slip_ratio = f_linear.abs() / f_max;
-
                 let saturation = if slip_ratio > 0.01 {
                     slip_ratio.tanh() / slip_ratio
                 } else {
                     1.0
                 };
-
-                let peak_mult = 1.02;
-
-                f_linear * saturation * peak_mult
+                f_linear * saturation * 1.02
             }
 
             let mu_front = MU_PEAK;
@@ -411,18 +333,14 @@ pub fn drive_car(
             let fy_rear = tire_lateral_force(alpha_rear, C_ALPHA_R, fz_rear, mu_rear);
 
             let f_rolling = -ROLL_RESISTANCE_COEFF * (fz_front + fz_rear) * u.signum();
-
             let f_aero = -AERO_DRAG_COEFF * u * u.abs();
-
             let ax_resist = (f_rolling + f_aero) / MASS;
 
             let cos_delta = car.steering_angle.cos();
             let sin_delta = car.steering_angle.sin();
 
             let u_dot = ax_command + ax_resist - (fy_front * sin_delta) / MASS + r * v;
-
             let v_dot = (fy_front * cos_delta + fy_rear) / MASS - r * u;
-
             let r_dot = (a * fy_front * cos_delta - b * fy_rear) / IZ;
 
             u += u_dot * h;
@@ -434,7 +352,6 @@ pub fn drive_car(
                 u *= decay;
                 v *= decay;
                 r *= decay;
-
                 if u.abs() < 0.05 {
                     u = 0.0;
                 }
@@ -446,21 +363,16 @@ pub fn drive_car(
                 }
             }
 
-            const MAX_SPEED: f32 = 90.0;
-            const MAX_YAW_RATE: f32 = 4.0;
-
             u = u.clamp(-MAX_SPEED, MAX_SPEED);
             v = v.clamp(-MAX_SPEED * 0.5, MAX_SPEED * 0.5);
             r = r.clamp(-MAX_YAW_RATE, MAX_YAW_RATE);
 
-            // Integrate yaw per substep
             let yaw_delta_world = -r * h;
-            if yaw_delta_world.abs() > 0.0 {
+            if yaw_delta_world.abs() > 1e-9 {
                 let rotation = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
-                car.quat = (rotation * car.quat).normalize();
+                car.quat = sanitize_quat(rotation * car.quat);
             }
 
-            // Reconstruct world velocity and integrate position per substep
             let local_velocity = Vec3::new(-v, 0.0, u);
             car.current_velocity = car.quat * local_velocity;
             car.pos = car.pos.add_vec3(car.current_velocity * h, chunk_size);
@@ -468,7 +380,7 @@ pub fn drive_car(
 
         car.yaw_rate = r;
 
-        car.pos.local.y = terrain.get_height_at(car.pos, true);
+        conform_car_to_terrain(car, terrain, dt);
 
         camera.target = car.pos;
 
@@ -505,8 +417,8 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
     const MASS: f32 = 1500.0;
     const IZ: f32 = 2500.0;
     const MU: f32 = 1.05;
-    const C_AF: f32 = 90000.0;
-    const C_AR: f32 = 100000.0;
+    const C_AF: f32 = 90_000.0;
+    const C_AR: f32 = 100_000.0;
     const ROLL_DRAG: f32 = 0.02;
     const AERO_DRAG: f32 = 0.0007;
     const STEER_RATE_MAX: f32 = 6.0;
@@ -517,6 +429,8 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
     const STEER_LOCK_FADE_MPS: f32 = 28.0;
     const MAX_STEP: f32 = 1.0 / 120.0;
     const MIN_U: f32 = 0.5;
+    const MAX_SPEED: f32 = 50.0;
+    const MAX_YAW_RATE: f32 = 3.5;
 
     let chunk_size = terrain.chunk_size;
     let player_car_id = car_subsystem.player_car_id();
@@ -524,7 +438,6 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
 
     let car_storage = car_subsystem.car_storage_mut();
 
-    // Parallel physics computation over all cars, collecting chunk moves
     let moves: Vec<_> = car_storage
         .par_iter_mut_cars()
         .filter_map(|car| {
@@ -535,10 +448,8 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
 
             let previous_chunk = car.pos.chunk;
 
-            // === AI Inputs: smooth procedural wandering ===
             let global_x = car.pos.chunk.x as f64 * cs + car.pos.local.x as f64;
             let global_z = car.pos.chunk.z as f64 * cs + car.pos.local.z as f64;
-
             let wander_phase = global_x * 0.012 + global_z * 0.008 + (car.id as f64 * 7.3);
             let wander = wander_phase.sin() as f32;
 
@@ -546,7 +457,6 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
             let throttle_input = 0.85 + wander * 0.15;
             let brake_input = if wander.abs() > 0.8 { 0.3 } else { 0.0 };
 
-            // === Convert world velocity to LOCAL space via quaternion ===
             let inv_q = car.quat.conjugate();
             let local_v = inv_q * car.current_velocity;
 
@@ -561,18 +471,14 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
             let fz_f = MASS * G * (b / wheelbase);
             let fz_r = MASS * G * (a / wheelbase);
 
-            // === Speed-sensitive steering lock ===
             let speed = u.abs();
             let t = (speed / STEER_LOCK_FADE_MPS).clamp(0.0, 1.0);
             let steer_lock =
                 STEER_LOCK_HIGH + (STEER_LOCK_LOW - STEER_LOCK_HIGH) * (1.0 - t).powf(1.7);
-
             let delta_cmd = (steer_input * steer_lock).clamp(-steer_lock, steer_lock);
 
-            // === Longitudinal accel command ===
             let ax_cmd = throttle_input * car.accel - brake_input * car.accel * 3.0;
 
-            // === Substep integration ===
             let mut time_left = dt;
             while time_left > 0.0 {
                 let h = time_left.min(MAX_STEP);
@@ -610,28 +516,32 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
 
                 let ax_drag = -ROLL_DRAG * u - AERO_DRAG * u * u.abs();
 
-                let u_dot = (ax_cmd + ax_drag) + r * v;
+                let u_dot = ax_cmd + ax_drag + r * v;
                 let v_dot = (fy_f + fy_r) / MASS - r * u;
                 let r_dot = (a * fy_f - b * fy_r) / IZ;
 
                 u += u_dot * h;
                 v += v_dot * h;
                 r += r_dot * h;
+
+                u = u.clamp(-MAX_SPEED, MAX_SPEED);
+                v = v.clamp(-MAX_SPEED * 0.4, MAX_SPEED * 0.4);
+                r = r.clamp(-MAX_YAW_RATE, MAX_YAW_RATE);
+
+                let yaw_delta = -r * h;
+                if yaw_delta.abs() > 1e-9 {
+                    let yaw_q = Quat::from_axis_angle(Vec3::Y, yaw_delta);
+                    car.quat = sanitize_quat(yaw_q * car.quat);
+                }
+
+                let local_velocity = Vec3::new(-v, 0.0, u);
+                car.current_velocity = car.quat * local_velocity;
+                car.pos = car.pos.add_vec3(car.current_velocity * h, chunk_size);
             }
 
             car.yaw_rate = r;
 
-            let yaw_delta_world = -r * dt;
-            if yaw_delta_world.abs() > 0.0 {
-                let yaw_q = Quat::from_axis_angle(Vec3::Y, yaw_delta_world);
-                car.quat = (yaw_q * car.quat).normalize();
-            }
-
-            let new_local_v = Vec3::new(-v, 0.0, u);
-            car.current_velocity = car.quat * new_local_v;
-
-            car.pos = car.pos.add_vec3(car.current_velocity * dt, chunk_size);
-            car.pos.local.y = terrain.get_height_at(car.pos, false);
+            conform_car_to_terrain(car, terrain, dt);
 
             if previous_chunk != car.pos.chunk {
                 Some((previous_chunk, car.pos.chunk, car.id))
@@ -641,7 +551,6 @@ pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &TerrainSubsyste
         })
         .collect();
 
-    // Apply chunk moves sequentially (requires &mut access to spatial index)
     for (prev, new, id) in moves {
         car_storage.move_car_between_chunks(prev, new, id);
     }

@@ -302,7 +302,7 @@ impl RenderCore {
             &self.config,
         );
         updater.update_fog_uniforms(&self.config, camera);
-        updater.update_sky_uniforms(astronomy.moon_phase);
+        updater.update_sky_uniforms(astronomy);
         updater.update_water_uniforms();
         updater.update_tonemapping_uniforms(&settings.tonemapping_state);
         updater.update_ssao_uniforms(time, settings, camera.prev_view_proj);
@@ -467,7 +467,7 @@ impl RenderCore {
             self.execute_gtao_pass(encoder, settings, time);
         });
 
-        gpu_timestamp!(encoder, &mut self.profiler, "RTwd", {
+        gpu_timestamp!(encoder, &mut self.profiler, "RT", {
             let sun_up = astronomy.sun_dir.y > 0.0;
             if sun_up && (settings.shadow_type == ShadowType::RT) {
                 render_ray_tracing(

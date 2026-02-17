@@ -94,8 +94,10 @@ impl<'a> UniformUpdater<'a> {
             bytemuck::bytes_of(&tonemapping_uniforms),
         );
     }
-    pub fn update_sky_uniforms(&self, moon_phase: f32) {
+    pub fn update_sky_uniforms(&self, astronomy: &AstronomyState) {
+        let moon_phase: f32 = astronomy.moon_phase;
         let sky_uniform = SkyUniform {
+            star_rotation: astronomy.star_rotation.to_cols_array_2d(),
             exposure: 1.0,
             moon_phase,
             sun_size: 0.0465,

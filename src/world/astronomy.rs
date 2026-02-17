@@ -1,9 +1,15 @@
 #![allow(dead_code)]
+use glam::{Mat3, Mat4, Vec3};
 use std::f32::consts::TAU;
 
+pub const MUNICH_LATITUDE: f64 = 48.1351;
+pub const MUNICH_LONGITUDE: f64 = 11.5820;
+pub const J2000: f64 = 2451545.0;
+
 pub struct AstronomyState {
-    pub sun_dir: glam::Vec3,
-    pub moon_dir: glam::Vec3,
+    pub star_rotation: Mat4,
+    pub sun_dir: Vec3,
+    pub moon_dir: Vec3,
     pub moon_phase: f32,
     pub sun_declination: f32,
     pub day_phase: f32,
@@ -13,6 +19,7 @@ pub struct AstronomyState {
 impl Default for AstronomyState {
     fn default() -> Self {
         Self {
+            star_rotation: Default::default(),
             sun_dir: Default::default(),
             moon_dir: Default::default(),
             moon_phase: 0.0,
@@ -80,7 +87,7 @@ pub struct ObserverParams {
 
 impl ObserverParams {
     pub fn new(day_angle: f32) -> Self {
-        let latitude = 48.0_f32.to_radians();
+        let latitude = MUNICH_LATITUDE.to_radians() as f32;
         let lat_rotation = glam::Quat::from_rotation_x(latitude);
 
         let sidereal_factor = 1.0027379_f32;
@@ -98,6 +105,25 @@ impl ObserverParams {
             obliquity_rotation,
         }
     }
+}
+
+pub fn compute_gmst(jd: f64) -> f64 {
+    let t = (jd - J2000) / 36525.0;
+    let gmst_0h = 24110.54841 + 8640184.812866 * t + 0.093104 * t * t - 6.2e-6 * t * t * t;
+    let ut1_frac = (jd + 0.5).fract();
+    let gmst_seconds = gmst_0h + 86400.0 * 1.00273790935 * ut1_frac;
+    (gmst_seconds / 86400.0) * core::f64::consts::TAU
+}
+
+pub fn compute_star_rotation(jd: f64) -> glam::Mat4 {
+    let gmst = compute_gmst(jd);
+    let lst = gmst + MUNICH_LONGITUDE.to_radians();
+
+    let sidereal_rot = Mat3::from_rotation_y(-lst as f32);
+    let lat = MUNICH_LATITUDE.to_radians() as f32;
+    let latitude_rot = Mat3::from_rotation_x(lat - std::f32::consts::FRAC_PI_2);
+
+    glam::Mat4::from_mat3(latitude_rot * sidereal_rot)
 }
 
 pub fn compute_sun_direction(observer: &ObserverParams, year_phase: f32) -> (glam::Vec3, f32) {
@@ -172,8 +198,11 @@ pub fn compute_astronomy(time_scales: &TimeScales) -> AstronomyState {
     let (sun_dir, sun_declination) = compute_sun_direction(&observer, time_scales.year_phase);
     let moon_dir = compute_moon_direction(&observer, time_scales.total_days);
     let moon_phase = compute_moon_phase(&observer, time_scales.year_phase, time_scales.total_days);
+    let jd = 2460676.5 + time_scales.total_days as f64; // Jan 1, 2026
+    let star_rotation = compute_star_rotation(jd);
 
     AstronomyState {
+        star_rotation,
         sun_dir,
         moon_dir,
         moon_phase,

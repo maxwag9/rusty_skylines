@@ -30,15 +30,15 @@ pub const STARS_VERTEX_LAYOUT: VertexBufferLayout = VertexBufferLayout {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SkyUniform {
+    // Star rotation matrix (equatorial J2000 → local horizontal)
+    pub star_rotation: [[f32; 4]; 4], // 64 bytes
     pub exposure: f32,
     pub moon_phase: f32,
-
     pub sun_size: f32,
     pub sun_intensity: f32,
-
     pub moon_size: f32,
     pub moon_intensity: f32,
 
-    pub _pad1: f32,
-    pub _pad2: f32,
+    pub(crate) _pad1: f32,
+    pub(crate) _pad2: f32,
 }

@@ -10,7 +10,7 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 176468.53539729887
+total_game_time = 185719.38833238767
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
@@ -18,7 +18,7 @@ always_day = false
 msaa_samples = 4
 shadow_map_size = 2048
 shadow_type = "RT"
-gtao_enabled = true
+gtao_enabled = false
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_chunk_bounds = false
@@ -33,10 +33,10 @@ drive_car = false
 render_rt_gizmo = false
 
 [player_pos.chunk]
-x = 148
-z = -49
+x = 85
+z = 32
 
 [player_pos.local]
-x = 16.070353
-y = 303.59958
-z = 127.4775
+x = 41.58012
+y = 1157.021
+z = 110.739456

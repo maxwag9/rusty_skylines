@@ -556,9 +556,9 @@ impl RoadEditor {
 
         let crossings = self.deduplicate_crossings(crossings);
 
-        for crossing in crossings.iter() {
-            gizmo.cross(crossing.world_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
-        }
+        // for crossing in crossings.iter() {
+        //     gizmo.cross(crossing.world_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
+        // }
         crossings
     }
 

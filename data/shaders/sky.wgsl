@@ -4,6 +4,7 @@
 @group(1) @binding(0) var<uniform> u: Uniforms;
 
 struct SkyUniform {
+    star_rotation: mat4x4<f32>,
     exposure: f32,
     moon_phase: f32,
     sun_size: f32,

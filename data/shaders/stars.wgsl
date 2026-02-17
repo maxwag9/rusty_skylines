@@ -1,10 +1,30 @@
 #include "includes/uniforms.wgsl"
+
 const STAR_COUNT: u32 = 116812u;
+
+struct SkyUniform {
+    star_rotation: mat4x4<f32>,
+    exposure: f32,
+    moon_phase: f32,
+    sun_size: f32,
+    sun_intensity: f32,
+    moon_size: f32,
+    moon_intensity: f32,
+    _pad1: f32,
+    _pad2: f32,
+};
 
 @group(1) @binding(0)
 var<uniform> u: Uniforms;
 
+@group(1) @binding(1)
+var<uniform> sky: SkyUniform;
+
 fn ra_dec_to_dir(ra: f32, dec: f32) -> vec3<f32> {
+    // Standard J2000.0 equatorial coordinates
+    // X → vernal equinox (RA=0, Dec=0)
+    // Y → north celestial pole (Dec=90°)
+    // Z → RA=90°, Dec=0
     return vec3(
         cos(dec) * cos(ra),
         sin(dec),
@@ -29,12 +49,18 @@ fn vs_main(
     @location(3) bv: f32,
     @builtin(vertex_index) vid: u32,
 ) -> VSOut {
+    // 1. Convert catalog RA/Dec to J2000.0 equatorial direction
+    let celestial_dir = ra_dec_to_dir(ra, dec);
 
-    let dir = ra_dec_to_dir(ra, dec);
+    // 2. Apply astronomical rotation (J2000 equatorial → local horizontal)
+    //    This includes precession, nutation, Earth rotation, and observer latitude
+    let horizontal_dir = (sky.star_rotation * vec4<f32>(celestial_dir, 0.0)).xyz;
 
-    let view_dir = (u.view * vec4<f32>(dir, 0.0)).xyz;
+    // 3. Apply camera view transform
+    let view_dir = (u.view * vec4<f32>(horizontal_dir, 0.0)).xyz;
     let center = normalize(view_dir) * 1000.0;
 
+    // Cull faint stars
     if (mag > 9.5) {
         var out: VSOut;
         out.pos = vec4<f32>(2.0, 2.0, 2.0, 1.0);
@@ -46,6 +72,7 @@ fn vs_main(
         return out;
     }
 
+    // Billboard corners
     let corners = array<vec2<f32>, 4>(
         vec2(-1.0, -1.0),
         vec2( 1.0, -1.0),
@@ -60,12 +87,11 @@ fn vs_main(
     let up    = vec3<f32>(0.0, 1.0, 0.0);
 
     let pos_view = center + right * corner.x * size + up * corner.y * size;
-
     let clip = u.proj * vec4<f32>(pos_view, 1.0);
 
-    // Previous frame: reproject the star direction through previous view
-    // dir is world-space, so transform by previous view, same billboard offset
-    let prev_view_dir = (u.prev_view_proj * vec4<f32>(dir, 0.0));
+    // Motion vectors (for temporal effects)
+    let prev_horizontal_dir = (sky.star_rotation * vec4<f32>(celestial_dir, 0.0)).xyz;
+    let prev_clip = u.prev_view_proj * vec4<f32>(prev_horizontal_dir * 1000.0, 0.0);
 
     var out: VSOut;
     out.pos = clip;
@@ -73,15 +99,10 @@ fn vs_main(
     out.bv = bv;
     out.uv = corner * 0.5 + 0.5;
     out.curr_clip = clip;
-
-    // For stars we reproject the center direction only (billboard is screen-aligned)
-    // Use the same world direction through prev_view_proj with w=0
-    out.prev_clip = u.prev_view_proj * vec4<f32>(dir * 1000.0, 0.0);
+    out.prev_clip = prev_clip;
 
     return out;
 }
-
-
 
 fn mag_to_intensity(m: f32) -> f32 {
     return pow(2.512, -m);

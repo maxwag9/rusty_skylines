@@ -1,6 +1,6 @@
 // intersections.rs - Fixed Clipper2 API usage
 
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
 use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
 use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::world::roads::road_helpers::*;
@@ -9,7 +9,10 @@ use crate::world::roads::road_structs::*;
 use crate::world::roads::roads::*;
 use crate::world::terrain::terrain_editing::TerrainEditor;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
-use clipper2::{EndType, JoinType, Path, Paths};
+use clipper2_rust::{
+    EndType, JoinType, PathD, PathsD, PointD, core::FillRule, difference_d, inflate_paths_d,
+    simplify_paths, union_d,
+};
 use earcutr;
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
@@ -18,6 +21,8 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 const DEFAULT_CORRIDOR_LENGTH: f32 = 6.0;
 const MAX_CORRIDOR_LENGTH: f32 = 10000.0;
 const MIN_ANGLE_FOR_DYNAMIC: f32 = 0.02;
+
+const CLIPPER_PRECISION: i32 = 2;
 
 // ============================================================================
 // Intersection Polygon
@@ -224,19 +229,12 @@ impl LocalPolygon {
         Self::new(points)
     }
 
-    /// Convert to clipper2 Paths format.
-    fn to_clipper_paths(&self) -> Paths {
+    /// Convert to clipper2 PathsD format.
+    fn to_clipper_paths(&self) -> PathsD {
         if self.points.len() < 3 {
-            return Vec::<Path>::new().into();
+            return vec![];
         }
-
-        let coords: Vec<(f64, f64)> = self
-            .points
-            .iter()
-            .map(|p| (p.x as f64, p.y as f64))
-            .collect();
-
-        vec![coords].into()
+        vec![to_pathd(self)]
     }
 
     /// Create from clipper2 output path.
@@ -405,11 +403,22 @@ fn polygon_signed_area(points: &[Vec2]) -> f32 {
     area * 0.5
 }
 
+fn to_pathd(polygon: &LocalPolygon) -> PathD {
+    polygon
+        .points
+        .iter()
+        .map(|pt| PointD::new(pt.x as f64, pt.y as f64))
+        .collect()
+}
+
+fn pathd_to_local_polygon(path: &PathD) -> LocalPolygon {
+    let coords: Vec<(f64, f64)> = path.iter().map(|pt| (pt.x, pt.y)).collect();
+    LocalPolygon::from_clipper_coords(coords)
+}
+
 /// Union multiple polygons using Clipper2.
 /// Returns only outer boundaries (filters out holes based on winding).
 fn union_polygons(polygons: &[LocalPolygon]) -> Vec<LocalPolygon> {
-    use clipper2::{FillRule, Paths, union};
-
     let valid: Vec<_> = polygons.iter().filter(|p| p.points.len() >= 3).collect();
     if valid.is_empty() {
         return vec![];
@@ -418,33 +427,18 @@ fn union_polygons(polygons: &[LocalPolygon]) -> Vec<LocalPolygon> {
         return vec![valid[0].clone()];
     }
 
-    let all_coords: Vec<Vec<(f64, f64)>> = valid
+    let subject: PathsD = valid.iter().map(|p| to_pathd(p)).collect();
+    let clip: PathsD = vec![];
+
+    let result = union_d(&subject, &clip, FillRule::NonZero, CLIPPER_PRECISION);
+
+    let mut polys: Vec<LocalPolygon> = result
         .iter()
-        .map(|p| {
-            p.points
-                .iter()
-                .map(|pt| (pt.x as f64, pt.y as f64))
-                .collect()
-        })
-        .collect();
-
-    let subject: Paths = all_coords.into();
-    let clip: Paths = Vec::<Vec<(f64, f64)>>::new().into();
-
-    let result = match union(subject, clip, FillRule::NonZero) {
-        Ok(r) => r,
-        Err(_) => return vec![],
-    };
-
-    let output: Vec<Vec<(f64, f64)>> = result.into();
-
-    let mut polys: Vec<LocalPolygon> = output
-        .into_iter()
         .filter(|path| path.len() >= 3)
-        .map(LocalPolygon::from_clipper_coords)
+        .map(pathd_to_local_polygon)
         .collect();
 
-    // Optional: normalize all to CCW for your downstream code
+    // Normalize all to CCW for downstream code
     for p in &mut polys {
         if polygon_signed_area(&p.points) < 0.0 {
             p.points.reverse();
@@ -460,13 +454,7 @@ fn offset_polygon(polygon: &LocalPolygon, offset: f32, round_corners: bool) -> V
         return vec![polygon.clone()];
     }
 
-    let coords: Vec<(f64, f64)> = polygon
-        .points
-        .iter()
-        .map(|p| (p.x as f64, p.y as f64))
-        .collect();
-
-    let paths: Paths = vec![coords].into();
+    let paths: PathsD = vec![to_pathd(polygon)];
 
     let join_type = if round_corners {
         JoinType::Round
@@ -474,21 +462,24 @@ fn offset_polygon(polygon: &LocalPolygon, offset: f32, round_corners: bool) -> V
         JoinType::Miter
     };
 
-    // inflate(delta, join_type, end_type, miter_limit)
-    let result = paths.inflate(offset as f64, join_type, EndType::Polygon, 2.0);
+    let result = inflate_paths_d(
+        &paths,
+        offset as f64,
+        join_type,
+        EndType::Polygon,
+        2.0, // miter_limit
+        CLIPPER_PRECISION,
+        0.25, // arc_tolerance (for round joins)
+    );
 
-    let output: Vec<Vec<(f64, f64)>> = result.into();
-
-    output
-        .into_iter()
+    result
+        .iter()
         .filter(|path| path.len() >= 3)
-        .map(LocalPolygon::from_clipper_coords)
+        .map(pathd_to_local_polygon)
         .collect()
 }
 
 fn difference_polygons(subject: &LocalPolygon, clips: &[LocalPolygon]) -> Vec<LocalPolygon> {
-    use clipper2::{FillRule, difference};
-
     if subject.points.len() < 3 {
         return vec![];
     }
@@ -498,31 +489,21 @@ fn difference_polygons(subject: &LocalPolygon, clips: &[LocalPolygon]) -> Vec<Lo
         return vec![subject.clone()];
     }
 
-    let subject_coords: Vec<(f64, f64)> = subject
-        .points
+    let subject_paths: PathsD = vec![to_pathd(subject)];
+    let clip_paths: PathsD = valid_clips.iter().map(|c| to_pathd(c)).collect();
+
+    let result = difference_d(
+        &subject_paths,
+        &clip_paths,
+        FillRule::NonZero,
+        CLIPPER_PRECISION,
+    );
+
+    result
         .iter()
-        .map(|p| (p.x as f64, p.y as f64))
-        .collect();
-
-    let clip_coords: Vec<Vec<(f64, f64)>> = valid_clips
-        .iter()
-        .map(|c| c.points.iter().map(|p| (p.x as f64, p.y as f64)).collect())
-        .collect();
-
-    let subject_paths: Paths = vec![subject_coords].into();
-    let clip_paths: Paths = clip_coords.into();
-
-    match difference(subject_paths, clip_paths, FillRule::NonZero) {
-        Ok(result) => {
-            let output: Vec<Vec<(f64, f64)>> = result.into();
-            output
-                .into_iter()
-                .filter(|path| path.len() >= 3)
-                .map(LocalPolygon::from_clipper_coords)
-                .collect()
-        }
-        Err(_) => vec![subject.clone()],
-    }
+        .filter(|path| path.len() >= 3)
+        .map(pathd_to_local_polygon)
+        .collect()
 }
 
 /// Simplify a polygon to remove redundant vertices.
@@ -531,24 +512,15 @@ fn simplify_clipper(polygon: &LocalPolygon, tolerance: f32) -> LocalPolygon {
         return polygon.clone();
     }
 
-    let coords: Vec<(f64, f64)> = polygon
-        .points
-        .iter()
-        .map(|p| (p.x as f64, p.y as f64))
-        .collect();
+    let paths: PathsD = vec![to_pathd(polygon)];
 
-    let paths: Paths = vec![coords].into();
+    let result = simplify_paths(&paths, tolerance as f64, false);
 
-    // simplify(tolerance, is_open)
-    let result = paths.simplify(tolerance as f64, false);
-
-    let output: Vec<Vec<(f64, f64)>> = result.into();
-
-    output
+    result
         .into_iter()
         .next()
         .filter(|path| path.len() >= 3)
-        .map(LocalPolygon::from_clipper_coords)
+        .map(|path| pathd_to_local_polygon(&path))
         .unwrap_or_else(|| polygon.clone())
 }
 
@@ -653,8 +625,9 @@ pub fn build_intersection_at_node(
                         node_id,
                         flattening_polygon,
                         center_height,
-                        -road_type.lane_height - 0.05,
-                        params.road_type.sidewalk_width + 1.0,
+                        -road_type.lane_height - 0.25,
+                        params.road_type.sidewalk_width * 2.0
+                            + params.road_type.lane_width * params.road_type.total_lanes() as f32,
                         chunk_size,
                         &terrain.chunks,
                     );
@@ -715,7 +688,7 @@ fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut G
 fn create_corner_fillers(
     arms: &[Arm],
     half_widths: &[f32],
-    _round_corners: bool,
+    round_corners: bool,
 ) -> Vec<LocalPolygon> {
     use std::f32::consts::PI;
     let n = arms.len();
@@ -747,42 +720,251 @@ fn create_corner_fillers(
             let edge_i = perp_i * hw_i;
             let edge_next = -perp_next * hw_next;
 
-            fillers.push(LocalPolygon::new(vec![Vec2::ZERO, edge_i, edge_next]));
+            if round_corners {
+                let radius = (hw_i + hw_next) / 2.0;
+                let filler = create_rounded_wedge(Vec2::ZERO, edge_i, edge_next, radius);
+                fillers.push(filler);
+            } else {
+                fillers.push(LocalPolygon::new(vec![Vec2::ZERO, edge_i, edge_next]));
+            }
         }
     }
 
     fillers
 }
 
-fn round_polygon_corners(polygon: &LocalPolygon, radius: f32) -> LocalPolygon {
+fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> LocalPolygon {
+    use std::f32::consts::{PI, TAU};
+
+    let start_angle = (start - center).y.atan2((start - center).x);
+    let end_angle = (end - center).y.atan2((end - center).x);
+
+    let mut sweep = end_angle - start_angle;
+    while sweep > PI {
+        sweep -= TAU;
+    }
+    while sweep < -PI {
+        sweep += TAU;
+    }
+
+    let arc_len = sweep.abs() * radius;
+    let steps = ((arc_len / 0.5) as usize).clamp(4, 48);
+
+    let mut points = vec![center];
+    for s in 0..=steps {
+        let t = s as f32 / steps as f32;
+        let angle = start_angle + sweep * t;
+        points.push(center + Vec2::new(angle.cos() * radius, angle.sin() * radius));
+    }
+
+    LocalPolygon::new(points)
+}
+
+fn is_vertex_at_corridor_entrance(
+    vertex: Vec2,
+    arms: &[Arm],
+    corridor_lengths: &[f32],
+    half_widths: &[f32],
+) -> bool {
+    let length_tolerance = 0.8;
+    let width_tolerance = 0.5;
+
+    for i in 0..arms.len() {
+        let arm = &arms[i];
+        let corridor_len = corridor_lengths[i];
+        let half_width = half_widths[i];
+
+        let arm_dir = arm.direction().xz().normalize_or_zero();
+        if arm_dir == Vec2::ZERO {
+            continue;
+        }
+
+        let proj_along = vertex.dot(arm_dir);
+
+        if (proj_along - corridor_len).abs() < length_tolerance {
+            let perp = Vec2::new(-arm_dir.y, arm_dir.x);
+            let proj_perp = vertex.dot(perp).abs();
+
+            if proj_perp <= half_width + width_tolerance {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn is_corridor_entrance_corner(
+    prev: Vec2,
+    curr: Vec2,
+    next: Vec2,
+    arms: &[Arm],
+    corridor_lengths: &[f32],
+    half_widths: &[f32],
+) -> bool {
+    for i in 0..arms.len() {
+        let arm_dir = arms[i].direction().xz().normalize_or_zero();
+        if arm_dir == Vec2::ZERO {
+            continue;
+        }
+
+        let corridor_len = corridor_lengths[i];
+        let half_width = half_widths[i];
+        let perp = Vec2::new(-arm_dir.y, arm_dir.x);
+
+        let proj_along = curr.dot(arm_dir);
+        let proj_perp = curr.dot(perp).abs();
+
+        let at_entrance_distance = (proj_along - corridor_len).abs() < 0.8;
+        let within_corridor_width = proj_perp < half_width + 0.5;
+
+        if !at_entrance_distance || !within_corridor_width {
+            continue;
+        }
+
+        let edge_in = (curr - prev).normalize_or_zero();
+        let edge_out = (next - curr).normalize_or_zero();
+
+        if edge_in == Vec2::ZERO || edge_out == Vec2::ZERO {
+            continue;
+        }
+
+        let dot_in_arm = edge_in.dot(arm_dir).abs();
+        let dot_out_arm = edge_out.dot(arm_dir).abs();
+        let dot_in_perp = edge_in.dot(perp).abs();
+        let dot_out_perp = edge_out.dot(perp).abs();
+
+        let pattern1 = dot_in_arm > 0.8 && dot_out_perp > 0.8;
+        let pattern2 = dot_in_perp > 0.8 && dot_out_arm > 0.8;
+
+        if pattern1 || pattern2 {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn round_single_corner(prev: Vec2, curr: Vec2, next: Vec2, radius: f32) -> Vec<Vec2> {
+    use std::f32::consts::TAU;
+
+    let edge_in = (curr - prev).normalize_or_zero();
+    let edge_out = (next - curr).normalize_or_zero();
+
+    if edge_in == Vec2::ZERO || edge_out == Vec2::ZERO {
+        return vec![curr];
+    }
+
+    let dot = edge_in.dot(edge_out);
+
+    if dot > 0.999 {
+        return vec![curr];
+    }
+
+    if dot < -0.999 {
+        return vec![curr];
+    }
+
+    let cross = edge_in.x * edge_out.y - edge_in.y * edge_out.x;
+
+    let theta = dot.clamp(-1.0, 1.0).acos();
+    let half_theta = theta / 2.0;
+    let tan_half = (half_theta).tan();
+
+    if tan_half.abs() < 0.001 {
+        return vec![curr];
+    }
+
+    let tan_dist = radius / tan_half;
+
+    let max_dist_prev = (curr - prev).length() * 0.4;
+    let max_dist_next = (next - curr).length() * 0.4;
+    let max_dist = max_dist_prev.min(max_dist_next);
+
+    let actual_tan_dist = tan_dist.min(max_dist);
+    if actual_tan_dist < 0.01 {
+        return vec![curr];
+    }
+
+    let actual_radius = actual_tan_dist * tan_half;
+
+    let t_start = curr - edge_in * actual_tan_dist;
+    let t_end = curr + edge_out * actual_tan_dist;
+
+    let perp_in = Vec2::new(-edge_in.y, edge_in.x);
+    let center = if cross > 0.0 {
+        t_start + perp_in * actual_radius
+    } else {
+        t_start - perp_in * actual_radius
+    };
+
+    let r_start = t_start - center;
+    let r_end = t_end - center;
+
+    let start_angle = r_start.y.atan2(r_start.x);
+    let end_angle = r_end.y.atan2(r_end.x);
+
+    let mut sweep = end_angle - start_angle;
+
+    if cross > 0.0 {
+        while sweep < 0.0 {
+            sweep += TAU;
+        }
+        if sweep > TAU {
+            sweep -= TAU;
+        }
+    } else {
+        while sweep > 0.0 {
+            sweep -= TAU;
+        }
+        if sweep < -TAU {
+            sweep += TAU;
+        }
+    }
+
+    let arc_length = actual_radius * sweep.abs();
+    let num_segments = ((arc_length / 0.2) as usize).clamp(3, 24);
+
+    let mut result = Vec::with_capacity(num_segments + 1);
+    for i in 0..=num_segments {
+        let t = i as f32 / num_segments as f32;
+        let angle = start_angle + sweep * t;
+        result.push(center + Vec2::new(angle.cos(), angle.sin()) * actual_radius);
+    }
+
+    result
+}
+
+fn round_inner_polygon_corners(
+    polygon: &LocalPolygon,
+    arms: &[Arm],
+    corridor_lengths: &[f32],
+    half_widths: &[f32],
+    radius: f32,
+) -> LocalPolygon {
     if polygon.points.len() < 3 || radius <= 0.001 {
         return polygon.clone();
     }
 
-    let coords: Vec<(f64, f64)> = polygon
-        .points
-        .iter()
-        .map(|p| (p.x as f64, p.y as f64))
-        .collect();
+    let n = polygon.points.len();
+    let mut result = Vec::new();
 
-    let paths: Paths = vec![coords].into();
+    for i in 0..n {
+        let prev = polygon.points[(i + n - 1) % n];
+        let curr = polygon.points[i];
+        let next = polygon.points[(i + 1) % n];
 
-    let shrunk = paths.inflate(-radius as f64, JoinType::Miter, EndType::Polygon, 2.0);
-    let expanded = shrunk.inflate(radius as f64, JoinType::Round, EndType::Polygon, 2.0);
+        if is_vertex_at_corridor_entrance(curr, arms, corridor_lengths, half_widths) {
+            result.push(curr);
+        } else {
+            let rounded = round_single_corner(prev, curr, next, radius);
+            result.extend(rounded);
+        }
+    }
 
-    let output: Vec<Vec<(f64, f64)>> = expanded.into();
-
-    output
-        .into_iter()
-        .filter(|path| path.len() >= 3)
-        .map(LocalPolygon::from_clipper_coords)
-        .max_by(|a, b| {
-            polygon_area(&a.points)
-                .partial_cmp(&polygon_area(&b.points))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .unwrap_or_else(|| polygon.clone())
+    LocalPolygon::new(result)
 }
+
 fn is_edge_at_corridor_entrance(
     edge_start: Vec2,
     edge_end: Vec2,
@@ -814,41 +996,6 @@ fn is_edge_at_corridor_entrance(
     }
 
     false
-}
-
-fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, _radius: f32) -> LocalPolygon {
-    use std::f32::consts::{PI, TAU};
-
-    let start_offset = start - center;
-    let end_offset = end - center;
-
-    let start_angle = start_offset.y.atan2(start_offset.x);
-    let end_angle = end_offset.y.atan2(end_offset.x);
-
-    let mut sweep = end_angle - start_angle;
-    while sweep > PI {
-        sweep -= TAU;
-    }
-    while sweep < -PI {
-        sweep += TAU;
-    }
-
-    let start_radius = start_offset.length();
-    let end_radius = end_offset.length();
-
-    let avg_radius = (start_radius + end_radius) / 2.0;
-    let arc_len = sweep.abs() * avg_radius;
-    let steps = ((arc_len / 0.5) as usize).clamp(4, 48);
-
-    let mut points = vec![center];
-    for s in 0..=steps {
-        let t = s as f32 / steps as f32;
-        let angle = start_angle + sweep * t;
-        let radius = start_radius + (end_radius - start_radius) * t;
-        points.push(center + Vec2::new(angle.cos() * radius, angle.sin() * radius));
-    }
-
-    LocalPolygon::new(points)
 }
 
 fn polygon_area(points: &[Vec2]) -> f32 {
@@ -960,47 +1107,6 @@ pub fn triangulate_polygon(ring: &[Vec2], base_index: u32, indices: &mut Vec<u32
         let i2 = base_index + tri[2] as u32;
 
         // Flip winding
-        indices.extend_from_slice(&[i0, i2, i1]);
-    }
-
-    true
-}
-
-/// Triangulate a polygon with a hole (for sidewalk ring).
-pub fn triangulate_polygon_with_hole(
-    outer: &[Vec2],
-    inner: &[Vec2],
-    base_index: u32,
-    indices: &mut Vec<u32>,
-) -> bool {
-    if outer.len() < 3 || inner.len() < 3 {
-        return false;
-    }
-
-    let mut coords: Vec<f64> = Vec::with_capacity((outer.len() + inner.len()) * 2);
-
-    for p in outer {
-        coords.push(p.x as f64);
-        coords.push(p.y as f64);
-    }
-    for p in inner {
-        coords.push(p.x as f64);
-        coords.push(p.y as f64);
-    }
-
-    let hole_indices = vec![outer.len()];
-
-    let tri_indices = earcutr::earcut(&coords, &hole_indices, 2).unwrap_or(Vec::new());
-
-    if tri_indices.is_empty() {
-        return false;
-    }
-
-    for tri in tri_indices.chunks_exact(3) {
-        let i0 = base_index + tri[0] as u32;
-        let i1 = base_index + tri[1] as u32;
-        let i2 = base_index + tri[2] as u32;
-
         indices.extend_from_slice(&[i0, i2, i1]);
     }
 
@@ -1121,118 +1227,6 @@ fn build_polygon_curbs_filtered(
     }
 }
 
-struct AdaptiveVertex {
-    pos_2d: Vec2,
-    height: f32,
-}
-
-fn adaptive_triangulate_polygon(
-    terrain: &TerrainSubsystem,
-    center: WorldPos,
-    polygon_2d: &[Vec2],
-    base_height_offset: f32,
-    chunk_size: ChunkSize,
-    structure_type: StructureType,
-) -> (Vec<AdaptiveVertex>, Vec<u32>) {
-    let mut verts: Vec<AdaptiveVertex> = polygon_2d
-        .iter()
-        .map(|p| {
-            let mut world_pos = center.add_vec3(Vec3::new(p.x, 0.0, p.y), chunk_size);
-            set_point_height_with_structure_type(terrain, structure_type, &mut world_pos, true);
-            AdaptiveVertex {
-                pos_2d: *p,
-                height: world_pos.local.y + base_height_offset,
-            }
-        })
-        .collect();
-
-    let mut initial_indices = Vec::new();
-    triangulate_polygon(polygon_2d, 0, &mut initial_indices);
-
-    let mut final_indices = Vec::new();
-    let mut tri_stack: Vec<(u32, u32, u32, u32)> = Vec::new();
-
-    for chunk in initial_indices.chunks(3) {
-        if chunk.len() == 3 {
-            tri_stack.push((chunk[0], chunk[1], chunk[2], 0));
-        }
-    }
-
-    const MAX_DEPTH: u32 = 3;
-    const TERRAIN_MARGIN: f32 = 0.02;
-
-    while let Some((i0, i1, i2, depth)) = tri_stack.pop() {
-        if depth >= MAX_DEPTH {
-            final_indices.extend_from_slice(&[i0, i1, i2]);
-            continue;
-        }
-
-        let v0 = &verts[i0 as usize];
-        let v1 = &verts[i1 as usize];
-        let v2 = &verts[i2 as usize];
-
-        let centroid_2d = Vec2::new(
-            (v0.pos_2d.x + v1.pos_2d.x + v2.pos_2d.x) / 3.0,
-            (v0.pos_2d.y + v1.pos_2d.y + v2.pos_2d.y) / 3.0,
-        );
-
-        let mesh_height_at_centroid = (v0.height + v1.height + v2.height) / 3.0;
-
-        let mut centroid_world =
-            center.add_vec3(Vec3::new(centroid_2d.x, 0.0, centroid_2d.y), chunk_size);
-        set_point_height_with_structure_type(terrain, structure_type, &mut centroid_world, true);
-        let terrain_height_at_centroid = centroid_world.local.y + base_height_offset;
-
-        if terrain_height_at_centroid > mesh_height_at_centroid + TERRAIN_MARGIN {
-            let new_idx = verts.len() as u32;
-            verts.push(AdaptiveVertex {
-                pos_2d: centroid_2d,
-                height: terrain_height_at_centroid,
-            });
-
-            tri_stack.push((i0, i1, new_idx, depth + 1));
-            tri_stack.push((i1, i2, new_idx, depth + 1));
-            tri_stack.push((i2, i0, new_idx, depth + 1));
-        } else {
-            final_indices.extend_from_slice(&[i0, i1, i2]);
-        }
-    }
-
-    (verts, final_indices)
-}
-
-fn emit_adaptive_mesh(
-    center: WorldPos,
-    adaptive_verts: &[AdaptiveVertex],
-    adaptive_indices: &[u32],
-    chunk_size: ChunkSize,
-    config: &MeshConfig,
-    material_id: u32,
-    vertices: &mut Vec<RoadVertex>,
-    indices: &mut Vec<u32>,
-) {
-    let base = vertices.len() as u32;
-
-    for av in adaptive_verts {
-        let pos = WorldPos {
-            chunk: center.chunk,
-            local: LocalPos::new(
-                center.local.x + av.pos_2d.x,
-                av.height,
-                center.local.z + av.pos_2d.y,
-            ),
-        }
-        .normalize(chunk_size);
-
-        let (u, v) = radial_uv(center, pos, chunk_size, config);
-        vertices.push(road_vertex(pos, [0.0, 1.0, 0.0], material_id, u, v));
-    }
-
-    for &idx in adaptive_indices {
-        indices.push(base + idx);
-    }
-}
-
 pub fn build_intersection_mesh(
     terrain: &TerrainSubsystem,
     node_id: NodeId,
@@ -1259,6 +1253,11 @@ pub fn build_intersection_mesh(
         compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
     let corner_rounding_radius = if params.round_corners { 0.5 } else { 0.0 };
 
+    let asphalt_hw: Vec<f32> = arms
+        .iter()
+        .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
+        .collect();
+
     let mut asphalt_corridors: Vec<LocalPolygon> = arms
         .iter()
         .zip(corridor_lengths.iter())
@@ -1269,11 +1268,7 @@ pub fn build_intersection_mesh(
         })
         .collect();
 
-    let asphalt_hw: Vec<f32> = arms
-        .iter()
-        .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
-        .collect();
-    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, false);
+    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
     asphalt_corridors.extend(asphalt_corners);
 
     let asphalt_union = union_polygons(&asphalt_corridors);
@@ -1287,7 +1282,13 @@ pub fn build_intersection_mesh(
     };
 
     let asphalt_rounded = if params.round_corners {
-        round_polygon_corners(&asphalt_poly, corner_rounding_radius)
+        round_inner_polygon_corners(
+            &asphalt_poly,
+            &arms,
+            &corridor_lengths,
+            &asphalt_hw,
+            corner_rounding_radius,
+        )
     } else {
         asphalt_poly
     };
@@ -1321,6 +1322,8 @@ pub fn build_intersection_mesh(
     triangulate_polygon(&asphalt_simplified.points, asphalt_base, indices);
 
     if road_type.sidewalk_width > 0.01 {
+        let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
+
         let mut full_corridors: Vec<LocalPolygon> = arms
             .iter()
             .zip(corridor_lengths.iter())
@@ -1330,8 +1333,7 @@ pub fn build_intersection_mesh(
             })
             .collect();
 
-        let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
-        let full_corners = create_corner_fillers(&arms, &full_hw, false);
+        let full_corners = create_corner_fillers(&arms, &full_hw, params.round_corners);
         full_corridors.extend(full_corners);
 
         let full_union = union_polygons(&full_corridors);
@@ -1346,7 +1348,13 @@ pub fn build_intersection_mesh(
         };
 
         let full_rounded = if params.round_corners {
-            round_polygon_corners(&full_poly, corner_rounding_radius)
+            round_inner_polygon_corners(
+                &full_poly,
+                &arms,
+                &corridor_lengths,
+                &full_hw,
+                corner_rounding_radius,
+            )
         } else {
             full_poly
         };
@@ -1362,7 +1370,8 @@ pub fn build_intersection_mesh(
             })
             .collect();
 
-        let asphalt_corners_for_sw = create_corner_fillers(&arms, &asphalt_hw, false);
+        let asphalt_corners_for_sw =
+            create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
         asphalt_corridors_for_sw.extend(asphalt_corners_for_sw);
 
         let asphalt_union_for_sw = union_polygons(&asphalt_corridors_for_sw);
@@ -1374,7 +1383,13 @@ pub fn build_intersection_mesh(
 
         let asphalt_rounded_for_sw = if let Some(ap) = asphalt_poly_for_sw {
             if params.round_corners {
-                round_polygon_corners(&ap, corner_rounding_radius)
+                round_inner_polygon_corners(
+                    &ap,
+                    &arms,
+                    &corridor_lengths,
+                    &asphalt_hw,
+                    corner_rounding_radius,
+                )
             } else {
                 ap
             }
@@ -1481,6 +1496,8 @@ fn compute_intersection_geometry(
         compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
     let corner_rounding_radius = if params.round_corners { 0.5 } else { 0.0 };
 
+    let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
+
     let mut corridors: Vec<LocalPolygon> = arms
         .iter()
         .zip(corridor_lengths.iter())
@@ -1490,8 +1507,7 @@ fn compute_intersection_geometry(
         })
         .collect();
 
-    let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
-    let corner_fillers = create_corner_fillers(&arms, &full_hw, false);
+    let corner_fillers = create_corner_fillers(&arms, &full_hw, params.round_corners);
     corridors.extend(corner_fillers);
 
     let unioned = union_polygons(&corridors);
@@ -1506,7 +1522,13 @@ fn compute_intersection_geometry(
     })?;
 
     let rounded = if params.round_corners {
-        round_polygon_corners(&main_poly, corner_rounding_radius)
+        round_inner_polygon_corners(
+            &main_poly,
+            &arms,
+            &corridor_lengths,
+            &full_hw,
+            corner_rounding_radius,
+        )
     } else {
         main_poly
     };
@@ -1522,6 +1544,11 @@ fn compute_intersection_geometry(
     let polygon = IntersectionPolygon::new(ring, center, chunk_size);
 
     let sidewalk_polygon = if params.road_type.sidewalk_width > 0.01 {
+        let asphalt_hw: Vec<f32> = arms
+            .iter()
+            .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
+            .collect();
+
         let mut asphalt_corridors: Vec<LocalPolygon> = arms
             .iter()
             .zip(corridor_lengths.iter())
@@ -1533,11 +1560,7 @@ fn compute_intersection_geometry(
             })
             .collect();
 
-        let asphalt_hw: Vec<f32> = arms
-            .iter()
-            .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
-            .collect();
-        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, false);
+        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
         asphalt_corridors.extend(asphalt_corners);
 
         let asphalt_union = union_polygons(&asphalt_corridors);
@@ -1550,7 +1573,13 @@ fn compute_intersection_geometry(
             })
             .map(|p| {
                 let p = if params.round_corners {
-                    round_polygon_corners(&p, corner_rounding_radius)
+                    round_inner_polygon_corners(
+                        &p,
+                        &arms,
+                        &corridor_lengths,
+                        &asphalt_hw,
+                        corner_rounding_radius,
+                    )
                 } else {
                     p
                 };
@@ -1578,80 +1607,57 @@ fn compute_sidewalk_ring_polygons(
     asphalt_corridors: &[LocalPolygon],
     end_clips: &[LocalPolygon],
 ) -> Vec<LocalPolygon> {
-    use clipper2::{FillRule, difference, union};
-
-    let full_coords: Vec<Vec<(f64, f64)>> = full_corridors
+    let full_paths: PathsD = full_corridors
         .iter()
         .filter(|p| p.points.len() >= 3)
-        .map(|p| {
-            p.points
-                .iter()
-                .map(|pt| (pt.x as f64, pt.y as f64))
-                .collect()
-        })
+        .map(to_pathd)
         .collect();
 
-    if full_coords.is_empty() {
+    if full_paths.is_empty() {
         return vec![];
     }
 
-    let full_paths: Paths = full_coords.into();
-    let empty: Paths = Vec::<Vec<(f64, f64)>>::new().into();
+    let empty: PathsD = vec![];
+    let full_union = union_d(&full_paths, &empty, FillRule::NonZero, CLIPPER_PRECISION);
 
-    let full_union = match union(full_paths, empty, FillRule::NonZero) {
-        Ok(r) => r,
-        Err(_) => return vec![],
-    };
-
-    let asphalt_coords: Vec<Vec<(f64, f64)>> = asphalt_corridors
+    let asphalt_paths: PathsD = asphalt_corridors
         .iter()
         .filter(|p| p.points.len() >= 3)
-        .map(|p| {
-            p.points
-                .iter()
-                .map(|pt| (pt.x as f64, pt.y as f64))
-                .collect()
-        })
+        .map(to_pathd)
         .collect();
 
-    if asphalt_coords.is_empty() {
+    if asphalt_paths.is_empty() {
         return vec![];
     }
 
-    let asphalt_paths: Paths = asphalt_coords.into();
+    let ring_result = difference_d(
+        &full_union,
+        &asphalt_paths,
+        FillRule::NonZero,
+        CLIPPER_PRECISION,
+    );
 
-    let ring_result = match difference(full_union, asphalt_paths, FillRule::NonZero) {
-        Ok(r) => r,
-        Err(_) => return vec![],
-    };
-
-    let clip_coords: Vec<Vec<(f64, f64)>> = end_clips
+    let clip_paths: PathsD = end_clips
         .iter()
         .filter(|p| p.points.len() >= 3)
-        .map(|p| {
-            p.points
-                .iter()
-                .map(|pt| (pt.x as f64, pt.y as f64))
-                .collect()
-        })
+        .map(to_pathd)
         .collect();
 
-    let final_result = if clip_coords.is_empty() {
+    let final_result = if clip_paths.is_empty() {
         ring_result
     } else {
-        let clip_paths: Paths = clip_coords.into();
-        match difference(ring_result, clip_paths, FillRule::NonZero) {
-            Ok(r) => r,
-            Err(_) => return vec![],
-        }
+        difference_d(
+            &ring_result,
+            &clip_paths,
+            FillRule::NonZero,
+            CLIPPER_PRECISION,
+        )
     };
 
-    let output: Vec<Vec<(f64, f64)>> = final_result.into();
-
-    output
-        .into_iter()
+    final_result
+        .iter()
         .filter(|path| path.len() >= 3)
-        .map(LocalPolygon::from_clipper_coords)
+        .map(pathd_to_local_polygon)
         .collect()
 }
 

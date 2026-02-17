@@ -8,7 +8,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "bytemuck",
- "clipper2",
+ "clipper2-rust",
  "crossbeam-channel",
  "earcutr",
  "fastnoise-lite",
@@ -20,7 +20,7 @@ dependencies = [
  "pollster",
  "postcard",
  "rand",
-    "rayon",
+ "rayon",
  "rect_packer",
  "serde",
  "serde_yaml",
@@ -304,24 +304,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "clipper2"
-version = "0.5.3"
+name = "clipper2-rust"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e9c96871d5c50dd16c0f9df018f701fc62bd4f1b73cea8efe1985df6ab3d7e6"
+checksum = "11da8a1461a0cccf508c9d37dca08fb817825344f3049c36b4b5eb554e982294"
 dependencies = [
- "clipper2c-sys",
- "libc",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "clipper2c-sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fe1f9be1018d6be0fa3c79ab338d295fb0c0c501e4fe81bfdbe3a89a23098"
-dependencies = [
- "cc",
- "libc",
+ "num-traits",
 ]
 
 [[package]]
@@ -454,8 +442,8 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
 dependencies = [
-    "crossbeam-epoch",
-    "crossbeam-utils",
+ "crossbeam-epoch",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -464,7 +452,7 @@ version = "0.9.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
 dependencies = [
-    "crossbeam-utils",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -1678,8 +1666,8 @@ version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
 dependencies = [
-    "either",
-    "rayon-core",
+ "either",
+ "rayon-core",
 ]
 
 [[package]]
@@ -1688,8 +1676,8 @@ version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
-    "crossbeam-deque",
-    "crossbeam-utils",
+ "crossbeam-deque",
+ "crossbeam-utils",
 ]
 
 [[package]]
