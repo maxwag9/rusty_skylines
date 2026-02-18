@@ -10,7 +10,7 @@ use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::world::cars::car_render::CarInstance;
-use crate::world::cars::car_structs::{Car, CarChunkDistance, CarId, CarStorage};
+use crate::world::cars::car_structs::{Car, CarChunkDistance, CarStorage, PartitionId};
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::RoadManager;
 use crate::world::terrain::terrain_subsystem::{CursorMode, TerrainSubsystem};
@@ -204,11 +204,11 @@ pub struct CarSubsystem {
     car_storage: CarStorage,
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
-    player_car_id: CarId,
+    player_car_id: PartitionId,
 }
 
 impl CarSubsystem {
-    pub(crate) fn player_car_id(&self) -> CarId {
+    pub(crate) fn player_car_id(&self) -> PartitionId {
         self.player_car_id
     }
     pub(crate) fn get_player_car(&mut self) -> Option<&mut Car> {

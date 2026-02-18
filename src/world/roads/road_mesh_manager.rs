@@ -5,7 +5,7 @@
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{
     IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh, road_vertex,
 };

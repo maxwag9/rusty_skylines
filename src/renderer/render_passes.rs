@@ -1,7 +1,7 @@
 use crate::data::{Settings, ShadowType};
 use crate::gpu_timestamp;
 use crate::helpers::paths::shader_dir;
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;

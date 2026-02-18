@@ -324,7 +324,7 @@ impl WorldPos {
 
     /// Often useful to avoid sqrt.
     #[inline]
-    pub fn distance_squared_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
+    pub fn distance_squared(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
         let cs = chunk_size as f64;
 
         let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
@@ -335,11 +335,6 @@ impl WorldPos {
         let dz = dcz as f64 * cs + (rhs.local.z as f64 - self.local.z as f64);
 
         dx * dx + dy * dy + dz * dz
-    }
-    /// Distance squared (cheaper, for comparisons).
-    #[inline]
-    pub fn distance_squared(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {
-        self.to_render_pos(rhs, chunk_size).length_squared()
     }
 
     /// Normalize as direction from origin (for displacement vectors).

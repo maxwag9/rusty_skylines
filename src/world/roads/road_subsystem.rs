@@ -6,12 +6,13 @@ use crate::world::roads::roads::{
 };
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::TimeSystem;
 use crate::simulation::Ticker;
 use crate::ui::input::InputState;
 use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::world::roads::road_structs::RoadEditorCommand;
 use std::collections::HashMap;
@@ -156,6 +157,7 @@ impl RoadRenderSubsystem {
 pub struct RoadSubsystem {
     pub road_manager: RoadManager,
     pub road_editor: RoadEditor,
+    pub partition_manager: PartitionManager,
     road_commands: Vec<RoadEditorCommand>,
     pub tick_20hz: Ticker,
 }
@@ -165,6 +167,7 @@ impl RoadSubsystem {
             tick_20hz: Ticker::new(20.0),
             road_manager: RoadManager::new(),
             road_editor: RoadEditor::new(),
+            partition_manager: PartitionManager::new(),
             road_commands: vec![],
         }
     }
@@ -203,6 +206,8 @@ impl RoadSubsystem {
                 &self.road_commands,
             );
         }
+        self.partition_manager
+            .rebuild_all(&self.road_manager.roads, terrain.chunk_size);
     }
 }
 pub const _WGSL_SDF_TEXT_OVERLAY: &str = r#"

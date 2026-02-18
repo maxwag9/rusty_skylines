@@ -1,5 +1,4 @@
 #![allow(dead_code, unused_variables, private_interfaces)]
-extern crate core;
 
 mod app;
 mod commands;

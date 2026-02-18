@@ -29,7 +29,7 @@ impl Camera {
             near: 2.5,
             far: 10_000.0,
             fov: 55.0,
-            chunk_size: 64,
+            chunk_size: 128,
             prev_view_proj: Default::default(),
             view: Default::default(),
             proj: Default::default(),

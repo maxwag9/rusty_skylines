@@ -25,7 +25,7 @@ fn find_data_root() -> PathBuf {
         if candidate.is_dir() {
             // Canonicalize resolves ".." and returns absolute path
             if let Ok(resolved) = candidate.canonicalize() {
-                eprintln!("[data_path] Found data directory: {}", resolved.display());
+                println!("[data_path] Found data directory: {}", resolved.display());
                 return resolved;
             }
         }
@@ -63,8 +63,7 @@ pub fn shader_dir() -> PathBuf {
 }
 
 pub fn texture_dir() -> PathBuf {
-    // Note: This was inside shaders/ - is that intentional?
-    let dir = data_dir("textures"); // Changed to be at data/textures/
+    let dir = shader_dir().join("textures");
     if let Err(e) = fs::create_dir_all(&dir) {
         eprintln!("[data_path] Failed to create texture dir: {}", e);
     }

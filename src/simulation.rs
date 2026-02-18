@@ -1,7 +1,7 @@
 use crate::commands::Command;
 use crate::data::Settings;
 use crate::helpers::mouse_ray::WorldRay;
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::TimeSystem;
 use crate::ui::input::InputState;
 use crate::ui::variables::UiVariableRegistry;

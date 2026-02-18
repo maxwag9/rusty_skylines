@@ -117,7 +117,7 @@ fn fs_main(input: VSOut) -> FragOut {
         let m_rad = sky.moon_size;
         let rel = (ndc - moon_ndc) / m_rad;
         let r2 = dot(rel, rel);
-        let halo_r = m_rad * 4.0;
+        let halo_r = 4.0; // relative units
 
         if r2 <= 1.0 {
             // Moon surface
@@ -142,20 +142,26 @@ fn fs_main(input: VSOut) -> FragOut {
 
             // Crescent glow & earthshine
             let ci = saturate(1.0 - phase);
-            moon_col += vec3<f32>(1.2, 1.05, 0.90) * ci * ci * sqrt(ci) * 0.0005;
+            //moon_col += vec3<f32>(0.005, 0.005, 0.005);
+            moon_col += vec3<f32>(1.2, 1.05, 0.90) * ci * ci * sqrt(ci) * 0.003;
             moon_col += vec3<f32>(0.12, 0.13, 0.17) * 0.0005 * (1.0 - phase);
             moon_col *= smoothstep(1.0, 0.4, r2);
 
+
             col += moon_col;
         } else {
-            // Moon halo (only when not on disc)
-            let m_d = sqrt(r2) * m_rad;
-            if m_d < halo_r {
-                let t = 1.0 - m_d / halo_r;
-                let t2 = t * t;
-                col += vec3<f32>(0.45, 0.47, 0.55) * (t2 * 0.9 + t2 * t2 * 0.25) * sky.moon_intensity * saturate(moon_dir.y + 0.1) * 0.1;
-            }
+
         }
+        // Moon halo (MUST be inside the moon aswell, or the inside will be dark on the non-illuminated parts and looks bad)
+        let m_d = sqrt(r2); // already 0 at moon center, 1 at moon radius
+
+        if m_d < halo_r {
+            let t = 1.0 - m_d / halo_r; // now t=1 at moon center, t=0 at halo edge
+            let t2 = t * t;
+            col += vec3<f32>(0.45, 0.47, 0.55) * (t2 * 0.9 + t2 * t2 * 0.25)
+                   * sky.moon_intensity * saturate(moon_dir.y + 0.1) * 0.1;
+        }
+
     }
 
     // Atmosphere (inlined)

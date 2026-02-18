@@ -1,7 +1,7 @@
 // intersections.rs - Fixed Clipper2 API usage
 
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
-use crate::renderer::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
+use crate::renderer::gizmo::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
 use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_mesh_manager::*;
@@ -11,8 +11,13 @@ use crate::world::terrain::terrain_editing::TerrainEditor;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use clipper2_rust::{
     EndType, JoinType, PathD, PathsD, PointD, core::FillRule, difference_d, inflate_paths_d,
-    simplify_paths, union_d,
+    intersect_d, simplify_paths, union_d,
 };
+use core::clone::Clone;
+use core::cmp::{Ord, PartialOrd};
+use core::default::Default;
+use core::iter::{IntoIterator, Iterator};
+use core::option::Option;
 use earcutr;
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
@@ -21,8 +26,7 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 const DEFAULT_CORRIDOR_LENGTH: f32 = 6.0;
 const MAX_CORRIDOR_LENGTH: f32 = 10000.0;
 const MIN_ANGLE_FOR_DYNAMIC: f32 = 0.02;
-
-const CLIPPER_PRECISION: i32 = 2;
+const CLIPPER_PRECISION: i32 = 2; // Decimal Points
 
 // ============================================================================
 // Intersection Polygon
@@ -552,6 +556,9 @@ pub struct IntersectionBuildParams {
     pub round_corners: bool,
     pub simplify_tolerance: f32,
     pub road_type: RoadType,
+
+    pub corner_radius: f32,
+    pub corner_segments: usize, // ← More intuitive! e.g., 8 = smooth, 16 = very smooth
 }
 
 impl Default for IntersectionBuildParams {
@@ -562,6 +569,8 @@ impl Default for IntersectionBuildParams {
             round_corners: true,
             simplify_tolerance: 0.1,
             road_type: Default::default(),
+            corner_radius: 1.5,
+            corner_segments: 8,
         }
     }
 }
@@ -574,6 +583,11 @@ impl IntersectionBuildParams {
             turn_tightness: style.turn_tightness(),
             ..Default::default()
         }
+    }
+
+    pub fn arc_tolerance_from_segments(&self) -> f64 {
+        let angle = std::f64::consts::FRAC_PI_2 / self.corner_segments as f64;
+        (self.corner_radius as f64) * (1.0 - angle.cos())
     }
 }
 
@@ -688,7 +702,7 @@ fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut G
 fn create_corner_fillers(
     arms: &[Arm],
     half_widths: &[f32],
-    round_corners: bool,
+    params: &IntersectionBuildParams,
 ) -> Vec<LocalPolygon> {
     use std::f32::consts::PI;
     let n = arms.len();
@@ -720,9 +734,15 @@ fn create_corner_fillers(
             let edge_i = perp_i * hw_i;
             let edge_next = -perp_next * hw_next;
 
-            if round_corners {
+            if params.round_corners {
                 let radius = (hw_i + hw_next) / 2.0;
-                let filler = create_rounded_wedge(Vec2::ZERO, edge_i, edge_next, radius);
+                let filler = create_rounded_wedge(
+                    Vec2::ZERO,
+                    edge_i,
+                    edge_next,
+                    radius,
+                    params.arc_tolerance_from_segments() as f32,
+                );
                 fillers.push(filler);
             } else {
                 fillers.push(LocalPolygon::new(vec![Vec2::ZERO, edge_i, edge_next]));
@@ -733,7 +753,13 @@ fn create_corner_fillers(
     fillers
 }
 
-fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> LocalPolygon {
+fn create_rounded_wedge(
+    center: Vec2,
+    start: Vec2,
+    end: Vec2,
+    radius: f32,
+    arc_tolerance: f32,
+) -> LocalPolygon {
     use std::f32::consts::{PI, TAU};
 
     let start_angle = (start - center).y.atan2((start - center).x);
@@ -748,7 +774,8 @@ fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> Lo
     }
 
     let arc_len = sweep.abs() * radius;
-    let steps = ((arc_len / 0.5) as usize).clamp(4, 48);
+    // Dynamic resolution
+    let steps = ((arc_len / arc_tolerance) as usize).clamp(4, 64);
 
     let mut points = vec![center];
     for s in 0..=steps {
@@ -760,209 +787,130 @@ fn create_rounded_wedge(center: Vec2, start: Vec2, end: Vec2, radius: f32) -> Lo
     LocalPolygon::new(points)
 }
 
-fn is_vertex_at_corridor_entrance(
-    vertex: Vec2,
-    arms: &[Arm],
-    corridor_lengths: &[f32],
-    half_widths: &[f32],
-) -> bool {
-    let length_tolerance = 0.8;
-    let width_tolerance = 0.5;
-
-    for i in 0..arms.len() {
-        let arm = &arms[i];
-        let corridor_len = corridor_lengths[i];
-        let half_width = half_widths[i];
-
-        let arm_dir = arm.direction().xz().normalize_or_zero();
-        if arm_dir == Vec2::ZERO {
-            continue;
-        }
-
-        let proj_along = vertex.dot(arm_dir);
-
-        if (proj_along - corridor_len).abs() < length_tolerance {
-            let perp = Vec2::new(-arm_dir.y, arm_dir.x);
-            let proj_perp = vertex.dot(perp).abs();
-
-            if proj_perp <= half_width + width_tolerance {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-fn is_corridor_entrance_corner(
-    prev: Vec2,
-    curr: Vec2,
-    next: Vec2,
-    arms: &[Arm],
-    corridor_lengths: &[f32],
-    half_widths: &[f32],
-) -> bool {
-    for i in 0..arms.len() {
-        let arm_dir = arms[i].direction().xz().normalize_or_zero();
-        if arm_dir == Vec2::ZERO {
-            continue;
-        }
-
-        let corridor_len = corridor_lengths[i];
-        let half_width = half_widths[i];
-        let perp = Vec2::new(-arm_dir.y, arm_dir.x);
-
-        let proj_along = curr.dot(arm_dir);
-        let proj_perp = curr.dot(perp).abs();
-
-        let at_entrance_distance = (proj_along - corridor_len).abs() < 0.8;
-        let within_corridor_width = proj_perp < half_width + 0.5;
-
-        if !at_entrance_distance || !within_corridor_width {
-            continue;
-        }
-
-        let edge_in = (curr - prev).normalize_or_zero();
-        let edge_out = (next - curr).normalize_or_zero();
-
-        if edge_in == Vec2::ZERO || edge_out == Vec2::ZERO {
-            continue;
-        }
-
-        let dot_in_arm = edge_in.dot(arm_dir).abs();
-        let dot_out_arm = edge_out.dot(arm_dir).abs();
-        let dot_in_perp = edge_in.dot(perp).abs();
-        let dot_out_perp = edge_out.dot(perp).abs();
-
-        let pattern1 = dot_in_arm > 0.8 && dot_out_perp > 0.8;
-        let pattern2 = dot_in_perp > 0.8 && dot_out_arm > 0.8;
-
-        if pattern1 || pattern2 {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn round_single_corner(prev: Vec2, curr: Vec2, next: Vec2, radius: f32) -> Vec<Vec2> {
-    use std::f32::consts::TAU;
-
-    let edge_in = (curr - prev).normalize_or_zero();
-    let edge_out = (next - curr).normalize_or_zero();
-
-    if edge_in == Vec2::ZERO || edge_out == Vec2::ZERO {
-        return vec![curr];
-    }
-
-    let dot = edge_in.dot(edge_out);
-
-    if dot > 0.999 {
-        return vec![curr];
-    }
-
-    if dot < -0.999 {
-        return vec![curr];
-    }
-
-    let cross = edge_in.x * edge_out.y - edge_in.y * edge_out.x;
-
-    let theta = dot.clamp(-1.0, 1.0).acos();
-    let half_theta = theta / 2.0;
-    let tan_half = (half_theta).tan();
-
-    if tan_half.abs() < 0.001 {
-        return vec![curr];
-    }
-
-    let tan_dist = radius / tan_half;
-
-    let max_dist_prev = (curr - prev).length() * 0.4;
-    let max_dist_next = (next - curr).length() * 0.4;
-    let max_dist = max_dist_prev.min(max_dist_next);
-
-    let actual_tan_dist = tan_dist.min(max_dist);
-    if actual_tan_dist < 0.01 {
-        return vec![curr];
-    }
-
-    let actual_radius = actual_tan_dist * tan_half;
-
-    let t_start = curr - edge_in * actual_tan_dist;
-    let t_end = curr + edge_out * actual_tan_dist;
-
-    let perp_in = Vec2::new(-edge_in.y, edge_in.x);
-    let center = if cross > 0.0 {
-        t_start + perp_in * actual_radius
-    } else {
-        t_start - perp_in * actual_radius
-    };
-
-    let r_start = t_start - center;
-    let r_end = t_end - center;
-
-    let start_angle = r_start.y.atan2(r_start.x);
-    let end_angle = r_end.y.atan2(r_end.x);
-
-    let mut sweep = end_angle - start_angle;
-
-    if cross > 0.0 {
-        while sweep < 0.0 {
-            sweep += TAU;
-        }
-        if sweep > TAU {
-            sweep -= TAU;
-        }
-    } else {
-        while sweep > 0.0 {
-            sweep -= TAU;
-        }
-        if sweep < -TAU {
-            sweep += TAU;
-        }
-    }
-
-    let arc_length = actual_radius * sweep.abs();
-    let num_segments = ((arc_length / 0.2) as usize).clamp(3, 24);
-
-    let mut result = Vec::with_capacity(num_segments + 1);
-    for i in 0..=num_segments {
-        let t = i as f32 / num_segments as f32;
-        let angle = start_angle + sweep * t;
-        result.push(center + Vec2::new(angle.cos(), angle.sin()) * actual_radius);
-    }
-
-    result
-}
-
-fn round_inner_polygon_corners(
+/// Round polygon corners using Clipper2, but preserve straight edges at corridor entrances.
+fn round_corners_preserve_entrances(
+    gizmo: &mut Gizmo,
     polygon: &LocalPolygon,
     arms: &[Arm],
     corridor_lengths: &[f32],
     half_widths: &[f32],
-    radius: f32,
+    params: &IntersectionBuildParams,
 ) -> LocalPolygon {
-    if polygon.points.len() < 3 || radius <= 0.001 {
+    let radius: f32 = params.corner_radius;
+
+    if polygon.points.len() < 3 || radius < 0.01 {
         return polygon.clone();
     }
 
-    let n = polygon.points.len();
-    let mut result = Vec::new();
+    let arc_tolerance: f64 = params.arc_tolerance_from_segments();
 
-    for i in 0..n {
-        let prev = polygon.points[(i + n - 1) % n];
-        let curr = polygon.points[i];
-        let next = polygon.points[(i + 1) % n];
+    let original_path: PathsD = vec![to_pathd(polygon)];
 
-        if is_vertex_at_corridor_entrance(curr, arms, corridor_lengths, half_widths) {
-            result.push(curr);
-        } else {
-            let rounded = round_single_corner(prev, curr, next, radius);
-            result.extend(rounded);
-        }
+    // Step 1: Create entrance mask rectangles (areas to preserve as straight)
+    let entrance_masks: PathsD = arms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, arm)| {
+            let dir = arm.direction().xz().normalize_or_zero();
+            if dir == Vec2::ZERO {
+                return None;
+            }
+
+            let corridor_len = corridor_lengths[i];
+            let hw = half_widths[i];
+            let perp = Vec2::new(-dir.y, dir.x);
+
+            // Rectangle covering the entrance zone
+            // Extends from (corridor_len - radius*2) to (corridor_len + small_margin)
+            let mask_depth = radius * 2.5;
+            let mask_start = corridor_len - mask_depth;
+            let mask_end = corridor_len + 0.1;
+
+            let p0 = dir * mask_start - perp * (hw + 0.1);
+            let p1 = dir * mask_end - perp * (hw + 0.1);
+            let p2 = dir * mask_end + perp * (hw + 0.1);
+            let p3 = dir * mask_start + perp * (hw + 0.1);
+
+            Some(vec![
+                PointD::new(p0.x as f64, p0.y as f64),
+                PointD::new(p1.x as f64, p1.y as f64),
+                PointD::new(p2.x as f64, p2.y as f64),
+                PointD::new(p3.x as f64, p3.y as f64),
+            ])
+        })
+        .collect();
+
+    // Step 2: Extract original entrance geometry (intersect original with masks)
+    let original_entrances = intersect_d(
+        &original_path,
+        &entrance_masks,
+        FillRule::NonZero,
+        CLIPPER_PRECISION,
+    );
+
+    // Step 3: Contract - use Miter, not Round
+    let contracted = inflate_paths_d(
+        &original_path,
+        -(radius as f64),
+        JoinType::Miter, // ← Changed! No rounding during shrink
+        EndType::Polygon,
+        4.0, // Higher miter limit to preserve corners
+        CLIPPER_PRECISION,
+        0.25, // Doesn't matter for miter joins
+    );
+
+    // Step 3b: Expand - THIS is where rounding happens
+    let rounded = inflate_paths_d(
+        &contracted,
+        radius as f64,
+        JoinType::Round,
+        EndType::Polygon,
+        2.0,
+        CLIPPER_PRECISION,
+        arc_tolerance,
+    );
+
+    // Step 4: Cut the entrance zones out of the rounded polygon
+    let rounded_without_entrances = difference_d(
+        &rounded,
+        &entrance_masks,
+        FillRule::NonZero,
+        CLIPPER_PRECISION,
+    );
+
+    // Step 5: Union back the original (straight) entrance geometry
+    let final_result = union_d(
+        &rounded_without_entrances,
+        &original_entrances,
+        FillRule::NonZero,
+        CLIPPER_PRECISION,
+    );
+
+    // Return the largest polygon
+    final_result
+        .into_iter()
+        .filter(|p| p.len() >= 3)
+        .max_by(|a, b| {
+            polygon_area_pathd(a)
+                .partial_cmp(&polygon_area_pathd(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|p| pathd_to_local_polygon(&p))
+        .unwrap_or_else(|| polygon.clone())
+}
+
+/// Helper to compute area of a PathD
+fn polygon_area_pathd(path: &PathD) -> f64 {
+    if path.len() < 3 {
+        return 0.0;
     }
-
-    LocalPolygon::new(result)
+    let mut area = 0.0f64;
+    for i in 0..path.len() {
+        let a = &path[i];
+        let b = &path[(i + 1) % path.len()];
+        area += a.x * b.y - b.x * a.y;
+    }
+    area.abs() * 0.5
 }
 
 fn is_edge_at_corridor_entrance(
@@ -1251,7 +1199,6 @@ pub fn build_intersection_mesh(
 
     let corridor_lengths =
         compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
-    let corner_rounding_radius = if params.round_corners { 0.5 } else { 0.0 };
 
     let asphalt_hw: Vec<f32> = arms
         .iter()
@@ -1268,7 +1215,7 @@ pub fn build_intersection_mesh(
         })
         .collect();
 
-    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+    let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, &params);
     asphalt_corridors.extend(asphalt_corners);
 
     let asphalt_union = union_polygons(&asphalt_corridors);
@@ -1282,12 +1229,13 @@ pub fn build_intersection_mesh(
     };
 
     let asphalt_rounded = if params.round_corners {
-        round_inner_polygon_corners(
+        round_corners_preserve_entrances(
+            gizmo,
             &asphalt_poly,
             &arms,
             &corridor_lengths,
             &asphalt_hw,
-            corner_rounding_radius,
+            &params,
         )
     } else {
         asphalt_poly
@@ -1333,7 +1281,7 @@ pub fn build_intersection_mesh(
             })
             .collect();
 
-        let full_corners = create_corner_fillers(&arms, &full_hw, params.round_corners);
+        let full_corners = create_corner_fillers(&arms, &full_hw, &params);
         full_corridors.extend(full_corners);
 
         let full_union = union_polygons(&full_corridors);
@@ -1348,12 +1296,13 @@ pub fn build_intersection_mesh(
         };
 
         let full_rounded = if params.round_corners {
-            round_inner_polygon_corners(
+            round_corners_preserve_entrances(
+                gizmo,
                 &full_poly,
                 &arms,
                 &corridor_lengths,
                 &full_hw,
-                corner_rounding_radius,
+                &params,
             )
         } else {
             full_poly
@@ -1370,8 +1319,7 @@ pub fn build_intersection_mesh(
             })
             .collect();
 
-        let asphalt_corners_for_sw =
-            create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+        let asphalt_corners_for_sw = create_corner_fillers(&arms, &asphalt_hw, &params);
         asphalt_corridors_for_sw.extend(asphalt_corners_for_sw);
 
         let asphalt_union_for_sw = union_polygons(&asphalt_corridors_for_sw);
@@ -1383,12 +1331,13 @@ pub fn build_intersection_mesh(
 
         let asphalt_rounded_for_sw = if let Some(ap) = asphalt_poly_for_sw {
             if params.round_corners {
-                round_inner_polygon_corners(
+                round_corners_preserve_entrances(
+                    gizmo,
                     &ap,
                     &arms,
                     &corridor_lengths,
                     &asphalt_hw,
-                    corner_rounding_radius,
+                    &params,
                 )
             } else {
                 ap
@@ -1494,7 +1443,6 @@ fn compute_intersection_geometry(
 
     let corridor_lengths =
         compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
-    let corner_rounding_radius = if params.round_corners { 0.5 } else { 0.0 };
 
     let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
 
@@ -1507,7 +1455,7 @@ fn compute_intersection_geometry(
         })
         .collect();
 
-    let corner_fillers = create_corner_fillers(&arms, &full_hw, params.round_corners);
+    let corner_fillers = create_corner_fillers(&arms, &full_hw, &params);
     corridors.extend(corner_fillers);
 
     let unioned = union_polygons(&corridors);
@@ -1522,12 +1470,13 @@ fn compute_intersection_geometry(
     })?;
 
     let rounded = if params.round_corners {
-        round_inner_polygon_corners(
+        round_corners_preserve_entrances(
+            gizmo,
             &main_poly,
             &arms,
             &corridor_lengths,
             &full_hw,
-            corner_rounding_radius,
+            &params,
         )
     } else {
         main_poly
@@ -1560,7 +1509,7 @@ fn compute_intersection_geometry(
             })
             .collect();
 
-        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, params.round_corners);
+        let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, &params);
         asphalt_corridors.extend(asphalt_corners);
 
         let asphalt_union = union_polygons(&asphalt_corridors);
@@ -1573,12 +1522,13 @@ fn compute_intersection_geometry(
             })
             .map(|p| {
                 let p = if params.round_corners {
-                    round_inner_polygon_corners(
+                    round_corners_preserve_entrances(
+                        gizmo,
                         &p,
                         &arms,
                         &corridor_lengths,
                         &asphalt_hw,
-                        corner_rounding_radius,
+                        &params,
                     )
                 } else {
                     p

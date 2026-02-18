@@ -1,5 +1,5 @@
 use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::InputState;
 use crate::world::roads::intersections::IntersectionBuildParams;
 use crate::world::roads::road_helpers::*;

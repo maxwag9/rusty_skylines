@@ -498,11 +498,21 @@ impl ApplicationHandler for App {
                 // -----------------------------
                 // Render
                 // -----------------------------
-                resources.world_core.world_state.update(
-                    &mut resources.ui_loader,
-                    &resources.world_core.time,
-                    &resources.settings,
-                );
+                {
+                    let camera = resources
+                        .world_core
+                        .world_state
+                        .camera_mut(resources.world_core.world_state.main_camera())
+                        .unwrap();
+                    let proj = camera.proj();
+                    resources.world_core.world_state.update(
+                        &mut resources.ui_loader,
+                        &resources.world_core.time,
+                        &resources.settings,
+                        proj,
+                    );
+                }
+
                 self.schedule.run_render(resources); // use commands output
 
                 // -----------------------------

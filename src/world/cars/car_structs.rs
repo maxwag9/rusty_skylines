@@ -1,5 +1,6 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::world::cars::car_subsystem::make_random_car;
+use crate::world::cars::partitions::HierarchicalAddress;
 use crate::world::roads::road_structs::LaneId;
 use crate::world::roads::roads::{LaneRef, TurnType};
 use glam::{Quat, Vec3};
@@ -10,10 +11,10 @@ use std::slice::{Iter, IterMut};
 
 type SimTime = f64;
 
-pub type CarId = u32;
+pub type PartitionId = u32;
 
 type VehicleType = u32;
-type PartitionId = u32;
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum CarChunkDistance {
     Close,
@@ -58,12 +59,12 @@ impl CarChunkDistance {
 #[derive(Clone, Debug)]
 pub struct CarChunk {
     pub distance: CarChunkDistance,
-    pub car_ids: Vec<CarId>,
+    pub car_ids: Vec<PartitionId>,
     pub last_update_time: SimTime,
 }
 
 impl CarChunk {
-    pub fn new(distance: CarChunkDistance, car_ids: Vec<CarId>) -> Self {
+    pub fn new(distance: CarChunkDistance, car_ids: Vec<PartitionId>) -> Self {
         Self {
             distance,
             car_ids,
@@ -82,9 +83,9 @@ impl CarChunk {
 pub struct CarStorage {
     car_chunk_storage: CarChunkStorage,
     cars: Vec<Option<Car>>,
-    free_list: Vec<CarId>,
+    free_list: Vec<PartitionId>,
     // Reverse mapping so I can remove from chunks in O(1) when despawning/moving
-    car_locations: HashMap<CarId, ChunkCoord>,
+    car_locations: HashMap<PartitionId, ChunkCoord>,
     chunk_size: ChunkSize,
     center_chunk: ChunkCoord,
 }
@@ -102,7 +103,7 @@ impl CarStorage {
         &mut self,
         from: ChunkCoord,
         to: ChunkCoord,
-        car_id: CarId,
+        car_id: PartitionId,
     ) {
         self.car_chunk_storage.remove_car(from, car_id);
         let car_chunk_distance =
@@ -185,7 +186,7 @@ impl CarStorage {
         chunk_coord: ChunkCoord,
         car_chunk_distance: CarChunkDistance,
         mut car: Car,
-    ) -> CarId {
+    ) -> PartitionId {
         let car_id = if let Some(reused_id) = self.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
             car.id = reused_id;
@@ -206,7 +207,7 @@ impl CarStorage {
         car_id
     }
 
-    pub fn despawn(&mut self, id: CarId) {
+    pub fn despawn(&mut self, id: PartitionId) {
         if id == 0 {
             // index 0 is reserved, ignore attempts to despawn it
             return;
@@ -233,12 +234,12 @@ impl CarStorage {
     }
 
     #[inline]
-    pub fn get(&self, id: CarId) -> Option<&Car> {
+    pub fn get(&self, id: PartitionId) -> Option<&Car> {
         self.cars.get(id as usize)?.as_ref()
     }
 
     #[inline]
-    pub fn get_mut(&mut self, id: CarId) -> Option<&mut Car> {
+    pub fn get_mut(&mut self, id: PartitionId) -> Option<&mut Car> {
         self.cars.get_mut(id as usize)?.as_mut()
     }
 }
@@ -254,7 +255,12 @@ impl CarChunkStorage {
         }
     }
 
-    pub fn add_car(&mut self, chunk_coord: ChunkCoord, dist: CarChunkDistance, car_id: CarId) {
+    pub fn add_car(
+        &mut self,
+        chunk_coord: ChunkCoord,
+        dist: CarChunkDistance,
+        car_id: PartitionId,
+    ) {
         let chunk = if let Some(existing) = self.chunks.get_mut(&chunk_coord) {
             // Enforce distance consistency - panic in debug if caller screws up
             debug_assert_eq!(
@@ -272,7 +278,7 @@ impl CarChunkStorage {
         chunk.car_ids.push(car_id);
     }
 
-    pub fn remove_car(&mut self, chunk_coord: ChunkCoord, car_id: CarId) {
+    pub fn remove_car(&mut self, chunk_coord: ChunkCoord, car_id: PartitionId) {
         if let Some(chunk) = self.chunks.get_mut(&chunk_coord) {
             chunk.car_ids.retain(|&x| x != car_id);
             if chunk.car_ids.is_empty() {
@@ -280,8 +286,8 @@ impl CarChunkStorage {
             }
         }
     }
-    pub fn close_cars(&self) -> Vec<CarId> {
-        let mut close_cars: Vec<CarId> = Vec::new();
+    pub fn close_cars(&self) -> Vec<PartitionId> {
+        let mut close_cars: Vec<PartitionId> = Vec::new();
         for chunk in self.chunks.values() {
             if chunk.distance == CarChunkDistance::Close {
                 close_cars.extend(&chunk.car_ids);
@@ -293,7 +299,7 @@ impl CarChunkStorage {
 #[derive(Debug)]
 pub struct Car {
     // === Identity ===
-    pub id: CarId,
+    pub id: PartitionId,
     pub vehicle_type: VehicleType, // bitmask index: car, bus, truck, emergency
     pub color: [f32; 3],
 
@@ -319,7 +325,7 @@ pub struct Car {
     pub committed_lane: Option<LaneRef>, // chosen outgoing lane
 
     // === Destination ===
-    pub destination_addr: HierarchicalAddress,
+    pub destination_addr: Option<HierarchicalAddress>,
 
     // === Decision memory (very small) ===
     pub last_turn: Option<TurnType>,
@@ -357,7 +363,7 @@ impl Default for Car {
             lane_s: 0.0,
             committed_arm: None,
             committed_lane: None,
-            destination_addr: HierarchicalAddress { address: vec![] },
+            destination_addr: None,
             last_turn: None,
             spawn_time: 0.0,
             last_decision_time: 0.0,
@@ -374,8 +380,4 @@ pub enum DriverProfile {
     GermanTame,       // Chill, well-educated in german driving school lol
     GermanAggressive, // Likely to honk, drive fast on highways, likelier in cars that resemble Audi or BMW, but SKILLED in comparison to just 'Aggressive'
     Anxious,          // Just got out of driving school or other anxiousness
-}
-#[derive(Debug)]
-pub struct HierarchicalAddress {
-    pub address: Vec<PartitionId>, // First index is smallest, most precise, bigger indices are bigger Partitions.
 }

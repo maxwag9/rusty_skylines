@@ -16,7 +16,7 @@
 // ============================================================================
 
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
@@ -255,7 +255,7 @@ impl Node {
             outgoing_lanes: Vec::new(),
             attached_controls: Vec::new(),
             next_control_id: 0,
-            car_spawning_rate: 10.0,
+            car_spawning_rate: 3.0,
         }
     }
 
@@ -697,66 +697,205 @@ impl LaneGeometry {
     }
 }
 
-// ============================================================================
 // RoadManager
-// ============================================================================
+
+pub type RoadRegionId = u32;
+
+pub struct RoadRegion {
+    nodes: Vec<u32>,
+}
+
+impl RoadRegion {
+    fn new() -> Self {
+        Self { nodes: Vec::new() }
+    }
+
+    pub fn node_indices(&self) -> &[u32] {
+        &self.nodes
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+}
 
 pub struct RoadStorage {
     pub nodes: Vec<Node>,
     pub segments: Vec<Segment>,
     pub lanes: Vec<Lane>,
+    node_to_region: Vec<RoadRegionId>,
+    regions: Vec<RoadRegion>,
+    free_regions: Vec<RoadRegionId>,
+    active_region_count: usize,
 }
+
 impl Default for RoadStorage {
     fn default() -> Self {
         Self {
             nodes: Vec::new(),
             segments: Vec::new(),
             lanes: Vec::new(),
+            node_to_region: Vec::new(),
+            regions: Vec::new(),
+            free_regions: Vec::new(),
+            active_region_count: 0,
         }
     }
 }
+
 impl RoadStorage {
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.segments.clear();
         self.lanes.clear();
+        self.node_to_region.clear();
+        self.regions.clear();
+        self.free_regions.clear();
+        self.active_region_count = 0;
     }
-    // ------------------------------------------------------------------------
-    // Node operations
-    // ------------------------------------------------------------------------
 
-    /// Adds a new intersection node at the specified position.
-    /// Returns the stable, monotonically increasing ID.
     pub fn add_node(&mut self, world_pos: WorldPos) -> NodeId {
-        let id = NodeId::new(self.nodes.len() as u32);
+        let node_idx = self.nodes.len() as u32;
+        let id = NodeId::new(node_idx);
         self.nodes.push(Node::new(world_pos));
+
+        let region_id = if let Some(reused_id) = self.free_regions.pop() {
+            self.regions[reused_id as usize].nodes.push(node_idx);
+            reused_id
+        } else {
+            let new_id = self.regions.len() as RoadRegionId;
+            let mut region = RoadRegion::new();
+            region.nodes.push(node_idx);
+            self.regions.push(region);
+            new_id
+        };
+
+        self.node_to_region.push(region_id);
+        self.active_region_count += 1;
+
         id
     }
 
-    /// Returns a reference to the node with the given ID.
+    pub fn add_segment(
+        &mut self,
+        start: NodeId,
+        end: NodeId,
+        structure: StructureType,
+    ) -> SegmentId {
+        let id = SegmentId::new(self.segments.len() as u32);
+        self.segments.push(Segment::new(start, end, structure));
+
+        let region_a = self.node_to_region[start.index()];
+        let region_b = self.node_to_region[end.index()];
+
+        if region_a != region_b {
+            self.merge_regions(region_a, region_b);
+        }
+
+        id
+    }
+
+    fn merge_regions(&mut self, a: RoadRegionId, b: RoadRegionId) {
+        let len_a = self.regions[a as usize].nodes.len();
+        let len_b = self.regions[b as usize].nodes.len();
+
+        let (smaller, larger) = if len_a <= len_b { (a, b) } else { (b, a) };
+
+        let nodes_to_move = std::mem::take(&mut self.regions[smaller as usize].nodes);
+
+        for &node_idx in &nodes_to_move {
+            self.node_to_region[node_idx as usize] = larger;
+        }
+
+        self.regions[larger as usize].nodes.extend(nodes_to_move);
+        self.free_regions.push(smaller);
+        self.active_region_count -= 1;
+    }
+
+    /// Returns the current region ID for a node.
+    ///
+    /// # Stability
+    ///
+    /// Region IDs become stale after merges. If you call `add_segment` connecting
+    /// two nodes in different regions, the smaller region is merged into the larger.
+    /// Any previously-obtained ID for the smaller region now points to an empty slot.
+    /// Re-query after any connectivity changes if freshness matters.
+    #[inline]
+    pub fn region_for_node(&self, node_id: NodeId) -> RoadRegionId {
+        self.node_to_region[node_id.index()]
+    }
+    /// Returns an iterator over all active (non-empty) regions with their IDs.
+    ///
+    /// Active regions contain at least one node. Empty regions resulting from
+    /// prior merge operations are skipped. Region IDs remain stable until the
+    /// next merge operation occurs.
+    pub fn iter_active_regions(&self) -> impl Iterator<Item = (RoadRegionId, &RoadRegion)> {
+        self.regions
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.is_empty())
+            .map(|(i, r)| (i as RoadRegionId, r))
+    }
+    /// Returns the region, which may be empty if it was merged into another.
+    #[inline]
+    pub fn get_region(&self, region_id: RoadRegionId) -> &RoadRegion {
+        &self.regions[region_id as usize]
+    }
+
+    #[inline]
+    pub fn are_nodes_connected(&self, a: NodeId, b: NodeId) -> bool {
+        self.node_to_region[a.index()] == self.node_to_region[b.index()]
+    }
+
+    #[inline]
+    pub fn nodes_in_region(&self, region_id: RoadRegionId) -> &[u32] {
+        &self.regions[region_id as usize].nodes
+    }
+
+    #[inline]
+    pub fn is_region_active(&self, region_id: RoadRegionId) -> bool {
+        (region_id as usize) < self.regions.len() && !self.regions[region_id as usize].is_empty()
+    }
+
+    #[inline]
+    pub fn active_region_count(&self) -> usize {
+        self.active_region_count
+    }
+
+    #[inline]
+    pub fn total_region_slots(&self) -> usize {
+        self.regions.len()
+    }
+
+    #[inline]
+    pub fn free_region_slot_count(&self) -> usize {
+        self.free_regions.len()
+    }
+
     #[inline]
     pub fn node(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(id.0 as usize)
     }
 
-    /// Returns a mutable reference to the node.
-    /// Only valid during command application, not during simulation.
     #[inline]
     pub fn node_mut(&mut self, id: NodeId) -> &mut Node {
         &mut self.nodes[id.0 as usize]
     }
 
-    /// Disables a node. Does not affect connected lanes/segments.
+    #[inline]
     pub fn disable_node(&mut self, id: NodeId) {
         self.nodes[id.0 as usize].enabled = false;
     }
 
-    /// Re-enables a previously disabled node.
+    #[inline]
     pub fn enable_node(&mut self, id: NodeId) {
         self.nodes[id.0 as usize].enabled = true;
     }
 
-    /// Returns an iterator over all nodes in insertion order.
     #[inline]
     pub fn iter_nodes(&self) -> impl Iterator<Item = (NodeId, &Node)> {
         self.nodes
@@ -765,18 +904,17 @@ impl RoadStorage {
             .map(|(i, n)| (NodeId::new(i as u32), n))
     }
 
-    /// Returns an iterator over enabled nodes only.
     #[inline]
     pub fn iter_enabled_nodes(&self) -> impl Iterator<Item = (NodeId, &Node)> {
         self.iter_nodes().filter(|(_, n)| n.is_enabled())
     }
 
-    /// Returns the total number of nodes (including disabled).
     #[inline]
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
+    #[inline]
     pub(crate) fn lane_counts_for_segment(&self, segment: &Segment) -> (usize, usize) {
         let mut left_lanes = 0;
         let mut right_lanes = 0;
@@ -792,6 +930,7 @@ impl RoadStorage {
         }
         (left_lanes, right_lanes)
     }
+
     pub fn enabled_segments_connected_to_node(&self, node_id: NodeId) -> Vec<SegmentId> {
         let Some(node) = self.node(node_id) else {
             return Vec::new();
@@ -803,16 +942,14 @@ impl RoadStorage {
             let lane = &self.lanes[lane_id.0 as usize];
             let seg = lane.segment();
             let segment = self.segment(seg);
-            if segment.is_enabled() {
-                // de-dup without HashSet (cheap, small N…)
-                if !segments.contains(&seg) {
-                    segments.push(seg);
-                }
+            if segment.is_enabled() && !segments.contains(&seg) {
+                segments.push(seg);
             }
         }
 
         segments
     }
+
     pub fn enabled_segment_count_connected_to_node(&self, node_id: NodeId) -> usize {
         let Some(node) = self.node(node_id) else {
             return 0;
@@ -824,11 +961,9 @@ impl RoadStorage {
         for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
             let seg = self.lanes[lane_id.0 as usize].segment();
             let segment = self.segment(seg);
-            if segment.is_enabled() {
-                if !seen.contains(&seg) {
-                    seen.push(seg);
-                    count += 1;
-                }
+            if segment.is_enabled() && !seen.contains(&seg) {
+                seen.push(seg);
+                count += 1;
             }
         }
 
@@ -843,6 +978,7 @@ impl RoadStorage {
             .map(|(id, _)| SegmentId(id as u32))
             .collect()
     }
+
     pub fn get_active_node_ids(&self) -> Vec<NodeId> {
         self.nodes
             .iter()
@@ -851,53 +987,33 @@ impl RoadStorage {
             .map(|(id, _)| NodeId(id as u32))
             .collect()
     }
-    // ------------------------------------------------------------------------
-    // Segment operations
-    // ------------------------------------------------------------------------
 
-    /// Adds a new road segment connecting two nodes.
-    pub fn add_segment(
-        &mut self,
-        start: NodeId,
-        end: NodeId,
-        structure: StructureType,
-    ) -> SegmentId {
-        let id = SegmentId::new(self.segments.len() as u32);
-        self.segments.push(Segment::new(start, end, structure));
-        id
-    }
-
-    /// Returns a reference to the segment with the given ID.
     #[inline]
     pub fn segment(&self, id: SegmentId) -> &Segment {
         &self.segments[id.0 as usize]
     }
 
-    /// Returns a mutable reference to the segment.
     #[inline]
     pub fn segment_mut(&mut self, id: SegmentId) -> &mut Segment {
         &mut self.segments[id.0 as usize]
     }
 
-    /// Disables a segment and all its lanes. Increments segment version.
     pub fn disable_segment(&mut self, id: SegmentId) {
         let segment = &mut self.segments[id.0 as usize];
         segment.enabled = false;
         segment.version += 1;
 
-        // Collect lane IDs first to avoid borrow issues
         let lane_ids: Vec<LaneId> = segment.lanes.clone();
         for lane_id in lane_ids {
             self.lanes[lane_id.0 as usize].enabled = false;
         }
     }
 
-    /// Re-enables a segment (lanes must be re-enabled separately if desired).
+    #[inline]
     pub fn enable_segment(&mut self, id: SegmentId) {
         self.segments[id.0 as usize].enabled = true;
     }
 
-    /// Returns an iterator over all segments in insertion order.
     #[inline]
     pub fn iter_segments(&self) -> impl Iterator<Item = (SegmentId, &Segment)> {
         self.segments
@@ -906,19 +1022,16 @@ impl RoadStorage {
             .map(|(i, s)| (SegmentId::new(i as u32), s))
     }
 
-    /// Returns an iterator over enabled segments only.
     #[inline]
     pub fn iter_enabled_segments(&self) -> impl Iterator<Item = (SegmentId, &Segment)> {
         self.iter_segments().filter(|(_, s)| s.is_enabled())
     }
 
-    /// Returns the total number of segments (including disabled).
     #[inline]
     pub fn segment_count(&self) -> usize {
         self.segments.len()
     }
 
-    /// Find segments that potentially touch a chunk (using bounding box test).
     pub fn segment_ids_touching_chunk(
         &self,
         chunk_coord: ChunkCoord,
@@ -938,7 +1051,6 @@ impl RoadStorage {
                 let start_pos = start.position();
                 let end_pos = end.position();
 
-                // Check if segment's bounding box overlaps this chunk
                 if segment_touches_chunk_precise(start_pos, end_pos, chunk_coord, chunk_size) {
                     Some(SegmentId::new(idx as u32))
                 } else {
@@ -952,12 +1064,7 @@ impl RoadStorage {
     pub fn node_lane_count_for_node(&self, id: NodeId) -> usize {
         self.nodes[id.raw() as usize].node_lanes.len()
     }
-    // ------------------------------------------------------------------------
-    // Lane operations
-    // ------------------------------------------------------------------------
 
-    /// Adds a new lane to a segment.
-    /// The lane direction is from->to; must match segment endpoints.
     pub fn add_lane(
         &mut self,
         from: NodeId,
@@ -997,32 +1104,31 @@ impl RoadStorage {
         id
     }
 
-    /// Returns a reference to the lane with the given ID.
     #[inline]
     pub fn lane(&self, id: &LaneId) -> &Lane {
         &self.lanes[id.0 as usize]
     }
+
     #[inline]
     pub fn lane_exists(&self, id: &LaneId) -> bool {
         self.lanes.get(id.raw() as usize).is_some()
     }
-    /// Returns a mutable reference to the lane.
+
     #[inline]
     pub fn lane_mut(&mut self, id: LaneId) -> &mut Lane {
         &mut self.lanes[id.0 as usize]
     }
 
-    /// Disables a lane.
+    #[inline]
     pub fn disable_lane(&mut self, id: LaneId) {
         self.lanes[id.0 as usize].enabled = false;
     }
 
-    /// Re-enables a lane.
+    #[inline]
     pub fn enable_lane(&mut self, id: LaneId) {
         self.lanes[id.0 as usize].enabled = true;
     }
 
-    /// Returns an iterator over all lanes in insertion order.
     #[inline]
     pub fn iter_lanes(&self) -> impl Iterator<Item = (LaneId, &Lane)> {
         self.lanes
@@ -1031,24 +1137,16 @@ impl RoadStorage {
             .map(|(i, l)| (LaneId::new(i as u32), l))
     }
 
-    /// Returns an iterator over enabled lanes only.
     #[inline]
     pub fn iter_enabled_lanes(&self) -> impl Iterator<Item = (LaneId, &Lane)> {
         self.iter_lanes().filter(|(_, l)| l.is_enabled())
     }
 
-    /// Returns the total number of lanes (including disabled).
     #[inline]
     pub fn lane_count(&self) -> usize {
         self.lanes.len()
     }
 
-    // ------------------------------------------------------------------------
-    // Traffic control operations
-    // ------------------------------------------------------------------------
-
-    /// Attaches a traffic control to a node intersection.
-    /// Returns the stable control ID for later modification/removal.
     pub fn attach_control(&mut self, node_id: NodeId, control: TrafficControl) -> ControlId {
         let node = &mut self.nodes[node_id.0 as usize];
         let id = ControlId::new(node.next_control_id);
@@ -1061,7 +1159,6 @@ impl RoadStorage {
         id
     }
 
-    /// Disables a traffic control (soft remove for undo support).
     pub fn disable_control(&mut self, node_id: NodeId, control_id: ControlId) {
         let node = &mut self.nodes[node_id.0 as usize];
         if let Some(ctrl) = node
@@ -1073,7 +1170,6 @@ impl RoadStorage {
         }
     }
 
-    /// Re-enables a traffic control.
     pub fn enable_control(&mut self, node_id: NodeId, control_id: ControlId) {
         let node = &mut self.nodes[node_id.0 as usize];
         if let Some(ctrl) = node
@@ -1084,6 +1180,7 @@ impl RoadStorage {
             ctrl.enabled = true;
         }
     }
+
     pub(crate) fn add_node_lane(
         &mut self,
         node_id: NodeId,
@@ -1116,34 +1213,21 @@ impl RoadStorage {
         id
     }
 
-    // ------------------------------------------------------------------------
-    // Upgrade operations
-    // ------------------------------------------------------------------------
-
-    /// Upgrades a segment by disabling it and allowing the caller to add replacements.
-    /// Returns the IDs of newly added segments during the upgrade.
-    ///
-    /// Pattern: disable old, then add new segments/lanes via callback.
-    /// Ensures operation is deterministic and versioned.
     pub fn upgrade_segment<F>(&mut self, old_segment: SegmentId, add_new: F) -> Vec<SegmentId>
     where
         F: FnOnce(&mut Self),
     {
         let segment_count_before = self.segments.len();
 
-        // Disable old segment and its lanes
         self.disable_segment(old_segment);
 
-        // Let caller add new segments and lanes
         add_new(self);
 
-        // Collect newly added segment IDs
         (segment_count_before..self.segments.len())
             .map(|i| SegmentId::new(i as u32))
             .collect()
     }
 
-    /// Returns nodes belonging to a specific chunk.
     pub fn nodes_in_chunk(&self, chunk_id: ChunkId) -> Vec<NodeId> {
         self.iter_nodes()
             .filter(|(_, n)| n.is_enabled() && n.chunk_id() == chunk_id)
@@ -1151,6 +1235,7 @@ impl RoadStorage {
             .collect()
     }
 }
+
 /// Global road topology manager with append-only storage.
 ///
 /// # Thread Safety

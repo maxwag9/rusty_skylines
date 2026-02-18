@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Rusty_Skylines"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "bytemuck",

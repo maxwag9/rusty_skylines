@@ -10,7 +10,7 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 185719.38833238767
+total_game_time = 195933.78018845362
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
@@ -33,10 +33,10 @@ drive_car = false
 render_rt_gizmo = false
 
 [player_pos.chunk]
-x = 85
-z = 32
+x = 194
+z = -52
 
 [player_pos.local]
-x = 41.58012
-y = 1157.021
-z = 110.739456
+x = 93.54662
+y = 134.49681
+z = 87.29567

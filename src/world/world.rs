@@ -4,6 +4,7 @@ use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::variables::update_ui_variables;
 use crate::world::astronomy::{AstronomyState, ObserverParams, TimeScales, compute_astronomy};
 use crate::world::camera::{Camera, CameraController};
+use glam::Mat4;
 use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -77,10 +78,11 @@ impl WorldState {
         ui_loader: &mut UiButtonLoader,
         time: &TimeSystem,
         settings: &Settings,
+        proj: Mat4,
     ) {
         let time_scales = TimeScales::from_game_time(time.total_game_time, settings.always_day);
         let observer = ObserverParams::new(time_scales.day_angle);
-        let astronomy = compute_astronomy(&time_scales);
+        let astronomy = compute_astronomy(&time_scales, proj);
 
         update_ui_variables(
             ui_loader,

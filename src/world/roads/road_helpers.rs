@@ -1,13 +1,11 @@
 use crate::helpers::positions::{ChunkSize, WorldPos};
-use crate::renderer::gizmo::Gizmo;
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{IntersectionBuildParams, IntersectionPolygon};
 use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::world::roads::road_structs::{NodeId, RoadStyleParams, StructureType};
 use crate::world::roads::roads::RoadCommand;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 use glam::Vec3;
-use std::cmp::Ordering;
-use std::f32::consts::PI;
 
 /// Offset an entire polyline by a fixed distance.
 /// Positive offset = right side of travel direction.
@@ -49,120 +47,6 @@ pub fn right_turn_score(poly: &[WorldPos], chunk_size: ChunkSize) -> f32 {
     // atan2 gives signed angle, negative = right turn
     let score = -cross.y.atan2(dot);
     if score.is_nan() { 0.0 } else { score }
-}
-
-/// Merges disjoint polylines into a single CCW ring sorted by angle around the center.
-/// Ensures that individual segments also flow in the CCW direction.
-pub fn merge_polylines_ccw(
-    center: WorldPos,
-    mut polylines: Vec<Vec<WorldPos>>,
-    chunk_size: ChunkSize,
-) -> Vec<WorldPos> {
-    if polylines.is_empty() {
-        return Vec::new();
-    }
-
-    // Helper to calculate angle in radians (-PI to PI) relative to center
-    let get_angle = |p: WorldPos| -> f32 {
-        let rel = p.to_render_pos(center, chunk_size);
-        rel.z.atan2(rel.x)
-    };
-
-    // 1. Sort the chunks radially based on their endpoint
-    polylines.sort_by(|a, b| {
-        if a.is_empty() || b.is_empty() {
-            return Ordering::Equal;
-        }
-        let pa = a.last().unwrap();
-        let pb = b.last().unwrap();
-
-        let angle_a = get_angle(*pa);
-        let angle_b = get_angle(*pb);
-
-        angle_a.partial_cmp(&angle_b).unwrap_or(Ordering::Equal)
-    });
-
-    let mut result_ring: Vec<WorldPos> = Vec::with_capacity(polylines.len() * 10);
-
-    // 2. Process each polyline
-    for poly in &mut polylines {
-        if poly.len() < 2 {
-            if !poly.is_empty() {
-                result_ring.push(poly[0]);
-            }
-            continue;
-        }
-
-        let start = poly.first().unwrap();
-        let end = poly.last().unwrap();
-
-        let angle_start = get_angle(*start);
-        let angle_end = get_angle(*end);
-
-        // Calculate angular delta to determine direction
-        let mut diff = angle_end - angle_start;
-
-        // Normalize diff to -PI..PI to handle the wrap-around case
-        while diff <= -PI {
-            diff += 2.0 * PI;
-        }
-        while diff > PI {
-            diff -= 2.0 * PI;
-        }
-
-        // If diff is negative, the polyline is running Clockwise.
-        // We need to reverse it to flow CCW.
-        if diff < 0.0 {
-            poly.reverse();
-        }
-
-        // 3. Append to result
-        // Skip duplicate vertices if ends touch exactly
-        if let Some(&last_pt) = result_ring.last() {
-            let first_new = &poly[0];
-            let dist_sq = last_pt.distance_squared(*first_new, chunk_size);
-
-            // If points are virtually identical, skip the first one
-            if dist_sq < 0.01 {
-                result_ring.extend_from_slice(&poly[1..]);
-                continue;
-            }
-        }
-
-        result_ring.extend_from_slice(poly);
-    }
-
-    result_ring
-}
-
-/// Creates a triangle fan connecting a central vertex (at `center_idx`)
-/// to a ring of vertices starting at `ring_start`.
-///
-/// Layout in Vertex Buffer: [Center, Ring0, Ring1, Ring2, ... RingN]
-/// `center_idx` = base
-/// `ring_start` = base + 1
-pub fn triangulate_center_fan(base_index: u32, ring_count: u32, indices: &mut Vec<u32>) {
-    if ring_count < 2 {
-        return;
-    }
-
-    let center = base_index;
-    let ring_start = base_index + 1;
-
-    for i in 0..ring_count {
-        // Current point in ring
-        let current = ring_start + i;
-
-        // Next point in ring (wrap around to start)
-        let next = ring_start + ((i + 1) % ring_count);
-
-        // CCW Winding: Center -> Next -> Current
-        // (Swap Next/Current if your engine uses CW culling, but usually standard is CCW)
-        // Since our ring is sorted CCW, Center->Current->Next should be the correct order (Right-Hand Rule)
-        indices.push(center);
-        indices.push(next);
-        indices.push(current);
-    }
 }
 
 /// 2D line segment intersection in XZ plane

@@ -73,6 +73,11 @@ impl NodeId {
     pub const fn raw(self) -> u32 {
         self.0
     }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl From<u32> for NodeId {
@@ -104,6 +109,11 @@ impl SegmentId {
     pub const fn raw(self) -> u32 {
         self.0
     }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
 impl From<u32> for SegmentId {
@@ -134,6 +144,11 @@ impl LaneId {
     #[inline]
     pub const fn raw(self) -> u32 {
         self.0
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
     }
 }
 
@@ -168,6 +183,11 @@ impl ControlId {
     #[inline]
     pub const fn raw(self) -> u32 {
         self.0
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
     }
 }
 /// Physical structure type of a road segment.
