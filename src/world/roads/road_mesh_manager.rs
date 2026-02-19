@@ -266,7 +266,7 @@ fn mesh_segment_with_boundaries(
     if let Some((_idx, lane_id)) = min_lane {
         let geom = storage.lane(&lane_id).geometry();
         let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
-        // gizmo.polyline(geom.points.as_slice(), [0.2, 1.0, 0.0], 10.0, 20.0);
+
         build_ribbon_mesh(
             terrain_renderer,
             gizmo,
@@ -284,7 +284,7 @@ fn mesh_segment_with_boundaries(
             indices,
         );
 
-        let inner_offset = road_type.lane_width * -0.5;
+        let inner_offset = offset - road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
             style,
@@ -292,7 +292,7 @@ fn mesh_segment_with_boundaries(
             inner_offset,
             road_type.lane_height,
             road_type.sidewalk_height,
-            0,
+            road_type.sidewalk_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
             Some(-1f32),
@@ -300,9 +300,10 @@ fn mesh_segment_with_boundaries(
             None,
             vertices,
             indices,
+            gizmo,
         );
 
-        let outer_offset = road_type.lane_width * -0.5 - road_type.sidewalk_width;
+        let outer_offset = offset + road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
             style,
@@ -310,7 +311,7 @@ fn mesh_segment_with_boundaries(
             outer_offset,
             road_type.lane_height,
             road_type.sidewalk_height,
-            0,
+            road_type.sidewalk_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
             Some(1f32),
@@ -318,6 +319,7 @@ fn mesh_segment_with_boundaries(
             None,
             vertices,
             indices,
+            gizmo,
         );
     }
 
@@ -342,7 +344,7 @@ fn mesh_segment_with_boundaries(
             indices,
         );
 
-        let inner_offset = road_type.lane_width * -0.5;
+        let inner_offset = offset - road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
             style,
@@ -358,9 +360,10 @@ fn mesh_segment_with_boundaries(
             None,
             vertices,
             indices,
+            gizmo,
         );
 
-        let outer_offset = road_type.lane_width * -0.5 - road_type.sidewalk_width;
+        let outer_offset = offset + road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
             style,
@@ -376,6 +379,7 @@ fn mesh_segment_with_boundaries(
             None,
             vertices,
             indices,
+            gizmo,
         );
     }
 
@@ -402,7 +406,7 @@ fn mesh_segment_with_boundaries(
                 indices,
             );
 
-            let curb_offset_right = road_type.lane_width * 0.5 + road_type.median_width * 0.5;
+            let curb_offset_right = offset + road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -413,14 +417,15 @@ fn mesh_segment_with_boundaries(
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                Some(-1.0),
+                Some(1.0),
                 None,
                 None,
                 vertices,
                 indices,
+                gizmo,
             );
 
-            let curb_offset_left = road_type.lane_width * 0.5 - road_type.median_width * 0.5;
+            let curb_offset_left = offset - road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
                 style,
@@ -431,11 +436,12 @@ fn mesh_segment_with_boundaries(
                 0,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                Some(1.0),
+                Some(-1.0),
                 None,
                 None,
                 vertices,
                 indices,
+                gizmo,
             );
         }
     }
@@ -582,6 +588,7 @@ fn draw_node_geometry(
         None,
         vertices,
         indices,
+        gizmo,
     );
 
     let outer_curb_geom = create_circular_geom(sw_outer);
@@ -601,6 +608,7 @@ fn draw_node_geometry(
         None,
         vertices,
         indices,
+        gizmo,
     );
 }
 
@@ -635,10 +643,10 @@ pub fn build_ribbon_mesh(
     for i in 0..lane_geom.points.len() {
         let p = lane_geom.points[i];
         let (_, lateral) = tangent_and_lateral_right(&lane_geom.points, i, chunk_size);
-
-        let center_pos = p.sub_vec3(lateral * offset_from_center, chunk_size);
-        let left_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
-        let right_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
+        //gizmo.direction(p, lateral, [1.0, 0.0, 0.0], 0.0);
+        let center_pos = p.add_vec3(lateral * offset_from_center, chunk_size);
+        let left_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
+        let right_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
 
         edges.push((left_pos, right_pos));
     }
@@ -744,13 +752,14 @@ pub fn build_ribbon_mesh(
         let v_base = base_vertex + point_idx_to_vert_idx[&a];
         let v_next = base_vertex + point_idx_to_vert_idx[&b];
 
-        indices.push(v_base + 1);
+        // CCW winding, top-facing
         indices.push(v_base);
         indices.push(v_next);
+        indices.push(v_base + 1);
 
-        indices.push(v_next + 1);
         indices.push(v_base + 1);
         indices.push(v_next);
+        indices.push(v_next + 1);
     }
 }
 
@@ -771,6 +780,7 @@ pub fn build_vertical_face(
     end_override: Option<WorldPos>,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
+    gizmo: &mut Gizmo,
 ) {
     if (top_height - bottom_height).abs() < 0.001 {
         return;
@@ -830,6 +840,7 @@ pub fn build_vertical_face(
             (ovr, lateral * normal_sign)
         } else {
             let (_, lateral) = tangent_and_lateral_right(&ref_geom.points, i, chunk_size);
+            //gizmo.direction(p, lateral, [1.0, 0.0, 1.0], 0.0);
             let raw = p.add_vec3(lateral * offset_lateral, chunk_size);
             (raw, lateral * normal_sign)
         };
@@ -869,7 +880,7 @@ pub fn build_vertical_face(
         current_vert_idx += 2;
     }
 
-    // Index generation (same as before)
+    // Index generation
     for k in 0..included_indices.len() - 1 {
         let idx_curr = included_indices[k];
         let idx_next = included_indices[k + 1];
@@ -898,19 +909,13 @@ pub fn build_vertical_face(
     }
 }
 
-// ============================================================================
-// Node Meshing (Simplified Radial)
-// ============================================================================
-
-/// Shared logic to draw a node (intersection/end cap) with sidewalks and curbs.
-
-// compute triangle normal (not normalized)
+/// compute triangle normal (not normalized)
 fn tri_normal(v0: Vec3, v1: Vec3, v2: Vec3) -> Vec3 {
     (v1 - v0).cross(v2 - v0)
 }
 
-// push triangle ensuring top-facing normals point up (normal.y > 0)
-// triangles with normal.y < 0 will be flipped (swap i1 <-> i2)
+/// push triangle ensuring top-facing normals point up (normal.y > 0)
+/// triangles with normal.y < 0 will be flipped (swap i1 <-> i2)
 fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32, i1: u32, i2: u32) {
     let v0 = Vec3::from(vertices[i0 as usize].local_position);
     let v1 = Vec3::from(vertices[i1 as usize].local_position);
@@ -925,72 +930,6 @@ fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32,
         indices.push(i2);
         indices.push(i1);
         indices.push(i0);
-    }
-}
-
-// push triangle ensuring curb-face normals point outward from node_pos
-// we check dot(normal, centroid_dir) >= 0 (normal points roughly away from center), flip if not
-fn emit_tri_for_curb(
-    indices: &mut Vec<u32>,
-    vertices: &Vec<RoadVertex>,
-    i0: u32,
-    i1: u32,
-    i2: u32,
-    node_pos: WorldPos,
-    chunk_size: ChunkSize,
-) {
-    let v0 = Vec3::from(vertices[i0 as usize].local_position);
-    let v1 = Vec3::from(vertices[i1 as usize].local_position);
-    let v2 = Vec3::from(vertices[i2 as usize].local_position);
-
-    let n = tri_normal(v0, v1, v2);
-    let centroid = (v0 + v1 + v2) / 3.0;
-
-    let node_render = node_pos.to_render_pos(WorldPos::zero(), chunk_size);
-    let centroid_dir = (centroid - node_render).normalize_or_zero();
-
-    if n.dot(centroid_dir) >= 0.0 {
-        indices.push(i0);
-        indices.push(i1);
-        indices.push(i2);
-    } else {
-        indices.push(i0);
-        indices.push(i2);
-        indices.push(i1);
-    }
-}
-
-// Add this helper for inner curb (normal points INWARD toward center)
-fn emit_tri_for_inner_curb(
-    indices: &mut Vec<u32>,
-    vertices: &Vec<RoadVertex>,
-    i0: u32,
-    i1: u32,
-    i2: u32,
-    node_pos: WorldPos,
-    chunk_size: ChunkSize,
-) {
-    let v0 = Vec3::from(vertices[i0 as usize].local_position);
-    let v1 = Vec3::from(vertices[i1 as usize].local_position);
-    let v2 = Vec3::from(vertices[i2 as usize].local_position);
-
-    let n = tri_normal(v0, v1, v2);
-
-    let centroid = (v0 + v1 + v2) / 3.0;
-
-    // Compute centroid_dir in render space relative to node_pos
-    let node_render = node_pos.to_render_pos(WorldPos::zero(), chunk_size);
-    let centroid_dir = (centroid - node_render).normalize_or_zero();
-
-    // Inner curb: normal should point TOWARD center (dot < 0)
-    if n.dot(centroid_dir) <= 0.0 {
-        indices.push(i0);
-        indices.push(i1);
-        indices.push(i2);
-    } else {
-        indices.push(i0);
-        indices.push(i2);
-        indices.push(i1);
     }
 }
 
@@ -1132,7 +1071,12 @@ impl RoadMeshManager {
             // Get boundary data from start and end nodes
             let start_boundary = intersection_results.get(&segment.start());
             let end_boundary = intersection_results.get(&segment.end());
-
+            // if let Some(start_boundary) = start_boundary {
+            //     gizmo.polyline(&start_boundary.polygon.ring, [0.2, 0.0, 0.0], 2.0, 50.0);
+            // }
+            // if let Some(end_boundary) = end_boundary {
+            //     gizmo.polyline(&end_boundary.polygon.ring, [0.0, 0.0, 0.2], 2.0, 50.0);
+            // }
             mesh_segment_with_boundaries(
                 terrain,
                 gizmo,

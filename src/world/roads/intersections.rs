@@ -566,7 +566,7 @@ impl Default for IntersectionBuildParams {
         Self {
             turn_samples: 12,
             turn_tightness: 1.0,
-            round_corners: true,
+            round_corners: false,
             simplify_tolerance: 0.1,
             road_type: Default::default(),
             corner_radius: 1.5,
@@ -586,8 +586,8 @@ impl IntersectionBuildParams {
     }
 
     pub fn arc_tolerance_from_segments(&self) -> f64 {
-        let angle = std::f64::consts::FRAC_PI_2 / self.corner_segments as f64;
-        (self.corner_radius as f64) * (1.0 - angle.cos())
+        // Empirical rule that matches Clipper's internals
+        (self.corner_radius as f64) / (self.corner_segments as f64 * 1.5)
     }
 }
 
@@ -822,7 +822,7 @@ fn round_corners_preserve_entrances(
 
             // Rectangle covering the entrance zone
             // Extends from (corridor_len - radius*2) to (corridor_len + small_margin)
-            let mask_depth = radius * 2.5;
+            let mask_depth = radius * 1.1;
             let mask_start = corridor_len - mask_depth;
             let mask_end = corridor_len + 0.1;
 
@@ -852,9 +852,9 @@ fn round_corners_preserve_entrances(
     let contracted = inflate_paths_d(
         &original_path,
         -(radius as f64),
-        JoinType::Miter, // ← Changed! No rounding during shrink
+        JoinType::Round, // ← Changed! No rounding during shrink
         EndType::Polygon,
-        4.0, // Higher miter limit to preserve corners
+        2.0, // Higher miter limit to preserve corners
         CLIPPER_PRECISION,
         0.25, // Doesn't matter for miter joins
     );
@@ -1013,9 +1013,9 @@ fn carve_lanes_with_polygon(
             //gizmo.cross(hit, 0.2, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
 
             let new_pts = if node_idx == 0 {
-                modify_polyline_start(pts, dist_to_boundary, chunk_size)
+                modify_polyline_start(pts, dist_to_boundary - 0.1, chunk_size)
             } else {
-                modify_polyline_end(pts, dist_to_boundary, chunk_size)
+                modify_polyline_end(pts, dist_to_boundary - 0.1, chunk_size)
             };
 
             if let Some(new_pts) = new_pts {
@@ -1720,136 +1720,6 @@ pub(crate) fn gather_arms(
     arms
 }
 
-fn gather_arms_from_node_lanes(
-    node_id: NodeId,
-    node_lanes: &[NodeLane],
-    storage: &RoadStorage,
-    chunk_size: ChunkSize,
-    params: &IntersectionBuildParams,
-    gizmo: &mut Gizmo,
-) -> Vec<Arm> {
-    let mut seen_segments: HashSet<SegmentId> = HashSet::new();
-
-    for nl in node_lanes {
-        for lane_ref in nl.merging() {
-            if let LaneRef::Segment(lane_id, _) = lane_ref {
-                let lane = storage.lane(lane_id);
-                seen_segments.insert(lane.segment());
-            }
-        }
-        for lane_ref in nl.merging() {
-            if let LaneRef::Segment(lane_id, _) = lane_ref {
-                let lane = storage.lane(lane_id);
-                seen_segments.insert(lane.segment());
-            }
-        }
-    }
-
-    let mut arms: Vec<Arm> = seen_segments
-        .into_iter()
-        .filter_map(|seg_id| {
-            let segment = storage.segment(seg_id);
-            let direction =
-                segment_direction_at_node(segment, node_id, storage, chunk_size, gizmo)?;
-
-            let mut bearing = direction.z.atan2(direction.x);
-            if bearing < 0.0 {
-                bearing += TAU;
-            }
-
-            let lane_count = segment.lanes().len();
-            let half_width = lane_count as f32 * params.road_type.lane_width * 0.5
-                + params.road_type.sidewalk_width;
-
-            let points_to_node = segment.end() == node_id;
-
-            Some(Arm::new(
-                seg_id,
-                bearing,
-                direction,
-                half_width,
-                points_to_node,
-            ))
-        })
-        .collect();
-
-    arms.sort_by(|a, b| {
-        a.bearing()
-            .partial_cmp(&b.bearing())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    arms
-}
-
-/// Compute bridge triangles for reflex angles (> 180°) between adjacent arms.
-/// When the angle between consecutive arms exceeds 180°, the corridor rectangles
-/// don't naturally meet at the outer corner, creating a gap. This function creates
-/// triangles to fill those gaps.
-fn compute_bridge_triangles(
-    arms: &[Arm],
-    corridor_lengths: &[f32],
-    half_widths: &[f32],
-) -> Vec<LocalPolygon> {
-    use std::f32::consts::PI;
-
-    let n = arms.len();
-    if n < 2 {
-        return vec![];
-    }
-
-    let mut bridges = Vec::new();
-
-    for i in 0..n {
-        let next_idx = (i + 1) % n;
-
-        // Angle from this arm to next (going CCW in bearing order)
-        let angle = normalize_angle_positive(arms[next_idx].bearing() - arms[i].bearing());
-
-        // If angle > PI (180°), there's a gap at the outer corner
-        if angle > PI {
-            let dir = arms[i].direction().xz();
-            let next_dir = arms[next_idx].direction().xz();
-            let perp = Vec2::new(-dir.y, dir.x);
-            let next_perp = Vec2::new(-next_dir.y, next_dir.x);
-
-            // Arm i's far-right corner (facing the gap)
-            let corner_i = dir * corridor_lengths[i] - perp * half_widths[i];
-
-            // Arm i+1's far-left corner (facing the gap)
-            let corner_next =
-                next_dir * corridor_lengths[next_idx] + next_perp * half_widths[next_idx];
-
-            // CCW winding for valid polygon: origin -> corner_next -> corner_i
-            bridges.push(LocalPolygon::new(vec![Vec2::ZERO, corner_next, corner_i]));
-        }
-    }
-
-    bridges
-}
-
-fn radial_uv(
-    center: WorldPos,
-    point: WorldPos,
-    chunk_size: ChunkSize,
-    config: &MeshConfig,
-) -> (f32, f32) {
-    let delta = center.delta_to(point, chunk_size);
-    let dist = (delta.x * delta.x + delta.z * delta.z).sqrt();
-
-    if dist <= 1e-6 {
-        return (0.5, 0.5);
-    }
-
-    let nx = delta.x / dist;
-    let nz = delta.z / dist;
-
-    (
-        0.5 + nx * dist * config.uv_scale_u,
-        0.5 + nz * dist * config.uv_scale_v,
-    )
-}
-
 pub fn road_vertex(world_pos: WorldPos, normal: [f32; 3], mat: u32, u: f32, v: f32) -> RoadVertex {
     RoadVertex {
         local_position: [world_pos.local.x, world_pos.local.y, world_pos.local.z],
@@ -2040,35 +1910,6 @@ fn build_node_lanes_for_intersection(
     node_lanes
 }
 
-fn compute_lane_dir_at_node(
-    pts: &[WorldPos],
-    node_idx: usize,
-    inward: bool,
-    chunk_size: ChunkSize,
-) -> Option<Vec3> {
-    if pts.len() < 2 {
-        return None;
-    }
-
-    let delta = if node_idx == 0 {
-        if inward {
-            pts[1].delta_to(pts[0], chunk_size)
-        } else {
-            pts[0].delta_to(pts[1], chunk_size)
-        }
-    } else {
-        let n = pts.len();
-        if inward {
-            pts[n - 2].delta_to(pts[n - 1], chunk_size)
-        } else {
-            pts[n - 1].delta_to(pts[n - 2], chunk_size)
-        }
-    };
-
-    let dir = Vec3::new(delta.x, 0.0, delta.z).normalize_or_zero();
-    if dir == Vec3::ZERO { None } else { Some(dir) }
-}
-
 fn compute_turn_tightness(chord: f32, dot: f32, params: &IntersectionBuildParams) -> f32 {
     let base = params.turn_tightness;
 
@@ -2208,17 +2049,6 @@ fn endpoint_index_near_node(
     Some(if d0 <= d1 { 0 } else { pts.len() - 1 })
 }
 
-fn lane_dir_away_from_node(pts: &[WorldPos], node_pos: WorldPos, chunk: ChunkSize) -> Option<Vec3> {
-    let node_idx = endpoint_index_near_node(pts, node_pos, chunk)?;
-    let d = if node_idx == 0 {
-        pts[0].delta_to(pts[1], chunk) // away from node
-    } else {
-        let n = pts.len();
-        pts[n - 1].delta_to(pts[n - 2], chunk) // away from node
-    };
-    let v = Vec3::new(d.x, 0.0, d.z).normalize_or_zero();
-    (v != Vec3::ZERO).then_some(v)
-}
 fn segment_direction_at_node(
     segment: &Segment,
     node_id: NodeId,

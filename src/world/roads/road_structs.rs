@@ -315,7 +315,7 @@ impl Default for RoadType {
             sidewalk_height: 0.15,
             sidewalk_material_id: 0, // concrete
 
-            median_width: 0.0,
+            median_width: 0.3,
             median_height: 0.15,
             median_material_id: 0, // concrete
 

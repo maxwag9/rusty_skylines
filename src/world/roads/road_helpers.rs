@@ -306,7 +306,7 @@ pub fn tangent_and_lateral_right(
         Vec3::X
     };
 
-    let lateral_right = Vec3::Y.cross(tangent).normalize_or_zero();
+    let lateral_right = tangent.cross(Vec3::Y).normalize_or_zero();
     // equivalent to: Vec3::new(tangent.z, 0.0, -tangent.x)
     (tangent, lateral_right)
 }
