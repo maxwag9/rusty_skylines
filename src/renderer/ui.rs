@@ -4,8 +4,8 @@ use crate::renderer::render_passes::color_target;
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
-use crate::resources::TimeSystem;
-use crate::ui::input::InputState;
+use crate::resources::Time;
+use crate::ui::input::Input;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::{
@@ -213,8 +213,8 @@ impl UiRenderer {
     pub fn update(
         &mut self,
         ui_loader: &mut UiButtonLoader,
-        time: &TimeSystem,
-        input_state: &InputState,
+        time: &Time,
+        input_state: &Input,
         queue: &Queue,
         size: &PhysicalSize<u32>,
     ) {
@@ -580,7 +580,7 @@ impl UiRenderer {
         queue: &Queue,
         layer: &mut RuntimeLayer,
         touch_manager: &UiTouchManager,
-        time_system: &TimeSystem,
+        time_system: &Time,
         menu_name: &String,
     ) {
         upload_circles(self, queue, layer);

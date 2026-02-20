@@ -1,16 +1,19 @@
 use crate::helpers::hsv::hsv_to_rgb;
-use crate::helpers::positions::WorldPos;
+use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::resources::TimeSystem;
-use crate::ui::input::InputState;
+use crate::resources::Time;
+use crate::ui::input::Input;
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::world::cars::car_render::CarInstance;
-use crate::world::cars::car_structs::{Car, CarChunkDistance, CarStorage, PartitionId};
+use crate::world::cars::car_simulation::CarSimSystem;
+use crate::world::cars::car_structs::{Car, CarChunkDistance, CarStorage, SimTime};
+use crate::world::cars::partitions::PartitionId;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::RoadManager;
 use crate::world::terrain::terrain_subsystem::{CursorMode, TerrainSubsystem};
@@ -122,7 +125,7 @@ impl CarRenderSubsystem {
         camera: &Camera,
         pass: &mut RenderPass,
     ) {
-        let mut close_ids = car_storage.car_chunks().close_cars();
+        let mut close_ids = car_storage.car_chunk_storage.close_cars();
         close_ids.sort_unstable();
 
         let mut instances: Vec<CarInstance> = Vec::with_capacity(close_ids.len());
@@ -205,6 +208,7 @@ pub struct CarSubsystem {
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
     player_car_id: PartitionId,
+    car_simulation: CarSimSystem,
 }
 
 impl CarSubsystem {
@@ -224,6 +228,7 @@ impl CarSubsystem {
             spawning_nodes: vec![],
             timing: CarSubsystemTiming::new(),
             player_car_id: 1,
+            car_simulation: CarSimSystem::new(),
         }
     }
     pub fn car_storage(&self) -> &CarStorage {
@@ -234,10 +239,11 @@ impl CarSubsystem {
     }
     pub fn update(
         &mut self,
+        gizmo: &mut Gizmo,
         road_manager: &RoadManager,
         terrain_renderer: &TerrainSubsystem,
-        input_state: &mut InputState,
-        time_system: &TimeSystem,
+        input_state: &mut Input,
+        time_system: &Time,
         variables: &mut UiVariableRegistry,
         target_pos: WorldPos,
     ) {
@@ -263,15 +269,47 @@ impl CarSubsystem {
             self.timing.carchunk_update_last = Instant::now();
             self.car_storage
                 .update_carchunk_distances(target_pos, terrain_renderer.chunk_size);
+
+            self.car_simulation
+                .cleanup_stale_jitter(&self.car_storage.car_chunk_storage);
+        }
+
+        let current_sim_time = time_system.total_game_time;
+        let mut rng = rng();
+        let updated_chunks = self.car_simulation.update_chunks(
+            &mut self.car_storage,
+            current_sim_time,
+            &mut rng,
+            terrain_renderer.chunk_size,
+        );
+
+        // live visualization
+        if !updated_chunks.is_empty() {
+            gizmo.visualize_chunk_updates_numbered(&updated_chunks, current_sim_time);
         }
     }
-
+    /// Manual batch simulation for specific chunks
+    pub fn simulate_chunks(
+        &mut self,
+        chunk_ids: Vec<ChunkCoord>,
+        current_time: SimTime,
+        chunk_size: ChunkSize,
+    ) {
+        let mut rng = rng();
+        self.car_simulation.simulate_chunks(
+            chunk_ids,
+            &mut self.car_storage,
+            current_time,
+            &mut rng,
+            chunk_size,
+        );
+    }
     fn spawn_cars(
         &mut self,
         road_manager: &RoadManager,
         terrain_renderer: &TerrainSubsystem,
         target_pos: WorldPos,
-        time_system: &TimeSystem,
+        time_system: &Time,
     ) {
         let mut rng = rng();
         let dt = time_system.target_sim_dt;

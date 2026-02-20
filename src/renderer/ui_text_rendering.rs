@@ -1,6 +1,6 @@
 use crate::renderer::ui::{GlyphUv, PAD, TextParams};
 use crate::renderer::ui_pipelines::UiPipelines;
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::ui::vertex::{UiButtonText, UiVertexText};
 use fontdue::Font;
 use rect_packer::DensePacker;
@@ -461,7 +461,7 @@ pub fn render_editor_caret(
     caret_x: f32,
     text_vertices: &mut Vec<UiVertexText>,
     metrics: &FontMetrics,
-    time_system: &TimeSystem,
+    time_system: &Time,
 ) {
     let caret_width = 2.0;
     let caret_offset_y = 4.0;

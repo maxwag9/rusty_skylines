@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 use crate::data::Settings;
 use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
-use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualizationConfig};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
@@ -571,8 +571,10 @@ impl Gizmo {
         self.chunk_size = settings.chunk_size;
         let target = camera.target;
 
-        self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
-        self.visualize_regions(&road_manager.roads, 0.0);
+        if settings.render_partitions_gizmo {
+            self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
+            self.visualize_regions(&road_manager.roads, 0.0);
+        }
 
         // self.sphere(camera.eye_world(), 400.0, [1.0, 1.0, 1.0], 0.0);
         if settings.render_rt_gizmo {
@@ -950,6 +952,91 @@ impl Gizmo {
             if let Some(blas) = &rt_subsystem.car_blas {
                 self.visualize_blas(blas, reference, true, true, blas_bvh_depth, duration);
             }
+        }
+    }
+
+    /// Visualize chunks that were just updated with colorful pulsing boxes.
+    /// Call this right after `job_system.update_chunks()` with the results.
+    pub fn visualize_chunk_updates(&mut self, updated_chunks: &[ChunkCoord], current_time: f64) {
+        let cs = self.chunk_size;
+        let chunk_size_f = cs as f32;
+        let duration = 2.0; // Visible for 2 seconds (matches tick interval)
+
+        for (i, &chunk_coord) in updated_chunks.iter().enumerate() {
+            // Rainbow color based on chunk position + time for variety
+            let hash = (chunk_coord.x.wrapping_mul(73856093) ^ chunk_coord.z.wrapping_mul(19349663))
+                as f32;
+            let hue = ((hash.abs() % 1000.0) / 1000.0 + current_time as f32 * 0.1) % 1.0;
+
+            let color = hsv_to_rgb(HSV {
+                h: hue,
+                s: 0.9,
+                v: 1.0,
+            });
+
+            // Chunk center at y=0
+            let center = WorldPos::new(
+                chunk_coord,
+                LocalPos::new(chunk_size_f * 0.5, 0.0, chunk_size_f * 0.5),
+            );
+
+            // Draw box outline
+            self.box_xz(center, chunk_size_f * 0.48, color, duration);
+
+            // Draw an X across the chunk for extra visibility
+            let corners = [
+                center.add_vec3(
+                    Vec3::new(-chunk_size_f * 0.45, 0.0, -chunk_size_f * 0.45),
+                    cs,
+                ),
+                center.add_vec3(Vec3::new(chunk_size_f * 0.45, 0.0, chunk_size_f * 0.45), cs),
+                center.add_vec3(
+                    Vec3::new(-chunk_size_f * 0.45, 0.0, chunk_size_f * 0.45),
+                    cs,
+                ),
+                center.add_vec3(
+                    Vec3::new(chunk_size_f * 0.45, 0.0, -chunk_size_f * 0.45),
+                    cs,
+                ),
+            ];
+            self.line(corners[0], corners[1], color, duration);
+            self.line(corners[2], corners[3], color, duration);
+
+            // Small circle in center
+            self.circle(center, chunk_size_f * 0.15, color, duration);
+        }
+    }
+
+    /// Simpler version: just bright colored boxes with chunk index number
+    pub fn visualize_chunk_updates_numbered(
+        &mut self,
+        updated_chunks: &[ChunkCoord],
+        current_time: f64,
+    ) {
+        let cs = self.chunk_size;
+        let chunk_size_f = cs as f32;
+        let duration = 1.5;
+
+        for (i, &chunk_coord) in updated_chunks.iter().enumerate() {
+            // Cycle through bright colors
+            let hue = (i as f32 * 0.137 + current_time as f32 * 0.05) % 1.0;
+            let color = hsv_to_rgb(HSV {
+                h: hue,
+                s: 0.85,
+                v: 1.0,
+            });
+
+            let center = WorldPos::new(
+                chunk_coord,
+                LocalPos::new(chunk_size_f * 0.5, 1.0, chunk_size_f * 0.5),
+            );
+
+            // Box outline
+            self.box_xz(center, chunk_size_f * 0.49, color, duration);
+
+            // Show update order number
+            let label_pos = center.add_vec3(Vec3::new(0.0, 0.0, 0.0), cs);
+            self.number(i as isize, label_pos, chunk_size_f * 0.15, color, duration);
         }
     }
 }

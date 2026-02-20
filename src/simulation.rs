@@ -2,15 +2,14 @@ use crate::commands::Command;
 use crate::data::Settings;
 use crate::helpers::mouse_ray::WorldRay;
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::resources::TimeSystem;
-use crate::ui::input::InputState;
+use crate::resources::Time;
+use crate::ui::input::Input;
 use crate::ui::variables::UiVariableRegistry;
-use crate::world::camera::Camera;
+use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_player::drive_car;
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::roads::road_subsystem::RoadSubsystem;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
-use crate::world::world::CameraBundle;
 use glam::Vec2;
 use std::time::Instant;
 use wgpu::{Device, Queue, SurfaceConfiguration};
@@ -63,10 +62,11 @@ impl Simulation {
         road_subsystem: &mut RoadSubsystem,
         car_subsystem: &mut CarSubsystem,
         settings: &Settings,
-        time: &TimeSystem,
-        input: &mut InputState,
+        time: &Time,
+        input: &mut Input,
         variables: &mut UiVariableRegistry,
-        camera_bundle: &mut CameraBundle,
+        camera: &mut Camera,
+        cam_controller: &mut CameraController,
         device: &Device,
         queue: &Queue,
         config: &SurfaceConfiguration,
@@ -78,13 +78,11 @@ impl Simulation {
 
         self.tick += 1;
         self.last_update = Instant::now();
-        let camera = &mut camera_bundle.camera;
         update_picked_pos(terrain, camera, settings, config, input);
         let aspect = config.width as f32 / config.height as f32;
 
-        let cam_ctrl = &mut camera_bundle.controller;
-
         car_subsystem.update(
+            gizmo,
             &road_subsystem.road_manager,
             &terrain,
             input,
@@ -97,7 +95,7 @@ impl Simulation {
             terrain,
             settings,
             input,
-            cam_ctrl,
+            cam_controller,
             camera,
             time.target_sim_dt,
         );
@@ -110,7 +108,7 @@ fn update_picked_pos(
     camera: &Camera,
     settings: &Settings,
     config: &SurfaceConfiguration,
-    input_state: &InputState,
+    input_state: &Input,
 ) {
     let (view, proj, view_proj) = camera.matrices();
     let ray = WorldRay::from_mouse(

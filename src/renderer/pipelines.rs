@@ -3,7 +3,7 @@ use crate::renderer::pipelines_outsource::*;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::renderer::taa::taa_jitter_pair;
 use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
-use crate::resources::{TimeSystem, Uniforms};
+use crate::resources::{Time, Uniforms};
 use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
@@ -709,7 +709,7 @@ pub fn create_gtao_texture(
 pub fn make_new_camera_uniforms(
     sun: Vec3,
     moon: Vec3,
-    time_system: &TimeSystem,
+    time_system: &Time,
     light_view_proj: [Mat4; CSM_CASCADES],
     cascade_splits: [f32; 4],
     camera: &Camera,

@@ -7,9 +7,9 @@ use crate::world::roads::roads::{
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
 
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::simulation::Ticker;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::cars::partitions::PartitionManager;
@@ -177,8 +177,8 @@ impl RoadSubsystem {
         &mut self,
         terrain: &mut TerrainSubsystem,
         car_subsystem: &mut CarSubsystem,
-        input: &mut InputState,
-        time: &TimeSystem,
+        input: &mut Input,
+        time: &Time,
         gizmo: &mut Gizmo,
     ) {
         self.road_commands = self

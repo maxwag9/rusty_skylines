@@ -1,13 +1,9 @@
 use crate::commands::Command;
 use crate::helpers::paths::data_dir;
 use crate::resources::Resources;
-use crate::systems::audio::audio_system;
-use crate::systems::car_events::run_car_events;
-use crate::systems::input::camera_input_system;
-use crate::systems::render::render_system;
-use crate::systems::simulation::simulation_system;
-use crate::systems::small_systems::*;
-use crate::systems::ui::ui_system;
+use crate::systems::input::run_inputs;
+use crate::systems::small_systems::run_commands;
+use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
@@ -38,7 +34,6 @@ const MAX_SIM_STEPS_PER_FRAME: usize = 1_000;
 pub struct App {
     window: Option<Arc<Window>>,
     resources: Option<Resources>,
-    schedule: Schedule,
 }
 
 impl App {
@@ -46,108 +41,7 @@ impl App {
         Self {
             window: None,
             resources: None,
-            schedule: Schedule::new(),
         }
-    }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-struct Schedule {
-    sim_systems: Vec<SystemFn>,
-    render_systems: Vec<SystemFn>,
-    input_systems: Vec<SystemFn>,
-}
-
-type SystemFn = fn(&mut Resources);
-
-impl Schedule {
-    fn new() -> Self {
-        Self {
-            sim_systems: vec![simulation_system, audio_system],
-            render_systems: vec![ui_system, render_system],
-            input_systems: vec![camera_input_system],
-        }
-    }
-
-    pub fn run_inputs(&self, resources: &mut Resources) {
-        for system in &self.input_systems {
-            system(resources);
-        }
-    }
-    pub fn apply_commands(&self, resources: &mut Resources) {
-        let world = &mut resources.world_core;
-        world.events.flip();
-
-        for event in world.events.drain() {
-            // order is explicit and intentional
-            world.simulation.process_simulation_state_commands(&event);
-            cursor_system(&mut world.terrain_subsystem.cursor, &event);
-            run_car_events(event, &mut world.car_subsystem, &world.road_subsystem);
-            // later:
-            // audio_event_system(...)
-            // ui_event_system(...)
-        }
-    }
-    pub fn run_ticked(&self, resources: &mut Resources) {
-        let world = &mut resources.world_core;
-        let renderer = &mut resources.render_core;
-        let Some(camera) = world
-            .world_state
-            .camera_mut(world.world_state.main_camera())
-        else {
-            return;
-        };
-        let (time, terrain, roads, cars, input) = (
-            &mut world.time,
-            &mut world.terrain_subsystem,
-            &mut world.road_subsystem,
-            &mut world.car_subsystem,
-            &mut world.input,
-        );
-        let (settings, gizmo, device, queue) = (
-            &mut resources.settings,
-            &mut renderer.gizmo,
-            &renderer.device,
-            &renderer.queue,
-        );
-        let aspect = renderer.config.width as f32 / renderer.config.height as f32;
-
-        if world.simulation.running {
-            terrain.update(device, queue, camera, aspect, settings, input, time);
-        }
-
-        roads.update(terrain, cars, input, time, gizmo);
-    }
-
-    pub fn run_sim(&self, resources: &mut Resources) {
-        for system in &self.sim_systems {
-            system(resources);
-        }
-    }
-    pub fn run_render(&self, resources: &mut Resources) {
-        let aspect =
-            resources.render_core.config.width as f32 / resources.render_core.config.height as f32;
-        let settings = &resources.settings;
-        resources
-            .world_core
-            .world_state
-            .camera_mut(resources.world_core.world_state.main_camera())
-            .unwrap()
-            .compute_matrices(aspect, settings);
-        for system in &self.render_systems {
-            system(resources);
-        }
-        resources
-            .world_core
-            .world_state
-            .camera_mut(resources.world_core.world_state.main_camera())
-            .unwrap()
-            .end_frame();
     }
 }
 
@@ -206,12 +100,7 @@ impl ApplicationHandler for App {
                     return;
                 };
                 let world = &mut resources.world_core;
-                let Some(camera) = world
-                    .world_state
-                    .camera_mut(world.world_state.main_camera())
-                else {
-                    return;
-                };
+                let camera = &world.world_state.camera;
                 let variables = &mut resources.ui_loader.variables;
                 let settings = &mut resources.settings;
                 let ui_options = &mut resources.ui_loader.touch_manager.options;
@@ -291,6 +180,10 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Toggle drive car") {
                     settings.drive_car = !settings.drive_car;
                     variables.set_bool("drive_car", settings.drive_car);
+                }
+                if input.action_repeat("Toggle noclip") {
+                    settings.noclip = !settings.noclip;
+                    variables.set_bool("noclip", settings.noclip);
                 }
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
@@ -401,20 +294,15 @@ impl ApplicationHandler for App {
                         .set_f32("mouse_pos_delta.y", delta.y);
                     // camera rotation ONLY if needed & dragging
                     if input.mouse.middle_pressed {
-                        if let Some(controller) = resources
-                            .world_core
-                            .world_state
-                            .camera_controller_mut(resources.world_core.world_state.main_camera())
-                        {
-                            let pitch_s = 0.002;
-                            let yaw_s = 0.0016;
+                        let cam_controller = &mut resources.world_core.world_state.cam_controller;
+                        let pitch_s = 0.002;
+                        let yaw_s = 0.0016;
 
-                            controller.target_yaw += delta.x * yaw_s;
-                            controller.target_pitch += delta.y * pitch_s;
+                        cam_controller.target_yaw += delta.x * yaw_s;
+                        cam_controller.target_pitch += delta.y * pitch_s;
 
-                            controller.yaw_velocity = delta.x * yaw_s;
-                            controller.pitch_velocity = delta.y * pitch_s;
-                        }
+                        cam_controller.yaw_velocity = delta.x * yaw_s;
+                        cam_controller.pitch_velocity = delta.y * pitch_s;
                     }
                 }
             }
@@ -424,14 +312,9 @@ impl ApplicationHandler for App {
                     let scroll = resources.world_core.input.handle_mouse_wheel(delta);
 
                     if !resources.settings.editor_mode {
-                        let cam = resources.world_core.world_state.main_camera();
-
-                        if let Some(controller) =
-                            resources.world_core.world_state.camera_controller_mut(cam)
-                        {
-                            let zoom_factor = 10.0;
-                            controller.zoom_velocity -= scroll.y * zoom_factor;
-                        }
+                        let cam_controller = &mut resources.world_core.world_state.cam_controller;
+                        let zoom_factor = 10.0;
+                        cam_controller.zoom_velocity -= scroll.y * zoom_factor;
                     }
                 }
             }
@@ -455,15 +338,15 @@ impl ApplicationHandler for App {
                     return;
                 };
                 let frame_start = Instant::now();
-                update_time_and_ui(resources);
+                update_time(resources);
 
                 // -----------------------------
                 // Fixed-step simulation with budget + spiral-of-death protection
                 // -----------------------------
-                self.schedule.run_inputs(resources);
-                self.schedule.apply_commands(resources);
-
-                self.schedule.run_ticked(resources);
+                run_inputs(resources);
+                run_ui(resources);
+                run_commands(resources);
+                run_ticked(resources);
                 let mut steps = 0u32;
 
                 // If speed just changed, skip sim this frame for clean transition
@@ -474,7 +357,7 @@ impl ApplicationHandler for App {
                         .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
 
                     let sim_budget = Duration::from_secs_f32(
-                        (resources.world_core.time.target_frametime * 0.7).max(0.0),
+                        (resources.world_core.time.target_frametime * 0.6).max(0.0),
                     );
                     let sim_deadline = Instant::now() + sim_budget;
 
@@ -482,7 +365,7 @@ impl ApplicationHandler for App {
                         && (steps as usize) < MAX_SIM_STEPS_PER_FRAME
                         && Instant::now() < sim_deadline
                     {
-                        self.schedule.run_sim(resources);
+                        run_sim(resources);
                         resources.world_core.time.consume_sim_step();
                         steps += 1;
                     }
@@ -495,15 +378,9 @@ impl ApplicationHandler for App {
                     resources.world_core.time.achieved_speed,
                 );
 
-                // -----------------------------
                 // Render
-                // -----------------------------
                 {
-                    let camera = resources
-                        .world_core
-                        .world_state
-                        .camera_mut(resources.world_core.world_state.main_camera())
-                        .unwrap();
+                    let camera = &resources.world_core.world_state.camera;
                     let proj = camera.proj();
                     resources.world_core.world_state.update(
                         &mut resources.ui_loader,
@@ -513,11 +390,10 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                self.schedule.run_render(resources); // use commands output
+                run_interpolation(resources);
+                run_render(resources); // use commands output
 
-                // -----------------------------
                 // FPS cap
-                // -----------------------------
                 let elapsed = frame_start.elapsed();
                 let target =
                     Duration::from_secs_f32(resources.world_core.time.target_frametime.max(0.0));
@@ -543,7 +419,7 @@ impl ApplicationHandler for App {
     }
 }
 
-fn update_time_and_ui(resources: &mut Resources) {
+fn update_time(resources: &mut Resources) {
     let Resources {
         world_core,
         settings,

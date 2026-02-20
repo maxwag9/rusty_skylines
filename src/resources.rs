@@ -49,8 +49,7 @@ impl Resources {
         surface.configure(device, &config);
 
         let mut world_core = WorldCore::new(device, &settings);
-        let camera_entity = world_core.world_state.main_camera();
-        let camera = world_core.world_state.camera_mut(camera_entity).unwrap();
+        let camera = &mut world_core.world_state.camera;
         camera.target = settings.player_pos;
 
         let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
@@ -81,7 +80,7 @@ impl Resources {
     }
 }
 
-pub struct TimeSystem {
+pub struct Time {
     pub last_frame: Instant,
     pub start: Instant,
 
@@ -114,7 +113,7 @@ pub struct TimeSystem {
     pub current_time_speed: f32,
 }
 
-impl TimeSystem {
+impl Time {
     pub fn new() -> Self {
         let now = Instant::now();
         let target_fps = 100.0;

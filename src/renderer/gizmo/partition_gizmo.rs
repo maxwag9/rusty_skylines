@@ -1,9 +1,7 @@
 use crate::helpers::hsv::depth_to_color;
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::world::cars::car_structs::PartitionId;
-use crate::world::cars::partitions::{PartitionManager, PartitionStorage};
-use crate::world::roads::road_structs::NodeId;
+use crate::world::cars::partitions::{PartitionId, PartitionManager, PartitionStorage};
 use crate::world::roads::roads::RoadStorage;
 use glam::Vec3;
 use std::collections::HashMap;
@@ -40,7 +38,7 @@ impl PartitionGizmo {
     ) -> Option<WorldPos> {
         let base = self.cached_base_centroids.get(&id)?;
         let depth = self.cached_depths.get(&id).copied().unwrap_or(0);
-        let height = (self.max_depth.saturating_sub(depth)) as f32 * config.height_per_level;
+        let height = self.max_depth.saturating_sub(depth) as f32 * config.height_per_level;
         Some(base.add_vec3(Vec3::new(0.0, height, 0.0), chunk_size))
     }
 
@@ -81,10 +79,10 @@ impl PartitionGizmo {
             self.draw_depth_rings(gizmo, &manager.storage, &config);
         }
 
-        println!(
-            "{:#?}",
-            manager.check_route_possibility(road_storage, NodeId::new(2), NodeId::new(13))
-        );
+        // println!(
+        //     "{:#?}",
+        //     manager.check_route_possibility(road_storage, NodeId::new(2), NodeId::new(13))
+        // );
     }
 
     fn draw_hierarchy_arrows(

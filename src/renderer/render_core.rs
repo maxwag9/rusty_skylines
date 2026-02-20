@@ -16,8 +16,8 @@ use crate::renderer::shadows::{
 };
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
-use crate::resources::TimeSystem;
-use crate::ui::input::InputState;
+use crate::resources::Time;
+use crate::ui::input::Input;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::world::astronomy::*;
 use crate::world::camera::Camera;
@@ -25,6 +25,7 @@ use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, RoadSubsystem};
 use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::world_core::WorldCore;
 use glam::UVec2;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -148,39 +149,24 @@ impl RenderCore {
     pub(crate) fn render(
         &mut self,
         surface: &Surface,
-        camera: &Camera,
+        world_core: &mut WorldCore,
         ui_loader: &mut UiButtonLoader,
-        time: &TimeSystem,
-        input_state: &mut InputState,
         settings: &Settings,
-        terrain_subsystem: &mut TerrainSubsystem,
-        road_subsystem: &RoadSubsystem,
-        car_subsystem: &CarSubsystem,
-        astronomy: &AstronomyState,
     ) {
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
 
         //let t = Instant::now();
-        self.update_render(
-            camera,
-            terrain_subsystem,
-            ui_loader,
-            time,
-            input_state,
-            settings,
-            road_subsystem,
-            car_subsystem,
-            astronomy,
-            aspect,
-            screen_size,
-        );
+        self.update_render(world_core, ui_loader, settings, aspect, screen_size);
 
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
-
+        let time = &world_core.time;
+        let camera = &world_core.world_state.camera;
+        let astronomy = &world_core.world_state.astronomy;
+        let terrain_subsystem = &mut world_core.terrain_subsystem;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -193,7 +179,7 @@ impl RenderCore {
             gpu_timestamp!(encoder, &mut self.profiler, "CSM", {
                 self.execute_shadow_pass(
                     &mut encoder,
-                    car_subsystem.car_storage(),
+                    world_core.car_subsystem.car_storage(),
                     camera,
                     aspect,
                     time,
@@ -207,10 +193,10 @@ impl RenderCore {
                 camera,
                 aspect,
                 time,
-                input_state,
+                &world_core.input,
                 ui_loader,
                 terrain_subsystem,
-                &car_subsystem.car_storage(),
+                &world_core.car_subsystem.car_storage(),
                 settings,
                 astronomy,
             );
@@ -230,18 +216,16 @@ impl RenderCore {
 
     pub fn update_render(
         &mut self,
-        camera: &Camera,
-        terrain_subsystem: &mut TerrainSubsystem,
+        world_core: &mut WorldCore,
         ui_loader: &mut UiButtonLoader,
-        time: &TimeSystem,
-        input_state: &mut InputState,
         settings: &Settings,
-        road_subsystem: &RoadSubsystem,
-        car_subsystem: &CarSubsystem,
-        astronomy: &AstronomyState,
         aspect: f32,
         screen_size: UVec2,
     ) {
+        let time = &world_core.time;
+        let camera = &world_core.world_state.camera;
+        let astronomy = &world_core.world_state.astronomy;
+        let terrain_subsystem = &mut world_core.terrain_subsystem;
         self.update_defines();
 
         self.check_shader_changes(ui_loader);
@@ -249,7 +233,7 @@ impl RenderCore {
         let (view, proj, view_proj) = camera.matrices();
         let prev_view_proj = camera.prev_view_proj;
 
-        terrain_subsystem.make_pick_uniforms(&self.queue, &self.pipelines.buffers.pick, camera);
+        terrain_subsystem.make_pick_uniforms(&self.queue, &self.pipelines.buffers.pick, &camera);
         self.render_manager.update_depth_params(DepthDebugParams {
             near: camera.near,
             far: camera.far,
@@ -275,12 +259,12 @@ impl RenderCore {
             camera,
             aspect,
             settings,
-            input_state,
+            &mut world_core.input,
             time,
             ui_loader,
             terrain_subsystem,
-            road_subsystem,
-            car_subsystem,
+            &world_core.road_subsystem,
+            &world_core.car_subsystem,
             astronomy,
         );
     }
@@ -289,7 +273,7 @@ impl RenderCore {
         &mut self,
         camera: &Camera,
         astronomy: &AstronomyState,
-        time: &TimeSystem,
+        time: &Time,
         aspect: f32,
         terrain_subsystem: &TerrainSubsystem,
         settings: &Settings,
@@ -316,8 +300,8 @@ impl RenderCore {
         camera: &Camera,
         aspect: f32,
         settings: &Settings,
-        input_state: &mut InputState,
-        time: &TimeSystem,
+        input_state: &mut Input,
+        time: &Time,
         ui_loader: &mut UiButtonLoader,
         terrain_subsystem: &mut TerrainSubsystem,
         road_subsystem: &RoadSubsystem,
@@ -378,7 +362,7 @@ impl RenderCore {
         car_storage: &CarStorage,
         camera: &Camera,
         aspect: f32,
-        _time: &TimeSystem,
+        _time: &Time,
         settings: &Settings,
     ) {
         for cascade_idx in 0..CSM_CASCADES {
@@ -450,8 +434,8 @@ impl RenderCore {
         config: &RenderPassConfig,
         camera: &Camera,
         aspect: f32,
-        time: &TimeSystem,
-        input_state: &InputState,
+        time: &Time,
+        input_state: &Input,
         ui_loader: &mut UiButtonLoader,
         terrain_subsystem: &TerrainSubsystem,
         car_storage: &CarStorage,
@@ -598,7 +582,7 @@ impl RenderCore {
         &mut self,
         encoder: &mut CommandEncoder,
         settings: &Settings,
-        time: &TimeSystem,
+        time: &Time,
     ) {
         if !settings.show_world {
             return;
@@ -852,8 +836,8 @@ impl RenderCore {
         &mut self,
         encoder: &mut CommandEncoder,
         ui_loader: &mut UiButtonLoader,
-        time: &TimeSystem,
-        input_state: &InputState,
+        time: &Time,
+        input_state: &Input,
     ) {
         let color_attachment = create_color_attachment_load(
             &self.pipelines.msaa.hdr,
@@ -1072,8 +1056,8 @@ impl RenderCore {
         &'a mut self,
         pass: &mut RenderPass<'a>,
         ui_loader: &mut UiButtonLoader,
-        time: &TimeSystem,
-        input_state: &InputState,
+        time: &Time,
+        input_state: &Input,
     ) {
         let screen_uniform = ScreenUniform {
             size: [self.config.width as f32, self.config.height as f32],

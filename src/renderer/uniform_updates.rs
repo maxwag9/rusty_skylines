@@ -4,7 +4,7 @@ use crate::renderer::pipelines::{
     FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_camera_uniforms,
 };
 use crate::renderer::shadows::compute_csm_matrices;
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::world::astronomy::AstronomyState;
 use crate::world::camera::Camera;
 use crate::world::terrain::sky::SkyUniform;
@@ -28,7 +28,7 @@ impl<'a> UniformUpdater<'a> {
         terrain_renderer: &TerrainSubsystem,
         astronomy: &AstronomyState,
         camera: &Camera,
-        time_system: &TimeSystem,
+        time_system: &Time,
         aspect: f32,
         settings: &Settings,
         config: &SurfaceConfiguration,
@@ -128,12 +128,7 @@ impl<'a> UniformUpdater<'a> {
         self.queue
             .write_buffer(&self.pipelines.buffers.water, 0, bytemuck::bytes_of(&wu));
     }
-    pub fn update_ssao_uniforms(
-        &self,
-        time: &TimeSystem,
-        settings: &Settings,
-        prev_view_proj: Mat4,
-    ) {
+    pub fn update_ssao_uniforms(&self, time: &Time, settings: &Settings, prev_view_proj: Mat4) {
         let half_w = self.pipelines.post_fx.linear_depth_half.texture().width();
         let half_h = self.pipelines.post_fx.linear_depth_half.texture().height();
         let hw = half_w as f32;

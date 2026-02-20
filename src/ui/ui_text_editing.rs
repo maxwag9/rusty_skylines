@@ -1,4 +1,4 @@
-use crate::ui::input::{InputState, MouseState};
+use crate::ui::input::{Input, MouseState};
 use crate::ui::menu::Menu;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
@@ -61,7 +61,7 @@ pub fn handle_text_editing(
     editor: &mut EditorTouchExtension,
     menus: &mut HashMap<String, Menu>,
     undo_manager: &mut UiEditManager,
-    input: &mut InputState,
+    input: &mut Input,
     mouse_snapshot: MouseSnapshot,
 ) {
     let Some(sel) = &selection.primary else {
@@ -114,7 +114,7 @@ pub fn handle_text_editing(
 
 pub(crate) fn process_text_editing_input(
     editor: &mut EditorTouchExtension,
-    input: &mut InputState,
+    input: &mut Input,
     mouse_snapshot: MouseSnapshot,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
@@ -178,7 +178,7 @@ fn handle_mouse_caret_selection(
 
 fn handle_ctrl_commands(
     editor: &mut EditorTouchExtension,
-    input: &mut InputState,
+    input: &mut Input,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
 ) -> bool {
@@ -203,7 +203,7 @@ fn handle_ctrl_commands(
 
 fn handle_paste(
     editor: &mut EditorTouchExtension,
-    input: &mut InputState,
+    input: &mut Input,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
 ) -> bool {
@@ -239,11 +239,7 @@ fn handle_paste(
     true
 }
 
-fn handle_copy(
-    editor: &mut EditorTouchExtension,
-    input: &mut InputState,
-    text: &UiButtonText,
-) -> bool {
+fn handle_copy(editor: &mut EditorTouchExtension, input: &mut Input, text: &UiButtonText) -> bool {
     if !input.action_pressed_once("Copy text") {
         return false;
     }
@@ -262,7 +258,7 @@ fn handle_copy(
 
 fn handle_cut(
     editor: &mut EditorTouchExtension,
-    input: &mut InputState,
+    input: &mut Input,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
 ) -> bool {
@@ -289,11 +285,7 @@ fn handle_cut(
     true
 }
 
-fn handle_backspace(
-    input: &mut InputState,
-    text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
-) -> bool {
+fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) -> bool {
     if !input.action_repeat("Backspace") {
         return false;
     }
@@ -329,7 +321,7 @@ fn handle_backspace(
 }
 
 fn handle_character_input(
-    input: &mut InputState,
+    input: &mut Input,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
 ) -> bool {
@@ -386,11 +378,7 @@ fn insert_characters(text: &mut UiButtonText, chars: &HashSet<String>, is_templa
     }
 }
 
-fn handle_arrow_navigation(
-    input: &mut InputState,
-    text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
-) {
+fn handle_arrow_navigation(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) {
     if text.has_selection {
         handle_selection_collapse(input, text, dirty);
         return;
@@ -407,11 +395,7 @@ fn handle_arrow_navigation(
     }
 }
 
-fn handle_selection_collapse(
-    input: &mut InputState,
-    text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
-) {
+fn handle_selection_collapse(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) {
     let (l, r) = text.selection_range();
 
     if input.action_pressed_once("Move Cursor Left") {

@@ -1,8 +1,8 @@
 #![allow(dead_code, unused_variables)]
 pub mod drag_hue_point;
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::ui::actions::drag_hue_point::drag_hue_point;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_text_editing::HitResult;
 use crate::world::roads::road_structs::RoadStyleParams;
@@ -443,8 +443,8 @@ pub enum CommandResult {
 /// Context provided only during command execution (drain phase).
 pub struct CommandContext<'a> {
     pub loader: &'a mut UiButtonLoader,
-    pub input_state: &'a InputState,
-    pub time: &'a TimeSystem,
+    pub input_state: &'a Input,
+    pub time: &'a Time,
     pub world_renderer: &'a mut TerrainSubsystem,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
@@ -1386,8 +1386,8 @@ pub fn process_commands(
     command_queue: &mut CommandQueue,
     loader: &mut UiButtonLoader,
     top_hit: &Option<HitResult>,
-    input_state: &InputState,
-    time: &TimeSystem,
+    input_state: &Input,
+    time: &Time,
     world_renderer: &mut TerrainSubsystem,
     window_size: PhysicalSize<u32>,
     road_style_params: &mut RoadStyleParams,

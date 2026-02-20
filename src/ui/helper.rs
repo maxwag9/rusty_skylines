@@ -1,10 +1,10 @@
 use crate::renderer::pipelines::DEPTH_FORMAT;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::ui::vertex::UiVertex;
 use std::cmp::Ordering;
 use wgpu::*;
 
-pub fn calc_move_speed(input: &InputState) -> f32 {
+pub fn calc_move_speed(input: &Input) -> f32 {
     let mut base = 8.0;
 
     match (input.shift, input.ctrl) {

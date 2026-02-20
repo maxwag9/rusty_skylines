@@ -1,5 +1,5 @@
 #![allow(dead_code, unused_variables)]
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::ui::actions::deactivate_action;
 use crate::ui::input::MouseState;
 use crate::ui::ui_editor::UiButtonLoader;
@@ -29,7 +29,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &MouseState, time: &TimeSystem) {
+pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &MouseState, time: &Time) {
     let Some(sel) = &loader.touch_manager.selection.primary else {
         return;
     };

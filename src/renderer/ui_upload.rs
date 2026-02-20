@@ -3,7 +3,7 @@ use crate::renderer::ui_text_rendering::{
     Anchor, anchor_to_top_left, glyphs_to_vertices, render_corner_brackets, render_editor_caret,
     render_editor_outline, render_selection,
 };
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
@@ -166,7 +166,7 @@ pub fn upload_text(
     ui_renderer: &mut UiRenderer,
     queue: &Queue,
     layer: &mut RuntimeLayer,
-    time_system: &TimeSystem,
+    time_system: &Time,
     touch_manager: &UiTouchManager,
     menu_name: &String,
 ) {
@@ -204,7 +204,7 @@ pub fn upload_text(
 pub fn build_text_vertices(
     ui_renderer: &mut UiRenderer,
     layer: &mut RuntimeLayer,
-    time_system: &TimeSystem,
+    time_system: &Time,
     touch_manager: &UiTouchManager,
     menu_name: &String,
     queue: &Queue,

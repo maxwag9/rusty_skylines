@@ -1,6 +1,6 @@
 use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::world::roads::intersections::IntersectionBuildParams;
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
@@ -39,7 +39,7 @@ impl RoadEditor {
         &mut self,
         road_manager: &RoadManager,
         terrain_renderer: &TerrainSubsystem,
-        input: &mut InputState,
+        input: &mut Input,
         gizmo: &mut Gizmo,
     ) -> Vec<RoadEditorCommand> {
         let Some(road_type) = (match terrain_renderer.cursor.mode {

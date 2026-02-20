@@ -5,10 +5,10 @@
 use crate::data::{BendMode, Settings};
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
-use crate::resources::{CommandQueues, TimeSystem};
+use crate::resources::{CommandQueues, Time};
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
 use crate::ui::helper::calc_move_speed;
-use crate::ui::input::{InputState, MouseState};
+use crate::ui::input::{Input, MouseState};
 use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::ui_edit_manager::{
@@ -154,8 +154,8 @@ impl UiButtonLoader {
     pub fn handle_touches(
         &mut self,
         dt: f32,
-        input_state: &mut InputState,
-        time_system: &TimeSystem,
+        input_state: &mut Input,
+        time_system: &Time,
         world_renderer: &mut TerrainSubsystem,
         window_size: PhysicalSize<u32>,
         road_style_params: &mut RoadStyleParams,
@@ -225,7 +225,7 @@ impl UiButtonLoader {
     }
 
     /// Create input snapshot from mouse state
-    fn create_input_snapshot(&self, mouse: &MouseState, input: &InputState) -> InputSnapshot {
+    fn create_input_snapshot(&self, mouse: &MouseState, input: &Input) -> InputSnapshot {
         InputSnapshot {
             position: mouse.pos.to_array(),
             pressed: mouse.left_pressed,
@@ -986,7 +986,7 @@ impl UiButtonLoader {
     // KEYBOARD NAVIGATION
     // ========================================================================
 
-    fn handle_keyboard_navigation(&mut self, input: &mut InputState) {
+    fn handle_keyboard_navigation(&mut self, input: &mut Input) {
         if input.ctrl || !self.touch_manager.editor.enabled {
             return;
         }
@@ -1095,7 +1095,7 @@ impl UiButtonLoader {
     // UNDO/REDO
     // ========================================================================
 
-    pub fn handle_undo_redo_input(&mut self, input: &mut InputState, dt: f32) {
+    pub fn handle_undo_redo_input(&mut self, input: &mut Input, dt: f32) {
         self.ui_edit_manager.update(dt);
 
         if !self.touch_manager.editor.enabled {
@@ -1225,7 +1225,7 @@ impl UiButtonLoader {
             })
     }
 
-    fn handle_text_editing(&mut self, input: &mut InputState, snapshot: InputSnapshot) {
+    fn handle_text_editing(&mut self, input: &mut Input, snapshot: InputSnapshot) {
         if self.touch_manager.editor.editing_text.is_some() {
             let mouse_snapshot = MouseSnapshot {
                 mx: snapshot.position[0],
@@ -1764,7 +1764,7 @@ impl UiButtonLoader {
             .unwrap_or(0)
     }
 
-    pub fn apply_ui_edit_movement(&mut self, input_state: &mut InputState) {
+    pub fn apply_ui_edit_movement(&mut self, input_state: &mut Input) {
         let Some(sel) = &self.touch_manager.selection.primary else {
             return;
         };

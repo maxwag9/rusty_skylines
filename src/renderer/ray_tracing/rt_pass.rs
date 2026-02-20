@@ -29,7 +29,7 @@ pub fn update_rt_instances(
         return;
     };
 
-    let close_cars = car_storage.car_chunks().close_cars();
+    let close_cars = car_storage.car_chunk_storage.close_cars();
 
     let instances = build_render_space_instances(
         close_cars.iter().filter_map(|&car_id| {

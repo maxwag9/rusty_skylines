@@ -158,6 +158,8 @@ pub struct Settings {
     #[serde(default)]
     pub render_lanes_gizmo: bool,
     #[serde(default)]
+    pub render_partitions_gizmo: bool,
+    #[serde(default)]
     pub render_chunk_bounds: bool,
     #[serde(default = "default_chunk_size")]
     pub chunk_size: ChunkSize,
@@ -179,6 +181,8 @@ pub struct Settings {
     pub drive_car: bool,
     #[serde(default)]
     pub render_rt_gizmo: bool,
+    #[serde(default)]
+    pub noclip: bool,
 }
 
 impl Settings {
@@ -210,6 +214,7 @@ impl Default for Settings {
             gtao_enabled: true,
             zoom_speed: 10.0,
             render_lanes_gizmo: false,
+            render_partitions_gizmo: false,
             render_chunk_bounds: false,
             chunk_size: default_chunk_size(),
             tonemapping_state: ToneMappingState::default(),
@@ -221,6 +226,7 @@ impl Default for Settings {
             player_pos: WorldPos::default(),
             drive_car: false,
             render_rt_gizmo: false,
+            noclip: false,
         }
     }
 }

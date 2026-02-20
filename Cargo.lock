@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Rusty_Skylines"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -305,9 +305,9 @@ dependencies = [
 
 [[package]]
 name = "clipper2-rust"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11da8a1461a0cccf508c9d37dca08fb817825344f3049c36b4b5eb554e982294"
+checksum = "036bf1ed30b24d24e8b2e2410f2f0ac8638cb5ee7f545d914098dfcac673e403"
 dependencies = [
  "num-traits",
 ]

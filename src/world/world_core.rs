@@ -1,8 +1,8 @@
 use crate::commands::CommandBuffer;
 use crate::data::Settings;
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::simulation::Simulation;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::roads::road_subsystem::RoadSubsystem;
 use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
@@ -11,8 +11,8 @@ use wgpu::Device;
 
 pub struct WorldCore {
     pub world_state: WorldState,
-    pub time: TimeSystem,
-    pub input: InputState,     // main-thread owned
+    pub time: Time,
+    pub input: Input,          // main-thread owned
     pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub simulation: Simulation,
     pub terrain_subsystem: TerrainSubsystem,
@@ -26,8 +26,8 @@ impl WorldCore {
     pub(crate) fn new(device: &Device, settings: &Settings) -> Self {
         Self {
             world_state: WorldState::new(),
-            time: TimeSystem::new(),
-            input: InputState::new(),
+            time: Time::new(),
+            input: Input::new(),
             simulation: Simulation::new(),
             terrain_subsystem: TerrainSubsystem::new(device, settings),
             road_subsystem: RoadSubsystem::new(),

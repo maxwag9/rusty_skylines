@@ -4,9 +4,9 @@ use crate::helpers::paths::data_dir;
 use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
-use crate::resources::TimeSystem;
+use crate::resources::Time;
 use crate::simulation::Ticker;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
@@ -401,8 +401,8 @@ impl TerrainSubsystem {
         camera: &Camera,
         aspect: f32,
         settings: &Settings,
-        input_state: &mut InputState,
-        _time_system: &TimeSystem,
+        input_state: &mut Input,
+        _time_system: &Time,
     ) {
         let t_frame = Instant::now();
 
@@ -457,12 +457,7 @@ impl TerrainSubsystem {
         // println!("{:#?}", self.frame_timings);
     }
 
-    fn handle_terrain_editing(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        input_state: &mut InputState,
-    ) {
+    fn handle_terrain_editing(&mut self, device: &Device, queue: &Queue, input_state: &mut Input) {
         match self.cursor.mode {
             CursorMode::TerrainEditing => {} // just continue lol
             _ => {

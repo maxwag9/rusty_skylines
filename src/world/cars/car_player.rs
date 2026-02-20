@@ -1,5 +1,5 @@
 use crate::data::Settings;
-use crate::ui::input::InputState;
+use crate::ui::input::Input;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_structs::Car;
 use crate::world::cars::car_subsystem::CarSubsystem;
@@ -23,7 +23,7 @@ struct TerrainConformTuning {
 }
 
 const TERRAIN: TerrainConformTuning = TerrainConformTuning {
-    height_conform_hz: 22.0,
+    height_conform_hz: 220.0,
     orient_conform_hz: 16.0,
     min_traction: 0.20,
     min_engine_mult: 0.15,
@@ -145,9 +145,10 @@ pub fn conform_car_to_terrain(car: &mut Car, terrain: &TerrainSubsystem, dt: f32
 
     let yaw = yaw_from_quat(car.quat);
     let (target_y, normal) = sample_terrain_plane(car, yaw, terrain);
+    let diff = target_y - car.pos.local.y;
 
-    let h_alpha = exp_alpha(TERRAIN.height_conform_hz, dt);
-    car.pos.local.y += (target_y - car.pos.local.y) * h_alpha;
+    //let h_alpha = exp_alpha(TERRAIN.height_conform_hz, dt);
+    car.pos.local.y += diff;
 
     let target_rot = quat_from_yaw_and_up(yaw, normal);
     let r_alpha = exp_alpha(TERRAIN.orient_conform_hz, dt);
@@ -168,12 +169,12 @@ pub fn drive_car(
     car_subsystem: &mut CarSubsystem,
     terrain: &TerrainSubsystem,
     settings: &Settings,
-    input: &mut InputState,
+    input: &mut Input,
     _cam_ctrl: &mut CameraController,
     camera: &mut Camera,
     dt: f32,
 ) {
-    drive_ai_cars(car_subsystem, terrain, dt);
+    // drive_ai_cars(car_subsystem, terrain, dt);
     if !settings.drive_car || dt <= 0.0 {
         return;
     }
@@ -393,10 +394,10 @@ pub fn drive_car(
         };
         let lat_g = (v * r) / G;
 
-        println!(
-            "{:6.1} km/h │ δ={:+5.1}° │ β={:+5.1}° │ ṙ={:+5.2} │ Lat≈{:+4.2}g",
-            speed_kmh, steer_deg, body_slip, r, lat_g
-        );
+        // println!(
+        //     "{:6.1} km/h │ δ={:+5.1}° │ β={:+5.1}° │ ṙ={:+5.2} │ Lat≈{:+4.2}g",
+        //     speed_kmh, steer_deg, body_slip, r, lat_g
+        // );
 
         (car.id, previous_chunk, car.pos.chunk)
     };

@@ -88,7 +88,7 @@ struct ParsedKeyCombo {
 }
 
 impl ParsedKeyCombo {
-    fn matches(&self, input: &InputState) -> bool {
+    fn matches(&self, input: &Input) -> bool {
         if input.ctrl != self.require_ctrl {
             return false;
         }
@@ -251,7 +251,7 @@ impl MouseState {
     }
 }
 
-pub struct InputState {
+pub struct Input {
     pub physical: HashMap<PhysicalKey, bool>,
     pub logical: HashMap<NamedKey, bool>,
     pub text_chars: HashSet<String>,
@@ -276,7 +276,7 @@ pub struct InputState {
     pub now: f64,
 }
 
-impl InputState {
+impl Input {
     pub fn new() -> Self {
         let keybinds = Keybinds::load(data_dir("keybinds.toml"), data_dir("default_keybinds.toml"));
         let parsed = Self::parse_all(&keybinds);

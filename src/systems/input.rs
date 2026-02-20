@@ -3,24 +3,20 @@ use crate::ui::helper::calc_move_speed;
 use crate::world::camera::{ground_camera_target, resolve_pitch_by_search};
 use glam::Vec3;
 
-pub fn camera_input_system(resources: &mut Resources) {
+pub fn run_inputs(resources: &mut Resources) {
     let world = &mut resources.world_core;
     let dt = world.time.target_sim_dt;
     if dt <= 0.0 {
         return;
     }
     let terrain_subsystem = &world.terrain_subsystem;
-    let Some(camera_bundle) = world
-        .world_state
-        .camera_and_controller_mut(world.world_state.main_camera())
-    else {
-        return;
-    };
-    let camera = &mut camera_bundle.camera;
-    let cam_ctrl = &mut camera_bundle.controller;
+
+    let camera = &mut world.world_state.camera;
+    let cam_ctrl = &mut world.world_state.cam_controller;
     let input = &mut world.input;
     let time = &world.time;
     let chunk_size = resources.settings.chunk_size;
+    let noclip = resources.settings.noclip;
     camera.chunk_size = chunk_size;
     let eye = camera.eye_world();
     let mut fwd3d = eye.direction_to(camera.target, chunk_size);
@@ -120,9 +116,14 @@ pub fn camera_input_system(resources: &mut Resources) {
     }
     if !resources.settings.drive_car {
         camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt, chunk_size);
-        ground_camera_target(camera, cam_ctrl, terrain_subsystem, 0.1);
+        if !noclip {
+            ground_camera_target(camera, cam_ctrl, terrain_subsystem, 0.1);
+        }
     }
-    resolve_pitch_by_search(camera, cam_ctrl, terrain_subsystem);
+    if !noclip {
+        resolve_pitch_by_search(camera, cam_ctrl, terrain_subsystem);
+    }
+
     // SMOOTH target → camera
     let t = 1.0 - (-cam_ctrl.orbit_smoothness * 60.0 * dt).exp();
 
