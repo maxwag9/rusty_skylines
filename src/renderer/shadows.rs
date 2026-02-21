@@ -11,7 +11,7 @@ use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::CarRenderSubsystem;
 use crate::world::roads::road_mesh_manager::RoadVertex;
 use crate::world::roads::road_subsystem::RoadRenderSubsystem;
-use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
@@ -282,7 +282,7 @@ fn compute_shadow_distance(eye_height_agl: f32, orbit_radius: f32) -> f32 {
 }
 
 pub fn compute_csm_matrices(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     camera: &Camera,
     aspect: f32,
     sun_dir_surface_to_sun: Vec3,
@@ -461,7 +461,7 @@ pub fn render_terrain_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     terrain_renderer: &TerrainRenderSubsystem,
-    terrain_subsystem: &TerrainSubsystem,
+    terrain_subsystem: &Terrain,
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,

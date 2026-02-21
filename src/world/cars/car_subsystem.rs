@@ -16,7 +16,7 @@ use crate::world::cars::car_structs::{Car, CarChunkDistance, CarStorage, SimTime
 use crate::world::cars::partitions::PartitionId;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::RoadManager;
-use crate::world::terrain::terrain_subsystem::{CursorMode, TerrainSubsystem};
+use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use glam::{Mat4, Vec3};
 use rand::rngs::ThreadRng;
 use rand::{RngExt, rng};
@@ -241,7 +241,7 @@ impl CarSubsystem {
         &mut self,
         gizmo: &mut Gizmo,
         road_manager: &RoadManager,
-        terrain_renderer: &TerrainSubsystem,
+        terrain: &Terrain,
         input_state: &mut Input,
         time_system: &Time,
         variables: &mut UiVariableRegistry,
@@ -249,12 +249,12 @@ impl CarSubsystem {
     ) {
         variables.set_i32("car_count", self.car_storage.car_count() as i32);
         self.car_storage
-            .update_target_and_chunk_size(target_pos.chunk, terrain_renderer.chunk_size);
-        self.spawn_cars(road_manager, terrain_renderer, target_pos, time_system);
+            .update_target_and_chunk_size(target_pos.chunk, terrain.chunk_size);
+        self.spawn_cars(road_manager, terrain, target_pos, time_system);
 
-        match terrain_renderer.cursor.mode {
+        match terrain.cursor.mode {
             CursorMode::Cars => {
-                if let Some(picked) = &terrain_renderer.last_picked {
+                if let Some(picked) = &terrain.last_picked {
                     if input_state.gameplay_repeat("Place Car") {
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
@@ -268,7 +268,7 @@ impl CarSubsystem {
         if self.timing.carchunk_update_last.elapsed() >= Duration::from_secs(1) {
             self.timing.carchunk_update_last = Instant::now();
             self.car_storage
-                .update_carchunk_distances(target_pos, terrain_renderer.chunk_size);
+                .update_carchunk_distances(target_pos, terrain.chunk_size);
 
             self.car_simulation
                 .cleanup_stale_jitter(&self.car_storage.car_chunk_storage);
@@ -278,9 +278,10 @@ impl CarSubsystem {
         let mut rng = rng();
         let updated_chunks = self.car_simulation.update_chunks(
             &mut self.car_storage,
+            terrain,
             current_sim_time,
             &mut rng,
-            terrain_renderer.chunk_size,
+            terrain.chunk_size,
         );
 
         // live visualization
@@ -291,6 +292,7 @@ impl CarSubsystem {
     /// Manual batch simulation for specific chunks
     pub fn simulate_chunks(
         &mut self,
+        terrain: &Terrain,
         chunk_ids: Vec<ChunkCoord>,
         current_time: SimTime,
         chunk_size: ChunkSize,
@@ -299,6 +301,7 @@ impl CarSubsystem {
         self.car_simulation.simulate_chunks(
             chunk_ids,
             &mut self.car_storage,
+            terrain,
             current_time,
             &mut rng,
             chunk_size,
@@ -307,7 +310,7 @@ impl CarSubsystem {
     fn spawn_cars(
         &mut self,
         road_manager: &RoadManager,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         target_pos: WorldPos,
         time_system: &Time,
     ) {

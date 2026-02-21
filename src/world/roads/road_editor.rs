@@ -9,7 +9,7 @@ use crate::world::roads::roads::{
     Lane, LaneGeometry, METERS_PER_LANE_POLYLINE_STEP, RoadCommand, RoadManager, RoadStorage,
     nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
-use crate::world::terrain::terrain_subsystem::{CursorMode, TerrainSubsystem};
+use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
 
@@ -38,7 +38,7 @@ impl RoadEditor {
     pub fn update(
         &mut self,
         road_manager: &RoadManager,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         input: &mut Input,
         gizmo: &mut Gizmo,
     ) -> Vec<RoadEditorCommand> {
@@ -162,7 +162,7 @@ impl RoadEditor {
 
     fn handle_straight_pick_end(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         storage: &RoadStorage,
         start: &Anchor,
         snap: &SnapResult,
@@ -305,7 +305,7 @@ impl RoadEditor {
 
     fn handle_curve_pick_end(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         storage: &RoadStorage,
         start: &Anchor,
         control: WorldPos,
@@ -412,7 +412,7 @@ impl RoadEditor {
     fn find_all_crossings(
         &self,
         storage: &RoadStorage,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         structure_type: StructureType,
         start_pos: WorldPos,
         end_pos: WorldPos,
@@ -565,7 +565,7 @@ impl RoadEditor {
     fn find_segment_center_crossing(
         &self,
         storage: &RoadStorage,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         test_polyline: &[WorldPos],
         start_pos: WorldPos,
         end_pos: WorldPos,
@@ -698,7 +698,7 @@ impl RoadEditor {
     fn find_lane_crossing_point(
         &self,
         storage: &RoadStorage,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         test_polyline: &[WorldPos],
         start_pos: WorldPos,
         end_pos: WorldPos,
@@ -820,7 +820,7 @@ impl RoadEditor {
     /// Sample a point along a path (linear or quadratic bezier) at parameter t.
     fn sample_path_at_t(
         &self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         start: WorldPos,
         end: WorldPos,
         control: Option<WorldPos>,
@@ -875,7 +875,7 @@ impl RoadEditor {
 
     fn commit_road_with_crossings(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         storage: &RoadStorage,
         start: &Anchor,
         end: &Anchor,
@@ -1028,7 +1028,7 @@ impl RoadEditor {
 
     fn compute_segment_centerline(
         &self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         structure_type: StructureType,
         original_start: WorldPos,
         original_end: WorldPos,
@@ -1077,7 +1077,7 @@ impl RoadEditor {
     fn find_best_snap(
         &self,
         storage: &RoadStorage,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         pos: WorldPos,
         gizmo: &mut Gizmo,
     ) -> SnapResult {
@@ -1133,7 +1133,7 @@ impl RoadEditor {
     fn find_nearest_lane_snap(
         &self,
         storage: &RoadStorage,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         pos: WorldPos,
         gizmo: &mut Gizmo,
     ) -> Option<(LaneId, f32, WorldPos, f32)> {
@@ -1332,7 +1332,7 @@ impl RoadEditor {
     fn build_lane_preview(
         &self,
         storage: &RoadStorage,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         lane_id: LaneId,
         t: f32,
     ) -> Option<LanePreview> {
@@ -1528,7 +1528,7 @@ impl RoadEditor {
 
     fn emit_lanes_from_centerline(
         &self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         cmds: &mut Vec<RoadCommand>,
         segment: SegmentId,
         start: NodeId,
@@ -1598,7 +1598,7 @@ impl RoadEditor {
 }
 
 fn make_straight_centerline(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     start_pos: WorldPos,
     end_pos: WorldPos,
     structure_type: StructureType,
@@ -1698,7 +1698,7 @@ fn lane_direction_at_node(lane: &Lane, node: NodeId, chunk_size: ChunkSize) -> V
 
 /// Sample quadratic Bézier curve with WorldPos control points.
 pub fn sample_quadratic_bezier(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     structure_type: StructureType,
     p0: WorldPos,
     p1: WorldPos,
@@ -1726,7 +1726,7 @@ pub fn sample_quadratic_bezier(
     points
 }
 fn estimate_bezier_arc_length(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     structure_type: StructureType,
     p0: WorldPos,
     p1: WorldPos,
@@ -1742,7 +1742,7 @@ fn compute_curve_segment_count(arc_length: f32) -> usize {
 
 /// Offset a polyline laterally by lane index.
 pub fn offset_polyline(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     center: &[WorldPos],
     lane_index: i8,
     lane_width: f32,

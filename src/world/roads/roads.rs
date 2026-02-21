@@ -26,7 +26,7 @@ use crate::world::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
 };
 use crate::world::roads::road_structs::*;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
@@ -1697,7 +1697,7 @@ pub enum CommandResult {
 /// Applies only the world-state mutations from real (non-preview) commands.
 /// No mesh rebuilding — that's the render subsystem's job.
 pub fn apply_commands_world(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     storage: &mut RoadStorage,
     car_subsystem: &mut CarSubsystem,
     gizmo: &mut Gizmo,
@@ -1712,7 +1712,7 @@ pub fn apply_commands_world(
 
 /// Applies world-state mutations for preview commands (populates preview_storage).
 pub fn apply_preview_commands_world(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     road_style_params: &RoadStyleParams,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
@@ -1803,7 +1803,7 @@ pub fn apply_preview_commands_world(
 
 /// Single command application — world state only, no mesh rebuild.
 pub fn apply_command_world(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     storage: &mut RoadStorage,
     car_subsystem: &mut CarSubsystem,
     gizmo: &mut Gizmo,
@@ -2024,7 +2024,7 @@ pub fn collect_affected_chunks(commands: &[RoadEditorCommand]) -> Vec<ChunkId> {
 /// Panics only on programmer errors (debug assertions).
 /// Applies a command to the road manager deterministically and updates the mesh.
 pub fn apply_command(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     road_mesh_manager: &mut RoadMeshManager,
     car_subsystem: &mut CarSubsystem,
     storage: &mut RoadStorage,
@@ -2277,7 +2277,7 @@ pub fn apply_command(
 
 /// Applies a batch of commands in order, ensuring deterministic execution.
 pub fn apply_commands(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
     car_subsystem: &mut CarSubsystem,
@@ -2306,7 +2306,7 @@ pub fn apply_commands(
 /// Processes preview commands and generates preview road geometry.
 /// Called every frame after RoadEditor::update().
 pub fn apply_preview_commands(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
@@ -2408,7 +2408,7 @@ pub fn apply_preview_commands(
 }
 
 fn generate_intersection_preview(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
     allocator: &mut PreviewIdAllocator,
@@ -2471,7 +2471,7 @@ impl PreviewIdAllocator {
 
 /// Generate preview for hover state - creates node with stub lanes so it renders
 fn generate_hover_preview(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     allocator: &mut PreviewIdAllocator,
     road_style_params: &RoadStyleParams,
     node_previews: &[&NodePreview],
@@ -2492,7 +2492,7 @@ fn generate_hover_preview(
 }
 /// Generate preview for invalid segment - shows both endpoints with stubs
 fn generate_invalid_segment_preview(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     allocator: &mut PreviewIdAllocator,
     road_style_params: &RoadStyleParams,
     preview: &SegmentPreview,
@@ -2525,7 +2525,7 @@ fn generate_invalid_segment_preview(
 
 /// Generate full segment preview with both nodes and all lanes
 fn generate_segment_preview(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     allocator: &mut PreviewIdAllocator,
     road_style_params: &RoadStyleParams,
     preview: &SegmentPreview,
@@ -2596,7 +2596,7 @@ fn generate_segment_preview(
 
 /// Creates a node with a short stub segment and lanes so it renders properly
 fn generate_node_with_stub(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     allocator: &mut PreviewIdAllocator,
     road_style_params: &RoadStyleParams,
     position: WorldPos,
@@ -2657,7 +2657,7 @@ struct LaneDefinition {
 
 /// Compute all lane geometries from a centerline polyline
 fn compute_lane_geometries(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     road_style_params: &RoadStyleParams,
     centerline: &[WorldPos],
 ) -> Vec<LaneDefinition> {

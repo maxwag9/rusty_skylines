@@ -6,7 +6,7 @@ use crate::ui::input::Input;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::ui_text_editing::HitResult;
 use crate::world::roads::road_structs::RoadStyleParams;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
 use std::collections::{HashMap, VecDeque};
 use winit::dpi::PhysicalSize;
@@ -445,7 +445,7 @@ pub struct CommandContext<'a> {
     pub loader: &'a mut UiButtonLoader,
     pub input_state: &'a Input,
     pub time: &'a Time,
-    pub world_renderer: &'a mut TerrainSubsystem,
+    pub world_renderer: &'a mut Terrain,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
     pub road_style_params: &'a mut RoadStyleParams,
@@ -1388,7 +1388,7 @@ pub fn process_commands(
     top_hit: &Option<HitResult>,
     input_state: &Input,
     time: &Time,
-    world_renderer: &mut TerrainSubsystem,
+    world_renderer: &mut Terrain,
     window_size: PhysicalSize<u32>,
     road_style_params: &mut RoadStyleParams,
 ) {

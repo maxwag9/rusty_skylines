@@ -10,7 +10,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
 use std::f32::consts::{PI, TAU};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
@@ -558,7 +558,7 @@ impl Gizmo {
 
     pub fn update(
         &mut self,
-        terrain_subsystem: &TerrainSubsystem,
+        terrain_subsystem: &Terrain,
         rt_subsystem: &RTSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,

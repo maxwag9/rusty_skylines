@@ -8,7 +8,7 @@ use crate::world::roads::road_mesh_manager::*;
 use crate::world::roads::road_structs::*;
 use crate::world::roads::roads::*;
 use crate::world::terrain::terrain_editing::TerrainEditor;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use clipper2_rust::{
     EndType, JoinType, PathD, PathsD, PointD, core::FillRule, difference_d, inflate_paths_d,
     intersect_d, simplify_paths, union_d,
@@ -596,7 +596,7 @@ impl IntersectionBuildParams {
 // ============================================================================
 
 pub fn build_intersection_at_node(
-    terrain: &mut TerrainSubsystem,
+    terrain: &mut Terrain,
     storage: &mut RoadStorage,
     node_id: NodeId,
     params: &IntersectionBuildParams,
@@ -665,7 +665,7 @@ pub fn remove_intersection_at_node(
 }
 
 fn compute_intersection_center_height(
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     center: &WorldPos,
     polygon: &[WorldPos],
     chunk_size: ChunkSize,
@@ -1064,7 +1064,7 @@ pub fn triangulate_polygon(ring: &[Vec2], base_index: u32, indices: &mut Vec<u32
 // Intersection Mesh Builder
 
 fn build_polygon_curbs_filtered(
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     center: WorldPos,
     ring: &[Vec2],
     arms: &[Arm],
@@ -1176,7 +1176,7 @@ fn build_polygon_curbs_filtered(
 }
 
 pub fn build_intersection_mesh(
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,
@@ -1612,7 +1612,7 @@ fn compute_sidewalk_ring_polygons(
 }
 
 fn build_sidewalk_mesh(
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     center: WorldPos,
     ring: &[Vec2],
     road_type: &RoadType,
@@ -1735,7 +1735,7 @@ pub fn road_vertex(world_pos: WorldPos, normal: [f32; 3], mat: u32, u: f32, v: f
 // ============================================================================
 
 fn build_node_lanes_for_intersection(
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     storage: &RoadStorage,
     node_id: NodeId,
     params: &IntersectionBuildParams,
@@ -1933,7 +1933,7 @@ fn compute_turn_tightness(chord: f32, dot: f32, params: &IntersectionBuildParams
 }
 
 pub fn generate_turn_geometry(
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     start: WorldPos,
     start_dir: Vec3, // Direction INTO intersection (incoming traffic direction)
     end: WorldPos,

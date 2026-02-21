@@ -24,7 +24,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, RoadSubsystem};
-use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world_core::WorldCore;
 use glam::UVec2;
 use std::path::PathBuf;
@@ -275,7 +275,7 @@ impl RenderCore {
         astronomy: &AstronomyState,
         time: &Time,
         aspect: f32,
-        terrain_subsystem: &TerrainSubsystem,
+        terrain_subsystem: &Terrain,
         settings: &Settings,
     ) {
         let mut updater = UniformUpdater::new(&self.queue, &mut self.pipelines);
@@ -303,7 +303,7 @@ impl RenderCore {
         input_state: &mut Input,
         time: &Time,
         ui_loader: &mut UiButtonLoader,
-        terrain_subsystem: &mut TerrainSubsystem,
+        terrain_subsystem: &mut Terrain,
         road_subsystem: &RoadSubsystem,
         car_subsystem: &CarSubsystem,
         astronomy: &AstronomyState,
@@ -437,7 +437,7 @@ impl RenderCore {
         time: &Time,
         input_state: &Input,
         ui_loader: &mut UiButtonLoader,
-        terrain_subsystem: &TerrainSubsystem,
+        terrain_subsystem: &Terrain,
         car_storage: &CarStorage,
         settings: &Settings,
         astronomy: &AstronomyState,
@@ -488,7 +488,7 @@ impl RenderCore {
         encoder: &mut CommandEncoder,
         config: &RenderPassConfig,
         camera: &Camera,
-        terrain_subsystem: &TerrainSubsystem,
+        terrain_subsystem: &Terrain,
         car_storage: &CarStorage,
         settings: &Settings,
         aspect: f32,

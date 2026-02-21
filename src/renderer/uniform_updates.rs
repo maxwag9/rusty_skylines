@@ -8,7 +8,7 @@ use crate::resources::Time;
 use crate::world::astronomy::AstronomyState;
 use crate::world::camera::Camera;
 use crate::world::terrain::sky::SkyUniform;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::terrain::water::WaterUniform;
 use glam::Mat4;
 use wgpu::{Queue, SurfaceConfiguration};
@@ -25,7 +25,7 @@ impl<'a> UniformUpdater<'a> {
 
     pub fn update_camera_uniforms(
         &mut self,
-        terrain_renderer: &TerrainSubsystem,
+        terrain_renderer: &Terrain,
         astronomy: &AstronomyState,
         camera: &Camera,
         time_system: &Time,

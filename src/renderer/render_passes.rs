@@ -15,7 +15,7 @@ use crate::world::cars::car_subsystem::CarRenderSubsystem;
 use crate::world::roads::road_mesh_manager::RoadVertex;
 use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
-use crate::world::terrain::terrain_subsystem::{TerrainRenderSubsystem, TerrainSubsystem};
+use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::terrain::water::SimpleVertex;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
@@ -292,7 +292,7 @@ pub fn render_terrain(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     terrain_renderer: &TerrainRenderSubsystem,
-    terrain_subsystem: &TerrainSubsystem,
+    terrain_subsystem: &Terrain,
     pipelines: &Pipelines,
     settings: &Settings,
     msaa_samples: u32,

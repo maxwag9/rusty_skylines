@@ -27,7 +27,7 @@ use crate::ui::ui_touch_manager::{
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
 use crate::world::roads::road_structs::RoadStyleParams;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -156,7 +156,7 @@ impl UiButtonLoader {
         dt: f32,
         input_state: &mut Input,
         time_system: &Time,
-        world_renderer: &mut TerrainSubsystem,
+        world_renderer: &mut Terrain,
         window_size: PhysicalSize<u32>,
         road_style_params: &mut RoadStyleParams,
         command_queues: &mut CommandQueues,

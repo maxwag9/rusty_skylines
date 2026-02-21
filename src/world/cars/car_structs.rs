@@ -1,5 +1,5 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
-use crate::world::cars::car_simulation::CarSplineSegment;
+use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::partitions::HierarchicalAddress;
 use crate::world::roads::road_structs::LaneId;
@@ -814,7 +814,7 @@ pub struct Car {
     pub color: [f32; 3],
 
     // === Physical state ===
-    pub next_splines: Vec<CarSplineSegment>,
+    pub trajectory: Option<CarTrajectory>,
     pub pos: WorldPos,
     pub quat: Quat,
     pub current_velocity: Vec3, // planar velocity (y = 0)
@@ -857,7 +857,7 @@ impl Default for Car {
             id: 0,
             vehicle_type: VehicleType::normal(),
             color: [1.0, 0.0, 0.0],
-            next_splines: vec![],
+            trajectory: None,
             pos: Default::default(),
             quat: Quat::IDENTITY,
             current_velocity: Vec3::ZERO,

@@ -3,7 +3,7 @@ use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::resources::Time;
 use crate::world::cars::car_player::conform_car_to_terrain;
 use crate::world::cars::car_structs::{Car, CarId};
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world_core::WorldCore;
 use rayon::iter::ParallelIterator;
 
@@ -83,95 +83,120 @@ impl CarInstance {
 enum CarChange {
     Position(WorldPos),
     Quat(Quat),
+    Velocity(Vec3),
+    Snap(WorldPos, Quat, Vec3),
 }
 
 fn interpolate_car(time: &Time, car: &Car, chunk_size: ChunkSize) -> Vec<CarChange> {
-    let mut car_changes = Vec::new();
-    let next_splines = &car.next_splines;
+    const INTERP_BACKTIME: f64 = 0.12;
+    const MAX_EXTRAP: f64 = 0.60;
 
-    if next_splines.is_empty() {
-        return car_changes;
+    let mut changes = Vec::new();
+
+    let Some(traj) = &car.trajectory else {
+        return changes;
+    };
+    if traj.points.len() < 2 {
+        return changes;
     }
 
-    let current_time = time.total_game_time;
+    let mut now = time.total_game_time - INTERP_BACKTIME;
+    if !now.is_finite() {
+        now = time.total_game_time;
+    }
 
-    let active_segment = next_splines.iter().find(|seg| {
-        let duration = 1.0 / seg.inv_duration as f64;
-        current_time >= seg.t0 && current_time < seg.t0 + duration
-    });
+    let first = &traj.points[0];
+    let last = traj.points.last().unwrap();
 
-    let Some(segment) = active_segment else {
-        eprintln!(
-            "No segment! time={}, segments: {:?}",
-            current_time,
-            next_splines
-                .iter()
-                .map(|s| (s.t0, s.t0 + 1.0 / s.inv_duration as f64))
-                .collect::<Vec<_>>()
-        );
-        return car_changes;
+    if now <= first.time {
+        let world_pos = traj.origin.add_vec3(first.pos, chunk_size);
+        let rot = first.quat;
+        let vel = first.velocity;
+
+        let delta = car.pos.delta_to(world_pos, chunk_size);
+        if delta.length_squared() > 100.0 * 100.0 {
+            changes.push(CarChange::Snap(world_pos, rot, vel));
+            return changes;
+        }
+
+        changes.push(CarChange::Position(world_pos));
+        changes.push(CarChange::Quat(rot));
+        changes.push(CarChange::Velocity(vel));
+        return changes;
+    }
+
+    if now >= last.time {
+        let dt_ex = (now - last.time).clamp(0.0, MAX_EXTRAP) as f32;
+
+        let last_world = traj.origin.add_vec3(last.pos, chunk_size);
+        let world_pos = last_world.add_vec3(last.velocity * dt_ex, chunk_size);
+        let rot = last.quat;
+        let vel = last.velocity;
+
+        let delta = car.pos.delta_to(world_pos, chunk_size);
+        if delta.length_squared() > 100.0 * 100.0 {
+            changes.push(CarChange::Snap(world_pos, rot, vel));
+            return changes;
+        }
+
+        changes.push(CarChange::Position(world_pos));
+        changes.push(CarChange::Quat(rot));
+        changes.push(CarChange::Velocity(vel));
+        return changes;
+    }
+
+    let idx = traj
+        .points
+        .binary_search_by(|p| {
+            p.time
+                .partial_cmp(&now)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or_else(|i| i);
+
+    let i1 = idx.clamp(1, traj.points.len() - 1);
+    let i0 = i1 - 1;
+
+    let p0 = &traj.points[i0];
+    let p1 = &traj.points[i1];
+
+    let dt = (p1.time - p0.time) as f32;
+    let t = if dt > 1e-9 {
+        ((now - p0.time) as f32 / dt).clamp(0.0, 1.0)
+    } else {
+        0.0
     };
 
-    let local_t = ((current_time - segment.t0) as f32 * segment.inv_duration).clamp(0.0, 1.0);
+    let pos_rel = Vec3::lerp(p0.pos, p1.pos, t);
+    let world_pos = traj.origin.add_vec3(pos_rel, chunk_size);
 
-    let t = local_t;
-    let t2 = t * t;
-    let t3 = t2 * t;
+    let rot = Quat::slerp(p0.quat, p1.quat, t);
+    let vel = Vec3::lerp(p0.velocity, p1.velocity, t);
 
-    // Position basis functions
-    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
-    let h10 = t3 - 2.0 * t2 + t;
-    let h01 = -2.0 * t3 + 3.0 * t2;
-    let h11 = t3 - t2;
-
-    // Derivative basis functions (d/dt of above)
-    let dh00 = 6.0 * t2 - 6.0 * t;
-    let dh10 = 3.0 * t2 - 4.0 * t + 1.0;
-    let dh01 = -6.0 * t2 + 6.0 * t;
-    let dh11 = 3.0 * t2 - 2.0 * t;
-
-    let dt = 1.0 / segment.inv_duration;
-
-    // Position
-    let interpolated =
-        segment.p0 * h00 + (segment.v0 * dt) * h10 + segment.p1 * h01 + (segment.v1 * dt) * h11;
-
-    // Velocity/tangent (multiply by inv_duration to get world-space velocity)
-    let tangent = (segment.p0 * dh00
-        + (segment.v0 * dt) * dh10
-        + segment.p1 * dh01
-        + (segment.v1 * dt) * dh11)
-        * segment.inv_duration;
-
-    let next_pos = segment.origin.add_vec3(interpolated, chunk_size);
-    car_changes.push(CarChange::Position(next_pos));
-
-    // Compute rotation from tangent direction
-    let direction = Vec3::new(tangent.x, 0.0, tangent.z); // Project to XZ plane for ground vehicles
-    if direction.length_squared() > 1e-6 {
-        let direction = direction.normalize();
-        // Assuming car's forward is +Z, rotate from +Z to direction
-        let forward = Vec3::Z;
-        let rotation = Quat::from_rotation_arc(forward, direction);
-        car_changes.push(CarChange::Quat(rotation));
+    let delta = car.pos.delta_to(world_pos, chunk_size);
+    if delta.length_squared() > 100.0 * 100.0 {
+        changes.push(CarChange::Snap(world_pos, rot, vel));
+        return changes;
     }
 
-    car_changes
+    changes.push(CarChange::Position(world_pos));
+    changes.push(CarChange::Quat(rot));
+    changes.push(CarChange::Velocity(vel));
+
+    changes
 }
 
-fn apply_car_changes(
-    terrain: &TerrainSubsystem,
-    time: &Time,
-    car: &mut Car,
-    delta: Vec<CarChange>,
-) {
+fn apply_car_changes(terrain: &Terrain, time: &Time, car: &mut Car, delta: Vec<CarChange>) {
     for delta in delta {
         match delta {
-            CarChange::Position(pos) => {
+            CarChange::Position(pos) => car.pos = pos,
+            CarChange::Quat(quat) => car.quat = quat,
+            CarChange::Velocity(v) => car.current_velocity = v,
+            CarChange::Snap(pos, quat, v) => {
                 car.pos = pos;
-            }
-            CarChange::Quat(quat) => {
                 car.quat = quat;
+                car.current_velocity = v;
+                car.trajectory = None;
             }
         }
     }

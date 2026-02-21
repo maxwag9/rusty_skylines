@@ -4,7 +4,7 @@ use crate::world::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManage
 use crate::world::roads::roads::{
     RoadManager, apply_commands_world, apply_preview_commands_world, collect_affected_chunks,
 };
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
@@ -50,7 +50,7 @@ impl RoadRenderSubsystem {
     /// Render-only update: processes commands for preview/mesh, rebuilds chunk meshes, uploads to GPU.
     pub fn update(
         &mut self,
-        terrain: &mut TerrainSubsystem,
+        terrain: &mut Terrain,
         road_subsystem: &RoadSubsystem,
         device: &Device,
         queue: &Queue,
@@ -175,7 +175,7 @@ impl RoadSubsystem {
     /// Returns the commands so the render subsystem can process previews/meshes.
     pub fn update(
         &mut self,
-        terrain: &mut TerrainSubsystem,
+        terrain: &mut Terrain,
         car_subsystem: &mut CarSubsystem,
         input: &mut Input,
         time: &Time,

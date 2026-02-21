@@ -206,7 +206,7 @@ impl TerrainRenderSubsystem {
     pub fn render(
         &self,
         pass: &mut RenderPass,
-        terrain_subsystem: &TerrainSubsystem,
+        terrain_subsystem: &Terrain,
         camera: &Camera,
         aspect: f32,
         settings: &Settings,
@@ -306,7 +306,7 @@ impl TerrainRenderSubsystem {
     }
 }
 
-pub struct TerrainSubsystem {
+pub struct Terrain {
     pub tick: Ticker,
     pub cursor: Cursor,
     pub arena: TerrainMeshArena,
@@ -332,7 +332,7 @@ pub struct TerrainSubsystem {
     pub terrain_gen: TerrainGenerator,
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
-impl TerrainSubsystem {
+impl Terrain {
     pub fn new(device: &Device, settings: &Settings) -> Self {
         let chunk_size: ChunkSize = settings.chunk_size;
         let view_radius_render = (64f32 * (64f32 / chunk_size as f32)) as usize;

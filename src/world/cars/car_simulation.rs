@@ -1,6 +1,8 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::world::cars::car_player::sanitize_quat;
 use crate::world::cars::car_structs::{CarChunkStorage, CarId, CarStorage, SimTime};
-use glam::Vec3;
+use crate::world::terrain::terrain_subsystem::Terrain;
+use glam::{Quat, Vec3};
 use rand::{Rng, RngExt, seq::SliceRandom};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -23,20 +25,23 @@ pub struct CarChunkJob {
     pub car_ids: Vec<CarId>,
     pub delta_time: SimTime,
 }
-#[derive(Debug)]
-pub struct CarSplineSegment {
-    pub t0: SimTime,
-    pub inv_duration: f32, // 1.0 / (t1 - t0)
-    pub p0: Vec3,
-    pub v0: Vec3,
-    pub p1: Vec3,
-    pub v1: Vec3,
-    pub origin: WorldPos,
+#[derive(Debug, Clone)]
+pub struct CarTrajectoryPoint {
+    pub time: f64,
+    pub pos: Vec3, // relative to origin
+    pub quat: Quat,
+    pub velocity: Vec3, // world space, for conforming to terrain etc
 }
-#[derive(Debug)]
-pub struct CarSpline {
-    pub car_id: CarId,
-    pub next_splines: Vec<CarSplineSegment>,
+
+#[derive(Debug, Clone)]
+pub struct CarTrajectory {
+    pub car_id: u32,
+    pub origin: WorldPos,
+    pub points: Vec<CarTrajectoryPoint>,
+    pub end_quat: Quat,
+    pub end_yaw_rate: f32,
+    pub end_steering_angle: f32,
+    pub end_steering_vel: f32,
 }
 #[derive(Debug)]
 pub struct CarChunkJobResult {
@@ -48,7 +53,7 @@ pub struct CarChunkJobResult {
     pub despawns: Vec<CarId>,
     /// Next positions as splines for cars for the great interpolator! "He's a nice guy, you know, I've known him for many years, he's a great guy, brilliant I must say.
     /// Joe Biden could never have been like him, not even before he got dementia, that's the truth!"
-    pub next_positions: Vec<CarSpline>,
+    pub trajectories: Vec<CarTrajectory>,
 }
 
 impl CarChunkJobResult {
@@ -58,7 +63,7 @@ impl CarChunkJobResult {
             completed_time,
             chunk_transfers: Vec::new(),
             despawns: Vec::new(),
-            next_positions: Vec::new(),
+            trajectories: Vec::new(),
         }
     }
 }
@@ -98,6 +103,7 @@ impl CarSimSystem {
     pub fn update_chunks(
         &mut self,
         car_storage: &mut CarStorage,
+        terrain: &Terrain,
         current_time: SimTime,
         rng: &mut impl Rng,
         chunk_size: ChunkSize,
@@ -111,8 +117,8 @@ impl CarSimSystem {
         // Collect which chunks are being updated
         let updated_chunks: Vec<ChunkCoord> = jobs.iter().map(|j| j.chunk_coord).collect();
 
-        let results = self.dispatch_batched(&jobs, car_storage, current_time, chunk_size);
-        self.apply_results(results, car_storage, rng);
+        let results = self.dispatch_batched(&jobs, car_storage, terrain, current_time, chunk_size);
+        self.apply_results(results, car_storage, rng, current_time);
 
         updated_chunks
     }
@@ -122,6 +128,7 @@ impl CarSimSystem {
         &mut self,
         chunk_coords: Vec<ChunkCoord>,
         car_storage: &mut CarStorage,
+        terrain: &Terrain,
         current_time: SimTime,
         rng: &mut impl Rng,
         chunk_size: ChunkSize,
@@ -145,8 +152,8 @@ impl CarSimSystem {
             return;
         }
 
-        let results = self.dispatch_batched(&jobs, car_storage, current_time, chunk_size);
-        self.apply_results(results, car_storage, rng);
+        let results = self.dispatch_batched(&jobs, car_storage, terrain, current_time, chunk_size);
+        self.apply_results(results, car_storage, rng, current_time);
     }
 
     fn collect_due_chunks(
@@ -195,6 +202,7 @@ impl CarSimSystem {
         &self,
         jobs: &[CarChunkJob],
         car_storage: &CarStorage,
+        terrain: &Terrain,
         current_time: SimTime,
         chunk_size: ChunkSize,
     ) -> Vec<CarChunkJobResult> {
@@ -217,79 +225,209 @@ impl CarSimSystem {
     ) -> CarChunkJobResult {
         let mut result = CarChunkJobResult::empty(job.chunk_coord, current_time);
 
-        const NUM_SEGMENTS: usize = 5;
-        const TOTAL_DURATION: f32 = 2.0; // seconds
-        const SEGMENT_DURATION: f32 = TOTAL_DURATION / NUM_SEGMENTS as f32; // 0.4s each
+        const TOTAL_DURATION: f32 = 4.0;
+        const PHYSICS_STEP: f32 = 1.0 / 120.0;
+        const SAMPLE_EVERY: u32 = 2;
+
+        const G: f32 = 9.81;
+        const MASS: f32 = 1500.0;
+        const IZ: f32 = 2500.0;
+        const MU: f32 = 1.05;
+        const C_AF: f32 = 90_000.0;
+        const C_AR: f32 = 100_000.0;
+        const ROLL_DRAG: f32 = 0.02;
+        const AERO_DRAG: f32 = 0.0007;
+        const STEER_RATE_MAX: f32 = 6.0;
+        const STEER_KP: f32 = 70.0;
+        const STEER_KD: f32 = 14.0;
+        const STEER_LOCK_LOW: f32 = 0.62;
+        const STEER_LOCK_HIGH: f32 = 0.14;
+        const STEER_LOCK_FADE_MPS: f32 = 28.0;
+        const MIN_U: f32 = 0.5;
+        const MAX_SPEED: f32 = 50.0;
+        const MAX_YAW_RATE: f32 = 3.5;
+
+        let cs = chunk_size as f64;
+        let total_steps = (TOTAL_DURATION / PHYSICS_STEP) as u32;
+        let num_samples = total_steps / SAMPLE_EVERY + 2;
 
         for &car_id in &job.car_ids {
             let Some(car) = car_storage.get(car_id) else {
                 continue;
             };
 
-            // Use car's starting chunk as reference for all spline positions
-            let ref_origin = WorldPos::new(car.pos.chunk, LocalPos::zero());
-
-            // Deterministic random generator seeded by car ID + time
-            let mut rng_state =
-                (car_id as u64).wrapping_mul(0x517cc1b727220a95) ^ (current_time.to_bits());
-
-            let mut rand = || -> f32 {
-                rng_state ^= rng_state >> 12;
-                rng_state ^= rng_state << 25;
-                rng_state ^= rng_state >> 27;
-                (rng_state.wrapping_mul(0x2545F4914F6CDD1D) >> 40) as f32 / 16777216.0
+            let (
+                mut sim_pos,
+                mut sim_quat,
+                mut sim_vel,
+                mut sim_yaw_rate,
+                mut sim_steering_angle,
+                mut sim_steering_vel,
+                start_time,
+            ) = if let Some(traj) = &car.trajectory {
+                if let Some(last) = traj.points.last() {
+                    let end_pos = traj.origin.add_vec3(last.pos, chunk_size);
+                    (
+                        end_pos,
+                        traj.end_quat,
+                        last.velocity,
+                        traj.end_yaw_rate,
+                        traj.end_steering_angle,
+                        traj.end_steering_vel,
+                        last.time,
+                    )
+                } else {
+                    (
+                        car.pos,
+                        car.quat,
+                        car.current_velocity,
+                        car.yaw_rate,
+                        car.steering_angle,
+                        car.steering_vel,
+                        current_time,
+                    )
+                }
+            } else {
+                (
+                    car.pos,
+                    car.quat,
+                    car.current_velocity,
+                    car.yaw_rate,
+                    car.steering_angle,
+                    car.steering_vel,
+                    current_time,
+                )
             };
 
-            // Each car has consistent driving characteristics
-            let base_speed = 6.0 + (car_id % 12) as f32; // 6-18 m/s
-            let mut heading = (car_id as f32 * 2.39996323) % std::f32::consts::TAU;
+            sim_quat = sanitize_quat(sim_quat);
 
-            let mut pos = car.pos;
-            let mut vel = Vec3::new(heading.cos(), 0.0, heading.sin()) * base_speed;
+            let ref_origin = car
+                .trajectory
+                .as_ref()
+                .map(|t| t.origin)
+                .unwrap_or_else(|| WorldPos::new(sim_pos.chunk, LocalPos::zero()));
 
-            let mut segments = Vec::with_capacity(NUM_SEGMENTS);
+            let wheelbase = car.length.max(0.1);
+            let a_wb = 0.5 * wheelbase;
+            let b_wb = wheelbase - a_wb;
+            let fz_f = MASS * G * (b_wb / wheelbase);
+            let fz_r = MASS * G * (a_wb / wheelbase);
 
-            for i in 0..NUM_SEGMENTS {
-                let t0 = (current_time as f32 + i as f32 * SEGMENT_DURATION) as SimTime;
+            let inv_q = sim_quat.conjugate();
+            let local_v = inv_q * sim_vel;
+            let mut u = local_v.z;
+            let mut v_lat = -local_v.x;
+            let mut r = sim_yaw_rate;
 
-                // Position relative to reference chunk origin (handles cross-chunk movement)
-                let p0 = ref_origin.delta_to(pos, chunk_size);
-                let v0 = vel;
+            let mut points = Vec::with_capacity(num_samples as usize);
 
-                // Beautiful smooth curves: gentle steering + subtle speed wobble
-                let turn = (rand() - 0.5) * 0.4; // ±0.2 rad per segment (~11°)
-                let speed_wobble = 0.88 + rand() * 0.24; // 88-112% speed variation
+            points.push(CarTrajectoryPoint {
+                time: start_time,
+                pos: ref_origin.delta_to(sim_pos, chunk_size),
+                quat: sim_quat,
+                velocity: sim_vel,
+            });
 
-                heading += turn;
-                let speed = base_speed * speed_wobble;
-                vel = Vec3::new(heading.cos(), 0.0, heading.sin()) * speed;
+            let mut sim_time = start_time;
+            let mut step_counter: u32 = 0;
 
-                // Advance position using average velocity (matches Hermite tangents nicely)
-                let avg_vel = (v0 + vel) * 0.5;
-                pos = pos.add_vec3(avg_vel * SEGMENT_DURATION, chunk_size);
+            for _ in 0..total_steps {
+                let h = PHYSICS_STEP;
+                sim_time += h as f64;
+                step_counter += 1;
 
-                let p1 = ref_origin.delta_to(pos, chunk_size);
-                let v1 = vel;
+                let global_x = sim_pos.chunk.x as f64 * cs + sim_pos.local.x as f64;
+                let global_z = sim_pos.chunk.z as f64 * cs + sim_pos.local.z as f64;
+                let wander_phase = global_x * 0.012 + global_z * 0.008 + (car_id as f64 * 7.3);
+                let wander = wander_phase.sin() as f32;
 
-                segments.push(CarSplineSegment {
-                    origin: ref_origin,
-                    t0,
-                    inv_duration: 1.0 / SEGMENT_DURATION,
-                    p0,
-                    v0,
-                    p1,
-                    v1,
+                let steer_input = wander * 0.55;
+                let throttle_input = 0.85 + wander * 0.15;
+                let brake_input = if wander.abs() > 0.8 { 0.3 } else { 0.0 };
+
+                let speed = u.abs();
+                let t_lock = (speed / STEER_LOCK_FADE_MPS).clamp(0.0, 1.0);
+                let steer_lock =
+                    STEER_LOCK_HIGH + (STEER_LOCK_LOW - STEER_LOCK_HIGH) * (1.0 - t_lock).powf(1.7);
+                let delta_cmd = (steer_input * steer_lock).clamp(-steer_lock, steer_lock);
+                let ax_cmd = throttle_input * car.accel - brake_input * car.accel * 3.0;
+
+                let delta = sim_steering_angle;
+                let mut delta_dot = sim_steering_vel;
+                delta_dot += (STEER_KP * (delta_cmd - delta) - STEER_KD * delta_dot) * h;
+                delta_dot = delta_dot.clamp(-STEER_RATE_MAX, STEER_RATE_MAX);
+                let mut delta_new = delta + delta_dot * h;
+                delta_new = delta_new.clamp(-steer_lock, steer_lock);
+                sim_steering_angle = delta_new;
+                sim_steering_vel = delta_dot;
+
+                let sign_u = if u >= 0.0 { 1.0 } else { -1.0 };
+                let u_safe = if u.abs() < MIN_U { MIN_U * sign_u } else { u };
+
+                let alpha_f = (v_lat + a_wb * r).atan2(u_safe) - sim_steering_angle;
+                let alpha_r = (v_lat - b_wb * r).atan2(u_safe);
+
+                let fy_f = (-C_AF * alpha_f).clamp(-MU * fz_f, MU * fz_f);
+                let fy_r = (-C_AR * alpha_r).clamp(-MU * fz_r, MU * fz_r);
+
+                let ax_drag = -ROLL_DRAG * u - AERO_DRAG * u * u.abs();
+
+                let u_dot = ax_cmd + ax_drag + r * v_lat;
+                let v_dot = (fy_f + fy_r) / MASS - r * u;
+                let r_dot = (a_wb * fy_f - b_wb * fy_r) / IZ;
+
+                u += u_dot * h;
+                v_lat += v_dot * h;
+                r += r_dot * h;
+
+                u = u.clamp(-MAX_SPEED, MAX_SPEED);
+                v_lat = v_lat.clamp(-MAX_SPEED * 0.4, MAX_SPEED * 0.4);
+                r = r.clamp(-MAX_YAW_RATE, MAX_YAW_RATE);
+
+                let yaw_delta = -r * h;
+                if yaw_delta.abs() > 1e-9 {
+                    let yaw_q = Quat::from_axis_angle(Vec3::Y, yaw_delta);
+                    sim_quat = sanitize_quat(yaw_q * sim_quat);
+                }
+
+                let local_velocity = Vec3::new(-v_lat, 0.0, u);
+                let world_vel = sim_quat * local_velocity;
+                sim_vel = world_vel;
+                sim_pos = sim_pos.add_vec3(world_vel * h, chunk_size);
+
+                if step_counter % SAMPLE_EVERY == 0 {
+                    points.push(CarTrajectoryPoint {
+                        time: sim_time,
+                        pos: ref_origin.delta_to(sim_pos, chunk_size),
+                        quat: sim_quat,
+                        velocity: world_vel,
+                    });
+                }
+            }
+
+            sim_yaw_rate = r;
+
+            if points.last().map(|p| p.time).unwrap_or(0.0) < sim_time {
+                points.push(CarTrajectoryPoint {
+                    time: sim_time,
+                    pos: ref_origin.delta_to(sim_pos, chunk_size),
+                    quat: sim_quat,
+                    velocity: sim_vel,
                 });
             }
 
-            result.next_positions.push(CarSpline {
+            result.trajectories.push(CarTrajectory {
                 car_id,
-                next_splines: segments,
+                origin: ref_origin,
+                points,
+                end_quat: sim_quat,
+                end_yaw_rate: sim_yaw_rate,
+                end_steering_angle: sim_steering_angle,
+                end_steering_vel: sim_steering_vel,
             });
 
-            // Final position determines chunk transfer
-            if pos.chunk != job.chunk_coord {
-                result.chunk_transfers.push((car_id, pos.chunk));
+            if sim_pos.chunk != job.chunk_coord {
+                result.chunk_transfers.push((car_id, sim_pos.chunk));
             }
         }
 
@@ -301,9 +439,22 @@ impl CarSimSystem {
         results: Vec<CarChunkJobResult>,
         car_storage: &mut CarStorage,
         rng: &mut impl Rng,
+        current_time: SimTime,
     ) {
+        const HISTORY_KEEP: f64 = 1.25;
+        const EPS: f64 = 1e-6;
+
+        fn trim_history(points: &mut Vec<CarTrajectoryPoint>, cutoff: f64) {
+            if points.len() < 3 {
+                return;
+            }
+            let k = points.partition_point(|p| p.time < cutoff);
+            if k > 1 {
+                points.drain(0..(k - 1));
+            }
+        }
+
         for result in results {
-            // Update the chunk's last simulation time
             if let Some(chunk) = car_storage
                 .car_chunk_storage
                 .close_mut()
@@ -312,25 +463,41 @@ impl CarSimSystem {
                 chunk.last_update_time = result.completed_time;
             }
 
-            // Process chunk transfers
             for (car_id, new_chunk) in result.chunk_transfers {
                 car_storage.move_car_between_chunks(result.chunk_coord, new_chunk, car_id);
             }
 
-            // Process despawns
             for car_id in result.despawns {
                 car_storage.despawn(car_id);
             }
 
-            // Process positions
-            for next_positions in result.next_positions {
-                let Some(car) = car_storage.get_mut(next_positions.car_id) else {
+            for mut trajectory in result.trajectories {
+                let Some(car) = car_storage.get_mut(trajectory.car_id) else {
                     continue;
                 };
-                car.next_splines = next_positions.next_splines;
+                if trajectory.points.len() < 2 {
+                    continue;
+                }
+
+                if let Some(existing) = &mut car.trajectory {
+                    if existing.origin != trajectory.origin {
+                        car.trajectory = Some(trajectory);
+                    } else {
+                        let start_new = trajectory.points[0].time;
+                        existing.points.retain(|p| p.time < start_new - EPS);
+                        existing.points.append(&mut trajectory.points);
+                        existing.end_quat = trajectory.end_quat;
+                        existing.end_yaw_rate = trajectory.end_yaw_rate;
+                        existing.end_steering_angle = trajectory.end_steering_angle;
+                        existing.end_steering_vel = trajectory.end_steering_vel;
+                        trim_history(&mut existing.points, current_time - HISTORY_KEEP);
+                    }
+                } else {
+                    trim_history(&mut trajectory.points, current_time - HISTORY_KEEP);
+                    car.trajectory = Some(trajectory);
+                }
             }
 
-            // Regenerate jitter for next cycle (prevents patterns)
             self.chunk_jitter
                 .insert(result.chunk_coord, rng.random_range(0.0..TICK_JITTER_MAX));
         }

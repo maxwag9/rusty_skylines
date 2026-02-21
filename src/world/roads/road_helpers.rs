@@ -4,7 +4,7 @@ use crate::world::roads::intersections::{IntersectionBuildParams, IntersectionPo
 use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::world::roads::road_structs::{NodeId, RoadStyleParams, StructureType};
 use crate::world::roads::roads::RoadCommand;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
 
 /// Offset an entire polyline by a fixed distance.
@@ -256,7 +256,7 @@ pub fn segment_intersection_xz(
 }
 
 pub fn set_point_height_with_structure_type(
-    terrain_renderer: &TerrainSubsystem,
+    terrain_renderer: &Terrain,
     structure_type: StructureType,
     p: &mut WorldPos,
     high_res: bool,

@@ -9,7 +9,7 @@ use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_player::drive_car;
 use crate::world::cars::car_subsystem::CarSubsystem;
 use crate::world::roads::road_subsystem::RoadSubsystem;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
 use std::time::Instant;
 use wgpu::{Device, Queue, SurfaceConfiguration};
@@ -58,7 +58,7 @@ impl Simulation {
     }
     pub fn update(
         &mut self,
-        terrain: &mut TerrainSubsystem,
+        terrain: &mut Terrain,
         road_subsystem: &mut RoadSubsystem,
         car_subsystem: &mut CarSubsystem,
         settings: &Settings,
@@ -104,7 +104,7 @@ impl Simulation {
 }
 
 fn update_picked_pos(
-    terrain_subsystem: &mut TerrainSubsystem,
+    terrain_subsystem: &mut Terrain,
     camera: &Camera,
     settings: &Settings,
     config: &SurfaceConfiguration,

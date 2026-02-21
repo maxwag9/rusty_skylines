@@ -1,6 +1,6 @@
 use crate::data::Settings;
 use crate::helpers::positions::*;
-use crate::world::terrain::terrain_subsystem::TerrainSubsystem;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Mat4, Vec3};
 
 pub struct Camera {
@@ -139,7 +139,7 @@ impl CameraController {
 pub fn ground_camera_target(
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    terrain: &TerrainSubsystem,
+    terrain: &Terrain,
     min_clearance: f32,
 ) {
     let ground_y = terrain.get_height_at(camera.target, true);
@@ -153,7 +153,7 @@ pub fn ground_camera_target(
 pub fn resolve_pitch_by_search(
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    world_renderer: &TerrainSubsystem,
+    world_renderer: &Terrain,
 ) {
     let target = camera.target;
     let orbit_radius = camera.orbit_radius;

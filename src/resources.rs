@@ -174,7 +174,6 @@ impl Time {
         self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
         self.total_time += dt as f64;
-        self.total_game_time += (dt as f64) * (time_speed as f64);
         self.frame_count += 1;
 
         // Detect speed change: flush accumulator immediately on ANY speed transition
@@ -240,6 +239,7 @@ impl Time {
     #[inline]
     pub fn consume_sim_step(&mut self) {
         self.sim_accumulator -= self.target_sim_dt;
+        self.total_game_time += self.target_sim_dt as f64; // <-- achieved sim time.
     }
 }
 
