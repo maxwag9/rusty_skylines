@@ -5,7 +5,7 @@
 //! Uses Command pattern with concrete types implementing the Command trait.
 //! Each command stores before/after state for explicit undo/redo semantics.
 
-use crate::ui::input::MouseState;
+use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edits::*;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
@@ -32,7 +32,7 @@ pub trait UICommand: Any {
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     );
 
     /// Apply redo (apply after state)
@@ -41,7 +41,7 @@ pub trait UICommand: Any {
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     );
 
     /// Human-readable description for UI
@@ -100,17 +100,10 @@ impl UICommand for MoveElementCommand {
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         if let Some(before) = self.before {
-            set_element_position(
-                menus,
-                &self.affected_element.menu,
-                &self.affected_element.layer,
-                &self.affected_element.id,
-                self.affected_element.kind,
-                before,
-            );
+            set_element_position(menus, &self.affected_element, before);
         }
     }
 
@@ -119,16 +112,10 @@ impl UICommand for MoveElementCommand {
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
-        let before = set_element_position(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.affected_element.kind,
-            self.after,
-        );
+        let before = set_element_position(menus, &self.affected_element, self.after);
+
         if self.before.is_none() {
             self.before = before;
         }
@@ -177,16 +164,9 @@ impl UICommand for ResizeElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
-        set_element_size(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.affected_element.kind,
-            self.before,
-        );
+        set_element_size(menus, &self.affected_element, self.before);
     }
 
     fn redo(
@@ -195,16 +175,9 @@ impl UICommand for ResizeElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
-        set_element_size(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.affected_element.kind,
-            self.after,
-        );
+        set_element_size(menus, &self.affected_element, self.after);
     }
 
     fn description(&self) -> String {
@@ -250,7 +223,7 @@ impl UICommand for ModifyCircleCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         replace_circle(
             menus,
@@ -266,7 +239,7 @@ impl UICommand for ModifyCircleCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         replace_circle(
             menus,
@@ -306,7 +279,7 @@ impl UICommand for ModifyTextCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         replace_text(
             menus,
@@ -322,7 +295,7 @@ impl UICommand for ModifyTextCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         replace_text(
             menus,
@@ -362,7 +335,7 @@ impl UICommand for ModifyPolygonCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         replace_polygon(
             menus,
@@ -378,7 +351,7 @@ impl UICommand for ModifyPolygonCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         replace_polygon(
             menus,
@@ -417,7 +390,7 @@ impl UICommand for CreateElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         delete_element(
             menus,
@@ -433,7 +406,7 @@ impl UICommand for CreateElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         let _ = create_element(
             menus,
@@ -473,7 +446,7 @@ impl UICommand for DeleteElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         let _ = create_element(
             menus,
@@ -490,7 +463,7 @@ impl UICommand for DeleteElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         delete_element(
             menus,
@@ -529,7 +502,7 @@ impl UICommand for ChangeZIndexCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         change_z_index(
             menus,
@@ -546,7 +519,7 @@ impl UICommand for ChangeZIndexCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         change_z_index(
             menus,
@@ -576,8 +549,7 @@ impl UICommand for ChangeZIndexCommand {
 #[derive(Clone, Debug)]
 pub struct ChangeLayerOrderCommand {
     pub affected_element: ElementRef,
-    pub before: u32,
-    pub after: u32,
+    pub delta: i32,
 }
 
 impl UICommand for ChangeLayerOrderCommand {
@@ -586,14 +558,15 @@ impl UICommand for ChangeLayerOrderCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        variables: &mut UiVariableRegistry,
+        _mouse: &Mouse,
     ) {
-        set_layer_order(
+        bump_layer_order(
             menus,
+            variables,
             &self.affected_element.menu,
             &self.affected_element.layer,
-            self.before,
+            self.delta,
         );
     }
 
@@ -602,14 +575,15 @@ impl UICommand for ChangeLayerOrderCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        variables: &mut UiVariableRegistry,
+        _mouse: &Mouse,
     ) {
-        set_layer_order(
+        bump_layer_order(
             menus,
+            variables,
             &self.affected_element.menu,
             &self.affected_element.layer,
-            self.after,
+            self.delta,
         );
     }
 
@@ -647,7 +621,7 @@ impl UICommand for TextEditCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         set_text_content(
             menus,
@@ -666,7 +640,7 @@ impl UICommand for TextEditCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         set_text_content(
             menus,
@@ -710,7 +684,7 @@ impl UICommand for MoveVertexCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         if let Some(before) = self.before {
             set_vertex_position(
@@ -730,7 +704,7 @@ impl UICommand for MoveVertexCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         let before = set_vertex_position(
             menus,
@@ -820,7 +794,7 @@ impl UICommand for ChangeColorCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         set_element_color(
             menus,
@@ -839,7 +813,7 @@ impl UICommand for ChangeColorCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         set_element_color(
             menus,
@@ -884,7 +858,7 @@ impl UICommand for DuplicateElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         delete_element(
             menus,
@@ -900,7 +874,7 @@ impl UICommand for DuplicateElementCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         let _ = create_element(
             menus,
@@ -940,7 +914,7 @@ impl UICommand for DeselectAllCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         touch_manager
             .selection
@@ -953,7 +927,7 @@ impl UICommand for DeselectAllCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         touch_manager.selection.deselect_all(menus);
     }
@@ -986,18 +960,11 @@ impl UICommand for MoveMultipleCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         for m in &self.moves {
             if let Some(before) = m.before {
-                set_element_position(
-                    menus,
-                    &m.affected_element.menu,
-                    &m.affected_element.layer,
-                    &m.affected_element.id,
-                    m.affected_element.kind,
-                    before,
-                );
+                set_element_position(menus, &m.affected_element, before);
             }
         }
     }
@@ -1008,17 +975,10 @@ impl UICommand for MoveMultipleCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        _mouse: &MouseState,
+        _mouse: &Mouse,
     ) {
         for m in self.moves.iter_mut() {
-            let before = set_element_position(
-                menus,
-                &m.affected_element.menu,
-                &m.affected_element.layer,
-                &m.affected_element.id,
-                m.affected_element.kind,
-                m.after,
-            );
+            let before = set_element_position(menus, &m.affected_element, m.after);
             if m.before.is_none() {
                 m.before = before;
             }
@@ -1098,7 +1058,7 @@ impl UICommand for BatchCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         // Undo in reverse order
         for cmd in self.commands.iter().rev() {
@@ -1112,7 +1072,7 @@ impl UICommand for BatchCommand {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         // Redo in forward order
         for cmd in self.commands.iter_mut() {
@@ -1151,6 +1111,7 @@ struct BatchBuilder {
 pub struct UiEditManager {
     undo_stack: VecDeque<TimestampedCommand>,
     redo_stack: Vec<Box<dyn UICommand>>,
+    immediate_commands: Vec<Box<dyn UICommand>>,
     in_undo_redo: bool,
     pending_batch: Option<BatchBuilder>,
     saved_position: Option<usize>,
@@ -1170,12 +1131,27 @@ impl UiEditManager {
         Self {
             undo_stack: VecDeque::with_capacity(MAX_UNDO_HISTORY),
             redo_stack: Vec::with_capacity(MAX_UNDO_HISTORY / 2),
+            immediate_commands: Vec::with_capacity(3),
             in_undo_redo: false,
             pending_batch: None,
             saved_position: Some(0),
             history_position: 0,
             last_action_time: 0.0,
             current_time: 0.0,
+        }
+    }
+
+    pub fn execute_immediate_commands(
+        &mut self,
+        touch_manager: &mut UiTouchManager,
+        menus: &mut HashMap<String, Menu>,
+        variables: &mut UiVariableRegistry,
+        mouse: &Mouse,
+    ) {
+        let commands = std::mem::take(&mut self.immediate_commands);
+
+        for command in commands {
+            self.execute(command, touch_manager, menus, variables, mouse);
         }
     }
 
@@ -1222,11 +1198,14 @@ impl UiEditManager {
     }
 
     /// Push a command (boxed)
-    pub fn push(&mut self, command: Box<dyn UICommand>) {
+    pub fn push(&mut self, command: Box<dyn UICommand>, immediate: bool) {
         if self.in_undo_redo {
             return;
         }
-
+        if immediate {
+            self.immediate_commands.push(command);
+            return;
+        }
         if let Some(ref mut batch) = self.pending_batch {
             batch.commands.push(command);
         } else {
@@ -1238,8 +1217,8 @@ impl UiEditManager {
     }
 
     /// Convenience: push without explicit Box
-    pub fn push_command<C: UICommand + 'static>(&mut self, command: C) {
-        self.push(Box::new(command));
+    pub fn push_command<C: UICommand + 'static>(&mut self, command: C, immediate: bool) {
+        self.push(Box::new(command), immediate);
     }
 
     /// Try to merge with previous command
@@ -1268,7 +1247,7 @@ impl UiEditManager {
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         if self.in_undo_redo {
             return;
@@ -1295,7 +1274,7 @@ impl UiEditManager {
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
         variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) {
         self.execute(Box::new(command), touch_manager, menus, variables, mouse);
     }
@@ -1346,7 +1325,7 @@ impl UiEditManager {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) -> Option<String> {
         if !self.can_undo() {
             return None;
@@ -1375,7 +1354,7 @@ impl UiEditManager {
 
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
-        mouse: &MouseState,
+        mouse: &Mouse,
     ) -> Option<String> {
         if !self.can_redo() {
             return None;

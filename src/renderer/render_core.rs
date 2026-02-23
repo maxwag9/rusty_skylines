@@ -166,7 +166,7 @@ impl RenderCore {
         let time = &world_core.time;
         let camera = &world_core.world_state.camera;
         let astronomy = &world_core.world_state.astronomy;
-        let terrain_subsystem = &mut world_core.terrain_subsystem;
+        let terrain_subsystem = &mut world_core.terrain;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -179,7 +179,7 @@ impl RenderCore {
             gpu_timestamp!(encoder, &mut self.profiler, "CSM", {
                 self.execute_shadow_pass(
                     &mut encoder,
-                    world_core.car_subsystem.car_storage(),
+                    world_core.cars.car_storage(),
                     camera,
                     aspect,
                     time,
@@ -196,7 +196,7 @@ impl RenderCore {
                 &world_core.input,
                 ui_loader,
                 terrain_subsystem,
-                &world_core.car_subsystem.car_storage(),
+                &world_core.cars.car_storage(),
                 settings,
                 astronomy,
             );
@@ -225,7 +225,7 @@ impl RenderCore {
         let time = &world_core.time;
         let camera = &world_core.world_state.camera;
         let astronomy = &world_core.world_state.astronomy;
-        let terrain_subsystem = &mut world_core.terrain_subsystem;
+        let terrain_subsystem = &mut world_core.terrain;
         self.update_defines();
 
         self.check_shader_changes(ui_loader);
@@ -264,7 +264,7 @@ impl RenderCore {
             ui_loader,
             terrain_subsystem,
             &world_core.road_subsystem,
-            &world_core.car_subsystem,
+            &world_core.cars,
             astronomy,
         );
     }
@@ -332,6 +332,7 @@ impl RenderCore {
             input_state,
             &self.queue,
             &PhysicalSize::new(self.config.width, self.config.height),
+            settings,
         );
         self.road_renderer.update(
             terrain_subsystem,
@@ -473,7 +474,7 @@ impl RenderCore {
         self.execute_fog_pass(encoder, settings);
 
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
-            self.execute_ui_pass(encoder, ui_loader, time, input_state);
+            self.execute_ui_pass(encoder, ui_loader, time, input_state, settings);
         });
 
         self.execute_debug_preview_pass(encoder, settings);
@@ -838,6 +839,7 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         time: &Time,
         input_state: &Input,
+        settings: &Settings,
     ) {
         let color_attachment = create_color_attachment_load(
             &self.pipelines.msaa.hdr,
@@ -854,7 +856,7 @@ impl RenderCore {
             multiview_mask: None,
         });
 
-        self.render_ui(&mut pass, ui_loader, time, input_state);
+        self.render_ui(&mut pass, ui_loader, time, input_state, settings);
     }
 
     fn execute_debug_preview_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
@@ -1058,6 +1060,7 @@ impl RenderCore {
         ui_loader: &mut UiButtonLoader,
         time: &Time,
         input_state: &Input,
+        settings: &Settings,
     ) {
         let screen_uniform = ScreenUniform {
             size: [self.config.width as f32, self.config.height as f32],
@@ -1072,8 +1075,13 @@ impl RenderCore {
             bytemuck::bytes_of(&screen_uniform),
         );
 
-        self.ui_renderer
-            .render(&mut self.render_manager, pass, ui_loader, &self.pipelines);
+        self.ui_renderer.render(
+            &mut self.render_manager,
+            pass,
+            ui_loader,
+            &self.pipelines,
+            settings,
+        );
     }
 
     pub(crate) fn cycle_msaa(&mut self, settings: &mut Settings) {

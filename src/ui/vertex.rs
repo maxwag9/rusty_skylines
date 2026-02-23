@@ -1500,6 +1500,50 @@ impl UiButtonPolygon {
             .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
         [sum.0 / count as f32, sum.1 / count as f32]
     }
+
+    /// Resizes the polygon uniformly from its center.
+    /// `size` represents the target distance from center to the farthest vertex.
+    pub fn resize(&mut self, size: f32) {
+        let center = self.center();
+
+        // Find the current maximum distance from center to any vertex
+        let current_max_dist = self
+            .vertices
+            .iter()
+            .map(|v| {
+                let dx = v.pos[0] - center[0];
+                let dy = v.pos[1] - center[1];
+                (dx * dx + dy * dy).sqrt()
+            })
+            .fold(0.0_f32, |a, b| a.max(b));
+
+        // Avoid division by zero
+        if current_max_dist < f32::EPSILON {
+            return;
+        }
+
+        let scale = size / current_max_dist;
+
+        // Scale each vertex position relative to center
+        for v in &mut self.vertices {
+            v.pos[0] = center[0] + (v.pos[0] - center[0]) * scale;
+            v.pos[1] = center[1] + (v.pos[1] - center[1]) * scale;
+        }
+    }
+    /// Returns the current size of the polygon.
+    /// Size is defined as the maximum distance from center to any vertex.
+    pub fn size(&self) -> f32 {
+        let center = self.center();
+
+        self.vertices
+            .iter()
+            .map(|v| {
+                let dx = v.pos[0] - center[0];
+                let dy = v.pos[1] - center[1];
+                (dx * dx + dy * dy).sqrt()
+            })
+            .fold(0.0_f32, |a, b| a.max(b))
+    }
 }
 
 impl Default for UiButtonText {

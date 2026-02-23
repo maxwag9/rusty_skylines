@@ -15,9 +15,9 @@ pub struct WorldCore {
     pub input: Input,          // main-thread owned
     pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub simulation: Simulation,
-    pub terrain_subsystem: Terrain,
+    pub terrain: Terrain,
     pub road_subsystem: RoadSubsystem,
-    pub car_subsystem: CarSubsystem,
+    pub cars: CarSubsystem,
     //pub job_pool: JobPool,         // persistent worker threads + channels
     // ... other sim-only subsystems (economy, citizens, etc)
 }
@@ -29,9 +29,9 @@ impl WorldCore {
             time: Time::new(),
             input: Input::new(),
             simulation: Simulation::new(),
-            terrain_subsystem: Terrain::new(device, settings),
+            terrain: Terrain::new(device, settings),
             road_subsystem: RoadSubsystem::new(),
-            car_subsystem: CarSubsystem::new(),
+            cars: CarSubsystem::new(),
             events: CommandBuffer::new(),
         }
     }

@@ -1,4 +1,4 @@
-use crate::ui::input::{Input, MouseState};
+use crate::ui::input::{Input, Mouse};
 use crate::ui::menu::Menu;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
@@ -16,7 +16,7 @@ pub(crate) struct MouseSnapshot {
 }
 
 impl MouseSnapshot {
-    pub fn from_mouse(mouse: &MouseState) -> Self {
+    pub fn from_mouse(mouse: &Mouse) -> Self {
         Self {
             mx: mouse.pos.x,
             my: mouse.pos.y,
@@ -95,20 +95,23 @@ pub fn handle_text_editing(
     process_text_editing_input(editor, input, mouse_snapshot, text, &mut layer.dirty);
 
     if text.text != before_text || text.template != before_template {
-        undo_manager.push_command(TextEditCommand {
-            affected_element: ElementRef {
-                menu: menu_name.clone(),
-                layer: layer.name.clone(),
-                id: sel_element_id.clone(),
-                kind: ElementKind::Text,
+        undo_manager.push_command(
+            TextEditCommand {
+                affected_element: ElementRef {
+                    menu: menu_name.clone(),
+                    layer: layer.name.clone(),
+                    id: sel_element_id.clone(),
+                    kind: ElementKind::Text,
+                },
+                before_text,
+                after_text: text.text.clone(),
+                before_template,
+                after_template: text.template.clone(),
+                before_caret,
+                after_caret: text.caret,
             },
-            before_text,
-            after_text: text.text.clone(),
-            before_template,
-            after_template: text.template.clone(),
-            before_caret,
-            after_caret: text.caret,
-        });
+            false,
+        );
     }
 }
 

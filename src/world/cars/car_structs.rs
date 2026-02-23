@@ -337,7 +337,7 @@ impl CarStorage {
         self.car_chunk_storage
             .add_car(to, car_chunk_distance, car_id);
     }
-    pub(crate) fn iter_cars(&mut self) -> Iter<'_, Option<Car>> {
+    pub(crate) fn iter_cars(&self) -> Iter<'_, Option<Car>> {
         self.cars.iter()
     }
     pub(crate) fn iter_mut_cars(&mut self) -> IterMut<'_, Option<Car>> {
@@ -818,7 +818,6 @@ pub struct Car {
     pub pos: WorldPos,
     pub quat: Quat,
     pub current_velocity: Vec3, // planar velocity (y = 0)
-    pub desired_velocity: Vec3, // Don't use
     pub steering_angle: f32,    // road wheel angle (rad), +left
     pub steering_vel: f32,      // (rad/s)
     pub yaw_rate: f32,          // (rad/s) in SAE sign ( + = yaw left )
@@ -826,6 +825,12 @@ pub struct Car {
     pub width: f32,
     pub accel: f32, // m/s²
     pub decel: f32, // m/s² (positive value)
+
+    pub throttle: f32, // 0..1
+    pub brake: f32,    // 0..1
+    pub gear: i8,
+    pub engine_rpm: f32,
+    pub wheel_radius: f32,
 
     // === Topology state ===
     pub lane: LaneRef, // current lane
@@ -856,12 +861,12 @@ impl Default for Car {
         Self {
             id: 0,
             vehicle_type: VehicleType::normal(),
+            engine_rpm: 0.0,
             color: [1.0, 0.0, 0.0],
             trajectory: None,
             pos: Default::default(),
             quat: Quat::IDENTITY,
             current_velocity: Vec3::ZERO,
-            desired_velocity: Vec3::ZERO, // Don't use
 
             steering_angle: 0.0,
             steering_vel: 0.0,
@@ -871,6 +876,8 @@ impl Default for Car {
             width: 2.2,
             accel: 7.0,
             decel: 10.0,
+            throttle: 0.0,
+            brake: 0.0,
             lane: LaneRef::Segment(LaneId(0), 0),
             lane_s: 0.0,
             committed_arm: None,
@@ -881,6 +888,8 @@ impl Default for Car {
             last_decision_time: 0.0,
             entered_arm_time: None,
             driver_profile: DriverProfile::Normal,
+            gear: 0,
+            wheel_radius: 0.34,
         }
     }
 }

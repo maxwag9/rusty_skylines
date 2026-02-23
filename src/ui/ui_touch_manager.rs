@@ -40,6 +40,8 @@ pub struct TouchConfig {
     pub multi_select_active: bool,
     /// Modifier for additive select (true = Shift held)
     pub additive_select_active: bool,
+    pub zoom_target: f32,
+    pub zoom_current: f32,
 }
 
 impl Default for TouchConfig {
@@ -52,6 +54,8 @@ impl Default for TouchConfig {
             snap_enabled: false,
             multi_select_active: false,
             additive_select_active: false,
+            zoom_target: 1.0,
+            zoom_current: 1.0,
         }
     }
 }
@@ -823,16 +827,7 @@ impl DragCoordinator {
         if !drag.threshold_exceeded && distance >= config.drag_threshold {
             drag.threshold_exceeded = true;
             let drag_element = drag.element.clone();
-            if drag_element.kind == ElementKind::Handle {
-                // if let Some(affected_element) = drag.affected_element.clone() {
-                //     events.push(TouchEvent::HandleDragStart {
-                //         handle_element: drag_element,
-                //         affected_element,
-                //         start_position: drag.start_position,
-                //         vertex_index: drag.vertex_index,
-                //     });
-                // }
-            } else {
+            if drag_element.kind != ElementKind::Handle {
                 events.push(TouchEvent::DragStart {
                     element: drag_element,
                     start_position: drag.start_position,
@@ -850,7 +845,7 @@ impl DragCoordinator {
 
             events.push(TouchEvent::DragMove {
                 element: drag.element.clone(),
-                current_position: mouse_pos,
+                current_position: drag.current_position,
                 delta,
                 total_delta,
             });
@@ -1380,33 +1375,7 @@ impl UiTouchManager {
             .push(TouchEvent::NavigateDirection { direction });
     }
 
-    /// Handle selection event
-    // pub fn apply_selection_event(&mut self, event: &TouchEvent) {
-    //     match event {
-    //         TouchEvent::SelectionRequested {
-    //             element,
-    //             additive,
-    //             multi,
-    //         } => {
-    //             if *multi {
-    //                 self.selection
-    //                     .move_primary_to_multi(element.clone(), None);
-    //             } else if *additive {
-    //                 self.selection.toggle_selection(element.clone());
-    //             } else {
-    //                 self.selection.select(element.clone(), None, false);
-    //             }
-    //         }
-    //         TouchEvent::DeselectAllRequested => {
-    //             self.selection.deselect_all();
-    //         }
-    //         _ => {}
-    //     }
-    // }
-
-    // ========================================================================
     // QUERIES
-    // ========================================================================
 
     /// Get current interaction mode
     pub fn interaction_mode(&self) -> InteractionMode {

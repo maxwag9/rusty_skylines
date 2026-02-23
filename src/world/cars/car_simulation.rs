@@ -6,9 +6,14 @@ use glam::{Quat, Vec3};
 use rand::{Rng, RngExt, seq::SliceRandom};
 use rayon::prelude::*;
 use std::collections::HashMap;
-// ============================================================================
-// Constants
-// ============================================================================
+
+const FINAL_DRIVE: f32 = 3.9;
+const GEAR_RATIOS: [f32; 6] = [3.6, 2.19, 1.41, 1.12, 0.95, 0.80];
+const REVERSE_RATIO: f32 = -3.2;
+const IDLE_RPM: f32 = 900.0;
+const REDLINE_RPM: f32 = 6500.0;
+const MAX_ENGINE_TORQUE: f32 = 260.0; // Nm
+const DRIVETRAIN_EFF: f32 = 0.85;
 
 pub const CHUNK_TICK_INTERVAL: SimTime = 2.0; // 2 second ticks
 pub const TICK_JITTER_MAX: SimTime = 0.5; // Spread updates over 0.5s window
@@ -35,13 +40,19 @@ pub struct CarTrajectoryPoint {
 
 #[derive(Debug, Clone)]
 pub struct CarTrajectory {
-    pub car_id: u32,
+    pub car_id: CarId,
     pub origin: WorldPos,
     pub points: Vec<CarTrajectoryPoint>,
     pub end_quat: Quat,
     pub end_yaw_rate: f32,
     pub end_steering_angle: f32,
     pub end_steering_vel: f32,
+}
+#[derive(Debug)]
+pub struct CarEngineResult {
+    pub car_id: CarId,
+    pub rpm: f32,
+    pub gear: i8,
 }
 #[derive(Debug)]
 pub struct CarChunkJobResult {
@@ -54,6 +65,7 @@ pub struct CarChunkJobResult {
     /// Next positions as splines for cars for the great interpolator! "He's a nice guy, you know, I've known him for many years, he's a great guy, brilliant I must say.
     /// Joe Biden could never have been like him, not even before he got dementia, that's the truth!"
     pub trajectories: Vec<CarTrajectory>,
+    pub engine_results: Vec<CarEngineResult>,
 }
 
 impl CarChunkJobResult {
@@ -64,6 +76,7 @@ impl CarChunkJobResult {
             chunk_transfers: Vec::new(),
             despawns: Vec::new(),
             trajectories: Vec::new(),
+            engine_results: Vec::new(),
         }
     }
 }
@@ -327,7 +340,11 @@ impl CarSimSystem {
                 quat: sim_quat,
                 velocity: sim_vel,
             });
-
+            let mut engine_result = CarEngineResult {
+                car_id,
+                rpm: 3000.0,
+                gear: 1,
+            };
             let mut sim_time = start_time;
             let mut step_counter: u32 = 0;
 
@@ -350,8 +367,59 @@ impl CarSimSystem {
                 let steer_lock =
                     STEER_LOCK_HIGH + (STEER_LOCK_LOW - STEER_LOCK_HIGH) * (1.0 - t_lock).powf(1.7);
                 let delta_cmd = (steer_input * steer_lock).clamp(-steer_lock, steer_lock);
-                let ax_cmd = throttle_input * car.accel - brake_input * car.accel * 3.0;
+                // --- WHEEL SPEED ---
+                let wheel_angular_speed = u / car.wheel_radius; // rad/s
+                let wheel_rpm = wheel_angular_speed * 60.0 / (2.0 * std::f32::consts::PI);
 
+                // --- CURRENT GEAR RATIO ---
+                let gear_ratio = if car.gear > 0 {
+                    GEAR_RATIOS[(car.gear - 1) as usize]
+                } else if car.gear < 0 {
+                    REVERSE_RATIO
+                } else {
+                    0.0
+                };
+
+                let total_ratio = gear_ratio * FINAL_DRIVE;
+
+                // --- ENGINE RPM SYNC ---
+                if total_ratio.abs() > 0.01 {
+                    let target_rpm = wheel_rpm * total_ratio.abs();
+                    engine_result.rpm = car.engine_rpm * 0.9 + target_rpm * 0.1;
+                } else {
+                    engine_result.rpm = IDLE_RPM;
+                }
+
+                engine_result.rpm = car.engine_rpm.clamp(IDLE_RPM, REDLINE_RPM);
+
+                // --- ENGINE TORQUE ---
+                let engine_torque = engine_torque_from_rpm(car.engine_rpm) * throttle_input;
+
+                // --- WHEEL TORQUE ---
+                let drive_torque = engine_torque * total_ratio * DRIVETRAIN_EFF;
+
+                // --- DRIVE FORCE ---
+                let drive_force = drive_torque / car.wheel_radius;
+
+                // --- BRAKE FORCE ---
+                let brake_force = car.brake * MASS * 8.0 * u.signum();
+                let engine_brake = if throttle_input < 0.05 {
+                    car.engine_rpm / REDLINE_RPM * 40.0
+                } else {
+                    0.0
+                };
+
+                let ax_cmd = (drive_force - brake_force) / MASS - engine_brake * u.signum() / MASS;
+                if car.gear >= 1 {
+                    if car.engine_rpm > 6200.0 && car.gear < 6 {
+                        engine_result.gear += 1;
+                    }
+                    if car.engine_rpm < 1500.0 && car.gear > 1 {
+                        engine_result.gear -= 1;
+                    }
+                } else if engine_result.gear == 0 {
+                    engine_result.gear = 1;
+                }
                 let delta = sim_steering_angle;
                 let mut delta_dot = sim_steering_vel;
                 delta_dot += (STEER_KP * (delta_cmd - delta) - STEER_KD * delta_dot) * h;
@@ -429,6 +497,7 @@ impl CarSimSystem {
             if sim_pos.chunk != job.chunk_coord {
                 result.chunk_transfers.push((car_id, sim_pos.chunk));
             }
+            result.engine_results.push(engine_result);
         }
 
         result
@@ -498,6 +567,14 @@ impl CarSimSystem {
                 }
             }
 
+            for engine_result in result.engine_results {
+                let Some(car) = car_storage.get_mut(engine_result.car_id) else {
+                    continue;
+                };
+                car.engine_rpm = engine_result.rpm;
+                car.gear = engine_result.gear;
+            }
+
             self.chunk_jitter
                 .insert(result.chunk_coord, rng.random_range(0.0..TICK_JITTER_MAX));
         }
@@ -508,4 +585,17 @@ impl CarSimSystem {
         self.chunk_jitter
             .retain(|coord, _| chunk_storage.contains(coord));
     }
+}
+
+fn engine_torque_from_rpm(rpm: f32) -> f32 {
+    let x = (rpm / 4000.0).clamp(0.0, 2.0);
+
+    // Peaky NA petrol curve
+    let torque = if x < 1.0 {
+        x * 1.2
+    } else {
+        1.2 - (x - 1.0) * 0.8
+    };
+
+    torque.clamp(0.0, 1.0) * MAX_ENGINE_TORQUE
 }

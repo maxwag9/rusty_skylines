@@ -6,6 +6,7 @@ use crate::renderer::render_core::{
 use crate::renderer::shadows::CSM_CASCADES;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::UiButtonLoader;
+use crate::world::sound::Sounds;
 use crate::world::world_core::WorldCore;
 use std::sync::Arc;
 use std::time::Instant;
@@ -34,6 +35,7 @@ pub struct Resources {
     pub render_core: RenderCore,
 
     pub ui_loader: UiButtonLoader,
+    pub sounds: Sounds,
     pub surface: Surface<'static>,
 }
 
@@ -76,6 +78,7 @@ impl Resources {
             command_queues,
             world_core,
             render_core,
+            sounds: Sounds::new(),
         }
     }
 }

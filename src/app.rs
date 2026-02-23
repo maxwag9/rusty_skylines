@@ -8,6 +8,7 @@ use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
 use crate::world::roads::road_structs::RoadType;
+use crate::world::sound::run_sounds;
 use crate::world::terrain::terrain_subsystem::CursorMode;
 use crate::world::world_core::WorldCore;
 use glam::Vec2;
@@ -200,16 +201,17 @@ impl ApplicationHandler for App {
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
-                    match resources
-                        .ui_loader
-                        .save_gui_to_file(data_dir("ui_data/menus"), resources.window.inner_size())
-                    {
+                    match resources.ui_loader.save_gui_to_file(
+                        data_dir("ui_data/menus"),
+                        data_dir("ui_data/menus/advanced_primitives"),
+                        resources.window.inner_size(),
+                    ) {
                         Ok(_) => println!("GUI layout saved"),
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
                     }
                 }
                 if input.action_pressed_once("Toggle Cursor Mode") {
-                    match world.terrain_subsystem.cursor.mode {
+                    match world.terrain.cursor.mode {
                         CursorMode::Roads(_) => {
                             world.events.send(Command::SetCursorMode(CursorMode::Cars))
                         }
@@ -234,7 +236,7 @@ impl ApplicationHandler for App {
                     if settings.show_world {
                         match resources
                             .world_core
-                            .terrain_subsystem
+                            .terrain
                             .terrain_editor
                             .save_edits(data_dir("edited_chunks"))
                         {
@@ -391,6 +393,7 @@ impl ApplicationHandler for App {
                 }
 
                 run_interpolation(resources);
+                run_sounds(resources);
                 run_render(resources); // use commands output
 
                 // FPS cap
@@ -450,7 +453,7 @@ fn update_time(resources: &mut Resources) {
     let mut time_speed = if simulation.running { 1.0 } else { 0.0 };
 
     for (action, speed) in TIME_SPEED_BINDINGS {
-        if input.action_down(action) {
+        if can_time_control && input.action_down(action) {
             time_speed = speed;
             simulation.running = true;
             break;
@@ -466,7 +469,7 @@ fn update_time(resources: &mut Resources) {
         .variables
         .set_f32("time_speed", time_speed);
 
-    // begin_frame now detects speed changes internally and flushes accumulator
+    // begin_frame detects speed changes internally and flushes accumulator
     time.begin_frame(time_speed);
 
     {

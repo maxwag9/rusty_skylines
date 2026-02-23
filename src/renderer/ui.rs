@@ -1,7 +1,8 @@
+use crate::data::Settings;
 use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::color_target;
-use crate::renderer::ui_pipelines::UiPipelines;
+use crate::renderer::ui_pipelines::{Background, UiPipelines};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
 use crate::resources::Time;
@@ -12,6 +13,7 @@ use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiElement, UiVertexPoly,
     UiVertexText,
 };
+use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
@@ -217,6 +219,7 @@ impl UiRenderer {
         input_state: &Input,
         queue: &Queue,
         size: &PhysicalSize<u32>,
+        settings: &Settings,
     ) {
         let new_uniform = ScreenUniform {
             size: [size.width as f32, size.height as f32],
@@ -229,6 +232,23 @@ impl UiRenderer {
             &self.pipelines.uniform_buffer,
             0,
             bytemuck::bytes_of(&new_uniform),
+        );
+        let bg_uniform = Background {
+            primary_color: settings.background_color.map(|c| c + 0.01f32),
+            secondary_color: settings.background_color.map(|c| c + 0.02f32),
+            block_size: 100f32,
+
+            warp_strength: 0.01,
+            warp_radius: 0.10,
+            time_scale: 0.03,
+            wave_strength: 0.005,
+            _padding: [0.0; 3],
+        };
+
+        queue.write_buffer(
+            &self.pipelines.background_buffer,
+            0,
+            bytemuck::bytes_of(&bg_uniform),
         );
         for (menu_name, menu) in ui_loader.menus.iter_mut().filter(|(_, menu)| menu.active) {
             let dirty_indices: Vec<usize> = menu
@@ -258,11 +278,36 @@ impl UiRenderer {
         pass: &mut RenderPass<'a>,
         ui: &mut UiButtonLoader,
         pipelines: &Pipelines,
+        settings: &Settings,
     ) {
         if !ui.touch_manager.options.show_gui {
             return;
         }
-
+        if settings.editor_mode {
+            let background_shader = &shader_dir().join("ui_background.wgsl");
+            let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+            let options = &PipelineOptions {
+                topology: TriangleList,
+                msaa_samples: settings.msaa_samples,
+                depth_stencil: None,
+                vertex_layouts: vec![],
+                cull_mode: None,
+                targets,
+                vertex_only: false,
+                shadow: None,
+            };
+            render_manager.render(
+                &[],
+                background_shader,
+                options,
+                &[
+                    &self.pipelines.uniform_buffer,
+                    &self.pipelines.background_buffer,
+                ],
+                pass,
+            );
+            pass.draw(0..3, 0..1);
+        }
         ui.update_dynamic_texts();
 
         let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();

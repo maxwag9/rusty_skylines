@@ -2,34 +2,33 @@
 // ELEMENT POSITION/SIZE/COLOR SETTERS (for undo system)
 // ========================================================================
 
-use crate::ui::input::MouseState;
+use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edit_manager::ColorProperty;
+use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 
 pub fn set_element_position(
     menus: &mut HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    id: &str,
-    kind: ElementKind,
+    element_ref: &ElementRef,
     pos: [f32; 2],
 ) -> Option<[f32; 2]> {
-    let Some(menu) = menus.get_mut(menu_name) else {
+    let Some(menu) = menus.get_mut(&element_ref.menu) else {
         return None;
     };
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
+    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
         return None;
     };
     let mut before: Option<[f32; 2]> = None;
-    match kind {
+    match element_ref.kind {
         ElementKind::Circle => {
             if let Some(c) = layer
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_circle_mut)
-                .find(|c| c.id == id)
+                .find(|c| c.id == element_ref.id)
             {
                 before = Some([c.x, c.y]);
                 c.x = pos[0];
@@ -43,7 +42,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_text_mut)
-                .find(|t| t.id == id)
+                .find(|t| t.id == element_ref.id)
             {
                 before = Some([t.x, t.y]);
                 t.x = pos[0];
@@ -57,7 +56,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_polygon_mut)
-                .find(|p| p.id == id)
+                .find(|p| p.id == element_ref.id)
             {
                 let [cx, cy] = p.center();
                 before = Some([cx, cy]);
@@ -76,7 +75,7 @@ pub fn set_element_position(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_handle_mut)
-                .find(|h| h.id == id)
+                .find(|h| h.id == element_ref.id)
             {
                 before = Some([h.x, h.y]);
                 h.x = pos[0];
@@ -89,18 +88,11 @@ pub fn set_element_position(
     }
 }
 
-pub fn set_element_size(
-    menus: &mut HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    id: &str,
-    kind: ElementKind,
-    size: f32,
-) {
-    let Some(menu) = menus.get_mut(menu_name) else {
+pub fn set_element_size(menus: &mut HashMap<String, Menu>, element_ref: &ElementRef, size: f32) {
+    let Some(menu) = menus.get_mut(&element_ref.menu) else {
         return;
     };
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
+    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
         return;
     };
 
@@ -109,27 +101,38 @@ pub fn set_element_size(
     for element in &mut layer.elements {
         match element {
             // PRIMARY ELEMENT
-            UiElement::Circle(c) if kind == ElementKind::Circle && c.id == id => {
+            UiElement::Circle(c)
+                if element_ref.kind == ElementKind::Circle && c.id == element_ref.id =>
+            {
                 c.radius = size;
                 layer.dirty.mark_circles();
             }
 
-            UiElement::Text(t) if kind == ElementKind::Text && t.id == id => {
+            UiElement::Text(t)
+                if element_ref.kind == ElementKind::Text && t.id == element_ref.id =>
+            {
                 t.px = size.max(4.0) as u16;
                 layer.dirty.mark_texts();
             }
 
             // DEPENDENTS (always applied immediately)
-            UiElement::Handle(h) if matches!(h.parent.as_ref(), Some(p) if p.id == id) => {
+            UiElement::Handle(h) if matches!(h.parent.as_ref(), Some(p) if p.id == element_ref.id) =>
+            {
                 h.radius = size;
                 layer.dirty.mark_handles();
             }
 
-            UiElement::Outline(o) if matches!(o.parent.as_ref(), Some(p) if p.id == id) => {
+            UiElement::Outline(o) if matches!(o.parent.as_ref(), Some(p) if p.id == element_ref.id) =>
+            {
                 o.shape_data.radius = size;
                 layer.dirty.mark_outlines();
             }
-
+            UiElement::Polygon(p)
+                if element_ref.kind == ElementKind::Polygon && p.id == element_ref.id =>
+            {
+                p.resize(size);
+                layer.dirty.mark_polygons();
+            }
             _ => {}
         }
     }
@@ -216,19 +219,18 @@ pub fn set_vertex_position(
     before
 }
 
-pub fn set_layer_order(
+pub fn bump_layer_order(
     menus: &mut HashMap<String, Menu>,
+    variables: &mut UiVariableRegistry,
     menu_name: &str,
     layer_name: &str,
-    order: u32,
+    delta: i32,
 ) {
     let Some(menu) = menus.get_mut(menu_name) else {
         return;
     };
-    if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
-        layer.order = order;
-    }
-    menu.layers.sort_by_key(|l| l.order);
+
+    menu.bump_layer_order(layer_name, delta, variables);
 }
 
 pub fn set_text_content(
@@ -384,7 +386,7 @@ pub fn create_element(
     menu_name: &str,
     layer_name: &str,
     mut element: UiElement,
-    mouse: &MouseState,
+    mouse: &Mouse,
 ) -> Result<(), String> {
     let menu = menus
         .get_mut(menu_name)

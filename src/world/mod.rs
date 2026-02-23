@@ -3,6 +3,7 @@ pub mod camera;
 pub mod cars;
 mod game_state;
 pub mod roads;
+pub mod sound;
 pub mod terrain;
 pub mod world;
 pub mod world_core;

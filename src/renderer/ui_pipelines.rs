@@ -13,6 +13,7 @@ pub struct UiPipelines {
     pub uniform_layout: BindGroupLayout,
     pub uniform_buffer: Buffer,
     pub uniform_bind_group: BindGroup,
+    pub background_buffer: Buffer,
 
     pub msaa_samples: u32,
 
@@ -47,7 +48,19 @@ pub struct UiPipelines {
     pub good_blend: Option<BlendState>,
     pub additive_blend: BlendState,
 }
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Background {
+    pub primary_color: [f32; 4],
+    pub secondary_color: [f32; 4],
+    pub block_size: f32,
 
+    pub warp_strength: f32,
+    pub warp_radius: f32,
+    pub time_scale: f32,
+    pub wave_strength: f32,
+    pub _padding: [f32; 3], // forces 64 bytes
+}
 impl UiPipelines {
     pub fn new(
         device: &Device,
@@ -133,6 +146,12 @@ impl UiPipelines {
             label: Some("UI Uniforms"),
             contents: screen_data,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        });
+        let background_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("UI Background Uniforms"),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            size: size_of::<Background>() as u64,
+            mapped_at_creation: false,
         });
         let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("UI Bind Group"),
@@ -413,6 +432,7 @@ impl UiPipelines {
             uniform_layout,
             uniform_buffer,
             uniform_bind_group,
+            background_buffer,
             msaa_samples,
             format,
 

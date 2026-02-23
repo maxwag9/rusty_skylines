@@ -175,7 +175,7 @@ impl Keybinds {
 }
 
 #[derive(Debug, Clone)]
-pub struct MouseState {
+pub struct Mouse {
     pub last_pos: Vec2,
     pub pos: Vec2,
     pub delta: Vec2,
@@ -193,7 +193,7 @@ pub struct MouseState {
     pub scroll_delta: Vec2,
 }
 
-impl MouseState {
+impl Mouse {
     pub fn new() -> Self {
         Self {
             last_pos: Vec2::ZERO,
@@ -261,7 +261,7 @@ pub struct Input {
     pub alt: bool,
 
     pub _keybinds: Keybinds,
-    pub mouse: MouseState,
+    pub mouse: Mouse,
     scroll_up_hit: bool,
     scroll_down_hit: bool,
     scroll_left_hit: bool,
@@ -289,7 +289,7 @@ impl Input {
             ctrl: false,
             alt: false,
             _keybinds: keybinds,
-            mouse: MouseState::new(),
+            mouse: Mouse::new(),
             scroll_up_hit: false,
             scroll_down_hit: false,
             scroll_left_hit: false,

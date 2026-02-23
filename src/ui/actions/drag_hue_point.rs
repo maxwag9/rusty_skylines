@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables)]
 use crate::resources::Time;
 use crate::ui::actions::deactivate_action;
-use crate::ui::input::MouseState;
+use crate::ui::input::Mouse;
 use crate::ui::ui_editor::UiButtonLoader;
 use crate::ui::vertex::{MiscButtonSettings, UiButtonCircle};
 use glam::Vec2;
@@ -29,7 +29,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &MouseState, time: &Time) {
+pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &Mouse, time: &Time) {
     let Some(sel) = &loader.touch_manager.selection.primary else {
         return;
     };
@@ -268,7 +268,7 @@ fn get_handle_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
 //         .unwrap_or(false)
 // }
 
-fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &MouseState) {
+fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &Mouse) {
     let handle = UiButtonCircle {
         id: "color picker handle circle".to_string(),
         action: "None".to_string(),

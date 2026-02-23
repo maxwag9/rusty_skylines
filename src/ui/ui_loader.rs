@@ -133,7 +133,44 @@ pub fn load_menus_from_directory(
     );
     Ok(menus)
 }
+pub fn load_advanced_primitives_from_directory(
+    ap_dir: &PathBuf,
+    mode: &BendMode,
+) -> Result<Vec<UiLayerYaml>, Box<dyn Error>> {
+    let mut aps = Vec::new();
 
+    if !ap_dir.is_dir() {
+        println!("Menus directory not found: {}", ap_dir.display());
+        return Ok(aps);
+    }
+
+    for entry in fs::read_dir(ap_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        let is_yaml = path
+            .extension()
+            .map_or(false, |e| e == "yaml" || e == "yml" || e == "Yaml");
+
+        if is_yaml && path.is_file() {
+            match load_layer_from_file(&path, mode) {
+                Ok(ap) => {
+                    aps.push(ap);
+                }
+                Err(e) => {
+                    eprintln!("Failed to load {}: {}", path.display(), e);
+                }
+            }
+        }
+    }
+
+    println!(
+        "📂 Loaded {} Advanced Primitives from {}",
+        aps.len(),
+        ap_dir.display()
+    );
+    Ok(aps)
+}
 pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, Box<dyn Error>> {
     let bytes = fs::read(path)?;
 
@@ -154,7 +191,30 @@ pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, 
         }
     }
 }
+pub fn load_layer_from_file(
+    path: &PathBuf,
+    mode: &BendMode,
+) -> Result<UiLayerYaml, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
 
+    match mode {
+        BendMode::Strict | BendMode::Unknown => {
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
+            let parsed: UiLayerYaml = match extension {
+                "Yaml" => serde_yaml::from_slice(&bytes)?,
+                _ => serde_yaml::from_slice(&bytes)?,
+            };
+            Ok(parsed)
+        }
+        BendMode::Bent => {
+            let seed = fnv1a_64(&bytes);
+            let mut rng = SimpleRng::new(seed);
+            let layer_idx = rng.next_i32_range(10000, 56201) as usize;
+            let layer = synth_layer(&mut rng, 446814, layer_idx);
+            Ok(layer)
+        }
+    }
+}
 pub fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| match c {

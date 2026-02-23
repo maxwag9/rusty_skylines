@@ -83,6 +83,7 @@ impl Menu {
                 return;
             }
         }
+        self.layers.sort_by_key(|l| l.order);
     }
 
     pub fn change_element_color(

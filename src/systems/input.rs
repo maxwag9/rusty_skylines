@@ -9,7 +9,7 @@ pub fn run_inputs(resources: &mut Resources) {
     if dt <= 0.0 {
         return;
     }
-    let terrain_subsystem = &world.terrain_subsystem;
+    let terrain_subsystem = &world.terrain;
 
     let camera = &mut world.world_state.camera;
     let cam_ctrl = &mut world.world_state.cam_controller;

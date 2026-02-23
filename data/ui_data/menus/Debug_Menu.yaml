@@ -1,12 +1,50 @@
 name: Debug_Menu
 layers:
+  - name: checkbox_unticked
+    elements:
+      - !Polygon
+        id: Checkbox Background
+        action: toggle_state(checkbox_ticked)
+        vertices:
+          - pos:
+              - 0.27886048
+              - 0.48469028
+            color:
+              - 0.01
+              - 0.01
+              - 0.01
+              - 0.3
+          - pos:
+              - 0.2828308
+              - 0.44037667
+            color:
+              - 0.01
+              - 0.01
+              - 0.01
+              - 0.3
+          - pos:
+              - 0.30165404
+              - 0.44131416
+            color:
+              - 0.01
+              - 1.01
+              - 0.01
+              - 0.3
+          - pos:
+              - 0.3054245
+              - 0.4960463
+            color:
+              - 0.01
+              - 0.01
+              - 0.01
+              - 0.3
   - name: debug_texts
     order: 2
     elements:
       - !Text
         id: fps_text
-        x: 0.0009250045
-        y: 0.0022857145
+        x: 0.00214113
+        y: 0.005321429
         px: 0.013733757
         color:
           - 1.0

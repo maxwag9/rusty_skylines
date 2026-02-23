@@ -1,6 +1,5 @@
 use crate::resources::Resources;
 use crate::world::cars::car_render::interpolate_cars;
-use rayon::iter::ParallelIterator;
 
 pub fn run_ticked(resources: &mut Resources) {
     let world = &mut resources.world_core;
@@ -8,9 +7,9 @@ pub fn run_ticked(resources: &mut Resources) {
     let camera = &world.world_state.camera;
     let (time, terrain, roads, cars, input) = (
         &mut world.time,
-        &mut world.terrain_subsystem,
+        &mut world.terrain,
         &mut world.road_subsystem,
-        &mut world.car_subsystem,
+        &mut world.cars,
         &mut world.input,
     );
     let (settings, gizmo, device, queue) = (
@@ -33,9 +32,9 @@ pub fn run_sim(resources: &mut Resources) {
     let camera = &mut world.world_state.camera;
     let cam_controller = &mut world.world_state.cam_controller;
     world.simulation.update(
-        &mut world.terrain_subsystem,
+        &mut world.terrain,
         &mut world.road_subsystem,
-        &mut world.car_subsystem,
+        &mut world.cars,
         &resources.settings,
         &world.time,
         &mut world.input,
@@ -58,7 +57,7 @@ pub fn run_ui(resources: &mut Resources) {
         dt,
         input,
         time,
-        &mut resources.world_core.terrain_subsystem,
+        &mut resources.world_core.terrain,
         resources.window.inner_size(),
         &mut resources.world_core.road_subsystem.road_editor.style,
         &mut resources.command_queues,

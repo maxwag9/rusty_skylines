@@ -10,12 +10,12 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 228305.7698639452
+total_game_time = 232212.97006772156
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
 always_day = false
-msaa_samples = 4
+msaa_samples = 1
 shadow_map_size = 2048
 shadow_type = "RT"
 gtao_enabled = false
@@ -35,10 +35,10 @@ render_rt_gizmo = false
 noclip = false
 
 [player_pos.chunk]
-x = 52
-z = 18
+x = 55
+z = 13
 
 [player_pos.local]
-x = 69.16143
-y = 558.1
-z = 80.12739
+x = 45.3664
+y = 525.79297
+z = 95.563866

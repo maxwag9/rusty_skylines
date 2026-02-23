@@ -204,7 +204,7 @@ fn apply_car_changes(terrain: &Terrain, time: &Time, car: &mut Car, delta: Vec<C
 }
 
 pub fn interpolate_cars(world_core: &mut WorldCore) {
-    let car_subsystem = &mut world_core.car_subsystem;
+    let car_subsystem = &mut world_core.cars;
 
     // Get all CLOSE cars (far away cars are ghosts)
     let close_ids: Vec<CarId> = {
@@ -221,11 +221,7 @@ pub fn interpolate_cars(world_core: &mut WorldCore) {
                 storage.get(id).map(|car| {
                     (
                         id,
-                        interpolate_car(
-                            &world_core.time,
-                            car,
-                            world_core.terrain_subsystem.chunk_size,
-                        ),
+                        interpolate_car(&world_core.time, car, world_core.terrain.chunk_size),
                     )
                 })
             })
@@ -239,12 +235,7 @@ pub fn interpolate_cars(world_core: &mut WorldCore) {
             let Some(car) = storage_mut.get_mut(id) else {
                 continue;
             };
-            apply_car_changes(
-                &world_core.terrain_subsystem,
-                &world_core.time,
-                car,
-                changes,
-            );
+            apply_car_changes(&world_core.terrain, &world_core.time, car, changes);
         }
     }
 }
