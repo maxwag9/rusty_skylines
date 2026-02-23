@@ -77,6 +77,10 @@ enum BindingKey {
     WheelDown,
     WheelLeft,
     WheelRight,
+
+    AnyShift,
+    AnyCtrl,
+    AnyAlt,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +93,7 @@ struct ParsedKeyCombo {
 
 impl ParsedKeyCombo {
     fn matches(&self, input: &Input) -> bool {
+        // STRICT: modifiers must match exactly
         if input.ctrl != self.require_ctrl {
             return false;
         }
@@ -98,17 +103,7 @@ impl ParsedKeyCombo {
         if input.alt != self.require_alt {
             return false;
         }
-
-        match &self.key {
-            BindingKey::Physical(p) => input.physical.get(p).copied().unwrap_or(false),
-            BindingKey::Logical(n) => input.logical.get(n).copied().unwrap_or(false),
-            BindingKey::Mouse(m) => input.mouse.is_button_down(*m),
-            BindingKey::Character(ch) => input.text_chars.contains(ch),
-            BindingKey::WheelUp => input.scroll_up_hit,
-            BindingKey::WheelDown => input.scroll_down_hit,
-            BindingKey::WheelLeft => input.scroll_left_hit,
-            BindingKey::WheelRight => input.scroll_right_hit,
-        }
+        input.key_active(&self.key)
     }
 }
 
@@ -547,6 +542,9 @@ impl Input {
             BindingKey::WheelDown => self.scroll_down_hit,
             BindingKey::WheelLeft => self.scroll_left_hit,
             BindingKey::WheelRight => self.scroll_right_hit,
+            BindingKey::AnyShift => self.shift,
+            BindingKey::AnyCtrl => self.ctrl,
+            BindingKey::AnyAlt => self.alt,
         }
     }
 
@@ -603,8 +601,7 @@ impl Input {
 }
 
 fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
-    // First: try to interpret the whole string as a character binding.
-    // This makes "+" / "-" / "=" etc. work with no modifiers.
+    // Character binding check first
     if let Some(ch) = map_to_char(s) {
         return Some(ParsedKeyCombo {
             require_ctrl: false,
@@ -621,6 +618,7 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
 
     for raw in s.split('+') {
         let t = raw.trim();
+
         if t.eq_ignore_ascii_case("ctrl") || t.eq_ignore_ascii_case("control") {
             require_ctrl = true;
         } else if t.eq_ignore_ascii_case("shift") {
@@ -643,6 +641,21 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
             key_part = Some(BindingKey::WheelLeft);
         } else if t.eq_ignore_ascii_case("WheelRight") {
             key_part = Some(BindingKey::WheelRight);
+        }
+    }
+
+    // If no key found, promote last modifier to be the key
+    // This allows bindings like "Shift" or "Ctrl+Shift"
+    if key_part.is_none() {
+        if require_shift {
+            key_part = Some(BindingKey::AnyShift);
+            require_shift = false;
+        } else if require_ctrl {
+            key_part = Some(BindingKey::AnyCtrl);
+            require_ctrl = false;
+        } else if require_alt {
+            key_part = Some(BindingKey::AnyAlt);
+            require_alt = false;
         }
     }
 
@@ -720,6 +733,12 @@ fn map_to_keycode(token: &str) -> Option<KeyCode> {
     }
 
     match token {
+        "LeftShift" | "ShiftLeft" | "LShift" => Some(KeyCode::ShiftLeft),
+        "RightShift" | "ShiftRight" | "RShift" => Some(KeyCode::ShiftRight),
+        "LeftCtrl" | "CtrlLeft" | "LCtrl" | "LeftControl" => Some(KeyCode::ControlLeft),
+        "RightCtrl" | "CtrlRight" | "RCtrl" | "RightControl" => Some(KeyCode::ControlRight),
+        "LeftAlt" | "AltLeft" | "LAlt" => Some(KeyCode::AltLeft),
+        "RightAlt" | "AltRight" | "RAlt" => Some(KeyCode::AltRight),
         "F1" => Some(KeyCode::F1),
         "F2" => Some(KeyCode::F2),
         "F3" => Some(KeyCode::F3),

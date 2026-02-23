@@ -10,7 +10,7 @@ wgpu = "28.0.0"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 glam = "0.32.0"
-toml = "1.0.3+spec-1.1.0"
+toml = "1.0.3"
 serde = { version = "1.0.228", features = ["derive"] }
 fontdue = "0.9.3"
 rect_packer = "0.2.1"
@@ -22,7 +22,7 @@ fastnoise-lite = "1.1.1"
 rand = "0.10.0"
 zstd = "0.13.3"
 postcard = { version = "1.1.3", features = ["use-std"] }
-serde_yaml = { version = "0.9.34+deprecated" }
+serde_yaml = { version = "0.9.34" }
 wgpu_render_manager = "0.2.5"
 earcutr = "0.5.0"
 clipper2-rust = "1.0.1"

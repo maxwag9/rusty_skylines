@@ -65,7 +65,7 @@ pub fn run_ui(resources: &mut Resources) {
 }
 
 pub fn run_interpolation(resources: &mut Resources) {
-    interpolate_cars(&mut resources.world_core);
+    interpolate_cars(&mut resources.world_core, &resources.settings);
 }
 
 pub fn run_render(resources: &mut Resources) {

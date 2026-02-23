@@ -163,3 +163,6 @@ keys = ["Shift+F8"]
 keys = ["Ctrl+F8"]
 ["Cycle Shadow Type"]
 keys = ["Shift+F7"]
+
+["UI Snap Modifier"]
+keys = ["Shift+Shift"]

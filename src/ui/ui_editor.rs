@@ -174,6 +174,7 @@ impl UiButtonLoader {
         if !self.touch_manager.options.show_gui {
             return;
         }
+        self.touch_manager.config.snap_enabled = input.gameplay_down("UI Snap Modifier");
 
         // Update undo manager timing
         self.ui_edit_manager.update(dt);
@@ -200,14 +201,6 @@ impl UiButtonLoader {
             .update(dt, input_snapshot, elements.into_iter());
         // Process all emitted events
         let result = self.process_touch_events(&input.mouse);
-        if result.drag_ended || result.update_selection {
-            // println!(
-            //     "Result drag_ended: {}, Result Selection updated: {}, Text editing: {}",
-            //     result.drag_ended,
-            //     result.update_selection,
-            //     self.touch_manager.editor.editing_text.is_some()
-            // );
-        }
 
         // Apply results
         self.apply_event_results(result, &input.mouse);

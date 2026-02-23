@@ -7,37 +7,109 @@ layers:
         action: toggle_state(checkbox_ticked)
         vertices:
           - pos:
-              - 0.27886048
-              - 0.48469028
+              - 0.0
+              - 0.0
             color:
               - 0.01
               - 0.01
               - 0.01
-              - 0.3
+              - 0.5
           - pos:
-              - 0.2828308
-              - 0.44037667
+              - 0.01
+              - 0.0
             color:
               - 0.01
               - 0.01
               - 0.01
-              - 0.3
+              - 0.5
           - pos:
-              - 0.30165404
-              - 0.44131416
+              - 0.0
+              - 0.01
             color:
               - 0.01
-              - 1.01
               - 0.01
-              - 0.3
+              - 0.01
+              - 0.5
           - pos:
-              - 0.3054245
-              - 0.4960463
+              - 0.01
+              - 0.01
             color:
               - 0.01
               - 0.01
               - 0.01
-              - 0.3
+              - 0.5
+      - !Polygon
+        id: Checkbox White Outline
+        action: on_hover(temp_darken_color(); temp_grow_size())
+        vertices:
+          - pos:
+              - 0.0
+              - 0.0
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 0.5
+          - pos:
+              - 0.01
+              - 0.0
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 0.5
+          - pos:
+              - 0.0
+              - 0.01
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 0.5
+          - pos:
+              - 0.01
+              - 0.01
+            color:
+              - 1.0
+              - 1.0
+              - 1.0
+              - 0.5
+      - !Polygon
+        id: Checkbox Black Infill
+        action: on_hover(temp_brighten_color())
+        vertices:
+          - pos:
+              - 0.02
+              - 0.02
+            color:
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.5
+          - pos:
+              - 0.008
+              - 0.0
+            color:
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.5
+          - pos:
+              - 0.0
+              - 0.008
+            color:
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.5
+          - pos:
+              - 0.008
+              - 0.008
+            color:
+              - 0.0
+              - 0.0
+              - 0.0
+              - 0.5
   - name: debug_texts
     order: 2
     elements:

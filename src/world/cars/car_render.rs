@@ -7,6 +7,7 @@ use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world_core::WorldCore;
 use rayon::iter::ParallelIterator;
 
+use crate::data::Settings;
 use bytemuck::{Pod, Zeroable};
 use glam::{Quat, Vec3};
 use rayon::iter::IntoParallelRefIterator;
@@ -203,7 +204,7 @@ fn apply_car_changes(terrain: &Terrain, time: &Time, car: &mut Car, delta: Vec<C
     conform_car_to_terrain(car, terrain, time.render_dt);
 }
 
-pub fn interpolate_cars(world_core: &mut WorldCore) {
+pub fn interpolate_cars(world_core: &mut WorldCore, settings: &Settings) {
     let car_subsystem = &mut world_core.cars;
 
     // Get all CLOSE cars (far away cars are ghosts)
@@ -221,7 +222,11 @@ pub fn interpolate_cars(world_core: &mut WorldCore) {
                 storage.get(id).map(|car| {
                     (
                         id,
-                        interpolate_car(&world_core.time, car, world_core.terrain.chunk_size),
+                        if id == 1 && settings.drive_car {
+                            Vec::new()
+                        } else {
+                            interpolate_car(&world_core.time, car, world_core.terrain.chunk_size)
+                        },
                     )
                 })
             })
