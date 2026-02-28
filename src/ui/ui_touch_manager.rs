@@ -10,6 +10,7 @@
 //! Does NOT handle:
 //! - Rendering, saving/loading, undo storage, element creation/deletion
 
+use crate::data::Settings;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_editor::GuiOptions;
 use crate::ui::ui_runtime::UiRuntimes;
@@ -1077,12 +1078,12 @@ pub struct UiTouchManager {
 }
 
 impl UiTouchManager {
-    pub fn new(editor_mode: bool, override_mode: bool, show_gui: bool) -> Self {
+    pub fn new(settings: &Settings) -> Self {
         Self {
             config: TouchConfig::default(),
             selection: SelectionManager::new(),
             drag: DragCoordinator::new(),
-            editor: EditorTouchExtension::new(editor_mode),
+            editor: EditorTouchExtension::new(settings.editor_mode),
             events: TouchEventQueue::new(64),
             runtimes: UiRuntimes::new(),
             element_states: HashMap::new(),
@@ -1091,8 +1092,8 @@ impl UiTouchManager {
             last_input: InputSnapshot::default(),
             accumulated_time: 0.0,
             options: GuiOptions {
-                override_mode,
-                show_gui,
+                override_mode: settings.override_mode,
+                show_gui: settings.show_gui,
             },
         }
     }

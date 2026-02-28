@@ -11,6 +11,12 @@ pub struct Menu {
 }
 
 impl Menu {
+    pub fn iter_all_elements(&self) -> impl Iterator<Item = &UiElement> {
+        self.layers.iter().flat_map(|l| l.iter_all())
+    }
+    pub fn iter_all_elements_mut(&mut self) -> impl Iterator<Item = &mut UiElement> {
+        self.layers.iter_mut().flat_map(|l| l.iter_all_mut())
+    }
     pub fn sort_layers(&mut self) {
         self.layers.sort_by_key(|l| l.order);
     }
@@ -145,6 +151,7 @@ impl Menu {
             }
 
             ElementKind::Outline | ElementKind::Handle | ElementKind::None => {}
+            _ => {}
         }
 
         false
@@ -191,6 +198,6 @@ pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
 
         ElementKind::Outline => None,
         ElementKind::Handle => None,
-        ElementKind::None => None,
+        ElementKind::None | _ => None,
     }
 }

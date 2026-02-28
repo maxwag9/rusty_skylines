@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
 
+pub trait CycleNext {
+    fn next(&self) -> Self;
+}
+
 /// Mode switch: Strict attempts to deserialize the file as normal JSON into GuiLayout.
 /// Bent ignores JSON structure and deterministically synthesizes a GuiLayout from the file bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +23,16 @@ impl Default for BendMode {
         BendMode::Strict
     }
 }
+impl CycleNext for BendMode {
+    fn next(&self) -> Self {
+        match self {
+            BendMode::Strict => BendMode::Bent,
+            BendMode::Bent => BendMode::Strict,
+            BendMode::Unknown => BendMode::Strict,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")] // "fifo", "mailbox", ...
 pub enum PresentModeSetting {
@@ -45,9 +59,21 @@ impl Default for PresentModeSetting {
         PresentModeSetting::Mailbox
     }
 }
+impl CycleNext for PresentModeSetting {
+    fn next(&self) -> Self {
+        match self {
+            PresentModeSetting::Immediate => PresentModeSetting::Mailbox,
+            PresentModeSetting::Mailbox => PresentModeSetting::Fifo,
+            PresentModeSetting::Fifo => PresentModeSetting::Immediate,
+            PresentModeSetting::Unknown => PresentModeSetting::Mailbox,
+        }
+    }
+}
+
 fn default_chunk_size() -> ChunkSize {
     128
 }
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum DebugViewState {
     Off,
@@ -77,6 +103,12 @@ impl DebugViewState {
         }
     }
 }
+impl CycleNext for DebugViewState {
+    fn next(&self) -> Self {
+        DebugViewState::next(self)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum InternalMenu {
     None,
@@ -87,6 +119,15 @@ impl Default for InternalMenu {
         Self::MainMenu
     }
 }
+impl CycleNext for InternalMenu {
+    fn next(&self) -> Self {
+        match self {
+            InternalMenu::None => InternalMenu::MainMenu,
+            InternalMenu::MainMenu => InternalMenu::None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum LodCenterType {
     Eye,
@@ -97,6 +138,15 @@ impl Default for LodCenterType {
         Self::Target
     }
 }
+impl CycleNext for LodCenterType {
+    fn next(&self) -> Self {
+        match self {
+            LodCenterType::Eye => LodCenterType::Target,
+            LodCenterType::Target => LodCenterType::Eye,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum ShadowType {
     OFF,
@@ -118,71 +168,157 @@ impl ShadowType {
         }
     }
 }
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(default)]
-pub struct Settings {
-    #[serde(default)]
-    pub target_fps: f32,
-    #[serde(default)]
-    pub target_tps: f32,
-    #[serde(default)]
-    pub present_mode: PresentModeSetting,
-    #[serde(default)]
-    pub editor_mode: bool,
-    #[serde(default)]
-    pub override_mode: bool,
-    #[serde(default)]
-    pub show_gui: bool,
-    #[serde(default)]
-    pub background_color: [f32; 4],
-    #[serde(default)]
-    pub total_game_time: f64,
-    #[serde(default)]
-    pub world_generation_benchmark_mode: bool,
-    #[serde(default)]
-    pub bend_mode: BendMode,
-    #[serde(default)]
-    pub show_world: bool,
-    #[serde(default)]
-    pub always_day: bool,
-    #[serde(default)]
-    pub msaa_samples: u32,
-    #[serde(default)]
-    pub shadow_map_size: u32,
-    #[serde(default)]
-    pub shadow_type: ShadowType,
-    #[serde(default)]
-    pub gtao_enabled: bool,
-    #[serde(default)]
-    pub zoom_speed: f32,
-    #[serde(default)]
-    pub render_lanes_gizmo: bool,
-    #[serde(default)]
-    pub render_partitions_gizmo: bool,
-    #[serde(default)]
-    pub render_chunk_bounds: bool,
-    #[serde(default = "default_chunk_size")]
-    pub chunk_size: ChunkSize,
-    #[serde(default)]
-    pub tonemapping_state: ToneMappingState,
-    #[serde(default)]
-    pub debug_view_state: DebugViewState,
-    #[serde(default)]
-    pub starting_menu: InternalMenu,
-    #[serde(default)]
-    pub lod_center: LodCenterType,
-    #[serde(default)]
-    pub reversed_depth_z: bool,
-    #[serde(default)]
-    pub show_fog: bool,
-    #[serde(default)]
-    pub player_pos: WorldPos,
-    #[serde(default)]
-    pub drive_car: bool,
-    #[serde(default)]
-    pub render_rt_gizmo: bool,
-    #[serde(default)]
-    pub noclip: bool,
+impl CycleNext for ShadowType {
+    fn next(&self) -> Self {
+        ShadowType::next(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingKind {
+    Bool,
+    Cycle,
+    Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum SettingValue {
+    F32(f32),
+    F64(f64),
+    U32(u32),
+    Bool(bool),
+    Vec4([f32; 4]),
+    ChunkSize(ChunkSize),
+    ToneMappingState(ToneMappingState),
+    WorldPos(WorldPos),
+    PresentModeSetting(PresentModeSetting),
+    BendMode(BendMode),
+    ShadowType(ShadowType),
+    DebugViewState(DebugViewState),
+    InternalMenu(InternalMenu),
+    LodCenterType(LodCenterType),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+pub enum SettingOp {
+    Toggle,
+    CycleNext,
+    Set(SettingValue),
+}
+
+macro_rules! apply_setting_arm {
+    (Bool, $s:ident, $field:ident, $val:ident, $op:ident) => {
+        match $op {
+            SettingOp::Toggle => $s.$field = !$s.$field,
+            SettingOp::Set(SettingValue::$val(v)) => $s.$field = v,
+            _ => {}
+        }
+    };
+    (Cycle, $s:ident, $field:ident, $val:ident, $op:ident) => {
+        match $op {
+            SettingOp::CycleNext => $s.$field = CycleNext::next(&$s.$field),
+            SettingOp::Set(SettingValue::$val(v)) => $s.$field = v,
+            _ => {}
+        }
+    };
+    (Value, $s:ident, $field:ident, $val:ident, $op:ident) => {
+        if let SettingOp::Set(SettingValue::$val(v)) = $op {
+            $s.$field = v;
+        }
+    };
+}
+
+macro_rules! define_settings {
+    ($(
+        $key:ident => $field:ident : $ty:ty = $default:expr ; $kind:ident ; $val:ident
+    ),* $(,)?) => {
+        #[derive(Debug, Deserialize, Serialize, Clone)]
+        #[serde(default)]
+        pub struct Settings {
+            $(pub $field: $ty,)*
+        }
+
+        impl Default for Settings {
+            fn default() -> Self {
+                Self {
+                    $($field: $default,)*
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum SettingKey {
+            $($key,)*
+        }
+
+        impl SettingKey {
+            pub fn kind(self) -> SettingKind {
+                match self {
+                    $(SettingKey::$key => SettingKind::$kind,)*
+                }
+            }
+
+            pub fn read(self, s: &Settings) -> SettingValue {
+                match self {
+                    $(SettingKey::$key => SettingValue::$val(s.$field.clone()),)*
+                }
+            }
+
+            pub fn apply(self, s: &mut Settings, op: SettingOp) {
+                match self {
+                    $(SettingKey::$key => apply_setting_arm!($kind, s, $field, $val, op),)*
+                }
+            }
+        }
+
+        impl Settings {
+            pub fn read_setting(&self, key: SettingKey) -> SettingValue {
+                key.read(self)
+            }
+
+            pub fn apply_setting(&mut self, key: SettingKey, op: SettingOp) {
+                key.apply(self, op)
+            }
+        }
+    };
+}
+
+define_settings! {
+    TargetFps => target_fps: f32 = 60.0; Value; F32,
+    TargetTps => target_tps: f32 = 60.0; Value; F32,
+    PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle; PresentModeSetting,
+    EditorMode => editor_mode: bool = false; Bool; Bool,
+    OverrideMode => override_mode: bool = false; Bool; Bool,
+    ShowGui => show_gui: bool = true; Bool; Bool,
+    BackgroundColor => background_color: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; Value; Vec4,
+    TotalGameTime => total_game_time: f64 = 0.0; Value; F64,
+    WorldGenerationBenchmarkMode => world_generation_benchmark_mode: bool = false; Bool; Bool,
+    BendMode => bend_mode: BendMode = BendMode::Strict; Cycle; BendMode,
+    ShowWorld => show_world: bool = true; Bool; Bool,
+    AlwaysDay => always_day: bool = false; Bool; Bool,
+    MsaaSamples => msaa_samples: u32 = 4; Value; U32,
+    ShadowMapSize => shadow_map_size: u32 = 4096; Value; U32,
+    ShadowType => shadow_type: ShadowType = ShadowType::default(); Cycle; ShadowType,
+    GtaoEnabled => gtao_enabled: bool = true; Bool; Bool,
+    ZoomSpeed => zoom_speed: f32 = 10.0; Value; F32,
+    RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool; Bool,
+    RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool; Bool,
+    RenderChunkBounds => render_chunk_bounds: bool = false; Bool; Bool,
+    ChunkSize => chunk_size: ChunkSize = default_chunk_size(); Value; ChunkSize,
+    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Value; ToneMappingState,
+    DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle; DebugViewState,
+    StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle; InternalMenu,
+    LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle; LodCenterType,
+    ReversedDepthZ => reversed_depth_z: bool = true; Bool; Bool,
+    ShowFog => show_fog: bool = true; Bool; Bool,
+    PlayerPos => player_pos: WorldPos = WorldPos::default(); Value; WorldPos,
+    DriveCar => drive_car: bool = false; Bool; Bool,
+    RenderRtGizmo => render_rt_gizmo: bool = false; Bool; Bool,
+    Noclip => noclip: bool = false; Bool; Bool,
 }
 
 impl Settings {
@@ -190,44 +326,6 @@ impl Settings {
         !self.gtao_enabled
             && (self.shadow_type == ShadowType::OFF || self.shadow_type == ShadowType::CSM)
             && !self.show_fog
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            target_fps: 60.0,
-            target_tps: 60.0,
-            present_mode: PresentModeSetting::Mailbox,
-            editor_mode: false,
-            override_mode: false,
-            show_gui: true,
-            background_color: [0.0, 0.0, 0.0, 1.0],
-            total_game_time: 0.0,
-            world_generation_benchmark_mode: false,
-            bend_mode: BendMode::Strict,
-            show_world: true,
-            always_day: false,
-            msaa_samples: 4,
-            shadow_map_size: 4096,
-            shadow_type: ShadowType::default(),
-            gtao_enabled: true,
-            zoom_speed: 10.0,
-            render_lanes_gizmo: false,
-            render_partitions_gizmo: false,
-            render_chunk_bounds: false,
-            chunk_size: default_chunk_size(),
-            tonemapping_state: ToneMappingState::default(),
-            debug_view_state: DebugViewState::Off,
-            starting_menu: InternalMenu::default(),
-            lod_center: LodCenterType::default(),
-            reversed_depth_z: true,
-            show_fog: true,
-            player_pos: WorldPos::default(),
-            drive_car: false,
-            render_rt_gizmo: false,
-            noclip: false,
-        }
     }
 }
 

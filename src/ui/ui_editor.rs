@@ -2,7 +2,7 @@
 //!
 //! Uses Command pattern for all undoable operations.
 
-use crate::data::{BendMode, Settings};
+use crate::data::Settings;
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::resources::{CommandQueues, Time};
@@ -17,8 +17,8 @@ use crate::ui::ui_edit_manager::{
 };
 use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::{
-    load_advanced_primitives_from_directory, load_legacy_gui_layout_legacy,
-    load_menus_from_directory, sanitize_filename,
+    load_advanced_primitives_from_directory, load_legacy_gui_layout, load_menus_from_directory,
+    sanitize_filename,
 };
 use crate::ui::ui_text_editing::{MouseSnapshot, handle_text_editing};
 use crate::ui::ui_touch_manager::{
@@ -86,52 +86,62 @@ pub struct UiButtonLoader {
 }
 
 impl UiButtonLoader {
-    pub fn new(
-        editor_mode: bool,
-        override_mode: bool,
-        show_gui: bool,
-        bend_mode: &BendMode,
-        window_size: PhysicalSize<u32>,
-    ) -> Self {
+    pub fn new(settings: &Settings, window_size: PhysicalSize<u32>) -> Self {
         let menus_dir = data_dir("ui_data/menus");
         let ap_dir = data_dir("ui_data/menus/advanced_primitives");
         let legacy_path = data_dir("ui_data/gui_layout.yaml");
-
-        let menu_files = load_menus_from_directory(&menus_dir, bend_mode)
+        let bend_mode = &settings.bend_mode;
+        let menu_files: Vec<MenuYaml> = load_menus_from_directory(&menus_dir, bend_mode)
             .ok()
             .filter(|menus| !menus.is_empty())
             .unwrap_or_else(|| {
                 println!("No menus in directory, trying legacy file...");
-                load_legacy_gui_layout_legacy(&legacy_path, bend_mode)
+                load_legacy_gui_layout(&legacy_path, bend_mode)
             });
-        let advanced_primitives = load_advanced_primitives_from_directory(&ap_dir, bend_mode)
-            .ok()
-            .filter(|ap| !ap.is_empty())
-            .unwrap_or_else(|| {
-                println!("No advanced primitives in {:?}", ap_dir);
-                Vec::new()
-            });
+        let advanced_primitives: HashMap<String, UiLayerYaml> =
+            load_advanced_primitives_from_directory(&ap_dir, bend_mode)
+                .ok()
+                .filter(|ap| !ap.is_empty())
+                .unwrap_or_else(|| {
+                    println!("No advanced primitives in {:?}", ap_dir);
+                    Vec::new()
+                })
+                .into_iter()
+                .map(|l| (l.name.clone(), l))
+                .collect();
 
         let mut loader = Self {
             menus: HashMap::new(),
             variables: UiVariableRegistry::new(),
             console_lines: VecDeque::new(),
-            touch_manager: UiTouchManager::new(editor_mode, override_mode, show_gui),
+            touch_manager: UiTouchManager::new(settings),
             ui_edit_manager: UiEditManager::new(),
             drag_start_state: None,
             element_clipboard: None,
         };
-
+        let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> =
+            HashMap::new(); // menu name, av.
         // Load menus
         for menu_yaml in menu_files {
-            let mut layers = Vec::new();
+            let mut layers: Vec<RuntimeLayer> = Vec::new();
 
             for l in menu_yaml.layers {
-                let elements = l
+                // UiLayerYaml
+                let elements: Vec<UiElement> = l
                     .elements
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|t| UiElement::from_yaml(t, window_size))
+                    .flat_map(|t| match t.advanced_primitive() {
+                        None => UiElement::from_yaml(t, window_size),
+                        Some(av) => {
+                            advanced_primitive_refs
+                                .entry(menu_yaml.name.clone())
+                                .or_default()
+                                .push((av.clone(), l.order));
+
+                            None
+                        }
+                    })
                     .collect();
 
                 layers.push(RuntimeLayer {
@@ -147,7 +157,6 @@ impl UiButtonLoader {
                 });
             }
 
-            layers.sort_by_key(|l| l.order);
             loader.menus.insert(
                 menu_yaml.name.clone(),
                 Menu {
@@ -158,15 +167,44 @@ impl UiButtonLoader {
         }
 
         loader.add_editor_layers();
+
+        for (menu_name, avs) in advanced_primitive_refs {
+            let Some(menu) = loader.menus.get_mut(&menu_name) else {
+                continue;
+            };
+            for (av, order) in avs {
+                let layer = av.to_runtime(settings, &advanced_primitives, order + 1, window_size);
+                menu.layers.push(layer);
+            }
+        }
+        for (_, menu) in loader.menus.iter_mut() {
+            menu.sort_layers()
+        }
         loader
     }
-
+    pub fn resize(&mut self, old_size: PhysicalSize<u32>, new_size: PhysicalSize<u32>) {
+        let scale_old = (old_size.width as f32 * old_size.height as f32).sqrt();
+        let scale_new = (new_size.width as f32 * new_size.height as f32).sqrt();
+        let scale_factor = scale_new / scale_old;
+        println!("scale_factor: {}", scale_factor);
+        self.menus
+            .values_mut()
+            .flat_map(|m| m.layers.iter_mut())
+            .flat_map(|l| {
+                l.dirty.mark_all(); // Dirty all elements so they actually get updated lol
+                l.iter_all_mut()
+            })
+            .for_each(|e| {
+                e.rescale_to_window(old_size, new_size);
+                e.resize(scale_factor.powi(2));
+            });
+    }
     pub fn handle_touches(
         &mut self,
         dt: f32,
         input: &mut Input,
         time: &Time,
-        world_renderer: &mut Terrain,
+        terrain: &mut Terrain,
         window_size: PhysicalSize<u32>,
         road_style_params: &mut RoadStyleParams,
         command_queues: &mut CommandQueues,
@@ -227,7 +265,7 @@ impl UiButtonLoader {
             &top_hit,
             input,
             time,
-            world_renderer,
+            terrain,
             window_size,
             road_style_params,
         );
@@ -1585,6 +1623,7 @@ impl UiButtonLoader {
                             x: v.pos[0],
                             y: v.pos[1],
                             radius: 10.0,
+                            original_radius: 10.0,
                             inside_border_thickness_percentage: 2.0,
                             border_thickness_percentage: 0.0,
                             fade: 0.0,

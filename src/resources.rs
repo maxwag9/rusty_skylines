@@ -56,13 +56,7 @@ impl Resources {
 
         let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
 
-        let mut ui_loader = UiButtonLoader::new(
-            editor_mode,
-            settings.override_mode,
-            settings.show_gui,
-            &settings.bend_mode.clone(),
-            window.inner_size(),
-        );
+        let mut ui_loader = UiButtonLoader::new(&settings, window.inner_size());
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);

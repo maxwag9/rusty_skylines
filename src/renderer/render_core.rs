@@ -57,6 +57,7 @@ pub struct RenderCore {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub msaa_samples: u32,
+    pub old_window_size: PhysicalSize<u32>,
 
     // render-only subsystems & caches
     pub render_manager: RenderManager,
@@ -109,6 +110,7 @@ impl RenderCore {
             config: config.clone(),
             pipelines,
             msaa_samples: settings.msaa_samples,
+            old_window_size: PhysicalSize::new(config.width, config.height),
             ui_renderer,
             terrain_renderer,
             road_renderer,
@@ -122,15 +124,25 @@ impl RenderCore {
         }
     }
 
-    pub(crate) fn resize(&mut self, surface: &Surface, new_size: PhysicalSize<u32>) {
+    pub(crate) fn resize(
+        &mut self,
+        surface: &Surface,
+        new_size: PhysicalSize<u32>,
+        ui: &mut UiButtonLoader,
+    ) {
+        // Early exit for invalid sizes
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
+
+        // Check if size actually changed BEFORE modifying anything
+        if new_size.width == self.config.width && new_size.height == self.config.height {
+            return; // No change needed
+        }
+        self.old_window_size = PhysicalSize::new(self.config.width, self.config.height);
         self.config.width = new_size.width;
         self.config.height = new_size.height;
-        if new_size.width == self.config.width && new_size.height == self.config.height {
-            return;
-        }
+
         let result = self.device.poll(PollType::Wait {
             submission_index: None,
             timeout: Some(Duration::from_secs(5)),
@@ -144,6 +156,7 @@ impl RenderCore {
         surface.configure(&self.device, &self.config);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.render_manager.invalidate_bind_groups();
+        ui.resize(self.old_window_size, new_size);
     }
 
     pub(crate) fn render(

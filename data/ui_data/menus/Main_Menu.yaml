@@ -14,3 +14,13 @@ layers:
           - 1.0
           - 1.0
         text: Play
+      - !Advanced
+        name: checkbox0
+        setting:
+          key: show_world
+          op: toggle
+          true_av: checkbox_ticked
+          false_av: checkbox_unticked
+        x: 0.5
+        y: 0.5
+        scale: 3.0

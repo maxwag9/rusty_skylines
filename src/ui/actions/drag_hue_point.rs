@@ -276,6 +276,7 @@ fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &Mouse) {
         x: mouse.pos.x,
         y: mouse.pos.y,
         radius: 6.0,
+        original_radius: 6.0,
         inside_border_thickness_percentage: 0.002,
         border_thickness_percentage: 1.0,
         fade: 0.0,

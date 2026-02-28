@@ -322,14 +322,22 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.render_core.resize(&resources.surface, size);
+                    resources.render_core.resize(
+                        &resources.surface,
+                        size,
+                        &mut resources.ui_loader,
+                    );
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(resources) = self.resources.as_mut() {
                     let size = resources.window.inner_size(); // << get the real physical size
                     if size.width > 0 && size.height > 0 {
-                        resources.render_core.resize(&resources.surface, size);
+                        resources.render_core.resize(
+                            &resources.surface,
+                            size,
+                            &mut resources.ui_loader,
+                        );
                     }
                 }
             }

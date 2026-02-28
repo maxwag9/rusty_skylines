@@ -1,9 +1,11 @@
+use crate::data::{SettingKey, SettingOp, SettingValue, Settings};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
 use crate::ui::ui_touch_manager::ElementRef;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
 use winit::dpi::PhysicalSize;
@@ -288,7 +290,101 @@ pub enum UiElementYaml {
     Polygon(UiButtonPolygonYaml),
     Text(UiButtonTextYaml),
     Outline(UiButtonOutlineYaml),
+    Advanced(AdvancedPrimitive),
 }
+impl UiElementYaml {
+    pub fn kind(&self) -> ElementKind {
+        match self {
+            UiElementYaml::Advanced(_) => ElementKind::Advanced,
+            UiElementYaml::Circle(_) => ElementKind::Circle,
+            UiElementYaml::Text(_) => ElementKind::Text,
+            UiElementYaml::Polygon(_) => ElementKind::Polygon,
+            UiElementYaml::Outline(_) => ElementKind::Outline,
+            UiElementYaml::Handle(_) => ElementKind::Handle,
+        }
+    }
+    pub fn advanced_primitive(&self) -> Option<&AdvancedPrimitive> {
+        match self {
+            UiElementYaml::Advanced(av) => Some(av),
+            _ => None,
+        }
+    }
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SettingBinding {
+    pub key: SettingKey,
+    pub op: SettingOp,
+
+    // For checkbox visuals:
+    pub true_av: Option<String>,
+    pub false_av: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AdvancedPrimitive {
+    pub name: String,
+    #[serde(default)]
+    pub av_name: Option<String>,
+
+    #[serde(default)]
+    pub setting: Option<SettingBinding>,
+    pub x: f32,
+    pub y: f32,
+    #[serde(skip_serializing_if = "is_one")]
+    pub scale: f32,
+    pub active: bool,
+}
+
+impl AdvancedPrimitive {
+    pub fn to_runtime(
+        self,
+        settings: &Settings,
+        advanced_primitives: &HashMap<String, UiLayerYaml>,
+        order: u32,
+        window_size: PhysicalSize<u32>,
+    ) -> RuntimeLayer {
+        let mut av_name = self.av_name;
+
+        if av_name.is_none() {
+            if let Some(setting) = self.setting {
+                let value = settings.read_setting(setting.key);
+                if let SettingValue::Bool(b) = value {
+                    av_name = if b { setting.true_av } else { setting.false_av };
+                }
+            }
+        }
+
+        let elements: Vec<UiElement> = av_name
+            .as_ref()
+            .and_then(|name| advanced_primitives.get(name))
+            .map(|av| {
+                av.elements
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|e| UiElement::from_yaml(e, window_size))
+                    .map(|mut el| {
+                        el.resize(self.scale);
+                        el.set_pos_normalized(self.x, self.y, window_size);
+                        el
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        RuntimeLayer {
+            name: self.name,
+            order,
+            elements,
+            active: self.active,
+            cache: Default::default(),
+            dirty: Default::default(),
+            gpu: Default::default(),
+            opaque: false,
+            saveable: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum UiElement {
     Circle(UiButtonCircle),
@@ -299,21 +395,29 @@ pub enum UiElement {
 }
 
 impl UiElement {
-    pub(crate) fn from_yaml(element: UiElementYaml, window_size: PhysicalSize<u32>) -> UiElement {
+    pub(crate) fn from_yaml(
+        element: UiElementYaml,
+        window_size: PhysicalSize<u32>,
+    ) -> Option<UiElement> {
         match element {
             UiElementYaml::Circle(e) => {
-                UiElement::Circle(UiButtonCircle::from_yaml(e, window_size))
+                Some(UiElement::Circle(UiButtonCircle::from_yaml(e, window_size)))
             }
             UiElementYaml::Handle(e) => {
-                UiElement::Handle(UiButtonHandle::from_yaml(e, window_size))
+                Some(UiElement::Handle(UiButtonHandle::from_yaml(e, window_size)))
             }
-            UiElementYaml::Polygon(e) => {
-                UiElement::Polygon(UiButtonPolygon::from_yaml(e, window_size))
+            UiElementYaml::Polygon(e) => Some(UiElement::Polygon(UiButtonPolygon::from_yaml(
+                e,
+                window_size,
+            ))),
+            UiElementYaml::Text(e) => {
+                Some(UiElement::Text(UiButtonText::from_yaml(e, window_size)))
             }
-            UiElementYaml::Text(e) => UiElement::Text(UiButtonText::from_yaml(e, window_size)),
-            UiElementYaml::Outline(e) => {
-                UiElement::Outline(UiButtonOutline::from_yaml(e, window_size))
-            }
+            UiElementYaml::Outline(e) => Some(UiElement::Outline(UiButtonOutline::from_yaml(
+                e,
+                window_size,
+            ))),
+            _ => None,
         }
     }
     pub(crate) fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiElementYaml {
@@ -453,32 +557,23 @@ impl UiElement {
     pub fn resize(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {
-                t.px = ((t.px as f32) * scale).round() as u16;
-
-                println!("Text size: {}", t.px)
+                t.px = (t.original_px as f32 * scale).round() as u16;
             }
             UiElement::Circle(c) => {
-                c.radius *= scale;
+                c.radius = c.original_radius * scale;
             }
-            UiElement::Outline(_) | UiElement::Handle(_) => {}
+            UiElement::Outline(o) => {
+                // Scale outline thickness?
+                o.shape_data.radius *= scale;
+            }
+            UiElement::Handle(h) => {
+                h.radius *= scale;
+            }
             UiElement::Polygon(p) => {
-                // compute centroid
-                let mut cx = 0.0f32;
-                let mut cy = 0.0f32;
-                let count = p.vertices.len() as f32;
-                if count <= 0.0 {
-                    return;
-                }
-                for v in &p.vertices {
-                    cx += v.pos[0];
-                    cy += v.pos[1];
-                }
-                cx /= count;
-                cy /= count;
-
-                for v in &mut p.vertices {
-                    v.pos[0] = cx + (v.pos[0] - cx) * scale;
-                    v.pos[1] = cy + (v.pos[1] - cy) * scale;
+                // Store original vertices and scale from those
+                for (v, orig) in p.vertices.iter_mut().zip(&p.original_vertices) {
+                    v.pos[0] = orig.pos[0] * scale;
+                    v.pos[1] = orig.pos[1] * scale;
                 }
             }
         }
@@ -508,6 +603,66 @@ impl UiElement {
                 }
             }
         }
+    }
+    pub fn set_pos(&mut self, x: f32, y: f32) {
+        match self {
+            UiElement::Text(t) => {
+                t.x = x;
+                t.y = y;
+            }
+            UiElement::Circle(c) => {
+                c.x = x;
+                c.y = y;
+            }
+            UiElement::Handle(h) => {
+                h.x = x;
+                h.y = y;
+            }
+            UiElement::Outline(o) => {
+                o.shape_data.x = x;
+                o.shape_data.y = y;
+            }
+            UiElement::Polygon(p) => {
+                // Get current center position
+                if let Some(first) = p.vertices.first() {
+                    let current_x = first.pos[0];
+                    let current_y = first.pos[1];
+
+                    // Calculate offset needed
+                    let dx = x - current_x;
+                    let dy = y - current_y;
+
+                    // Apply offset to all vertices
+                    for v in &mut p.vertices {
+                        v.pos[0] += dx;
+                        v.pos[1] += dy;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn set_pos_normalized(&mut self, norm_x: f32, norm_y: f32, window_size: PhysicalSize<u32>) {
+        // Convert normalized coordinates (0.0..1.0) to pixel coordinates
+        let x = norm_x * window_size.width as f32;
+        let y = norm_y * window_size.height as f32;
+
+        self.set_pos(x, y);
+    }
+    pub fn rescale_to_window(
+        &mut self,
+        old_window_size: PhysicalSize<u32>,
+        new_window_size: PhysicalSize<u32>,
+    ) {
+        // Get current pixel position
+        let current_pos = self.center();
+
+        // Infer normalized position from old window size
+        let norm_x = current_pos[0] / old_window_size.width as f32;
+        let norm_y = current_pos[1] / old_window_size.height as f32;
+
+        // Reapply normalized position with new window size
+        self.set_pos_normalized(norm_x, norm_y, new_window_size);
     }
     /// Replaces self if same variant and matching id. Returns true if replaced.
     pub fn replace_if_matches(&mut self, new_state: &UiElement) -> bool {
@@ -762,6 +917,7 @@ pub enum ElementKind {
     Handle,
     Polygon,
     None,
+    Advanced,
 }
 
 impl From<&UiElement> for ElementKind {
@@ -879,7 +1035,7 @@ impl RuntimeLayer {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)] // This tells serde to fill missing fields with defaults when loading
 pub struct UiLayerYaml {
     pub name: String,
@@ -925,9 +1081,6 @@ pub struct UiVertex {
 impl UiVertex {
     fn from_yaml(v: UiVertexYaml, id: usize, window_size: PhysicalSize<u32>) -> Self {
         let mut pos = v.pos;
-        pos[0] *= window_size.width as f32;
-        pos[1] *= window_size.height as f32;
-
         UiVertex {
             pos,
             color: v.color,
@@ -939,8 +1092,6 @@ impl UiVertex {
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiVertexYaml {
         let mut pos = self.pos;
-        pos[0] /= window_size.width as f32;
-        pos[1] /= window_size.height as f32;
         UiVertexYaml {
             pos,
             color: self.color,
@@ -1134,6 +1285,7 @@ pub struct UiButtonText {
     pub top_right_offset: [f32; 2],
     pub bottom_right_offset: [f32; 2],
     pub px: u16,
+    pub original_px: u16,
     pub color: [f32; 4],
     pub text: String,
     pub template: String,
@@ -1159,9 +1311,13 @@ pub struct UiButtonText {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: String,
+    pub x: f32,
+    pub y: f32,
+    pub scale: f32,
     pub action: String,
     pub style: String,
     pub vertices: Vec<UiVertex>,
+    pub original_vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
     pub tri_count: u32,
 }
@@ -1174,6 +1330,7 @@ pub struct UiButtonCircle {
     pub x: f32,
     pub y: f32,
     pub radius: f32,
+    pub original_radius: f32,
     pub inside_border_thickness_percentage: f32,
     pub border_thickness_percentage: f32,
     pub fade: f32,
@@ -1239,6 +1396,7 @@ impl UiButtonText {
                 scale * t.bottom_right_offset[1],
             ],
             px: (scale * t.px) as u16,
+            original_px: (scale * t.px) as u16,
             color: t.color,
             text: t.text.clone(),
             template: t.text,
@@ -1313,6 +1471,7 @@ impl UiButtonCircle {
             x: window_size.width as f32 * c.x,
             y: window_size.height as f32 * c.y,
             radius,
+            original_radius: radius,
             inside_border_thickness_percentage: c.inside_border_thickness_percentage,
             border_thickness_percentage: c.border_thickness_percentage,
             fade: c.fade,
@@ -1462,9 +1621,13 @@ impl UiButtonPolygon {
 
         UiButtonPolygon {
             id: p.id,
+            x: p.x,
+            y: p.y,
+            scale: p.scale,
             action: p.action,
             style: p.style,
-            vertices: verts,
+            vertices: verts.clone(),
+            original_vertices: verts,
             misc: MiscButtonSettings {
                 active: p.misc.active,
                 touched_time: 0.0,
@@ -1482,6 +1645,9 @@ impl UiButtonPolygon {
             action: self.action.clone(),
             style: self.style.clone(),
 
+            x: self.x,
+            y: self.y,
+            scale: self.scale,
             vertices: self
                 .vertices
                 .iter()
@@ -1559,6 +1725,7 @@ impl Default for UiButtonText {
             top_right_offset: [0.0; 2],
             bottom_right_offset: [0.0; 2],
             px: 14,
+            original_px: 14,
             color: [1.0, 1.0, 1.0, 1.0],
             text: "".into(),
             template: "".to_string(),
@@ -1615,9 +1782,13 @@ impl Default for UiButtonPolygon {
 
         Self {
             id: "None".to_string(),
+            x: 0.0,
+            y: 0.0,
+            scale: 1.0,
             action: "None".to_string(),
             style: "None".to_string(),
-            vertices: verts,
+            vertices: verts.clone(),
+            original_vertices: verts,
             misc: MiscButtonSettings::default(),
             tri_count: 0,
         }
@@ -1633,6 +1804,7 @@ impl Default for UiButtonCircle {
             x: 0.0,
             y: 0.0,
             radius: 10.0,
+            original_radius: 10.0,
             inside_border_thickness_percentage: 0.0,
             border_thickness_percentage: 1.0,
             fade: 0.0,
@@ -1995,7 +2167,12 @@ pub struct UiButtonPolygonYaml {
         skip_serializing_if = "is_none_string"
     )]
     pub style: String,
-
+    #[serde(skip_serializing_if = "is_default")]
+    pub x: f32,
+    #[serde(skip_serializing_if = "is_default")]
+    pub y: f32,
+    #[serde(skip_serializing_if = "is_default")]
+    pub scale: f32,
     // If vertices are empty, we might as well skip, but usually polygon has data
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vertices: Vec<UiVertexYaml>,
@@ -2010,6 +2187,9 @@ impl Default for UiButtonPolygonYaml {
             id: "None".to_string(),
             action: "None".to_string(),
             style: "None".to_string(),
+            x: 0.0,
+            y: 0.0,
+            scale: 1.0,
             vertices: Vec::new(),
             misc: MiscButtonSettingsYaml::default(),
         }
@@ -2023,6 +2203,9 @@ fn is_default<T: Default + PartialEq>(t: &T) -> bool {
 // Checks if a boolean is true (useful for things like 'active' where default is true)
 fn is_true(b: &bool) -> bool {
     *b
+}
+fn is_one(v: &f32) -> bool {
+    (*v - 1.0).abs() < 1e-6
 }
 
 // Checks if the [f32; 2] offset is [0.0, 0.0]

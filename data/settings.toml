@@ -1,7 +1,7 @@
 target_fps = 100.0
 target_tps = 60.0
 present_mode = "mailbox"
-editor_mode = false
+editor_mode = true
 override_mode = false
 show_gui = true
 background_color = [
@@ -10,10 +10,10 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 233840.4201525997
+total_game_time = 234182.12017042073
 world_generation_benchmark_mode = false
 bend_mode = "strict"
-show_world = true
+show_world = false
 always_day = false
 msaa_samples = 4
 shadow_map_size = 2048
@@ -30,15 +30,15 @@ starting_menu = "None"
 lod_center = "Target"
 reversed_depth_z = true
 show_fog = true
-drive_car = true
+drive_car = false
 render_rt_gizmo = false
 noclip = false
 
 [player_pos.chunk]
-x = 56
-z = 13
+x = -59
+z = -222
 
 [player_pos.local]
-x = 34.721115
-y = 510.51495
-z = 95.00353
+x = 7.013014
+y = 42.578815
+z = 23.927063

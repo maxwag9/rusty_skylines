@@ -58,7 +58,7 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
 }
 
 /// Load from legacy single-file format
-pub fn load_legacy_gui_layout_legacy(path: &PathBuf, mode: &BendMode) -> Vec<MenuYaml> {
+pub fn load_legacy_gui_layout(path: &PathBuf, mode: &BendMode) -> Vec<MenuYaml> {
     if !path.exists() {
         println!("Legacy file not found: {}", path.display());
         return vec![];
@@ -520,6 +520,9 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
         id: format!("p_{}", rng.next_u64()),
         action: "None".to_string(),
         style: "BentPoly".to_string(),
+        x: 0.0,
+        y: 0.0,
+        scale: 1.0,
         vertices: verts,
         misc: MiscButtonSettingsYaml {
             active: true,
