@@ -32,7 +32,7 @@ pub struct LineVtxWorld {
     pub pos: WorldPos,
     pub color: [f32; 3],
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerGpu {
     pub circle_ssbo: Option<Buffer>,
     pub circle_count: u32,
@@ -48,6 +48,9 @@ pub struct LayerGpu {
     pub poly_count: u32,          // vertex count
     pub poly_info_ssbo: Option<Buffer>,
     pub poly_edge_ssbo: Option<Buffer>,
+
+    pub rect_ssbo: Option<Buffer>,
+    pub rect_count: u32,
 
     pub text_vbo: Option<Buffer>, // UiVertexText stream
     pub text_count: u32,
@@ -67,6 +70,8 @@ impl Default for LayerGpu {
             poly_count: 0,
             poly_info_ssbo: None,
             poly_edge_ssbo: None,
+            rect_ssbo: None,
+            rect_count: 0,
             text_vbo: None,
             text_count: 0,
         }
@@ -87,9 +92,10 @@ pub enum UiElementCache {
     Polygon(Vec<UiVertexPoly>),
     Text(TextParams),
     Outline(OutlineParams),
+    Rect(RectGpu),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LayerCache {
     pub elements: Vec<UiElementCache>,
     pub outline_poly_vertices: Vec<[f32; 2]>,
@@ -208,6 +214,7 @@ pub struct LayerDirty {
     pub outlines: bool,
     pub handles: bool,
     pub polygons: bool,
+    pub rects: bool,
 }
 
 impl LayerDirty {
@@ -218,6 +225,7 @@ impl LayerDirty {
             outlines: true,
             handles: true,
             polygons: true,
+            rects: true,
         }
     }
 
@@ -228,6 +236,7 @@ impl LayerDirty {
             outlines: false,
             handles: false,
             polygons: false,
+            rects: false,
         }
     }
 
@@ -246,7 +255,9 @@ impl LayerDirty {
     pub fn mark_outlines(&mut self) {
         self.outlines = true;
     }
-
+    pub fn mark_rects(&mut self) {
+        self.rects = true;
+    }
     pub fn mark_handles(&mut self) {
         self.handles = true;
     }
@@ -259,22 +270,13 @@ impl LayerDirty {
         *self = Self::all();
     }
 
-    pub fn clear(&mut self, done: LayerDirty) {
-        if done.texts {
-            self.texts = false;
-        }
-        if done.circles {
-            self.circles = false;
-        }
-        if done.outlines {
-            self.outlines = false;
-        }
-        if done.handles {
-            self.handles = false;
-        }
-        if done.polygons {
-            self.polygons = false;
-        }
+    pub fn clear(&mut self, d: LayerDirty) {
+        self.texts &= !d.texts;
+        self.circles &= !d.circles;
+        self.outlines &= !d.outlines;
+        self.handles &= !d.handles;
+        self.polygons &= !d.polygons;
+        self.rects &= !d.rects;
     }
 }
 
@@ -291,10 +293,12 @@ pub enum UiElementYaml {
     Text(UiButtonTextYaml),
     Outline(UiButtonOutlineYaml),
     Advanced(AdvancedPrimitive),
+    Rect(UiButtonRectYaml),
 }
 impl UiElementYaml {
     pub fn kind(&self) -> ElementKind {
         match self {
+            UiElementYaml::Rect(_) => ElementKind::Rect,
             UiElementYaml::Advanced(_) => ElementKind::Advanced,
             UiElementYaml::Circle(_) => ElementKind::Circle,
             UiElementYaml::Text(_) => ElementKind::Text,
@@ -345,14 +349,17 @@ impl AdvancedPrimitive {
         let mut av_name = self.av_name;
 
         if av_name.is_none() {
-            if let Some(setting) = self.setting {
+            if let Some(setting) = &self.setting {
                 let value = settings.read_setting(setting.key);
                 if let SettingValue::Bool(b) = value {
-                    av_name = if b { setting.true_av } else { setting.false_av };
+                    av_name = if b {
+                        setting.true_av.clone()
+                    } else {
+                        setting.false_av.clone()
+                    };
                 }
             }
         }
-
         let elements: Vec<UiElement> = av_name
             .as_ref()
             .and_then(|name| advanced_primitives.get(name))
@@ -370,21 +377,123 @@ impl AdvancedPrimitive {
                     .collect()
             })
             .unwrap_or_default();
-
         RuntimeLayer {
             name: self.name,
             order,
             elements,
             active: self.active,
+            setting: self.setting,
             cache: Default::default(),
-            dirty: Default::default(),
+            dirty: LayerDirty::all(),
             gpu: Default::default(),
             opaque: false,
             saveable: false,
         }
     }
 }
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UiButtonRectYaml {
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub id: String,
 
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub action: String,
+
+    #[serde(
+        default = "default_none_string",
+        skip_serializing_if = "is_none_string"
+    )]
+    pub style: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    #[serde(default)]
+    pub color: [f32; 4], // tint for texture
+    #[serde(default)]
+    pub texture: Option<String>,
+    #[serde(default)]
+    pub roundness: f32, // corner radius
+    #[serde(default)]
+    pub border_thickness_percentage: f32,
+    #[serde(default)]
+    pub fade: f32,
+    #[serde(default)]
+    pub misc: MiscButtonSettingsYaml,
+}
+#[derive(Debug, Clone)]
+pub struct UiButtonRect {
+    pub id: String,
+    pub action: String,
+    pub style: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub color: [f32; 4], // tint for texture
+    pub texture: Option<String>,
+    pub roundness: f32, // corner radius
+    pub border_thickness_percentage: f32,
+    pub fade: f32,
+    pub misc: MiscButtonSettings,
+}
+
+impl UiButtonRect {
+    pub fn from_yaml(c: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        UiButtonRect {
+            id: c.id,
+            action: c.action,
+            style: c.style,
+            x: window_size.width as f32 * c.x,
+            y: window_size.height as f32 * c.y,
+            w: c.w * scale,
+            h: c.h * scale,
+            color: c.color,
+            texture: c.texture,
+            roundness: c.roundness * scale,
+            border_thickness_percentage: c.border_thickness_percentage,
+            fade: c.fade,
+            misc: MiscButtonSettings {
+                active: c.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: c.misc.pressable,
+                editable: c.misc.editable,
+            },
+        }
+    }
+
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonRectYaml {
+        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        UiButtonRectYaml {
+            id: self.id.clone(),
+            action: self.action.clone(),
+            style: self.style.clone(),
+            x: self.x / window_size.width as f32,
+            y: self.y / window_size.height as f32,
+            w: self.w / scale,
+            h: self.h / scale,
+            color: self.color,
+            texture: self.texture.clone(),
+            roundness: self.roundness / scale,
+            border_thickness_percentage: self.border_thickness_percentage,
+            fade: self.fade,
+            misc: self.misc.to_yaml(),
+        }
+    }
+
+    #[inline]
+    pub fn size(&self) -> f32 {
+        (self.w + self.h) * 0.5
+    }
+}
 #[derive(Debug, Clone)]
 pub enum UiElement {
     Circle(UiButtonCircle),
@@ -392,13 +501,11 @@ pub enum UiElement {
     Polygon(UiButtonPolygon),
     Text(UiButtonText),
     Outline(UiButtonOutline),
+    Rect(UiButtonRect),
 }
 
 impl UiElement {
-    pub(crate) fn from_yaml(
-        element: UiElementYaml,
-        window_size: PhysicalSize<u32>,
-    ) -> Option<UiElement> {
+    pub fn from_yaml(element: UiElementYaml, window_size: PhysicalSize<u32>) -> Option<UiElement> {
         match element {
             UiElementYaml::Circle(e) => {
                 Some(UiElement::Circle(UiButtonCircle::from_yaml(e, window_size)))
@@ -417,20 +524,21 @@ impl UiElement {
                 e,
                 window_size,
             ))),
+            UiElementYaml::Rect(e) => {
+                Some(UiElement::Rect(UiButtonRect::from_yaml(e, window_size)))
+            }
             _ => None,
         }
     }
-    pub(crate) fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiElementYaml {
+
+    pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiElementYaml {
         match self {
-            UiElement::Circle(e) => UiElementYaml::Circle(UiButtonCircle::to_yaml(e, window_size)),
-            UiElement::Handle(e) => UiElementYaml::Handle(UiButtonHandle::to_yaml(e, window_size)),
-            UiElement::Polygon(e) => {
-                UiElementYaml::Polygon(UiButtonPolygon::to_yaml(e, window_size))
-            }
-            UiElement::Text(e) => UiElementYaml::Text(UiButtonText::to_yaml(e, window_size)),
-            UiElement::Outline(e) => {
-                UiElementYaml::Outline(UiButtonOutline::to_yaml(e, window_size))
-            }
+            UiElement::Circle(e) => UiElementYaml::Circle(e.to_yaml(window_size)),
+            UiElement::Handle(e) => UiElementYaml::Handle(e.to_yaml(window_size)),
+            UiElement::Polygon(e) => UiElementYaml::Polygon(e.to_yaml(window_size)),
+            UiElement::Text(e) => UiElementYaml::Text(e.to_yaml(window_size)),
+            UiElement::Outline(e) => UiElementYaml::Outline(e.to_yaml(window_size)),
+            UiElement::Rect(e) => UiElementYaml::Rect(e.to_yaml(window_size)),
         }
     }
     pub fn as_text_mut(&mut self) -> Option<&mut UiButtonText> {
@@ -459,7 +567,12 @@ impl UiElement {
             _ => None,
         }
     }
-
+    pub fn as_rect_mut(&mut self) -> Option<&mut UiButtonRect> {
+        match self {
+            UiElement::Rect(r) => Some(r),
+            _ => None,
+        }
+    }
     pub fn as_outline_mut(&mut self) -> Option<&mut UiButtonOutline> {
         match self {
             UiElement::Outline(o) => Some(o),
@@ -494,6 +607,13 @@ impl UiElement {
         }
     }
 
+    pub fn as_rect(&self) -> Option<&UiButtonRect> {
+        match self {
+            UiElement::Rect(r) => Some(r),
+            _ => None,
+        }
+    }
+
     pub fn as_outline(&self) -> Option<&UiButtonOutline> {
         match self {
             UiElement::Outline(o) => Some(o),
@@ -509,42 +629,43 @@ impl UiElement {
             UiElement::Polygon(_) => "Polygon",
             UiElement::Handle(_) => "Handle",
             UiElement::Outline(_) => "Outline",
+            UiElement::Rect(_) => "Rect",
         }
     }
+
     pub fn id(&self) -> &str {
         match self {
-            UiElement::Text(t) => &*t.id,
-            UiElement::Circle(c) => c.id.as_str(),
-            UiElement::Outline(o) => &*o.id,
-            UiElement::Handle(h) => &*h.id,
-            UiElement::Polygon(p) => &*p.id,
+            UiElement::Text(t) => &t.id,
+            UiElement::Circle(c) => &c.id,
+            UiElement::Outline(o) => &o.id,
+            UiElement::Handle(h) => &h.id,
+            UiElement::Polygon(p) => &p.id,
+            UiElement::Rect(r) => &r.id,
         }
     }
+
     pub fn action(&self) -> Option<String> {
         match self {
             UiElement::Text(t) => Some(t.action.clone()),
             UiElement::Circle(c) => Some(c.action.clone()),
-            UiElement::Outline(o) => None, //"None, in outline UiElement.action()",
-            UiElement::Handle(h) => None,  //"None, in handle UiElement.action()",
+            UiElement::Outline(_) => None,
+            UiElement::Handle(_) => None,
             UiElement::Polygon(p) => Some(p.action.clone()),
+            UiElement::Rect(r) => Some(r.action.clone()),
         }
     }
+
     pub fn center(&self) -> [f32; 2] {
         match self {
             UiElement::Text(t) => [t.x, t.y],
             UiElement::Circle(c) => [c.x, c.y],
             UiElement::Handle(h) => [h.x, h.y],
             UiElement::Outline(o) => [o.shape_data.x, o.shape_data.y],
-            UiElement::Polygon(p) => {
-                let count = p.vertices.len().max(1);
-                let sum = p
-                    .vertices
-                    .iter()
-                    .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-                [sum.0 / count as f32, sum.1 / count as f32]
-            }
+            UiElement::Polygon(p) => p.center(),
+            UiElement::Rect(r) => [r.x, r.y],
         }
     }
+
     pub fn kind(&self) -> ElementKind {
         match self {
             UiElement::Circle(_) => ElementKind::Circle,
@@ -552,8 +673,10 @@ impl UiElement {
             UiElement::Polygon(_) => ElementKind::Polygon,
             UiElement::Outline(_) => ElementKind::Outline,
             UiElement::Handle(_) => ElementKind::Handle,
+            UiElement::Rect(_) => ElementKind::Rect,
         }
     }
+
     pub fn resize(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {
@@ -563,21 +686,25 @@ impl UiElement {
                 c.radius = c.original_radius * scale;
             }
             UiElement::Outline(o) => {
-                // Scale outline thickness?
                 o.shape_data.radius *= scale;
             }
             UiElement::Handle(h) => {
                 h.radius *= scale;
             }
             UiElement::Polygon(p) => {
-                // Store original vertices and scale from those
                 for (v, orig) in p.vertices.iter_mut().zip(&p.original_vertices) {
                     v.pos[0] = orig.pos[0] * scale;
                     v.pos[1] = orig.pos[1] * scale;
                 }
             }
+            UiElement::Rect(r) => {
+                r.w *= scale;
+                r.h *= scale;
+                r.roundness *= scale;
+            }
         }
     }
+
     pub fn translate(&mut self, dx: f32, dy: f32) {
         match self {
             UiElement::Text(t) => {
@@ -602,8 +729,13 @@ impl UiElement {
                     v.pos[1] += dy;
                 }
             }
+            UiElement::Rect(r) => {
+                r.x += dx;
+                r.y += dy;
+            }
         }
     }
+
     pub fn set_pos(&mut self, x: f32, y: f32) {
         match self {
             UiElement::Text(t) => {
@@ -623,21 +755,17 @@ impl UiElement {
                 o.shape_data.y = y;
             }
             UiElement::Polygon(p) => {
-                // Get current center position
-                if let Some(first) = p.vertices.first() {
-                    let current_x = first.pos[0];
-                    let current_y = first.pos[1];
-
-                    // Calculate offset needed
-                    let dx = x - current_x;
-                    let dy = y - current_y;
-
-                    // Apply offset to all vertices
-                    for v in &mut p.vertices {
-                        v.pos[0] += dx;
-                        v.pos[1] += dy;
-                    }
+                let center = p.center();
+                let dx = x - center[0];
+                let dy = y - center[1];
+                for v in &mut p.vertices {
+                    v.pos[0] += dx;
+                    v.pos[1] += dy;
                 }
+            }
+            UiElement::Rect(r) => {
+                r.x = x;
+                r.y = y;
             }
         }
     }
@@ -690,6 +818,7 @@ impl UiElement {
             UiElement::Text(_) => dirty.mark_texts(),
             UiElement::Handle(_) => dirty.mark_handles(),
             UiElement::Outline(_) => dirty.mark_outlines(),
+            UiElement::Rect(_) => dirty.mark_rects(),
         }
     }
 }
@@ -859,7 +988,18 @@ pub struct PolygonEdgeGpu {
     pub p0: [f32; 2],
     pub p1: [f32; 2],
 }
-
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct RectGpu {
+    pub center: [f32; 2],      // center position
+    pub size: [f32; 2],        // width, height
+    pub color: [f32; 4],       // RGBA
+    pub roundness: f32,        // corner radius
+    pub border_thickness: f32, // computed from percentage
+    pub fade: f32,
+    pub _pad: f32,
+    pub misc: [f32; 4], // active, touched_time, is_down, hash
+}
 // For text — pos + uv + color
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
@@ -894,12 +1034,13 @@ impl UiVertexText {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RuntimeLayer {
     pub name: String,
     pub order: u32,
     pub elements: Vec<UiElement>,
     pub active: bool,
+    pub setting: Option<SettingBinding>,
     // NEW: cached GPU data!!!
     pub cache: LayerCache,
 
@@ -909,15 +1050,17 @@ pub struct RuntimeLayer {
     pub saveable: bool,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ElementKind {
+    #[default]
+    None,
     Text,
     Circle,
     Outline,
     Handle,
     Polygon,
-    None,
     Advanced,
+    Rect,
 }
 
 impl From<&UiElement> for ElementKind {
@@ -928,6 +1071,7 @@ impl From<&UiElement> for ElementKind {
             UiElement::Polygon(_) => ElementKind::Polygon,
             UiElement::Text(_) => ElementKind::Text,
             UiElement::Outline(_) => ElementKind::Outline,
+            UiElement::Rect(_) => ElementKind::Rect,
         }
     }
 }
@@ -986,7 +1130,9 @@ impl RuntimeLayer {
     pub fn iter_texts(&self) -> impl Iterator<Item = &UiButtonText> {
         self.elements.iter().filter_map(UiElement::as_text)
     }
-
+    pub fn iter_rects(&self) -> impl Iterator<Item = &UiButtonRect> {
+        self.elements.iter().filter_map(UiElement::as_rect)
+    }
     pub fn iter_outlines(&self) -> impl Iterator<Item = &UiButtonOutline> {
         self.elements.iter().filter_map(UiElement::as_outline)
     }
@@ -1012,6 +1158,11 @@ impl RuntimeLayer {
     pub fn clear_polygons(&mut self) {
         self.elements
             .retain(|e| !matches!(e, UiElement::Polygon(_)));
+    }
+
+    /// Clear all Polygon elements
+    pub fn clear_rects(&mut self) {
+        self.elements.retain(|e| !matches!(e, UiElement::Rect(_)));
     }
 
     /// Clear all Text elements
@@ -2167,11 +2318,9 @@ pub struct UiButtonPolygonYaml {
         skip_serializing_if = "is_none_string"
     )]
     pub style: String,
-    #[serde(skip_serializing_if = "is_default")]
     pub x: f32,
-    #[serde(skip_serializing_if = "is_default")]
     pub y: f32,
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(skip_serializing_if = "is_one")]
     pub scale: f32,
     // If vertices are empty, we might as well skip, but usually polygon has data
     #[serde(skip_serializing_if = "Vec::is_empty")]

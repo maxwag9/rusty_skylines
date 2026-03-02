@@ -84,6 +84,20 @@ pub fn set_element_position(
             }
             before
         }
+        ElementKind::Rect => {
+            if let Some(r) = layer
+                .elements
+                .iter_mut()
+                .filter_map(UiElement::as_rect_mut)
+                .find(|r| r.id == element_ref.id)
+            {
+                before = Some([r.x, r.y]);
+                r.x = pos[0];
+                r.y = pos[1];
+                layer.dirty.mark_rects();
+            }
+            before
+        }
         _ => before,
     }
 }
@@ -132,6 +146,13 @@ pub fn set_element_size(menus: &mut HashMap<String, Menu>, element_ref: &Element
             {
                 p.resize(size);
                 layer.dirty.mark_polygons();
+            }
+            UiElement::Rect(r)
+                if element_ref.kind == ElementKind::Rect && r.id == element_ref.id =>
+            {
+                r.w = size;
+                r.h = size;
+                layer.dirty.mark_rects();
             }
             _ => {}
         }
@@ -182,6 +203,44 @@ pub fn set_element_color(
                 if matches!(property, ColorProperty::TextColor) {
                     t.color = color;
                     layer.dirty.mark_texts();
+                }
+            }
+        }
+        ElementKind::Rect => {
+            if let Some(r) = layer
+                .elements
+                .iter_mut()
+                .filter_map(UiElement::as_rect_mut)
+                .find(|r| r.id == id)
+            {
+                if matches!(property, ColorProperty::Fill) {
+                    r.color = color;
+                    layer.dirty.mark_rects();
+                }
+            }
+        }
+        ElementKind::Polygon => {
+            if let Some(p) = layer
+                .elements
+                .iter_mut()
+                .filter_map(UiElement::as_polygon_mut)
+                .find(|p| p.id == id)
+            {
+                match property {
+                    ColorProperty::Fill => {
+                        for v in &mut p.vertices {
+                            v.color = color;
+                        }
+                        layer.dirty.mark_rects();
+                    }
+
+                    ColorProperty::VertexIndex(i) => {
+                        if let Some(vertex) = p.vertices.get_mut(*i as usize) {
+                            vertex.color = color;
+                            layer.dirty.mark_rects();
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -353,29 +412,23 @@ pub fn replace_polygon(
 }
 
 /// Delete element - takes element reference
-pub fn delete_element(
-    menus: &mut HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    element: &UiElement,
-) {
-    let Some(menu) = menus.get_mut(menu_name) else {
+pub fn delete_element(menus: &mut HashMap<String, Menu>, element: &ElementRef) {
+    let Some(menu) = menus.get_mut(&element.menu) else {
         return;
     };
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
+    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element.layer) else {
         return;
     };
 
-    let element_id = element.id();
-
-    if let Some(pos) = layer.elements.iter().position(|e| e.id() == element_id) {
-        let removed = layer.elements.remove(pos);
+    if let Some(id) = layer.elements.iter().position(|e| e.id() == element.id) {
+        let removed = layer.elements.remove(id);
         match removed {
             UiElement::Circle(_) => layer.dirty.mark_circles(),
             UiElement::Text(_) => layer.dirty.mark_texts(),
             UiElement::Polygon(_) => layer.dirty.mark_polygons(),
             UiElement::Handle(_) => layer.dirty.mark_handles(),
             UiElement::Outline(_) => layer.dirty.mark_outlines(),
+            UiElement::Rect(_) => layer.dirty.mark_rects(),
         }
     }
 }
@@ -422,6 +475,11 @@ pub fn create_element(
         UiElement::Polygon(p) => {
             p.id = id.to_string();
         }
+        UiElement::Rect(r) => {
+            r.x = mouse.pos.x;
+            r.y = mouse.pos.y;
+            r.id = id.to_string();
+        }
     }
 
     // Push element veryyy simple
@@ -431,6 +489,7 @@ pub fn create_element(
         UiElement::Outline(_) => layer.dirty.mark_outlines(),
         UiElement::Handle(_) => layer.dirty.mark_handles(),
         UiElement::Polygon(_) => layer.dirty.mark_polygons(),
+        UiElement::Rect(_) => layer.dirty.mark_rects(),
     }
     layer.elements.push(element);
 

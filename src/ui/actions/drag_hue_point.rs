@@ -2,7 +2,7 @@
 use crate::resources::Time;
 use crate::ui::actions::deactivate_action;
 use crate::ui::input::Mouse;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::ui::vertex::{MiscButtonSettings, UiButtonCircle};
 use glam::Vec2;
 use std::f32::consts::{FRAC_PI_2, TAU};
@@ -29,7 +29,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r + m, g + m, b + m]
 }
 
-pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &Mouse, time: &Time) {
+pub fn drag_hue_point(loader: &mut Ui, mouse_state: &Mouse, time: &Time) {
     let Some(sel) = &loader.touch_manager.selection.primary else {
         return;
     };
@@ -106,7 +106,7 @@ pub fn drag_hue_point(loader: &mut UiButtonLoader, mouse_state: &Mouse, time: &T
     // }
 }
 
-fn get_picker_circles(loader: &UiButtonLoader) -> Option<(CircleSnapshot, CircleSnapshot)> {
+fn get_picker_circles(loader: &Ui) -> Option<(CircleSnapshot, CircleSnapshot)> {
     let layer = loader
         .menus
         .get("Editor_Menu")?
@@ -140,7 +140,7 @@ struct CircleSnapshot {
     radius: f32,
 }
 
-fn ensure_action_state(loader: &mut UiButtonLoader, hue_radius: f32, handle_radius: f32) {
+fn ensure_action_state(loader: &mut Ui, hue_radius: f32, handle_radius: f32) {
     // let state = loader
     //     .ui_runtime
     //     .action_states
@@ -224,7 +224,7 @@ fn compute_idle_state(
     pointer: Vec2,
     og_handle_r: f32,
     og_hue_r: f32,
-    loader: &UiButtonLoader,
+    loader: &Ui,
     dt: f32,
 ) -> (Option<Vec2>, Option<[f32; 4]>, f32, f32) {
     let h = loader.variables.get_f32("color_picker.h").unwrap_or(0.0);
@@ -252,7 +252,7 @@ fn compute_idle_state(
     (Some(smoothed), None, handle_radius, og_hue_r)
 }
 
-fn get_handle_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
+fn get_handle_color(loader: &Ui) -> Option<[f32; 4]> {
     let r = loader.variables.get_f32("color_picker.r").unwrap_or(1.0);
     let g = loader.variables.get_f32("color_picker.g").unwrap_or(1.0);
     let b = loader.variables.get_f32("color_picker.b").unwrap_or(1.0);
@@ -268,7 +268,7 @@ fn get_handle_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
 //         .unwrap_or(false)
 // }
 
-fn spawn_handle_circle(loader: &mut UiButtonLoader, mouse: &Mouse) {
+fn spawn_handle_circle(loader: &mut Ui, mouse: &Mouse) {
     let handle = UiButtonCircle {
         id: "color picker handle circle".to_string(),
         action: "None".to_string(),

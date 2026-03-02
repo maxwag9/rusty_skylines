@@ -107,7 +107,46 @@ pub fn upload_polygons(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
 
     upload_poly_metadata_ssbos(ui_renderer, queue, layer, &infos, &edges);
 }
+pub fn upload_rects(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
+    let rects: Vec<RectGpu> = layer
+        .cache
+        .elements
+        .iter()
+        .filter_map(|e| {
+            if let UiElementCache::Rect(r) = e {
+                Some(*r)
+            } else {
+                None
+            }
+        })
+        .collect();
 
+    let rect_count = rects.len() as u32;
+
+    if rect_count > 0 {
+        let bytes = bytemuck::cast_slice(&rects);
+        let need_new = layer
+            .gpu
+            .rect_ssbo
+            .as_ref()
+            .map(|b| b.size() < bytes.len() as u64)
+            .unwrap_or(true);
+
+        if need_new {
+            layer.gpu.rect_ssbo = Some(ui_renderer.device.create_buffer(&BufferDescriptor {
+                label: Some(&format!("{}_rect_ssbo", layer.name)),
+                size: bytes.len() as u64,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        queue.write_buffer(layer.gpu.rect_ssbo.as_ref().unwrap(), 0, bytes);
+    } else {
+        layer.gpu.rect_ssbo = None;
+    }
+
+    layer.gpu.rect_count = rect_count;
+}
 pub fn upload_poly_metadata_ssbos(
     ui_renderer: &mut UiRenderer,
     queue: &Queue,

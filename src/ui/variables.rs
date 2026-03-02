@@ -1,5 +1,5 @@
 use crate::data::Settings;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::{AstronomyState, TimeScales};
 use std::collections::HashMap;
 use std::fmt;
@@ -164,7 +164,7 @@ impl UiVariableRegistry {
 }
 
 pub fn update_ui_variables(
-    ui_loader: &mut UiButtonLoader,
+    ui_loader: &mut Ui,
     time_scales: &TimeScales,
     astronomy: &AstronomyState,
     obliquity: f32,

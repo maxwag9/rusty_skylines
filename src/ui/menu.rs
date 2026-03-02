@@ -1,5 +1,5 @@
 use crate::ui::cache::*;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
@@ -47,7 +47,7 @@ impl Menu {
             return;
         }
 
-        let outlines_dirty = dirty.outlines || dirty.polygons;
+        let outlines_dirty = dirty.outlines || dirty.polygons || dirty.rects || dirty.circles;
         let mut rebuilt = LayerDirty::none();
 
         init_cache_structure(layer);
@@ -70,6 +70,10 @@ impl Menu {
 
         if dirty.polygons {
             rebuild_polygon_cache(layer, &mut rebuilt, runtime);
+        }
+
+        if dirty.rects {
+            rebuild_rect_cache(layer, &mut rebuilt, runtime);
         }
 
         layer.dirty.clear(rebuilt);
@@ -158,7 +162,7 @@ impl Menu {
     }
 }
 
-pub fn get_selected_element_color(loader: &UiButtonLoader) -> Option<[f32; 4]> {
+pub fn get_selected_element_color(loader: &Ui) -> Option<[f32; 4]> {
     let Some(sel) = &loader.touch_manager.selection.primary else {
         return None;
     };

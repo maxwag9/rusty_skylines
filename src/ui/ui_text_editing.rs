@@ -27,28 +27,12 @@ impl MouseSnapshot {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum HitElement {
-    Circle(usize),
-    Handle(usize),
-    Polygon(usize),
-    Text(usize),
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct HitResult {
-    pub menu_name: String,
-    pub layer_name: String,
-    pub element: HitElement,
+    pub element: ElementRef,
     pub layer_order: u32,
     pub action: Option<String>,
     pub(crate) element_order: usize,
-}
-
-impl HitResult {
-    pub fn matches(&self, menu_name: &str, layer_name: &str, element: HitElement) -> bool {
-        self.menu_name == menu_name && self.layer_name == layer_name && self.element == element
-    }
 }
 
 // ============================================================================

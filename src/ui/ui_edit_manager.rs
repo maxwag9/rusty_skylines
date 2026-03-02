@@ -13,6 +13,7 @@ use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::{Debug, Display, Formatter};
 
 /// Maximum number of undo steps to keep
 const MAX_UNDO_HISTORY: usize = 100;
@@ -25,6 +26,7 @@ const COALESCE_TIMEOUT: f32 = 0.3;
 // ============================================================================
 
 /// Command trait for undoable actions
+
 pub trait UICommand: Any {
     /// Apply undo (restore before state)
     fn undo(
@@ -78,6 +80,11 @@ impl dyn UICommand {
 impl Clone for Box<dyn UICommand> {
     fn clone(&self) -> Self {
         self.clone_box()
+    }
+}
+impl Debug for Box<dyn UICommand> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.as_any().fmt(f)
     }
 }
 
@@ -392,12 +399,7 @@ impl UICommand for CreateElementCommand {
         _variables: &mut UiVariableRegistry,
         _mouse: &Mouse,
     ) {
-        delete_element(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.element,
-        );
+        delete_element(menus, &self.affected_element);
     }
 
     fn redo(
@@ -443,7 +445,6 @@ impl UICommand for DeleteElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
-
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         mouse: &Mouse,
@@ -460,17 +461,11 @@ impl UICommand for DeleteElementCommand {
     fn redo(
         &mut self,
         _touch_manager: &mut UiTouchManager,
-
         menus: &mut HashMap<String, Menu>,
         _variables: &mut UiVariableRegistry,
         _mouse: &Mouse,
     ) {
-        delete_element(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.element,
-        );
+        delete_element(menus, &self.affected_element);
     }
 
     fn description(&self) -> String {
@@ -762,10 +757,11 @@ pub enum ColorProperty {
     TextColor,
     DashColor,
     SubDashColor,
+    VertexIndex(u32),
 }
 
-impl std::fmt::Display for ColorProperty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ColorProperty {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Fill => write!(f, "fill"),
             Self::Border => write!(f, "border"),
@@ -774,6 +770,7 @@ impl std::fmt::Display for ColorProperty {
             Self::TextColor => write!(f, "text"),
             Self::DashColor => write!(f, "dash"),
             Self::SubDashColor => write!(f, "sub_dash"),
+            Self::VertexIndex(i) => write!(f, "vertex_index: {}", i),
         }
     }
 }
@@ -860,12 +857,7 @@ impl UICommand for DuplicateElementCommand {
         _variables: &mut UiVariableRegistry,
         _mouse: &Mouse,
     ) {
-        delete_element(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.new_element,
-        );
+        delete_element(menus, &self.affected_element);
     }
 
     fn redo(

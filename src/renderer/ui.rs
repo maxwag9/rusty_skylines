@@ -7,7 +7,7 @@ use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
 use crate::resources::Time;
 use crate::ui::input::Input;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiElement, UiVertexPoly,
@@ -214,7 +214,7 @@ impl UiRenderer {
 
     pub fn update(
         &mut self,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         time: &Time,
         input_state: &Input,
         queue: &Queue,
@@ -235,7 +235,7 @@ impl UiRenderer {
         );
         let bg_uniform = Background {
             primary_color: settings.background_color.map(|c| c + 0.01f32),
-            secondary_color: settings.background_color.map(|c| c + 0.02f32),
+            secondary_color: settings.background_color.map(|c| c + 0.20f32),
             block_size: 100f32,
 
             warp_strength: 0.01,
@@ -276,7 +276,7 @@ impl UiRenderer {
         &self,
         render_manager: &mut RenderManager,
         pass: &mut RenderPass<'a>,
-        ui: &mut UiButtonLoader,
+        ui: &mut Ui,
         pipelines: &Pipelines,
         settings: &Settings,
     ) {
@@ -404,11 +404,21 @@ impl UiRenderer {
             } else {
                 None
             };
-
+            let rect_bg = layer.gpu.rect_ssbo.as_ref().map(|ssbo| {
+                self.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("rect_bind_group"),
+                    layout: &self.pipelines.rect_layout,
+                    entries: &[BindGroupEntry {
+                        binding: 0,
+                        resource: ssbo.as_entire_binding(),
+                    }],
+                })
+            });
             let mut circle_idx: u32 = 0;
             let mut handle_idx: u32 = 0;
             let mut outline_idx: u32 = 0;
             let mut poly_vtx_offset: u32 = 0;
+            let mut rect_idx: u32 = 0;
 
             for element in &layer.elements {
                 match element {
@@ -556,6 +566,31 @@ impl UiRenderer {
                     UiElement::Text(_) => {
                         // handled after other elements for proper layering
                     }
+                    UiElement::Rect(_) => {
+                        if let Some(bg1) = rect_bg.as_ref() {
+                            let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+                            let options = &PipelineOptions {
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                targets,
+                                ..Default::default()
+                            };
+
+                            // UI Rect
+                            render_manager.render_with_layouts(
+                                &shader_dir().join("ui_rect.wgsl"),
+                                &[&self.pipelines.uniform_layout, &self.pipelines.rect_layout],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, rect_idx..rect_idx + 1);
+                        }
+                        rect_idx += 1;
+                    }
                 }
             }
 
@@ -632,6 +667,7 @@ impl UiRenderer {
         upload_outlines(self, queue, layer);
         upload_handles(self, queue, layer);
         upload_polygons(self, queue, layer);
+        upload_rects(self, queue, layer);
         upload_text(self, queue, layer, time_system, touch_manager, menu_name);
     }
 

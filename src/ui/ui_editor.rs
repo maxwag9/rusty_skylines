@@ -6,6 +6,7 @@ use crate::data::Settings;
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::resources::{CommandQueues, Time};
+use crate::ui::action_parser::action_to_uicommand;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{Input, Mouse};
@@ -20,7 +21,7 @@ use crate::ui::ui_loader::{
     load_advanced_primitives_from_directory, load_legacy_gui_layout, load_menus_from_directory,
     sanitize_filename,
 };
-use crate::ui::ui_text_editing::{MouseSnapshot, handle_text_editing};
+use crate::ui::ui_text_editing::{HitResult, MouseSnapshot, handle_text_editing};
 use crate::ui::ui_touch_manager::{
     DragCoordinator, ElementRef, HitDetector, InputSnapshot, NavigationDirection, TouchEvent,
     UiTouchManager,
@@ -66,7 +67,7 @@ pub struct GuiOptions {
     pub(crate) override_mode: bool,
 }
 
-pub struct UiButtonLoader {
+pub struct Ui {
     // Core data
     pub menus: HashMap<String, Menu>,
     pub variables: UiVariableRegistry,
@@ -85,7 +86,7 @@ pub struct UiButtonLoader {
     pub element_clipboard: Option<UiElement>,
 }
 
-impl UiButtonLoader {
+impl Ui {
     pub fn new(settings: &Settings, window_size: PhysicalSize<u32>) -> Self {
         let menus_dir = data_dir("ui_data/menus");
         let ap_dir = data_dir("ui_data/menus/advanced_primitives");
@@ -150,6 +151,7 @@ impl UiButtonLoader {
                     active: l.active,
                     opaque: l.opaque,
                     elements,
+                    setting: None,
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
@@ -186,7 +188,6 @@ impl UiButtonLoader {
         let scale_old = (old_size.width as f32 * old_size.height as f32).sqrt();
         let scale_new = (new_size.width as f32 * new_size.height as f32).sqrt();
         let scale_factor = scale_new / scale_old;
-        println!("scale_factor: {}", scale_factor);
         self.menus
             .values_mut()
             .flat_map(|m| m.layers.iter_mut())
@@ -238,7 +239,7 @@ impl UiButtonLoader {
         self.touch_manager
             .update(dt, input_snapshot, elements.into_iter());
         // Process all emitted events
-        let result = self.process_touch_events(&input.mouse);
+        let result = self.process_touch_events(&mut command_queues.ui_command_queue, &input.mouse);
 
         // Apply results
         self.apply_event_results(result, &input.mouse);
@@ -317,11 +318,15 @@ impl UiButtonLoader {
     }
 
     /// Process all touch events and return combined result
-    fn process_touch_events(&mut self, mouse: &Mouse) -> EventProcessingResult {
+    fn process_touch_events(
+        &mut self,
+        ui_command_queue: &mut CommandQueue,
+        mouse: &Mouse,
+    ) -> EventProcessingResult {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
-        let events: Vec<_> = self.touch_manager.events.drain().collect();
-
+        let events: Vec<TouchEvent> = self.touch_manager.events.drain().collect();
+        push_commands(ui_command_queue, self, &events, mouse);
         for event in events {
             self.handle_touch_event(&event, &mut result, mouse);
         }
@@ -342,10 +347,10 @@ impl UiButtonLoader {
             // ----------------------------------------------------------------
             // HOVER EVENTS
             // ----------------------------------------------------------------
-            TouchEvent::HoverEnter { element } => {
+            TouchEvent::HoverEnter { element, action } => {
                 self.handle_hover_enter(element, result);
             }
-            TouchEvent::HoverExit { element } => {
+            TouchEvent::HoverExit { element, action } => {
                 self.handle_hover_exit(element, result);
             }
 
@@ -356,6 +361,7 @@ impl UiButtonLoader {
                 element,
                 position,
                 vertex_index,
+                action,
             } => {
                 self.handle_press(element, *position, *vertex_index, result);
             }
@@ -374,7 +380,11 @@ impl UiButtonLoader {
             } => {
                 self.handle_click(element, *position, action.clone(), result);
             }
-            TouchEvent::DoubleClick { element, position } => {
+            TouchEvent::DoubleClick {
+                element,
+                position,
+                action,
+            } => {
                 self.handle_double_click(element, *position, result);
             }
 
@@ -431,7 +441,11 @@ impl UiButtonLoader {
             // ----------------------------------------------------------------
             // SCROLL/RESIZE EVENTS
             // ----------------------------------------------------------------
-            TouchEvent::ScrollOnElement { element, delta } => {
+            TouchEvent::ScrollOnElement {
+                element,
+                delta,
+                action,
+            } => {
                 //self.handle_scroll_on_element(element, *delta, result);
             }
 
@@ -666,6 +680,14 @@ impl UiButtonLoader {
                     )
                 }
             }
+            ElementKind::Rect => self.ui_edit_manager.push_command(
+                MoveElementCommand {
+                    affected_element: element.clone(),
+                    before: None,
+                    after: snapped_pos,
+                },
+                true,
+            ),
             ElementKind::Handle => {
                 self.handle_handle_drag(element, current_position, mouse);
             }
@@ -792,35 +814,6 @@ impl UiButtonLoader {
             .selection
             .set_from_box(selected, &mut self.menus);
         result.update_selection = true;
-    }
-
-    fn handle_scroll_on_element(
-        &mut self,
-        element: &ElementRef,
-        delta: f32,
-        result: &mut EventProcessingResult,
-    ) {
-        if element.kind != ElementKind::Circle {
-            return;
-        }
-
-        if let Some(old_size) = get_element_size(&self.menus, element) {
-            let new_size = (old_size + delta * 3.0).max(2.0);
-
-            // Push resize command
-            self.ui_edit_manager.push_command(
-                ResizeElementCommand {
-                    affected_element: element.clone(),
-                    before: old_size,
-                    after: new_size,
-                },
-                false,
-            );
-
-            // Apply resize
-            self.set_element_size(element, new_size);
-            result.mark_dirty = true;
-        }
     }
 
     fn handle_text_edit_requested(
@@ -1001,6 +994,7 @@ impl UiButtonLoader {
             UiElement::Circle(c) => Some(c.action.clone()),
             UiElement::Polygon(p) => Some(p.action.clone()),
             UiElement::Text(t) => Some(t.action.clone()),
+            UiElement::Rect(r) => Some(r.action.clone()),
             _ => None,
         })
     }
@@ -1239,24 +1233,14 @@ impl UiButtonLoader {
         self.variables.set_f32("color_picker.v", v);
     }
 
-    fn get_current_hit_for_actions(&self) -> Option<crate::ui::ui_text_editing::HitResult> {
+    fn get_current_hit_for_actions(&self) -> Option<HitResult> {
         // Convert touch manager's current hover to legacy HitResult for action system
-        self.touch_manager
-            .hovered()
-            .map(|elem| crate::ui::ui_text_editing::HitResult {
-                menu_name: elem.menu.clone(),
-                layer_name: elem.layer.clone(),
-                element: match elem.kind {
-                    ElementKind::Circle => crate::ui::ui_text_editing::HitElement::Circle(0),
-                    ElementKind::Polygon => crate::ui::ui_text_editing::HitElement::Polygon(0),
-                    ElementKind::Text => crate::ui::ui_text_editing::HitElement::Text(0),
-                    ElementKind::Handle => crate::ui::ui_text_editing::HitElement::Handle(0),
-                    _ => crate::ui::ui_text_editing::HitElement::Circle(0),
-                },
-                layer_order: 0,
-                element_order: 0,
-                action: self.get_element_action(elem),
-            })
+        self.touch_manager.hovered().map(|hover| HitResult {
+            element: hover.element.clone(),
+            layer_order: 0,
+            element_order: 0,
+            action: hover.action.clone(),
+        })
     }
 
     fn handle_text_editing(&mut self, input: &mut Input, snapshot: InputSnapshot) {
@@ -1505,6 +1489,16 @@ impl UiButtonLoader {
                                             o.misc = p.misc.clone();
                                         }
                                     }
+                                    ElementKind::Rect => {
+                                        if let Some(r) =
+                                            layer.iter_rects().find(|r| r.id == parent.id)
+                                        {
+                                            o.shape_data.x = r.x;
+                                            o.shape_data.y = r.y;
+                                            o.shape_data.radius = r.size();
+                                            o.misc = r.misc.clone();
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1688,6 +1682,47 @@ impl UiButtonLoader {
                         .push(UiElement::Outline(polygon_outline));
                 }
             }
+            UiElement::Rect(r) => {
+                if editor_mode && r.misc.editable {
+                    let polygon_outline = UiButtonOutline {
+                        id: "Polygon Outline".to_string(),
+                        parent: Some(ElementRef {
+                            menu: sel.menu.clone(),
+                            layer: sel.layer.clone(),
+                            id: r.id.clone(),
+                            kind: ElementKind::Polygon,
+                        }),
+                        mode: 1.0,
+                        vertex_offset: 0,
+                        vertex_count: 4u32,
+                        dash_color: [0.2, 0.0, 0.4, 0.8],
+                        dash_misc: DashMisc {
+                            dash_len: 0.1,
+                            dash_spacing: 0.05,
+                            dash_roundness: 1.0,
+                            dash_speed: 0.15,
+                        },
+                        sub_dash_color: [0.8, 1.0, 1.0, 0.5],
+                        sub_dash_misc: DashMisc {
+                            dash_len: 0.1,
+                            dash_spacing: 0.1,
+                            dash_roundness: 0.0,
+                            dash_speed: -0.25,
+                        },
+                        misc: r.misc.clone(),
+                        shape_data: ShapeData {
+                            x: r.x,
+                            y: r.y,
+                            radius: r.size(),
+                            border_thickness: 0.9,
+                        },
+                    };
+                    // println!("YEES");
+                    editor_layer
+                        .elements
+                        .push(UiElement::Outline(polygon_outline));
+                }
+            }
             _ => {}
         }
     }
@@ -1710,6 +1745,7 @@ impl UiButtonLoader {
                     editor_layer.clear_handles();
                     editor_layer.clear_outlines();
                     editor_layer.clear_polygons();
+                    editor_layer.clear_rects();
                     editor_layer.dirty.mark_all()
                 }
             }
@@ -1723,7 +1759,7 @@ impl UiButtonLoader {
             }
         }
 
-        let element = get_element(&self.menus, &sel.menu, &sel.layer, &sel.id);
+        let element = get_element(&self.menus, &sel);
 
         if let Some(element) = element {
             let is_handle = element.kind() == ElementKind::Handle;
@@ -1740,6 +1776,7 @@ impl UiButtonLoader {
                     editor_layer.dirty.mark_all();
                     editor_layer.clear_circles();
                     editor_layer.clear_polygons();
+                    editor_layer.clear_rects();
 
                     if is_handle {
                         // Update existing handles/outlines from parent
@@ -1759,13 +1796,6 @@ impl UiButtonLoader {
     // ========================================================================
     // UNDO/REDO OPERATIONS
     // ========================================================================
-
-    /// Delete element by ID (internal, for undo system)
-    pub fn delete_element_by_id(&mut self, menu_name: &str, layer_name: &str, element_id: &str) {
-        if let Some(element) = get_element(&self.menus, menu_name, layer_name, element_id) {
-            delete_element(&mut self.menus, menu_name, layer_name, &element);
-        }
-    }
 
     fn get_polygon(&self, menu: &str, layer: &str, id: &str) -> Option<UiButtonPolygon> {
         let menu = self.menus.get(menu)?;
@@ -1969,6 +1999,7 @@ impl UiButtonLoader {
             name: "editor_selection".into(),
             order: 900,
             active: true,
+            setting: None,
             cache: LayerCache::default(),
             elements: vec![],
             dirty: LayerDirty::all(),
@@ -1981,6 +2012,7 @@ impl UiButtonLoader {
             name: "editor_handles".into(),
             order: 950,
             active: true,
+            setting: None,
             cache: LayerCache::default(),
             elements: vec![],
             dirty: LayerDirty::all(),
@@ -2009,6 +2041,18 @@ impl UiButtonLoader {
     }
 }
 
+fn push_commands(
+    ui_command_queue: &mut CommandQueue,
+    ui: &mut Ui,
+    events: &Vec<TouchEvent>,
+    mouse: &Mouse,
+) {
+    for event in events {
+        let command = action_to_uicommand(ui, event);
+        ui_command_queue.push_optional(command);
+    }
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -2029,41 +2073,50 @@ fn this_text(selected: &Option<ElementRef>, menu: &str, layer: &str, element_id:
     sel.id == element_id
 }
 
-pub fn get_element(
-    menus: &HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    element_id: &str,
-) -> Option<UiElement> {
-    let menu = menus.get(menu_name)?;
-    let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
+pub fn get_element(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<UiElement> {
+    let menu = menus.get(&element.menu)?;
+    let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
+    let element_id = &element.id;
 
-    if let Some(c) = layer.iter_circles().find(|c| c.id == element_id) {
+    if let Some(c) = layer.iter_circles().find(|c| c.id == *element_id) {
         return Some(UiElement::Circle(c.clone()));
     }
-    if let Some(t) = layer.iter_texts().find(|t| t.id == element_id) {
+    if let Some(t) = layer.iter_texts().find(|t| t.id == *element_id) {
         return Some(UiElement::Text(t.clone()));
     }
-    if let Some(p) = layer.iter_polygons().find(|p| p.id == element_id) {
+    if let Some(p) = layer.iter_polygons().find(|p| p.id == *element_id) {
         return Some(UiElement::Polygon(p.clone()));
     }
-    if let Some(h) = layer.iter_handles().find(|h| h.id == element_id) {
+    if let Some(h) = layer.iter_handles().find(|h| h.id == *element_id) {
         return Some(UiElement::Handle(h.clone()));
     }
-    if let Some(o) = layer.iter_outlines().find(|o| o.id == element_id) {
+    if let Some(o) = layer.iter_outlines().find(|o| o.id == *element_id) {
         return Some(UiElement::Outline(o.clone()));
     }
 
     None
 }
+pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<RuntimeLayer> {
+    let menu = menus.get(&element.menu)?;
+    let layer = menu
+        .layers
+        .iter()
+        .find(|l| l.name == element.layer)?
+        .clone();
 
-pub fn get_element_position(
+    Some(layer)
+}
+pub fn get_layer_settings(
     menus: &HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    element_id: &str,
-) -> [f32; 2] {
-    if let Some(element) = get_element(menus, menu_name, layer_name, element_id) {
+    element: &ElementRef,
+) -> Option<SettingBinding> {
+    let menu = menus.get(&element.menu)?;
+    let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
+
+    layer.setting.clone()
+}
+pub fn get_element_position(menus: &HashMap<String, Menu>, element: &ElementRef) -> [f32; 2] {
+    if let Some(element) = get_element(menus, element) {
         element.center()
     } else {
         [0.0, 0.0]
@@ -2090,6 +2143,10 @@ pub fn get_element_size(menus: &HashMap<String, Menu>, element: &ElementRef) -> 
             .iter_polygons()
             .find(|p| p.id == element.id)
             .map(|p| p.size()),
+        ElementKind::Rect => layer
+            .iter_rects()
+            .find(|r| r.id == element.id)
+            .map(|r| r.size()),
         _ => None,
     }
 }

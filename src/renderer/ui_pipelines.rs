@@ -27,6 +27,7 @@ pub struct UiPipelines {
     pub glow_pipeline: RenderPipeline,
     pub handle_layout: BindGroupLayout,
     pub circle_layout: BindGroupLayout,
+    pub rect_layout: BindGroupLayout,
     pub text_atlas: TextAtlas,
     pub text_pipeline: RenderPipeline,
     pub text_layout: BindGroupLayout,
@@ -141,7 +142,19 @@ impl UiPipelines {
             mouse: [0.0, 0.0],
         };
         let screen_data = bytemuck::bytes_of(&screen_uniform);
-
+        let rect_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("rect_layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("UI Uniforms"),
             contents: screen_data,
@@ -473,6 +486,7 @@ impl UiPipelines {
 
             additive_blend,
             good_blend,
+            rect_layout,
         })
     }
 

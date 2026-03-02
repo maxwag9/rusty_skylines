@@ -202,7 +202,7 @@ pub enum SettingValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "op", content = "value", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum SettingOp {
     Toggle,
     CycleNext,

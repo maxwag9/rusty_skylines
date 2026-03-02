@@ -12,10 +12,11 @@
 
 use crate::data::Settings;
 use crate::ui::selections::SelectionManager;
-use crate::ui::ui_editor::GuiOptions;
+use crate::ui::ui_editor::{GuiOptions, Ui, get_element};
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::vertex::{
-    ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonText, UiElement,
+    ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonRect, UiButtonText,
+    UiElement,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -75,7 +76,14 @@ pub struct ElementRef {
 }
 
 impl ElementRef {
-    pub(crate) fn default() -> ElementRef {
+    pub fn action(&self, ui: Ui) -> Option<String> {
+        let element = get_element(&ui.menus, self);
+        element?.action()
+    }
+}
+
+impl Default for ElementRef {
+    fn default() -> ElementRef {
         ElementRef {
             menu: "m".into(),
             layer: "l".into(),
@@ -141,9 +149,11 @@ pub enum TouchEvent {
     // Hover events
     HoverEnter {
         element: ElementRef,
+        action: Option<String>,
     },
     HoverExit {
         element: ElementRef,
+        action: Option<String>,
     },
 
     // Press/release events
@@ -151,6 +161,7 @@ pub enum TouchEvent {
         element: ElementRef,
         position: [f32; 2],
         vertex_index: Option<usize>,
+        action: Option<String>,
     },
     Release {
         element: ElementRef,
@@ -166,6 +177,7 @@ pub enum TouchEvent {
     DoubleClick {
         element: ElementRef,
         position: [f32; 2],
+        action: Option<String>,
     },
 
     // Drag events
@@ -209,6 +221,7 @@ pub enum TouchEvent {
     ScrollOnElement {
         element: ElementRef,
         delta: f32,
+        action: Option<String>,
     },
 
     // Text editing events
@@ -415,6 +428,71 @@ impl Draggable for UiButtonPolygon {
     }
 }
 
+impl Touchable for UiButtonRect {
+    fn kind(&self) -> ElementKind {
+        ElementKind::Rect
+    }
+
+    fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
+        let half_w = self.w * 0.5;
+        let half_h = self.h * 0.5;
+
+        // Clamp roundness to valid range
+        let max_round = half_w.min(half_h);
+        let roundness = self.roundness.min(max_round);
+
+        // SDF for rounded rectangle
+        let sdf = sd_rounded_box(point, [self.x, self.y], [half_w, half_h], roundness);
+
+        let inside = sdf < 0.0;
+        let near_edge = sdf.abs() < 8.0;
+
+        if inside || near_edge {
+            Some(TouchableHit {
+                distance: sdf.abs(),
+                vertex_index: None, // Rects have no vertices to select
+            })
+        } else {
+            None
+        }
+    }
+
+    fn center(&self) -> [f32; 2] {
+        [self.x, self.y]
+    }
+
+    fn z_order(&self) -> u32 {
+        0
+    }
+
+    fn is_active(&self) -> bool {
+        self.misc.active
+    }
+
+    fn is_pressable(&self) -> bool {
+        self.misc.pressable
+    }
+
+    fn is_editable(&self) -> bool {
+        self.misc.editable
+    }
+
+    fn action(&self) -> Option<&str> {
+        Some(&self.action)
+    }
+}
+
+impl Draggable for UiButtonRect {
+    fn drag_anchor(&self, _vertex_index: Option<usize>) -> [f32; 2] {
+        // Rects only drag from center, no vertex manipulation
+        [self.x, self.y]
+    }
+
+    fn can_snap(&self) -> bool {
+        true
+    }
+}
+
 impl Touchable for UiButtonText {
     fn kind(&self) -> ElementKind {
         ElementKind::Text
@@ -537,9 +615,7 @@ impl Draggable for UiButtonHandle {
     }
 }
 
-// ============================================================================
 // PER-ELEMENT STATE MACHINE
-// ============================================================================
 
 /// State machine state for a single element
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -671,6 +747,14 @@ impl HitDetector {
                 None,
             ),
             UiElement::Outline(_) => return None, // Outlines aren't interactive
+            UiElement::Rect(r) => (
+                r.id.clone(),
+                ElementKind::Rect,
+                r.misc.active,
+                r.misc.pressable,
+                r.misc.editable,
+                Some(r.action.as_str()),
+            ),
         };
 
         // Skip inactive or non-interactive elements
@@ -696,7 +780,8 @@ impl HitDetector {
                 affected_element = h.parent.clone();
                 h.hit_test(point)
             }
-            _ => None,
+            UiElement::Outline(_) => return None,
+            UiElement::Rect(r) => r.hit_test(point),
         }?;
 
         Some(HitTestResult {
@@ -733,6 +818,9 @@ impl HitDetector {
                 }
                 UiElement::Text(t) if t.misc.active => {
                     (t.id.clone(), ElementKind::Text, [t.x, t.y])
+                }
+                UiElement::Rect(r) if r.misc.active => {
+                    (r.id.clone(), ElementKind::Rect, r.center())
                 }
                 _ => continue,
             };
@@ -964,6 +1052,7 @@ impl EditorTouchExtension {
     pub fn process_scroll(
         &mut self,
         element: &ElementRef,
+        action: &Option<String>,
         scroll_delta: f32,
     ) -> Option<TouchEvent> {
         if !self.enabled || scroll_delta == 0.0 {
@@ -973,6 +1062,7 @@ impl EditorTouchExtension {
         Some(TouchEvent::ScrollOnElement {
             element: element.clone(),
             delta: scroll_delta,
+            action: action.clone(),
         })
     }
 }
@@ -1051,6 +1141,12 @@ impl Default for InteractionMode {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CurrentHover {
+    pub(crate) element: ElementRef,
+    pub(crate) action: Option<String>,
+}
+
 // ============================================================================
 // UI TOUCH MANAGER - MAIN COORDINATOR
 // ============================================================================
@@ -1068,7 +1164,7 @@ pub struct UiTouchManager {
     pub runtimes: UiRuntimes,
     // State
     element_states: HashMap<String, ElementTouchData>,
-    current_hover: Option<ElementRef>,
+    current_hover: Option<CurrentHover>,
     interaction_mode: InteractionMode,
     pub(crate) last_input: InputSnapshot,
 
@@ -1138,16 +1234,20 @@ impl UiTouchManager {
 
     /// Process hover state changes
     fn process_hover(&mut self, top_hit: &Option<HitTestResult>) {
-        let new_hover = top_hit.as_ref().map(|h| h.element_ref.clone());
+        let new_hover = top_hit.as_ref().map(|h| CurrentHover {
+            element: h.element_ref.clone(),
+            action: h.action.clone(),
+        });
 
         // Check if hover target changed
         if self.current_hover != new_hover {
             // Exit old hover
             if let Some(old) = &self.current_hover {
                 self.events.push(TouchEvent::HoverExit {
-                    element: old.clone(),
+                    element: old.element.clone(),
+                    action: old.action.clone(),
                 });
-                if let Some(state) = self.element_states.get_mut(&old.id) {
+                if let Some(state) = self.element_states.get_mut(&old.element.id) {
                     if state.state == ElementTouchState::Hovered {
                         state.state = ElementTouchState::Idle;
                     }
@@ -1157,9 +1257,13 @@ impl UiTouchManager {
             // Enter new hover
             if let Some(new) = &new_hover {
                 self.events.push(TouchEvent::HoverEnter {
-                    element: new.clone(),
+                    element: new.element.clone(),
+                    action: new.action.clone(),
                 });
-                let state = self.element_states.entry(new.id.clone()).or_default();
+                let state = self
+                    .element_states
+                    .entry(new.element.id.clone())
+                    .or_default();
                 if state.state == ElementTouchState::Idle {
                     state.state = ElementTouchState::Hovered;
                 }
@@ -1215,6 +1319,7 @@ impl UiTouchManager {
                 element: element.clone(),
                 position: input.position,
                 vertex_index: hit.vertex_index,
+                action: hit.action.clone(),
             });
 
             // Begin potential drag
@@ -1315,12 +1420,12 @@ impl UiTouchManager {
         for (id, _press_pos, was_drag) in releases {
             // Find the element ref for this id (simplified - in real use would look up)
             if let Some(hover) = &self.current_hover {
-                if hover.id == id {
+                if hover.element.id == id {
                     self.events.push(TouchEvent::Release {
-                        element: hover.clone(),
+                        element: hover.element.clone(),
                         position: input.position,
                         was_drag,
-                        action: None, // Would look up from element
+                        action: hover.action.clone(),
                     });
 
                     // If it wasn't a drag, it's a click
@@ -1332,14 +1437,15 @@ impl UiTouchManager {
 
                         if time_since_last_click < self.config.double_click_time.as_secs_f32() {
                             self.events.push(TouchEvent::DoubleClick {
-                                element: hover.clone(),
+                                element: hover.element.clone(),
                                 position: input.position,
+                                action: hover.action.clone(),
                             });
                         } else {
                             self.events.push(TouchEvent::Click {
-                                element: hover.clone(),
+                                element: hover.element.clone(),
                                 position: input.position,
-                                action: None,
+                                action: hover.action.clone(),
                             });
                         }
 
@@ -1363,7 +1469,10 @@ impl UiTouchManager {
     fn process_scroll(&mut self, delta: f32) {
         if let Some(hover) = &self.current_hover {
             if self.editor.enabled {
-                if let Some(event) = self.editor.process_scroll(hover, delta) {
+                if let Some(event) =
+                    self.editor
+                        .process_scroll(&hover.element, &hover.action, delta)
+                {
                     self.events.push(event);
                 }
             }
@@ -1389,7 +1498,7 @@ impl UiTouchManager {
     }
 
     /// Get currently hovered element
-    pub fn hovered(&self) -> Option<&ElementRef> {
+    pub fn hovered(&self) -> Option<&CurrentHover> {
         self.current_hover.as_ref()
     }
 
@@ -1475,9 +1584,24 @@ fn polygon_sdf(px: f32, py: f32, vertices: &[crate::ui::vertex::UiVertex]) -> f3
     s * d.sqrt()
 }
 
-// ============================================================================
+/// Signed distance function for a rounded rectangle.
+/// Returns negative values inside, positive outside.
+///
+/// - `p`: test point
+/// - `center`: rectangle center
+/// - `half_size`: half width and half height
+/// - `r`: corner radius
+pub fn sd_rounded_box(p: [f32; 2], center: [f32; 2], half_size: [f32; 2], r: f32) -> f32 {
+    let dx = (p[0] - center[0]).abs() - half_size[0] + r;
+    let dy = (p[1] - center[1]).abs() - half_size[1] + r;
+
+    let outside_dist = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
+    let inside_dist = dx.max(dy).min(0.0);
+
+    outside_dist + inside_dist - r
+}
+
 // TESTS
-// ============================================================================
 
 #[cfg(test)]
 mod tests {

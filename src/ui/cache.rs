@@ -1,10 +1,11 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
+use bytemuck::Zeroable;
 
 pub fn rebuild_text_cache(
     layer: &mut RuntimeLayer,
@@ -246,14 +247,46 @@ pub fn rebuild_polygon_cache(
 
     rebuilt.mark_polygons();
 }
+pub fn rebuild_rect_cache(
+    layer: &mut RuntimeLayer,
+    rebuilt: &mut LayerDirty,
+    runtime: &UiRuntimes,
+) {
+    for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+        if let (UiElement::Rect(rect), UiElementCache::Rect(cached)) = (element, cache_element) {
+            let (rt, hash) = runtime_info(runtime, &rect.id);
 
+            // Compute actual border thickness from percentage
+            let min_dim = rect.w.min(rect.h);
+            let border = rect.border_thickness_percentage * min_dim;
+
+            *cached = RectGpu {
+                center: [rect.x, rect.y],
+                size: [rect.w, rect.h],
+                color: rect.color,
+                roundness: rect.roundness,
+                border_thickness: border,
+                fade: rect.fade,
+                _pad: 0.0,
+                misc: [
+                    f32::from(rect.misc.active),
+                    rt.touched_time,
+                    f32::from(rt.is_down),
+                    hash,
+                ],
+            };
+        }
+    }
+
+    rebuilt.mark_rects();
+}
 pub fn runtime_info(runtime: &UiRuntimes, id: &String) -> (ButtonRuntime, f32) {
     let runtime = runtime.get(id);
 
     let hash = if id.is_empty() {
         f32::MAX
     } else {
-        UiButtonLoader::hash_id(id)
+        Ui::hash_id(id)
     };
 
     (runtime, hash)
@@ -274,6 +307,7 @@ pub fn init_cache_structure(layer: &mut RuntimeLayer) {
             UiElement::Polygon(_) => UiElementCache::Polygon(Vec::new()),
             UiElement::Outline(_) => UiElementCache::Outline(OutlineParams::default()),
             UiElement::Handle(_) => UiElementCache::Handle(HandleParams::default()),
+            UiElement::Rect(_) => UiElementCache::Rect(RectGpu::zeroed()),
         });
     }
 }

@@ -1,10 +1,12 @@
 #![allow(dead_code, unused_variables)]
 pub mod drag_hue_point;
+
 use crate::resources::Time;
 use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::Input;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::{Ui, get_layer_settings};
 use crate::ui::ui_text_editing::HitResult;
+use crate::ui::ui_touch_manager::ElementRef;
 use crate::world::roads::road_structs::RoadStyleParams;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
@@ -183,7 +185,6 @@ impl UiCommandType {
 /// A fully-specified UI command with all data embedded.
 /// Can be queued and executed without the original parsing context.
 #[derive(Debug, Clone)]
-
 pub enum UiCommand {
     // ===== MENU COMMANDS =====
     OpenMenu {
@@ -233,6 +234,13 @@ pub enum UiCommand {
     },
     ToggleBool {
         name: String,
+    },
+    ToggleSettingBool {
+        element_ref: ElementRef,
+    },
+    SetSettingBool {
+        element_ref: ElementRef,
+        state: bool,
     },
     Clamp {
         name: String,
@@ -291,11 +299,14 @@ pub enum UiCommand {
 
     // ===== EVENT COMMANDS =====
     EmitEvent {
+        element_ref: ElementRef,
         event_name: String,
     },
 
     // ===== LEGACY/SPECIAL COMMANDS =====
-    DragHuePoint,
+    DragHuePoint {
+        element_ref: ElementRef,
+    },
     SetRoadsFourLanes {
         forward: usize,
         backward: usize,
@@ -320,6 +331,9 @@ pub enum CommandArg {
 }
 
 impl CommandArg {
+    pub fn from_str(s: &str) -> Self {
+        CommandArg::String(s.to_string())
+    }
     pub fn as_str(&self) -> Option<&str> {
         match self {
             CommandArg::String(s) | CommandArg::Var(s) => Some(s),
@@ -442,7 +456,7 @@ pub enum CommandResult {
 
 /// Context provided only during command execution (drain phase).
 pub struct CommandContext<'a> {
-    pub loader: &'a mut UiButtonLoader,
+    pub loader: &'a mut Ui,
     pub input_state: &'a Input,
     pub time: &'a Time,
     pub world_renderer: &'a mut Terrain,
@@ -483,25 +497,17 @@ impl CommandQueue {
         self.queue.push_back(cmd);
     }
 
-    /// Queue multiple commands.
-    pub fn push_many(&mut self, cmds: impl IntoIterator<Item = UiCommand>) {
-        for cmd in cmds {
-            self.queue.push_back(cmd);
+    /// Queue a single optional command.
+    pub fn push_optional(&mut self, cmd: Option<UiCommand>) {
+        if let Some(cmd) = cmd {
+            self.push(cmd);
         }
     }
 
-    /// Parse and queue commands from an action string.
-    pub fn push_str(&mut self, action_str: &str) {
-        let commands = parse_command_string(action_str);
-        self.push_many(commands);
-    }
-
-    /// Queue commands from a UI hit result.
-    pub(crate) fn push_from_hit(&mut self, hit: &HitResult) {
-        if let Some(action_str) = &hit.action {
-            if !action_str.is_empty() && action_str != "None" {
-                self.push_str(action_str);
-            }
+    /// Queue multiple commands.
+    pub fn push_many(&mut self, cmds: impl IntoIterator<Item = UiCommand>) {
+        for cmd in cmds {
+            self.push(cmd);
         }
     }
 
@@ -737,6 +743,16 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
+            UiCommand::ToggleSettingBool { element_ref } => CommandResult::Ok,
+
+            UiCommand::SetSettingBool { element_ref, state } => {
+                let Some(setting) = get_layer_settings(&ctx.loader.menus, &element_ref) else {
+                    return CommandResult::Error("Layer doesn't exist".to_string());
+                };
+
+                CommandResult::Ok
+            }
+
             UiCommand::Clamp { name, min, max } => {
                 if let Some(CommandArg::Float(f)) = self.variables.get(&name).cloned() {
                     self.variables
@@ -873,20 +889,27 @@ impl CommandQueue {
             }
 
             // ===== EVENT COMMANDS =====
-            UiCommand::EmitEvent { event_name } => {
-                println!("[Event] {}", event_name);
+            UiCommand::EmitEvent {
+                element_ref,
+                event_name,
+            } => {
+                println!("[Event] {} from element {:?}", event_name, element_ref.id);
                 self.set_var("_last_event", CommandArg::String(event_name));
+                self.set_var(
+                    "_last_event_element",
+                    CommandArg::String(element_ref.id.clone()),
+                );
                 CommandResult::Ok
             }
 
-            // ===== LEGACY/SPECIAL COMMANDS =====
-            UiCommand::DragHuePoint => {
-                let state = ActionState::with_time("Drag Hue Point", ctx.time.total_time);
+            UiCommand::DragHuePoint { element_ref } => {
+                let action_name = format!("Drag Hue Point:{}", element_ref.id);
+                let state = ActionState::with_time(&action_name, ctx.time.total_time);
                 ctx.loader
                     .touch_manager
                     .runtimes
                     .action_states
-                    .insert("Drag Hue Point".to_string(), state);
+                    .insert(action_name, state);
                 CommandResult::Ok
             }
 
@@ -964,427 +987,17 @@ fn canonicalize_action_name(name: &str) -> String {
     s
 }
 
-/// Parsed raw action for intermediate representation.
-#[derive(Debug, Clone)]
-struct RawParsedAction {
-    name: String,
-    args: Vec<CommandArg>,
-}
-
-impl RawParsedAction {
-    fn arg_str(&self, index: usize) -> Option<&str> {
-        self.args.get(index).and_then(|a| a.as_str())
-    }
-
-    fn arg_string(&self, index: usize) -> String {
-        self.arg_str(index).unwrap_or_default().to_string()
-    }
-
-    fn arg_float(&self, index: usize) -> Option<f32> {
-        self.args.get(index).and_then(|a| a.as_float())
-    }
-
-    fn arg_float_or(&self, index: usize, default: f32) -> f32 {
-        self.arg_float(index).unwrap_or(default)
-    }
-
-    fn arg_int(&self, index: usize) -> Option<i64> {
-        self.args.get(index).and_then(|a| a.as_int())
-    }
-
-    fn arg_int_or(&self, index: usize, default: i64) -> i64 {
-        self.arg_int(index).unwrap_or(default)
-    }
-}
-
-/// Parse an action string into a list of commands.
-pub fn parse_command_string(input: &str) -> Vec<UiCommand> {
-    let raw_actions = parse_raw_action_chain(input);
-    raw_actions
-        .into_iter()
-        .filter_map(convert_raw_to_command)
-        .collect()
-}
-
-fn parse_raw_action_chain(input: &str) -> Vec<RawParsedAction> {
-    let parts = split_by_delimiter(input, ';');
-    parts
-        .into_iter()
-        .filter_map(|part| {
-            let trimmed = part.trim();
-            if !trimmed.is_empty() {
-                parse_single_raw_action(trimmed)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn parse_single_raw_action(input: &str) -> Option<RawParsedAction> {
-    let input = input.trim();
-    if input.is_empty() {
-        return None;
-    }
-
-    if let Some(paren_start) = input.find('(') {
-        let name = input[..paren_start].trim().to_string();
-        if let Some(paren_end) = input.rfind(')') {
-            let args_str = &input[paren_start + 1..paren_end];
-            let args = parse_arguments(args_str);
-            return Some(RawParsedAction { name, args });
-        }
-    }
-
-    Some(RawParsedAction {
-        name: input.to_string(),
-        args: Vec::new(),
-    })
-}
-
-fn parse_arguments(input: &str) -> Vec<CommandArg> {
-    if input.trim().is_empty() {
-        return Vec::new();
-    }
-
-    let parts = split_by_delimiter(input, ',');
-    parts.iter().map(|s| parse_single_arg(s.trim())).collect()
-}
-
-fn parse_single_arg(input: &str) -> CommandArg {
-    let s = input.trim();
-
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
-        return CommandArg::String(s[1..s.len() - 1].to_string());
-    }
-
-    if s.starts_with('$') {
-        return CommandArg::Var(s[1..].to_string());
-    }
-
-    if s == "true" {
-        return CommandArg::Bool(true);
-    }
-    if s == "false" {
-        return CommandArg::Bool(false);
-    }
-
-    if let Ok(i) = s.parse::<i64>() {
-        return CommandArg::Int(i);
-    }
-
-    if let Ok(f) = s.parse::<f32>() {
-        return CommandArg::Float(f);
-    }
-
-    CommandArg::String(s.to_string())
-}
-
-fn split_by_delimiter(input: &str, delim: char) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut quote_char = '"';
-    let mut paren_depth = 0;
-
-    for c in input.chars() {
-        match c {
-            '"' | '\'' if !in_quotes => {
-                in_quotes = true;
-                quote_char = c;
-                current.push(c);
-            }
-            c if c == quote_char && in_quotes => {
-                in_quotes = false;
-                current.push(c);
-            }
-            '(' if !in_quotes => {
-                paren_depth += 1;
-                current.push(c);
-            }
-            ')' if !in_quotes => {
-                paren_depth = (paren_depth - 1).max(0);
-                current.push(c);
-            }
-            c if c == delim && !in_quotes && paren_depth == 0 => {
-                parts.push(std::mem::take(&mut current));
-            }
-            _ => {
-                current.push(c);
-            }
-        }
-    }
-
-    if !current.is_empty() {
-        parts.push(current);
-    }
-
-    parts
-}
-
-/// Convert a raw parsed action to a typed UiCommand.
-fn convert_raw_to_command(raw: RawParsedAction) -> Option<UiCommand> {
-    let cmd_type = UiCommandType::from_legacy_name(&raw.name)?;
-
-    let cmd = match cmd_type {
-        // ===== MENU =====
-        UiCommandType::OpenMenu => UiCommand::OpenMenu {
-            menu_name: raw.arg_string(0),
-        },
-        UiCommandType::CloseMenu => UiCommand::CloseMenu {
-            menu_name: raw.arg_string(0),
-        },
-        UiCommandType::ToggleMenu => UiCommand::ToggleMenu {
-            menu_name: raw.arg_string(0),
-        },
-        UiCommandType::MenuActive => UiCommand::MenuActive {
-            menu_name: raw.arg_string(0),
-        },
-
-        // ===== LAYERS =====
-        UiCommandType::OpenLayer => UiCommand::OpenLayer {
-            menu_name: raw.arg_string(0),
-            layer_name: raw.arg_string(1),
-        },
-        UiCommandType::CloseLayer => UiCommand::CloseLayer {
-            menu_name: raw.arg_string(0),
-            layer_name: raw.arg_string(1),
-        },
-        UiCommandType::ToggleLayer => UiCommand::ToggleLayer {
-            menu_name: raw.arg_string(0),
-            layer_name: raw.arg_string(1),
-        },
-
-        // ===== VARIABLES =====
-        UiCommandType::SetVar => {
-            let name = raw.arg_string(0);
-            let value = raw
-                .args
-                .get(1)
-                .cloned()
-                .unwrap_or(CommandArg::String(String::new()));
-            UiCommand::SetVar { name, value }
-        }
-        UiCommandType::IncVar => UiCommand::IncVar {
-            name: raw.arg_string(0),
-            amount: raw.arg_float_or(1, 1.0),
-        },
-        UiCommandType::DecVar => UiCommand::DecVar {
-            name: raw.arg_string(0),
-            amount: raw.arg_float_or(1, 1.0),
-        },
-        UiCommandType::MulVar => UiCommand::MulVar {
-            name: raw.arg_string(0),
-            factor: raw.arg_float_or(1, 1.0),
-        },
-        UiCommandType::ToggleBool => UiCommand::ToggleBool {
-            name: raw.arg_string(0),
-        },
-        UiCommandType::Clamp => UiCommand::Clamp {
-            name: raw.arg_string(0),
-            min: raw.arg_float_or(1, 0.0),
-            max: raw.arg_float_or(2, 1.0),
-        },
-
-        // ===== ACTION STATE =====
-        UiCommandType::StartAction => UiCommand::StartAction {
-            action_name: raw.arg_string(0),
-        },
-        UiCommandType::StopAction => UiCommand::StopAction {
-            action_name: raw.arg_string(0),
-        },
-        UiCommandType::RemoveAction => UiCommand::RemoveAction {
-            action_name: raw.arg_string(0),
-        },
-
-        // ===== WORLD RENDERER =====
-        UiCommandType::SetPickRadius => UiCommand::SetPickRadius {
-            radius: raw.arg_float_or(0, 10.0),
-        },
-        UiCommandType::GrowPickRadius => UiCommand::GrowPickRadius {
-            amount: raw.arg_float_or(0, 10.0),
-        },
-        UiCommandType::ShrinkPickRadius => UiCommand::ShrinkPickRadius {
-            amount: raw.arg_float_or(0, 10.0),
-        },
-
-        // ===== FLOW CONTROL =====
-        UiCommandType::Delay => UiCommand::Delay {
-            seconds: raw.arg_float_or(0, 0.0),
-        },
-        UiCommandType::Halt => UiCommand::Halt,
-        UiCommandType::Skip => UiCommand::Skip {
-            count: raw.arg_int_or(0, 1) as usize,
-        },
-        UiCommandType::If => {
-            let condition = raw.args.get(0).cloned().unwrap_or(CommandArg::Bool(false));
-            let then_str = raw.arg_string(1);
-            let else_str = raw.arg_string(2);
-            UiCommand::If {
-                condition,
-                then_branch: parse_command_string(&then_str),
-                else_branch: parse_command_string(&else_str),
-            }
-        }
-        UiCommandType::IfVarEq => {
-            let var_name = raw.arg_string(0);
-            let value = raw
-                .args
-                .get(1)
-                .cloned()
-                .unwrap_or(CommandArg::String(String::new()));
-            let then_str = raw.arg_string(2);
-            UiCommand::IfVarEq {
-                var_name,
-                value,
-                then_branch: parse_command_string(&then_str),
-            }
-        }
-
-        // ===== DEBUG =====
-        UiCommandType::Print => UiCommand::Print {
-            args: raw.args.clone(),
-        },
-        UiCommandType::DebugVars => UiCommand::DebugVars,
-        UiCommandType::DebugMenus => UiCommand::DebugMenus,
-        UiCommandType::DebugActions => UiCommand::DebugActions,
-
-        // ===== EVENTS =====
-        UiCommandType::EmitEvent => UiCommand::EmitEvent {
-            event_name: raw.arg_string(0),
-        },
-
-        // ===== SPECIAL =====
-        UiCommandType::DragHuePoint => UiCommand::DragHuePoint,
-        UiCommandType::SetRoadsFourLanes => UiCommand::SetRoadsFourLanes {
-            forward: raw.arg_int_or(0, 1) as usize,
-            backward: raw.arg_int_or(1, 1) as usize,
-        },
-
-        // ===== NO-OP =====
-        UiCommandType::Noop => UiCommand::Noop,
-    };
-
-    Some(cmd)
-}
-
-// ==================== BUILDER API ====================
-
-impl UiCommand {
-    /// Create an OpenMenu command.
-    pub fn open_menu(name: impl Into<String>) -> Self {
-        UiCommand::OpenMenu {
-            menu_name: name.into(),
-        }
-    }
-
-    /// Create a CloseMenu command.
-    pub fn close_menu(name: impl Into<String>) -> Self {
-        UiCommand::CloseMenu {
-            menu_name: name.into(),
-        }
-    }
-
-    /// Create a ToggleMenu command.
-    pub fn toggle_menu(name: impl Into<String>) -> Self {
-        UiCommand::ToggleMenu {
-            menu_name: name.into(),
-        }
-    }
-
-    /// Create an OpenLayer command.
-    pub fn open_layer(menu: impl Into<String>, layer: impl Into<String>) -> Self {
-        UiCommand::OpenLayer {
-            menu_name: menu.into(),
-            layer_name: layer.into(),
-        }
-    }
-
-    /// Create a CloseLayer command.
-    pub fn close_layer(menu: impl Into<String>, layer: impl Into<String>) -> Self {
-        UiCommand::CloseLayer {
-            menu_name: menu.into(),
-            layer_name: layer.into(),
-        }
-    }
-
-    /// Create a ToggleLayer command.
-    pub fn toggle_layer(menu: impl Into<String>, layer: impl Into<String>) -> Self {
-        UiCommand::ToggleLayer {
-            menu_name: menu.into(),
-            layer_name: layer.into(),
-        }
-    }
-
-    /// Create a SetVar command.
-    pub fn set_var(name: impl Into<String>, value: CommandArg) -> Self {
-        UiCommand::SetVar {
-            name: name.into(),
-            value,
-        }
-    }
-
-    /// Create an IncVar command.
-    pub fn inc_var(name: impl Into<String>, amount: f32) -> Self {
-        UiCommand::IncVar {
-            name: name.into(),
-            amount,
-        }
-    }
-
-    /// Create a DecVar command.
-    pub fn dec_var(name: impl Into<String>, amount: f32) -> Self {
-        UiCommand::DecVar {
-            name: name.into(),
-            amount,
-        }
-    }
-
-    /// Create a StartAction command.
-    pub fn start_action(name: impl Into<String>) -> Self {
-        UiCommand::StartAction {
-            action_name: name.into(),
-        }
-    }
-
-    /// Create a StopAction command.
-    pub fn stop_action(name: impl Into<String>) -> Self {
-        UiCommand::StopAction {
-            action_name: name.into(),
-        }
-    }
-
-    /// Create a Print command.
-    pub fn print(args: Vec<CommandArg>) -> Self {
-        UiCommand::Print { args }
-    }
-
-    /// Create a Delay command.
-    pub fn delay(seconds: f32) -> Self {
-        UiCommand::Delay { seconds }
-    }
-
-    /// Create a batch of commands.
-    pub fn batch(commands: Vec<UiCommand>) -> Self {
-        UiCommand::Batch { commands }
-    }
-}
-
-// ==================== HELPER FUNCTIONS ====================
-
 pub fn style_to_u32(style: &str) -> u32 {
     match style {
-        "Hue Circle" => 1,
+        "Hue Circle" | "1" => 1,
         _ => 0,
     }
 }
 
-// ==================== MAIN ENTRY POINTS ====================
-
 /// Process commands and continuous actions. Call once per frame.
 pub fn process_commands(
     command_queue: &mut CommandQueue,
-    loader: &mut UiButtonLoader,
+    loader: &mut Ui,
     top_hit: &Option<HitResult>,
     input_state: &Input,
     time: &Time,
@@ -1406,15 +1019,8 @@ pub fn process_commands(
     command_queue.execute_continuous(&mut ctx);
 }
 
-/// Queue commands from a UI hit (when element is clicked).
-pub fn queue_from_hit(queue: &mut CommandQueue, hit: &Option<HitResult>) {
-    if let Some(h) = hit {
-        queue.push_from_hit(h);
-    }
-}
-
 /// Deactivate a continuous action by name.
-pub fn deactivate_action(loader: &mut UiButtonLoader, action_name: &str) {
+pub fn deactivate_action(loader: &mut Ui, action_name: &str) {
     if let Some(state) = loader
         .touch_manager
         .runtimes

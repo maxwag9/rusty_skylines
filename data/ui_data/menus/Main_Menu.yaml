@@ -23,4 +23,16 @@ layers:
           false_av: checkbox_unticked
         x: 0.5
         y: 0.5
-        scale: 3.0
+        scale: 1.0
+        active: true
+      - !Rect
+        id: test_rect
+        x: 0.4
+        y: 0.4
+        w: 0.02
+        h: 0.03
+        color:
+          - 1.0
+          - 0.0
+          - 0.0
+          - 1.0

@@ -5,7 +5,7 @@ use crate::renderer::render_core::{
 };
 use crate::renderer::shadows::CSM_CASCADES;
 use crate::ui::actions::CommandQueue;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::world::sound::Sounds;
 use crate::world::world_core::WorldCore;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use wgpu::Surface;
 use winit::window::Window;
 
 pub struct CommandQueues {
-    pub(crate) ui_command_queue: CommandQueue,
+    pub ui_command_queue: CommandQueue,
 }
 impl CommandQueues {
     pub fn new() -> Self {
@@ -34,7 +34,7 @@ pub struct Resources {
     // The GPU + render-only subsystems:
     pub render_core: RenderCore,
 
-    pub ui_loader: UiButtonLoader,
+    pub ui_loader: Ui,
     pub sounds: Sounds,
     pub surface: Surface<'static>,
 }
@@ -56,7 +56,7 @@ impl Resources {
 
         let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
 
-        let mut ui_loader = UiButtonLoader::new(&settings, window.inner_size());
+        let mut ui_loader = Ui::new(&settings, window.inner_size());
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);

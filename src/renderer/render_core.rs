@@ -18,7 +18,7 @@ use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::Time;
 use crate::ui::input::Input;
-use crate::ui::ui_editor::UiButtonLoader;
+use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
@@ -124,12 +124,7 @@ impl RenderCore {
         }
     }
 
-    pub(crate) fn resize(
-        &mut self,
-        surface: &Surface,
-        new_size: PhysicalSize<u32>,
-        ui: &mut UiButtonLoader,
-    ) {
+    pub(crate) fn resize(&mut self, surface: &Surface, new_size: PhysicalSize<u32>, ui: &mut Ui) {
         // Early exit for invalid sizes
         if new_size.width == 0 || new_size.height == 0 {
             return;
@@ -163,7 +158,7 @@ impl RenderCore {
         &mut self,
         surface: &Surface,
         world_core: &mut WorldCore,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         settings: &Settings,
     ) {
         let total_cpu_render_time_start = Instant::now();
@@ -230,7 +225,7 @@ impl RenderCore {
     pub fn update_render(
         &mut self,
         world_core: &mut WorldCore,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         settings: &Settings,
         aspect: f32,
         screen_size: UVec2,
@@ -315,7 +310,7 @@ impl RenderCore {
         settings: &Settings,
         input_state: &mut Input,
         time: &Time,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         terrain_subsystem: &mut Terrain,
         road_subsystem: &RoadSubsystem,
         car_subsystem: &CarSubsystem,
@@ -450,7 +445,7 @@ impl RenderCore {
         aspect: f32,
         time: &Time,
         input_state: &Input,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         terrain_subsystem: &Terrain,
         car_storage: &CarStorage,
         settings: &Settings,
@@ -849,7 +844,7 @@ impl RenderCore {
     fn execute_ui_pass(
         &mut self,
         encoder: &mut CommandEncoder,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         time: &Time,
         input_state: &Input,
         settings: &Settings,
@@ -1070,7 +1065,7 @@ impl RenderCore {
     fn render_ui<'a>(
         &'a mut self,
         pass: &mut RenderPass<'a>,
-        ui_loader: &mut UiButtonLoader,
+        ui_loader: &mut Ui,
         time: &Time,
         input_state: &Input,
         settings: &Settings,
@@ -1123,7 +1118,7 @@ impl RenderCore {
         Ok(())
     }
 
-    fn check_shader_changes(&mut self, ui_loader: &mut UiButtonLoader) {
+    fn check_shader_changes(&mut self, ui_loader: &mut Ui) {
         let Some(watcher) = &self.shader_watcher else {
             return;
         };

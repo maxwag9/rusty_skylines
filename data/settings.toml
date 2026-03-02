@@ -1,7 +1,7 @@
 target_fps = 100.0
 target_tps = 60.0
 present_mode = "mailbox"
-editor_mode = true
+editor_mode = false
 override_mode = false
 show_gui = true
 background_color = [
@@ -10,10 +10,10 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 234182.12017042073
+total_game_time = 234788.1202020261
 world_generation_benchmark_mode = false
 bend_mode = "strict"
-show_world = false
+show_world = true
 always_day = false
 msaa_samples = 4
 shadow_map_size = 2048
@@ -35,10 +35,10 @@ render_rt_gizmo = false
 noclip = false
 
 [player_pos.chunk]
-x = -59
-z = -222
+x = -44
+z = -212
 
 [player_pos.local]
-x = 7.013014
+x = 75.98671
 y = 42.578815
-z = 23.927063
+z = 100.4072
