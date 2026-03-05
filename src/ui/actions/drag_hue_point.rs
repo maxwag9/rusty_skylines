@@ -271,7 +271,7 @@ fn get_handle_color(loader: &Ui) -> Option<[f32; 4]> {
 fn spawn_handle_circle(loader: &mut Ui, mouse: &Mouse) {
     let handle = UiButtonCircle {
         id: "color picker handle circle".to_string(),
-        action: "None".to_string(),
+        actions: vec![],
         style: "None".to_string(),
         x: mouse.pos.x,
         y: mouse.pos.y,

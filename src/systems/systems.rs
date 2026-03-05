@@ -61,6 +61,7 @@ pub fn run_ui(resources: &mut Resources) {
         resources.window.inner_size(),
         &mut resources.world_core.road_subsystem.road_editor.style,
         &mut resources.command_queues,
+        &mut resources.settings,
     );
 }
 

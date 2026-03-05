@@ -19,7 +19,7 @@ pub struct SelectionManager {
     /// Whether a deselection just happened
     pub just_deselected: bool,
     /// Action associated with primary selection
-    pub primary_action: Option<String>,
+    pub primary_action: Vec<String>,
     /// Whether primary is an input box
     pub primary_is_input_box: bool,
 }
@@ -30,7 +30,7 @@ impl SelectionManager {
     }
 
     /// Select a single element, clearing any existing selection
-    pub fn select(&mut self, element: ElementRef, action: Option<String>, is_input_box: bool) {
+    pub fn select(&mut self, element: ElementRef, action: Vec<String>, is_input_box: bool) {
         self.just_deselected = false;
         self.primary = Some(element);
         self.secondary.clear();
@@ -104,7 +104,7 @@ impl SelectionManager {
     }
 
     /// Move primary to secondary and select new primary
-    pub fn move_primary_to_multi(&mut self, new_primary: ElementRef, action: Option<String>) {
+    pub fn move_primary_to_multi(&mut self, new_primary: ElementRef, action: Vec<String>) {
         if let Some(old_primary) = self.primary.take() {
             if old_primary != new_primary {
                 self.secondary.push(old_primary);
@@ -129,7 +129,7 @@ impl SelectionManager {
         self.just_deselected = self.primary.is_some() || !self.secondary.is_empty();
         self.primary = None;
         self.secondary.clear();
-        self.primary_action = None;
+        self.primary_action.clear();
         self.primary_is_input_box = false;
         self.selection_changed = true;
     }

@@ -341,7 +341,7 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
 fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
     UiButtonTextYaml {
         id: format!("t_{}", rng.next_u64()),
-        action: "None".to_string(),
+        actions: vec![],
         style: "None".to_string(),
         x: rng.next_f32_range(0.0, 1.0),
         y: rng.next_f32_range(0.0, 1.0),
@@ -370,7 +370,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
 fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
     UiButtonCircleYaml {
         id: format!("c_{}", rng.next_u64()),
-        action: "None".to_string(),
+        actions: vec![],
         style: "Bent".to_string(),
         x: rng.next_f32_range(0.0, 1.0),
         y: rng.next_f32_range(0.0, 1.0),
@@ -518,7 +518,7 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
 
     UiButtonPolygonYaml {
         id: format!("p_{}", rng.next_u64()),
-        action: "None".to_string(),
+        actions: vec![],
         style: "BentPoly".to_string(),
         x: 0.0,
         y: 0.0,

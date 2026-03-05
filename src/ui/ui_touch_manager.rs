@@ -76,9 +76,11 @@ pub struct ElementRef {
 }
 
 impl ElementRef {
-    pub fn action(&self, ui: Ui) -> Option<String> {
-        let element = get_element(&ui.menus, self);
-        element?.action()
+    pub fn action(&self, ui: &Ui) -> Vec<String> {
+        match get_element(&ui.menus, self) {
+            Some(e) => e.action(),
+            None => vec![],
+        }
     }
 }
 
@@ -111,7 +113,7 @@ pub struct HitTestResult {
     pub affected_element: Option<ElementRef>,
     pub z_order: u32,
     pub element_order: usize,
-    pub action: Option<String>,
+    pub actions: Vec<String>,
     /// Distance from element center (useful for tie-breaking)
     pub distance: f32,
     /// For polygon: which vertex was hit, if any
@@ -149,11 +151,15 @@ pub enum TouchEvent {
     // Hover events
     HoverEnter {
         element: ElementRef,
-        action: Option<String>,
+        actions: Vec<String>,
+    },
+    Hovering {
+        element: ElementRef,
+        actions: Vec<String>,
     },
     HoverExit {
         element: ElementRef,
-        action: Option<String>,
+        actions: Vec<String>,
     },
 
     // Press/release events
@@ -161,23 +167,23 @@ pub enum TouchEvent {
         element: ElementRef,
         position: [f32; 2],
         vertex_index: Option<usize>,
-        action: Option<String>,
+        actions: Vec<String>,
     },
     Release {
         element: ElementRef,
         position: [f32; 2],
         was_drag: bool,
-        action: Option<String>,
+        actions: Vec<String>,
     },
     Click {
         element: ElementRef,
         position: [f32; 2],
-        action: Option<String>,
+        actions: Vec<String>,
     },
     DoubleClick {
         element: ElementRef,
         position: [f32; 2],
-        action: Option<String>,
+        actions: Vec<String>,
     },
 
     // Drag events
@@ -221,7 +227,7 @@ pub enum TouchEvent {
     ScrollOnElement {
         element: ElementRef,
         delta: f32,
-        action: Option<String>,
+        actions: Vec<String>,
     },
 
     // Text editing events
@@ -236,12 +242,6 @@ pub enum TouchEvent {
     NavigateDirection {
         direction: NavigationDirection,
     },
-    // HandleDragStart {
-    //     handle_element: ElementRef,
-    //     affected_element: ElementRef,
-    //     start_position: (f32, f32),
-    //     vertex_index: Option<usize>
-    // },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,7 +265,7 @@ pub trait Touchable {
     fn is_active(&self) -> bool;
     fn is_pressable(&self) -> bool;
     fn is_editable(&self) -> bool;
-    fn action(&self) -> Option<&str>;
+    fn action(&self) -> Vec<String>;
 }
 
 /// Result of hitting a touchable element
@@ -325,8 +325,8 @@ impl Touchable for UiButtonCircle {
         self.misc.editable
     }
 
-    fn action(&self) -> Option<&str> {
-        Some(&self.action)
+    fn action(&self) -> Vec<String> {
+        self.actions.clone()
     }
 }
 
@@ -408,8 +408,8 @@ impl Touchable for UiButtonPolygon {
         self.misc.editable
     }
 
-    fn action(&self) -> Option<&str> {
-        Some(&self.action)
+    fn action(&self) -> Vec<String> {
+        self.actions.clone()
     }
 }
 
@@ -477,8 +477,8 @@ impl Touchable for UiButtonRect {
         self.misc.editable
     }
 
-    fn action(&self) -> Option<&str> {
-        Some(&self.action)
+    fn action(&self) -> Vec<String> {
+        self.actions.clone()
     }
 }
 
@@ -537,8 +537,8 @@ impl Touchable for UiButtonText {
         self.misc.editable
     }
 
-    fn action(&self) -> Option<&str> {
-        Some(&self.action)
+    fn action(&self) -> Vec<String> {
+        self.actions.clone()
     }
 }
 
@@ -600,8 +600,8 @@ impl Touchable for UiButtonHandle {
         self.misc.editable
     }
 
-    fn action(&self) -> Option<&str> {
-        None
+    fn action(&self) -> Vec<String> {
+        vec![]
     }
 }
 
@@ -670,6 +670,7 @@ impl HitDetector {
         point: [f32; 2],
         elements: I,
         editor_mode: bool,
+        override_mode: bool,
     ) -> Option<HitTestResult>
     where
         I: Iterator<Item = (&'a str, &'a str, u32, usize, &'a UiElement)>,
@@ -685,6 +686,7 @@ impl HitDetector {
                 element_order,
                 element,
                 editor_mode,
+                override_mode,
             );
 
             if let Some(candidate) = hit {
@@ -712,15 +714,16 @@ impl HitDetector {
         element_order: usize,
         element: &UiElement,
         editor_mode: bool,
+        override_mode: bool,
     ) -> Option<HitTestResult> {
-        let (id, kind, active, pressable, editable, action) = match element {
+        let (id, kind, active, pressable, editable, actions) = match element {
             UiElement::Circle(c) => (
                 c.id.clone(),
                 ElementKind::Circle,
                 c.misc.active,
                 c.misc.pressable,
                 c.misc.editable,
-                Some(c.action.as_str()),
+                c.actions.clone(),
             ),
             UiElement::Polygon(p) => (
                 p.id.clone(),
@@ -728,7 +731,7 @@ impl HitDetector {
                 p.misc.active,
                 p.misc.pressable,
                 p.misc.editable,
-                Some(p.action.as_str()),
+                p.actions.clone(),
             ),
             UiElement::Text(t) => (
                 t.id.clone(),
@@ -736,7 +739,7 @@ impl HitDetector {
                 t.misc.active,
                 t.misc.pressable,
                 t.misc.editable,
-                Some(t.action.as_str()),
+                t.actions.clone(),
             ),
             UiElement::Handle(h) => (
                 h.id.clone(),
@@ -744,7 +747,7 @@ impl HitDetector {
                 h.misc.active,
                 h.misc.pressable,
                 h.misc.editable,
-                None,
+                vec![],
             ),
             UiElement::Outline(_) => return None, // Outlines aren't interactive
             UiElement::Rect(r) => (
@@ -753,14 +756,18 @@ impl HitDetector {
                 r.misc.active,
                 r.misc.pressable,
                 r.misc.editable,
-                Some(r.action.as_str()),
+                r.actions.clone(),
             ),
         };
 
         // Skip inactive or non-interactive elements
-        if !active || (!pressable && !editable) {
+        if !active {
             return None;
         }
+
+        // if !override_mode && !editable {
+        //     return None;
+        // }
 
         // Skip handles in non-editor mode
         if kind == ElementKind::Handle && !editor_mode {
@@ -789,7 +796,7 @@ impl HitDetector {
             affected_element,
             z_order: layer_order,
             element_order,
-            action: action.map(|s| s.to_string()),
+            actions,
             distance: hit.distance,
             vertex_index: hit.vertex_index,
             text_being_edited,
@@ -1052,7 +1059,7 @@ impl EditorTouchExtension {
     pub fn process_scroll(
         &mut self,
         element: &ElementRef,
-        action: &Option<String>,
+        action: &Vec<String>,
         scroll_delta: f32,
     ) -> Option<TouchEvent> {
         if !self.enabled || scroll_delta == 0.0 {
@@ -1062,7 +1069,7 @@ impl EditorTouchExtension {
         Some(TouchEvent::ScrollOnElement {
             element: element.clone(),
             delta: scroll_delta,
-            action: action.clone(),
+            actions: action.clone(),
         })
     }
 }
@@ -1143,8 +1150,8 @@ impl Default for InteractionMode {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CurrentHover {
-    pub(crate) element: ElementRef,
-    pub(crate) action: Option<String>,
+    pub element: ElementRef,
+    pub actions: Vec<String>,
 }
 
 // ============================================================================
@@ -1208,8 +1215,12 @@ impl UiTouchManager {
         self.config.additive_select_active = input.shift_held;
 
         // Find what we're hitting
-        let top_hit =
-            HitDetector::find_top_hit(input.position, elements.clone(), self.editor.enabled);
+        let top_hit = HitDetector::find_top_hit(
+            input.position,
+            elements.clone(),
+            self.editor.enabled,
+            self.options.override_mode,
+        );
 
         // Process hover changes
         self.process_hover(&top_hit);
@@ -1236,7 +1247,7 @@ impl UiTouchManager {
     fn process_hover(&mut self, top_hit: &Option<HitTestResult>) {
         let new_hover = top_hit.as_ref().map(|h| CurrentHover {
             element: h.element_ref.clone(),
-            action: h.action.clone(),
+            actions: h.actions.clone(),
         });
 
         // Check if hover target changed
@@ -1245,7 +1256,7 @@ impl UiTouchManager {
             if let Some(old) = &self.current_hover {
                 self.events.push(TouchEvent::HoverExit {
                     element: old.element.clone(),
-                    action: old.action.clone(),
+                    actions: old.actions.clone(),
                 });
                 if let Some(state) = self.element_states.get_mut(&old.element.id) {
                     if state.state == ElementTouchState::Hovered {
@@ -1258,7 +1269,7 @@ impl UiTouchManager {
             if let Some(new) = &new_hover {
                 self.events.push(TouchEvent::HoverEnter {
                     element: new.element.clone(),
-                    action: new.action.clone(),
+                    actions: new.actions.clone(),
                 });
                 let state = self
                     .element_states
@@ -1280,6 +1291,13 @@ impl UiTouchManager {
                 } else {
                     InteractionMode::None
                 };
+            }
+        } else {
+            if let Some(current_hover) = &self.current_hover {
+                self.events.push(TouchEvent::Hovering {
+                    element: current_hover.element.clone(),
+                    actions: current_hover.actions.clone(),
+                });
             }
         }
     }
@@ -1319,7 +1337,7 @@ impl UiTouchManager {
                 element: element.clone(),
                 position: input.position,
                 vertex_index: hit.vertex_index,
-                action: hit.action.clone(),
+                actions: hit.actions.clone(),
             });
 
             // Begin potential drag
@@ -1425,7 +1443,7 @@ impl UiTouchManager {
                         element: hover.element.clone(),
                         position: input.position,
                         was_drag,
-                        action: hover.action.clone(),
+                        actions: hover.actions.clone(),
                     });
 
                     // If it wasn't a drag, it's a click
@@ -1439,13 +1457,13 @@ impl UiTouchManager {
                             self.events.push(TouchEvent::DoubleClick {
                                 element: hover.element.clone(),
                                 position: input.position,
-                                action: hover.action.clone(),
+                                actions: hover.actions.clone(),
                             });
                         } else {
                             self.events.push(TouchEvent::Click {
                                 element: hover.element.clone(),
                                 position: input.position,
-                                action: hover.action.clone(),
+                                actions: hover.actions.clone(),
                             });
                         }
 
@@ -1471,7 +1489,7 @@ impl UiTouchManager {
             if self.editor.enabled {
                 if let Some(event) =
                     self.editor
-                        .process_scroll(&hover.element, &hover.action, delta)
+                        .process_scroll(&hover.element, &hover.actions, delta)
                 {
                     self.events.push(event);
                 }
@@ -1613,7 +1631,7 @@ mod tests {
         let mut sm = SelectionManager::new();
 
         let elem = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
-        sm.select(elem.clone(), Some("action".into()), false);
+        sm.select(elem.clone(), vec!["action".into()], false);
 
         assert!(sm.is_selected(&elem));
         assert!(sm.is_primary(&elem));
@@ -1627,7 +1645,7 @@ mod tests {
         let elem1 = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
         let elem2 = ElementRef::new("menu", "layer", "elem2", ElementKind::Circle);
 
-        sm.select(elem1.clone(), None, false);
+        sm.select(elem1.clone(), vec![], false);
         sm.add_to_selection(elem2.clone());
 
         assert!(sm.is_primary(&elem1));
@@ -1640,7 +1658,7 @@ mod tests {
         let mut sm = SelectionManager::new();
 
         let elem = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
-        sm.select(elem.clone(), None, false);
+        sm.select(elem.clone(), vec![], false);
         sm.toggle_selection(elem.clone());
 
         assert!(!sm.is_selected(&elem));

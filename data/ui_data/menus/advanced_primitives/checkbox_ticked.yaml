@@ -16,13 +16,14 @@ elements:
   # Soft inner fill
   - !Rect
     id: Checkbox Fill
-    action: on_release(set_setting_to(false))
+    actions:
+      - on_release(set_setting_to(ap, bool:false))
     x: 0.5
     y: 0.5
     w: 0.015
     h: 0.015
     color:
-      - 0.40
+      - 0.10
       - 0.85
-      - 0.40
+      - 0.10
       - 0.85

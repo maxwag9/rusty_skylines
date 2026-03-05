@@ -167,10 +167,6 @@ pub fn get_selected_element_color(loader: &Ui) -> Option<[f32; 4]> {
         return None;
     };
 
-    if loader.touch_manager.selection.primary_action == Some("Drag Hue Point".to_string()) {
-        return None;
-    }
-
     // Find the menu
     let menu = loader.menus.get(&sel.menu)?;
     // Find the layer

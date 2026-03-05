@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_variables)]
 pub mod drag_hue_point;
 
+use crate::data::{SettingKey, SettingOp, Settings};
 use crate::resources::Time;
 use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::Input;
@@ -217,32 +218,31 @@ pub enum UiCommand {
 
     // ===== VARIABLE COMMANDS =====
     SetVar {
+        element_ref: ElementRef,
         name: String,
         value: CommandArg,
     },
     IncVar {
+        element_ref: ElementRef,
         name: String,
         amount: f32,
     },
     DecVar {
+        element_ref: ElementRef,
         name: String,
         amount: f32,
     },
     MulVar {
+        element_ref: ElementRef,
         name: String,
         factor: f32,
     },
-    ToggleBool {
+    ToggleVar {
+        element_ref: ElementRef,
         name: String,
     },
-    ToggleSettingBool {
-        element_ref: ElementRef,
-    },
-    SetSettingBool {
-        element_ref: ElementRef,
-        state: bool,
-    },
     Clamp {
+        element_ref: ElementRef,
         name: String,
         min: f32,
         max: f32,
@@ -257,17 +257,6 @@ pub enum UiCommand {
     },
     RemoveAction {
         action_name: String,
-    },
-
-    // ===== WORLD RENDERER COMMANDS =====
-    SetPickRadius {
-        radius: f32,
-    },
-    GrowPickRadius {
-        amount: f32,
-    },
-    ShrinkPickRadius {
-        amount: f32,
     },
 
     // ===== FLOW CONTROL =====
@@ -303,15 +292,6 @@ pub enum UiCommand {
         event_name: String,
     },
 
-    // ===== LEGACY/SPECIAL COMMANDS =====
-    DragHuePoint {
-        element_ref: ElementRef,
-    },
-    SetRoadsFourLanes {
-        forward: usize,
-        backward: usize,
-    },
-
     // ===== UTILITY =====
     Batch {
         commands: Vec<UiCommand>,
@@ -332,8 +312,71 @@ pub enum CommandArg {
 
 impl CommandArg {
     pub fn from_str(s: &str) -> Self {
+        let s = s.trim();
+
+        if s.is_empty() {
+            return CommandArg::String(String::new());
+        }
+
+        // =========================
+        // Explicit type prefix
+        // =========================
+        if let Some((ty, value)) = s.split_once(':') {
+            match ty.to_ascii_lowercase().as_str() {
+                "int" => {
+                    if let Ok(i) = value.parse::<i64>() {
+                        return CommandArg::Int(i);
+                    }
+                }
+                "float" | "f32" => {
+                    if let Ok(f) = value.parse::<f32>() {
+                        return CommandArg::Float(f);
+                    }
+                }
+                "bool" => match value.to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" | "on" => return CommandArg::Bool(true),
+                    "false" | "0" | "no" | "off" => return CommandArg::Bool(false),
+                    _ => {}
+                },
+                "string" | "str" => {
+                    return CommandArg::String(value.to_string());
+                }
+                "var" => {
+                    return CommandArg::Var(value.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        // =========================
+        // Auto-detect bool
+        // =========================
+        match s.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" => return CommandArg::Bool(true),
+            "false" | "no" | "off" => return CommandArg::Bool(false),
+            _ => {}
+        }
+
+        // =========================
+        // Auto-detect integer
+        // =========================
+        if let Ok(i) = s.parse::<i64>() {
+            return CommandArg::Int(i);
+        }
+
+        // =========================
+        // Auto-detect float
+        // =========================
+        if let Ok(f) = s.parse::<f32>() {
+            return CommandArg::Float(f);
+        }
+
+        // =========================
+        // Default: String
+        // =========================
         CommandArg::String(s.to_string())
     }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             CommandArg::String(s) | CommandArg::Var(s) => Some(s),
@@ -456,13 +499,14 @@ pub enum CommandResult {
 
 /// Context provided only during command execution (drain phase).
 pub struct CommandContext<'a> {
-    pub loader: &'a mut Ui,
-    pub input_state: &'a Input,
+    pub ui: &'a mut Ui,
+    pub input: &'a Input,
     pub time: &'a Time,
-    pub world_renderer: &'a mut Terrain,
+    pub terrain: &'a mut Terrain,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
     pub road_style_params: &'a mut RoadStyleParams,
+    pub settings: &'a mut Settings,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -610,7 +654,7 @@ impl CommandQueue {
         match cmd {
             // ===== MENU COMMANDS =====
             UiCommand::OpenMenu { menu_name } => {
-                if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     menu.active = true;
                     CommandResult::Ok
                 } else {
@@ -619,7 +663,7 @@ impl CommandQueue {
             }
 
             UiCommand::CloseMenu { menu_name } => {
-                if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     menu.active = false;
                     CommandResult::Ok
                 } else {
@@ -628,14 +672,14 @@ impl CommandQueue {
             }
 
             UiCommand::CloseAllMenus => {
-                for (_, menu) in ctx.loader.menus.iter_mut() {
+                for (_, menu) in ctx.ui.menus.iter_mut() {
                     menu.active = false;
                 }
                 CommandResult::Ok
             }
 
             UiCommand::ToggleMenu { menu_name } => {
-                if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     menu.active = !menu.active;
                     CommandResult::Ok
                 } else {
@@ -645,7 +689,7 @@ impl CommandQueue {
 
             UiCommand::MenuActive { menu_name } => {
                 let is_active = ctx
-                    .loader
+                    .ui
                     .menus
                     .get(&menu_name)
                     .map(|m| m.active)
@@ -659,7 +703,7 @@ impl CommandQueue {
                 menu_name,
                 layer_name,
             } => {
-                if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = true;
                         return CommandResult::Ok;
@@ -676,7 +720,7 @@ impl CommandQueue {
                 menu_name,
                 layer_name,
             } => {
-                if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = false;
                         return CommandResult::Ok;
@@ -690,7 +734,7 @@ impl CommandQueue {
                 menu_name,
                 layer_name,
             } => {
-                if let Some(menu) = ctx.loader.menus.get_mut(&menu_name) {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = !layer.active;
                         return CommandResult::Ok;
@@ -701,13 +745,87 @@ impl CommandQueue {
             }
 
             // ===== VARIABLE COMMANDS =====
-            UiCommand::SetVar { name, value } => {
-                let resolved = self.resolve_arg(&value);
-                self.variables.insert(name, resolved);
-                CommandResult::Ok
+            UiCommand::SetVar {
+                element_ref,
+                name,
+                value,
+            } => {
+                let mut result: CommandResult = CommandResult::Error(
+                    "No settings nor vars found to set using UiCommand::SetVar".into(),
+                );
+                // Primary: Settings
+                if let Some(key) = SettingKey::from_str(&name) {
+                    if let Some(setting_value) = key.parse_command_arg(&value) {
+                        ctx.settings
+                            .apply_setting(key, SettingOp::Set(setting_value));
+                        result = CommandResult::Ok
+                    } else {
+                        result = CommandResult::Error(format!(
+                            "Cannot convert {:?} for setting '{}'",
+                            value, name
+                        ))
+                    }
+                }
+
+                // Secondary: AP (layer settings)
+                if name == "ap" && !matches!(result, CommandResult::Ok) {
+                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
+                        if let Some(setting_value) = setting.key.parse_command_arg(&value) {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::Set(setting_value.clone()));
+                            result = CommandResult::Ok
+                        } else {
+                            result = CommandResult::Error(format!(
+                                "Cannot convert {:?} for setting '{}'",
+                                value, name
+                            ))
+                        }
+                    }
+                }
+
+                // Ternary: Variables
+                if !matches!(result, CommandResult::Ok) {
+                    let resolved = self.resolve_arg(&value);
+                    self.variables.insert(name, resolved);
+                    result = CommandResult::Ok
+                }
+                result
             }
 
-            UiCommand::IncVar { name, amount } => {
+            UiCommand::IncVar {
+                element_ref,
+                name,
+                amount,
+            } => {
+                // Primary: Settings
+                if let Some(key) = SettingKey::from_str(&name) {
+                    let current = ctx.settings.read_setting(key);
+                    // Try numeric add first, fall back to cycle
+                    if let Some(new_value) = current.add(amount) {
+                        ctx.settings.apply_setting(key, SettingOp::Set(new_value));
+                    } else {
+                        ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                    }
+                    return CommandResult::Ok;
+                }
+
+                // Secondary: AV
+                if name == "av" {
+                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
+                        let current = ctx.settings.read_setting(setting.key);
+                        // Try numeric add first, fall back to cycle
+                        if let Some(new_value) = current.add(amount) {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                        } else {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::CycleNext);
+                        }
+                        return CommandResult::Ok;
+                    }
+                }
+
+                // Ternary: Variables
                 let new_val = match self.variables.get(&name) {
                     Some(CommandArg::Float(f)) => CommandArg::Float(f + amount),
                     Some(CommandArg::Int(i)) => CommandArg::Float(*i as f32 + amount),
@@ -717,7 +835,40 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
-            UiCommand::DecVar { name, amount } => {
+            UiCommand::DecVar {
+                element_ref,
+                name,
+                amount,
+            } => {
+                // Primary: Settings
+                if let Some(key) = SettingKey::from_str(&name) {
+                    let current = ctx.settings.read_setting(key);
+                    // Try numeric add first, fall back to cycle
+                    if let Some(new_value) = current.subtract(amount) {
+                        ctx.settings.apply_setting(key, SettingOp::Set(new_value));
+                    } else {
+                        ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                    }
+                    return CommandResult::Ok;
+                }
+
+                // Secondary: AV
+                if name == "av" {
+                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
+                        let current = ctx.settings.read_setting(setting.key);
+                        // Try numeric add first, fall back to cycle
+                        if let Some(new_value) = current.subtract(amount) {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                        } else {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::CyclePrev);
+                        }
+                        return CommandResult::Ok;
+                    }
+                }
+
+                // Ternary: Variables
                 let new_val = match self.variables.get(&name) {
                     Some(CommandArg::Float(f)) => CommandArg::Float(f - amount),
                     Some(CommandArg::Int(i)) => CommandArg::Float(*i as f32 - amount),
@@ -727,14 +878,55 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
-            UiCommand::MulVar { name, factor } => {
+            UiCommand::MulVar {
+                element_ref,
+                name,
+                factor,
+            } => {
+                // Primary: Settings
+                if let Some(key) = SettingKey::from_str(&name) {
+                    let current = ctx.settings.read_setting(key);
+                    if let Some(new_value) = current.multiply(factor) {
+                        ctx.settings.apply_setting(key, SettingOp::Set(new_value));
+                    }
+                    return CommandResult::Ok;
+                }
+
+                // Secondary: AV
+                if name == "av" {
+                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
+                        let current = ctx.settings.read_setting(setting.key);
+                        if let Some(new_value) = current.multiply(factor) {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                        }
+                        return CommandResult::Ok;
+                    }
+                }
+
+                // Ternary: Variables
                 if let Some(CommandArg::Float(f)) = self.variables.get(&name) {
                     self.variables.insert(name, CommandArg::Float(f * factor));
                 }
                 CommandResult::Ok
             }
 
-            UiCommand::ToggleBool { name } => {
+            UiCommand::ToggleVar { element_ref, name } => {
+                // Primary: Settings
+                if let Some(key) = SettingKey::from_str(&name) {
+                    ctx.settings.apply_setting(key, SettingOp::Toggle);
+                    return CommandResult::Ok;
+                }
+
+                // Secondary: AV
+                if name == "av" {
+                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
+                        ctx.settings.apply_setting(setting.key, SettingOp::Toggle);
+                        return CommandResult::Ok;
+                    }
+                }
+
+                // Ternary: Variables
                 let new_val = match self.variables.get(&name) {
                     Some(CommandArg::Bool(b)) => CommandArg::Bool(!b),
                     _ => CommandArg::Bool(true),
@@ -743,17 +935,34 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
-            UiCommand::ToggleSettingBool { element_ref } => CommandResult::Ok,
+            UiCommand::Clamp {
+                element_ref,
+                name,
+                min,
+                max,
+            } => {
+                // Primary: Settings
+                if let Some(key) = SettingKey::from_str(&name) {
+                    let current = ctx.settings.read_setting(key);
+                    if let Some(new_value) = current.clamp_range(min, max) {
+                        ctx.settings.apply_setting(key, SettingOp::Set(new_value));
+                    }
+                    return CommandResult::Ok;
+                }
 
-            UiCommand::SetSettingBool { element_ref, state } => {
-                let Some(setting) = get_layer_settings(&ctx.loader.menus, &element_ref) else {
-                    return CommandResult::Error("Layer doesn't exist".to_string());
-                };
+                // Secondary: AV
+                if name == "av" {
+                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
+                        let current = ctx.settings.read_setting(setting.key);
+                        if let Some(new_value) = current.clamp_range(min, max) {
+                            ctx.settings
+                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                        }
+                        return CommandResult::Ok;
+                    }
+                }
 
-                CommandResult::Ok
-            }
-
-            UiCommand::Clamp { name, min, max } => {
+                // Ternary: Variables
                 if let Some(CommandArg::Float(f)) = self.variables.get(&name).cloned() {
                     self.variables
                         .insert(name, CommandArg::Float(f.clamp(min, max)));
@@ -764,7 +973,7 @@ impl CommandQueue {
             // ===== ACTION STATE COMMANDS =====
             UiCommand::StartAction { action_name } => {
                 let state = ActionState::with_time(&action_name, ctx.time.total_time);
-                ctx.loader
+                ctx.ui
                     .touch_manager
                     .runtimes
                     .action_states
@@ -774,7 +983,7 @@ impl CommandQueue {
 
             UiCommand::StopAction { action_name } => {
                 if let Some(state) = ctx
-                    .loader
+                    .ui
                     .touch_manager
                     .runtimes
                     .action_states
@@ -786,28 +995,11 @@ impl CommandQueue {
             }
 
             UiCommand::RemoveAction { action_name } => {
-                ctx.loader
+                ctx.ui
                     .touch_manager
                     .runtimes
                     .action_states
                     .remove(&action_name);
-                CommandResult::Ok
-            }
-
-            // ===== WORLD RENDERER COMMANDS =====
-            UiCommand::SetPickRadius { radius } => {
-                ctx.world_renderer.pick_radius_m = radius;
-                CommandResult::Ok
-            }
-
-            UiCommand::GrowPickRadius { amount } => {
-                ctx.world_renderer.pick_radius_m += amount;
-                CommandResult::Ok
-            }
-
-            UiCommand::ShrinkPickRadius { amount } => {
-                ctx.world_renderer.pick_radius_m =
-                    (ctx.world_renderer.pick_radius_m - amount).max(0.1);
                 CommandResult::Ok
             }
 
@@ -871,7 +1063,7 @@ impl CommandQueue {
             }
 
             UiCommand::DebugMenus => {
-                for (name, menu) in &ctx.loader.menus {
+                for (name, menu) in &ctx.ui.menus {
                     println!("[Debug] Menu '{}': active={}", name, menu.active);
                     for layer in &menu.layers {
                         println!("  Layer '{}': active={}", layer.name, layer.active);
@@ -882,7 +1074,7 @@ impl CommandQueue {
 
             UiCommand::DebugActions => {
                 println!("[Debug] Active action states:");
-                for (name, state) in &ctx.loader.touch_manager.runtimes.action_states {
+                for (name, state) in &ctx.ui.touch_manager.runtimes.action_states {
                     println!("  '{}': active={}", name, state.active);
                 }
                 CommandResult::Ok
@@ -899,24 +1091,6 @@ impl CommandQueue {
                     "_last_event_element",
                     CommandArg::String(element_ref.id.clone()),
                 );
-                CommandResult::Ok
-            }
-
-            UiCommand::DragHuePoint { element_ref } => {
-                let action_name = format!("Drag Hue Point:{}", element_ref.id);
-                let state = ActionState::with_time(&action_name, ctx.time.total_time);
-                ctx.loader
-                    .touch_manager
-                    .runtimes
-                    .action_states
-                    .insert(action_name, state);
-                CommandResult::Ok
-            }
-
-            UiCommand::SetRoadsFourLanes { forward, backward } => {
-                let mut road_type = ctx.road_style_params.road_type().clone();
-                road_type.lanes_each_direction = (forward, backward);
-                ctx.road_style_params.set_road_type(road_type);
                 CommandResult::Ok
             }
 
@@ -937,7 +1111,7 @@ impl CommandQueue {
     /// Execute continuous/frame-based actions. Call every frame after drain().
     pub fn execute_continuous(&mut self, ctx: &mut CommandContext) {
         let active_actions: Vec<String> = ctx
-            .loader
+            .ui
             .touch_manager
             .runtimes
             .action_states
@@ -949,7 +1123,7 @@ impl CommandQueue {
         for action_name in active_actions {
             match action_name.as_str() {
                 "Drag Hue Point" => {
-                    drag_hue_point(ctx.loader, &ctx.input_state.mouse, ctx.time);
+                    drag_hue_point(ctx.ui, &ctx.input.mouse, ctx.time);
                 }
                 _ => {}
             }
@@ -1004,15 +1178,17 @@ pub fn process_commands(
     world_renderer: &mut Terrain,
     window_size: PhysicalSize<u32>,
     road_style_params: &mut RoadStyleParams,
+    settings: &mut Settings,
 ) {
     let mut ctx = CommandContext {
-        loader,
-        input_state,
+        ui: loader,
+        input: input_state,
         time,
-        world_renderer,
+        terrain: world_renderer,
         hit: top_hit,
         window_size,
         road_style_params,
+        settings,
     };
 
     command_queue.drain(&mut ctx);

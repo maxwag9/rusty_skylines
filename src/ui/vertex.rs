@@ -4,8 +4,10 @@ use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams}
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
 use crate::ui::ui_touch_manager::ElementRef;
-use serde::{Deserialize, Serialize};
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer, Serialize, de};
 use std::collections::HashMap;
+use std::fmt;
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
 use winit::dpi::PhysicalSize;
@@ -319,15 +321,14 @@ pub struct SettingBinding {
     pub key: SettingKey,
     pub op: SettingOp,
 
-    // For checkbox visuals:
-    pub true_av: Option<String>,
-    pub false_av: Option<String>,
+    pub true_ap: Option<String>,
+    pub false_ap: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AdvancedPrimitive {
     pub name: String,
     #[serde(default)]
-    pub av_name: Option<String>,
+    pub ap_name: Option<String>,
 
     #[serde(default)]
     pub setting: Option<SettingBinding>,
@@ -335,6 +336,7 @@ pub struct AdvancedPrimitive {
     pub y: f32,
     #[serde(skip_serializing_if = "is_one")]
     pub scale: f32,
+    pub editable: bool,
     pub active: bool,
 }
 
@@ -345,50 +347,54 @@ impl AdvancedPrimitive {
         advanced_primitives: &HashMap<String, UiLayerYaml>,
         order: u32,
         window_size: PhysicalSize<u32>,
-    ) -> RuntimeLayer {
-        let mut av_name = self.av_name;
+    ) -> Vec<RuntimeLayer> {
+        let mut layers: Vec<RuntimeLayer> = Vec::new();
+        let mut active_ap: Option<String> = self.ap_name.clone();
 
-        if av_name.is_none() {
+        if active_ap.is_none() {
             if let Some(setting) = &self.setting {
                 let value = settings.read_setting(setting.key);
                 if let SettingValue::Bool(b) = value {
-                    av_name = if b {
-                        setting.true_av.clone()
+                    active_ap = if b {
+                        setting.true_ap.clone()
                     } else {
-                        setting.false_av.clone()
+                        setting.false_ap.clone()
                     };
                 }
             }
         }
-        let elements: Vec<UiElement> = av_name
-            .as_ref()
-            .and_then(|name| advanced_primitives.get(name))
-            .map(|av| {
-                av.elements
-                    .clone()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|e| UiElement::from_yaml(e, window_size))
-                    .map(|mut el| {
-                        el.resize(self.scale);
-                        el.set_pos_normalized(self.x, self.y, window_size);
-                        el
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        RuntimeLayer {
-            name: self.name,
-            order,
-            elements,
-            active: self.active,
-            setting: self.setting,
-            cache: Default::default(),
-            dirty: LayerDirty::all(),
-            gpu: Default::default(),
-            opaque: false,
-            saveable: false,
+
+        for (name, av) in advanced_primitives {
+            let elements: Vec<UiElement> = av
+                .elements
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|e| UiElement::from_yaml(e, window_size))
+                .map(|mut el| {
+                    el.resize(self.scale);
+                    el.set_pos_normalized(self.x, self.y, window_size);
+                    el.set_editable(self.editable);
+                    el
+                })
+                .collect();
+
+            layers.push(RuntimeLayer {
+                name: self.name.clone(),
+                ap_name: Some(name.clone()),
+                order,
+                elements,
+                active: active_ap.as_ref() == Some(name),
+                setting: self.setting.clone(),
+                cache: Default::default(),
+                dirty: LayerDirty::all(),
+                gpu: Default::default(),
+                opaque: false,
+                saveable: false,
+            });
         }
+
+        layers
     }
 }
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -399,11 +405,9 @@ pub struct UiButtonRectYaml {
     )]
     pub id: String,
 
-    #[serde(
-        default = "default_none_string",
-        skip_serializing_if = "is_none_string"
-    )]
-    pub action: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "string_or_vec")]
+    pub actions: Vec<String>,
 
     #[serde(
         default = "default_none_string",
@@ -415,7 +419,11 @@ pub struct UiButtonRectYaml {
     pub w: f32,
     pub h: f32,
     #[serde(default)]
+    pub rotation: f32, // DEGREES!!! 360 ftw!
+    #[serde(default)]
     pub color: [f32; 4], // tint for texture
+    #[serde(default)]
+    pub border_color: [f32; 4],
     #[serde(default)]
     pub texture: Option<String>,
     #[serde(default)]
@@ -430,13 +438,15 @@ pub struct UiButtonRectYaml {
 #[derive(Debug, Clone)]
 pub struct UiButtonRect {
     pub id: String,
-    pub action: String,
+    pub actions: Vec<String>,
     pub style: String,
     pub x: f32,
     pub y: f32,
     pub w: f32,
     pub h: f32,
+    pub rotation: f32,   // DEGREES!!! 360 ftw!
     pub color: [f32; 4], // tint for texture
+    pub border_color: [f32; 4],
     pub texture: Option<String>,
     pub roundness: f32, // corner radius
     pub border_thickness_percentage: f32,
@@ -445,27 +455,29 @@ pub struct UiButtonRect {
 }
 
 impl UiButtonRect {
-    pub fn from_yaml(c: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(r: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonRect {
-            id: c.id,
-            action: c.action,
-            style: c.style,
-            x: window_size.width as f32 * c.x,
-            y: window_size.height as f32 * c.y,
-            w: c.w * scale,
-            h: c.h * scale,
-            color: c.color,
-            texture: c.texture,
-            roundness: c.roundness * scale,
-            border_thickness_percentage: c.border_thickness_percentage,
-            fade: c.fade,
+            id: r.id,
+            actions: r.actions,
+            style: r.style,
+            x: window_size.width as f32 * r.x,
+            y: window_size.height as f32 * r.y,
+            w: r.w * scale,
+            h: r.h * scale,
+            rotation: r.rotation,
+            color: r.color,
+            border_color: r.border_color,
+            texture: r.texture,
+            roundness: r.roundness * scale,
+            border_thickness_percentage: r.border_thickness_percentage,
+            fade: r.fade,
             misc: MiscButtonSettings {
-                active: c.misc.active,
+                active: r.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: c.misc.pressable,
-                editable: c.misc.editable,
+                pressable: r.misc.pressable,
+                editable: r.misc.editable,
             },
         }
     }
@@ -474,13 +486,15 @@ impl UiButtonRect {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonRectYaml {
             id: self.id.clone(),
-            action: self.action.clone(),
+            actions: self.actions.clone(),
             style: self.style.clone(),
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
             w: self.w / scale,
             h: self.h / scale,
+            rotation: self.rotation,
             color: self.color,
+            border_color: self.border_color,
             texture: self.texture.clone(),
             roundness: self.roundness / scale,
             border_thickness_percentage: self.border_thickness_percentage,
@@ -644,14 +658,25 @@ impl UiElement {
         }
     }
 
-    pub fn action(&self) -> Option<String> {
+    pub fn is_editable(&self) -> bool {
         match self {
-            UiElement::Text(t) => Some(t.action.clone()),
-            UiElement::Circle(c) => Some(c.action.clone()),
-            UiElement::Outline(_) => None,
-            UiElement::Handle(_) => None,
-            UiElement::Polygon(p) => Some(p.action.clone()),
-            UiElement::Rect(r) => Some(r.action.clone()),
+            UiElement::Text(t) => t.misc.editable,
+            UiElement::Circle(c) => c.misc.editable,
+            UiElement::Outline(o) => o.misc.editable,
+            UiElement::Handle(h) => h.misc.editable,
+            UiElement::Polygon(p) => p.misc.editable,
+            UiElement::Rect(r) => r.misc.editable,
+        }
+    }
+
+    pub fn action(&self) -> Vec<String> {
+        match self {
+            UiElement::Text(t) => t.actions.clone(),
+            UiElement::Circle(c) => c.actions.clone(),
+            UiElement::Outline(_) => vec![],
+            UiElement::Handle(_) => vec![],
+            UiElement::Polygon(p) => p.actions.clone(),
+            UiElement::Rect(r) => r.actions.clone(),
         }
     }
 
@@ -776,6 +801,20 @@ impl UiElement {
         let y = norm_y * window_size.height as f32;
 
         self.set_pos(x, y);
+    }
+    fn misc_mut(&mut self) -> &mut MiscButtonSettings {
+        match self {
+            UiElement::Text(t) => &mut t.misc,
+            UiElement::Circle(c) => &mut c.misc,
+            UiElement::Handle(h) => &mut h.misc,
+            UiElement::Outline(o) => &mut o.misc,
+            UiElement::Polygon(p) => &mut p.misc,
+            UiElement::Rect(r) => &mut r.misc,
+        }
+    }
+
+    pub fn set_editable(&mut self, editable: bool) {
+        self.misc_mut().editable = editable;
     }
     pub fn rescale_to_window(
         &mut self,
@@ -991,13 +1030,14 @@ pub struct PolygonEdgeGpu {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RectGpu {
-    pub center: [f32; 2],      // center position
-    pub size: [f32; 2],        // width, height
-    pub color: [f32; 4],       // RGBA
+    pub center: [f32; 2], // center position
+    pub size: [f32; 2],   // width, height
+    pub color: [f32; 4],  // RGBA
+    pub border_color: [f32; 4],
     pub roundness: f32,        // corner radius
     pub border_thickness: f32, // computed from percentage
+    pub rotation: f32,         // RAD to the GPU! DEG User-Facing in YAML and Runtime.
     pub fade: f32,
-    pub _pad: f32,
     pub misc: [f32; 4], // active, touched_time, is_down, hash
 }
 // For text — pos + uv + color
@@ -1037,6 +1077,7 @@ impl UiVertexText {
 #[derive(Debug, Clone)]
 pub struct RuntimeLayer {
     pub name: String,
+    pub ap_name: Option<String>,
     pub order: u32,
     pub elements: Vec<UiElement>,
     pub active: bool,
@@ -1231,9 +1272,8 @@ pub struct UiVertex {
 
 impl UiVertex {
     fn from_yaml(v: UiVertexYaml, id: usize, window_size: PhysicalSize<u32>) -> Self {
-        let mut pos = v.pos;
         UiVertex {
-            pos,
+            pos: v.pos,
             color: v.color,
             roundness: v.roundness,
             _selected: false,
@@ -1242,9 +1282,8 @@ impl UiVertex {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiVertexYaml {
-        let mut pos = self.pos;
         UiVertexYaml {
-            pos,
+            pos: self.pos,
             color: self.color,
             roundness: self.roundness,
         }
@@ -1427,7 +1466,7 @@ impl UiButtonText {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonText {
     pub id: String,
-    pub action: String,
+    pub actions: Vec<String>,
     pub style: String,
     pub x: f32,
     pub y: f32,
@@ -1465,7 +1504,7 @@ pub struct UiButtonPolygon {
     pub x: f32,
     pub y: f32,
     pub scale: f32,
-    pub action: String,
+    pub actions: Vec<String>,
     pub style: String,
     pub vertices: Vec<UiVertex>,
     pub original_vertices: Vec<UiVertex>,
@@ -1476,7 +1515,7 @@ pub struct UiButtonPolygon {
 #[derive(Deserialize, Debug, Clone)]
 pub struct UiButtonCircle {
     pub id: String,
-    pub action: String,
+    pub actions: Vec<String>,
     pub style: String,
     pub x: f32,
     pub y: f32,
@@ -1532,7 +1571,7 @@ impl UiButtonText {
         let length = t.text.len();
         UiButtonText {
             id: t.id,
-            action: t.action.clone(),
+            actions: t.actions.clone(),
             style: t.style.clone(),
             x: window_size.width as f32 * t.x,
             y: window_size.height as f32 * t.y,
@@ -1578,7 +1617,7 @@ impl UiButtonText {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonTextYaml {
             id: self.id.clone(),
-            action: self.action.clone(),
+            actions: self.actions.clone(),
             style: self.style.clone(),
 
             x: self.x / window_size.width as f32,
@@ -1617,7 +1656,7 @@ impl UiButtonCircle {
         let radius = scale * c.radius;
         UiButtonCircle {
             id: c.id,
-            action: c.action,
+            actions: c.actions,
             style: c.style,
             x: window_size.width as f32 * c.x,
             y: window_size.height as f32 * c.y,
@@ -1649,7 +1688,7 @@ impl UiButtonCircle {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonCircleYaml {
             id: self.id.clone(),
-            action: self.action.clone(),
+            actions: self.actions.clone(),
             style: self.style.clone(),
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
@@ -1775,7 +1814,7 @@ impl UiButtonPolygon {
             x: p.x,
             y: p.y,
             scale: p.scale,
-            action: p.action,
+            actions: p.actions,
             style: p.style,
             vertices: verts.clone(),
             original_vertices: verts,
@@ -1793,7 +1832,7 @@ impl UiButtonPolygon {
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonPolygonYaml {
         UiButtonPolygonYaml {
             id: self.id.clone(),
-            action: self.action.clone(),
+            actions: self.actions.clone(),
             style: self.style.clone(),
 
             x: self.x,
@@ -1867,7 +1906,7 @@ impl Default for UiButtonText {
     fn default() -> Self {
         Self {
             id: "None".to_string(),
-            action: "None".to_string(),
+            actions: vec![],
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
@@ -1936,7 +1975,7 @@ impl Default for UiButtonPolygon {
             x: 0.0,
             y: 0.0,
             scale: 1.0,
-            action: "None".to_string(),
+            actions: vec![],
             style: "None".to_string(),
             vertices: verts.clone(),
             original_vertices: verts,
@@ -1950,7 +1989,7 @@ impl Default for UiButtonCircle {
     fn default() -> Self {
         Self {
             id: "None".to_string(),
-            action: "None".to_string(),
+            actions: vec![],
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
@@ -2060,11 +2099,9 @@ pub struct UiButtonTextYaml {
     )]
     pub id: String,
 
-    #[serde(
-        default = "default_none_string",
-        skip_serializing_if = "is_none_string"
-    )]
-    pub action: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "string_or_vec")]
+    pub actions: Vec<String>,
 
     #[serde(
         default = "default_none_string",
@@ -2106,7 +2143,7 @@ impl Default for UiButtonTextYaml {
     fn default() -> Self {
         Self {
             id: "None".to_string(),
-            action: "None".to_string(),
+            actions: Vec::new(),
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
@@ -2134,11 +2171,9 @@ pub struct UiButtonCircleYaml {
     )]
     pub id: String,
 
-    #[serde(
-        default = "default_none_string",
-        skip_serializing_if = "is_none_string"
-    )]
-    pub action: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "string_or_vec")]
+    pub actions: Vec<String>,
 
     #[serde(
         default = "default_none_string",
@@ -2181,7 +2216,7 @@ impl Default for UiButtonCircleYaml {
     fn default() -> Self {
         Self {
             id: "None".to_string(),
-            action: "None".to_string(),
+            actions: Vec::new(),
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
@@ -2307,11 +2342,9 @@ pub struct UiButtonPolygonYaml {
     )]
     pub id: String,
 
-    #[serde(
-        default = "default_none_string",
-        skip_serializing_if = "is_none_string"
-    )]
-    pub action: String,
+    #[serde(default)]
+    #[serde(deserialize_with = "string_or_vec")]
+    pub actions: Vec<String>,
 
     #[serde(
         default = "default_none_string",
@@ -2334,7 +2367,7 @@ impl Default for UiButtonPolygonYaml {
     fn default() -> Self {
         Self {
             id: "None".to_string(),
-            action: "None".to_string(),
+            actions: vec![],
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
@@ -2380,4 +2413,41 @@ fn default_true() -> bool {
 // Check: is [f32; 2] == [0.0, 0.0]?
 fn is_zero_vec2(v: &[f32; 2]) -> bool {
     v[0] == 0.0 && v[1] == 0.0
+}
+fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrVec;
+
+    impl<'de> Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or a list of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![value.to_string()])
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![value])
+        }
+
+        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            Deserialize::deserialize(de::value::SeqAccessDeserializer::new(seq))
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
 }

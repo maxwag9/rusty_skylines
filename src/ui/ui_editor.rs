@@ -2,11 +2,11 @@
 //!
 //! Uses Command pattern for all undoable operations.
 
-use crate::data::Settings;
+use crate::data::{SettingValue, Settings};
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::resources::{CommandQueues, Time};
-use crate::ui::action_parser::action_to_uicommand;
+use crate::ui::action_parser::actions_to_uicommands;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{Input, Mouse};
@@ -24,7 +24,7 @@ use crate::ui::ui_loader::{
 use crate::ui::ui_text_editing::{HitResult, MouseSnapshot, handle_text_editing};
 use crate::ui::ui_touch_manager::{
     DragCoordinator, ElementRef, HitDetector, InputSnapshot, NavigationDirection, TouchEvent,
-    UiTouchManager,
+    Touchable, UiTouchManager,
 };
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
@@ -147,6 +147,7 @@ impl Ui {
 
                 layers.push(RuntimeLayer {
                     name: l.name,
+                    ap_name: None,
                     order: l.order,
                     active: l.active,
                     opaque: l.opaque,
@@ -170,13 +171,14 @@ impl Ui {
 
         loader.add_editor_layers();
 
-        for (menu_name, avs) in advanced_primitive_refs {
+        for (menu_name, aps) in advanced_primitive_refs {
             let Some(menu) = loader.menus.get_mut(&menu_name) else {
                 continue;
             };
-            for (av, order) in avs {
-                let layer = av.to_runtime(settings, &advanced_primitives, order + 1, window_size);
-                menu.layers.push(layer);
+            for (ap, order) in aps {
+                let mut layers =
+                    ap.to_runtime(settings, &advanced_primitives, order + 1, window_size);
+                menu.layers.append(&mut layers);
             }
         }
         for (_, menu) in loader.menus.iter_mut() {
@@ -209,6 +211,7 @@ impl Ui {
         window_size: PhysicalSize<u32>,
         road_style_params: &mut RoadStyleParams,
         command_queues: &mut CommandQueues,
+        settings: &mut Settings,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
@@ -223,6 +226,7 @@ impl Ui {
             &mut self.variables,
             &input.mouse,
         );
+        self.sync_settings_and_ui(settings);
         self.handle_undo_redo_input(input, dt);
 
         // Reset frame flags
@@ -259,7 +263,8 @@ impl Ui {
 
         // Execute actions
         let top_hit = self.get_current_hit_for_actions();
-
+        // let print = make_ui_command("print", vec!["hello".into()], &ElementRef::default());
+        // command_queues.ui_command_queue.push_optional(print);
         process_commands(
             &mut command_queues.ui_command_queue,
             self,
@@ -269,6 +274,7 @@ impl Ui {
             terrain,
             window_size,
             road_style_params,
+            settings,
         );
     }
 
@@ -347,10 +353,11 @@ impl Ui {
             // ----------------------------------------------------------------
             // HOVER EVENTS
             // ----------------------------------------------------------------
-            TouchEvent::HoverEnter { element, action } => {
+            TouchEvent::HoverEnter { element, actions } => {
                 self.handle_hover_enter(element, result);
             }
-            TouchEvent::HoverExit { element, action } => {
+            TouchEvent::Hovering { .. } => {}
+            TouchEvent::HoverExit { element, actions } => {
                 self.handle_hover_exit(element, result);
             }
 
@@ -361,7 +368,7 @@ impl Ui {
                 element,
                 position,
                 vertex_index,
-                action,
+                actions,
             } => {
                 self.handle_press(element, *position, *vertex_index, result);
             }
@@ -369,21 +376,21 @@ impl Ui {
                 element,
                 position,
                 was_drag,
-                action,
+                actions,
             } => {
-                self.handle_release(element, *position, *was_drag, action.clone(), result);
+                self.handle_release(element, *position, *was_drag, actions.clone(), result);
             }
             TouchEvent::Click {
                 element,
                 position,
-                action,
+                actions,
             } => {
-                self.handle_click(element, *position, action.clone(), result);
+                self.handle_click(element, *position, actions.clone(), result);
             }
             TouchEvent::DoubleClick {
                 element,
                 position,
-                action,
+                actions,
             } => {
                 self.handle_double_click(element, *position, result);
             }
@@ -444,9 +451,9 @@ impl Ui {
             TouchEvent::ScrollOnElement {
                 element,
                 delta,
-                action,
+                actions,
             } => {
-                //self.handle_scroll_on_element(element, *delta, result);
+                // self.handle_scroll_on_element(element, *delta, result);
             }
 
             // ----------------------------------------------------------------
@@ -475,6 +482,9 @@ impl Ui {
     fn handle_hover_enter(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
         // Update text hover state
         if element.kind == ElementKind::Text {
+            if !self.is_editable(element) {
+                return;
+            };
             if let Some(text) = self.get_text_mut(element) {
                 text.being_hovered = true;
                 text.just_unhovered = false;
@@ -487,6 +497,9 @@ impl Ui {
 
     fn handle_hover_exit(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
         if element.kind == ElementKind::Text {
+            if !self.is_editable(element) {
+                return;
+            };
             if let Some(text) = self.get_text_mut(element) {
                 text.being_hovered = false;
                 text.just_unhovered = true;
@@ -505,6 +518,9 @@ impl Ui {
         // Store drag offset for editor mode
         if self.touch_manager.editor.enabled {
             if let Some(elem) = self.get_element(element) {
+                if !self.is_editable(element) {
+                    return;
+                };
                 if vertex_index.is_none() {
                     let center = elem.center();
                     let offset = [position[0] - center[0], position[1] - center[1]];
@@ -521,20 +537,17 @@ impl Ui {
 
     fn handle_release(
         &mut self,
-        _element: &ElementRef,
+        element: &ElementRef,
         _position: [f32; 2],
         was_drag: bool,
-        action: Option<String>,
+        actions: Vec<String>,
         result: &mut EventProcessingResult,
     ) {
+        if !self.is_editable(element) {
+            return;
+        };
         self.touch_manager.drag.active_drag = None;
         self.touch_manager.editor.active_vertex = None;
-
-        if !was_drag {
-            if let Some(action_name) = action {
-                result.trigger_action = Some(action_name);
-            }
-        }
 
         result.update_selection = true;
         result.mark_dirty = true;
@@ -542,14 +555,14 @@ impl Ui {
 
     fn handle_click(
         &mut self,
-        _element: &ElementRef,
+        element: &ElementRef,
         _position: [f32; 2],
-        action: Option<String>,
+        actions: Vec<String>,
         result: &mut EventProcessingResult,
     ) {
-        if let Some(action_name) = action {
-            result.trigger_action = Some(action_name);
-        }
+        if !self.is_editable(element) {
+            return;
+        };
     }
 
     fn handle_double_click(
@@ -562,17 +575,9 @@ impl Ui {
             return;
         }
 
-        // Check if editable first (immutable borrow)
-        let is_editable = self
-            .get_element(element)
-            .and_then(|e| e.as_text())
-            .map(|t| t.misc.editable)
-            .unwrap_or(false);
-
-        if !is_editable {
+        if !self.is_editable(element) {
             return;
-        }
-
+        };
         // Now do mutations (borrow is dropped)
         self.touch_manager.editor.editing_text = Some(element.clone());
 
@@ -595,7 +600,9 @@ impl Ui {
         if !self.touch_manager.editor.enabled {
             return;
         }
-
+        if !self.is_editable(element) {
+            return;
+        };
         // Capture start state for undo
         let start_size = get_element_size(&self.menus, element);
         let start_vertices = if element.kind == ElementKind::Polygon {
@@ -624,6 +631,9 @@ impl Ui {
         if !self.touch_manager.editor.enabled {
             return;
         }
+        if !self.is_editable(element) {
+            return;
+        };
         let Some(active_drag) = &mut self.touch_manager.drag.active_drag else {
             return;
         };
@@ -704,6 +714,9 @@ impl Ui {
         vertex_index: Option<usize>,
         result: &mut EventProcessingResult,
     ) {
+        if !self.is_editable(element) {
+            return;
+        };
         if self.drag_start_state.take().is_some() {
             let new_pos = self.get_element_position(element);
 
@@ -753,6 +766,9 @@ impl Ui {
         multi: bool,
         result: &mut EventProcessingResult,
     ) {
+        if !self.is_editable(element) {
+            return;
+        };
         // Get action for element
         let action = self.get_element_action(element);
         let is_input_box = self.is_input_box(element);
@@ -868,9 +884,19 @@ impl Ui {
 
         // Find the best element in direction
         if let Some(next) = self.find_element_in_direction(current, current_pos, direction) {
-            self.touch_manager.selection.select(next, None, false);
+            self.touch_manager.selection.select(next, vec![], false);
             result.update_selection = true;
         }
+    }
+
+    fn is_editable(&self, element: &ElementRef) -> bool {
+        if let Some(elem) = self.get_element(element) {
+            if !self.touch_manager.options.override_mode && !elem.is_editable() {
+                return false;
+            }
+            return true;
+        }
+        true
     }
 
     // ========================================================================
@@ -989,14 +1015,17 @@ impl Ui {
             .map(|p| p.vertices.iter().map(|v| v.pos).collect())
     }
 
-    fn get_element_action(&self, element: &ElementRef) -> Option<String> {
-        self.get_element(element).and_then(|e| match e {
-            UiElement::Circle(c) => Some(c.action.clone()),
-            UiElement::Polygon(p) => Some(p.action.clone()),
-            UiElement::Text(t) => Some(t.action.clone()),
-            UiElement::Rect(r) => Some(r.action.clone()),
-            _ => None,
-        })
+    fn get_element_action(&self, element: &ElementRef) -> Vec<String> {
+        let Some(e) = self.get_element(element) else {
+            return vec![];
+        };
+        match e {
+            UiElement::Circle(c) => c.actions.clone(),
+            UiElement::Polygon(p) => p.actions.clone(),
+            UiElement::Text(t) => t.actions.clone(),
+            UiElement::Rect(r) => r.actions.clone(),
+            _ => vec![],
+        }
     }
 
     fn is_input_box(&self, element: &ElementRef) -> bool {
@@ -1239,7 +1268,7 @@ impl Ui {
             element: hover.element.clone(),
             layer_order: 0,
             element_order: 0,
-            action: hover.action.clone(),
+            actions: hover.actions.clone(),
         })
     }
 
@@ -1380,9 +1409,12 @@ impl Ui {
                     } else {
                         if this_text(
                             &self.touch_manager.selection.primary,
-                            menu_name,
-                            layer.name.as_str(),
-                            t.id.clone(),
+                            &ElementRef::new(
+                                menu_name,
+                                layer.name.as_str(),
+                                t.id.clone().as_str(),
+                                ElementKind::Text,
+                            ),
                         ) {
                             let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
                             if new_text != t.text {
@@ -1401,9 +1433,12 @@ impl Ui {
                     if t.input_box && self.touch_manager.selection.just_deselected {
                         if this_text(
                             &self.touch_manager.selection.primary,
-                            menu_name,
-                            layer.name.as_str(),
-                            t.id.clone(),
+                            &ElementRef::new(
+                                menu_name,
+                                layer.name.as_str(),
+                                t.id.clone().as_str(),
+                                ElementKind::Text,
+                            ),
                         ) {
                             let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
                             if new_text != t.text {
@@ -1516,10 +1551,11 @@ impl Ui {
         element: &UiElement,
         sel: &ElementRef,
         editor_mode: bool,
+        override_mode: bool,
     ) {
         match element {
             UiElement::Circle(c) => {
-                if editor_mode && c.misc.editable {
+                if editor_mode && (c.misc.editable || override_mode) {
                     let circle_outline = UiButtonOutline {
                         id: "Circle Outline".to_string(),
                         parent: Some(ElementRef {
@@ -1594,7 +1630,7 @@ impl Ui {
                 }
             }
             UiElement::Polygon(p) => {
-                if editor_mode && p.misc.editable {
+                if editor_mode && (p.misc.editable || override_mode) {
                     let mut cx = 0.0;
                     let mut cy = 0.0;
                     for v in &p.vertices {
@@ -1612,7 +1648,7 @@ impl Ui {
 
                         let vertex_outline = UiButtonCircle {
                             id: format!("vertex_outline_{}", i),
-                            action: "None".to_string(),
+                            actions: vec![],
                             style: "None".to_string(),
                             x: v.pos[0],
                             y: v.pos[1],
@@ -1676,21 +1712,21 @@ impl Ui {
                             border_thickness: 0.9,
                         },
                     };
-                    // println!("YEES");
+
                     editor_layer
                         .elements
                         .push(UiElement::Outline(polygon_outline));
                 }
             }
             UiElement::Rect(r) => {
-                if editor_mode && r.misc.editable {
-                    let polygon_outline = UiButtonOutline {
-                        id: "Polygon Outline".to_string(),
+                if editor_mode && (r.misc.editable || override_mode) {
+                    let rect_outline = UiButtonOutline {
+                        id: "Rect Outline".to_string(),
                         parent: Some(ElementRef {
                             menu: sel.menu.clone(),
                             layer: sel.layer.clone(),
                             id: r.id.clone(),
-                            kind: ElementKind::Polygon,
+                            kind: ElementKind::Rect,
                         }),
                         mode: 1.0,
                         vertex_offset: 0,
@@ -1717,10 +1753,8 @@ impl Ui {
                             border_thickness: 0.9,
                         },
                     };
-                    // println!("YEES");
-                    editor_layer
-                        .elements
-                        .push(UiElement::Outline(polygon_outline));
+
+                    editor_layer.elements.push(UiElement::Outline(rect_outline));
                 }
             }
             _ => {}
@@ -1785,7 +1819,13 @@ impl Ui {
                         // Create new selection visuals
                         editor_layer.clear_handles();
                         editor_layer.clear_outlines();
-                        Self::create_selection_visuals(editor_layer, &element, sel, editor_mode);
+                        Self::create_selection_visuals(
+                            editor_layer,
+                            &element,
+                            sel,
+                            editor_mode,
+                            self.touch_manager.options.override_mode,
+                        );
                     }
                 }
                 self.menus.insert("Editor_Menu".to_string(), editor_menu);
@@ -1997,6 +2037,7 @@ impl Ui {
 
         menu.layers.push(RuntimeLayer {
             name: "editor_selection".into(),
+            ap_name: None,
             order: 900,
             active: true,
             setting: None,
@@ -2010,6 +2051,7 @@ impl Ui {
 
         menu.layers.push(RuntimeLayer {
             name: "editor_handles".into(),
+            ap_name: None,
             order: 950,
             active: true,
             setting: None,
@@ -2039,6 +2081,37 @@ impl Ui {
         // map to [0, 1]
         (hash_u64 as f64 / u64::MAX as f64) as f32
     }
+
+    fn sync_settings_and_ui(&mut self, settings: &Settings) {
+        for menu in self.menus.values_mut() {
+            for layer in menu.layers.iter_mut() {
+                let Some(setting) = &layer.setting else {
+                    continue;
+                };
+
+                let value = settings.read_setting(setting.key);
+
+                match value {
+                    SettingValue::Bool(value) => {
+                        if value {
+                            if layer.ap_name == setting.true_ap {
+                                layer.active = true;
+                            } else {
+                                layer.active = false;
+                            }
+                        } else {
+                            if layer.ap_name == setting.false_ap {
+                                layer.active = true;
+                            } else {
+                                layer.active = false;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 fn push_commands(
@@ -2048,8 +2121,9 @@ fn push_commands(
     mouse: &Mouse,
 ) {
     for event in events {
-        let command = action_to_uicommand(ui, event);
-        ui_command_queue.push_optional(command);
+        let commands = actions_to_uicommands(ui, event);
+
+        ui_command_queue.push_many(commands);
     }
 }
 
@@ -2061,16 +2135,16 @@ fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
     const EPSILON: f32 = 0.001;
     a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
 }
-fn this_text(selected: &Option<ElementRef>, menu: &str, layer: &str, element_id: String) -> bool {
+fn this_text(selected: &Option<ElementRef>, other_element: &ElementRef) -> bool {
     let Some(sel) = selected else { return false };
-    if sel.menu != menu {
+    if sel.menu != other_element.menu {
         return false;
     }
-    if sel.layer != layer {
+    if sel.layer != other_element.layer {
         return false;
     }
 
-    sel.id == element_id
+    sel.id == other_element.id
 }
 
 pub fn get_element(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<UiElement> {

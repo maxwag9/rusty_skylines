@@ -31,7 +31,7 @@ impl MouseSnapshot {
 pub(crate) struct HitResult {
     pub element: ElementRef,
     pub layer_order: u32,
-    pub action: Option<String>,
+    pub actions: Vec<String>,
     pub(crate) element_order: usize,
 }
 

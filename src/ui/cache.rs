@@ -256,7 +256,6 @@ pub fn rebuild_rect_cache(
         if let (UiElement::Rect(rect), UiElementCache::Rect(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &rect.id);
 
-            // Compute actual border thickness from percentage
             let min_dim = rect.w.min(rect.h);
             let border = rect.border_thickness_percentage * min_dim;
 
@@ -264,10 +263,11 @@ pub fn rebuild_rect_cache(
                 center: [rect.x, rect.y],
                 size: [rect.w, rect.h],
                 color: rect.color,
+                border_color: rect.border_color,
                 roundness: rect.roundness,
                 border_thickness: border,
+                rotation: -rect.rotation.to_radians(), // NEGATIVE so that it feels intuitive for us mere mortal humans who have a preference for positive rotation to go CW instead of CCW!
                 fade: rect.fade,
-                _pad: 0.0,
                 misc: [
                     f32::from(rect.misc.active),
                     rt.touched_time,

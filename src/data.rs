@@ -1,15 +1,36 @@
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::pipelines::ToneMappingState;
+use crate::ui::actions::CommandArg;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
+macro_rules! impl_cycle {
+    ($ty:ty : $($variant:expr),+ $(,)?) => {
+        impl Cycle for $ty {
+            fn next(&self) -> Self {
+                let variants: &[$ty] = &[$($variant),+];
+                let idx = variants.iter()
+                    .position(|v| std::mem::discriminant(v) == std::mem::discriminant(self))
+                    .unwrap_or(0);
+                variants[(idx + 1) % variants.len()].clone()
+            }
 
-pub trait CycleNext {
+            fn prev(&self) -> Self {
+                let variants: &[$ty] = &[$($variant),+];
+                let len = variants.len();
+                let idx = variants.iter()
+                    .position(|v| std::mem::discriminant(v) == std::mem::discriminant(self))
+                    .unwrap_or(0);
+                variants[(idx + len - 1) % len].clone()
+            }
+        }
+    };
+}
+pub trait Cycle {
     fn next(&self) -> Self;
+    fn prev(&self) -> Self;
 }
 
-/// Mode switch: Strict attempts to deserialize the file as normal JSON into GuiLayout.
-/// Bent ignores JSON structure and deterministically synthesizes a GuiLayout from the file bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BendMode {
@@ -23,18 +44,9 @@ impl Default for BendMode {
         BendMode::Strict
     }
 }
-impl CycleNext for BendMode {
-    fn next(&self) -> Self {
-        match self {
-            BendMode::Strict => BendMode::Bent,
-            BendMode::Bent => BendMode::Strict,
-            BendMode::Unknown => BendMode::Strict,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")] // "fifo", "mailbox", ...
+#[serde(rename_all = "lowercase")]
 pub enum PresentModeSetting {
     Immediate,
     Mailbox,
@@ -42,7 +54,6 @@ pub enum PresentModeSetting {
     #[serde(other)]
     Unknown,
 }
-
 impl PresentModeSetting {
     pub fn to_wgpu(self) -> PresentMode {
         match self {
@@ -53,25 +64,10 @@ impl PresentModeSetting {
         }
     }
 }
-
 impl Default for PresentModeSetting {
     fn default() -> Self {
         PresentModeSetting::Mailbox
     }
-}
-impl CycleNext for PresentModeSetting {
-    fn next(&self) -> Self {
-        match self {
-            PresentModeSetting::Immediate => PresentModeSetting::Mailbox,
-            PresentModeSetting::Mailbox => PresentModeSetting::Fifo,
-            PresentModeSetting::Fifo => PresentModeSetting::Immediate,
-            PresentModeSetting::Unknown => PresentModeSetting::Mailbox,
-        }
-    }
-}
-
-fn default_chunk_size() -> ChunkSize {
-    128
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -89,25 +85,6 @@ impl Default for DebugViewState {
         Self::Off
     }
 }
-impl DebugViewState {
-    pub fn next(&self) -> Self {
-        use DebugViewState::*;
-        match self {
-            Off => Normals,
-            Normals => Depth,
-            Depth => GtaoRaw,
-            GtaoRaw => GtaoBlurred,
-            GtaoBlurred => RTRaw,
-            RTRaw => Motion,
-            Motion => Off,
-        }
-    }
-}
-impl CycleNext for DebugViewState {
-    fn next(&self) -> Self {
-        DebugViewState::next(self)
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum InternalMenu {
@@ -119,14 +96,6 @@ impl Default for InternalMenu {
         Self::MainMenu
     }
 }
-impl CycleNext for InternalMenu {
-    fn next(&self) -> Self {
-        match self {
-            InternalMenu::None => InternalMenu::MainMenu,
-            InternalMenu::MainMenu => InternalMenu::None,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum LodCenterType {
@@ -136,14 +105,6 @@ pub enum LodCenterType {
 impl Default for LodCenterType {
     fn default() -> Self {
         Self::Target
-    }
-}
-impl CycleNext for LodCenterType {
-    fn next(&self) -> Self {
-        match self {
-            LodCenterType::Eye => LodCenterType::Target,
-            LodCenterType::Target => LodCenterType::Eye,
-        }
     }
 }
 
@@ -158,21 +119,32 @@ impl Default for ShadowType {
         Self::CSM
     }
 }
-impl ShadowType {
-    pub fn next(&self) -> Self {
-        use crate::data::ShadowType::*;
-        match self {
-            OFF => CSM,
-            CSM => RT,
-            RT => OFF,
-        }
-    }
-}
-impl CycleNext for ShadowType {
-    fn next(&self) -> Self {
-        ShadowType::next(self)
-    }
-}
+
+impl_cycle!(BendMode: BendMode::Strict, BendMode::Bent);
+
+impl_cycle!(PresentModeSetting:
+    PresentModeSetting::Immediate,
+    PresentModeSetting::Mailbox,
+    PresentModeSetting::Fifo
+);
+
+impl_cycle!(DebugViewState:
+    DebugViewState::Off,
+    DebugViewState::Normals,
+    DebugViewState::Depth,
+    DebugViewState::GtaoRaw,
+    DebugViewState::GtaoBlurred,
+    DebugViewState::RTRaw,
+    DebugViewState::Motion
+);
+
+impl_cycle!(InternalMenu: InternalMenu::None, InternalMenu::MainMenu);
+
+impl_cycle!(LodCenterType: LodCenterType::Eye, LodCenterType::Target);
+
+impl_cycle!(ShadowType: ShadowType::OFF, ShadowType::CSM, ShadowType::RT);
+
+// ============ Simplified SettingValue ============
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -185,55 +157,338 @@ pub enum SettingKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum SettingValue {
+    Bool(bool),
+    U16(u16),
+    U32(u32),
     F32(f32),
     F64(f64),
-    U32(u32),
-    Bool(bool),
+    Vec2([f32; 2]),
+    Vec3([f32; 3]),
     Vec4([f32; 4]),
-    ChunkSize(ChunkSize),
-    ToneMappingState(ToneMappingState),
-    WorldPos(WorldPos),
-    PresentModeSetting(PresentModeSetting),
-    BendMode(BendMode),
-    ShadowType(ShadowType),
-    DebugViewState(DebugViewState),
-    InternalMenu(InternalMenu),
-    LodCenterType(LodCenterType),
+    /// Serialized enum/struct as TOML string
+    Enum(String),
 }
+impl SettingValue {
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            SettingValue::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+    /// Multiply numeric values by a factor
+    pub fn multiply(&self, factor: f32) -> Option<SettingValue> {
+        match self {
+            SettingValue::Bool(_) => None,
+            SettingValue::U16(v) => Some(SettingValue::U16(((*v as f32) * factor).round() as u16)),
+            SettingValue::U32(v) => Some(SettingValue::U32(((*v as f32) * factor).round() as u32)),
+            SettingValue::F32(v) => Some(SettingValue::F32(v * factor)),
+            SettingValue::F64(v) => Some(SettingValue::F64(*v * factor as f64)),
+            SettingValue::Vec2(v) => Some(SettingValue::Vec2([v[0] * factor, v[1] * factor])),
+            SettingValue::Vec3(v) => Some(SettingValue::Vec3([
+                v[0] * factor,
+                v[1] * factor,
+                v[2] * factor,
+            ])),
+            SettingValue::Vec4(v) => Some(SettingValue::Vec4([
+                v[0] * factor,
+                v[1] * factor,
+                v[2] * factor,
+                v[3] * factor,
+            ])),
+            SettingValue::Enum(_) => None,
+        }
+    }
 
+    /// Clamp numeric values to a range
+    pub fn clamp_range(&self, min: f32, max: f32) -> Option<SettingValue> {
+        match self {
+            SettingValue::Bool(_) => None,
+            SettingValue::U16(v) => Some(SettingValue::U16((*v).clamp(min as u16, max as u16))),
+            SettingValue::U32(v) => Some(SettingValue::U32((*v).clamp(min as u32, max as u32))),
+            SettingValue::F32(v) => Some(SettingValue::F32(v.clamp(min, max))),
+            SettingValue::F64(v) => Some(SettingValue::F64(v.clamp(min as f64, max as f64))),
+            SettingValue::Vec2(v) => Some(SettingValue::Vec2([
+                v[0].clamp(min, max),
+                v[1].clamp(min, max),
+            ])),
+            SettingValue::Vec3(v) => Some(SettingValue::Vec3([
+                v[0].clamp(min, max),
+                v[1].clamp(min, max),
+                v[2].clamp(min, max),
+            ])),
+            SettingValue::Vec4(v) => Some(SettingValue::Vec4([
+                v[0].clamp(min, max),
+                v[1].clamp(min, max),
+                v[2].clamp(min, max),
+                v[3].clamp(min, max),
+            ])),
+            SettingValue::Enum(_) => None,
+        }
+    }
+
+    /// Add a value (for increment operations)
+    pub fn add(&self, amount: f32) -> Option<SettingValue> {
+        match self {
+            SettingValue::Bool(_) => None,
+            SettingValue::U16(v) => Some(SettingValue::U16(
+                ((*v as f32) + amount).round().max(0.0) as u16,
+            )),
+            SettingValue::U32(v) => Some(SettingValue::U32(
+                ((*v as f32) + amount).round().max(0.0) as u32,
+            )),
+            SettingValue::F32(v) => Some(SettingValue::F32(v + amount)),
+            SettingValue::F64(v) => Some(SettingValue::F64(*v + amount as f64)),
+            SettingValue::Vec2(v) => Some(SettingValue::Vec2([v[0] + amount, v[1] + amount])),
+            SettingValue::Vec3(v) => Some(SettingValue::Vec3([
+                v[0] + amount,
+                v[1] + amount,
+                v[2] + amount,
+            ])),
+            SettingValue::Vec4(v) => Some(SettingValue::Vec4([
+                v[0] + amount,
+                v[1] + amount,
+                v[2] + amount,
+                v[3] + amount,
+            ])),
+            SettingValue::Enum(_) => None,
+        }
+    }
+
+    /// Subtract a value (for decrement operations)
+    pub fn subtract(&self, amount: f32) -> Option<SettingValue> {
+        self.add(-amount)
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingOp {
     Toggle,
     CycleNext,
+    CyclePrev,
     Set(SettingValue),
 }
 
+// ============ Conversion Trait ============
+
+// Helper for parsing enums from command strings
+fn parse_enum_from_str<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
+    #[derive(Deserialize)]
+    struct Wrapper<T> {
+        value: T,
+    }
+    // Try with quotes (for simple enum variants)
+    let toml_str = format!("value = \"{}\"", s);
+    if let Ok(w) = toml::from_str::<Wrapper<T>>(&toml_str) {
+        return Some(w.value);
+    }
+    // Try raw (for complex values)
+    let toml_str = format!("value = {}", s);
+    toml::from_str::<Wrapper<T>>(&toml_str)
+        .ok()
+        .map(|w| w.value)
+}
+
+// ============ Updated Conversion Trait ============
+
+pub trait SettingConvert: Sized + Clone {
+    fn to_setting_value(&self) -> SettingValue;
+    fn from_setting_value(value: SettingValue) -> Option<Self>;
+    fn from_command_arg(arg: &CommandArg) -> Option<Self>;
+}
+
+// Primitives
+impl SettingConvert for bool {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::Bool(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::Bool(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+        arg.as_bool()
+    }
+}
+
+impl SettingConvert for u16 {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::U16(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::U16(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+        arg.as_int().map(|i| i as u16)
+    }
+}
+
+impl SettingConvert for u32 {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::U32(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::U32(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+        arg.as_int().map(|i| i as u32)
+    }
+}
+
+impl SettingConvert for f32 {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::F32(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::F32(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+        arg.as_float()
+    }
+}
+
+impl SettingConvert for f64 {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::F64(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::F64(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+        arg.as_float().map(|f| f as f64)
+    }
+}
+
+// Vectors - not easily settable from single CommandArg
+impl SettingConvert for [f32; 2] {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::Vec2(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::Vec2(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(_arg: &CommandArg) -> Option<Self> {
+        None
+    }
+}
+
+impl SettingConvert for [f32; 3] {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::Vec3(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::Vec3(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(_arg: &CommandArg) -> Option<Self> {
+        None
+    }
+}
+
+impl SettingConvert for [f32; 4] {
+    fn to_setting_value(&self) -> SettingValue {
+        SettingValue::Vec4(*self)
+    }
+    fn from_setting_value(value: SettingValue) -> Option<Self> {
+        match value {
+            SettingValue::Vec4(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn from_command_arg(_arg: &CommandArg) -> Option<Self> {
+        None
+    }
+}
+
+// Enums and complex types
+macro_rules! impl_setting_convert_enum {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl SettingConvert for $ty {
+                fn to_setting_value(&self) -> SettingValue {
+                    SettingValue::Enum(toml::to_string(self).unwrap_or_default())
+                }
+                fn from_setting_value(value: SettingValue) -> Option<Self> {
+                    match value {
+                        SettingValue::Enum(s) => toml::from_str(&s).ok(),
+                        _ => None,
+                    }
+                }
+                fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+                    arg.as_str().and_then(parse_enum_from_str)
+                }
+            }
+        )*
+    };
+}
+
+impl_setting_convert_enum!(
+    PresentModeSetting,
+    BendMode,
+    ShadowType,
+    DebugViewState,
+    InternalMenu,
+    LodCenterType,
+    ToneMappingState,
+    WorldPos,
+);
+
+// ============ Settings Macros ============
+
 macro_rules! apply_setting_arm {
-    (Bool, $s:ident, $field:ident, $val:ident, $op:ident) => {
+    (Bool, $s:ident, $field:ident, $op:ident) => {
         match $op {
             SettingOp::Toggle => $s.$field = !$s.$field,
-            SettingOp::Set(SettingValue::$val(v)) => $s.$field = v,
+            SettingOp::Set(v) => {
+                if let Some(val) = SettingConvert::from_setting_value(v) {
+                    $s.$field = val;
+                }
+            }
             _ => {}
         }
     };
-    (Cycle, $s:ident, $field:ident, $val:ident, $op:ident) => {
+    (Cycle, $s:ident, $field:ident, $op:ident) => {
         match $op {
-            SettingOp::CycleNext => $s.$field = CycleNext::next(&$s.$field),
-            SettingOp::Set(SettingValue::$val(v)) => $s.$field = v,
+            SettingOp::CycleNext => $s.$field = Cycle::next(&$s.$field),
+            SettingOp::CyclePrev => $s.$field = Cycle::prev(&$s.$field),
+            SettingOp::Set(v) => {
+                if let Some(val) = SettingConvert::from_setting_value(v) {
+                    $s.$field = val;
+                }
+            }
             _ => {}
         }
     };
-    (Value, $s:ident, $field:ident, $val:ident, $op:ident) => {
-        if let SettingOp::Set(SettingValue::$val(v)) = $op {
-            $s.$field = v;
+    (Value, $s:ident, $field:ident, $op:ident) => {
+        if let SettingOp::Set(v) = $op {
+            if let Some(val) = SettingConvert::from_setting_value(v) {
+                $s.$field = val;
+            }
         }
     };
 }
 
 macro_rules! define_settings {
     ($(
-        $key:ident => $field:ident : $ty:ty = $default:expr ; $kind:ident ; $val:ident
+        $key:ident => $field:ident : $ty:ty = $default:expr ; $kind:ident
     ),* $(,)?) => {
         #[derive(Debug, Deserialize, Serialize, Clone)]
         #[serde(default)]
@@ -256,6 +511,14 @@ macro_rules! define_settings {
         }
 
         impl SettingKey {
+            /// Parse a snake_case string into a SettingKey
+            pub fn from_str(s: &str) -> Option<Self> {
+                match s {
+                    $(stringify!($field) => Some(SettingKey::$key),)*
+                    _ => None,
+                }
+            }
+
             pub fn kind(self) -> SettingKind {
                 match self {
                     $(SettingKey::$key => SettingKind::$kind,)*
@@ -264,13 +527,23 @@ macro_rules! define_settings {
 
             pub fn read(self, s: &Settings) -> SettingValue {
                 match self {
-                    $(SettingKey::$key => SettingValue::$val(s.$field.clone()),)*
+                    $(SettingKey::$key => SettingConvert::to_setting_value(&s.$field),)*
                 }
             }
 
             pub fn apply(self, s: &mut Settings, op: SettingOp) {
                 match self {
-                    $(SettingKey::$key => apply_setting_arm!($kind, s, $field, $val, op),)*
+                    $(SettingKey::$key => apply_setting_arm!($kind, s, $field, op),)*
+                }
+            }
+
+            /// Convert a CommandArg to the appropriate SettingValue for this key
+            pub fn parse_command_arg(self, arg: &CommandArg) -> Option<SettingValue> {
+                match self {
+                    $(SettingKey::$key => {
+                        <$ty as SettingConvert>::from_command_arg(arg)
+                            .map(|v| v.to_setting_value())
+                    },)*
                 }
             }
         }
@@ -287,38 +560,44 @@ macro_rules! define_settings {
     };
 }
 
+// ============ Settings Definition (simplified - no $val!) ============
+
+fn default_chunk_size() -> ChunkSize {
+    128
+}
+
 define_settings! {
-    TargetFps => target_fps: f32 = 60.0; Value; F32,
-    TargetTps => target_tps: f32 = 60.0; Value; F32,
-    PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle; PresentModeSetting,
-    EditorMode => editor_mode: bool = false; Bool; Bool,
-    OverrideMode => override_mode: bool = false; Bool; Bool,
-    ShowGui => show_gui: bool = true; Bool; Bool,
-    BackgroundColor => background_color: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; Value; Vec4,
-    TotalGameTime => total_game_time: f64 = 0.0; Value; F64,
-    WorldGenerationBenchmarkMode => world_generation_benchmark_mode: bool = false; Bool; Bool,
-    BendMode => bend_mode: BendMode = BendMode::Strict; Cycle; BendMode,
-    ShowWorld => show_world: bool = true; Bool; Bool,
-    AlwaysDay => always_day: bool = false; Bool; Bool,
-    MsaaSamples => msaa_samples: u32 = 4; Value; U32,
-    ShadowMapSize => shadow_map_size: u32 = 4096; Value; U32,
-    ShadowType => shadow_type: ShadowType = ShadowType::default(); Cycle; ShadowType,
-    GtaoEnabled => gtao_enabled: bool = true; Bool; Bool,
-    ZoomSpeed => zoom_speed: f32 = 10.0; Value; F32,
-    RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool; Bool,
-    RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool; Bool,
-    RenderChunkBounds => render_chunk_bounds: bool = false; Bool; Bool,
-    ChunkSize => chunk_size: ChunkSize = default_chunk_size(); Value; ChunkSize,
-    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Value; ToneMappingState,
-    DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle; DebugViewState,
-    StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle; InternalMenu,
-    LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle; LodCenterType,
-    ReversedDepthZ => reversed_depth_z: bool = true; Bool; Bool,
-    ShowFog => show_fog: bool = true; Bool; Bool,
-    PlayerPos => player_pos: WorldPos = WorldPos::default(); Value; WorldPos,
-    DriveCar => drive_car: bool = false; Bool; Bool,
-    RenderRtGizmo => render_rt_gizmo: bool = false; Bool; Bool,
-    Noclip => noclip: bool = false; Bool; Bool,
+    TargetFps => target_fps: f32 = 60.0; Value,
+    TargetTps => target_tps: f32 = 60.0; Value,
+    PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle,
+    EditorMode => editor_mode: bool = false; Bool,
+    OverrideMode => override_mode: bool = false; Bool,
+    ShowGui => show_gui: bool = true; Bool,
+    BackgroundColor => background_color: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; Value,
+    TotalGameTime => total_game_time: f64 = 0.0; Value,
+    WorldGenerationBenchmarkMode => world_generation_benchmark_mode: bool = false; Bool,
+    BendMode => bend_mode: BendMode = BendMode::Strict; Cycle,
+    ShowWorld => show_world: bool = true; Bool,
+    AlwaysDay => always_day: bool = false; Bool,
+    MsaaSamples => msaa_samples: u32 = 4; Value,
+    ShadowMapSize => shadow_map_size: u32 = 4096; Value,
+    ShadowType => shadow_type: ShadowType = ShadowType::default(); Cycle,
+    GtaoEnabled => gtao_enabled: bool = true; Bool,
+    ZoomSpeed => zoom_speed: f32 = 10.0; Value,
+    RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
+    RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
+    RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
+    ChunkSize => chunk_size: ChunkSize = default_chunk_size(); Value,
+    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Value,
+    DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle,
+    StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle,
+    LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle,
+    ReversedDepthZ => reversed_depth_z: bool = true; Bool,
+    ShowFog => show_fog: bool = true; Bool,
+    PlayerPos => player_pos: WorldPos = WorldPos::default(); Value,
+    DriveCar => drive_car: bool = false; Bool,
+    RenderRtGizmo => render_rt_gizmo: bool = false; Bool,
+    Noclip => noclip: bool = false; Bool,
 }
 
 impl Settings {
@@ -327,12 +606,9 @@ impl Settings {
             && (self.shadow_type == ShadowType::OFF || self.shadow_type == ShadowType::CSM)
             && !self.show_fog
     }
-}
 
-impl Settings {
     pub fn load<P: AsRef<Path>>(path: P) -> Self {
         let path = path.as_ref();
-
         let mut settings = match fs::read_to_string(path) {
             Ok(content) => match toml::from_str::<Settings>(&content) {
                 Ok(settings) => settings,
@@ -350,23 +626,19 @@ impl Settings {
                 default
             }
         };
-        match settings.starting_menu {
-            InternalMenu::None => {}
-            InternalMenu::MainMenu => settings.show_world = false,
+        if let InternalMenu::MainMenu = settings.starting_menu {
+            settings.show_world = false;
         }
         settings
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
         let path = path.as_ref();
-
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-
         let toml_str = toml::to_string_pretty(self)?;
         fs::write(path, toml_str)?;
-
         Ok(())
     }
 }
