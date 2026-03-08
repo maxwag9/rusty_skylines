@@ -3,27 +3,47 @@ elements:
   # Soft outer border
   - !Rect
     id: Checkbox Border
-    x: 0.5
-    y: 0.5
+    actions:
+      - on:release, set_setting_to(ap, bool:false)
+    x: 0.0
+    y: 0.0
     w: 0.02
     h: 0.02
     color:
-      - 0.03
-      - 0.03
-      - 0.03
-      - 0.95
-
-  # Soft inner fill
+      - 0.00
+      - 0.00
+      - 0.00
+      - 1.0
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.01
+    border_thickness_percentage: 0.1
+  # inner indicator
   - !Rect
-    id: Checkbox Fill
+    id: Checkbox Indicator
     actions:
-      - on_release(set_setting_to(ap, bool:false))
-    x: 0.5
-    y: 0.5
-    w: 0.015
-    h: 0.015
+      - on:release, set_setting_to(ap, bool:false)
+    x: 0.0
+    y: 0.0
+    w: 0.010
+    h: 0.010
     color:
-      - 0.10
-      - 0.85
-      - 0.10
-      - 0.85
+      - 0.00
+      - 0.50
+      - 0.0
+      - 1.0
+    roundness: 0.5
+  - !Text
+    id: setting_text
+    x: -0.06
+    y: 0.0
+    px: 0.013
+    color:
+      - 0.0
+      - 0.5
+      - 1.0
+      - 1.0
+    text: '{ap}'

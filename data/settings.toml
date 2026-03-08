@@ -10,10 +10,10 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 235678.37024845625
+total_game_time = 236730.37030332233
 world_generation_benchmark_mode = false
 bend_mode = "strict"
-show_world = true
+show_world = false
 always_day = false
 msaa_samples = 4
 shadow_map_size = 2048
@@ -35,10 +35,10 @@ render_rt_gizmo = false
 noclip = false
 
 [player_pos.chunk]
-x = -42
-z = -212
+x = -40
+z = -203
 
 [player_pos.local]
-x = 113.20741
-y = 35.62229
-z = 29.259747
+x = 124.17282
+y = 90.78634
+z = 58.510174

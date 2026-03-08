@@ -7,7 +7,7 @@ struct ScreenUniform {
 
 struct RectGpu {
     center: vec2<f32>,
-    size: vec2<f32>,
+    half_size: vec2<f32>,
     color: vec4<f32>,
     border_color: vec4<f32>,
     roundness: f32,
@@ -28,7 +28,7 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) local_pos: vec2<f32>,  // [-1, 1] within rect
     @location(1) color: vec4<f32>,
-    @location(2) rect_size: vec2<f32>,
+    @location(2) rect_half_size: vec2<f32>,
     @location(3) roundness: f32,
     @location(4) border_thickness: f32,
     @location(5) fade: f32,
@@ -46,7 +46,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance: u32) -> VertexOut
     let rect = rects[instance];
 
     let padding = 2.0;
-    let half_size = rect.size * 0.5 + padding;
+    let half_size = rect.half_size + padding;
 
     let c = cos(rect.rotation);
     let s = sin(rect.rotation);
@@ -63,7 +63,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance: u32) -> VertexOut
     out.clip_position = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
     out.local_pos = local;
     out.color = rect.color;
-    out.rect_size = rect.size;
+    out.rect_half_size = rect.half_size;
     out.roundness = rect.roundness;
     out.border_thickness = rect.border_thickness;
     out.fade = rect.fade;
@@ -74,10 +74,10 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance: u32) -> VertexOut
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let half_size = in.rect_size * 0.5;
+    let half_size = in.rect_half_size;
 
     let max_round = min(half_size.x, half_size.y);
-    let roundness = min(in.roundness, max_round);
+    let roundness = in.roundness * max_round;  // Multiply instead of min()
 
     let d = sd_rounded_box(in.local_pos, half_size, roundness);
 

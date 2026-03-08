@@ -5,6 +5,7 @@ layers:
     elements:
       - !Text
         id: play_text
+        actions: [ ]
         x: 0.8275116
         y: 0.92290735
         px: 0.016374864
@@ -14,24 +15,12 @@ layers:
           - 1.0
           - 1.0
         text: Play
-      - !Advanced
-        name: checkbox0
-        ap_name: checkbox_ticked
-        setting:
-          key: show_world
-          op: toggle
-          true_ap: checkbox_ticked
-          false_ap: checkbox_unticked
-        x: 0.5
-        y: 0.5
-        scale: 1.0
-        editable: false
-        active: true
       - !Rect
         id: test_rect
+        actions: [ ]
         x: 0.4
         y: 0.4
-        w: 0.02
+        w: 0.019999998
         h: 0.03
         rotation: 30.0
         color:
@@ -44,4 +33,11 @@ layers:
           - 1.0
           - 0.0
           - 1.0
+        texture: null
+        roundness: 0.0
         border_thickness_percentage: 0.1
+        fade: 0.0
+        misc:
+          active: true
+          pressable: true
+          editable: true

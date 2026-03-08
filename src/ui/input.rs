@@ -1,5 +1,7 @@
 #![allow(dead_code, unused_variables)]
 use crate::helpers::paths::data_dir;
+use crate::ui::ui_touch_manager::MouseButtons;
+use arboard::Clipboard;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -174,16 +176,8 @@ pub struct Mouse {
     pub last_pos: Vec2,
     pub pos: Vec2,
     pub delta: Vec2,
-    pub middle_pressed: bool,
-    pub left_pressed: bool,
-    pub right_pressed: bool,
-    pub back_pressed: bool,
-    pub forward_pressed: bool,
 
-    pub left_just_pressed: bool,
-    pub left_just_released: bool,
-    pub right_just_pressed: bool,
-    pub right_just_released: bool,
+    pub buttons: MouseButtons,
 
     pub scroll_delta: Vec2,
 }
@@ -194,53 +188,43 @@ impl Mouse {
             last_pos: Vec2::ZERO,
             pos: Vec2::ZERO,
             delta: Vec2::ZERO,
-
-            middle_pressed: false,
-            left_pressed: false,
-            right_pressed: false,
-            back_pressed: false,
-            forward_pressed: false,
-
-            left_just_pressed: false,
-            left_just_released: false,
-            right_just_pressed: false,
-            right_just_released: false,
-
+            buttons: MouseButtons::default(),
             scroll_delta: Vec2::ZERO,
         }
     }
 
     pub fn update_just_states(&mut self) {
-        // Reset per-frame flags
-        self.left_just_pressed = false;
-        self.left_just_released = false;
-        self.right_just_pressed = false;
-        self.right_just_released = false;
+        self.buttons.left.just_pressed = false;
+        self.buttons.left.just_released = false;
+
+        self.buttons.right.just_pressed = false;
+        self.buttons.right.just_released = false;
+
+        self.buttons.middle.just_pressed = false;
+        self.buttons.middle.just_released = false;
+
+        self.buttons.back.just_pressed = false;
+        self.buttons.back.just_released = false;
+
+        self.buttons.forward.just_pressed = false;
+        self.buttons.forward.just_released = false;
+
         self.scroll_delta = Vec2::ZERO;
     }
 
     pub fn is_button_down(&self, button: MouseButton) -> bool {
         match button {
-            MouseButton::Left => self.left_pressed,
-            MouseButton::Right => self.right_pressed,
-            MouseButton::Middle => self.middle_pressed,
-            MouseButton::Back => self.back_pressed,
-            MouseButton::Forward => self.forward_pressed,
+            MouseButton::Left => self.buttons.left.pressed,
+            MouseButton::Right => self.buttons.right.pressed,
+            MouseButton::Middle => self.buttons.middle.pressed,
+            MouseButton::Back => self.buttons.back.pressed,
+            MouseButton::Forward => self.buttons.forward.pressed,
             MouseButton::Other(_) => false,
         }
     }
+
     pub fn reset(&mut self) {
-        self.left_pressed = false;
-        self.right_pressed = false;
-        self.middle_pressed = false;
-        self.back_pressed = false;
-        self.forward_pressed = false;
-
-        self.left_just_pressed = false;
-        self.left_just_released = false;
-        self.right_just_pressed = false;
-        self.right_just_released = false;
-
+        self.buttons = MouseButtons::default();
         self.delta = Vec2::ZERO;
         self.scroll_delta = Vec2::ZERO;
     }
@@ -269,13 +253,14 @@ pub struct Input {
     pub gameplay_last_down: HashMap<String, bool>,
     pub gameplay_repeat_timers: HashMap<String, RepeatTimer>,
     pub now: f64,
+    pub clipboard: Clipboard,
 }
 
 impl Input {
     pub fn new() -> Self {
         let keybinds = Keybinds::load(data_dir("keybinds.toml"), data_dir("default_keybinds.toml"));
         let parsed = Self::parse_all(&keybinds);
-
+        let clipboard = Clipboard::new().expect("[Fatal] Clipboard creation failed in Input::new");
         Self {
             physical: HashMap::new(),
             logical: HashMap::new(),
@@ -297,6 +282,7 @@ impl Input {
             gameplay_last_down: HashMap::new(),
             gameplay_repeat_timers: HashMap::new(),
             now: 0.0,
+            clipboard,
         }
     }
 
@@ -385,36 +371,24 @@ impl Input {
     }
 
     pub fn set_mouse_button(&mut self, button: MouseButton, down: bool) {
-        match button {
-            MouseButton::Left => {
-                if down && !self.mouse.left_pressed {
-                    self.mouse.left_just_pressed = true;
-                }
-                if !down && self.mouse.left_pressed {
-                    self.mouse.left_just_released = true;
-                }
-                self.mouse.left_pressed = down;
-            }
-            MouseButton::Right => {
-                if down && !self.mouse.right_pressed {
-                    self.mouse.right_just_pressed = true;
-                }
-                if !down && self.mouse.right_pressed {
-                    self.mouse.right_just_released = true;
-                }
-                self.mouse.right_pressed = down;
-            }
-            MouseButton::Middle => {
-                self.mouse.middle_pressed = down;
-            }
-            MouseButton::Back => {
-                self.mouse.back_pressed = down;
-            }
-            MouseButton::Forward => {
-                self.mouse.forward_pressed = down;
-            }
-            MouseButton::Other(_) => {}
+        let state = match button {
+            MouseButton::Left => &mut self.mouse.buttons.left,
+            MouseButton::Right => &mut self.mouse.buttons.right,
+            MouseButton::Middle => &mut self.mouse.buttons.middle,
+            MouseButton::Back => &mut self.mouse.buttons.back,
+            MouseButton::Forward => &mut self.mouse.buttons.forward,
+            MouseButton::Other(_) => return,
+        };
+
+        if down && !state.pressed {
+            state.just_pressed = true;
         }
+
+        if !down && state.pressed {
+            state.just_released = true;
+        }
+
+        state.pressed = down;
     }
 
     pub fn add_scroll_delta(&mut self, delta: Vec2) {

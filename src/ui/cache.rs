@@ -261,7 +261,7 @@ pub fn rebuild_rect_cache(
 
             *cached = RectGpu {
                 center: [rect.x, rect.y],
-                size: [rect.w, rect.h],
+                half_size: [rect.w * 0.5, rect.h * 0.5],
                 color: rect.color,
                 border_color: rect.border_color,
                 roundness: rect.roundness,

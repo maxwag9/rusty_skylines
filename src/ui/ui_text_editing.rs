@@ -20,8 +20,8 @@ impl MouseSnapshot {
         Self {
             mx: mouse.pos.x,
             my: mouse.pos.y,
-            pressed: mouse.left_pressed,
-            just_pressed: mouse.left_just_pressed,
+            pressed: mouse.buttons.left.pressed,
+            just_pressed: mouse.buttons.left.just_pressed,
             scroll: mouse.scroll_delta.y,
         }
     }
@@ -110,7 +110,7 @@ pub(crate) fn process_text_editing_input(
         return;
     }
 
-    if handle_ctrl_commands(editor, input, text, dirty) {
+    if handle_clipboard_commands(input, text, dirty) {
         return;
     }
 
@@ -163,8 +163,7 @@ fn handle_mouse_caret_selection(
     false
 }
 
-fn handle_ctrl_commands(
-    editor: &mut EditorTouchExtension,
+fn handle_clipboard_commands(
     input: &mut Input,
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
@@ -173,103 +172,109 @@ fn handle_ctrl_commands(
         return false;
     }
 
-    if handle_paste(editor, input, text, dirty) {
-        return true;
+    enum Cmd {
+        Copy,
+        Cut,
+        Paste,
     }
 
-    if handle_copy(editor, input, text) {
-        return true;
-    }
-
-    if handle_cut(editor, input, text, dirty) {
-        return true;
-    }
-
-    true
-}
-
-fn handle_paste(
-    editor: &mut EditorTouchExtension,
-    input: &mut Input,
-    text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
-) -> bool {
-    if !input.action_repeat("Paste text") {
-        return false;
-    }
-
-    let is_template_mode = !text.input_box;
-
-    if text.has_selection {
-        let (l, r) = text.selection_range();
-        if is_template_mode {
-            text.template.replace_range(l..r, &editor.clipboard);
-        } else {
-            text.text.replace_range(l..r, &editor.clipboard);
-        }
-        text.caret = l + editor.clipboard.len();
-        text.clear_selection();
+    let cmd = if input.action_repeat("Paste text") {
+        Cmd::Paste
+    } else if input.action_pressed_once("Copy text") {
+        Cmd::Copy
+    } else if input.action_pressed_once("Cut text") {
+        Cmd::Cut
     } else {
-        for c in editor.clipboard.clone().chars() {
-            if is_template_mode {
-                text.template.insert(text.caret, c);
-            } else {
-                text.text.insert(text.caret, c);
-            }
-            text.caret += 1;
-        }
-    }
-
-    text.text = text.template.clone();
-    dirty.mark_texts();
-
-    true
-}
-
-fn handle_copy(editor: &mut EditorTouchExtension, input: &mut Input, text: &UiButtonText) -> bool {
-    if !input.action_pressed_once("Copy text") {
         return false;
-    }
-
-    let (l, r) = text.selection_range();
-    let is_template_mode = !text.input_box;
-
-    editor.clipboard = if is_template_mode {
-        text.template.get(l..r).unwrap_or("").to_string()
-    } else {
-        text.text.get(l..r).unwrap_or("").to_string()
     };
 
-    true
-}
+    let clipboard = &mut input.clipboard;
 
-fn handle_cut(
-    editor: &mut EditorTouchExtension,
-    input: &mut Input,
-    text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
-) -> bool {
-    if !input.action_pressed_once("Cut text") {
-        return false;
-    }
-
-    let (l, r) = text.selection_range();
     let is_template_mode = !text.input_box;
 
-    if is_template_mode {
-        editor.clipboard = text.template.get(l..r).unwrap_or("").to_string();
-        text.template.replace_range(l..r, "");
-        text.text = text.template.clone();
+    let (l, r) = text.selection_range();
+    let active = if is_template_mode {
+        &mut text.template
     } else {
-        editor.clipboard = text.text.get(l..r).unwrap_or("").to_string();
-        text.text.replace_range(l..r, "");
+        &mut text.text
+    };
+
+    match cmd {
+        Cmd::Copy => {
+            if !text.has_selection {
+                return false;
+            }
+
+            let Some(slice) = active.get(l..r) else {
+                return false;
+            };
+
+            clipboard.set_text(slice.to_string()).is_ok()
+        }
+
+        Cmd::Cut => {
+            if !text.has_selection {
+                return false;
+            }
+
+            let Some(slice) = active.get(l..r) else {
+                return false;
+            };
+
+            if clipboard.set_text(slice.to_string()).is_err() {
+                return false;
+            }
+
+            active.replace_range(l..r, "");
+            text.caret = l;
+            text.clear_selection();
+
+            if is_template_mode {
+                text.text = text.template.clone();
+            }
+
+            dirty.mark_texts();
+            true
+        }
+
+        Cmd::Paste => {
+            let Ok(clip) = clipboard.get_text() else {
+                println!("Failed to get text from clipboard");
+                return false;
+            };
+
+            if clip.is_empty() {
+                println!("Clipboard is empty '{}'", clip);
+                return false;
+            }
+
+            if text.has_selection {
+                if active.get(l..r).is_none() {
+                    println!("Failed to get range from text");
+                    return false;
+                }
+
+                active.replace_range(l..r, &clip);
+                text.caret = l + clip.len();
+                text.clear_selection();
+            } else {
+                if text.caret > active.len() {
+                    println!("Failed to get range from non selected text");
+                    return false;
+                }
+
+                active.insert_str(text.caret, &clip);
+                text.caret += clip.len();
+            }
+
+            if is_template_mode {
+                text.text = text.template.clone();
+            }
+
+            dirty.mark_texts();
+            true
+        }
     }
-
-    text.caret = l;
-    text.clear_selection();
-    dirty.mark_texts();
-
-    true
 }
 
 fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut LayerDirty) -> bool {

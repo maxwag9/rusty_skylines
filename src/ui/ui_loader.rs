@@ -1,4 +1,5 @@
 use crate::data::BendMode;
+use crate::ui::ui_editor::GlobalActions;
 use crate::ui::vertex::*;
 use std::error::Error;
 use std::fs;
@@ -171,6 +172,25 @@ pub fn load_advanced_primitives_from_directory(
     );
     Ok(aps)
 }
+pub fn load_global_actions(
+    ga_dir: &PathBuf,
+    mode: &BendMode,
+) -> Result<GlobalActions, Box<dyn Error>> {
+    if !ga_dir.is_dir() {
+        println!("Global Actions directory not found: {}", ga_dir.display());
+        return Err("Global actions directory not found".into());
+    }
+    let ga_path = &ga_dir.join("_global_actions.yaml");
+
+    if !ga_path.is_file() {
+        return Err("_global_actions.yaml not found".into());
+    }
+
+    load_global_actions_from_file(&ga_path, mode).map_err(|e| {
+        eprintln!("Failed to load {}: {}", ga_path.display(), e);
+        "Failed to load global actions".into()
+    })
+}
 pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, Box<dyn Error>> {
     let bytes = fs::read(path)?;
 
@@ -188,6 +208,30 @@ pub fn load_menu_from_file(path: &PathBuf, mode: &BendMode) -> Result<MenuYaml, 
             let mut rng = SimpleRng::new(seed);
             let menu = synthesize_menu_from_bytes(&bytes, &mut rng, path);
             Ok(menu)
+        }
+    }
+}
+pub fn load_global_actions_from_file(
+    path: &PathBuf,
+    mode: &BendMode,
+) -> Result<GlobalActions, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+
+    match mode {
+        BendMode::Strict | BendMode::Unknown => {
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("yaml");
+            let parsed: GlobalActions = match extension {
+                "Yaml" => serde_yaml::from_slice(&bytes)?,
+                _ => serde_yaml::from_slice(&bytes)?,
+            };
+            Ok(parsed)
+        }
+        BendMode::Bent => {
+            Err("Unimplemented".into())
+            // let seed = fnv1a_64(&bytes);
+            // let mut rng = SimpleRng::new(seed);
+            // let menu = synthesize_menu_from_bytes(&bytes, &mut rng, path);
+            // Ok(menu)
         }
     }
 }

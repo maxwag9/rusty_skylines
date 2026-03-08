@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.6.8"
+version = "0.6.9"
 edition = "2024"
 
 [dependencies]
@@ -9,8 +9,8 @@ winit = { version = "0.30.12", features = ["serde"] }
 wgpu = "28.0.0"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
-glam = "0.32.0"
-toml = "1.0.3"
+glam = "0.32.1"
+toml = "1.0.6"
 serde = { version = "1.0.228", features = ["derive"] }
 fontdue = "0.9.3"
 rect_packer = "0.2.1"
@@ -29,6 +29,7 @@ clipper2-rust = "1.0.1"
 log = "0.4.29"
 rayon = "1.11.0"
 cpal = "0.17.3"
+arboard = "3.6.1"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults

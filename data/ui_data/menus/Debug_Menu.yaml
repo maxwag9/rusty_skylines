@@ -5,6 +5,7 @@ layers:
     elements:
       - !Text
         id: fps_text
+        actions: [ ]
         x: 0.00214113
         y: 0.005321429
         px: 0.013733757
@@ -16,6 +17,7 @@ layers:
         text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Render CPU: {(total_cpu_render_time):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
       - !Text
         id: frametime_main_pass_text
+        actions: [ ]
         x: 0.0008250045
         y: 0.070285715
         px: 0.009507986
@@ -27,6 +29,7 @@ layers:
         text: 'Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Stars: {(stars_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
       - !Text
         id: gtao_frametimes_text
+        actions: [ ]
         x: 0.0008250045
         y: 0.095
         px: 0.009507986
@@ -38,6 +41,7 @@ layers:
         text: 'GTAO: Total: {(gtao_frametime):.2}ms, Prep: {(gtao_prep_frametime):.2}ms, Generate: {(gtao_generate_frametime):.2}ms, Blur: {(gtao_blur_frametime):.2}ms, Upsample/Apply: {(gtao_upsample_apply_frametime):.2}ms'
       - !Text
         id: fog_frametime_text
+        actions: [ ]
         x: 0.0008250045
         y: 0.11657142
         px: 0.009507986
@@ -49,6 +53,7 @@ layers:
         text: 'Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
       - !Text
         id: shadows_frametime_text
+        actions: [ ]
         x: 0.0008250045
         y: 0.13942835
         px: 0.009507986
@@ -60,6 +65,7 @@ layers:
         text: 'CSM Shadows: {(csm_frametime):.2}ms, RT Total: {(rt_frametime):.2}ms, RT Rays: {(rt_tracing_frametime):.2}ms, RT Upsampling: {(rt_upsample_frametime):.2}ms, RT Apply: {(rt_apply_frametime):.2}ms'
       - !Text
         id: sky_info_text
+        actions: [ ]
         x: 0.001895523
         y: 0.0274163
         px: 0.013205536
@@ -71,6 +77,7 @@ layers:
         text: "Requested Time Speed: {time_speed:.2|fix}x, Actual Time Speed: {achieved_time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, \n Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees"
       - !Text
         id: player_info_text
+        actions: [ ]
         x: 0.001895523
         y: 0.046987172
         px: 0.013205536
@@ -82,6 +89,7 @@ layers:
         text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
       - !Text
         id: world_info_text
+        actions: [ ]
         x: 0.001895523
         y: 0.15898716
         px: 0.010564429
@@ -93,6 +101,7 @@ layers:
         text: 'Car Count: {car_count}'
       - !Circle
         id: '967'
+        actions: [ ]
         x: 0.9281143
         y: 0.8954688
         radius: 0.07209885
@@ -114,6 +123,7 @@ layers:
           - 0.0
       - !Circle
         id: '968'
+        actions: [ ]
         x: 0.8455063
         y: 0.93613005
         radius: 0.043656804
@@ -130,6 +140,9 @@ layers:
           - 0.0
       - !Polygon
         id: '566'
+        actions: [ ]
+        x: 0.0
+        y: 0.0
         vertices:
           - pos:
               - 0.8578537

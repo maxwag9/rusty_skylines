@@ -296,7 +296,7 @@ impl ApplicationHandler for App {
                         .variables
                         .set_f32("mouse_pos_delta.y", delta.y);
                     // camera rotation ONLY if needed & dragging
-                    if input.mouse.middle_pressed {
+                    if input.mouse.buttons.middle.pressed {
                         let cam_controller = &mut resources.world_core.world_state.cam_controller;
                         let pitch_s = 0.002;
                         let yaw_s = 0.0016;

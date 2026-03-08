@@ -18,18 +18,19 @@ use crate::ui::ui_edit_manager::{
 };
 use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::{
-    load_advanced_primitives_from_directory, load_legacy_gui_layout, load_menus_from_directory,
-    sanitize_filename,
+    load_advanced_primitives_from_directory, load_global_actions, load_legacy_gui_layout,
+    load_menus_from_directory, sanitize_filename,
 };
 use crate::ui::ui_text_editing::{HitResult, MouseSnapshot, handle_text_editing};
 use crate::ui::ui_touch_manager::{
-    DragCoordinator, ElementRef, HitDetector, InputSnapshot, NavigationDirection, TouchEvent,
-    Touchable, UiTouchManager,
+    DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection,
+    TouchEvent, UiTouchManager,
 };
 use crate::ui::variables::UiVariableRegistry;
 use crate::ui::vertex::*;
 use crate::world::roads::road_structs::RoadStyleParams;
 use crate::world::terrain::terrain_subsystem::Terrain;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -70,6 +71,7 @@ pub struct GuiOptions {
 pub struct Ui {
     // Core data
     pub menus: HashMap<String, Menu>,
+    pub global_actions: GlobalActions,
     pub variables: UiVariableRegistry,
     pub console_lines: VecDeque<String>,
 
@@ -85,7 +87,10 @@ pub struct Ui {
     // Element clipboard
     pub element_clipboard: Option<UiElement>,
 }
-
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
+pub struct GlobalActions {
+    pub(crate) actions: Vec<String>,
+}
 impl Ui {
     pub fn new(settings: &Settings, window_size: PhysicalSize<u32>) -> Self {
         let menus_dir = data_dir("ui_data/menus");
@@ -110,9 +115,13 @@ impl Ui {
                 .into_iter()
                 .map(|l| (l.name.clone(), l))
                 .collect();
-
+        let global_actions: GlobalActions = load_global_actions(&menus_dir, bend_mode)
+            .ok()
+            .unwrap_or_default();
+        println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
             menus: HashMap::new(),
+            global_actions,
             variables: UiVariableRegistry::new(),
             console_lines: VecDeque::new(),
             touch_manager: UiTouchManager::new(settings),
@@ -243,7 +252,8 @@ impl Ui {
         self.touch_manager
             .update(dt, input_snapshot, elements.into_iter());
         // Process all emitted events
-        let result = self.process_touch_events(&mut command_queues.ui_command_queue, &input.mouse);
+        let result =
+            self.process_touch_events(&mut command_queues.ui_command_queue, &input.mouse, settings);
 
         // Apply results
         self.apply_event_results(result, &input.mouse);
@@ -263,6 +273,9 @@ impl Ui {
 
         // Execute actions
         let top_hit = self.get_current_hit_for_actions();
+        if top_hit.is_some() || self.touch_manager.editor.enabled {
+            terrain.last_picked = None;
+        }
         // let print = make_ui_command("print", vec!["hello".into()], &ElementRef::default());
         // command_queues.ui_command_queue.push_optional(print);
         process_commands(
@@ -282,9 +295,15 @@ impl Ui {
     fn create_input_snapshot(&self, mouse: &Mouse, input: &Input) -> InputSnapshot {
         InputSnapshot {
             position: mouse.pos.to_array(),
-            pressed: mouse.left_pressed,
-            just_pressed: mouse.left_just_pressed,
-            just_released: !mouse.left_pressed && self.touch_manager.last_input.pressed,
+
+            buttons: MouseButtons {
+                left: mouse.buttons.left,
+                right: mouse.buttons.right,
+                middle: mouse.buttons.middle,
+                back: mouse.buttons.back,
+                forward: mouse.buttons.forward,
+            },
+
             scroll_delta: mouse.scroll_delta.y,
             ctrl_held: input.ctrl,
             shift_held: input.shift,
@@ -328,11 +347,12 @@ impl Ui {
         &mut self,
         ui_command_queue: &mut CommandQueue,
         mouse: &Mouse,
+        settings: &Settings,
     ) -> EventProcessingResult {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
         let events: Vec<TouchEvent> = self.touch_manager.events.drain().collect();
-        push_commands(ui_command_queue, self, &events, mouse);
+        push_commands(ui_command_queue, self, &events, mouse, settings);
         for event in events {
             self.handle_touch_event(&event, &mut result, mouse);
         }
@@ -369,6 +389,7 @@ impl Ui {
                 position,
                 vertex_index,
                 actions,
+                buttons,
             } => {
                 self.handle_press(element, *position, *vertex_index, result);
             }
@@ -377,6 +398,7 @@ impl Ui {
                 position,
                 was_drag,
                 actions,
+                buttons,
             } => {
                 self.handle_release(element, *position, *was_drag, actions.clone(), result);
             }
@@ -384,6 +406,7 @@ impl Ui {
                 element,
                 position,
                 actions,
+                buttons,
             } => {
                 self.handle_click(element, *position, actions.clone(), result);
             }
@@ -391,6 +414,7 @@ impl Ui {
                 element,
                 position,
                 actions,
+                buttons,
             } => {
                 self.handle_double_click(element, *position, result);
             }
@@ -899,9 +923,7 @@ impl Ui {
         true
     }
 
-    // ========================================================================
     // APPLY RESULTS
-    // ========================================================================
 
     fn apply_event_results(&mut self, result: EventProcessingResult, mouse: &Mouse) {
         // Push undo commands
@@ -1277,8 +1299,8 @@ impl Ui {
             let mouse_snapshot = MouseSnapshot {
                 mx: snapshot.position[0],
                 my: snapshot.position[1],
-                pressed: snapshot.pressed,
-                just_pressed: snapshot.just_pressed,
+                pressed: snapshot.buttons.left.pressed,
+                just_pressed: snapshot.buttons.left.just_pressed,
                 scroll: snapshot.scroll_delta,
             };
 
@@ -1396,6 +1418,7 @@ impl Ui {
                     if !t.template.contains('{')
                         || !t.template.contains('}')
                         || (t.being_edited && !t.input_box)
+                        || t.template.contains("{ap}")
                     {
                         continue;
                     }
@@ -2119,9 +2142,10 @@ fn push_commands(
     ui: &mut Ui,
     events: &Vec<TouchEvent>,
     mouse: &Mouse,
+    settings: &Settings,
 ) {
     for event in events {
-        let commands = actions_to_uicommands(ui, event);
+        let commands = actions_to_uicommands(ui, event, settings);
 
         ui_command_queue.push_many(commands);
     }

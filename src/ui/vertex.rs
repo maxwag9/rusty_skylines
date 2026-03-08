@@ -373,8 +373,9 @@ impl AdvancedPrimitive {
                 .filter_map(|e| UiElement::from_yaml(e, window_size))
                 .map(|mut el| {
                     el.resize(self.scale);
-                    el.set_pos_normalized(self.x, self.y, window_size);
+                    el.offset_pos_normalized(self.x, self.y, window_size);
                     el.set_editable(self.editable);
+                    el.set_ap_text(&self.setting);
                     el
                 })
                 .collect();
@@ -469,7 +470,7 @@ impl UiButtonRect {
             color: r.color,
             border_color: r.border_color,
             texture: r.texture,
-            roundness: r.roundness * scale,
+            roundness: r.roundness,
             border_thickness_percentage: r.border_thickness_percentage,
             fade: r.fade,
             misc: MiscButtonSettings {
@@ -496,7 +497,7 @@ impl UiButtonRect {
             color: self.color,
             border_color: self.border_color,
             texture: self.texture.clone(),
-            roundness: self.roundness / scale,
+            roundness: self.roundness,
             border_thickness_percentage: self.border_thickness_percentage,
             fade: self.fade,
             misc: self.misc.to_yaml(),
@@ -725,7 +726,6 @@ impl UiElement {
             UiElement::Rect(r) => {
                 r.w *= scale;
                 r.h *= scale;
-                r.roundness *= scale;
             }
         }
     }
@@ -802,6 +802,44 @@ impl UiElement {
 
         self.set_pos(x, y);
     }
+    pub fn offset_pos_normalized(
+        &mut self,
+        norm_x: f32,
+        norm_y: f32,
+        window_size: PhysicalSize<u32>,
+    ) {
+        let offset_x = norm_x * window_size.width as f32;
+        let offset_y = norm_y * window_size.height as f32;
+
+        match self {
+            UiElement::Text(t) => {
+                t.x += offset_x;
+                t.y += offset_y;
+            }
+            UiElement::Circle(c) => {
+                c.x += offset_x;
+                c.y += offset_y;
+            }
+            UiElement::Handle(h) => {
+                h.x += offset_x;
+                h.y += offset_y;
+            }
+            UiElement::Outline(o) => {
+                o.shape_data.x += offset_x;
+                o.shape_data.y += offset_y;
+            }
+            UiElement::Polygon(p) => {
+                for v in &mut p.vertices {
+                    v.pos[0] += offset_x;
+                    v.pos[1] += offset_y;
+                }
+            }
+            UiElement::Rect(r) => {
+                r.x += offset_x;
+                r.y += offset_y;
+            }
+        }
+    }
     fn misc_mut(&mut self) -> &mut MiscButtonSettings {
         match self {
             UiElement::Text(t) => &mut t.misc,
@@ -813,6 +851,14 @@ impl UiElement {
         }
     }
 
+    pub fn set_ap_text(&mut self, setting: &Option<SettingBinding>) {
+        if let Some(setting) = setting {
+            if let Some(text) = self.as_text_mut() {
+                let key = setting.key;
+                text.text = text.template.replace("{ap}", format!("{:?}", key).as_str())
+            }
+        }
+    }
     pub fn set_editable(&mut self, editable: bool) {
         self.misc_mut().editable = editable;
     }
@@ -1030,9 +1076,9 @@ pub struct PolygonEdgeGpu {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RectGpu {
-    pub center: [f32; 2], // center position
-    pub size: [f32; 2],   // width, height
-    pub color: [f32; 4],  // RGBA
+    pub center: [f32; 2],    // center position
+    pub half_size: [f32; 2], // width, height
+    pub color: [f32; 4],     // RGBA
     pub border_color: [f32; 4],
     pub roundness: f32,        // corner radius
     pub border_thickness: f32, // computed from percentage

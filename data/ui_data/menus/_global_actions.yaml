@@ -1,0 +1,3 @@
+actions:
+  - button:r, on:r, in:editor_mode, open_layer(Editor_Menu, Color Picker)
+  - button:l, on:r, in:editor_mode, close_layer(Editor_Menu, Color Picker)

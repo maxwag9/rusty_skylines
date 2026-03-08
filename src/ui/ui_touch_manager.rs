@@ -128,14 +128,54 @@ impl HitTestResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ButtonState {
+    pub pressed: bool,
+    pub just_pressed: bool,
+    pub just_released: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MouseButtons {
+    pub left: ButtonState,
+    pub right: ButtonState,
+    pub middle: ButtonState,
+    pub back: ButtonState,
+    pub forward: ButtonState,
+}
+impl MouseButtons {
+    pub fn pressed(&self) -> bool {
+        self.left.pressed
+            || self.right.pressed
+            || self.middle.pressed
+            || self.back.pressed
+            || self.forward.pressed
+    }
+
+    pub fn just_pressed(&self) -> bool {
+        self.left.just_pressed
+            || self.right.just_pressed
+            || self.middle.just_pressed
+            || self.back.just_pressed
+            || self.forward.just_pressed
+    }
+
+    pub fn just_released(&self) -> bool {
+        self.left.just_released
+            || self.right.just_released
+            || self.middle.just_released
+            || self.back.just_released
+            || self.forward.just_released
+    }
+}
 /// Mouse/touch input snapshot
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InputSnapshot {
     pub position: [f32; 2],
-    pub pressed: bool,
-    pub just_pressed: bool,
-    pub just_released: bool,
     pub scroll_delta: f32,
+
+    pub buttons: MouseButtons,
+
     pub ctrl_held: bool,
     pub shift_held: bool,
     pub alt_held: bool,
@@ -168,22 +208,26 @@ pub enum TouchEvent {
         position: [f32; 2],
         vertex_index: Option<usize>,
         actions: Vec<String>,
+        buttons: MouseButtons,
     },
     Release {
         element: ElementRef,
         position: [f32; 2],
         was_drag: bool,
         actions: Vec<String>,
+        buttons: MouseButtons,
     },
     Click {
         element: ElementRef,
         position: [f32; 2],
         actions: Vec<String>,
+        buttons: MouseButtons,
     },
     DoubleClick {
         element: ElementRef,
         position: [f32; 2],
         actions: Vec<String>,
+        buttons: MouseButtons,
     },
 
     // Drag events
@@ -350,7 +394,7 @@ impl Touchable for UiButtonPolygon {
             return None;
         }
 
-        const VERTEX_RADIUS: f32 = 20.0;
+        const VERTEX_RADIUS: f32 = 10.0;
 
         // Check vertex hits first
         for (i, v) in self.vertices.iter().enumerate() {
@@ -437,20 +481,21 @@ impl Touchable for UiButtonRect {
         let half_w = self.w * 0.5;
         let half_h = self.h * 0.5;
 
-        // Clamp roundness to valid range
+        // Convert normalized roundness (0.0-1.0) to absolute radius
+        // Maximum radius is the smaller half-dimension (makes it a circle/capsule at 1.0)
         let max_round = half_w.min(half_h);
-        let roundness = self.roundness.min(max_round);
+        let roundness = self.roundness * max_round;
 
         // SDF for rounded rectangle
         let sdf = sd_rounded_box(point, [self.x, self.y], [half_w, half_h], roundness);
 
         let inside = sdf < 0.0;
-        let near_edge = sdf.abs() < 8.0;
+        let near_edge = sdf.abs() < 1.0;
 
         if inside || near_edge {
             Some(TouchableHit {
                 distance: sdf.abs(),
-                vertex_index: None, // Rects have no vertices to select
+                vertex_index: None,
             })
         } else {
             None
@@ -1014,8 +1059,6 @@ pub struct EditorTouchExtension {
     pub enabled: bool,
     /// Currently editing text element
     pub editing_text: Option<ElementRef>,
-    /// Text clipboard
-    pub clipboard: String,
     /// Whether actively dragging text selection
     pub dragging_text_selection: bool,
     /// Original radius when resize started
@@ -1234,7 +1277,7 @@ impl UiTouchManager {
         }
 
         // Handle box selection if active
-        if self.selection.is_box_selecting() && input.pressed {
+        if self.selection.is_box_selecting() && input.buttons.pressed() {
             self.events.push(TouchEvent::BoxSelectMove {
                 current: input.position,
             });
@@ -1305,17 +1348,17 @@ impl UiTouchManager {
     /// Process press and release events
     fn process_press_release(&mut self, input: &InputSnapshot, top_hit: &Option<HitTestResult>) {
         // Just pressed
-        if input.just_pressed {
+        if input.buttons.just_pressed() {
             self.handle_press(input, top_hit);
         }
 
         // Held (potential drag)
-        if input.pressed && !input.just_pressed {
+        if input.buttons.pressed() && !input.buttons.just_pressed() {
             self.handle_held(input);
         }
 
         // Just released
-        if input.just_released {
+        if input.buttons.just_released() {
             self.handle_release(input);
         }
     }
@@ -1338,6 +1381,7 @@ impl UiTouchManager {
                 position: input.position,
                 vertex_index: hit.vertex_index,
                 actions: hit.actions.clone(),
+                buttons: input.buttons,
             });
 
             // Begin potential drag
@@ -1444,6 +1488,7 @@ impl UiTouchManager {
                         position: input.position,
                         was_drag,
                         actions: hover.actions.clone(),
+                        buttons: input.buttons,
                     });
 
                     // If it wasn't a drag, it's a click
@@ -1458,12 +1503,14 @@ impl UiTouchManager {
                                 element: hover.element.clone(),
                                 position: input.position,
                                 actions: hover.actions.clone(),
+                                buttons: input.buttons,
                             });
                         } else {
                             self.events.push(TouchEvent::Click {
                                 element: hover.element.clone(),
                                 position: input.position,
                                 actions: hover.actions.clone(),
+                                buttons: input.buttons,
                             });
                         }
 
