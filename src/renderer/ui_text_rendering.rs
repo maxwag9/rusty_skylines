@@ -1,3 +1,4 @@
+use crate::helpers::paths::data_dir;
 use crate::renderer::ui::{GlyphUv, PAD, TextParams};
 use crate::renderer::ui_pipelines::UiPipelines;
 use crate::resources::Time;
@@ -6,6 +7,7 @@ use fontdue::Font;
 use rect_packer::DensePacker;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use wgpu::*;
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug)]
@@ -73,8 +75,19 @@ impl TextAtlas {
             mipmap_filter: MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        let font_ttf: &[u8] = include_bytes!("../../data/ui_data/ttf/JetBrainsMono-Regular.ttf");
-        let font = Font::from_bytes(font_ttf, fontdue::FontSettings::default())
+        let dir = data_dir("ui_data/ttf");
+        println!("{}", dir.display());
+        let font_path = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().map(|x| x == "ttf").unwrap_or(false))
+            .expect("No TTF found")
+            .path();
+
+        // read the bytes from the file
+        let font_ttf = fs::read(&font_path).expect("Failed to read TTF file");
+
+        let font = Font::from_bytes(font_ttf.as_slice(), fontdue::FontSettings::default())
             .unwrap_or_else(|e| panic!("Failed to load font: {e}"));
         let packer = DensePacker::new(size.0 as i32, size.1 as i32);
         let cpu_atlas = vec![0u8; (size.0 * size.1) as usize];

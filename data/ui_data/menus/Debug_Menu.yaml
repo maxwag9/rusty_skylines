@@ -176,3 +176,46 @@ layers:
               - 1.0
               - 1.0
               - 1.0
+#- name: random_crap
+#  order: 1
+#  elements:
+#    - !Advanced
+#      name: checkbox0
+#      ap_name: checkbox_ticked
+#      setting:
+#        key: show_world
+#        op: toggle
+#        true_ap: checkbox_ticked
+#        false_ap: checkbox_unticked
+#      x: 0.5
+#      y: 0.5
+#      scale: 2.0
+#      editable: false
+#      active: false
+#    - !Rect
+#      id: test_rect
+#      actions: [ ]
+#      x: 0.40123445
+#      y: 0.38800225
+#      w: 0.019999998
+#      h: 0.03
+#      rotation: 30.0
+#      color:
+#        - 1.0
+#        - 0.0
+#        - 0.0
+#        - 1.0
+#      border_color:
+#        - 0.0
+#        - 1.0
+#        - 0.0
+#        - 1.0
+#      texture: null
+#      roundness: 0.0
+#      border_thickness_percentage: 0.1
+#      fade: 0.0
+#      misc:
+#        active: false
+#        pressable: true
+#        editable: true
+#  active: false

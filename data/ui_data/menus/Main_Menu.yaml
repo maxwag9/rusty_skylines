@@ -1,43 +1,53 @@
-name: Main Menu
+name: MainMenu
 layers:
   - name: main_menu_buttons
     order: 2
     elements:
-      - !Text
-        id: play_text
-        actions: [ ]
-        x: 0.8275116
-        y: 0.92290735
-        px: 0.016374864
-        color:
-          - 1.0
-          - 0.0
-          - 1.0
-          - 1.0
-        text: Play
       - !Rect
-        id: test_rect
+        id: Buttons Background
         actions: [ ]
-        x: 0.4
+        x: 0.5
         y: 0.4
-        w: 0.019999998
-        h: 0.03
-        rotation: 30.0
+        w: 0.2
+        h: 0.3
         color:
-          - 1.0
-          - 0.0
-          - 0.0
+          - 0.01
+          - 0.01
+          - 0.01
           - 1.0
         border_color:
-          - 0.0
           - 1.0
-          - 0.0
+          - 1.0
+          - 1.0
           - 1.0
         texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.1
+        roundness: 0.2
+        border_thickness_percentage: 0.01
         fade: 0.0
         misc:
           active: true
-          pressable: true
+          pressable: false
           editable: true
+      - !Text
+        id: play_text
+        actions:
+          - on:r set(show_world, true)
+          - on:r set(editor_mode, false)
+          - on:r set(override_mode, false)
+          - on:r close_menu(MainMenu)
+          - on:r open_menu(Debug_Menu)
+          - on:r close_menu(Editor_Menu)
+        x: 0.5
+        y: 0.3
+        px: 0.016374864
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: Play
+        misc:
+          active: true
+          pressable: false
+          editable: true
+

@@ -228,7 +228,7 @@ pub fn compute_star_rotation(jd: f64) -> Mat4 {
     glam::Mat4::from_mat3(latitude_rot * sidereal_rot)
 }
 
-pub fn compute_sun_direction(observer: &ObserverParams, year_phase: f32) -> (glam::Vec3, f32) {
+pub fn compute_sun_direction(observer: &ObserverParams, year_phase: f32) -> (Vec3, f32) {
     let sun_ecliptic_lon = year_phase * TAU;
     let sun_ecl = glam::Vec3::new(sun_ecliptic_lon.cos(), 0.0, sun_ecliptic_lon.sin());
     let sun_eq = (observer.obliquity_rotation * sun_ecl).normalize();
@@ -238,7 +238,7 @@ pub fn compute_sun_direction(observer: &ObserverParams, year_phase: f32) -> (gla
     (sun_dir, sun_declination)
 }
 
-pub fn compute_moon_direction(observer: &ObserverParams, total_days: f32) -> glam::Vec3 {
+pub fn compute_moon_direction(observer: &ObserverParams, total_days: f32) -> Vec3 {
     let jd = 2451545.0 + total_days;
     let t = (jd - 2451545.0) / 36525.0;
 

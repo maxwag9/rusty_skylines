@@ -1,7 +1,7 @@
 use crate::ui::cache::*;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 
 #[derive(Debug)]
@@ -43,7 +43,7 @@ impl Menu {
         let (layer, after) = rest.split_first_mut().unwrap();
 
         let dirty = layer.dirty;
-        if !dirty.any() {
+        if !dirty.any() || !layer.active {
             return;
         }
 
@@ -79,17 +79,12 @@ impl Menu {
         layer.dirty.clear(rebuilt);
     }
 
-    pub fn bump_layer_order(
-        &mut self,
-        layer_name: &str,
-        delta: i32,
-        variables: &mut UiVariableRegistry,
-    ) {
+    pub fn bump_layer_order(&mut self, layer_name: &str, delta: i32, variables: &mut Variables) {
         for layer in &mut self.layers {
             if layer.name == layer_name {
                 let new = layer.order as i32 + delta;
                 layer.order = new.max(0) as u32;
-                variables.set_i32("selected_layer.order", layer.order as i32);
+                variables.set_i64("selected_layer.order", layer.order as i32);
                 return;
             }
         }

@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.6.9"
+version = "0.6.10"
 edition = "2024"
 
 [dependencies]
@@ -30,6 +30,7 @@ log = "0.4.29"
 rayon = "1.11.0"
 cpal = "0.17.3"
 arboard = "3.6.1"
+#wgpu_text = "28.0.1"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults

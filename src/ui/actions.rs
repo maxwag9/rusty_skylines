@@ -3,11 +3,11 @@ pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::resources::Time;
-use crate::ui::actions::drag_hue_point::drag_hue_point;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::{Ui, get_layer_settings};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::variables::UiValue;
 use crate::world::roads::road_structs::RoadStyleParams;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
@@ -220,22 +220,22 @@ pub enum UiCommand {
     SetVar {
         element_ref: ElementRef,
         name: String,
-        value: CommandArg,
+        value: UiValue,
     },
     IncVar {
         element_ref: ElementRef,
         name: String,
-        amount: f32,
+        amount: f64,
     },
     DecVar {
         element_ref: ElementRef,
         name: String,
-        amount: f32,
+        amount: f64,
     },
     MulVar {
         element_ref: ElementRef,
         name: String,
-        factor: f32,
+        factor: f64,
     },
     ToggleVar {
         element_ref: ElementRef,
@@ -244,8 +244,8 @@ pub enum UiCommand {
     Clamp {
         element_ref: ElementRef,
         name: String,
-        min: f32,
-        max: f32,
+        min: f64,
+        max: f64,
     },
 
     // ===== ACTION STATE COMMANDS =====
@@ -261,26 +261,26 @@ pub enum UiCommand {
 
     // ===== FLOW CONTROL =====
     Delay {
-        seconds: f32,
+        seconds: f64,
     },
     Halt,
     Skip {
         count: usize,
     },
     If {
-        condition: CommandArg,
-        then_branch: Vec<UiCommand>,
+        condition: UiValue,
+        then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
     IfVarEq {
         var_name: String,
-        value: CommandArg,
-        then_branch: Vec<UiCommand>,
+        value: UiValue,
+        then: Vec<UiCommand>,
     },
 
     // ===== DEBUG COMMANDS =====
     Print {
-        args: Vec<CommandArg>,
+        args: Vec<UiValue>,
     },
     DebugVars,
     DebugMenus,
@@ -299,136 +299,6 @@ pub enum UiCommand {
     Noop,
 }
 
-// ==================== COMMAND ARGUMENTS ====================
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CommandArg {
-    String(String),
-    Float(f32),
-    Int(i64),
-    Bool(bool),
-    Var(String),
-}
-
-impl CommandArg {
-    pub fn from_str(s: &str) -> Self {
-        let s = s.trim();
-
-        if s.is_empty() {
-            return CommandArg::String(String::new());
-        }
-
-        // =========================
-        // Explicit type prefix
-        // =========================
-        if let Some((ty, value)) = s.split_once(':') {
-            match ty.to_ascii_lowercase().as_str() {
-                "int" => {
-                    if let Ok(i) = value.parse::<i64>() {
-                        return CommandArg::Int(i);
-                    }
-                }
-                "float" | "f32" => {
-                    if let Ok(f) = value.parse::<f32>() {
-                        return CommandArg::Float(f);
-                    }
-                }
-                "bool" => match value.to_ascii_lowercase().as_str() {
-                    "true" | "1" | "yes" | "on" => return CommandArg::Bool(true),
-                    "false" | "0" | "no" | "off" => return CommandArg::Bool(false),
-                    _ => {}
-                },
-                "string" | "str" => {
-                    return CommandArg::String(value.to_string());
-                }
-                "var" => {
-                    return CommandArg::Var(value.to_string());
-                }
-                _ => {}
-            }
-        }
-
-        // =========================
-        // Auto-detect bool
-        // =========================
-        match s.to_ascii_lowercase().as_str() {
-            "true" | "yes" | "on" => return CommandArg::Bool(true),
-            "false" | "no" | "off" => return CommandArg::Bool(false),
-            _ => {}
-        }
-
-        // =========================
-        // Auto-detect integer
-        // =========================
-        if let Ok(i) = s.parse::<i64>() {
-            return CommandArg::Int(i);
-        }
-
-        // =========================
-        // Auto-detect float
-        // =========================
-        if let Ok(f) = s.parse::<f32>() {
-            return CommandArg::Float(f);
-        }
-
-        // =========================
-        // Default: String
-        // =========================
-        CommandArg::String(s.to_string())
-    }
-
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            CommandArg::String(s) | CommandArg::Var(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_float(&self) -> Option<f32> {
-        match self {
-            CommandArg::Float(f) => Some(*f),
-            CommandArg::Int(i) => Some(*i as f32),
-            _ => None,
-        }
-    }
-
-    pub fn as_int(&self) -> Option<i64> {
-        match self {
-            CommandArg::Int(i) => Some(*i),
-            CommandArg::Float(f) => Some(*f as i64),
-            _ => None,
-        }
-    }
-
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            CommandArg::Bool(b) => Some(*b),
-            CommandArg::Int(i) => Some(*i != 0),
-            _ => None,
-        }
-    }
-
-    pub fn to_string_value(&self) -> String {
-        match self {
-            CommandArg::String(s) => s.clone(),
-            CommandArg::Float(f) => f.to_string(),
-            CommandArg::Int(i) => i.to_string(),
-            CommandArg::Bool(b) => b.to_string(),
-            CommandArg::Var(v) => format!("${}", v),
-        }
-    }
-
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            CommandArg::Bool(b) => *b,
-            CommandArg::Int(i) => *i != 0,
-            CommandArg::Float(f) => *f != 0.0,
-            CommandArg::String(s) => !s.is_empty() && s != "false" && s != "0",
-            CommandArg::Var(_) => true,
-        }
-    }
-}
-
 // ==================== ACTION STATE ====================
 
 #[derive(Debug, Clone)]
@@ -438,7 +308,7 @@ pub struct ActionState {
     pub started_at: f64,
     pub position: Option<Vec2>,
     pub last_pos: Option<Vec2>,
-    pub custom_data: HashMap<String, CommandArg>,
+    pub custom_data: HashMap<String, UiValue>,
 }
 
 impl ActionState {
@@ -464,11 +334,11 @@ impl ActionState {
         }
     }
 
-    pub fn set_data(&mut self, key: &str, value: CommandArg) {
+    pub fn set_data(&mut self, key: &str, value: UiValue) {
         self.custom_data.insert(key.to_string(), value);
     }
 
-    pub fn get_data(&self, key: &str) -> Option<&CommandArg> {
+    pub fn get_data(&self, key: &str) -> Option<&UiValue> {
         self.custom_data.get(key)
     }
 }
@@ -488,7 +358,7 @@ pub enum CommandResult {
     Ok,
     Stop,
     Delay {
-        seconds: f32,
+        seconds: f64,
         remaining: Vec<UiCommand>,
     },
     Skip(usize),
@@ -516,7 +386,6 @@ pub struct CommandContext<'a> {
 pub struct CommandQueue {
     queue: VecDeque<UiCommand>,
     delayed: Vec<DelayedCommands>,
-    pub variables: HashMap<String, CommandArg>,
 }
 
 impl Default for CommandQueue {
@@ -530,7 +399,6 @@ impl CommandQueue {
         Self {
             queue: VecDeque::new(),
             delayed: Vec::new(),
-            variables: HashMap::new(),
         }
     }
 
@@ -565,35 +433,6 @@ impl CommandQueue {
         self.queue.len()
     }
 
-    // ==================== VARIABLE MANAGEMENT ====================
-
-    pub fn set_var(&mut self, name: &str, value: CommandArg) {
-        self.variables.insert(name.to_string(), value);
-    }
-
-    pub fn get_var(&self, name: &str) -> Option<&CommandArg> {
-        self.variables.get(name)
-    }
-
-    pub fn get_var_float(&self, name: &str) -> Option<f32> {
-        self.variables.get(name).and_then(|v| v.as_float())
-    }
-
-    pub fn get_var_string(&self, name: &str) -> Option<&str> {
-        self.variables.get(name).and_then(|v| v.as_str())
-    }
-
-    pub fn resolve_arg(&self, arg: &CommandArg) -> CommandArg {
-        match arg {
-            CommandArg::Var(name) => self
-                .variables
-                .get(name)
-                .cloned()
-                .unwrap_or(CommandArg::String(String::new())),
-            other => other.clone(),
-        }
-    }
-
     // ==================== EXECUTION (context required) ====================
 
     /// Drain and execute all pending commands.
@@ -619,7 +458,7 @@ impl CommandQueue {
                     if !remaining.is_empty() {
                         self.delayed.push(DelayedCommands {
                             commands: remaining,
-                            execute_at: ctx.time.total_time + seconds as f64,
+                            execute_at: ctx.time.total_time + seconds,
                         });
                     }
                     break;
@@ -694,7 +533,7 @@ impl CommandQueue {
                     .get(&menu_name)
                     .map(|m| m.active)
                     .unwrap_or(false);
-                self.set_var("_result", CommandArg::Bool(is_active));
+                ctx.ui.variables.set_bool("_result", is_active);
                 CommandResult::Ok
             }
 
@@ -785,8 +624,9 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 if !matches!(result, CommandResult::Ok) {
-                    let resolved = self.resolve_arg(&value);
-                    self.variables.insert(name, resolved);
+                    //let resolved = value.(&ctx.settings, &ctx.ui.variables);
+                    ctx.ui.variables.set_var(&name, value);
+
                     result = CommandResult::Ok
                 }
                 result
@@ -826,12 +666,12 @@ impl CommandQueue {
                 }
 
                 // Ternary: Variables
-                let new_val = match self.variables.get(&name) {
-                    Some(CommandArg::Float(f)) => CommandArg::Float(f + amount),
-                    Some(CommandArg::Int(i)) => CommandArg::Float(*i as f32 + amount),
-                    _ => CommandArg::Float(amount),
+                let new_val = match ctx.ui.variables.get(&name) {
+                    Some(UiValue::F64(f)) => UiValue::F64(f + amount),
+                    Some(UiValue::I64(i)) => UiValue::F64(*i as f64 + amount),
+                    _ => UiValue::F64(amount),
                 };
-                self.variables.insert(name, new_val);
+                ctx.ui.variables.set_var_ui_value(name, new_val);
                 CommandResult::Ok
             }
 
@@ -869,12 +709,12 @@ impl CommandQueue {
                 }
 
                 // Ternary: Variables
-                let new_val = match self.variables.get(&name) {
-                    Some(CommandArg::Float(f)) => CommandArg::Float(f - amount),
-                    Some(CommandArg::Int(i)) => CommandArg::Float(*i as f32 - amount),
-                    _ => CommandArg::Float(-amount),
+                let new_val = match ctx.ui.variables.get(&name) {
+                    Some(UiValue::F64(f)) => UiValue::F64(f - amount),
+                    Some(UiValue::I64(i)) => UiValue::F64(*i as f64 - amount),
+                    _ => UiValue::F64(-amount),
                 };
-                self.variables.insert(name, new_val);
+                ctx.ui.variables.set_var_ui_value(name, new_val);
                 CommandResult::Ok
             }
 
@@ -905,9 +745,12 @@ impl CommandQueue {
                 }
 
                 // Ternary: Variables
-                if let Some(CommandArg::Float(f)) = self.variables.get(&name) {
-                    self.variables.insert(name, CommandArg::Float(f * factor));
-                }
+                let new_val = match ctx.ui.variables.get(&name) {
+                    Some(UiValue::F64(f)) => UiValue::F64(f * factor),
+                    Some(UiValue::I64(i)) => UiValue::F64(*i as f64 * factor),
+                    _ => UiValue::F64(factor),
+                };
+                ctx.ui.variables.set_var_ui_value(name, new_val);
                 CommandResult::Ok
             }
 
@@ -927,11 +770,11 @@ impl CommandQueue {
                 }
 
                 // Ternary: Variables
-                let new_val = match self.variables.get(&name) {
-                    Some(CommandArg::Bool(b)) => CommandArg::Bool(!b),
-                    _ => CommandArg::Bool(true),
+                let new_val = match ctx.ui.variables.get(&name) {
+                    Some(UiValue::Bool(b)) => UiValue::Bool(!b),
+                    _ => UiValue::Bool(false),
                 };
-                self.variables.insert(name, new_val);
+                ctx.ui.variables.set_var_ui_value(name, new_val);
                 CommandResult::Ok
             }
 
@@ -963,10 +806,12 @@ impl CommandQueue {
                 }
 
                 // Ternary: Variables
-                if let Some(CommandArg::Float(f)) = self.variables.get(&name).cloned() {
-                    self.variables
-                        .insert(name, CommandArg::Float(f.clamp(min, max)));
-                }
+                let new_val = match ctx.ui.variables.get(&name) {
+                    Some(UiValue::F64(f)) => UiValue::F64(f.clamp(min, max)),
+                    Some(UiValue::I64(i)) => UiValue::F64((*i as f64).clamp(min, max)),
+                    _ => UiValue::F64(min),
+                };
+                ctx.ui.variables.set_var_ui_value(name, new_val);
                 CommandResult::Ok
             }
 
@@ -1015,11 +860,10 @@ impl CommandQueue {
 
             UiCommand::If {
                 condition,
-                then_branch,
+                then: then_branch,
                 else_branch,
             } => {
-                let resolved = self.resolve_arg(&condition);
-                if resolved.is_truthy() {
+                if condition.is_truthy() {
                     for cmd in then_branch.into_iter().rev() {
                         self.queue.push_front(cmd);
                     }
@@ -1034,12 +878,12 @@ impl CommandQueue {
             UiCommand::IfVarEq {
                 var_name,
                 value,
-                then_branch,
+                then,
             } => {
-                let current = self.variables.get(&var_name).cloned();
-                let compare_to = Some(self.resolve_arg(&value));
+                let current = ctx.ui.variables.get(&var_name).cloned();
+                let compare_to = Some(value);
                 if current == compare_to {
-                    for cmd in then_branch.into_iter().rev() {
+                    for cmd in then.into_iter().rev() {
                         self.queue.push_front(cmd);
                     }
                 }
@@ -1050,7 +894,7 @@ impl CommandQueue {
             UiCommand::Print { args } => {
                 let msg: String = args
                     .iter()
-                    .map(|a| self.resolve_arg(a).to_string_value())
+                    .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(" ");
                 println!("[UI] {}", msg);
@@ -1058,7 +902,7 @@ impl CommandQueue {
             }
 
             UiCommand::DebugVars => {
-                println!("[Debug] Variables: {:?}", self.variables);
+                println!("[Debug] Variables: {:#?}", ctx.ui.variables.dump());
                 CommandResult::Ok
             }
 
@@ -1086,10 +930,12 @@ impl CommandQueue {
                 event_name,
             } => {
                 println!("[Event] {} from element {:?}", event_name, element_ref.id);
-                self.set_var("_last_event", CommandArg::String(event_name));
-                self.set_var(
+                ctx.ui
+                    .variables
+                    .set_var("_last_event", UiValue::String(event_name));
+                ctx.ui.variables.set_var(
                     "_last_event_element",
-                    CommandArg::String(element_ref.id.clone()),
+                    UiValue::String(element_ref.id.clone()),
                 );
                 CommandResult::Ok
             }
@@ -1123,7 +969,7 @@ impl CommandQueue {
         for action_name in active_actions {
             match action_name.as_str() {
                 "Drag Hue Point" => {
-                    drag_hue_point(ctx.ui, &ctx.input.mouse, ctx.time);
+                    // drag_hue_point(ctx.ui, &ctx.input.mouse, ctx.time);
                 }
                 _ => {}
             }

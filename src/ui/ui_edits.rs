@@ -6,7 +6,7 @@ use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edit_manager::ColorProperty;
 use crate::ui::ui_touch_manager::ElementRef;
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 
@@ -280,7 +280,7 @@ pub fn set_vertex_position(
 
 pub fn bump_layer_order(
     menus: &mut HashMap<String, Menu>,
-    variables: &mut UiVariableRegistry,
+    variables: &mut Variables,
     menu_name: &str,
     layer_name: &str,
     delta: i32,

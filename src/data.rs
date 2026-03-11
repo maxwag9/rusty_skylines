@@ -1,9 +1,10 @@
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::pipelines::ToneMappingState;
-use crate::ui::actions::CommandArg;
+use crate::ui::variables::UiValue;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
+
 macro_rules! impl_cycle {
     ($ty:ty : $($variant:expr),+ $(,)?) => {
         impl Cycle for $ty {
@@ -169,94 +170,147 @@ pub enum SettingValue {
     Enum(String),
 }
 impl SettingValue {
+    pub fn to_ui_value(&self) -> UiValue {
+        match self {
+            SettingValue::Bool(v) => UiValue::Bool(*v),
+            SettingValue::U16(v) => UiValue::I64(*v as i64),
+            SettingValue::U32(v) => UiValue::I64(*v as i64),
+            SettingValue::F32(v) => UiValue::F64(*v as f64),
+            SettingValue::F64(v) => UiValue::F64(*v),
+            SettingValue::Vec2(v) => UiValue::String(format!("[{}, {}]", v[0], v[1])),
+            SettingValue::Vec3(v) => UiValue::String(format!("[{}, {}, {}]", v[0], v[1], v[2])),
+            SettingValue::Vec4(v) => {
+                UiValue::String(format!("[{}, {}, {}, {}]", v[0], v[1], v[2], v[3]))
+            }
+            SettingValue::Enum(v) => UiValue::String(v.clone()),
+        }
+    }
+
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             SettingValue::Bool(v) => Some(*v),
             _ => None,
         }
     }
-    /// Multiply numeric values by a factor
-    pub fn multiply(&self, factor: f32) -> Option<SettingValue> {
+    pub fn multiply(&self, factor: impl Into<f64>) -> Option<SettingValue> {
+        let f = factor.into();
         match self {
             SettingValue::Bool(_) => None,
-            SettingValue::U16(v) => Some(SettingValue::U16(((*v as f32) * factor).round() as u16)),
-            SettingValue::U32(v) => Some(SettingValue::U32(((*v as f32) * factor).round() as u32)),
-            SettingValue::F32(v) => Some(SettingValue::F32(v * factor)),
-            SettingValue::F64(v) => Some(SettingValue::F64(*v * factor as f64)),
-            SettingValue::Vec2(v) => Some(SettingValue::Vec2([v[0] * factor, v[1] * factor])),
-            SettingValue::Vec3(v) => Some(SettingValue::Vec3([
-                v[0] * factor,
-                v[1] * factor,
-                v[2] * factor,
-            ])),
-            SettingValue::Vec4(v) => Some(SettingValue::Vec4([
-                v[0] * factor,
-                v[1] * factor,
-                v[2] * factor,
-                v[3] * factor,
-            ])),
-            SettingValue::Enum(_) => None,
-        }
-    }
-
-    /// Clamp numeric values to a range
-    pub fn clamp_range(&self, min: f32, max: f32) -> Option<SettingValue> {
-        match self {
-            SettingValue::Bool(_) => None,
-            SettingValue::U16(v) => Some(SettingValue::U16((*v).clamp(min as u16, max as u16))),
-            SettingValue::U32(v) => Some(SettingValue::U32((*v).clamp(min as u32, max as u32))),
-            SettingValue::F32(v) => Some(SettingValue::F32(v.clamp(min, max))),
-            SettingValue::F64(v) => Some(SettingValue::F64(v.clamp(min as f64, max as f64))),
+            SettingValue::U16(v) => {
+                let res = ((*v as u64) as f64 * f).round();
+                let res = res.max(u16::MIN as f64).min(u16::MAX as f64);
+                Some(SettingValue::U16(res as u16))
+            }
+            SettingValue::U32(v) => {
+                let res = ((*v as u64) as f64 * f).round();
+                let res = res.max(u32::MIN as f64).min(u32::MAX as f64);
+                Some(SettingValue::U32(res as u32))
+            }
+            SettingValue::F32(v) => Some(SettingValue::F32(((*v as f64) * f) as f32)),
+            SettingValue::F64(v) => Some(SettingValue::F64(*v * f)),
             SettingValue::Vec2(v) => Some(SettingValue::Vec2([
-                v[0].clamp(min, max),
-                v[1].clamp(min, max),
+                ((v[0] as f64) * f) as f32,
+                ((v[1] as f64) * f) as f32,
             ])),
             SettingValue::Vec3(v) => Some(SettingValue::Vec3([
-                v[0].clamp(min, max),
-                v[1].clamp(min, max),
-                v[2].clamp(min, max),
+                ((v[0] as f64) * f) as f32,
+                ((v[1] as f64) * f) as f32,
+                ((v[2] as f64) * f) as f32,
             ])),
             SettingValue::Vec4(v) => Some(SettingValue::Vec4([
-                v[0].clamp(min, max),
-                v[1].clamp(min, max),
-                v[2].clamp(min, max),
-                v[3].clamp(min, max),
+                ((v[0] as f64) * f) as f32,
+                ((v[1] as f64) * f) as f32,
+                ((v[2] as f64) * f) as f32,
+                ((v[3] as f64) * f) as f32,
             ])),
             SettingValue::Enum(_) => None,
         }
     }
 
-    /// Add a value (for increment operations)
-    pub fn add(&self, amount: f32) -> Option<SettingValue> {
+    pub fn clamp_range(&self, min: impl Into<f64>, max: impl Into<f64>) -> Option<SettingValue> {
+        let a = min.into();
+        let b = max.into();
+        let lo = a.min(b);
+        let hi = a.max(b);
         match self {
             SettingValue::Bool(_) => None,
-            SettingValue::U16(v) => Some(SettingValue::U16(
-                ((*v as f32) + amount).round().max(0.0) as u16,
-            )),
-            SettingValue::U32(v) => Some(SettingValue::U32(
-                ((*v as f32) + amount).round().max(0.0) as u32,
-            )),
-            SettingValue::F32(v) => Some(SettingValue::F32(v + amount)),
-            SettingValue::F64(v) => Some(SettingValue::F64(*v + amount as f64)),
-            SettingValue::Vec2(v) => Some(SettingValue::Vec2([v[0] + amount, v[1] + amount])),
+            SettingValue::U16(v) => {
+                let val = (*v as u64) as f64;
+                let clamped = val.max(lo).min(hi).round();
+                let clamped = clamped.max(u16::MIN as f64).min(u16::MAX as f64);
+                Some(SettingValue::U16(clamped as u16))
+            }
+            SettingValue::U32(v) => {
+                let val = (*v as u64) as f64;
+                let clamped = val.max(lo).min(hi).round();
+                let clamped = clamped.max(u32::MIN as f64).min(u32::MAX as f64);
+                Some(SettingValue::U32(clamped as u32))
+            }
+            SettingValue::F32(v) => {
+                let val = *v as f64;
+                let clamped = val.max(lo).min(hi);
+                Some(SettingValue::F32(clamped as f32))
+            }
+            SettingValue::F64(v) => {
+                let clamped = (*v).max(lo).min(hi);
+                Some(SettingValue::F64(clamped))
+            }
+            SettingValue::Vec2(v) => Some(SettingValue::Vec2([
+                (*v.get(0).unwrap() as f64).max(lo).min(hi) as f32,
+                (*v.get(1).unwrap() as f64).max(lo).min(hi) as f32,
+            ])),
             SettingValue::Vec3(v) => Some(SettingValue::Vec3([
-                v[0] + amount,
-                v[1] + amount,
-                v[2] + amount,
+                (*v.get(0).unwrap() as f64).max(lo).min(hi) as f32,
+                (*v.get(1).unwrap() as f64).max(lo).min(hi) as f32,
+                (*v.get(2).unwrap() as f64).max(lo).min(hi) as f32,
             ])),
             SettingValue::Vec4(v) => Some(SettingValue::Vec4([
-                v[0] + amount,
-                v[1] + amount,
-                v[2] + amount,
-                v[3] + amount,
+                (*v.get(0).unwrap() as f64).max(lo).min(hi) as f32,
+                (*v.get(1).unwrap() as f64).max(lo).min(hi) as f32,
+                (*v.get(2).unwrap() as f64).max(lo).min(hi) as f32,
+                (*v.get(3).unwrap() as f64).max(lo).min(hi) as f32,
             ])),
             SettingValue::Enum(_) => None,
         }
     }
 
-    /// Subtract a value (for decrement operations)
-    pub fn subtract(&self, amount: f32) -> Option<SettingValue> {
-        self.add(-amount)
+    pub fn add(&self, amount: impl Into<f64>) -> Option<SettingValue> {
+        let a = amount.into();
+        match self {
+            SettingValue::Bool(_) => None,
+            SettingValue::U16(v) => {
+                let res = ((*v as u64) as f64 + a).round();
+                let res = res.max(0.0).min(u16::MAX as f64);
+                Some(SettingValue::U16(res as u16))
+            }
+            SettingValue::U32(v) => {
+                let res = ((*v as u64) as f64 + a).round();
+                let res = res.max(0.0).min(u32::MAX as f64);
+                Some(SettingValue::U32(res as u32))
+            }
+            SettingValue::F32(v) => Some(SettingValue::F32(((*v as f64) + a) as f32)),
+            SettingValue::F64(v) => Some(SettingValue::F64(*v + a)),
+            SettingValue::Vec2(v) => Some(SettingValue::Vec2([
+                ((*v.get(0).unwrap() as f64) + a) as f32,
+                ((*v.get(1).unwrap() as f64) + a) as f32,
+            ])),
+            SettingValue::Vec3(v) => Some(SettingValue::Vec3([
+                ((*v.get(0).unwrap() as f64) + a) as f32,
+                ((*v.get(1).unwrap() as f64) + a) as f32,
+                ((*v.get(2).unwrap() as f64) + a) as f32,
+            ])),
+            SettingValue::Vec4(v) => Some(SettingValue::Vec4([
+                ((*v.get(0).unwrap() as f64) + a) as f32,
+                ((*v.get(1).unwrap() as f64) + a) as f32,
+                ((*v.get(2).unwrap() as f64) + a) as f32,
+                ((*v.get(3).unwrap() as f64) + a) as f32,
+            ])),
+            SettingValue::Enum(_) => None,
+        }
+    }
+
+    pub fn subtract(&self, amount: impl Into<f64>) -> Option<SettingValue> {
+        self.add(-amount.into())
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,7 +347,7 @@ fn parse_enum_from_str<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
 pub trait SettingConvert: Sized + Clone {
     fn to_setting_value(&self) -> SettingValue;
     fn from_setting_value(value: SettingValue) -> Option<Self>;
-    fn from_command_arg(arg: &CommandArg) -> Option<Self>;
+    fn from_ui_value(arg: &UiValue) -> Option<Self>;
 }
 
 // Primitives
@@ -307,8 +361,8 @@ impl SettingConvert for bool {
             _ => None,
         }
     }
-    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
-        arg.as_bool()
+    fn from_ui_value(arg: &UiValue) -> Option<Self> {
+        Some(arg.as_bool())
     }
 }
 
@@ -322,7 +376,7 @@ impl SettingConvert for u16 {
             _ => None,
         }
     }
-    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+    fn from_ui_value(arg: &UiValue) -> Option<Self> {
         arg.as_int().map(|i| i as u16)
     }
 }
@@ -337,7 +391,7 @@ impl SettingConvert for u32 {
             _ => None,
         }
     }
-    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+    fn from_ui_value(arg: &UiValue) -> Option<Self> {
         arg.as_int().map(|i| i as u32)
     }
 }
@@ -352,8 +406,12 @@ impl SettingConvert for f32 {
             _ => None,
         }
     }
-    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
-        arg.as_float()
+    fn from_ui_value(arg: &UiValue) -> Option<Self> {
+        match arg {
+            UiValue::F64(v) => Some(*v as f32),
+            UiValue::I64(v) => Some(*v as f32),
+            other => None,
+        }
     }
 }
 
@@ -367,8 +425,8 @@ impl SettingConvert for f64 {
             _ => None,
         }
     }
-    fn from_command_arg(arg: &CommandArg) -> Option<Self> {
-        arg.as_float().map(|f| f as f64)
+    fn from_ui_value(arg: &UiValue) -> Option<Self> {
+        arg.as_float().map(|f| f)
     }
 }
 
@@ -383,7 +441,7 @@ impl SettingConvert for [f32; 2] {
             _ => None,
         }
     }
-    fn from_command_arg(_arg: &CommandArg) -> Option<Self> {
+    fn from_ui_value(_arg: &UiValue) -> Option<Self> {
         None
     }
 }
@@ -398,7 +456,7 @@ impl SettingConvert for [f32; 3] {
             _ => None,
         }
     }
-    fn from_command_arg(_arg: &CommandArg) -> Option<Self> {
+    fn from_ui_value(_arg: &UiValue) -> Option<Self> {
         None
     }
 }
@@ -413,7 +471,7 @@ impl SettingConvert for [f32; 4] {
             _ => None,
         }
     }
-    fn from_command_arg(_arg: &CommandArg) -> Option<Self> {
+    fn from_ui_value(_arg: &UiValue) -> Option<Self> {
         None
     }
 }
@@ -432,7 +490,7 @@ macro_rules! impl_setting_convert_enum {
                         _ => None,
                     }
                 }
-                fn from_command_arg(arg: &CommandArg) -> Option<Self> {
+                fn from_ui_value(arg: &UiValue) -> Option<Self> {
                     arg.as_str().and_then(parse_enum_from_str)
                 }
             }
@@ -538,10 +596,10 @@ macro_rules! define_settings {
             }
 
             /// Convert a CommandArg to the appropriate SettingValue for this key
-            pub fn parse_command_arg(self, arg: &CommandArg) -> Option<SettingValue> {
+            pub fn parse_command_arg(self, arg: &UiValue) -> Option<SettingValue> {
                 match self {
                     $(SettingKey::$key => {
-                        <$ty as SettingConvert>::from_command_arg(arg)
+                        <$ty as SettingConvert>::from_ui_value(arg)
                             .map(|v| v.to_setting_value())
                     },)*
                 }

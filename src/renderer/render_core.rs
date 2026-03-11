@@ -17,6 +17,7 @@ use crate::renderer::shadows::{
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::Time;
+use crate::simulation::update_picked_pos;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
@@ -215,7 +216,7 @@ impl RenderCore {
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
         ui_loader
             .variables
-            .set_f32("total_cpu_render_time", total_cpu_render_time);
+            .set_f64("total_cpu_render_time", total_cpu_render_time);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.profiler
@@ -233,15 +234,15 @@ impl RenderCore {
         let time = &world_core.time;
         let camera = &world_core.world_state.camera;
         let astronomy = &world_core.world_state.astronomy;
-        let terrain_subsystem = &mut world_core.terrain;
+        let terrain = &mut world_core.terrain;
         self.update_defines();
 
         self.check_shader_changes(ui_loader);
 
         let (view, proj, view_proj) = camera.matrices();
         let prev_view_proj = camera.prev_view_proj;
-
-        terrain_subsystem.make_pick_uniforms(&self.queue, &self.pipelines.buffers.pick, &camera);
+        update_picked_pos(terrain, camera, settings, &self.config, &world_core.input);
+        terrain.make_pick_uniforms(&self.queue, &self.pipelines.buffers.pick, &camera);
         self.render_manager.update_depth_params(DepthDebugParams {
             near: camera.near,
             far: camera.far,
@@ -249,7 +250,7 @@ impl RenderCore {
             reversed_z: settings.reversed_depth_z as u32,
             msaa_samples: self.msaa_samples,
         });
-        self.update_uniforms(camera, astronomy, time, aspect, terrain_subsystem, settings);
+        self.update_uniforms(camera, astronomy, time, aspect, terrain, settings);
 
         // upload per-cascade shadow uniforms ONCE (outside encoder)
         for i in 0..CSM_CASCADES {
@@ -270,7 +271,7 @@ impl RenderCore {
             &mut world_core.input,
             time,
             ui_loader,
-            terrain_subsystem,
+            terrain,
             &world_core.road_subsystem,
             &world_core.cars,
             astronomy,
@@ -320,19 +321,19 @@ impl RenderCore {
         let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
         ui_loader
             .variables
-            .set_i32("target_pos_cx", camera.target.chunk.x);
+            .set_i64("target_pos_cx", camera.target.chunk.x);
         ui_loader
             .variables
-            .set_i32("target_pos_cz", camera.target.chunk.z);
+            .set_i64("target_pos_cz", camera.target.chunk.z);
         ui_loader
             .variables
-            .set_f32("target_pos_x", target_pos_render.x);
+            .set_f64("target_pos_x", target_pos_render.x);
         ui_loader
             .variables
-            .set_f32("target_pos_y", target_pos_render.y);
+            .set_f64("target_pos_y", target_pos_render.y);
         ui_loader
             .variables
-            .set_f32("target_pos_z", target_pos_render.z);
+            .set_f64("target_pos_z", target_pos_render.z);
 
         self.ui_renderer.update(
             ui_loader,

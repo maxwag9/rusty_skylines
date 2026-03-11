@@ -273,11 +273,37 @@ layers:
   - name: Color Picker
     order: 900
     elements:
+      - !Rect
+        id: Color Picker Body
+        actions: [ ]
+        x: 0.34443054
+        y: 0.5594419
+        w: 0.15
+        h: 0.19802216
+        rotation: 0.0
+        color:
+          - 0.001
+          - 0.001
+          - 0.001
+          - 0.95
+        border_color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 1.0
+        texture: null
+        roundness: 0.2
+        border_thickness_percentage: 0.005
+        fade: 0.0
+        misc:
+          active: true
+          pressable: true
+          editable: false
       - !Text
         id: Color Picker Title
         actions: [ ]
-        x: 0.31283003
-        y: 0.43314108
+        x: 0.31479993
+        y: 0.43258864
         px: 0.012149093
         color:
           - 0.7
@@ -285,48 +311,65 @@ layers:
           - 0.7
           - 1.0
         text: ColorPicker
+        misc:
+          active: true
+          pressable: true
+          editable: false
       - !Text
         id: Color Picker Red Input Box
         actions: [ ]
-        x: 0.2975041
-        y: 0.61537045
-        px: 0.0073951
+        x: 0.30482832
+        y: 0.61743236
+        px: 0.0068668784
         color:
           - 0.7
           - 0.7
           - 0.7
           - 1.0
         text: 'Red: {color_picker.r:.2|fix}'
+        misc:
+          active: true
+          pressable: true
+          editable: false
         input_box: true
       - !Text
         id: Color Picker Green Input Box
         actions: [ ]
-        x: 0.29688305
-        y: 0.6345698
-        px: 0.0073951
+        x: 0.30145305
+        y: 0.63390857
+        px: 0.0068668784
         color:
           - 0.7
           - 0.7
           - 0.7
           - 1.0
         text: 'Green: {color_picker.g:.2|fix}'
+        misc:
+          active: true
+          pressable: true
+          editable: false
         input_box: true
       - !Text
         id: Color Picker Blue Input Box
         actions: [ ]
-        x: 0.2980168
-        y: 0.6521911
-        px: 0.0073951
+        x: 0.30354658
+        y: 0.65007895
+        px: 0.006338657
         color:
           - 0.7
           - 0.7
           - 0.7
           - 1.0
         text: 'Blue: {color_picker.b:.2|fix}'
+        misc:
+          active: true
+          pressable: true
+          editable: false
         input_box: true
       - !Circle
         id: Color Picker Color Circle
-        actions: [ ]
+        actions:
+          -
         style: Hue Circle
         x: 0.34415
         y: 0.53456
@@ -340,45 +383,19 @@ layers:
           active: true
           pressable: true
           editable: false
-      - !Polygon
-        id: Color Picker Body
-        actions: [ ]
-        x: 0.0
-        y: 0.0
-        vertices:
-          - pos:
-              - 0.31294
-              - 0.45763
-            color:
-              - 0.015
-              - 0.015
-              - 0.015
-              - 1.0
-            roundness: 0.5
-          - pos:
-              - 0.37714
-              - 0.4577
-            color:
-              - 0.015
-              - 0.015
-              - 0.015
-              - 1.0
-            roundness: 0.5
-          - pos:
-              - 0.37829
-              - 0.64489
-            color:
-              - 0.015
-              - 0.015
-              - 0.015
-              - 1.0
-            roundness: 0.5
-          - pos:
-              - 0.3125
-              - 0.64482
-            color:
-              - 0.015
-              - 0.015
-              - 0.015
-              - 1.0
-            roundness: 0.5
+      - !Circle
+        id: Color Picker Drag Circle
+        actions:
+          -
+        x: 0.34415
+        y: 0.53456
+        radius: 0.05804
+        fill_color:
+          - 0.2
+          - 0.2
+          - 0.2
+          - 0.5
+        misc:
+          active: true
+          pressable: true
+          editable: false

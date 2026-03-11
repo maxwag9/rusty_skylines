@@ -1,4 +1,4 @@
-use crate::ui::variables::{UiValue, UiVariableRegistry};
+use crate::ui::variables::{UiValue, Variables};
 use std::fmt;
 
 // ------------------------------------------------------------
@@ -83,11 +83,11 @@ impl Value {
     }
 }
 
-fn lookup_var(vars: &UiVariableRegistry, name: &str) -> Option<Value> {
+fn lookup_var(vars: &Variables, name: &str) -> Option<Value> {
     match vars.get(name)? {
         UiValue::Bool(v) => Some(Value::Bool(*v)),
-        UiValue::I32(v) => Some(Value::Num(*v as f64)),
-        UiValue::F32(v) => Some(Value::Num(*v as f64)),
+        UiValue::I64(v) => Some(Value::Num(*v as f64)),
+        UiValue::F64(v) => Some(Value::Num(*v as f64)),
         UiValue::String(v) => Some(Value::Str(v.clone())),
     }
 }
@@ -1272,11 +1272,11 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
-    vars: &'a UiVariableRegistry,
+    vars: &'a Variables,
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token], vars: &'a UiVariableRegistry) -> Self {
+    fn new(tokens: &'a [Token], vars: &'a Variables) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -2177,11 +2177,11 @@ fn is_plain_ident(s: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
 }
 
-pub fn evaluate_placeholder(src: &str, vars: &UiVariableRegistry) -> String {
+pub fn evaluate_placeholder(src: &str, vars: &Variables) -> String {
     format_slot(src.trim(), vars)
 }
 
-fn format_slot(src: &str, vars: &UiVariableRegistry) -> String {
+fn format_slot(src: &str, vars: &Variables) -> String {
     // extract |options (but not || which is logical or)
     let mut expr = src;
     let mut opts = "";
@@ -2299,7 +2299,7 @@ fn format_slot(src: &str, vars: &UiVariableRegistry) -> String {
     apply_format(val, precision, opts)
 }
 
-pub fn eval_expr(expr: &str, vars: &UiVariableRegistry) -> Option<Value> {
+pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
     let tokens = tokenize_expr(expr);
     let mut parser = Parser::new(&tokens, vars);
     parser.parse_expr()
@@ -2309,7 +2309,7 @@ pub fn eval_expr(expr: &str, vars: &UiVariableRegistry) -> Option<Value> {
 // ------------------------------------------------------------
 // Final public function
 // ------------------------------------------------------------
-pub fn resolve_template(template: &str, vars: &UiVariableRegistry) -> String {
+pub fn resolve_template(template: &str, vars: &Variables) -> String {
     let mut out = String::new();
     let mut chars = template.char_indices().peekable();
 
@@ -2361,7 +2361,7 @@ pub fn resolve_template(template: &str, vars: &UiVariableRegistry) -> String {
     out
 }
 
-pub fn set_input_box(template: &str, current_text: &str, _vars: &mut UiVariableRegistry) -> String {
+pub fn set_input_box(template: &str, current_text: &str, _vars: &mut Variables) -> String {
     let start = template.find('{');
     let end = template.find('}');
 

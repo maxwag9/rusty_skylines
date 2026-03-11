@@ -14,7 +14,7 @@ use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::ui_edit_manager::{
     ChangeLayerOrderCommand, ChangeZIndexCommand, DeselectAllCommand, MoveElementCommand,
-    MoveVertexCommand, ResizeElementCommand, UICommand, UiEditManager,
+    MoveVertexCommand, ResizeElementCommand, UIEditCommand, UiEditManager,
 };
 use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::{
@@ -26,7 +26,7 @@ use crate::ui::ui_touch_manager::{
     DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection,
     TouchEvent, UiTouchManager,
 };
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use crate::world::roads::road_structs::RoadStyleParams;
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -52,7 +52,7 @@ pub struct DragStartState {
 #[derive(Default)]
 struct EventProcessingResult {
     /// Commands to push to undo system
-    commands: Vec<Box<dyn UICommand>>,
+    commands: Vec<Box<dyn UIEditCommand>>,
     /// Whether to update selection visuals
     update_selection: bool,
     /// Whether to mark layers dirty
@@ -72,7 +72,7 @@ pub struct Ui {
     // Core data
     pub menus: HashMap<String, Menu>,
     pub global_actions: GlobalActions,
-    pub variables: UiVariableRegistry,
+    pub variables: Variables,
     pub console_lines: VecDeque<String>,
 
     // NEW: Touch manager (primary touch handling)
@@ -89,7 +89,7 @@ pub struct Ui {
 }
 #[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct GlobalActions {
-    pub(crate) actions: Vec<String>,
+    pub actions: Vec<String>,
 }
 impl Ui {
     pub fn new(settings: &Settings, window_size: PhysicalSize<u32>) -> Self {
@@ -122,7 +122,7 @@ impl Ui {
         let mut loader = Self {
             menus: HashMap::new(),
             global_actions,
-            variables: UiVariableRegistry::new(),
+            variables: Variables::new(),
             console_lines: VecDeque::new(),
             touch_manager: UiTouchManager::new(settings),
             ui_edit_manager: UiEditManager::new(),
@@ -187,9 +187,11 @@ impl Ui {
             for (ap, order) in aps {
                 let mut layers =
                     ap.to_runtime(settings, &advanced_primitives, order + 1, window_size);
+
                 menu.layers.append(&mut layers);
             }
         }
+
         for (_, menu) in loader.menus.iter_mut() {
             menu.sort_layers()
         }
@@ -235,6 +237,7 @@ impl Ui {
             &mut self.variables,
             &input.mouse,
         );
+
         self.sync_settings_and_ui(settings);
         self.handle_undo_redo_input(input, dt);
 
@@ -246,11 +249,12 @@ impl Ui {
         let input_snapshot = self.create_input_snapshot(&input.mouse, input);
 
         // Collect elements - borrow only self.menus
-        let elements = Self::collect_touchable_elements_from(&self.menus);
+        let elements = Self::collect_touchable_elements(&self.menus);
 
         // Now we can mutably borrow touch_manager separately
         self.touch_manager
             .update(dt, input_snapshot, elements.into_iter());
+
         // Process all emitted events
         let result =
             self.process_touch_events(&mut command_queues.ui_command_queue, &input.mouse, settings);
@@ -276,6 +280,7 @@ impl Ui {
         if top_hit.is_some() || self.touch_manager.editor.enabled {
             terrain.last_picked = None;
         }
+
         // let print = make_ui_command("print", vec!["hello".into()], &ElementRef::default());
         // command_queues.ui_command_queue.push_optional(print);
         process_commands(
@@ -312,8 +317,8 @@ impl Ui {
     }
 
     /// Collect all touchable elements from menus - return references, not owned Strings
-    fn collect_touchable_elements_from(
-        menus: &HashMap<String, Menu>, // adjust type as needed
+    fn collect_touchable_elements(
+        menus: &HashMap<String, Menu>,
     ) -> Vec<(&str, &str, u32, usize, &UiElement)> {
         let mut elements = Vec::new();
 
@@ -353,6 +358,7 @@ impl Ui {
         // Drain events from touch manager
         let events: Vec<TouchEvent> = self.touch_manager.events.drain().collect();
         push_commands(ui_command_queue, self, &events, mouse, settings);
+
         for event in events {
             self.handle_touch_event(&event, &mut result, mouse);
         }
@@ -684,14 +690,19 @@ impl Ui {
                 },
                 true,
             ),
-            ElementKind::Text => self.ui_edit_manager.push_command(
-                MoveElementCommand {
-                    affected_element: element.clone(),
-                    before: None,
-                    after: snapped_pos,
-                },
-                true,
-            ),
+            ElementKind::Text => {
+                self.ui_edit_manager.push_command(
+                    MoveElementCommand {
+                        affected_element: element.clone(),
+                        before: None,
+                        after: snapped_pos,
+                    },
+                    true,
+                );
+                if let Some(text) = self.get_text_mut(element) {
+                    text.clear_selection();
+                }
+            }
             ElementKind::Polygon => {
                 if let Some(vertex_idx) = self.touch_manager.editor.active_vertex {
                     self.ui_edit_manager.push_command(
@@ -842,7 +853,7 @@ impl Ui {
         result: &mut EventProcessingResult,
     ) {
         // Find all elements in box
-        let elements: Vec<_> = Self::collect_touchable_elements_from(&self.menus)
+        let elements: Vec<_> = Self::collect_touchable_elements(&self.menus)
             .into_iter()
             .map(|(menu, layer, _, _, elem)| (menu, layer, elem))
             .collect();
@@ -1276,12 +1287,12 @@ impl Ui {
 
         let HSV { h, s, v } = rgb_to_hsv(color);
 
-        self.variables.set_f32("color_picker.r", color[0]);
-        self.variables.set_f32("color_picker.g", color[1]);
-        self.variables.set_f32("color_picker.b", color[2]);
-        self.variables.set_f32("color_picker.h", h);
-        self.variables.set_f32("color_picker.s", s);
-        self.variables.set_f32("color_picker.v", v);
+        self.variables.set_f64("color_picker.r", color[0]);
+        self.variables.set_f64("color_picker.g", color[1]);
+        self.variables.set_f64("color_picker.b", color[2]);
+        self.variables.set_f64("color_picker.h", h);
+        self.variables.set_f64("color_picker.s", s);
+        self.variables.set_f64("color_picker.v", v);
     }
 
     fn get_current_hit_for_actions(&self) -> Option<HitResult> {
@@ -1812,7 +1823,7 @@ impl Ui {
         if let Some(menu) = self.menus.get(&sel.menu) {
             if let Some(layer) = menu.layers.iter().find(|l| l.name == sel.layer.to_string()) {
                 self.variables
-                    .set_i32("selected_layer.order", layer.order as i32);
+                    .set_i64("selected_layer.order", layer.order as i32);
             }
         }
 
@@ -2090,10 +2101,13 @@ impl Ui {
     }
     pub fn set_starting_menu(&mut self, settings: &Settings, ui_command_queue: &mut CommandQueue) {
         ui_command_queue.push(UiCommand::OpenMenu {
-            menu_name: "Main Menu".to_string(),
+            menu_name: "MainMenu".to_string(),
         });
-        ui_command_queue.push(UiCommand::OpenMenu {
-            menu_name: "Main Menu".to_string(),
+        ui_command_queue.push(UiCommand::CloseMenu {
+            menu_name: "Editor_Menu".to_string(),
+        });
+        ui_command_queue.push(UiCommand::CloseMenu {
+            menu_name: "Debug_Menu".to_string(),
         });
     }
     pub fn hash_id(id: &str) -> f32 {

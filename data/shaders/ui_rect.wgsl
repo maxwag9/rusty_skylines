@@ -26,13 +26,14 @@ struct VertexInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) local_pos: vec2<f32>,  // [-1, 1] within rect
+    @location(0) local_pos: vec2<f32>,
     @location(1) color: vec4<f32>,
     @location(2) rect_half_size: vec2<f32>,
     @location(3) roundness: f32,
     @location(4) border_thickness: f32,
     @location(5) fade: f32,
     @location(6) misc: vec4<f32>,
+    @location(7) border_color: vec4<f32>,
 };
 
 // Signed distance function for rounded rectangle
@@ -63,6 +64,7 @@ fn vs_main(in: VertexInput, @builtin(instance_index) instance: u32) -> VertexOut
     out.clip_position = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
     out.local_pos = local;
     out.color = rect.color;
+    out.border_color = rect.border_color;
     out.rect_half_size = rect.half_size;
     out.roundness = rect.roundness;
     out.border_thickness = rect.border_thickness;
@@ -89,14 +91,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if in.border_thickness > 0.0 {
         let inner_half = half_size - in.border_thickness;
         let inner_round = max(roundness - in.border_thickness, 0.0);
+
         let d_inner = sd_rounded_box(in.local_pos, inner_half, inner_round);
-        let inner_alpha = smoothstep(-aa, aa, d_inner);
+        let inner_alpha = 1.0 - smoothstep(-aa, aa, d_inner);
 
-        let border_mask = alpha * (1.0 - inner_alpha);
-        let fill_mask = alpha * inner_alpha;
+        let fill_mask = inner_alpha;
+        let border_mask = alpha - fill_mask;
 
-        color = mix(rects[0].border_color, color, fill_mask / max(fill_mask + border_mask, 0.0001));
-        alpha = fill_mask + border_mask;
+        color = in.border_color * border_mask + in.color * fill_mask;
+        alpha = border_mask + fill_mask;
     }
 
     alpha *= mix(1.0, in.misc.x, in.fade);

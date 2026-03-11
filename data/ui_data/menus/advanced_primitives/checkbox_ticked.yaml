@@ -19,8 +19,8 @@ elements:
       - 1.0
       - 1.0
       - 1.0
-    roundness: 0.01
-    border_thickness_percentage: 0.1
+    roundness: 0.1
+    border_thickness_percentage: 0.05
   # inner indicator
   - !Rect
     id: Checkbox Indicator
@@ -38,7 +38,7 @@ elements:
     roundness: 0.5
   - !Text
     id: setting_text
-    x: -0.06
+    x: -0.10
     y: 0.0
     px: 0.013
     color:

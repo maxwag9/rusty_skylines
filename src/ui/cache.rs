@@ -13,6 +13,9 @@ pub fn rebuild_text_cache(
     runtime: &UiRuntimes,
 ) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+        if !element.is_active() {
+            continue;
+        }
         if let (UiElement::Text(t), UiElementCache::Text(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &t.id);
 
@@ -47,6 +50,9 @@ pub fn rebuild_circle_cache(
     runtime: &UiRuntimes,
 ) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+        if !element.is_active() {
+            continue;
+        }
         if let (UiElement::Circle(c), UiElementCache::Circle(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &c.id);
 
@@ -113,6 +119,9 @@ pub fn rebuild_outline_cache(
         .iter_mut()
         .zip(layer.cache.elements.iter_mut())
     {
+        if !element.is_active() {
+            continue;
+        }
         if let (UiElement::Outline(o), UiElementCache::Outline(cached)) = (element, cache_element) {
             if o.mode == 1.0 {
                 if let Some(poly) = find_polygon_by_id(&o.parent, before, after) {
@@ -171,6 +180,9 @@ pub fn rebuild_handle_cache(
     runtime: &UiRuntimes,
 ) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+        if !element.is_active() {
+            continue;
+        }
         if let (UiElement::Handle(h), UiElementCache::Handle(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &h.id);
 
@@ -215,6 +227,9 @@ pub fn rebuild_polygon_cache(
         .iter_mut()
         .zip(layer.cache.elements.iter_mut())
     {
+        if !element.is_active() {
+            continue;
+        }
         if let (UiElement::Polygon(poly), UiElementCache::Polygon(cached_vertices)) =
             (element, cache_element)
         {
@@ -253,6 +268,9 @@ pub fn rebuild_rect_cache(
     runtime: &UiRuntimes,
 ) {
     for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+        if !element.is_active() {
+            continue;
+        }
         if let (UiElement::Rect(rect), UiElementCache::Rect(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &rect.id);
 

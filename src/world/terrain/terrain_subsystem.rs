@@ -462,7 +462,7 @@ impl Terrain {
             CursorMode::TerrainEditing => {} // just continue lol
             _ => {
                 return;
-            } //Fuck off, this is not your mode!!
+            } // Fuck off, this is not your mode!!
         };
         let editing =
             input_state.action_down("Edit Terrain +") || input_state.action_down("Edit Terrain -");

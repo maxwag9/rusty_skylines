@@ -1,53 +1,54 @@
 use crate::data::Settings;
 #[allow(unused_mut, unused_assignments)]
-use crate::ui::actions::{CommandArg, UiCommand};
+use crate::ui::actions::UiCommand;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, TouchEvent};
+use crate::ui::variables::{UiValue, Variables};
 use std::cmp::PartialEq;
 
 /// Helper trait for parsing argument types
 trait ParseArg: Sized {
-    fn parse_arg(s: &str) -> Option<Self>;
+    fn parse_arg(settings: &Settings, variables: &Variables, s: &str) -> Option<Self>;
 }
 
 impl ParseArg for String {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         Some(s.to_string())
     }
 }
 
 impl ParseArg for f32 {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for f64 {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for i32 {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for u32 {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for usize {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for bool {
-    fn parse_arg(s: &str) -> Option<Self> {
+    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" | "on" | "enabled" => Some(true),
             "false" | "0" | "no" | "off" | "disabled" => Some(false),
@@ -56,41 +57,36 @@ impl ParseArg for bool {
     }
 }
 
-impl ParseArg for CommandArg {
-    fn parse_arg(s: &str) -> Option<Self> {
-        Some(CommandArg::from_str(s))
+impl ParseArg for UiValue {
+    fn parse_arg(settings: &Settings, variables: &Variables, s: &str) -> Option<Self> {
+        Some(UiValue::from_str(settings, variables, s))
     }
 }
 
 /// Macro to define command mappings - just add lines when you add commands!
 macro_rules! define_commands {
-    // ============================================================================
-    // Main entry point - generates the make_ui_command function
-    // ============================================================================
     (
         $(
             $( $name:literal )|+ => $variant:ident
-            $( {
-                $( $field:ident : $ftype:ty ),* $(,)?
-            } )?
+            $( { $( $field:ident : $ftype:ty ),* $(,)? } )?
         ),* $(,)?
     ) => {
-        pub fn make_ui_command(func_name: &str, args: Vec<String>, element: &ElementRef) -> Option<UiCommand> {
-            let name_lower = func_name.to_ascii_lowercase();
 
-            match name_lower.as_str() {
+        pub fn make_ui_command(
+            settings: &Settings,
+            variables: &Variables,
+            func_name: &str,
+            args: Vec<String>,
+            element: &ElementRef
+        ) -> Option<UiCommand> {
+            let name = func_name.to_ascii_lowercase();
+
+            match name.as_str() {
                 $(
                     $( $name )|+ => {
-                        define_commands!(
-                            @dispatch
-                            args,
-                            element,
-                            $variant
-                            $( { $( $field : $ftype ),* } )?
-                        )
+                        define_commands!(@build settings, variables, args, element, $variant $( { $( $field : $ftype ),* } )?)
                     }
-                ),*
-                ,
+                ),*,
                 _ => {
                     eprintln!("[Warning] Unknown UI command: {}", func_name);
                     None
@@ -99,71 +95,111 @@ macro_rules! define_commands {
         }
     };
 
-    // ============================================================================
-    // Dispatch - creates the UiCommand variant
-    // ============================================================================
-
-    // Unit variant (no fields)
-    (@dispatch $args:ident, $element:ident, $variant:ident) => {
+    // unit variant
+    (@build $settings:ident, $vars:ident, $args:ident, $element:ident, $variant:ident) => {
         Some(UiCommand::$variant)
     };
 
-    // Struct variant (with fields)
-    (@dispatch $args:ident, $element:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
+    // struct variant
+    (@build $settings:ident, $vars:ident, $args:ident, $element:ident,
+        $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
         #[allow(unused_mut, unused_assignments)]
         let mut idx = 0usize;
 
         $(
-            let $field = define_commands!(@parse_field $args, idx, $element, $field, $ftype)?;
+            let $field = define_commands!(
+                @parse $settings, $vars, $args, idx, $element, $field, $ftype
+            )?;
         )*
 
-        Some(UiCommand::$variant {
-            $(
-                $field,
-            )*
-        })
+        Some(UiCommand::$variant { $( $field ),* })
     }};
 
-    // ============================================================================
-    // Field Parsing - match by FIELD NAME for special cases
-    // ============================================================================
+    // -----------------------------
+    // SPECIAL FIELD: element_ref
+    // -----------------------------
 
-    // Special case: field named 'element_ref' gets injected from context (no idx increment!)
-    (@parse_field $args:ident, $idx:ident, $element:ident, element_ref, $ftype:ty) => {{
+    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+        $element:ident, element_ref, $ftype:ty) => {{
         Some($element.clone())
     }};
 
-    // Special case: field named 'args' consumes ALL remaining arguments as Vec<CommandArg>
-    (@parse_field $args:ident, $idx:ident, $element:ident, args, $ftype:ty) => {{
-        let result: Vec<CommandArg> = $args
-            .iter()
+    // -----------------------------
+    // SPECIAL FIELD: args
+    // -----------------------------
+
+    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+        $element:ident, args, $ftype:ty) => {{
+        let out = $args.iter()
             .skip($idx)
-            .map(|s| CommandArg::from_str(s))
+            .map(|s| UiValue::from_str($settings, $vars, s))
             .collect();
         #[allow(unused_assignments)]
         {
             $idx = $args.len();
         }
-        Some(result)
+        Some(out)
     }};
 
-    // Special case: field named 'commands' consumes ALL remaining arguments as Vec<UiCommand>
-    (@parse_field $args:ident, $idx:ident, $element:ident, commands, $ftype:ty) => {{
-        let result: Vec<UiCommand> = $args
-            .iter()
+    // -----------------------------
+    // SPECIAL FIELD: commands
+    // -----------------------------
+
+    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+        $element:ident, commands, $ftype:ty) => {{
+        let out = $args.iter()
             .skip($idx)
-            .filter_map(|s| make_ui_command(s, Vec::new(), $element))
+            .filter_map(|s| make_ui_command($settings, $vars, s, Vec::new(), $element))
             .collect();
         #[allow(unused_assignments)]
         {
             $idx = $args.len();
         }
-        Some(result)
+        Some(out)
     }};
 
-    // All other fields: use ParseArg trait for parsing
-    (@parse_field $args:ident, $idx:ident, $element:ident, $field:ident, $ftype:ty) => {{
-        let val = <$ftype as ParseArg>::parse_arg($args.get($idx)?)?;
+    // -----------------------------
+    // SPECIAL FIELD: then / else_branch
+    // -----------------------------
+
+    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+        $element:ident, then, $ftype:ty) => {{
+        define_commands!(@branch $settings, $vars, $args, $idx, $element)
+    }};
+
+    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+        $element:ident, else_branch, $ftype:ty) => {{
+        define_commands!(@branch $settings, $vars, $args, $idx, $element)
+    }};
+
+    (@branch $settings:ident, $vars:ident, $args:ident, $idx:ident, $element:ident) => {{
+        let raw = $args.get($idx)?;
+        #[allow(unused_assignments)]
+        {
+            $idx += 1;
+        }
+
+        let cmds = raw.split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| parse_primitive_action($settings, $vars, s, $element))
+            .collect();
+
+        Some(cmds)
+    }};
+
+    // -----------------------------
+    // GENERIC FIELD PARSER
+    // -----------------------------
+
+    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+        $element:ident, $field:ident, $ftype:ty) => {{
+
+        let val = <$ftype as ParseArg>::parse_arg(
+            $settings,
+            $vars,
+            $args.get($idx)?
+        )?;
         #[allow(unused_assignments)]
         {
             $idx += 1;
@@ -172,10 +208,7 @@ macro_rules! define_commands {
     }};
 }
 
-// ============================================================================
-// COMMAND DEFINITIONS - Just add a line here when you add a new UiCommand!
-// ============================================================================
-
+// COMMAND DEFINITIONS - I Just add a line here when I add a new UiCommand!
 define_commands! {
     // ===== MENU COMMANDS =====
     "open_menu" | "openmenu" | "menu_open"
@@ -205,22 +238,22 @@ define_commands! {
 
     // ===== VARIABLE COMMANDS =====
     "set_var" | "setvar" | "set" | "set_var_to" | "set_setting" | "setsetting" | "set_settings" | "setsettings" | "set_setting_to" | "set_av_setting_to" | "set_av_setting"
-        => SetVar { element_ref: ElementRef, name: String, value: CommandArg },
+        => SetVar { element_ref: ElementRef, name: String, value: UiValue },
 
     "inc_var" | "incvar" | "inc" | "increment" | "add" | "cycle_setting" | "cyclesetting" | "cycle_settings" | "cyclesettings"
-        => IncVar { element_ref: ElementRef, name: String, amount: f32 },
+        => IncVar { element_ref: ElementRef, name: String, amount: f64 },
 
     "dec_var" | "decvar" | "dec" | "decrement" | "sub" | "subtract"
-        => DecVar { element_ref: ElementRef, name: String, amount: f32 },
+        => DecVar { element_ref: ElementRef, name: String, amount: f64 },
 
     "mul_var" | "mulvar" | "mul" | "multiply"
-        => MulVar { element_ref: ElementRef, name: String, factor: f32 },
+        => MulVar { element_ref: ElementRef, name: String, factor: f64 },
 
     "toggle_var" | "togglevar" | "toggle_variable" | "flip_var" | "toggle_setting" | "togglesetting" | "toggle_settings" | "flip_setting"
         => ToggleVar { element_ref: ElementRef, name: String },
 
     "clamp" | "clamp_var"
-        => Clamp { element_ref: ElementRef, name: String, min: f32, max: f32 },
+        => Clamp { element_ref: ElementRef, name: String, min: f64, max: f64 },
 
     // ===== ACTION STATE COMMANDS =====
     "start_action" | "startaction" | "action_start"
@@ -235,7 +268,7 @@ define_commands! {
 
     // ===== FLOW CONTROL =====
     "delay" | "wait" | "sleep" | "pause"
-        => Delay { seconds: f32 },
+        => Delay { seconds: f64 },
 
     "halt" | "stop" | "break"
         => Halt,
@@ -243,9 +276,14 @@ define_commands! {
     "skip"
         => Skip { count: usize },
 
+    "if"
+        => If { condition: UiValue, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
+
+    "ifvareq"
+        => IfVarEq { var_name: String, value: UiValue, then: Vec<UiCommand> },
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
-        => Print { args: Vec<CommandArg> },
+        => Print { args: Vec<UiValue> },
 
     "debug_vars" | "debugvars" | "vars"
         => DebugVars,
@@ -274,6 +312,8 @@ enum TouchEventKind {
     Click,
     DoubleClick,
     ScrollOnElement,
+    Select,
+    DeSelect,
 }
 pub fn actions_to_uicommands(
     ui: &mut Ui,
@@ -331,6 +371,18 @@ pub fn actions_to_uicommands(
             element,
             MouseButtons::default(),
         ),
+        TouchEvent::SelectionRequested { element, .. } => (
+            TouchEventKind::Select,
+            &vec![],
+            element,
+            MouseButtons::default(),
+        ),
+        TouchEvent::DeselectAllRequested {} => (
+            TouchEventKind::DeSelect,
+            &vec![],
+            &ElementRef::default(),
+            MouseButtons::default(),
+        ),
         _ => return vec![],
     };
 
@@ -338,11 +390,14 @@ pub fn actions_to_uicommands(
 
     for action in actions.iter().chain(ui.global_actions.actions.iter()) {
         let mut action_owned = action.clone();
+
         let filters = parse_action_filters(&mut action_owned);
 
         if filters_match(settings, &filters, &event_kind, &buttons) {
             // Now action_owned only contains the actual command
-            if let Some(cmd) = parse_primitive_action(action_owned.trim(), element) {
+            if let Some(cmd) =
+                parse_primitive_action(settings, &ui.variables, action_owned.trim(), element)
+            {
                 cmds.push(cmd);
             }
         }
@@ -352,6 +407,7 @@ pub fn actions_to_uicommands(
 
 /// Handle a single action string that may be an event wrapper
 fn handle_action_str(
+    settings: &Settings,
     ui: &mut Ui,
     event_kind: &TouchEventKind,
     action: &str,
@@ -403,18 +459,12 @@ fn handle_action_str(
     };
 
     let inner = s[open_paren + 1..close_paren].trim();
-    let wrapper_lower = wrapper.to_ascii_lowercase();
-
-    // Check if this wrapper matches the current event
-    if wrapper_matches_event(&wrapper_lower, event_kind) {
-        return process_inner_content(ui, event_kind, inner, element);
-    }
-
-    None
+    process_inner_content(settings, ui, event_kind, inner, element)
 }
 
 /// Process the inner content of a matched event wrapper
 fn process_inner_content(
+    settings: &Settings,
     ui: &mut Ui,
     event_kind: &TouchEventKind,
     inner: &str,
@@ -440,11 +490,15 @@ fn process_inner_content(
                 let last_part = s[part_start..i].trim();
                 if !last_part.is_empty() {
                     // Try as nested event wrapper first
-                    if let Some(cmd) = handle_action_str(ui, event_kind, last_part, element) {
+                    if let Some(cmd) =
+                        handle_action_str(settings, ui, event_kind, last_part, element)
+                    {
                         return Some(cmd);
                     }
                     // Try as primitive action
-                    if let Some(cmd) = parse_primitive_action(last_part, element) {
+                    if let Some(cmd) =
+                        parse_primitive_action(settings, &ui.variables, last_part, element)
+                    {
                         return Some(cmd);
                     }
                 }
@@ -458,11 +512,11 @@ fn process_inner_content(
     let last_part = s[part_start..].trim();
     if !last_part.is_empty() {
         // Try as nested event wrapper
-        if let Some(cmd) = handle_action_str(ui, event_kind, last_part, element) {
+        if let Some(cmd) = handle_action_str(settings, ui, event_kind, last_part, element) {
             return Some(cmd);
         }
         // Try as primitive action
-        if let Some(cmd) = parse_primitive_action(last_part, element) {
+        if let Some(cmd) = parse_primitive_action(settings, &ui.variables, last_part, element) {
             return Some(cmd);
         }
     }
@@ -569,7 +623,12 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
 
 /// Parse a primitive action and create a UiCommand
 /// Handles: "action_name" or "action_name(arg1, arg2, ...)"
-fn parse_primitive_action(action: &str, element: &ElementRef) -> Option<UiCommand> {
+fn parse_primitive_action(
+    settings: &Settings,
+    variables: &Variables,
+    action: &str,
+    element: &ElementRef,
+) -> Option<UiCommand> {
     let s = action.trim();
 
     if s.is_empty() {
@@ -604,32 +663,12 @@ fn parse_primitive_action(action: &str, element: &ElementRef) -> Option<UiComman
 
             //println!("Primitive action: {}({:#?})", func_name, args); // Debug
 
-            return make_ui_command(func_name, args, element);
+            return make_ui_command(settings, variables, func_name, args, element);
         }
     }
 
     //println!("Simple action: {}", s); // Debug
-    make_ui_command(s, Vec::new(), element)
-}
-
-fn wrapper_matches_event(wrapper: &str, event_kind: &TouchEventKind) -> bool {
-    let wrapper_normalized = wrapper.to_ascii_lowercase().replace('_', "");
-
-    match wrapper_normalized.as_str() {
-        // hover synonyms
-        "onhoverenter" | "hoverenter" => *event_kind == TouchEventKind::HoverEnter,
-        "onhover" | "hover" | "whilehovering" | "hovering" => {
-            *event_kind == TouchEventKind::Hovering
-        }
-        "onhoverexit" | "hoverexit" | "hoverleave" => *event_kind == TouchEventKind::HoverExit,
-        // press / release / click / double_click / scroll
-        "onpress" | "press" => *event_kind == TouchEventKind::Press,
-        "onrelease" | "release" => *event_kind == TouchEventKind::Release,
-        "onclick" | "click" => *event_kind == TouchEventKind::Click,
-        "ondoubleclick" | "doubleclick" => *event_kind == TouchEventKind::DoubleClick,
-        "onscroll" | "scroll" => *event_kind == TouchEventKind::ScrollOnElement,
-        _ => false,
-    }
+    make_ui_command(settings, variables, s, Vec::new(), element)
 }
 
 fn button_matches(button: ParsedMouseButton, buttons: &MouseButtons) -> bool {
@@ -648,7 +687,6 @@ struct ActionFilters {
     buttons: Vec<ParsedMouseButton>,
     events: Vec<TouchEventKind>,
     modes: Vec<String>,
-    // Easy to add more: players: Vec<PlayerId>, layers: Vec<String>, etc.
 }
 
 struct ParsedAction {
@@ -660,9 +698,8 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
     let mut filters = ActionFilters::default();
 
     // Keep removing filters until none are found
-    loop {
-        let mut found = false;
 
+    loop {
         // Try to extract a button: filter
         if let Some(button) = try_extract_filter(
             action,
@@ -683,10 +720,7 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
             ],
         ) {
             filters.buttons.push(button);
-            found = true;
             continue;
-        } else {
-            filters.buttons.push(ParsedMouseButton::Left);
         }
 
         // Try to extract an on: filter (event type)
@@ -714,25 +748,25 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
                 ("c", TouchEventKind::Click),
                 ("dc", TouchEventKind::DoubleClick),
                 ("s", TouchEventKind::ScrollOnElement),
+                ("sel", TouchEventKind::Select),
+                ("desel", TouchEventKind::DeSelect),
             ],
         ) {
             filters.events.push(event);
-            found = true;
             continue;
         }
 
         // Try to extract an in: filter (mode)
         if let Some(mode) = try_extract_string_filter(action, "in:") {
             filters.modes.push(mode);
-            found = true;
             continue;
         }
 
-        if !found {
-            break;
-        }
+        break;
     }
-
+    if filters.buttons.is_empty() {
+        filters.buttons.push(ParsedMouseButton::Left);
+    }
     filters
 }
 
@@ -846,7 +880,11 @@ fn filters_match(
             return false;
         }
     }
-
+    // If in editor mode, require the action to explicitly allow editor_mode.
+    // Actions with no in: filter will be rejected while editor_mode is true.
+    if settings.editor_mode && filters.modes.is_empty() {
+        return false;
+    }
     // Check mode filters
     if !filters.modes.is_empty() {
         let any_mode_matches = filters.modes.iter().any(|m| match m.as_str() {

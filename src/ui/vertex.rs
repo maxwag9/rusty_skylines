@@ -385,7 +385,7 @@ impl AdvancedPrimitive {
                 ap_name: Some(name.clone()),
                 order,
                 elements,
-                active: active_ap.as_ref() == Some(name),
+                active: active_ap.as_ref() == Some(name) && self.active,
                 setting: self.setting.clone(),
                 cache: Default::default(),
                 dirty: LayerDirty::all(),
@@ -667,6 +667,17 @@ impl UiElement {
             UiElement::Handle(h) => h.misc.editable,
             UiElement::Polygon(p) => p.misc.editable,
             UiElement::Rect(r) => r.misc.editable,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        match self {
+            UiElement::Text(t) => t.misc.active,
+            UiElement::Circle(c) => c.misc.active,
+            UiElement::Outline(o) => o.misc.active,
+            UiElement::Handle(h) => h.misc.active,
+            UiElement::Polygon(p) => p.misc.active,
+            UiElement::Rect(r) => r.misc.active,
         }
     }
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use wgpu::*;
 
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 
 const MAX_PROFILE_PAIRS: u32 = 32;
 const MAX_PROFILE_ENTRIES: u32 = MAX_PROFILE_PAIRS * 2;
@@ -200,12 +200,7 @@ impl GpuProfiler {
     }
 
     /// Call once per frame AFTER `queue.submit()`.
-    pub fn end_frame(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        variables: &mut UiVariableRegistry,
-    ) {
+    pub fn end_frame(&mut self, device: &Device, queue: &Queue, variables: &mut Variables) {
         let _ = device.poll(PollType::Poll);
 
         self.collect_ready(queue);
@@ -229,7 +224,7 @@ impl GpuProfiler {
 
             for (label, sum) in self.sums_ms.iter() {
                 let name = format!("{label}_frametime");
-                variables.set_f32(&name, (*sum * inv_samples) as f32);
+                variables.set_f64(&name, (*sum * inv_samples) as f32);
             }
 
             self.sums_ms.clear();

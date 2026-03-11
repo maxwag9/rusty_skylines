@@ -4,7 +4,7 @@ use crate::helpers::mouse_ray::WorldRay;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::ui::input::Input;
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_player::drive_car;
 use crate::world::cars::car_subsystem::CarSubsystem;
@@ -64,7 +64,7 @@ impl Simulation {
         settings: &Settings,
         time: &Time,
         input: &mut Input,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         camera: &mut Camera,
         cam_controller: &mut CameraController,
         device: &Device,
@@ -78,7 +78,7 @@ impl Simulation {
 
         self.tick += 1;
         self.last_update = Instant::now();
-        update_picked_pos(terrain, camera, settings, config, input);
+
         let aspect = config.width as f32 / config.height as f32;
 
         car_subsystem.update(
@@ -103,7 +103,7 @@ impl Simulation {
     }
 }
 
-fn update_picked_pos(
+pub(crate) fn update_picked_pos(
     terrain_subsystem: &mut Terrain,
     camera: &Camera,
     settings: &Settings,

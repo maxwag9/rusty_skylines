@@ -65,7 +65,7 @@ impl<'a> UniformUpdater<'a> {
         self.pipelines.resources.csm_shadows.splits = splits;
     }
 
-    pub fn update_fog_uniforms(&self, config: &wgpu::SurfaceConfiguration, camera: &Camera) {
+    pub fn update_fog_uniforms(&self, config: &SurfaceConfiguration, camera: &Camera) {
         let fog_uniforms = FogUniforms {
             fog_density: 1.0,
             fog_height: 200.0,

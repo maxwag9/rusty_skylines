@@ -9,7 +9,7 @@ use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
 use crate::ui::ui_edits::*;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
@@ -27,13 +27,13 @@ const COALESCE_TIMEOUT: f32 = 0.3;
 
 /// Command trait for undoable actions
 
-pub trait UICommand: Any {
+pub trait UIEditCommand: Any {
     /// Apply undo (restore before state)
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     );
 
@@ -42,7 +42,7 @@ pub trait UICommand: Any {
         &mut self,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     );
 
@@ -55,34 +55,34 @@ pub trait UICommand: Any {
 
     /// Try to merge another command into this one (for coalescing).
     /// Returns true if merged successfully.
-    fn try_coalesce(&mut self, _other: &dyn UICommand) -> bool {
+    fn try_coalesce(&mut self, _other: &dyn UIEditCommand) -> bool {
         false
     }
 
     /// Clone into a Box (required for redo stack)
-    fn clone_box(&self) -> Box<dyn UICommand>;
+    fn clone_box(&self) -> Box<dyn UIEditCommand>;
 }
 
-impl dyn UICommand {
-    pub fn is<T: UICommand + 'static>(&self) -> bool {
+impl dyn UIEditCommand {
+    pub fn is<T: UIEditCommand + 'static>(&self) -> bool {
         self.as_any().is::<T>()
     }
 
-    pub fn downcast_ref<T: UICommand + 'static>(&self) -> Option<&T> {
+    pub fn downcast_ref<T: UIEditCommand + 'static>(&self) -> Option<&T> {
         self.as_any().downcast_ref::<T>()
     }
 
-    pub fn downcast_mut<T: UICommand + 'static>(&mut self) -> Option<&mut T> {
+    pub fn downcast_mut<T: UIEditCommand + 'static>(&mut self) -> Option<&mut T> {
         self.as_any_mut().downcast_mut::<T>()
     }
 }
 
-impl Clone for Box<dyn UICommand> {
+impl Clone for Box<dyn UIEditCommand> {
     fn clone(&self) -> Self {
         self.clone_box()
     }
 }
-impl Debug for Box<dyn UICommand> {
+impl Debug for Box<dyn UIEditCommand> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.as_any().fmt(f)
     }
@@ -101,12 +101,12 @@ pub struct MoveElementCommand {
     pub after: [f32; 2],
 }
 
-impl UICommand for MoveElementCommand {
+impl UIEditCommand for MoveElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         if let Some(before) = self.before {
@@ -118,7 +118,7 @@ impl UICommand for MoveElementCommand {
         &mut self,
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         let before = set_element_position(menus, &self.affected_element, self.after);
@@ -139,7 +139,7 @@ impl UICommand for MoveElementCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UIEditCommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -151,7 +151,7 @@ impl UICommand for MoveElementCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -164,13 +164,13 @@ pub struct ResizeElementCommand {
     pub after: f32,
 }
 
-impl UICommand for ResizeElementCommand {
+impl UIEditCommand for ResizeElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         set_element_size(menus, &self.affected_element, self.before);
@@ -181,7 +181,7 @@ impl UICommand for ResizeElementCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         set_element_size(menus, &self.affected_element, self.after);
@@ -198,7 +198,7 @@ impl UICommand for ResizeElementCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UIEditCommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -210,7 +210,7 @@ impl UICommand for ResizeElementCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -223,13 +223,13 @@ pub struct ModifyCircleCommand {
     pub after: UiButtonCircle,
 }
 
-impl UICommand for ModifyCircleCommand {
+impl UIEditCommand for ModifyCircleCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         replace_circle(
@@ -245,7 +245,7 @@ impl UICommand for ModifyCircleCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         replace_circle(
@@ -266,7 +266,7 @@ impl UICommand for ModifyCircleCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -279,13 +279,13 @@ pub struct ModifyTextCommand {
     pub after: UiButtonText,
 }
 
-impl UICommand for ModifyTextCommand {
+impl UIEditCommand for ModifyTextCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         replace_text(
@@ -301,7 +301,7 @@ impl UICommand for ModifyTextCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         replace_text(
@@ -322,7 +322,7 @@ impl UICommand for ModifyTextCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -335,13 +335,13 @@ pub struct ModifyPolygonCommand {
     pub after: UiButtonPolygon,
 }
 
-impl UICommand for ModifyPolygonCommand {
+impl UIEditCommand for ModifyPolygonCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         replace_polygon(
@@ -357,7 +357,7 @@ impl UICommand for ModifyPolygonCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         replace_polygon(
@@ -378,7 +378,7 @@ impl UICommand for ModifyPolygonCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -390,13 +390,13 @@ pub struct CreateElementCommand {
     pub element: UiElement,
 }
 
-impl UICommand for CreateElementCommand {
+impl UIEditCommand for CreateElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         delete_element(menus, &self.affected_element);
@@ -407,7 +407,7 @@ impl UICommand for CreateElementCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) {
         let _ = create_element(
@@ -429,7 +429,7 @@ impl UICommand for CreateElementCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -441,12 +441,12 @@ pub struct DeleteElementCommand {
     pub element: UiElement,
 }
 
-impl UICommand for DeleteElementCommand {
+impl UIEditCommand for DeleteElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) {
         let _ = create_element(
@@ -462,7 +462,7 @@ impl UICommand for DeleteElementCommand {
         &mut self,
         _touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         delete_element(menus, &self.affected_element);
@@ -478,7 +478,7 @@ impl UICommand for DeleteElementCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -490,13 +490,13 @@ pub struct ChangeZIndexCommand {
     pub delta: i32,
 }
 
-impl UICommand for ChangeZIndexCommand {
+impl UIEditCommand for ChangeZIndexCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         change_z_index(
@@ -513,7 +513,7 @@ impl UICommand for ChangeZIndexCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         change_z_index(
@@ -535,7 +535,7 @@ impl UICommand for ChangeZIndexCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -547,13 +547,13 @@ pub struct ChangeLayerOrderCommand {
     pub delta: i32,
 }
 
-impl UICommand for ChangeLayerOrderCommand {
+impl UIEditCommand for ChangeLayerOrderCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         bump_layer_order(
@@ -570,7 +570,7 @@ impl UICommand for ChangeLayerOrderCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         bump_layer_order(
@@ -592,7 +592,7 @@ impl UICommand for ChangeLayerOrderCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -609,13 +609,13 @@ pub struct TextEditCommand {
     pub after_caret: usize,
 }
 
-impl UICommand for TextEditCommand {
+impl UIEditCommand for TextEditCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         set_text_content(
@@ -634,7 +634,7 @@ impl UICommand for TextEditCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         set_text_content(
@@ -658,7 +658,7 @@ impl UICommand for TextEditCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -672,13 +672,13 @@ pub struct MoveVertexCommand {
     pub after: [f32; 2],
 }
 
-impl UICommand for MoveVertexCommand {
+impl UIEditCommand for MoveVertexCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         if let Some(before) = self.before {
@@ -698,7 +698,7 @@ impl UICommand for MoveVertexCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         let before = set_vertex_position(
@@ -728,7 +728,7 @@ impl UICommand for MoveVertexCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UIEditCommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -742,7 +742,7 @@ impl UICommand for MoveVertexCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -784,13 +784,13 @@ pub struct ChangeColorCommand {
     pub after: [f32; 4],
 }
 
-impl UICommand for ChangeColorCommand {
+impl UIEditCommand for ChangeColorCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         set_element_color(
@@ -809,7 +809,7 @@ impl UICommand for ChangeColorCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         set_element_color(
@@ -836,7 +836,7 @@ impl UICommand for ChangeColorCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -848,13 +848,13 @@ pub struct DuplicateElementCommand {
     pub new_element: UiElement,
 }
 
-impl UICommand for DuplicateElementCommand {
+impl UIEditCommand for DuplicateElementCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         delete_element(menus, &self.affected_element);
@@ -865,7 +865,7 @@ impl UICommand for DuplicateElementCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) {
         let _ = create_element(
@@ -887,7 +887,7 @@ impl UICommand for DuplicateElementCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -899,13 +899,13 @@ pub struct DeselectAllCommand {
     pub(crate) secondary: Vec<ElementRef>,
 }
 
-impl UICommand for DeselectAllCommand {
+impl UIEditCommand for DeselectAllCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         touch_manager
@@ -918,7 +918,7 @@ impl UICommand for DeselectAllCommand {
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         touch_manager.selection.deselect_all(menus);
@@ -934,7 +934,7 @@ impl UICommand for DeselectAllCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -945,13 +945,13 @@ pub struct MoveMultipleCommand {
     pub moves: Vec<MoveElementCommand>,
 }
 
-impl UICommand for MoveMultipleCommand {
+impl UIEditCommand for MoveMultipleCommand {
     fn undo(
         &self,
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         for m in &self.moves {
@@ -966,7 +966,7 @@ impl UICommand for MoveMultipleCommand {
         _touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
         for m in self.moves.iter_mut() {
@@ -988,7 +988,7 @@ impl UICommand for MoveMultipleCommand {
         self
     }
 
-    fn try_coalesce(&mut self, other: &dyn UICommand) -> bool {
+    fn try_coalesce(&mut self, other: &dyn UIEditCommand) -> bool {
         let Some(other) = other.downcast_ref::<Self>() else {
             return false;
         };
@@ -1014,14 +1014,14 @@ impl UICommand for MoveMultipleCommand {
         }
     }
 
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
 
 /// Command that batches multiple commands as a single undo step
 pub struct BatchCommand {
-    pub commands: Vec<Box<dyn UICommand>>,
+    pub commands: Vec<Box<dyn UIEditCommand>>,
     pub description_text: String,
 }
 
@@ -1043,13 +1043,13 @@ impl std::fmt::Debug for BatchCommand {
     }
 }
 
-impl UICommand for BatchCommand {
+impl UIEditCommand for BatchCommand {
     fn undo(
         &self,
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) {
         // Undo in reverse order
@@ -1063,7 +1063,7 @@ impl UICommand for BatchCommand {
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) {
         // Redo in forward order
@@ -1082,7 +1082,7 @@ impl UICommand for BatchCommand {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn clone_box(&self) -> Box<dyn UICommand> {
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
         Box::new(self.clone())
     }
 }
@@ -1090,20 +1090,20 @@ impl UICommand for BatchCommand {
 ///MANAGER!! Karen >:( ///
 
 struct TimestampedCommand {
-    command: Box<dyn UICommand>,
+    command: Box<dyn UIEditCommand>,
     timestamp: f32,
 }
 
 struct BatchBuilder {
-    commands: Vec<Box<dyn UICommand>>,
+    commands: Vec<Box<dyn UIEditCommand>>,
     description: String,
 }
 
 /// Manages undo/redo history with coalescing support
 pub struct UiEditManager {
     undo_stack: VecDeque<TimestampedCommand>,
-    redo_stack: Vec<Box<dyn UICommand>>,
-    immediate_commands: Vec<Box<dyn UICommand>>,
+    redo_stack: Vec<Box<dyn UIEditCommand>>,
+    immediate_commands: Vec<Box<dyn UIEditCommand>>,
     in_undo_redo: bool,
     pending_batch: Option<BatchBuilder>,
     saved_position: Option<usize>,
@@ -1137,7 +1137,7 @@ impl UiEditManager {
         &mut self,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         mouse: &Mouse,
     ) {
         let commands = std::mem::take(&mut self.immediate_commands);
@@ -1190,7 +1190,7 @@ impl UiEditManager {
     }
 
     /// Push a command (boxed)
-    pub fn push(&mut self, command: Box<dyn UICommand>, immediate: bool) {
+    pub fn push(&mut self, command: Box<dyn UIEditCommand>, immediate: bool) {
         if self.in_undo_redo {
             return;
         }
@@ -1209,12 +1209,12 @@ impl UiEditManager {
     }
 
     /// Convenience: push without explicit Box
-    pub fn push_command<C: UICommand + 'static>(&mut self, command: C, immediate: bool) {
+    pub fn push_command<C: UIEditCommand + 'static>(&mut self, command: C, immediate: bool) {
         self.push(Box::new(command), immediate);
     }
 
     /// Try to merge with previous command
-    fn try_coalesce(&mut self, command: &dyn UICommand) -> bool {
+    fn try_coalesce(&mut self, command: &dyn UIEditCommand) -> bool {
         if self.current_time - self.last_action_time > COALESCE_TIMEOUT {
             return false;
         }
@@ -1235,10 +1235,10 @@ impl UiEditManager {
     /// Execute a command immediately and push it onto the undo stack
     pub fn execute(
         &mut self,
-        mut command: Box<dyn UICommand>,
+        mut command: Box<dyn UIEditCommand>,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         mouse: &Mouse,
     ) {
         if self.in_undo_redo {
@@ -1260,18 +1260,18 @@ impl UiEditManager {
     }
 
     /// Convenience: execute without explicit Box
-    pub fn execute_command<C: UICommand + 'static>(
+    pub fn execute_command<C: UIEditCommand + 'static>(
         &mut self,
         command: C,
         touch_manager: &mut UiTouchManager,
         menus: &mut HashMap<String, Menu>,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         mouse: &Mouse,
     ) {
         self.execute(Box::new(command), touch_manager, menus, variables, mouse);
     }
 
-    fn push_internal(&mut self, command: Box<dyn UICommand>) {
+    fn push_internal(&mut self, command: Box<dyn UIEditCommand>) {
         self.redo_stack.clear();
 
         self.undo_stack.push_back(TimestampedCommand {
@@ -1316,7 +1316,7 @@ impl UiEditManager {
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) -> Option<String> {
         if !self.can_undo() {
@@ -1345,7 +1345,7 @@ impl UiEditManager {
         touch_manager: &mut UiTouchManager,
 
         menus: &mut HashMap<String, Menu>,
-        _variables: &mut UiVariableRegistry,
+        _variables: &mut Variables,
         mouse: &Mouse,
     ) -> Option<String> {
         if !self.can_redo() {
@@ -1370,7 +1370,7 @@ impl UiEditManager {
     }
 
     /// Access last command for direct mutation during drag operations
-    pub fn last_command_mut<T: UICommand + 'static>(&mut self) -> Option<&mut T> {
+    pub fn last_command_mut<T: UIEditCommand + 'static>(&mut self) -> Option<&mut T> {
         if self.in_undo_redo {
             return None;
         }

@@ -5,7 +5,10 @@ use crate::resources::Resources;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
+use crate::ui::actions::UiCommand;
 use crate::ui::ui_edit_manager::CreateElementCommand;
+use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::variables::UiValue;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
 use crate::world::roads::road_structs::RoadType;
@@ -58,16 +61,16 @@ impl ApplicationHandler for App {
             let pos = input.mouse.pos;
             let delta = input.mouse.delta;
 
-            resources.ui_loader.variables.set_f32("mouse_pos.x", pos.x);
+            resources.ui_loader.variables.set_f64("mouse_pos.x", pos.x);
             resources
                 .ui_loader
                 .variables
-                .set_f32("mouse_pos_delta.x", delta.x);
-            resources.ui_loader.variables.set_f32("mouse_pos.y", pos.y);
+                .set_f64("mouse_pos_delta.x", delta.x);
+            resources.ui_loader.variables.set_f64("mouse_pos.y", pos.y);
             resources
                 .ui_loader
                 .variables
-                .set_f32("mouse_pos_delta.y", delta.y);
+                .set_f64("mouse_pos_delta.y", delta.y);
         }
     }
 
@@ -227,7 +230,45 @@ impl ApplicationHandler for App {
                         )),
                     }
                 }
-                if input.action_pressed_once("Leave Game") {
+                if input.action_repeat("Toggle Debug Menu") {
+                    resources
+                        .command_queues
+                        .ui_command_queue
+                        .push(UiCommand::ToggleMenu {
+                            menu_name: "Debug_Menu".to_string(),
+                        });
+                }
+                let main_menu_active = resources.ui_loader.menus.get("MainMenu").unwrap().active;
+
+                if !main_menu_active && input.action_released("Exit to Main Menu") {
+                    let cmds: Vec<UiCommand> = vec![
+                        UiCommand::OpenMenu {
+                            menu_name: "MainMenu".to_string(),
+                        },
+                        UiCommand::CloseMenu {
+                            menu_name: "Editor_Menu".to_string(),
+                        },
+                        UiCommand::CloseMenu {
+                            menu_name: "Debug_Menu".to_string(),
+                        },
+                        UiCommand::SetVar {
+                            element_ref: ElementRef::default(),
+                            name: "editor_mode".to_string(),
+                            value: UiValue::Bool(false),
+                        },
+                        UiCommand::SetVar {
+                            element_ref: ElementRef::default(),
+                            name: "show_world".to_string(),
+                            value: UiValue::Bool(false),
+                        },
+                        UiCommand::SetVar {
+                            element_ref: ElementRef::default(),
+                            name: "override_mode".to_string(),
+                            value: UiValue::Bool(false),
+                        },
+                    ];
+                    resources.command_queues.ui_command_queue.push_many(cmds);
+                } else if main_menu_active && input.action_released("Leave Game") {
                     settings.total_game_time = time.total_game_time;
                     settings.player_pos = camera.target;
                     match settings.save(data_dir("settings.toml")) {
@@ -285,16 +326,16 @@ impl ApplicationHandler for App {
                     let pos = input.mouse.pos;
                     let delta = input.mouse.delta;
 
-                    resources.ui_loader.variables.set_f32("mouse_pos.x", pos.x);
+                    resources.ui_loader.variables.set_f64("mouse_pos.x", pos.x);
                     resources
                         .ui_loader
                         .variables
-                        .set_f32("mouse_pos_delta.x", delta.x);
-                    resources.ui_loader.variables.set_f32("mouse_pos.y", pos.y);
+                        .set_f64("mouse_pos_delta.x", delta.x);
+                    resources.ui_loader.variables.set_f64("mouse_pos.y", pos.y);
                     resources
                         .ui_loader
                         .variables
-                        .set_f32("mouse_pos_delta.y", delta.y);
+                        .set_f64("mouse_pos_delta.y", delta.y);
                     // camera rotation ONLY if needed & dragging
                     if input.mouse.buttons.middle.pressed {
                         let cam_controller = &mut resources.world_core.world_state.cam_controller;
@@ -351,11 +392,10 @@ impl ApplicationHandler for App {
                 let frame_start = Instant::now();
                 update_time(resources);
 
-                // -----------------------------
-                // Fixed-step simulation with budget + spiral-of-death protection
-                // -----------------------------
                 run_inputs(resources);
+
                 run_ui(resources);
+
                 run_commands(resources);
                 run_ticked(resources);
                 let mut steps = 0u32;
@@ -384,7 +424,7 @@ impl ApplicationHandler for App {
 
                 // Update achieved speed (windowed measurement)
                 resources.world_core.time.update_achieved_speed(steps);
-                resources.ui_loader.variables.set_f32(
+                resources.ui_loader.variables.set_f64(
                     "achieved_time_speed",
                     resources.world_core.time.achieved_speed,
                 );
@@ -476,17 +516,17 @@ fn update_time(resources: &mut Resources) {
     resources
         .ui_loader
         .variables
-        .set_f32("time_speed", time_speed);
+        .set_f64("time_speed", time_speed);
 
     // begin_frame detects speed changes internally and flushes accumulator
     time.begin_frame(time_speed);
 
     {
         let ui = &mut resources.ui_loader;
-        ui.variables.set_f32("fps", time.render_fps);
-        ui.variables.set_f32("render_dt", time.render_dt);
-        ui.variables.set_f32("sim_dt", time.target_sim_dt);
+        ui.variables.set_f64("fps", time.render_fps);
+        ui.variables.set_f64("render_dt", time.render_dt);
+        ui.variables.set_f64("sim_dt", time.target_sim_dt);
         ui.variables
-            .set_f32("total_game_time", time.total_game_time as f32);
+            .set_f64("total_game_time", time.total_game_time as f32);
     }
 }

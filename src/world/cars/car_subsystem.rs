@@ -6,7 +6,7 @@ use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::resources::Time;
 use crate::ui::input::Input;
-use crate::ui::variables::UiVariableRegistry;
+use crate::ui::variables::Variables;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
@@ -244,10 +244,10 @@ impl CarSubsystem {
         terrain: &Terrain,
         input_state: &mut Input,
         time_system: &Time,
-        variables: &mut UiVariableRegistry,
+        variables: &mut Variables,
         target_pos: WorldPos,
     ) {
-        variables.set_i32("car_count", self.car_storage.car_count() as i32);
+        variables.set_i64("car_count", self.car_storage.car_count() as i32);
         self.car_storage
             .update_target_and_chunk_size(target_pos.chunk, terrain.chunk_size);
         self.spawn_cars(road_manager, terrain, target_pos, time_system);

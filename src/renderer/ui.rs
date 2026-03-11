@@ -238,10 +238,10 @@ impl UiRenderer {
             secondary_color: settings.background_color.map(|c| c + 0.20f32),
             block_size: 100f32,
 
-            warp_strength: 0.01,
+            warp_strength: 0.02,
             warp_radius: 0.10,
             time_scale: 0.03,
-            wave_strength: 0.005,
+            wave_strength: 0.002,
             _padding: [0.0; 3],
         };
 

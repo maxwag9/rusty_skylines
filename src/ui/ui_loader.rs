@@ -113,7 +113,9 @@ pub fn load_menus_from_directory(
         let is_yaml = path
             .extension()
             .map_or(false, |e| e == "yaml" || e == "yml" || e == "Yaml");
-
+        if path.display().to_string().contains("_global_actions") {
+            continue;
+        }
         if is_yaml && path.is_file() {
             match load_menu_from_file(&path, mode) {
                 Ok(menu) => {
