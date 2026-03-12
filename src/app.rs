@@ -256,11 +256,11 @@ impl ApplicationHandler for App {
                             name: "editor_mode".to_string(),
                             value: UiValue::Bool(false),
                         },
-                        UiCommand::SetVar {
-                            element_ref: ElementRef::default(),
-                            name: "show_world".to_string(),
-                            value: UiValue::Bool(false),
-                        },
+                        // UiCommand::SetVar {
+                        //     element_ref: ElementRef::default(),
+                        //     name: "show_world".to_string(),
+                        //     value: UiValue::Bool(false),
+                        // },
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
                             name: "override_mode".to_string(),
@@ -269,26 +269,10 @@ impl ApplicationHandler for App {
                     ];
                     resources.command_queues.ui_command_queue.push_many(cmds);
                 } else if main_menu_active && input.action_released("Leave Game") {
-                    settings.total_game_time = time.total_game_time;
-                    settings.player_pos = camera.target;
-                    match settings.save(data_dir("settings.toml")) {
-                        Ok(_) => println!("Settings saved"),
-                        Err(e) => eprintln!("Failed to save Settings: {e}"),
-                    }
-                    if settings.show_world {
-                        match resources
-                            .world_core
-                            .terrain
-                            .terrain_editor
-                            .save_edits(data_dir("edited_chunks"))
-                        {
-                            Ok(_) => println!("World saved"),
-                            Err(e) => eprintln!("Failed to save World: {e}"),
-                        }
-                    }
-
-                    event_loop.exit();
-                    std::process::exit(69); // Die.
+                    resources
+                        .command_queues
+                        .ui_command_queue
+                        .push(UiCommand::ExitGame);
                 }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
@@ -394,7 +378,7 @@ impl ApplicationHandler for App {
 
                 run_inputs(resources);
 
-                run_ui(resources);
+                run_ui(resources, event_loop);
 
                 run_commands(resources);
                 run_ticked(resources);

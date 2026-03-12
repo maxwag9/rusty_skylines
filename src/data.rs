@@ -685,7 +685,7 @@ impl Settings {
             }
         };
         if let InternalMenu::MainMenu = settings.starting_menu {
-            settings.show_world = false;
+            //settings.show_world = false;
         }
         settings
     }

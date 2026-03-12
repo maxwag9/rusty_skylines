@@ -1,0 +1,55 @@
+name: Settings
+layers:
+  - name: settings
+    order: 2
+    elements:
+      - !Text
+        id: settings_text
+        actions: [ ]
+        x: 0.45
+        y: 0.05
+        px: 0.02
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: Settings
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Text
+        id: settings_to_main_menu_text
+        actions:
+          #- on:r set(show_world, false)
+          - on:r set(editor_mode, false)
+          - on:r set(override_mode, false)
+          - on:r close_all_menus
+          - on:r open_menu(MainMenu)
+        x: 0.05
+        y: 0.05
+        px: 0.019
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: <- To Main Menu
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Advanced
+        name: checkbox_render_chunk_bounds
+        ap_name: checkbox_ticked
+        setting:
+          key: render_chunk_bounds
+          op: toggle
+          true_ap: checkbox_ticked
+          false_ap: checkbox_unticked
+        x: 0.1
+        y: 0.3
+        scale: 2.0
+        editable: false
+        active: true

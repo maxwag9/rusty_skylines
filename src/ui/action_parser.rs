@@ -281,6 +281,9 @@ define_commands! {
 
     "ifvareq"
         => IfVarEq { var_name: String, value: UiValue, then: Vec<UiCommand> },
+
+    "exit" | "quit" | "exit_game"
+        => ExitGame,
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
         => Print { args: Vec<UiValue> },

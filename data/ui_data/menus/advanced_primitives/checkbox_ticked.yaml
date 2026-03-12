@@ -38,12 +38,12 @@ elements:
     roundness: 0.5
   - !Text
     id: setting_text
-    x: -0.10
+    x: 0.02
     y: 0.0
-    px: 0.013
+    px: 0.008
     color:
-      - 0.0
-      - 0.5
+      - 1.0
+      - 1.0
       - 1.0
       - 1.0
     text: '{ap}'

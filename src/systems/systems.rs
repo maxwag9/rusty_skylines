@@ -1,5 +1,6 @@
 use crate::resources::Resources;
 use crate::world::cars::car_render::interpolate_cars;
+use winit::event_loop::ActiveEventLoop;
 
 pub fn run_ticked(resources: &mut Resources) {
     let world = &mut resources.world_core;
@@ -48,7 +49,7 @@ pub fn run_sim(resources: &mut Resources) {
     );
 }
 
-pub fn run_ui(resources: &mut Resources) {
+pub fn run_ui(resources: &mut Resources, event_loop: &ActiveEventLoop) {
     let input = &mut resources.world_core.input;
     let time = &resources.world_core.time;
     let dt = time.target_frametime;
@@ -62,6 +63,8 @@ pub fn run_ui(resources: &mut Resources) {
         &mut resources.world_core.road_subsystem.road_editor.style,
         &mut resources.command_queues,
         &mut resources.settings,
+        &mut resources.world_core.world_state.camera,
+        event_loop,
     );
 }
 

@@ -8,15 +8,13 @@ struct WaterUniform {
 };
 
 struct SkyUniform {
+    star_rotation: mat4x4<f32>,
     exposure: f32,
     moon_phase: f32,
-
     sun_size: f32,
     sun_intensity: f32,
-
     moon_size: f32,
     moon_intensity: f32,
-
     _pad1: f32,
     _pad2: f32,
 };
@@ -174,9 +172,6 @@ fn fs_main(in: VSOut) -> FragOut {
 
     let sun_height = clamp(sun_elev * 0.5 + 0.5, 0.0, 1.0);
 
-    // FIXED: to_cam should be computed from the actual view-space relationship
-    // pos.xz is the offset from camera, so -pos.xz points toward camera
-    // We need to reconstruct this from in.world
     let water_to_cam_xz = uniforms.camera_local.xz - in.world.xz;
     let water_to_cam_y = uniforms.camera_local.y - water.sea_level;
     let to_cam = normalize(vec3<f32>(water_to_cam_xz.x, water_to_cam_y, water_to_cam_xz.y));
@@ -184,15 +179,8 @@ fn fs_main(in: VSOut) -> FragOut {
 
     let t = uniforms.time * 300.0;
 
-    var tiling = water.wave_tiling;
-    if (tiling <= 0.0) {
-        tiling = 0.0008;
-    }
-
-    var strength = water.wave_strength;
-    if (strength <= 0.0) {
-        strength = 0.8;
-    }
+    let tiling = water.wave_tiling;
+    let strength = water.wave_strength;
 
     // LOD
     let x = clamp((dist - 200.0) / 1800.0, 0.0, 1.0);
@@ -221,17 +209,12 @@ fn fs_main(in: VSOut) -> FragOut {
     let phase = abs(sky.moon_phase * 2.0 - 1.0);
     let moon_phase_vis = clamp(1.0 - phase, 0.0, 1.0);
 
-    // ============================================================
-    // SUN SPECULAR REFLECTION
-    // ============================================================
+
     let sun_reflect_dir = reflect(-sun_dir, n);
     let sun_reflect_align = max(dot(sun_reflect_dir, to_cam), 0.0);
 
-    // FIXED: Use sensible specular powers (30-150 range for water)
-    // sun_size should be ~0.5-2.0 for reasonable results
-    let safe_sun_size = max(sky.sun_size, 0.1);
-    let sun_spec_power_base = mix(40.0, 120.0, sun_height);
-    let sun_spec_power = sun_spec_power_base / safe_sun_size;
+    let sun_spec_power_base = mix(20.0, 80.0, sun_height);
+    let sun_spec_power = sun_spec_power_base / sky.sun_size;
 
     // Core tight reflection
     let sun_spec_core = pow(sun_reflect_align, sun_spec_power);
@@ -247,14 +230,10 @@ fn fs_main(in: VSOut) -> FragOut {
     let sun_spec_total = (sun_spec_core + sun_spec_glow + sun_glitter * (1.0 - detail_lod)) * sun_vis;
     let sun_spec_color = vec3<f32>(1.0, 0.98, 0.92);
 
-    // ============================================================
-    // MOON SPECULAR REFLECTION
-    // ============================================================
     let moon_reflect_dir = reflect(-moon_dir, n);
     let moon_reflect_align = max(dot(moon_reflect_dir, to_cam), 0.0);
 
-    let safe_moon_size = max(sky.moon_size, 0.1);
-    let moon_spec_power = 60.0 / safe_moon_size;
+    let moon_spec_power = 30.0 / sky.moon_size;
 
     let moon_spec_core = pow(moon_reflect_align, moon_spec_power);
     let moon_spec_glow = pow(moon_reflect_align, moon_spec_power * 0.2) * 0.15;
@@ -262,9 +241,6 @@ fn fs_main(in: VSOut) -> FragOut {
     let moon_spec_total = (moon_spec_core + moon_spec_glow) * moon_vis * moon_phase_vis * moon_day_suppress;
     let moon_spec_color = vec3<f32>(0.8, 0.85, 0.95);
 
-    // ============================================================
-    // SKY ENVIRONMENT REFLECTION (Fresnel-based)
-    // ============================================================
     let view_down = clamp(n.y, 0.0, 1.0);
     let horizon_factor = smoothstep(0.3, 0.0, view_down);
 
@@ -282,9 +258,6 @@ fn fs_main(in: VSOut) -> FragOut {
     let env_sky = mix(day_sky, night_sky, night) * sky.exposure;
     let sky_fresnel_reflection = env_sky * fresnel;
 
-    // ============================================================
-    // WATER BODY COLOR
-    // ============================================================
     let base_water = water.color.rgb;
     let depth_noise = fbm(wave_xz * tile_lod * 0.6, t * 0.2, strength * 0.5) * 0.5 + 0.5;
     let view_tint = smoothstep(0.2, 1.0, view_down);
@@ -295,17 +268,11 @@ fn fs_main(in: VSOut) -> FragOut {
     let body_mix = clamp(depth_noise * 0.7 + view_tint * 0.3, 0.0, 1.0);
     let body_color = mix(shallow_color, deep_color, body_mix);
 
-    // ============================================================
-    // DIFFUSE LIGHTING
-    // ============================================================
     let sun_diffuse = 0.15 + 0.85 * n_dot_l;
     let moon_diffuse = 0.02 + 0.98 * n_dot_m;
     let moon_diffuse_lit = moon_diffuse * sky.moon_intensity * 0.1 * moon_day_suppress * moon_vis;
     let total_diffuse = mix(sun_diffuse * sun_vis, moon_diffuse_lit, night);
 
-    // ============================================================
-    // FOAM
-    // ============================================================
     let slope = length(n.xz);
     let foam_noise = fbm(wave_xz * tile_lod * 1.3, t * 0.6, strength * 1.3);
     let foam_edges = smoothstep(0.7, 1.0, slope + foam_noise * 0.4);
@@ -313,9 +280,6 @@ fn fs_main(in: VSOut) -> FragOut {
     let foam_amount = foam_edges * foam_dist_fade * (1.0 - detail_lod);
     let foam_color = vec3<f32>(0.95, 0.97, 1.0);
 
-    // ============================================================
-    // COMPOSE FINAL COLOR
-    // ============================================================
 
     // Base: body color with diffuse lighting
     var color = body_color * total_diffuse;
@@ -346,23 +310,14 @@ fn fs_main(in: VSOut) -> FragOut {
     let sky_refl_strength = mix(0.5, 0.15, smoothstep(0.0, 2000.0, dist));
     color += sky_fresnel_reflection * sky_refl_strength;
 
-    // ============================================================
-    // SUN REFLECTION - The actual bright streak!
-    // ============================================================
     let sun_refl_intensity = sun_spec_total * sky.sun_intensity;
     let sun_dist_fade = mix(1.0, 0.5, smoothstep(0.0, 3000.0, dist));
     color += sun_spec_color * sun_refl_intensity * sun_dist_fade * 3.0;
 
-    // ============================================================
-    // MOON REFLECTION - The actual bright streak at night!
-    // ============================================================
     let moon_refl_intensity = moon_spec_total * sky.moon_intensity * sky.exposure;
     let moon_dist_fade = mix(1.0, 0.4, smoothstep(0.0, 2000.0, dist));
     color += moon_spec_color * moon_refl_intensity * moon_dist_fade * 5.0;
 
-    // ============================================================
-    // OUTPUT
-    // ============================================================
     let alpha = clamp(water.color.a + foam_amount * 0.15, 0.0, 1.0);
     out.color = vec4<f32>(color, alpha);
 

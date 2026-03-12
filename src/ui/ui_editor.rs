@@ -28,6 +28,7 @@ use crate::ui::ui_touch_manager::{
 };
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
+use crate::world::camera::Camera;
 use crate::world::roads::road_structs::RoadStyleParams;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use winit::dpi::PhysicalSize;
+use winit::event_loop::ActiveEventLoop;
 // ============================================================================
 // DRAG STATE FOR UNDO TRACKING
 // ============================================================================
@@ -223,6 +225,8 @@ impl Ui {
         road_style_params: &mut RoadStyleParams,
         command_queues: &mut CommandQueues,
         settings: &mut Settings,
+        camera: &mut Camera,
+        event_loop: &ActiveEventLoop,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
@@ -293,6 +297,8 @@ impl Ui {
             window_size,
             road_style_params,
             settings,
+            camera,
+            event_loop,
         );
     }
 
@@ -2100,6 +2106,7 @@ impl Ui {
         menu.sort_layers();
     }
     pub fn set_starting_menu(&mut self, settings: &Settings, ui_command_queue: &mut CommandQueue) {
+        ui_command_queue.push(UiCommand::CloseAllMenus);
         ui_command_queue.push(UiCommand::OpenMenu {
             menu_name: "MainMenu".to_string(),
         });

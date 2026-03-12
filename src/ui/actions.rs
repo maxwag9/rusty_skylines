@@ -2,17 +2,20 @@
 pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
+use crate::helpers::paths::data_dir;
 use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::{Ui, get_layer_settings};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::UiValue;
+use crate::world::camera::Camera;
 use crate::world::roads::road_structs::RoadStyleParams;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
 use std::collections::{HashMap, VecDeque};
 use winit::dpi::PhysicalSize;
+use winit::event_loop::ActiveEventLoop;
 // ==================== COMMAND TYPE ENUM ====================
 
 /// Canonical command type identifier for pattern matching and legacy conversion.
@@ -277,7 +280,7 @@ pub enum UiCommand {
         value: UiValue,
         then: Vec<UiCommand>,
     },
-
+    ExitGame,
     // ===== DEBUG COMMANDS =====
     Print {
         args: Vec<UiValue>,
@@ -377,6 +380,8 @@ pub struct CommandContext<'a> {
     pub window_size: PhysicalSize<u32>,
     pub road_style_params: &'a mut RoadStyleParams,
     pub settings: &'a mut Settings,
+    pub camera: &'a mut Camera,
+    pub event_loop: &'a ActiveEventLoop,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -890,6 +895,17 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
+            UiCommand::ExitGame => {
+                exit_game(
+                    ctx.settings,
+                    ctx.time,
+                    ctx.camera,
+                    ctx.terrain,
+                    ctx.event_loop,
+                );
+                CommandResult::Ok
+            }
+
             // ===== DEBUG COMMANDS =====
             UiCommand::Print { args } => {
                 let msg: String = args
@@ -1017,24 +1033,28 @@ pub fn style_to_u32(style: &str) -> u32 {
 /// Process commands and continuous actions. Call once per frame.
 pub fn process_commands(
     command_queue: &mut CommandQueue,
-    loader: &mut Ui,
-    top_hit: &Option<HitResult>,
-    input_state: &Input,
+    ui: &mut Ui,
+    hit: &Option<HitResult>,
+    input: &Input,
     time: &Time,
-    world_renderer: &mut Terrain,
+    terrain: &mut Terrain,
     window_size: PhysicalSize<u32>,
     road_style_params: &mut RoadStyleParams,
     settings: &mut Settings,
+    camera: &mut Camera,
+    event_loop: &ActiveEventLoop,
 ) {
     let mut ctx = CommandContext {
-        ui: loader,
-        input: input_state,
+        ui,
+        input,
         time,
-        terrain: world_renderer,
-        hit: top_hit,
+        terrain,
+        hit,
         window_size,
         road_style_params,
         settings,
+        camera,
+        event_loop,
     };
 
     command_queue.drain(&mut ctx);
@@ -1051,4 +1071,28 @@ pub fn deactivate_action(loader: &mut Ui, action_name: &str) {
     {
         state.active = false;
     }
+}
+
+pub fn exit_game(
+    settings: &mut Settings,
+    time: &Time,
+    camera: &Camera,
+    terrain: &Terrain,
+    event_loop: &ActiveEventLoop,
+) {
+    settings.total_game_time = time.total_game_time;
+    settings.player_pos = camera.target;
+    match settings.save(data_dir("settings.toml")) {
+        Ok(_) => println!("Settings saved"),
+        Err(e) => eprintln!("Failed to save Settings: {e}"),
+    }
+    if settings.show_world {
+        match terrain.terrain_editor.save_edits(data_dir("edited_chunks")) {
+            Ok(_) => println!("World saved"),
+            Err(e) => eprintln!("Failed to save World: {e}"),
+        }
+    }
+
+    event_loop.exit();
+    //std::process::exit(69); // Die.
 }

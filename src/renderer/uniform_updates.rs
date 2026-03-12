@@ -96,6 +96,7 @@ impl<'a> UniformUpdater<'a> {
     }
     pub fn update_sky_uniforms(&self, astronomy: &AstronomyState) {
         let moon_phase: f32 = astronomy.moon_phase;
+
         let sky_uniform = SkyUniform {
             star_rotation: astronomy.star_rotation.to_cols_array_2d(),
             exposure: 1.0,
@@ -119,7 +120,7 @@ impl<'a> UniformUpdater<'a> {
         let wu = WaterUniform {
             sea_level: 0.0,
             _pad0: [1.0; 3],
-            color: [0.05, 0.25, 0.35, 0.95],
+            color: [0.05, 0.25, 0.35, 1.95],
             wave_tiling: 0.5,
             wave_strength: 0.1,
             _pad1: [1.0; 2],
