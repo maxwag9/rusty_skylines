@@ -11,6 +11,7 @@
 //! - Rendering, saving/loading, undo storage, element creation/deletion
 
 use crate::data::Settings;
+use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_editor::{GuiOptions, Ui, get_element};
 use crate::ui::ui_runtime::UiRuntimes;
@@ -544,10 +545,17 @@ impl Touchable for UiButtonText {
     }
 
     fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
-        let x0 = self.x + self.top_left_offset[0];
-        let y0 = self.y + self.top_left_offset[1];
-        let x1 = x0 + self.natural_width + self.top_right_offset[0];
-        let y1 = y0 + self.natural_height + self.bottom_left_offset[1];
+        let pos = anchor_to(
+            self.anchor.unwrap_or(Anchor::Center),
+            [self.x, self.y],
+            self.width,
+            self.height,
+        );
+        let pad = 2f32;
+        let x0 = pos[0] + self.top_left_offset[0];
+        let y0 = pos[1] + self.top_left_offset[1];
+        let x1 = x0 + self.width + self.top_right_offset[0] + pad;
+        let y1 = y0 + self.height + self.bottom_left_offset[1] + pad;
 
         if point[0] >= x0 && point[0] <= x1 && point[1] >= y0 && point[1] <= y1 {
             let cx = (x0 + x1) / 2.0;
@@ -589,7 +597,7 @@ impl Touchable for UiButtonText {
 
 impl Draggable for UiButtonText {
     fn drag_anchor(&self, _vertex_index: Option<usize>) -> [f32; 2] {
-        [self.x, self.y]
+        self.center()
     }
 
     fn can_snap(&self) -> bool {
@@ -863,13 +871,13 @@ impl HitDetector {
         for (menu_name, layer_name, element) in elements {
             let (id, kind, center) = match element {
                 UiElement::Circle(c) if c.misc.active => {
-                    (c.id.clone(), ElementKind::Circle, [c.x, c.y])
+                    (c.id.clone(), ElementKind::Circle, c.center())
                 }
                 UiElement::Polygon(p) if p.misc.active => {
                     (p.id.clone(), ElementKind::Polygon, p.center())
                 }
                 UiElement::Text(t) if t.misc.active => {
-                    (t.id.clone(), ElementKind::Text, [t.x, t.y])
+                    (t.id.clone(), ElementKind::Text, t.center())
                 }
                 UiElement::Rect(r) if r.misc.active => {
                     (r.id.clone(), ElementKind::Rect, r.center())

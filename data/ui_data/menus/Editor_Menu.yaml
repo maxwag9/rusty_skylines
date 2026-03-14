@@ -92,7 +92,7 @@ layers:
         actions: [ ]
         x: 0.04323
         y: 0.56015
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -104,7 +104,7 @@ layers:
         actions: [ ]
         x: 0.0559
         y: 0.07343
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -116,7 +116,7 @@ layers:
         actions: [ ]
         x: 0.055430003
         y: 0.11689
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -128,7 +128,7 @@ layers:
         actions: [ ]
         x: 0.05632
         y: 0.15672
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -140,7 +140,7 @@ layers:
         actions: [ ]
         x: 0.06232
         y: 0.1938
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -152,7 +152,7 @@ layers:
         actions: [ ]
         x: 0.06187
         y: 0.22553998
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -164,7 +164,7 @@ layers:
         actions: [ ]
         x: 0.06519
         y: 0.28678
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -176,7 +176,7 @@ layers:
         actions: [ ]
         x: 0.05342
         y: 0.32652
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -188,7 +188,7 @@ layers:
         actions: [ ]
         x: 0.05984
         y: 0.37815
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -200,7 +200,7 @@ layers:
         actions: [ ]
         x: 0.0574
         y: 0.46259004
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -212,7 +212,7 @@ layers:
         actions: [ ]
         x: 0.04919
         y: 0.49596
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -224,7 +224,7 @@ layers:
         actions: [ ]
         x: 0.052539997
         y: 0.43811
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -236,7 +236,7 @@ layers:
         actions: [ ]
         x: 0.056269996
         y: 0.52738
-        px: 0.016374864
+        pt: 15.0
         color:
           - 0.6
           - 1.0
@@ -304,7 +304,7 @@ layers:
         actions: [ ]
         x: 0.31479993
         y: 0.43258864
-        px: 0.012149093
+        pt: 15.0
         color:
           - 0.7
           - 0.7
@@ -320,7 +320,7 @@ layers:
         actions: [ ]
         x: 0.30482832
         y: 0.61743236
-        px: 0.0068668784
+        pt: 15.0
         color:
           - 0.7
           - 0.7
@@ -337,7 +337,7 @@ layers:
         actions: [ ]
         x: 0.30145305
         y: 0.63390857
-        px: 0.0068668784
+        pt: 15.0
         color:
           - 0.7
           - 0.7
@@ -354,7 +354,7 @@ layers:
         actions: [ ]
         x: 0.30354658
         y: 0.65007895
-        px: 0.006338657
+        pt: 15.0
         color:
           - 0.7
           - 0.7
@@ -369,7 +369,7 @@ layers:
       - !Circle
         id: Color Picker Color Circle
         actions:
-          -
+          - ''
         style: Hue Circle
         x: 0.34415
         y: 0.53456
@@ -386,7 +386,7 @@ layers:
       - !Circle
         id: Color Picker Drag Circle
         actions:
-          -
+          - ''
         x: 0.34415
         y: 0.53456
         radius: 0.05804
@@ -399,3 +399,4 @@ layers:
           active: true
           pressable: true
           editable: false
+    active: false

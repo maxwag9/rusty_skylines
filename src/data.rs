@@ -667,7 +667,7 @@ impl Settings {
 
     pub fn load<P: AsRef<Path>>(path: P) -> Self {
         let path = path.as_ref();
-        let mut settings = match fs::read_to_string(path) {
+        let settings = match fs::read_to_string(path) {
             Ok(content) => match toml::from_str::<Settings>(&content) {
                 Ok(settings) => settings,
                 Err(err) => {

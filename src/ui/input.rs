@@ -250,6 +250,8 @@ pub struct Input {
     warned_missing: HashSet<String>,
     repeat_timers: HashMap<String, RepeatTimer>,
     action_last_down: HashMap<String, bool>,
+    named_last_down: HashMap<NamedKey, bool>,
+    logical_just_pressed: HashSet<NamedKey>,
     pub gameplay_last_down: HashMap<String, bool>,
     pub gameplay_repeat_timers: HashMap<String, RepeatTimer>,
     pub now: f64,
@@ -279,6 +281,8 @@ impl Input {
             warned_missing: HashSet::new(),
             repeat_timers: HashMap::new(),
             action_last_down: HashMap::new(),
+            named_last_down: HashMap::new(),
+            logical_just_pressed: HashSet::new(),
             gameplay_last_down: HashMap::new(),
             gameplay_repeat_timers: HashMap::new(),
             now: 0.0,
@@ -295,6 +299,7 @@ impl Input {
 
         self.mouse.update_just_states();
         self.text_chars.clear();
+        self.logical_just_pressed.clear();
     }
     pub fn reset_all(&mut self, now: f64) {
         self.now = now;
@@ -315,9 +320,11 @@ impl Input {
         self.scroll_right_hit = false;
 
         self.action_last_down.clear();
+        self.named_last_down.clear();
         self.gameplay_last_down.clear();
         self.repeat_timers.clear();
         self.gameplay_repeat_timers.clear();
+        self.logical_just_pressed.clear();
     }
 
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
@@ -359,9 +366,14 @@ impl Input {
     }
 
     pub fn set_logical(&mut self, key: NamedKey, down: bool) {
+        if down {
+            let was_down = self.logical.get(&key).copied().unwrap_or(false);
+            if !was_down {
+                self.logical_just_pressed.insert(key);
+            }
+        }
         self.logical.insert(key, down);
     }
-
     pub fn set_character(&mut self, ch: &str, down: bool) {
         if down {
             self.text_chars.insert(ch.to_string());
@@ -571,6 +583,10 @@ impl Input {
             .entry(action.to_string())
             .or_insert_with(RepeatTimer::new);
         timer.tick(self.now, down)
+    }
+
+    pub fn named_just_pressed(&mut self, key: NamedKey) -> bool {
+        self.logical_just_pressed.contains(&key)
     }
 }
 

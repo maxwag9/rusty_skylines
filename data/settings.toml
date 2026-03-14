@@ -1,7 +1,7 @@
 target_fps = 100.0
 target_tps = 60.0
 present_mode = "mailbox"
-editor_mode = false
+editor_mode = true
 override_mode = false
 show_gui = true
 background_color = [
@@ -10,10 +10,10 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 243030.30375660653
+total_game_time = 254012.0376626819
 world_generation_benchmark_mode = false
 bend_mode = "strict"
-show_world = true
+show_world = false
 always_day = false
 msaa_samples = 4
 shadow_map_size = 2048
@@ -22,7 +22,7 @@ gtao_enabled = false
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_partitions_gizmo = false
-render_chunk_bounds = true
+render_chunk_bounds = false
 chunk_size = 128
 tonemapping_state = "Cinematic"
 debug_view_state = "Off"
@@ -35,10 +35,10 @@ render_rt_gizmo = false
 noclip = false
 
 [player_pos.chunk]
-x = 243
-z = -1
+x = 73
+z = 70
 
 [player_pos.local]
-x = 78.993546
-y = 4.3969264
-z = 37.208717
+x = 56.014194
+y = 665.9415
+z = 81.74285

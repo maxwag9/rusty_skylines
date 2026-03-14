@@ -7,9 +7,6 @@ use crate::resources::{Time, Uniforms};
 use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::fs;
-use std::path::PathBuf;
 use wgpu::TextureFormat::{R32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
 use wgpu_render_manager::renderer::RenderManager;
@@ -99,12 +96,6 @@ pub struct MeshBuffers {
     pub vertex: Buffer,
     pub index: Buffer,
     pub index_count: u32,
-}
-
-#[derive(Clone)]
-pub struct ShaderAsset {
-    pub _path: PathBuf,
-    pub module: ShaderModule,
 }
 pub struct ShadowSamplers {
     pub shadow_sampler: Sampler,
@@ -340,19 +331,7 @@ pub fn make_dummy_buf(device: &Device) -> Buffer {
     })
 }
 
-pub fn load_shader(device: &Device, path: &PathBuf, label: &str) -> anyhow::Result<ShaderAsset> {
-    let src = fs::read_to_string(path)?;
-    let module = device.create_shader_module(ShaderModuleDescriptor {
-        label: Some(label),
-        source: ShaderSource::Wgsl(Cow::Owned(src)),
-    });
-    let asset = ShaderAsset {
-        _path: path.clone(),
-        module,
-    };
-    Ok(asset)
-}
-
+pub const COLOR_FORMAT: TextureFormat = Rgba16Float;
 pub fn create_msaa_targets(
     device: &Device,
     config: &SurfaceConfiguration,
@@ -368,7 +347,7 @@ pub fn create_msaa_targets(
         mip_level_count: 1,
         sample_count: samples,
         dimension: TextureDimension::D2,
-        format: Rgba16Float,
+        format: COLOR_FORMAT,
         usage: TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });

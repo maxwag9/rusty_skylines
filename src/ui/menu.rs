@@ -3,6 +3,7 @@ use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
+use wgpu_text::TextBrush;
 
 #[derive(Debug)]
 pub struct Menu {
@@ -38,7 +39,12 @@ impl Menu {
         })
     }
 
-    pub fn rebuild_layer_cache_index(&mut self, layer_index: usize, runtime: &UiRuntimes) {
+    pub fn rebuild_layer_cache_index(
+        &mut self,
+        brush: &TextBrush,
+        layer_index: usize,
+        runtime: &UiRuntimes,
+    ) {
         let (before, rest) = self.layers.split_at_mut(layer_index);
         let (layer, after) = rest.split_first_mut().unwrap();
 
@@ -53,7 +59,7 @@ impl Menu {
         init_cache_structure(layer);
 
         if dirty.texts {
-            rebuild_text_cache(layer, &mut rebuilt, runtime);
+            rebuild_text_cache(brush, layer, &mut rebuilt, runtime);
         }
 
         if dirty.circles {

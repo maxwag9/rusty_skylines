@@ -40,7 +40,7 @@ elements:
     id: setting_text
     x: 0.02
     y: 0.0
-    px: 0.008
+    pt: 15.0
     color:
       - 1.0
       - 1.0

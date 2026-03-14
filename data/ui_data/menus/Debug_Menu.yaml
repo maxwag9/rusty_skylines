@@ -8,7 +8,7 @@ layers:
         actions: [ ]
         x: 0.00214113
         y: 0.005321429
-        px: 0.013733757
+        pt: 15.0
         color:
           - 1.0
           - 0.0
@@ -20,7 +20,7 @@ layers:
         actions: [ ]
         x: 0.0008250045
         y: 0.070285715
-        px: 0.009507986
+        pt: 15.0
         color:
           - 1.0
           - 0.0
@@ -32,7 +32,7 @@ layers:
         actions: [ ]
         x: 0.0008250045
         y: 0.095
-        px: 0.009507986
+        pt: 15.0
         color:
           - 1.0
           - 0.2
@@ -44,7 +44,7 @@ layers:
         actions: [ ]
         x: 0.0008250045
         y: 0.11657142
-        px: 0.009507986
+        pt: 15.0
         color:
           - 1.0
           - 0.0
@@ -56,7 +56,7 @@ layers:
         actions: [ ]
         x: 0.0008250045
         y: 0.13942835
-        px: 0.009507986
+        pt: 15.0
         color:
           - 1.0
           - 0.0
@@ -68,7 +68,7 @@ layers:
         actions: [ ]
         x: 0.001895523
         y: 0.0274163
-        px: 0.013205536
+        pt: 15.0
         color:
           - 0.3
           - 0.5
@@ -80,7 +80,7 @@ layers:
         actions: [ ]
         x: 0.001895523
         y: 0.046987172
-        px: 0.013205536
+        pt: 15.0
         color:
           - 0.0
           - 0.5
@@ -92,7 +92,7 @@ layers:
         actions: [ ]
         x: 0.001895523
         y: 0.15898716
-        px: 0.010564429
+        pt: 15.0
         color:
           - 0.0
           - 0.3
@@ -176,46 +176,3 @@ layers:
               - 1.0
               - 1.0
               - 1.0
-#- name: random_crap
-#  order: 1
-#  elements:
-#    - !Advanced
-#      name: checkbox0
-#      ap_name: checkbox_ticked
-#      setting:
-#        key: show_world
-#        op: toggle
-#        true_ap: checkbox_ticked
-#        false_ap: checkbox_unticked
-#      x: 0.5
-#      y: 0.5
-#      scale: 2.0
-#      editable: false
-#      active: false
-#    - !Rect
-#      id: test_rect
-#      actions: [ ]
-#      x: 0.40123445
-#      y: 0.38800225
-#      w: 0.019999998
-#      h: 0.03
-#      rotation: 30.0
-#      color:
-#        - 1.0
-#        - 0.0
-#        - 0.0
-#        - 1.0
-#      border_color:
-#        - 0.0
-#        - 1.0
-#        - 0.0
-#        - 1.0
-#      texture: null
-#      roundness: 0.0
-#      border_thickness_percentage: 0.1
-#      fade: 0.0
-#      misc:
-#        active: false
-#        pressable: true
-#        editable: true
-#  active: false

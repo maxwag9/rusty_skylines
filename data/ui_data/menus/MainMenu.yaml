@@ -10,6 +10,7 @@ layers:
         y: 0.4
         w: 0.2
         h: 0.3
+        rotation: 0.0
         color:
           - 0.01
           - 0.01
@@ -36,9 +37,9 @@ layers:
           - on:r set(override_mode, false)
           - on:r close_all_menus
           - on:r open_menu(Debug_Menu)
-        x: 0.45
+        x: 0.5
         y: 0.3
-        px: 0.02
+        pt: 20.0
         color:
           - 1.0
           - 1.0
@@ -52,38 +53,29 @@ layers:
       - !Text
         id: settings_text
         actions:
-          #- on:r set(show_world, false)
           - on:r set(editor_mode, false)
           - on:r set(override_mode, false)
           - on:r close_all_menus
           - on:r open_menu(Settings)
-        x: 0.45
+        x: 0.5
         y: 0.35
-        px: 0.02
+        pt: 15.0
         color:
           - 1.0
           - 1.0
           - 1.0
           - 1.0
         text: Settings
-        misc:
-          active: true
-          pressable: true
-          editable: true
       - !Text
         id: exit_text
         actions:
           - on:r exit
-        x: 0.45
-        y: 0.40
-        px: 0.02
+        x: 0.5
+        y: 0.4
+        pt: 15.0
         color:
           - 0.1
           - 0.1
           - 1.0
           - 1.0
         text: Exit Game
-        misc:
-          active: true
-          pressable: true
-          editable: true

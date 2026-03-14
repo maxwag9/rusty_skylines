@@ -1,10 +1,13 @@
+use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
 use crate::ui::input::{Input, Mouse};
 use crate::ui::menu::Menu;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_edit_manager::{TextEditCommand, UiEditManager};
 use crate::ui::ui_touch_manager::{EditorTouchExtension, ElementRef};
 use crate::ui::vertex::{ElementKind, LayerDirty, UiButtonText, UiElement};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::ops::Range;
+use winit::keyboard::NamedKey;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MouseSnapshot {
@@ -128,31 +131,36 @@ pub(crate) fn process_text_editing_input(
 fn handle_mouse_caret_selection(
     editor: &mut EditorTouchExtension,
     mouse_snapshot: MouseSnapshot,
-    text: &mut UiButtonText,
+    t: &mut UiButtonText,
 ) -> bool {
     let mx = mouse_snapshot.mx;
     let my = mouse_snapshot.my;
-
-    let x0 = text.x;
-    let y0 = text.y;
-    let x1 = x0 + text.natural_width;
-    let y1 = y0 + text.natural_height;
+    let pos = anchor_to(
+        t.anchor.unwrap_or(Anchor::Center),
+        [t.x, t.y],
+        t.width,
+        t.height,
+    );
+    let x0 = pos[0];
+    let y0 = pos[1];
+    let x1 = x0 + t.width;
+    let y1 = y0 + t.height;
 
     if mouse_snapshot.just_pressed && mx >= x0 && mx <= x1 && my >= y0 && my <= y1 {
-        let new_caret = pick_caret(text, mx);
-        text.caret = new_caret;
-        text.sel_start = new_caret;
-        text.sel_end = new_caret;
-        text.has_selection = false;
+        let new_caret = pick_caret(t, mx, my);
+        t.caret = new_caret;
+        t.sel_start = new_caret;
+        t.sel_end = new_caret;
+        t.has_selection = false;
         editor.dragging_text_selection = true;
         return true;
     }
 
     if editor.dragging_text_selection && mouse_snapshot.pressed {
-        let new_pos = pick_caret(text, mx);
-        text.sel_end = new_pos;
-        text.has_selection = text.sel_end != text.sel_start;
-        text.caret = new_pos;
+        let new_pos = pick_caret(t, mx, my);
+        t.sel_end = new_pos;
+        t.has_selection = t.sel_end != t.sel_start;
+        t.caret = new_pos;
         return true;
     }
 
@@ -238,9 +246,12 @@ fn handle_clipboard_commands(
         }
 
         Cmd::Paste => {
-            let Ok(clip) = clipboard.get_text() else {
-                println!("Failed to get text from clipboard");
-                return false;
+            let clip = match clipboard.get_text() {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("Failed to get text from clipboard: {:#?}", e);
+                    return false;
+                }
             };
 
             if clip.is_empty() {
@@ -286,11 +297,14 @@ fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut Laye
 
     if text.has_selection {
         let (l, r) = text.selection_range();
+        let byte_start = logical_to_byte(&text.char_spans, l);
+        let byte_end = logical_to_byte(&text.char_spans, r);
+
         if is_template_mode {
-            text.template.replace_range(l..r, "");
+            text.template.replace_range(byte_start..byte_end, "");
             text.text = text.template.clone();
         } else {
-            text.text.replace_range(l..r, "");
+            text.text.replace_range(byte_start..byte_end, "");
         }
         text.caret = l;
         text.clear_selection();
@@ -298,12 +312,13 @@ fn handle_backspace(input: &mut Input, text: &mut UiButtonText, dirty: &mut Laye
         return true;
     }
 
-    if text.caret > 0 {
+    if text.caret > 0 && text.caret <= text.char_spans.len() {
+        let span = text.char_spans[text.caret - 1].clone();
         if is_template_mode {
-            text.template.remove(text.caret - 1);
+            text.template.replace_range(span.clone(), "");
             text.text = text.template.clone();
         } else {
-            text.text.remove(text.caret - 1);
+            text.text.replace_range(span, "");
         }
         text.caret -= 1;
         dirty.mark_texts();
@@ -317,7 +332,10 @@ fn handle_character_input(
     text: &mut UiButtonText,
     dirty: &mut LayerDirty,
 ) -> bool {
-    if !input.repeat("char_repeat", !input.text_chars.is_empty()) {
+    if !input.repeat("char_repeat", !input.text_chars.is_empty())
+        && !input.named_just_pressed(NamedKey::Enter)
+        && !input.named_just_pressed(NamedKey::Tab)
+    {
         return false;
     }
 
@@ -327,7 +345,7 @@ fn handle_character_input(
         delete_selection(text, is_template_mode);
     }
 
-    insert_characters(text, &input.text_chars, is_template_mode);
+    insert_characters(text, input, is_template_mode);
     dirty.mark_texts();
 
     true
@@ -351,8 +369,31 @@ fn delete_selection(text: &mut UiButtonText, is_template_mode: bool) {
     text.clear_selection();
 }
 
-fn insert_characters(text: &mut UiButtonText, chars: &HashSet<String>, is_template_mode: bool) {
-    for s in chars {
+fn insert_characters(text: &mut UiButtonText, input: &mut Input, is_template_mode: bool) {
+    if input.named_just_pressed(NamedKey::Enter) {
+        if is_template_mode {
+            let bi = caret_to_byte(&text.template, text.caret);
+            text.template.insert_str(bi, "\n");
+            text.text = text.template.clone();
+        } else {
+            let bi = caret_to_byte(&text.text, text.caret);
+            text.text.insert_str(bi, "\n");
+        }
+        text.caret += 1;
+    }
+    if input.named_just_pressed(NamedKey::Tab) {
+        let tab = "    "; // 4 Spaces
+        if is_template_mode {
+            let bi = caret_to_byte(&text.template, text.caret);
+            text.template.insert_str(bi, tab);
+            text.text = text.template.clone();
+        } else {
+            let bi = caret_to_byte(&text.text, text.caret);
+            text.text.insert_str(bi, tab);
+        }
+        text.caret += tab.len();
+    }
+    for s in input.text_chars.iter() {
         if s.is_empty() {
             continue;
         }
@@ -381,9 +422,118 @@ fn handle_arrow_navigation(input: &mut Input, text: &mut UiButtonText, dirty: &m
         dirty.mark_texts();
     }
 
-    if input.action_repeat("Move Cursor Right") && text.caret < text.template.len() {
+    if input.action_repeat("Move Cursor Right") && text.caret < text.glyph_bounds.len() {
         text.caret += 1;
         dirty.mark_texts();
+    }
+
+    if input.action_repeat("Move Cursor Up") {
+        if let Some(new_caret) = navigate_vertical(text, true) {
+            text.caret = new_caret;
+            dirty.mark_texts();
+        }
+    }
+
+    if input.action_repeat("Move Cursor Down") {
+        if let Some(new_caret) = navigate_vertical(text, false) {
+            text.caret = new_caret;
+            dirty.mark_texts();
+        }
+    }
+}
+
+fn navigate_vertical(text: &UiButtonText, up: bool) -> Option<usize> {
+    if text.glyph_bounds.is_empty() {
+        return None;
+    }
+
+    let (caret_x, caret_y) = get_caret_position(text);
+
+    // Collect unique line Y values
+    let mut line_ys: Vec<f32> = Vec::new();
+    for rect in &text.glyph_bounds {
+        let y = rect.min.y;
+        if !line_ys.iter().any(|&ly| (ly - y).abs() < 0.5) {
+            line_ys.push(y);
+        }
+    }
+    line_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    // Find current line index
+    let current_line = line_ys.iter().position(|&y| (y - caret_y).abs() < 0.5)?;
+
+    // Find target line index
+    let target_line = if up {
+        current_line.checked_sub(1)?
+    } else {
+        let next = current_line + 1;
+        if next >= line_ys.len() {
+            return None;
+        }
+        next
+    };
+
+    let target_y = line_ys[target_line];
+
+    // Find the best caret position on target line at similar X
+    find_caret_at_x_on_line(text, caret_x, target_y)
+}
+
+fn get_caret_position(t: &UiButtonText) -> (f32, f32) {
+    if t.glyph_bounds.is_empty() {
+        let pos = anchor_to(
+            t.anchor.unwrap_or(Anchor::Center),
+            [t.x, t.y],
+            t.width,
+            t.height,
+        );
+        return pos.into();
+    }
+
+    if t.caret == 0 {
+        let rect = &t.glyph_bounds[0];
+        return (rect.min.x, rect.min.y);
+    }
+
+    if t.caret >= t.glyph_bounds.len() {
+        let rect = t.glyph_bounds.last().unwrap();
+        return (rect.max.x, rect.min.y);
+    }
+
+    let rect = &t.glyph_bounds[t.caret];
+    (rect.min.x, rect.min.y)
+}
+
+fn find_caret_at_x_on_line(text: &UiButtonText, target_x: f32, line_y: f32) -> Option<usize> {
+    let mut best_idx = 0;
+    let mut best_dist = f32::MAX;
+    let mut found = false;
+
+    for (i, rect) in text.glyph_bounds.iter().enumerate() {
+        if (rect.min.y - line_y).abs() > 0.5 {
+            continue;
+        }
+        found = true;
+
+        // Check left edge (caret before this glyph)
+        let dist_left = (rect.min.x - target_x).abs();
+        if dist_left < best_dist {
+            best_dist = dist_left;
+            best_idx = i;
+        }
+
+        // Check right edge (caret after this glyph)
+        let dist_right = (rect.max.x - target_x).abs();
+        if dist_right < best_dist {
+            best_dist = dist_right;
+            best_idx = i + 1;
+        }
+    }
+
+    if found {
+        Some(best_idx.min(text.glyph_bounds.len()))
+    } else {
+        None
     }
 }
 
@@ -403,13 +553,40 @@ fn handle_selection_collapse(input: &mut Input, text: &mut UiButtonText, dirty: 
     }
 }
 
-fn pick_caret(text: &UiButtonText, mx: f32) -> usize {
-    for (i, (_, gx1)) in text.glyph_bounds.iter().enumerate() {
-        if mx < *gx1 {
-            return i;
+fn pick_caret(text: &UiButtonText, mx: f32, my: f32) -> usize {
+    if text.glyph_bounds.is_empty() {
+        return 0;
+    }
+
+    let mut best_idx = 0;
+    let mut best_dist = f32::MAX;
+
+    for (i, rect) in text.glyph_bounds.iter().enumerate() {
+        let line_top = rect.min.y;
+        let line_bottom = rect.max.y;
+
+        if my >= line_top && my < line_bottom {
+            let glyph_center_x = (rect.min.x + rect.max.x) * 0.5;
+            if mx < glyph_center_x {
+                return i;
+            }
+            best_idx = i + 1;
+        }
+
+        let center_y = (rect.min.y + rect.max.y) * 0.5;
+        let dist = (my - center_y).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            let glyph_center_x = (rect.min.x + rect.max.x) * 0.5;
+            if mx < glyph_center_x {
+                best_idx = i;
+            } else {
+                best_idx = i + 1;
+            }
         }
     }
-    text.glyph_bounds.len()
+
+    best_idx.min(text.glyph_bounds.len())
 }
 
 fn caret_to_byte(text: &str, caret: usize) -> usize {
@@ -417,4 +594,14 @@ fn caret_to_byte(text: &str, caret: usize) -> usize {
         .nth(caret)
         .map(|(i, _)| i)
         .unwrap_or_else(|| text.len())
+}
+
+fn logical_to_byte(char_spans: &[Range<usize>], logical: usize) -> usize {
+    if logical == 0 || char_spans.is_empty() {
+        0
+    } else if logical >= char_spans.len() {
+        char_spans.last().map(|s| s.end).unwrap_or(0)
+    } else {
+        char_spans[logical].start
+    }
 }

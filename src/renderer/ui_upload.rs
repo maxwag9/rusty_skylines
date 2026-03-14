@@ -1,13 +1,17 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, UiRenderer};
 use crate::renderer::ui_text_rendering::{
-    Anchor, anchor_to_top_left, glyphs_to_vertices, render_corner_brackets, render_editor_caret,
-    render_editor_outline, render_selection,
+    Anchor, anchor_to, render_corner_brackets, render_editor_caret, render_editor_outline,
+    render_selection,
 };
 use crate::resources::Time;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 use wgpu::{BufferDescriptor, BufferUsages, Queue};
+use wgpu_text::glyph_brush::ab_glyph::Font;
+use wgpu_text::glyph_brush::{
+    BuiltInLineBreaker, Layout, OwnedSection, Section, Text, VerticalAlign,
+};
 
 pub fn upload_circles(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut RuntimeLayer) {
     let circle_params: Vec<CircleParams> = layer.cache.iter_circles().cloned().collect();
@@ -209,216 +213,118 @@ pub fn upload_text(
     touch_manager: &UiTouchManager,
     menu_name: &String,
 ) {
-    let text_vertices = build_text_vertices(
-        ui_renderer,
-        layer,
-        time_system,
-        touch_manager,
-        menu_name,
-        queue,
-    );
-    let text_bytes = bytemuck::cast_slice(&text_vertices);
+    let estimated = layer.cache.elements.len();
+    let mut sections: Vec<OwnedSection> = Vec::with_capacity(estimated);
+    let mut bounds_map: HashMap<String, (f32, f32)> = HashMap::with_capacity(estimated);
+    let mut vertices: Vec<UiVertexText> = Vec::new();
 
-    if !text_vertices.is_empty() {
-        let need_new = layer
-            .gpu
-            .text_vbo
-            .as_ref()
-            .map(|b| b.size() < text_bytes.len() as u64)
-            .unwrap_or(true);
-
-        if need_new {
-            layer.gpu.text_vbo = Some(ui_renderer.device.create_buffer(&BufferDescriptor {
-                label: Some(&format!("{}_text_vbo", layer.name)),
-                size: text_bytes.len() as u64,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-        }
-        queue.write_buffer(layer.gpu.text_vbo.as_ref().unwrap(), 0, text_bytes);
-    }
-    layer.gpu.text_count = text_vertices.len() as u32;
-}
-
-pub fn build_text_vertices(
-    ui_renderer: &mut UiRenderer,
-    layer: &mut RuntimeLayer,
-    time_system: &Time,
-    touch_manager: &UiTouchManager,
-    menu_name: &String,
-    queue: &Queue,
-) -> Vec<UiVertexText> {
-    let mut text_vertices: Vec<UiVertexText> = Vec::new();
-    let caret_by_id: HashMap<String, usize> = layer
-        .iter_texts()
-        .map(|t| (t.id.clone(), t.caret))
-        .collect();
     for tp in layer
         .cache
         .elements
         .iter_mut()
         .filter_map(UiElementCache::as_text_mut)
     {
-        // ensure atlas has this size
-        if !ui_renderer
-            .pipelines
-            .text_atlas
-            .metrics
-            .contains_key(&tp.px)
-        {
-            ui_renderer
-                .pipelines
-                .text_atlas
-                .ensure_px_size(&ui_renderer.device, queue, tp.px)
-                .expect("failed to ensure text atlas size");
-            // quick sanity: atlas must have some pixels
-            debug_assert!(
-                ui_renderer
-                    .pipelines
-                    .text_atlas
-                    .cpu_atlas
-                    .iter()
-                    .any(|&b| b != 0),
-                "text atlas empty after rasterize"
-            );
-            ui_renderer.rebuild_text_bind_group()
-        }
+        let layout = Layout::default()
+            .v_align(VerticalAlign::Top)
+            .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker);
+        let text = tp.text.replace("\\n", "\n");
 
-        let pad = 4.0; // same as your selection outline pad
-
-        let maybe_caret = caret_by_id.get(&tp.id).copied();
-
-        let caret_index = maybe_caret.unwrap_or(tp.text.len());
-        tp.glyph_bounds.clear();
-
-        // ---- measure + render glyphs ----
-        let mut min_x = f32::MAX;
-        let mut min_y = f32::MAX;
-        let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
-
-        let metrics = &ui_renderer.pipelines.text_atlas.metrics[&tp.px];
-        let used_pos = anchor_to_top_left(
-            tp.anchor.unwrap_or(Anchor::TopLeft),
-            tp.pos,
-            0.0,
-            tp.natural_height,
+        let Some(font) = ui_renderer.brush.fonts().first() else {
+            continue;
+        };
+        let Some(px) = font.pt_to_px_scale(tp.pt) else {
+            continue;
+        };
+        let s = Section::default().with_layout(layout).add_text(
+            Text::new(&text)
+                .with_scale(px) // px -> font size in pixels
+                .with_color(tp.color),
         );
+        if let Some(rect) = ui_renderer.brush.glyph_bounds(&s) {
+            let (w, h) = (rect.width(), rect.height());
+            bounds_map.insert(tp.id.clone(), (w, h));
 
-        let text_top = used_pos[1] + (tp.natural_height * 0.5);
-        let baseline_y = text_top + metrics.ascent;
-        let mut pen_x = used_pos[0];
-
-        // find mutable original text if needed (for writing glyph bounds back)
-        let mut original_text: Option<&mut UiButtonText> = None;
-
-        for t in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-            if t.id == tp.id {
-                original_text = Some(t);
-                break;
-            }
-        }
-
-        if let Some(orig) = &mut original_text {
-            orig.glyph_bounds.clear();
-        }
-
-        // caret position tracker
-        let mut caret_x = pen_x;
-        let mut char_i = 0;
-
-        glyphs_to_vertices(
-            &ui_renderer.pipelines,
-            &mut text_vertices,
-            tp, // TextParams mutable ref
-            &mut char_i,
-            caret_index,
-            baseline_y,
-            &mut pen_x,
-            &mut caret_x,
-            &mut original_text,
-            &mut min_x,
-            &mut min_y,
-            &mut max_x,
-            &mut max_y,
-        );
-
-        // caret at end → last glyph right edge or pen_x
-        if caret_index == tp.text.len() {
-            if let Some((_, last_x1)) = tp.glyph_bounds.last() {
-                caret_x = *last_x1;
-            } else {
-                caret_x = tp.pos[0];
-            }
-        }
-
-        // ---- bounding box for the whole text ----
-        if max_x < min_x {
-            tp.natural_width = 0.0;
-            tp.natural_height = metrics.line_height + 2.0 * pad;
+            tp.width = w;
+            tp.height = h;
+            let pos = anchor_to(tp.anchor.unwrap_or(Anchor::Center), tp.pos, w, h);
+            let s = s.with_screen_position((pos[0], pos[1]));
+            sections.push(s.to_owned());
         } else {
-            let padded_min_x = min_x - pad;
-            let padded_max_x = max_x + pad;
-
-            tp.natural_width = padded_max_x - padded_min_x;
-            tp.natural_height = metrics.line_height + 2.0 * pad;
+            let s = s.with_screen_position(tp.pos);
+            sections.push(s.to_owned());
         }
+    }
 
-        // ---- write back natural_width/natural_height to UiButtonText ----
-        let mut being_edited = false;
-        let mut being_hovered = false;
-        let mut is_input_box = false;
-        if let Some(orig) = &mut original_text {
-            orig.natural_width = tp.natural_width;
-            orig.natural_height = tp.natural_height;
-            orig.ascent = metrics.ascent; // <-- use per-size ascent
-            being_edited = orig.being_edited;
-            being_hovered = orig.being_hovered;
-            is_input_box = orig.input_box
+    layer.gpu.text_sections = sections;
+    let layer_name = layer.name.clone();
+    for t in layer.iter_texts_mut() {
+        if let Some(&(w, h)) = bounds_map.get(&t.id) {
+            t.width = w;
+            t.height = h;
         }
-
-        // ---- selection / editor outlines / brackets etc ----
         let mut is_selected = false;
         if let Some(sel) = &touch_manager.selection.primary {
-            if sel.id == tp.id && sel.layer == layer.name && sel.menu == *menu_name {
+            if sel.id == t.id && sel.layer == layer_name && sel.menu == *menu_name {
                 is_selected = true;
             }
         }
-
-        if let Some(orig) = original_text {
-            render_selection(orig, min_y, max_y, &mut text_vertices);
+        let pos = anchor_to(
+            t.anchor.unwrap_or(Anchor::Center),
+            [t.x, t.y],
+            t.width,
+            t.height,
+        );
+        if is_selected && !t.being_edited {
+            render_corner_brackets(
+                pos[0],
+                pos[1],
+                pos[0] + t.width,
+                pos[1] + t.height,
+                &mut vertices,
+                t.being_hovered,
+            );
         }
+
+        render_selection(t, &mut vertices);
 
         // editor outline
-        if touch_manager.editor.enabled && !being_edited && !is_selected {
+        if touch_manager.editor.enabled && !t.being_edited && !is_selected {
+            let pad = 2.0;
             render_editor_outline(
-                min_x,
-                min_y,
-                max_x,
-                max_y,
-                &mut text_vertices,
+                pos[0],
+                pos[1],
+                pos[0] + t.width,
+                pos[1] + t.height,
+                &mut vertices,
                 pad,
-                being_hovered,
+                t.being_hovered,
             );
         }
-
-        // corner brackets
-        if is_selected && !being_edited {
-            render_corner_brackets(
-                min_x,
-                min_y,
-                max_x,
-                max_y,
-                &mut text_vertices,
-                being_hovered,
-            );
+        if t.being_edited || (t.input_box && is_selected) {
+            render_editor_caret(ui_renderer, t, &mut vertices, time_system);
         }
+    }
 
-        // caret rendering when editing
-        if being_edited || (is_input_box && is_selected) {
-            render_editor_caret(tp, caret_x, &mut text_vertices, metrics, time_system);
+    if !vertices.is_empty() {
+        let bytes = bytemuck::cast_slice(&vertices);
+        let need_new = layer
+            .gpu
+            .text_misc_vbo
+            .as_ref()
+            .map(|b| b.size() < bytes.len() as u64)
+            .unwrap_or(true);
+
+        if need_new {
+            layer.gpu.text_misc_vbo = Some(ui_renderer.device.create_buffer(&BufferDescriptor {
+                label: Some(&format!("{} Text Miscellaneous Stuff VBO", layer.name)),
+                size: bytes.len() as u64,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
         }
-    } // for tp
-
-    text_vertices
+        layer.gpu.text_misc_vertex_count = vertices.len() as u32;
+        queue.write_buffer(layer.gpu.text_misc_vbo.as_ref().unwrap(), 0, bytes);
+    } else {
+        layer.gpu.text_misc_vbo = None;
+    }
 }

@@ -87,7 +87,7 @@ impl RenderCore {
         let shader_watcher = ShaderWatcher::new().ok();
 
         let mut rt_subsystem = RTSubsystem::new(device);
-        let ui_renderer = UiRenderer::new(device, config.format, size, settings.msaa_samples)
+        let ui_renderer = UiRenderer::new(device, config, size, settings.msaa_samples)
             .expect("Failed to create UI pipelines");
         let terrain_renderer = TerrainRenderSubsystem::new();
         let road_renderer = RoadRenderSubsystem::new(device);
@@ -153,6 +153,11 @@ impl RenderCore {
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.render_manager.invalidate_bind_groups();
         ui.resize(self.old_window_size, new_size);
+        self.ui_renderer.brush.resize_view(
+            new_size.width as f32,
+            new_size.height as f32,
+            &self.queue,
+        );
     }
 
     pub(crate) fn render(
@@ -855,7 +860,6 @@ impl RenderCore {
             &self.pipelines.resolved.hdr,
             self.msaa_samples,
         );
-
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (UI)"),
             color_attachments: &[Some(color_attachment)],
@@ -1087,6 +1091,7 @@ impl RenderCore {
         self.ui_renderer.render(
             &mut self.render_manager,
             pass,
+            &self.queue,
             ui_loader,
             &self.pipelines,
             settings,
@@ -1108,12 +1113,10 @@ impl RenderCore {
             .update_define("MSAA".to_string(), self.msaa_samples > 1);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
-        self.ui_renderer.pipelines.rebuild_pipelines();
         self.render_manager.invalidate_bind_groups();
     }
 
     fn reload_all_shaders(&mut self, changed: &[PathBuf]) -> anyhow::Result<()> {
-        self.ui_renderer.reload_shaders()?;
         self.render_manager.reload_render_shaders(changed);
         self.render_manager.compute_system().invalidate_cache();
         Ok(())

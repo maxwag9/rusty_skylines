@@ -395,7 +395,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         bottom_left_offset: [0.0, 0.0],
         top_right_offset: [0.0, 0.0],
         bottom_right_offset: [0.0, 0.0],
-        px: rng.next_f32_range(0.0, 0.1),
+        pt: rng.next_f32_range(4.0, 50.1),
         color: [
             rng.next_f32_range(0.0, 2.0),
             rng.next_f32_range(0.0, 2.0),

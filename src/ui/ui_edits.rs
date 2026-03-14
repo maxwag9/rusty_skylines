@@ -125,7 +125,7 @@ pub fn set_element_size(menus: &mut HashMap<String, Menu>, element_ref: &Element
             UiElement::Text(t)
                 if element_ref.kind == ElementKind::Text && t.id == element_ref.id =>
             {
-                t.px = size.max(4.0) as u16;
+                t.pt = size.max(4.0);
                 layer.dirty.mark_texts();
             }
 

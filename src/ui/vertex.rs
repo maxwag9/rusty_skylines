@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
+use wgpu_text::glyph_brush::OwnedSection;
+use wgpu_text::glyph_brush::ab_glyph::Rect;
 use winit::dpi::PhysicalSize;
 
 #[repr(C)]
@@ -54,8 +56,9 @@ pub struct LayerGpu {
     pub rect_ssbo: Option<Buffer>,
     pub rect_count: u32,
 
-    pub text_vbo: Option<Buffer>, // UiVertexText stream
-    pub text_count: u32,
+    pub text_sections: Vec<OwnedSection>,
+    pub text_misc_vbo: Option<Buffer>,
+    pub text_misc_vertex_count: u32,
 }
 
 impl Default for LayerGpu {
@@ -74,8 +77,10 @@ impl Default for LayerGpu {
             poly_edge_ssbo: None,
             rect_ssbo: None,
             rect_count: 0,
-            text_vbo: None,
-            text_count: 0,
+
+            text_sections: vec![],
+            text_misc_vbo: None,
+            text_misc_vertex_count: 0,
         }
     }
 }
@@ -717,7 +722,7 @@ impl UiElement {
     pub fn resize(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {
-                t.px = (t.original_px as f32 * scale).round() as u16;
+                t.pt = t.original_pt * scale;
             }
             UiElement::Circle(c) => {
                 c.radius = c.original_radius * scale;
@@ -1102,7 +1107,6 @@ pub struct RectGpu {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct UiVertexText {
     pub pos: [f32; 2],
-    pub uv: [f32; 2],
     pub color: [f32; 4],
 }
 impl UiVertexText {
@@ -1119,11 +1123,6 @@ impl UiVertexText {
                 VertexAttribute {
                     offset: size_of::<[f32; 2]>() as _,
                     shader_location: 1,
-                    format: VertexFormat::Float32x2,
-                },
-                VertexAttribute {
-                    offset: (size_of::<[f32; 2]>() * 2) as _,
-                    shader_location: 2,
                     format: VertexFormat::Float32x4,
                 },
             ],
@@ -1227,6 +1226,9 @@ impl RuntimeLayer {
 
     pub fn iter_texts(&self) -> impl Iterator<Item = &UiButtonText> {
         self.elements.iter().filter_map(UiElement::as_text)
+    }
+    pub fn iter_texts_mut(&mut self) -> impl Iterator<Item = &mut UiButtonText> {
+        self.elements.iter_mut().filter_map(UiElement::as_text_mut)
     }
     pub fn iter_rects(&self) -> impl Iterator<Item = &UiButtonRect> {
         self.elements.iter().filter_map(UiElement::as_rect)
@@ -1520,7 +1522,7 @@ impl UiButtonText {
     }
 }
 // --- all possible button shapes ---
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct UiButtonText {
     pub id: String,
     pub actions: Vec<String>,
@@ -1531,16 +1533,15 @@ pub struct UiButtonText {
     pub bottom_left_offset: [f32; 2],
     pub top_right_offset: [f32; 2],
     pub bottom_right_offset: [f32; 2],
-    pub px: u16,
-    pub original_px: u16,
+    pub pt: f32,
+    pub original_pt: f32,
     pub color: [f32; 4],
     pub text: String,
     pub template: String,
     pub misc: MiscButtonSettings,
 
-    pub natural_width: f32,
-    pub natural_height: f32,
-    pub ascent: f32,
+    pub width: f32,
+    pub height: f32,
     pub being_edited: bool,
     pub caret: usize,
     pub being_hovered: bool,
@@ -1549,7 +1550,8 @@ pub struct UiButtonText {
     pub sel_start: usize, // selection start index
     pub sel_end: usize,   // selection end index
     pub has_selection: bool,
-    pub glyph_bounds: Vec<(f32, f32)>,
+    pub glyph_bounds: Vec<Rect>,
+    pub char_spans: Vec<std::ops::Range<usize>>, // byte range per logical glyph
 
     pub input_box: bool,
     pub anchor: Option<Anchor>,
@@ -1642,8 +1644,8 @@ impl UiButtonText {
                 scale * t.bottom_right_offset[0],
                 scale * t.bottom_right_offset[1],
             ],
-            px: (scale * t.px) as u16,
-            original_px: (scale * t.px) as u16,
+            pt: t.pt,
+            original_pt: t.pt,
             color: t.color,
             text: t.text.clone(),
             template: t.text,
@@ -1654,9 +1656,8 @@ impl UiButtonText {
                 pressable: t.misc.pressable,
                 editable: t.misc.editable,
             },
-            natural_width: 50.0,
-            natural_height: 20.0,
-            ascent: 10.0,
+            width: 50.0,
+            height: 20.0,
             being_edited: false,
             caret: length,
             being_hovered: false,
@@ -1665,6 +1666,7 @@ impl UiButtonText {
             sel_end: 0,
             has_selection: false,
             glyph_bounds: vec![],
+            char_spans: vec![],
             input_box: t.input_box,
             anchor: t.anchor,
         }
@@ -1697,7 +1699,7 @@ impl UiButtonText {
                 self.bottom_right_offset[1] / scale,
             ],
 
-            px: self.px as f32 / scale,
+            pt: self.pt,
             color: self.color,
             text: self.template.clone(),
             misc: self.misc.to_yaml(),
@@ -1971,15 +1973,14 @@ impl Default for UiButtonText {
             bottom_left_offset: [0.0; 2],
             top_right_offset: [0.0; 2],
             bottom_right_offset: [0.0; 2],
-            px: 14,
-            original_px: 14,
+            pt: 14.0,
+            original_pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
             text: "".into(),
             template: "".to_string(),
             misc: MiscButtonSettings::default(),
-            natural_width: 50.0,
-            natural_height: 20.0,
-            ascent: 10.0,
+            width: 50.0,
+            height: 20.0,
             being_edited: false,
             caret: 0,
             being_hovered: false,
@@ -1988,6 +1989,7 @@ impl Default for UiButtonText {
             sel_end: 0,
             has_selection: false,
             glyph_bounds: vec![],
+            char_spans: vec![],
             input_box: false,
             anchor: None,
         }
@@ -2179,7 +2181,7 @@ pub struct UiButtonTextYaml {
     pub bottom_right_offset: [f32; 2],
 
     #[serde(skip_serializing_if = "is_default")]
-    pub px: f32,
+    pub pt: f32,
 
     pub color: [f32; 4],
     pub text: String,
@@ -2208,7 +2210,7 @@ impl Default for UiButtonTextYaml {
             bottom_left_offset: [0.0; 2],
             top_right_offset: [0.0; 2],
             bottom_right_offset: [0.0; 2],
-            px: 0.0,
+            pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
             text: String::new(),
             misc: MiscButtonSettingsYaml::default(),

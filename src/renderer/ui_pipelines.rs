@@ -1,9 +1,6 @@
-use crate::helpers::paths::shader_dir;
-use crate::renderer::pipelines::load_shader;
 use crate::renderer::ui::ScreenUniform;
-use crate::renderer::ui_text_rendering::TextAtlas;
-use crate::ui::helper::{make_pipeline, make_storage_layout, make_uniform_layout};
-use crate::ui::vertex::{UiVertexPoly, UiVertexText};
+use crate::ui::helper::{make_storage_layout, make_uniform_layout};
+use crate::ui::vertex::UiVertexPoly;
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::*;
 use winit::dpi::PhysicalSize;
@@ -18,34 +15,13 @@ pub struct UiPipelines {
     pub msaa_samples: u32,
 
     format: TextureFormat,
-    pub circle_pipeline: RenderPipeline,
-    pub outline_pipeline: RenderPipeline,
-    pub polygon_pipeline: RenderPipeline,
-    pub handle_pipeline: RenderPipeline,
     pub quad_buffer: Buffer,
     pub handle_quad_buffer: Buffer,
-    pub glow_pipeline: RenderPipeline,
     pub handle_layout: BindGroupLayout,
     pub circle_layout: BindGroupLayout,
     pub rect_layout: BindGroupLayout,
-    pub text_atlas: TextAtlas,
-    pub text_pipeline: RenderPipeline,
-    pub text_layout: BindGroupLayout,
-    pub text_bind_group: BindGroup,
     pub outline_layout: BindGroupLayout,
-    pub text_shader: ShaderModule,
-    pub circle_shader: ShaderModule,
-    pub outline_shader: ShaderModule,
-    pub polygon_shader: ShaderModule,
-    pub handle_shader: ShaderModule,
-    pub glow_shader: ShaderModule,
-    pub text_pipeline_layout: PipelineLayout,
-    pub circle_pipeline_layout: PipelineLayout,
-    pub glow_pipeline_layout: PipelineLayout,
-    pub handle_pipeline_layout: PipelineLayout,
     pub polygon_layout: BindGroupLayout,
-    pub polygon_pipeline_layout: PipelineLayout,
-    pub outline_pipeline_layout: PipelineLayout,
     pub good_blend: Option<BlendState>,
     pub additive_blend: BlendState,
 }
@@ -65,10 +41,11 @@ pub struct Background {
 impl UiPipelines {
     pub fn new(
         device: &Device,
-        format: TextureFormat,
+        config: &SurfaceConfiguration,
         msaa_samples: u32,
         size: PhysicalSize<u32>,
     ) -> anyhow::Result<Self> {
+        let format = config.format;
         let handle_quad_vertices = [
             UiVertexPoly {
                 pos: [-3.0, -3.0],
@@ -175,8 +152,6 @@ impl UiPipelines {
             }],
         });
 
-        let text_shader =
-            load_shader(&device, &shader_dir().join("text.wgsl"), "UI Text Shader")?.module;
         let text_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Text Layout"),
             entries: &[
@@ -198,59 +173,8 @@ impl UiPipelines {
                 },
             ],
         });
-        let text_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Text Pipeline Layout"),
-            bind_group_layouts: &[&uniform_layout, &text_layout],
-            immediate_size: 0,
-        });
-        let text_pipeline = build_pipeline(
-            device,
-            "UI Text Pipeline",
-            &text_pipeline_layout,
-            &text_shader,
-            &[UiVertexText::desc()],
-            format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleList,
-            msaa_samples,
-        );
 
-        let circle_shader = load_shader(
-            &device,
-            &shader_dir().join("ui_circle.wgsl"),
-            "UI Circle Shader",
-        )?
-        .module;
-        let outline_shader = load_shader(
-            &device,
-            &shader_dir().join("ui_shape_outline.wgsl"),
-            "UI Outline Shader",
-        )?
-        .module;
-        let handle_shader = load_shader(
-            &device,
-            &shader_dir().join("ui_handle.wgsl"),
-            "UI Handle Shader",
-        )?
-        .module;
         let circle_layout = make_storage_layout(device, "Circle Layout");
-        let circle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Circle Pipeline Layout"),
-            bind_group_layouts: &[&uniform_layout, &circle_layout],
-            immediate_size: 0,
-        });
-
-        let circle_pipeline = build_pipeline(
-            device,
-            "UI Circle Pipeline",
-            &circle_pipeline_layout,
-            &circle_shader,
-            &[UiVertexPoly::desc()],
-            format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleStrip,
-            msaa_samples,
-        );
 
         let good_blend = Some(BlendState {
             color: BlendComponent {
@@ -292,91 +216,12 @@ impl UiPipelines {
             label: Some("Outline Layout"),
             entries: ssbo_entries,
         });
-        let outline_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Outline Pipeline Layout"),
-            bind_group_layouts: &[&uniform_layout, &outline_layout],
-            immediate_size: 0,
-        });
-
-        let outline_pipeline = make_pipeline(
-            device,
-            "UI Outline Pipeline",
-            &outline_pipeline_layout,
-            &outline_shader,
-            "vs_main",
-            "fs_main",
-            &[UiVertexPoly::desc()],
-            format,
-            good_blend,
-            PrimitiveTopology::TriangleStrip,
-            MultisampleState {
-                count: msaa_samples,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-        );
         let handle_layout = make_storage_layout(device, "Handle Layout");
-        let handle_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Handle Pipeline Layout"),
-            bind_group_layouts: &[&uniform_layout, &handle_layout],
-            immediate_size: 0,
-        });
-
-        let handle_pipeline = build_pipeline(
-            device,
-            "UI Handle Pipeline",
-            &handle_pipeline_layout,
-            &handle_shader,
-            &[UiVertexPoly::desc()],
-            format,
-            good_blend,
-            PrimitiveTopology::TriangleStrip,
-            msaa_samples,
-        );
-        let polygon_shader = load_shader(
-            &device,
-            &shader_dir().join("ui_polygon.wgsl"),
-            "UI Polygon Shader",
-        )?
-        .module;
         let polygon_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("polygon_layout"),
             entries: ssbo_entries,
         });
 
-        let polygon_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("UI Polygon Pipeline Layout"),
-            bind_group_layouts: &[
-                &uniform_layout, // group(0) -> ScreenUniform
-                &polygon_layout, // group(1) -> polygon_infos, polygon_edges
-            ],
-            immediate_size: 0,
-        });
-
-        let polygon_pipeline = build_pipeline(
-            device,
-            "UI Polygon Pipeline",
-            &polygon_pipeline_layout,
-            &polygon_shader,
-            &[UiVertexPoly::desc()],
-            format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleStrip,
-            msaa_samples,
-        );
-
-        let glow_shader = load_shader(
-            &device,
-            &shader_dir().join("ui_circle_glow.wgsl"),
-            "UI Glow Shader",
-        )?
-        .module;
-
-        let glow_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("UI Glow Pipeline Layout"),
-            bind_group_layouts: &[&uniform_layout, &circle_layout],
-            immediate_size: 0,
-        });
         let additive_blend = BlendState {
             color: BlendComponent {
                 src_factor: BlendFactor::One,
@@ -389,18 +234,6 @@ impl UiPipelines {
                 operation: BlendOperation::Add,
             },
         };
-
-        let glow_pipeline = build_pipeline(
-            device,
-            "UI Glow Pipeline",
-            &glow_pipeline_layout,
-            &glow_shader,
-            &[UiVertexPoly::desc()],
-            format,
-            Some(additive_blend),
-            PrimitiveTopology::TriangleStrip,
-            msaa_samples,
-        );
 
         let dummy_tex = device.create_texture(&TextureDescriptor {
             label: Some("Dummy Text Atlas"),
@@ -425,21 +258,6 @@ impl UiPipelines {
             ..Default::default()
         });
 
-        let text_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Text Atlas Bind Group"),
-            layout: &text_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&dummy_view),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(&dummy_sampler),
-                },
-            ],
-        });
-
         Ok(Self {
             device: device.clone(),
             uniform_layout,
@@ -451,185 +269,23 @@ impl UiPipelines {
 
             quad_buffer,
 
-            circle_shader,
             circle_layout,
-            circle_pipeline_layout,
-            circle_pipeline,
 
-            outline_shader,
             outline_layout,
-            outline_pipeline_layout,
-            outline_pipeline,
 
-            polygon_shader,
             polygon_layout,
-            polygon_pipeline_layout,
-            polygon_pipeline,
 
             handle_quad_buffer,
-            handle_shader,
             handle_layout,
-            handle_pipeline_layout,
-            handle_pipeline,
-
-            glow_shader,
-            glow_pipeline_layout,
-            glow_pipeline,
-
-            text_atlas: TextAtlas::new(device, (1024, 1024)),
-            text_shader,
-            text_layout,
-            text_pipeline_layout,
-            text_pipeline,
-
-            text_bind_group,
 
             additive_blend,
             good_blend,
             rect_layout,
         })
     }
-
-    pub(crate) fn rebuild_pipelines(&mut self) {
-        let samples = self.msaa_samples;
-        self.text_pipeline = build_pipeline(
-            &self.device,
-            "UI Text Pipeline",
-            &self.text_pipeline_layout,
-            &self.text_shader,
-            &[UiVertexText::desc()],
-            self.format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleList,
-            samples,
-        );
-        self.circle_pipeline = build_pipeline(
-            &self.device,
-            "UI Circle Pipeline",
-            &self.circle_pipeline_layout,
-            &self.circle_shader,
-            &[UiVertexPoly::desc()],
-            self.format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleStrip,
-            samples,
-        );
-        self.glow_pipeline = build_pipeline(
-            &self.device,
-            "UI Glow Pipeline",
-            &self.glow_pipeline_layout,
-            &self.glow_shader,
-            &[UiVertexPoly::desc()],
-            self.format,
-            Some(self.additive_blend),
-            PrimitiveTopology::TriangleStrip,
-            samples,
-        );
-        self.handle_pipeline = build_pipeline(
-            &self.device,
-            "UI Handle Pipeline",
-            &self.handle_pipeline_layout,
-            &self.handle_shader,
-            &[UiVertexPoly::desc()],
-            self.format,
-            self.good_blend,
-            PrimitiveTopology::TriangleStrip,
-            samples,
-        );
-        self.outline_pipeline = build_pipeline(
-            &self.device,
-            "UI Outline Pipeline",
-            &self.outline_pipeline_layout,
-            &self.outline_shader,
-            &[UiVertexPoly::desc()],
-            self.format,
-            self.good_blend,
-            PrimitiveTopology::TriangleStrip,
-            samples,
-        );
-        self.polygon_pipeline = build_pipeline(
-            &self.device,
-            "UI Polygon Pipeline",
-            &self.polygon_pipeline_layout,
-            &self.polygon_shader,
-            &[UiVertexPoly::desc()],
-            self.format,
-            Some(BlendState::ALPHA_BLENDING),
-            PrimitiveTopology::TriangleStrip,
-            samples,
-        );
-    }
-
-    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.text_shader = load_shader(
-            &self.device,
-            &shader_dir().join("text.wgsl"),
-            "UI Text Shader",
-        )?
-        .module;
-        self.circle_shader = load_shader(
-            &self.device,
-            &shader_dir().join("ui_circle.wgsl"),
-            "UI Circle Shader",
-        )?
-        .module;
-        self.outline_shader = load_shader(
-            &self.device,
-            &shader_dir().join("ui_shape_outline.wgsl"),
-            "UI Outline Shader",
-        )?
-        .module;
-        self.handle_shader = load_shader(
-            &self.device,
-            &shader_dir().join("ui_handle.wgsl"),
-            "UI Handle Shader",
-        )?
-        .module;
-        self.polygon_shader = load_shader(
-            &self.device,
-            &shader_dir().join("ui_polygon.wgsl"),
-            "UI Polygon Shader",
-        )?
-        .module;
-        self.glow_shader = load_shader(
-            &self.device,
-            &shader_dir().join("ui_circle_glow.wgsl"),
-            "UI Glow Shader",
-        )?
-        .module;
-
-        self.rebuild_pipelines();
-        Ok(())
-    }
 }
 
-fn build_pipeline(
-    device: &Device,
-    label: &str,
-    layout: &PipelineLayout,
-    shader: &ShaderModule,
-    buffers: &[VertexBufferLayout],
-    format: TextureFormat,
-    blend: Option<BlendState>,
-    topology: PrimitiveTopology,
-    samples: u32,
-) -> RenderPipeline {
-    make_pipeline(
-        device,
-        label,
-        layout,
-        shader,
-        "vs_main",
-        "fs_main",
-        buffers,
-        format,
-        blend,
-        topology,
-        multisample_state(samples),
-    )
-}
-
-fn multisample_state(samples: u32) -> MultisampleState {
+pub fn multisample_state(samples: u32) -> MultisampleState {
     MultisampleState {
         count: samples,
         mask: !0,

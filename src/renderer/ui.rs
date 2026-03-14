@@ -1,8 +1,8 @@
 use crate::data::Settings;
-use crate::helpers::paths::shader_dir;
-use crate::renderer::pipelines::Pipelines;
+use crate::helpers::paths::{data_dir, shader_dir};
+use crate::renderer::pipelines::{COLOR_FORMAT, Pipelines};
 use crate::renderer::render_passes::color_target;
-use crate::renderer::ui_pipelines::{Background, UiPipelines};
+use crate::renderer::ui_pipelines::{Background, UiPipelines, multisample_state};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
 use crate::resources::Time;
@@ -13,10 +13,13 @@ use crate::ui::vertex::{
     PolygonEdgeGpu, PolygonInfoGpu, RuntimeLayer, UiButtonPolygon, UiElement, UiVertexPoly,
     UiVertexText,
 };
+use std::fs;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
+use wgpu_text::glyph_brush::ab_glyph::FontArc;
+use wgpu_text::{BrushBuilder, TextBrush};
 use winit::dpi::PhysicalSize;
 
 pub const PAD: i32 = 1;
@@ -158,16 +161,15 @@ impl Default for PolygonOutlineParams {
 #[derive(Debug, Clone)]
 pub struct TextParams {
     pub pos: [f32; 2],
-    pub px: u16,
+    pub pt: f32,
     pub color: [f32; 4],
     pub id_hash: f32,
     pub misc: [f32; 4], // [active, touched_time, is_down, id_hash]
     pub text: String,
-    pub natural_width: f32,
-    pub natural_height: f32,
+    pub width: f32,
+    pub height: f32,
     pub id: String,
     pub caret: usize,
-    pub glyph_bounds: Vec<(f32, f32)>,
     pub anchor: Option<Anchor>,
 }
 
@@ -175,17 +177,16 @@ impl Default for TextParams {
     fn default() -> Self {
         Self {
             pos: [0.0, 0.0],
-            px: 0,
+            pt: 14.0,
             color: [0.0, 0.0, 0.0, 0.0],
             id_hash: 0.0,
             misc: [0.0; 4], // active, touched_time, is_touched, id_hash
 
             text: "".to_string(),
-            natural_width: 20.0,
-            natural_height: 10.0,
+            width: 20.0,
+            height: 10.0,
             id: "None".to_string(),
             caret: 0,
-            glyph_bounds: vec![],
             anchor: None,
         }
     }
@@ -193,21 +194,35 @@ impl Default for TextParams {
 
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
-
-    pub(crate) device: Device,
+    pub brush: TextBrush<FontArc>,
+    pub device: Device,
 }
 
 impl UiRenderer {
     pub fn new(
         device: &Device,
-        format: TextureFormat,
+        config: &SurfaceConfiguration,
         size: PhysicalSize<u32>,
         msaa_samples: u32,
     ) -> anyhow::Result<Self> {
-        let pipelines = UiPipelines::new(device, format, msaa_samples, size)?;
+        let pipelines = UiPipelines::new(device, config, msaa_samples, size)?;
 
+        let dir = data_dir("ui_data/ttf");
+        let font_path = fs::read_dir(dir)?
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().map(|x| x == "ttf").unwrap_or(false))
+            .expect("No TTF found")
+            .path();
+
+        let font_ttf = fs::read(&font_path)?;
+        let font = FontArc::try_from_vec(font_ttf)?;
+        let brush = BrushBuilder::using_font(font)
+            .initial_cache_size((8192, 8192))
+            .with_multisample(multisample_state(msaa_samples))
+            .build(device, config.width, config.height, COLOR_FORMAT);
         Ok(Self {
             pipelines,
+            brush,
             device: device.clone(),
         })
     }
@@ -260,22 +275,18 @@ impl UiRenderer {
                 .collect();
 
             for idx in dirty_indices {
-                menu.rebuild_layer_cache_index(idx, &ui_loader.touch_manager.runtimes);
+                menu.rebuild_layer_cache_index(&self.brush, idx, &ui_loader.touch_manager.runtimes);
                 let layer = &mut menu.layers[idx];
                 self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
             }
         }
     }
 
-    pub fn reload_shaders(&mut self) -> anyhow::Result<()> {
-        self.pipelines.reload_shaders()?;
-        Ok(())
-    }
-
     pub fn render<'a>(
-        &self,
+        &mut self,
         render_manager: &mut RenderManager,
         pass: &mut RenderPass<'a>,
+        queue: &Queue,
         ui: &mut Ui,
         pipelines: &Pipelines,
         settings: &Settings,
@@ -547,7 +558,6 @@ impl UiRenderer {
                             };
                             // UI Outline
                             render_manager.render_with_layouts(
-                                //cannot borrow `*render_manager` as mutable more than once at a time [E0499] `*render_manager` was mutably borrowed here in the previous iteration of the loop
                                 &shader_dir().join("ui_shape_outline.wgsl"),
                                 &[
                                     &self.pipelines.uniform_layout,
@@ -556,16 +566,14 @@ impl UiRenderer {
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
                                 pass,
-                            ); //argument requires that `*render_manager` is borrowed for `'a`
+                            );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, outline_idx..outline_idx + 1);
                         }
                         outline_idx += 1;
                     }
 
-                    UiElement::Text(_) => {
-                        // handled after other elements for proper layering
-                    }
+                    UiElement::Text(_) => {}
                     UiElement::Rect(_) => {
                         if let Some(bg1) = rect_bg.as_ref() {
                             let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
@@ -594,37 +602,39 @@ impl UiRenderer {
                 }
             }
 
-            // Text on top
-            if layer.gpu.text_count > 0 {
-                if let Some(text_vbo) = &layer.gpu.text_vbo {
-                    let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
-                    let options = &PipelineOptions {
-                        topology: PrimitiveTopology::TriangleList,
-                        msaa_samples: msaa,
-                        depth_stencil: depth_stencil.clone(),
-                        vertex_layouts: vec![UiVertexText::desc()],
-                        targets,
-                        ..Default::default()
-                    };
-                    // UI Text
-                    render_manager.render_with_layouts(
-                        &shader_dir().join("text.wgsl"),
-                        &[&self.pipelines.uniform_layout, &self.pipelines.text_layout],
-                        &[
-                            &self.pipelines.uniform_bind_group,
-                            &self.pipelines.text_bind_group,
-                        ],
-                        options,
-                        pass,
-                    );
-                    pass.set_vertex_buffer(0, text_vbo.slice(..));
-                    pass.draw(0..layer.gpu.text_count, 0..1);
-                }
+            if let Some(text_vbo) = &layer.gpu.text_misc_vbo {
+                let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+                let options = &PipelineOptions {
+                    topology: TriangleList,
+                    msaa_samples: msaa,
+                    depth_stencil: depth_stencil.clone(),
+                    vertex_layouts: vec![UiVertexText::desc()],
+                    targets,
+                    ..Default::default()
+                };
+
+                render_manager.render(
+                    &[],
+                    &shader_dir().join("ui_triangles.wgsl"),
+                    options,
+                    &[&self.pipelines.uniform_buffer],
+                    pass,
+                );
+
+                pass.set_vertex_buffer(0, text_vbo.slice(..));
+                pass.draw(0..layer.gpu.text_misc_vertex_count, 0..1);
             }
+
+            // Text on top
+            let _ = self
+                .brush
+                .queue(&self.device, queue, layer.gpu.text_sections.iter());
+
+            self.brush.draw(pass);
         }
     }
 
-    pub(crate) fn write_storage_buffer(
+    pub fn write_storage_buffer(
         &self,
         queue: &Queue,
         target: &mut Option<Buffer>,
@@ -669,27 +679,6 @@ impl UiRenderer {
         upload_polygons(self, queue, layer);
         upload_rects(self, queue, layer);
         upload_text(self, queue, layer, time_system, touch_manager, menu_name);
-    }
-
-    pub fn rebuild_text_bind_group(&mut self) {
-        let atlas = &self.pipelines.text_atlas;
-
-        let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Text Atlas Bind Group"),
-            layout: &self.pipelines.text_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&atlas.view),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(&atlas.sampler),
-                },
-            ],
-        });
-
-        self.pipelines.text_bind_group = bind_group;
     }
 }
 

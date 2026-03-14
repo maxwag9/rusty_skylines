@@ -1,4 +1,5 @@
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
+use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
 use crate::ui::actions::style_to_u32;
 use crate::ui::helper::triangulate_polygon;
 use crate::ui::ui_editor::Ui;
@@ -6,22 +7,145 @@ use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::*;
 use bytemuck::Zeroable;
+use wgpu_text::TextBrush;
+use wgpu_text::glyph_brush::ab_glyph::{Font, Point, Rect};
 
 pub fn rebuild_text_cache(
+    brush: &TextBrush,
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
-    for (element, cache_element) in layer.elements.iter().zip(layer.cache.elements.iter_mut()) {
+    for (element, cache_element) in layer
+        .elements
+        .iter_mut()
+        .zip(layer.cache.elements.iter_mut())
+    {
         if !element.is_active() {
             continue;
         }
         if let (UiElement::Text(t), UiElementCache::Text(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &t.id);
+            let Some(font) = brush.fonts().first() else {
+                return;
+            };
+
+            let mut glyph_bounds: Vec<Rect> = Vec::new();
+            let mut char_spans: Vec<std::ops::Range<usize>> = Vec::new();
+
+            let Some(px_scale) = font.pt_to_px_scale(t.pt) else {
+                return;
+            };
+            let scale_factor = px_scale.y / font.height_unscaled();
+            let line_height = px_scale.y;
+            let pos = anchor_to(
+                t.anchor.unwrap_or(Anchor::Center),
+                [t.x, t.y],
+                t.width,
+                t.height,
+            );
+            let mut cursor_x = pos[0];
+            let mut cursor_y = pos[1];
+
+            let chars: Vec<(usize, char)> = t.text.char_indices().collect();
+            let mut i = 0;
+
+            while i < chars.len() {
+                let (byte_start, ch) = chars[i];
+
+                // Handle real control chars and escape sequences
+                let (render_char, span_chars) = match ch {
+                    '\n' | '\t' | '\r' => (ch, 1),
+                    '\\' if i + 1 < chars.len() => match chars[i + 1].1 {
+                        'n' => ('\n', 2),
+                        't' => ('\t', 2),
+                        'r' => ('\r', 2),
+                        '\\' => ('\\', 2),
+                        _ => (ch, 1),
+                    },
+                    _ => (ch, 1),
+                };
+
+                let byte_end = if span_chars == 2 {
+                    chars[i + 1].0 + chars[i + 1].1.len_utf8()
+                } else {
+                    byte_start + ch.len_utf8()
+                };
+
+                match render_char {
+                    '\n' => {
+                        glyph_bounds.push(Rect {
+                            min: Point {
+                                x: cursor_x,
+                                y: cursor_y,
+                            },
+                            max: Point {
+                                x: cursor_x + 4.0,
+                                y: cursor_y + line_height,
+                            },
+                        });
+                        char_spans.push(byte_start..byte_end);
+                        cursor_x = pos[0];
+                        cursor_y += line_height;
+                    }
+                    '\t' => {
+                        let space_advance =
+                            font.h_advance_unscaled(font.glyph_id(' ')) * scale_factor;
+                        let tab_width = space_advance * 4.0;
+                        glyph_bounds.push(Rect {
+                            min: Point {
+                                x: cursor_x,
+                                y: cursor_y,
+                            },
+                            max: Point {
+                                x: cursor_x + tab_width,
+                                y: cursor_y + line_height,
+                            },
+                        });
+                        char_spans.push(byte_start..byte_end);
+                        cursor_x += tab_width;
+                    }
+                    '\r' => {
+                        glyph_bounds.push(Rect {
+                            min: Point {
+                                x: cursor_x,
+                                y: cursor_y,
+                            },
+                            max: Point {
+                                x: cursor_x,
+                                y: cursor_y + line_height,
+                            },
+                        });
+                        char_spans.push(byte_start..byte_end);
+                        cursor_x = pos[0];
+                    }
+                    _ => {
+                        let glyph_id = font.glyph_id(render_char);
+                        let advance = font.h_advance_unscaled(glyph_id) * scale_factor;
+                        glyph_bounds.push(Rect {
+                            min: Point {
+                                x: cursor_x,
+                                y: cursor_y,
+                            },
+                            max: Point {
+                                x: cursor_x + advance,
+                                y: cursor_y + line_height,
+                            },
+                        });
+                        char_spans.push(byte_start..byte_end);
+                        cursor_x += advance;
+                    }
+                }
+
+                i += span_chars;
+            }
+
+            t.glyph_bounds = glyph_bounds;
+            t.char_spans = char_spans;
 
             *cached = TextParams {
                 pos: [t.x, t.y],
-                px: t.px,
+                pt: t.pt,
                 color: t.color,
                 id_hash: hash,
                 misc: [
@@ -31,19 +155,16 @@ pub fn rebuild_text_cache(
                     hash,
                 ],
                 text: t.text.clone(),
-                natural_width: t.natural_width,
-                natural_height: t.natural_height,
+                width: t.width,
+                height: t.height,
                 id: t.id.clone(),
-                caret: t.text.len(),
-                glyph_bounds: vec![],
+                caret: t.char_spans.len(),
                 anchor: t.anchor,
             };
         }
     }
-
     rebuilt.mark_texts();
 }
-
 pub fn rebuild_circle_cache(
     layer: &mut RuntimeLayer,
     rebuilt: &mut LayerDirty,

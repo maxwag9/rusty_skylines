@@ -246,7 +246,6 @@ impl Ui {
         self.handle_undo_redo_input(input, dt);
 
         // Reset frame flags
-        self.reset_selection_flags();
         self.sync_selected_element_color();
 
         // Create input snapshot
@@ -300,6 +299,29 @@ impl Ui {
             camera,
             event_loop,
         );
+
+        if self.touch_manager.selection.selection_changed {
+            for (menu_name, menu) in self.menus.iter_mut() {
+                for layer in menu.layers.iter_mut() {
+                    for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
+                        let Some(sel) = &self.touch_manager.selection.primary else {
+                            continue;
+                        };
+                        let text_ref = ElementRef::new(
+                            menu_name,
+                            layer.name.as_str(),
+                            text.id.as_str(),
+                            ElementKind::Text,
+                        );
+                        if text_ref != *sel {
+                            text.being_edited = false;
+                            text.clear_selection();
+                            layer.dirty.mark_texts()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Create input snapshot from mouse state
@@ -1020,6 +1042,16 @@ impl Ui {
         layer_data.elements.iter().find(|e| e.id() == element.id)
     }
 
+    fn get_text(&self, element: &ElementRef) -> Option<&UiButtonText> {
+        let menu_data = self.menus.get(&element.menu)?;
+        let layer_data = menu_data.layers.iter().find(|l| l.name == element.layer)?;
+        layer_data
+            .elements
+            .iter()
+            .filter_map(UiElement::as_text)
+            .find(|t| t.id == element.id)
+    }
+
     fn get_text_mut(&mut self, element: &ElementRef) -> Option<&mut UiButtonText> {
         let menu_data = self.menus.get_mut(&element.menu)?;
         let layer_data = menu_data
@@ -1177,14 +1209,6 @@ impl Ui {
         }
 
         best.map(|(elem, _)| elem)
-    }
-
-    // ========================================================================
-    // LEGACY SYNC
-    // ========================================================================
-
-    fn reset_selection_flags(&mut self) {
-        self.touch_manager.selection.reset_frame_flags();
     }
 
     // ========================================================================
@@ -1915,6 +1939,11 @@ impl Ui {
         let Some(sel) = &self.touch_manager.selection.primary else {
             return;
         };
+        if let Some(text) = self.get_text(sel) {
+            if text.being_edited {
+                return;
+            }
+        }
         let mut changed = false;
 
         // ============================================================
@@ -2253,7 +2282,7 @@ pub fn get_element_size(menus: &HashMap<String, Menu>, element: &ElementRef) -> 
         ElementKind::Text => layer
             .iter_texts()
             .find(|t| t.id == element.id)
-            .map(|t| t.px as f32),
+            .map(|t| t.pt),
         ElementKind::Handle => layer
             .iter_handles()
             .find(|h| h.id == element.id)
