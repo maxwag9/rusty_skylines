@@ -18,9 +18,6 @@ const LANE_SNAP_RADIUS: f32 = 8.0;
 const ENDPOINT_T_EPS: f32 = 0.02;
 const MIN_SEGMENT_LENGTH: f32 = 1.0;
 const CROSSING_SNAP_TO_NODE_RADIUS: f32 = 20.0;
-// ============================================================================
-// Road Editor Implementation
-// ============================================================================
 
 pub struct RoadEditor {
     allocator: IdAllocator,
@@ -38,12 +35,12 @@ impl RoadEditor {
     pub fn update(
         &mut self,
         road_manager: &RoadManager,
-        terrain_renderer: &Terrain,
+        terrain: &Terrain,
         input: &mut Input,
         gizmo: &mut Gizmo,
     ) -> Vec<RoadEditorCommand> {
-        let Some(road_type) = (match terrain_renderer.cursor.mode {
-            CursorMode::Roads(r) => Some(r),
+        let Some(road_type) = (match terrain.cursor.mode {
+            CursorMode::Roads => terrain.cursor.road_type,
             _ => None,
         }) else {
             return Vec::new();
@@ -59,14 +56,14 @@ impl RoadEditor {
             return output;
         }
 
-        let Some(picked) = &terrain_renderer.last_picked else {
+        let Some(picked) = &terrain.last_picked else {
             output.push(RoadEditorCommand::PreviewError(PreviewError::NoPickedPoint));
             output.push(RoadEditorCommand::PreviewClear);
             return output;
         };
 
         let chunk_id = picked.chunk.id;
-        let snap = self.find_best_snap(storage, terrain_renderer, picked.pos, gizmo);
+        let snap = self.find_best_snap(storage, terrain, picked.pos, gizmo);
 
         output.push(RoadEditorCommand::PreviewSnap(SnapPreview {
             world_pos: snap.world_pos,
@@ -75,9 +72,7 @@ impl RoadEditor {
         }));
 
         if let SnapKind::Lane { lane_id, t } = snap.kind {
-            if let Some(lane_preview) =
-                self.build_lane_preview(storage, terrain_renderer, lane_id, t)
-            {
+            if let Some(lane_preview) = self.build_lane_preview(storage, terrain, lane_id, t) {
                 output.push(RoadEditorCommand::PreviewLane(lane_preview));
             }
         }
@@ -91,12 +86,12 @@ impl RoadEditor {
                     &snap,
                     place_pressed,
                     &mut output,
-                    terrain_renderer.chunk_size,
+                    terrain.chunk_size,
                 );
             }
             EditorState::StraightPickEnd { start } => {
                 self.handle_straight_pick_end(
-                    terrain_renderer,
+                    terrain,
                     storage,
                     &start,
                     &snap,
@@ -113,12 +108,12 @@ impl RoadEditor {
                     &snap,
                     place_pressed,
                     &mut output,
-                    terrain_renderer.chunk_size,
+                    terrain.chunk_size,
                 );
             }
             EditorState::CurvePickEnd { start, control } => {
                 self.handle_curve_pick_end(
-                    terrain_renderer,
+                    terrain,
                     storage,
                     &start,
                     control,

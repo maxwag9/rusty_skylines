@@ -1,3 +1,4 @@
+use crate::commands::Command;
 use crate::data::{LodCenterType, Settings};
 use crate::helpers::mouse_ray::*;
 use crate::helpers::paths::data_dir;
@@ -22,8 +23,8 @@ use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
 pub struct ChunkCoords {
-    chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
-    dist2: i32,
+    pub chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
+    pub dist2: i32,
 }
 pub struct VisibleChunk {
     pub coords: ChunkCoords,
@@ -42,22 +43,60 @@ struct FrameState {
     r2_render: i32,
     r2_gen: i32,
 }
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CursorMode {
     None,
-    Roads(RoadType),
+    Roads,
+    Props,
     TerrainEditing,
     Cars,
+}
+
+impl CursorMode {
+    fn order() -> [CursorMode; 5] {
+        [
+            CursorMode::Roads,
+            CursorMode::Props,
+            CursorMode::TerrainEditing,
+            CursorMode::Cars,
+            CursorMode::None,
+        ]
+    }
+
+    fn kind_eq(a: &CursorMode, b: &CursorMode) -> bool {
+        matches!(
+            (a, b),
+            (CursorMode::None, CursorMode::None)
+                | (CursorMode::Props, CursorMode::Props)
+                | (CursorMode::Cars, CursorMode::Cars)
+                | (CursorMode::TerrainEditing, CursorMode::TerrainEditing)
+                | (CursorMode::Roads, CursorMode::Roads)
+        )
+    }
+
+    pub fn next(&self) -> CursorMode {
+        let order = Self::order();
+        let i = order.iter().position(|m| Self::kind_eq(m, self)).unwrap();
+        order[(i + 1) % order.len()].to_owned()
+    }
+
+    pub fn next_command(&self) -> Command {
+        Command::SetCursorMode(self.next())
+    }
 }
 #[derive(Debug)]
 pub struct Cursor {
     pub mode: CursorMode,
+    pub road_type: Option<RoadType>,
+    pub prop_name: Option<String>,
 }
 
 impl Cursor {
     pub fn new() -> Self {
         Self {
-            mode: CursorMode::Roads(RoadType::default()),
+            mode: CursorMode::Roads,
+            road_type: Some(RoadType::default()),
+            prop_name: Some("pine".to_string()),
         }
     }
 }

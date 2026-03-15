@@ -7,6 +7,7 @@ use crate::renderer::gizmo::partition_gizmo::PartitionGizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::Pipelines;
+use crate::renderer::props::Props;
 use crate::renderer::ray_tracing::rt_pass::render_ray_tracing;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::*;
@@ -23,8 +24,8 @@ use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
-use crate::world::cars::car_subsystem::{CarRenderSubsystem, CarSubsystem};
-use crate::world::roads::road_subsystem::{RoadRenderSubsystem, RoadSubsystem};
+use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
+use crate::world::roads::road_subsystem::{RoadRenderSubsystem, Roads};
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world_core::WorldCore;
 use glam::UVec2;
@@ -72,6 +73,7 @@ pub struct RenderCore {
     pub car_renderer: CarRenderSubsystem,
     pub gizmo: Gizmo,
     pub partition_gizmo: PartitionGizmo,
+    pub props: Props,
 }
 
 impl RenderCore {
@@ -122,6 +124,7 @@ impl RenderCore {
             profiler,
             rt_subsystem,
             partition_gizmo: PartitionGizmo::new(),
+            props: Props::new(),
         }
     }
 
@@ -286,7 +289,7 @@ impl RenderCore {
     fn update_uniforms(
         &mut self,
         camera: &Camera,
-        astronomy: &AstronomyState,
+        astronomy: &Astronomy,
         time: &Time,
         aspect: f32,
         terrain_subsystem: &Terrain,
@@ -314,13 +317,13 @@ impl RenderCore {
         camera: &Camera,
         aspect: f32,
         settings: &Settings,
-        input_state: &mut Input,
+        input: &mut Input,
         time: &Time,
         ui_loader: &mut Ui,
-        terrain_subsystem: &mut Terrain,
-        road_subsystem: &RoadSubsystem,
-        car_subsystem: &CarSubsystem,
-        astronomy: &AstronomyState,
+        terrain: &mut Terrain,
+        roads: &Roads,
+        cars: &Cars,
+        astronomy: &Astronomy,
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
@@ -339,18 +342,18 @@ impl RenderCore {
         ui_loader
             .variables
             .set_f64("target_pos_z", target_pos_render.z);
-
+        self.props.place_props(terrain, input, &self.device);
         self.ui_renderer.update(
             ui_loader,
             time,
-            input_state,
+            input,
             &self.queue,
             &PhysicalSize::new(self.config.width, self.config.height),
             settings,
         );
         self.road_renderer.update(
-            terrain_subsystem,
-            road_subsystem,
+            terrain,
+            roads,
             &self.device,
             &self.queue,
             camera,
@@ -358,12 +361,12 @@ impl RenderCore {
         );
 
         self.gizmo.update(
-            terrain_subsystem,
+            terrain,
             &self.rt_subsystem,
             time.total_game_time,
-            &road_subsystem.road_manager,
+            &roads.road_manager,
             &mut self.partition_gizmo,
-            &road_subsystem.partition_manager,
+            &roads.partition_manager,
             settings,
             camera,
         );
@@ -455,7 +458,7 @@ impl RenderCore {
         terrain_subsystem: &Terrain,
         car_storage: &CarStorage,
         settings: &Settings,
-        astronomy: &AstronomyState,
+        astronomy: &Astronomy,
     ) {
         self.execute_world_pass(
             encoder,
@@ -503,7 +506,7 @@ impl RenderCore {
         encoder: &mut CommandEncoder,
         config: &RenderPassConfig,
         camera: &Camera,
-        terrain_subsystem: &Terrain,
+        terrain: &Terrain,
         car_storage: &CarStorage,
         settings: &Settings,
         aspect: f32,
@@ -531,7 +534,7 @@ impl RenderCore {
                 &mut pass,
                 &mut self.render_manager,
                 &self.terrain_renderer,
-                terrain_subsystem,
+                terrain,
                 &self.pipelines,
                 settings,
                 self.msaa_samples,
@@ -589,7 +592,20 @@ impl RenderCore {
                 &self.pipelines,
                 settings,
                 camera,
-                self.msaa_samples,
+            );
+        });
+        // 7
+        gpu_timestamp!(pass, &mut self.profiler, "Props", {
+            render_props(
+                &mut pass,
+                &mut self.render_manager,
+                &mut self.props,
+                &self.pipelines,
+                settings,
+                camera,
+                terrain,
+                &self.device,
+                &self.queue,
             );
         });
     }

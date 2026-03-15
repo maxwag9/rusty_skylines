@@ -1428,7 +1428,7 @@ impl Ui {
         }
     }
 
-    pub fn update_dynamic_texts(&mut self) {
+    pub fn update_dynamic_texts(&mut self, settings: &Settings) {
         let mut being_hovered = false;
         let mut selected_being_hovered = false;
 
@@ -1465,7 +1465,7 @@ impl Ui {
                     }
 
                     if !t.input_box || self.touch_manager.options.override_mode {
-                        let new_text = resolve_template(&t.template, &self.variables);
+                        let new_text = resolve_template(&t.template, &self.variables, settings);
                         if new_text != t.text {
                             t.text = new_text;
                             any_changed = true;
@@ -1486,7 +1486,7 @@ impl Ui {
                                 any_changed = true;
                             }
                         } else {
-                            let new_text = resolve_template(&t.template, &self.variables);
+                            let new_text = resolve_template(&t.template, &self.variables, settings);
                             if new_text != t.text {
                                 t.text = new_text;
                                 any_changed = true;

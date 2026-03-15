@@ -1,4 +1,3 @@
-use crate::commands::Command;
 use crate::data::Cycle;
 use crate::helpers::paths::data_dir;
 use crate::resources::Resources;
@@ -11,9 +10,7 @@ use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::UiValue;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
-use crate::world::roads::road_structs::RoadType;
 use crate::world::sound::run_sounds;
-use crate::world::terrain::terrain_subsystem::CursorMode;
 use crate::world::world_core::WorldCore;
 use glam::Vec2;
 use std::sync::Arc;
@@ -90,6 +87,10 @@ impl ApplicationHandler for App {
         let time = &mut world.time;
         time.set_tps(resources.settings.target_tps.max(1.0));
         time.set_fps(resources.settings.target_fps.max(1.0));
+        resources
+            .ui_loader
+            .variables
+            .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
         self.window = Some(window.clone());
         self.resources = Some(resources);
 
@@ -215,20 +216,7 @@ impl ApplicationHandler for App {
                     }
                 }
                 if input.action_pressed_once("Toggle Cursor Mode") {
-                    match world.terrain.cursor.mode {
-                        CursorMode::Roads(_) => {
-                            world.events.send(Command::SetCursorMode(CursorMode::Cars))
-                        }
-                        CursorMode::Cars => world
-                            .events
-                            .send(Command::SetCursorMode(CursorMode::TerrainEditing)),
-                        CursorMode::TerrainEditing => {
-                            world.events.send(Command::SetCursorMode(CursorMode::None))
-                        }
-                        CursorMode::None => world.events.send(Command::SetCursorMode(
-                            CursorMode::Roads(RoadType::default()),
-                        )),
-                    }
+                    world.events.send(world.terrain.cursor.mode.next_command());
                 }
                 if input.action_repeat("Toggle Debug Menu") {
                     resources

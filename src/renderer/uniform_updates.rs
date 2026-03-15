@@ -5,7 +5,7 @@ use crate::renderer::pipelines::{
 };
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::resources::Time;
-use crate::world::astronomy::AstronomyState;
+use crate::world::astronomy::Astronomy;
 use crate::world::camera::Camera;
 use crate::world::terrain::sky::SkyUniform;
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -26,7 +26,7 @@ impl<'a> UniformUpdater<'a> {
     pub fn update_camera_uniforms(
         &mut self,
         terrain_renderer: &Terrain,
-        astronomy: &AstronomyState,
+        astronomy: &Astronomy,
         camera: &Camera,
         time_system: &Time,
         aspect: f32,
@@ -94,7 +94,7 @@ impl<'a> UniformUpdater<'a> {
             bytemuck::bytes_of(&tonemapping_uniforms),
         );
     }
-    pub fn update_sky_uniforms(&self, astronomy: &AstronomyState) {
+    pub fn update_sky_uniforms(&self, astronomy: &Astronomy) {
         let moon_phase: f32 = astronomy.moon_phase;
 
         let sky_uniform = SkyUniform {

@@ -1,6 +1,6 @@
 use crate::data::{SettingKey, Settings};
 use crate::ui::ui_editor::Ui;
-use crate::world::astronomy::{AstronomyState, TimeScales};
+use crate::world::astronomy::{Astronomy, TimeScales};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -293,7 +293,7 @@ impl Variables {
 pub fn update_ui_variables(
     ui_loader: &mut Ui,
     time_scales: &TimeScales,
-    astronomy: &AstronomyState,
+    astronomy: &Astronomy,
     obliquity: f32,
     settings: &Settings,
 ) {

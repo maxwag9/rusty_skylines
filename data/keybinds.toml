@@ -92,6 +92,8 @@ keys = ["MouseRight"]
 keys = ["MouseLeft"]
 ["Place Car"]
 keys = ["MouseLeft"]
+["Place Prop"]
+keys = ["MouseLeft"]
 ["Cancel"]
 keys = ["MouseRight"]
 

@@ -4,6 +4,7 @@ use crate::helpers::paths::shader_dir;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
+use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
 use crate::ui::vertex::{LineVtxRender, Vertex};
@@ -561,7 +562,6 @@ pub fn render_cars(
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,
-    msaa_samples: u32,
 ) {
     let keys = cars_material_keys();
     let shader_path = shader_dir().join("car.wgsl");
@@ -575,7 +575,7 @@ pub fn render_cars(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(Default::default(), settings)),
-            msaa_samples,
+            msaa_samples: settings.msaa_samples,
             vertex_layouts: Vec::from([CarVertex::layout(), CarInstance::layout()]),
             cull_mode: Some(Face::Back),
             targets: targets.clone(),
@@ -587,6 +587,48 @@ pub fn render_cars(
     );
 
     car_renderer.render(pipelines, rt_subsystem, car_storage, camera, pass);
+}
+
+pub fn render_props<'a>(
+    pass: &mut RenderPass<'a>,
+    render_manager: &mut RenderManager,
+    props: &'a mut Props,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    camera: &'a Camera,
+    terrain: &'a Terrain,
+    device: &Device,
+    queue: &Queue,
+) {
+    // Upload instance data for visible chunks
+    props.upload_instances(device, queue, camera, terrain);
+
+    let shader_path = shader_dir().join("props.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+    let targets = color_and_normals_and_instance_targets(pipelines);
+
+    // Set up pipeline
+    render_manager.render(
+        &[],
+        shader_path.as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(depth_stencil(Default::default(), settings)),
+            msaa_samples: settings.msaa_samples,
+            vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
+            cull_mode: Some(Face::Front),
+            targets: targets.clone(),
+            shadow: shadow.clone(),
+            ..Default::default()
+        },
+        &[&pipelines.buffers.camera],
+        pass,
+    );
+
+    props.upload_instances(device, queue, camera, terrain);
+
+    // Draw all props
+    props.render(pass, camera, terrain);
 }
 
 fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {

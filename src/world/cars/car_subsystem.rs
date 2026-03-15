@@ -203,7 +203,7 @@ impl CarRenderSubsystem {
     }
 }
 
-pub struct CarSubsystem {
+pub struct Cars {
     car_storage: CarStorage,
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
@@ -211,7 +211,7 @@ pub struct CarSubsystem {
     car_simulation: CarSimSystem,
 }
 
-impl CarSubsystem {
+impl Cars {
     pub(crate) fn player_car_id(&self) -> PartitionId {
         self.player_car_id
     }
@@ -221,7 +221,7 @@ impl CarSubsystem {
     }
 }
 
-impl CarSubsystem {
+impl Cars {
     pub fn new() -> Self {
         Self {
             car_storage: CarStorage::new(),

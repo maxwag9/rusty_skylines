@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Rusty_Skylines"
-version = "0.6.12"
+version = "0.6.13"
 dependencies = [
  "anyhow",
  "arboard",
@@ -20,14 +20,14 @@ dependencies = [
  "num_cpus",
  "pollster",
  "postcard",
-    "rand 0.10.0",
+ "rand 0.10.0",
  "rayon",
  "serde",
  "serde_yaml",
  "toml",
  "wgpu",
  "wgpu_render_manager",
-    "wgpu_text",
+ "wgpu_text",
  "winit",
  "zstd",
 ]
@@ -143,7 +143,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
 dependencies = [
-    "num-traits",
+ "num-traits",
 ]
 
 [[package]]
@@ -163,7 +163,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "windows-sys 0.59.0",
-    "wl-clipboard-rs",
+ "wl-clipboard-rs",
  "x11rb",
 ]
 
@@ -374,7 +374,7 @@ checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
 dependencies = [
  "cfg-if",
  "cpufeatures",
-    "rand_core 0.10.0",
+ "rand_core 0.10.0",
 ]
 
 [[package]]
@@ -847,7 +847,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
-    "rand_core 0.10.0",
+ "rand_core 0.10.0",
  "wasip2",
  "wasip3",
 ]
@@ -896,11 +896,11 @@ version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0060f4ed4ef64a5876d9836d7d6c9ed43a463f3ca431682bec1c326064c8c93e"
 dependencies = [
-    "glyph_brush_draw_cache",
-    "glyph_brush_layout",
-    "ordered-float",
-    "rustc-hash 2.1.1",
-    "twox-hash",
+ "glyph_brush_draw_cache",
+ "glyph_brush_layout",
+ "ordered-float",
+ "rustc-hash 2.1.1",
+ "twox-hash",
 ]
 
 [[package]]
@@ -909,12 +909,12 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bb6c910def52365fef3f439a6b50a4d5c11b28eec4cf6c191f6dfea18e88d7f"
 dependencies = [
-    "ab_glyph",
-    "crossbeam-channel",
-    "crossbeam-deque",
-    "linked-hash-map",
-    "rayon",
-    "rustc-hash 2.1.1",
+ "ab_glyph",
+ "crossbeam-channel",
+ "crossbeam-deque",
+ "linked-hash-map",
+ "rayon",
+ "rustc-hash 2.1.1",
 ]
 
 [[package]]
@@ -923,9 +923,9 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b1e288bfd2f6c0313f78bf5aa538356ad481a3bb97e9b7f93220ab0066c5992"
 dependencies = [
-    "ab_glyph",
-    "approx",
-    "xi-unicode",
+ "ab_glyph",
+ "approx",
+ "xi-unicode",
 ]
 
 [[package]]
@@ -1359,7 +1359,7 @@ dependencies = [
  "log",
  "num-traits",
  "once_cell",
-    "rustc-hash 1.1.0",
+ "rustc-hash 1.1.0",
  "spirv",
  "thiserror 2.0.17",
  "unicode-ident",
@@ -1401,7 +1401,7 @@ version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
-    "memchr",
+ "memchr",
 ]
 
 [[package]]
@@ -1857,8 +1857,8 @@ version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
-    "libc",
-    "windows-sys 0.45.0",
+ "libc",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -1867,7 +1867,7 @@ version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
-    "ttf-parser",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -1911,9 +1911,9 @@ version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
 dependencies = [
-    "fixedbitset",
-    "hashbrown 0.15.5",
-    "indexmap",
+ "fixedbitset",
+ "hashbrown 0.15.5",
+ "indexmap",
 ]
 
 [[package]]
@@ -2015,7 +2015,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
-    "zerocopy",
+ "zerocopy",
 ]
 
 [[package]]
@@ -2100,8 +2100,8 @@ version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
 dependencies = [
-    "rand_chacha",
-    "rand_core 0.9.5",
+ "rand_chacha",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -2112,7 +2112,7 @@ checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
 dependencies = [
  "chacha20",
  "getrandom 0.4.1",
-    "rand_core 0.10.0",
+ "rand_core 0.10.0",
 ]
 
 [[package]]
@@ -2121,8 +2121,8 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
-    "ppv-lite86",
-    "rand_core 0.9.5",
+ "ppv-lite86",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -2131,7 +2131,7 @@ version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
-    "getrandom 0.3.4",
+ "getrandom 0.3.4",
 ]
 
 [[package]]
@@ -2644,9 +2644,9 @@ version = "3.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8765b90061cba6c22b5831f675da109ae5561588290f9fa2317adab2714d5a6"
 dependencies = [
-    "memchr",
-    "nom",
-    "petgraph",
+ "memchr",
+ "nom",
+ "petgraph",
 ]
 
 [[package]]
@@ -2661,7 +2661,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ea3136b675547379c4bd395ca6b938e5ad3c3d20fad76e7fe85f9e0d011419c"
 dependencies = [
-    "rand 0.9.2",
+ "rand 0.9.2",
 ]
 
 [[package]]
@@ -3027,7 +3027,7 @@ dependencies = [
  "portable-atomic",
  "profiling",
  "raw-window-handle",
-    "rustc-hash 1.1.0",
+ "rustc-hash 1.1.0",
  "smallvec",
  "thiserror 2.0.17",
  "wgpu-core-deps-apple",
@@ -3141,10 +3141,10 @@ version = "28.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aef7538af806ccf415f149430f27bbe12b35ffcd6ab8bf8dafe699220332492a"
 dependencies = [
-    "bytemuck",
-    "glyph_brush",
-    "log",
-    "wgpu",
+ "bytemuck",
+ "glyph_brush",
+ "log",
+ "wgpu",
 ]
 
 [[package]]
@@ -3585,16 +3585,16 @@ version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9651471a32e87d96ef3a127715382b2d11cc7c8bb9822ded8a7cc94072eb0a3"
 dependencies = [
-    "libc",
-    "log",
-    "os_pipe",
-    "rustix 1.1.2",
-    "thiserror 2.0.17",
-    "tree_magic_mini",
-    "wayland-backend",
-    "wayland-client",
-    "wayland-protocols",
-    "wayland-protocols-wlr",
+ "libc",
+ "log",
+ "os_pipe",
+ "rustix 1.1.2",
+ "thiserror 2.0.17",
+ "tree_magic_mini",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

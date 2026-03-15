@@ -319,7 +319,7 @@ impl UiRenderer {
             );
             pass.draw(0..3, 0..1);
         }
-        ui.update_dynamic_texts();
+        ui.update_dynamic_texts(settings);
 
         let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
         for (_, menu) in ui.menus.iter().filter(|(_, m)| m.active) {

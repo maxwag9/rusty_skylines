@@ -8,7 +8,7 @@ pub const MUNICH_LATITUDE: f64 = 48.1351;
 pub const MUNICH_LONGITUDE: f64 = 11.5820;
 pub const J2000: f64 = 2451545.0;
 
-pub struct AstronomyState {
+pub struct Astronomy {
     pub star_rotation: Mat4,
     pub sun_dir: Vec3,
     pub sun_size_ndc: f32,
@@ -20,7 +20,7 @@ pub struct AstronomyState {
     pub current_year: f32,
 }
 
-impl Default for AstronomyState {
+impl Default for Astronomy {
     fn default() -> Self {
         Self {
             star_rotation: Default::default(),
@@ -299,7 +299,7 @@ pub fn compute_moon_phase(observer: &ObserverParams, year_phase: f32, total_days
 ///
 /// The returned `sun_size_ndc` and `moon_size_ndc` should be written into `SkyUniform.sun_size`
 /// and `SkyUniform.moon_size`.
-pub fn compute_astronomy(time_scales: &TimeScales, proj: Mat4) -> AstronomyState {
+pub fn compute_astronomy(time_scales: &TimeScales, proj: Mat4) -> Astronomy {
     let base_jd_2026_01_01 = J2000 + 9131.5;
     let jd = base_jd_2026_01_01 + time_scales.total_days as f64;
     let days_since_j2000 = (jd - J2000) as f32;
@@ -318,7 +318,7 @@ pub fn compute_astronomy(time_scales: &TimeScales, proj: Mat4) -> AstronomyState
     let sun_size_ndc = angular_radius_rad_to_ndc_radius(proj, sun_ang_rad) * 2.5;
     let moon_size_ndc = angular_radius_rad_to_ndc_radius(proj, moon_ang_rad) * 2.5;
 
-    let astronomy = AstronomyState {
+    let astronomy = Astronomy {
         star_rotation,
         sun_dir,
         sun_size_ndc,

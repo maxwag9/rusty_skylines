@@ -250,20 +250,20 @@ pub enum CarChunkDistance {
 
 impl CarChunkDistance {
     #[inline]
-    pub fn from_dist2(dist2: u32, chunk_size: ChunkSize) -> Self {
-        const BASE_CHUNK_SIZE: f32 = 128.0;
-        const CLOSE_CHUNKS: f32 = 10.0;
-        const MEDIUM_CHUNKS: f32 = 100.0;
+    pub fn from_dist2(dist2: u64, chunk_size: ChunkSize) -> Self {
+        const BASE_CHUNK_SIZE: f64 = 128.0;
+        const CLOSE_CHUNKS: f64 = 10.0;
+        const MEDIUM_CHUNKS: f64 = 100.0;
 
-        const CLOSE_DIST2_BASE: f32 = CLOSE_CHUNKS * CLOSE_CHUNKS;
-        const MEDIUM_DIST2_BASE: f32 = MEDIUM_CHUNKS * MEDIUM_CHUNKS;
+        const CLOSE_DIST2_BASE: f64 = CLOSE_CHUNKS * CLOSE_CHUNKS;
+        const MEDIUM_DIST2_BASE: f64 = MEDIUM_CHUNKS * MEDIUM_CHUNKS;
 
-        let cs = chunk_size as f32;
+        let cs = chunk_size as f64;
         let scale = BASE_CHUNK_SIZE / cs;
         let close_thresh = CLOSE_DIST2_BASE * scale.powi(2);
         let medium_thresh = MEDIUM_DIST2_BASE * scale.powi(2);
 
-        let d = dist2 as f32;
+        let d = dist2 as f64;
         if d < close_thresh {
             Self::Close
         } else if d < medium_thresh {

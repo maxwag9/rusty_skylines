@@ -3,8 +3,8 @@ use crate::data::Settings;
 use crate::resources::Time;
 use crate::simulation::Simulation;
 use crate::ui::input::Input;
-use crate::world::cars::car_subsystem::CarSubsystem;
-use crate::world::roads::road_subsystem::RoadSubsystem;
+use crate::world::cars::car_subsystem::Cars;
+use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world::WorldState;
 use wgpu::Device;
@@ -16,8 +16,8 @@ pub struct WorldCore {
     pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub simulation: Simulation,
     pub terrain: Terrain,
-    pub road_subsystem: RoadSubsystem,
-    pub cars: CarSubsystem,
+    pub road_subsystem: Roads,
+    pub cars: Cars,
     //pub job_pool: JobPool,         // persistent worker threads + channels
     // ... other sim-only subsystems (economy, citizens, etc)
 }
@@ -30,8 +30,8 @@ impl WorldCore {
             input: Input::new(),
             simulation: Simulation::new(),
             terrain: Terrain::new(device, settings),
-            road_subsystem: RoadSubsystem::new(),
-            cars: CarSubsystem::new(),
+            road_subsystem: Roads::new(),
+            cars: Cars::new(),
             events: CommandBuffer::new(),
         }
     }

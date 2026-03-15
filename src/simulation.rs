@@ -7,8 +7,8 @@ use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_player::drive_car;
-use crate::world::cars::car_subsystem::CarSubsystem;
-use crate::world::roads::road_subsystem::RoadSubsystem;
+use crate::world::cars::car_subsystem::Cars;
+use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
 use std::time::Instant;
@@ -59,8 +59,8 @@ impl Simulation {
     pub fn update(
         &mut self,
         terrain: &mut Terrain,
-        road_subsystem: &mut RoadSubsystem,
-        car_subsystem: &mut CarSubsystem,
+        road_subsystem: &mut Roads,
+        car_subsystem: &mut Cars,
         settings: &Settings,
         time: &Time,
         input: &mut Input,

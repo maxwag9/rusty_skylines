@@ -2,14 +2,14 @@ use crate::data::Settings;
 use crate::resources::Time;
 use crate::ui::ui_editor::Ui;
 use crate::ui::variables::update_ui_variables;
-use crate::world::astronomy::{AstronomyState, ObserverParams, TimeScales, compute_astronomy};
+use crate::world::astronomy::{Astronomy, ObserverParams, TimeScales, compute_astronomy};
 use crate::world::camera::{Camera, CameraController};
 use glam::Mat4;
 
 pub struct WorldState {
     pub camera: Camera,
     pub cam_controller: CameraController,
-    pub astronomy: AstronomyState,
+    pub astronomy: Astronomy,
 }
 
 impl WorldState {
@@ -19,7 +19,7 @@ impl WorldState {
         let world = Self {
             camera,
             cam_controller,
-            astronomy: AstronomyState::default(),
+            astronomy: Astronomy::default(),
         };
         world
     }

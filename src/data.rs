@@ -170,6 +170,19 @@ pub enum SettingValue {
     Enum(String),
 }
 impl SettingValue {
+    pub fn to_string(&self) -> String {
+        match self {
+            SettingValue::Bool(b) => b.to_string(),
+            SettingValue::F64(f) => f.to_string(),
+            SettingValue::F32(f) => f.to_string(),
+            SettingValue::Vec3(f) => format!("[{}, {}, {}]", f[0], f[1], f[2]),
+            SettingValue::Vec4(f) => format!("[{}, {}, {}, {}]", f[0], f[1], f[2], f[3]),
+            SettingValue::Vec2(f) => format!("[{}, {}]", f[0], f[1]),
+            SettingValue::Enum(f) => f.to_string(),
+            SettingValue::U16(u) => u.to_string(),
+            SettingValue::U32(u) => u.to_string(),
+        }
+    }
     pub fn to_ui_value(&self) -> UiValue {
         match self {
             SettingValue::Bool(v) => UiValue::Bool(*v),

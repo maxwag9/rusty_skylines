@@ -11,7 +11,7 @@ use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::world::camera::Camera;
-use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::world::roads::road_structs::RoadEditorCommand;
@@ -51,7 +51,7 @@ impl RoadRenderSubsystem {
     pub fn update(
         &mut self,
         terrain: &mut Terrain,
-        road_subsystem: &RoadSubsystem,
+        road_subsystem: &Roads,
         device: &Device,
         queue: &Queue,
         camera: &Camera,
@@ -154,14 +154,14 @@ impl RoadRenderSubsystem {
     }
 }
 
-pub struct RoadSubsystem {
+pub struct Roads {
     pub road_manager: RoadManager,
     pub road_editor: RoadEditor,
     pub partition_manager: PartitionManager,
     road_commands: Vec<RoadEditorCommand>,
     pub tick_20hz: Ticker,
 }
-impl RoadSubsystem {
+impl Roads {
     pub fn new() -> Self {
         Self {
             tick_20hz: Ticker::new(20.0),
@@ -176,7 +176,7 @@ impl RoadSubsystem {
     pub fn update(
         &mut self,
         terrain: &mut Terrain,
-        car_subsystem: &mut CarSubsystem,
+        car_subsystem: &mut Cars,
         input: &mut Input,
         time: &Time,
         gizmo: &mut Gizmo,

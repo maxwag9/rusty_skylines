@@ -2,7 +2,7 @@ use crate::data::Settings;
 use crate::ui::input::Input;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_structs::Car;
-use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::cars::car_subsystem::Cars;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Quat, Vec3};
 use rayon::iter::ParallelIterator;
@@ -166,7 +166,7 @@ pub fn conform_car_to_terrain(car: &mut Car, terrain: &Terrain, dt: f32) -> Grou
 }
 
 pub fn drive_car(
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     terrain: &Terrain,
     settings: &Settings,
     input: &mut Input,
@@ -409,7 +409,7 @@ pub fn drive_car(
     }
 }
 
-pub fn drive_ai_cars(car_subsystem: &mut CarSubsystem, terrain: &Terrain, dt: f32) {
+pub fn drive_ai_cars(car_subsystem: &mut Cars, terrain: &Terrain, dt: f32) {
     if dt <= 0.0 {
         return;
     }

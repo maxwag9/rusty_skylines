@@ -17,7 +17,7 @@
 
 use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::world::cars::car_subsystem::CarSubsystem;
+use crate::world::cars::car_subsystem::Cars;
 use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
 };
@@ -1699,7 +1699,7 @@ pub enum CommandResult {
 pub fn apply_commands_world(
     terrain: &mut Terrain,
     storage: &mut RoadStorage,
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     gizmo: &mut Gizmo,
     commands: &[RoadEditorCommand],
 ) {
@@ -1716,7 +1716,7 @@ pub fn apply_preview_commands_world(
     road_style_params: &RoadStyleParams,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     commands: &[RoadEditorCommand],
     gizmo: &mut Gizmo,
 ) {
@@ -1805,7 +1805,7 @@ pub fn apply_preview_commands_world(
 pub fn apply_command_world(
     terrain: &mut Terrain,
     storage: &mut RoadStorage,
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     gizmo: &mut Gizmo,
     road_command: &RoadCommand,
     is_preview: bool,
@@ -2026,7 +2026,7 @@ pub fn collect_affected_chunks(commands: &[RoadEditorCommand]) -> Vec<ChunkId> {
 pub fn apply_command(
     terrain: &mut Terrain,
     road_mesh_manager: &mut RoadMeshManager,
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     storage: &mut RoadStorage,
     road_style_params: &RoadStyleParams,
     command: RoadEditorCommand,
@@ -2280,7 +2280,7 @@ pub fn apply_commands(
     terrain: &mut Terrain,
     road_mesh_manager: &mut RoadMeshManager,
     storage: &mut RoadStorage,
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     road_style_params: &RoadStyleParams,
     is_preview: bool,
     gizmo: &mut Gizmo,
@@ -2310,7 +2310,7 @@ pub fn apply_preview_commands(
     road_mesh_manager: &mut RoadMeshManager,
     preview_storage: &mut RoadStorage,
     real_storage: &RoadStorage,
-    car_subsystem: &mut CarSubsystem,
+    car_subsystem: &mut Cars,
     road_style_params: &RoadStyleParams,
     gizmo: &mut Gizmo,
     commands: &[RoadEditorCommand],

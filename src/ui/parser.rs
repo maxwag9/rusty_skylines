@@ -1,3 +1,4 @@
+use crate::data::{SettingKey, Settings};
 use crate::ui::variables::{UiValue, Variables};
 use std::fmt;
 
@@ -2309,7 +2310,7 @@ pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
 // ------------------------------------------------------------
 // Final public function
 // ------------------------------------------------------------
-pub fn resolve_template(template: &str, vars: &Variables) -> String {
+pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -> String {
     let mut out = String::new();
     let mut chars = template.char_indices().peekable();
 
@@ -2341,7 +2342,12 @@ pub fn resolve_template(template: &str, vars: &Variables) -> String {
 
             if let Some(end) = end_opt {
                 let inside = &template[start..end];
-                let val = evaluate_placeholder(inside.trim(), vars);
+
+                let val = if let Some(key) = SettingKey::from_str(inside) {
+                    settings.read_setting(key).to_string()
+                } else {
+                    evaluate_placeholder(inside.trim(), vars)
+                };
                 out.push_str(&val);
             } else {
                 out.push('{');
@@ -2358,6 +2364,7 @@ pub fn resolve_template(template: &str, vars: &Variables) -> String {
             out.push(c);
         }
     }
+
     out
 }
 
