@@ -415,7 +415,7 @@ impl Gizmo {
                 0.0
             };
 
-            let pos = points[i0].lerp(points[i1], seg_t, cs);
+            let pos = points[i0].lerp(points[i1], seg_t as f64, cs);
             let dir = points[i1].to_render_pos(points[i0], cs).normalize_or_zero();
             (pos, dir)
         };

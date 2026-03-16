@@ -96,7 +96,7 @@ impl Cursor {
         Self {
             mode: CursorMode::Roads,
             road_type: Some(RoadType::default()),
-            prop_name: Some("pine".to_string()),
+            prop_name: Some("oak".to_string()),
         }
     }
 }

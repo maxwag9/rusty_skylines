@@ -1,4 +1,10 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::data::Settings;
+use crate::helpers::paths::shader_dir;
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::renderer::pipelines::Pipelines;
+use crate::renderer::render_passes::{
+    color_and_normals_and_instance_targets, depth_stencil, make_shadow_option,
+};
 use crate::ui::input::Input;
 use crate::world::camera::Camera;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
@@ -6,8 +12,12 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat3, Mat4, Vec3};
 use std::collections::HashMap;
 use std::f32::consts::PI;
+use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::util::DeviceExt;
 use wgpu::*;
+use wgpu_render_manager::generator::{TextureKey, TextureParams};
+use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::renderer::RenderManager;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -16,6 +26,7 @@ pub struct PropVertex {
     pub normal: [f32; 3],
     pub color: [f32; 4],
     pub uv: [f32; 2],
+    pub texture_id: u32,
 }
 
 impl PropVertex {
@@ -44,14 +55,16 @@ impl PropVertex {
                     shader_location: 3,
                     format: VertexFormat::Float32x2,
                 }, // uv
+                // texture_id
+                VertexAttribute {
+                    offset: 48,
+                    shader_location: 4,
+                    format: VertexFormat::Uint32,
+                },
             ],
         }
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// GPU INSTANCE
-// ═══════════════════════════════════════════════════════════════════════════════
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -84,68 +97,64 @@ impl GpuPropInstance {
             array_stride: size_of::<GpuPropInstance>() as BufferAddress,
             step_mode: VertexStepMode::Instance,
             attributes: &[
-                // model mat4 (locations 4-7)
+                // model mat4 (locations 5-8)
                 VertexAttribute {
                     offset: 0,
-                    shader_location: 4,
-                    format: VertexFormat::Float32x4,
-                },
-                VertexAttribute {
-                    offset: 16,
                     shader_location: 5,
                     format: VertexFormat::Float32x4,
                 },
                 VertexAttribute {
-                    offset: 32,
+                    offset: 16,
                     shader_location: 6,
                     format: VertexFormat::Float32x4,
                 },
                 VertexAttribute {
-                    offset: 48,
+                    offset: 32,
                     shader_location: 7,
                     format: VertexFormat::Float32x4,
                 },
-                // prev_model mat4 (locations 8-11)
                 VertexAttribute {
-                    offset: 64,
+                    offset: 48,
                     shader_location: 8,
                     format: VertexFormat::Float32x4,
                 },
+                // prev_model mat4 (locations 9-12)
                 VertexAttribute {
-                    offset: 80,
+                    offset: 64,
                     shader_location: 9,
                     format: VertexFormat::Float32x4,
                 },
                 VertexAttribute {
-                    offset: 96,
+                    offset: 80,
                     shader_location: 10,
                     format: VertexFormat::Float32x4,
                 },
                 VertexAttribute {
-                    offset: 112,
+                    offset: 96,
                     shader_location: 11,
                     format: VertexFormat::Float32x4,
                 },
-                // color (location 12)
                 VertexAttribute {
-                    offset: 128,
+                    offset: 112,
                     shader_location: 12,
                     format: VertexFormat::Float32x4,
                 },
-                // misc (location 13)
+                // color (location 13)
+                VertexAttribute {
+                    offset: 128,
+                    shader_location: 13,
+                    format: VertexFormat::Float32x4,
+                },
+                // misc (location 14)
                 VertexAttribute {
                     offset: 144,
-                    shader_location: 13,
+                    shader_location: 14,
                     format: VertexFormat::Float32x4,
                 },
             ],
         }
     }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CPU INSTANCE
-// ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct PropInstance {
     pub pos: WorldPos,
@@ -157,20 +166,12 @@ pub struct PropInstance {
     pub wind_strength: f32,
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MESH
-// ═══════════════════════════════════════════════════════════════════════════════
-
 pub struct Mesh {
     pub vertex_buffer: Buffer,
     pub index_buffer: Buffer,
     pub index_count: u32,
     pub bounds: (Vec3, f32), // center, radius
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CHUNK
-// ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct PropChunk {
     pub chunk_coord: ChunkCoord,
@@ -372,9 +373,12 @@ impl Props {
 
     pub fn render<'a>(
         &'a self,
+        render_manager: &mut RenderManager,
         pass: &mut RenderPass<'a>,
         camera: &'a Camera,
         terrain: &'a Terrain,
+        pipelines: &Pipelines,
+        settings: &Settings,
     ) {
         let eye = camera.eye_world();
         let terrain_height = terrain.get_height_at(eye, true);
@@ -389,8 +393,12 @@ impl Props {
             };
 
             // Calculate LOD for this chunk
-            let dist2 = eye.chunk.dist2(&coord) as f32;
-            let lod_level = select_lod(dist2, height_above_terrain, chunk_size);
+            let instance_terrain_height = terrain.get_height_at(eye, true);
+            let dist = eye.distance_to(
+                WorldPos::new(coord, LocalPos::new(0.0, instance_terrain_height, 0.0)),
+                chunk_size,
+            );
+            let lod_level = select_lod(dist, chunk_size);
 
             for (archetype, instances) in &chunk.archetype_instances {
                 if instances.is_empty() {
@@ -407,6 +415,30 @@ impl Props {
                     continue;
                 };
 
+                let shader_path = shader_dir().join("props.wgsl");
+                let shadow = make_shadow_option(settings, pipelines);
+                let targets = color_and_normals_and_instance_targets(pipelines);
+
+                // Set up pipeline
+                render_manager.render(
+                    &prop.texture_keys,
+                    shader_path.as_path(),
+                    &PipelineOptions {
+                        topology: TriangleList,
+                        depth_stencil: Some(depth_stencil(Default::default(), settings)),
+                        msaa_samples: settings.msaa_samples,
+                        vertex_layouts: Vec::from([
+                            PropVertex::layout(),
+                            GpuPropInstance::layout(),
+                        ]),
+                        cull_mode: Some(Face::Front),
+                        targets: targets.clone(),
+                        shadow: shadow.clone(),
+                        ..Default::default()
+                    },
+                    &[&pipelines.buffers.camera],
+                    pass,
+                );
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, inst_buf.slice(..));
                 pass.set_index_buffer(mesh.index_buffer.slice(..), IndexFormat::Uint32);
@@ -420,6 +452,7 @@ struct Prop {
     lod1: Option<Mesh>,
     lod2: Option<Mesh>,
     lod3: Option<Mesh>,
+    texture_keys: [TextureKey; 4], // 4 slots for textures in the shader.
 }
 
 impl Prop {
@@ -454,41 +487,16 @@ impl Prop {
     }
 }
 /// LOD distance thresholds (in world units)
-const LOD0_MAX_DIST: f32 = 50.0; // Full detail
-const LOD1_MAX_DIST: f32 = 150.0; // Medium detail
-const LOD2_MAX_DIST: f32 = 400.0; // Low detail
-// Beyond LOD2_MAX_DIST -> LOD3 (billboard)
+const LOD0_MAX_DIST: f64 = 250.0; // Full detail
+const LOD1_MAX_DIST: f64 = 700.0; // Medium detail
+const LOD2_MAX_DIST: f64 = 1700.0; // Low detail
 
-/// Height at which LOD scaling starts
-const LOD_HEIGHT_BASE: f32 = 10.0;
-/// Maximum height multiplier for LOD distances
-const LOD_HEIGHT_SCALE_MAX: f32 = 4.0;
-
-fn select_lod(dist2_chunks: f32, height_above_terrain: f32, chunk_size: ChunkSize) -> u32 {
-    // Convert squared chunk distance to world distance
-    let world_dist = dist2_chunks.sqrt() * chunk_size as f32;
-
-    // Height-based scaling: higher camera = use lower LODs at same distance
-    // At ground level (< LOD_HEIGHT_BASE): factor = 1.0 (no scaling)
-    // At 100m above terrain: factor ~= 2.0 (double LOD distances)
-    // At 400m+: factor = LOD_HEIGHT_SCALE_MAX (4x LOD distances)
-    let height_factor = if height_above_terrain <= LOD_HEIGHT_BASE {
-        1.0
-    } else {
-        let normalized = (height_above_terrain - LOD_HEIGHT_BASE) / 100.0;
-        (1.0 + normalized).min(LOD_HEIGHT_SCALE_MAX)
-    };
-
-    // Scale thresholds by height factor
-    let lod0_thresh = LOD0_MAX_DIST * height_factor;
-    let lod1_thresh = LOD1_MAX_DIST * height_factor;
-    let lod2_thresh = LOD2_MAX_DIST * height_factor;
-
-    if world_dist < lod0_thresh {
+fn select_lod(dist: f64, chunk_size: ChunkSize) -> u32 {
+    if dist < LOD0_MAX_DIST {
         0
-    } else if world_dist < lod1_thresh {
+    } else if dist < LOD1_MAX_DIST {
         1
-    } else if world_dist < lod2_thresh {
+    } else if dist < LOD2_MAX_DIST {
         2
     } else {
         3
@@ -509,6 +517,28 @@ fn make_oak_tree(device: &Device) -> Option<Prop> {
         lod1: Some(make_oak_lod1(device)),
         lod2: Some(make_oak_lod2(device)),
         lod3: Some(make_oak_billboard(device)),
+        texture_keys: [
+            TextureKey::new(
+                "leaves",
+                TextureParams {
+                    // Good defaults for leaf cards:
+                    color_primary: [0.25, 0.45, 0.15, 1.0], // Deep green
+                    color_secondary: [0.35, 0.55, 0.20, 1.0], // Lighter green variation
+                    seed: 42,
+                    scale: 1.5,     // 1.0 = moderate density, 2.0+ = very dense
+                    roughness: 0.8, // Surface texture amount
+                    octaves: 0.6,
+                    persistence: 0.5,
+                    lacunarity: 0.3,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                },
+                512,
+            ),
+            TextureKey::notex(),
+            TextureKey::notex(),
+            TextureKey::notex(),
+        ],
     })
 }
 
@@ -576,8 +606,8 @@ fn make_oak_lod0(device: &Device) -> Mesh {
         crown_center,
         crown_radius_h,
         crown_radius_v,
-        12,  // num cards
-        1.8, // card size
+        16,  // num cards
+        1.6, // card size
         leaf_color,
     );
 
@@ -588,8 +618,8 @@ fn make_oak_lod0(device: &Device) -> Mesh {
         crown_center + Vec3::new(0.0, -0.3, 0.0),
         crown_radius_h * 0.6,
         crown_radius_v * 0.6,
-        6,
-        1.4,
+        8,
+        1.0,
         [0.18, 0.45, 0.12, 0.9],
     );
 
@@ -712,6 +742,7 @@ fn make_oak_billboard(device: &Device) -> Mesh {
                 normal: normal.to_array(),
                 color: colors[i],
                 uv: uvs[i],
+                texture_id: 0,
             });
         }
 
@@ -777,6 +808,7 @@ fn generate_tapered_cylinder(
                 normal: normal.to_array(),
                 color: varied_color,
                 uv: [seg as f32 / segments as f32, t],
+                texture_id: 0,
             });
         }
     }
@@ -801,6 +833,7 @@ fn generate_tapered_cylinder(
         normal: [0.0, -1.0, 0.0],
         color,
         uv: [0.5, 0.5],
+        texture_id: 0,
     });
     for seg in 0..segments {
         let next = (seg + 1) % segments;
@@ -847,6 +880,7 @@ fn generate_branch(
                 normal: normal.to_array(),
                 color,
                 uv: [seg as f32 / segments as f32, t],
+                texture_id: 0,
             });
         }
     }
@@ -960,6 +994,7 @@ fn generate_leaf_card(
             normal: facing.to_array(),
             color: varied_color(alphas[i]),
             uv: uvs[i],
+            texture_id: 1,
         });
     }
 
@@ -980,10 +1015,6 @@ fn generate_leaf_card(
         base_idx + 2,
     ]);
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MESH BUILDER
-// ═══════════════════════════════════════════════════════════════════════════════
 
 fn build_mesh(
     device: &Device,
@@ -1011,16 +1042,18 @@ fn build_mesh(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// PINE TREE (BONUS)
-// ═══════════════════════════════════════════════════════════════════════════════
-
 fn make_pine_tree(device: &Device) -> Option<Prop> {
     Some(Prop {
         lod0: Some(make_pine_lod0(device)),
         lod1: Some(make_pine_lod1(device)),
         lod2: Some(make_pine_lod2(device)),
         lod3: Some(make_pine_billboard(device)),
+        texture_keys: [
+            TextureKey::notex(),
+            TextureKey::notex(),
+            TextureKey::notex(),
+            TextureKey::notex(),
+        ],
     })
 }
 
@@ -1082,6 +1115,7 @@ fn generate_cone_layer(
         normal: [0.0, 1.0, 0.0],
         color,
         uv: [0.5, 0.0],
+        texture_id: 0,
     });
 
     // Base ring
@@ -1099,6 +1133,7 @@ fn generate_cone_layer(
             normal: normal.to_array(),
             color: [color[0], color[1], color[2], edge_alpha],
             uv: [seg as f32 / segments as f32, 1.0],
+            texture_id: 0,
         });
     }
 
@@ -1153,6 +1188,7 @@ fn make_pine_billboard(device: &Device) -> Mesh {
                 normal: (rot * Vec3::Z).to_array(),
                 color: colors[i],
                 uv: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]][i],
+                texture_id: 0,
             });
         }
 

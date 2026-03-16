@@ -1,7 +1,11 @@
 #include "includes/uniforms.wgsl"
 
 @group(0) @binding(0) var texture_sampler: sampler;
-@group(0) @binding(1) var leaves: texture_2d<f32>;
+@group(0) @binding(1) var tex1: texture_2d<f32>;
+@group(0) @binding(2) var tex2: texture_2d<f32>;
+@group(0) @binding(3) var tex3: texture_2d<f32>;
+@group(0) @binding(4) var tex4: texture_2d<f32>;
+
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 
 
@@ -10,19 +14,20 @@ struct VertexInput {
     @location(1) normal: vec3<f32>,
     @location(2) color: vec4<f32>,
     @location(3) uv: vec2<f32>,
+    @location(4) texture_id: u32
 };
 
 struct InstanceInput {
-    @location(4)  model_col0: vec4<f32>,
-    @location(5)  model_col1: vec4<f32>,
-    @location(6)  model_col2: vec4<f32>,
-    @location(7)  model_col3: vec4<f32>,
-    @location(8)  prev_model_col0: vec4<f32>,
-    @location(9)  prev_model_col1: vec4<f32>,
-    @location(10) prev_model_col2: vec4<f32>,
-    @location(11) prev_model_col3: vec4<f32>,
-    @location(12) color: vec4<f32>,
-    @location(13) misc: vec4<f32>, // x: seed, y: wind_strength, z: variant, w: unused
+    @location(5)  model_col0: vec4<f32>,
+    @location(6)  model_col1: vec4<f32>,
+    @location(7)  model_col2: vec4<f32>,
+    @location(8)  model_col3: vec4<f32>,
+    @location(9)  prev_model_col0: vec4<f32>,
+    @location(10)  prev_model_col1: vec4<f32>,
+    @location(11) prev_model_col2: vec4<f32>,
+    @location(12) prev_model_col3: vec4<f32>,
+    @location(13) color: vec4<f32>,
+    @location(14) misc: vec4<f32>, // x: seed, y: wind_strength, z: variant, w: unused
 };
 
 struct VertexOutput {
@@ -31,11 +36,12 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) world_pos: vec3<f32>,
     @location(3) instance_color: vec4<f32>,
-    @location(4) @interpolate(flat) instance_id: u32,
-    @location(5) curr_pos_cs: vec4<f32>,
-    @location(6) prev_pos_cs: vec4<f32>,
-    @location(7) misc: vec4<f32>,
-    @location(8) vertex_color: vec4<f32>,
+    @location(4) texture_id: u32,
+    @location(5) @interpolate(flat) instance_id: u32,
+    @location(6) curr_pos_cs: vec4<f32>,
+    @location(7) prev_pos_cs: vec4<f32>,
+    @location(8) misc: vec4<f32>,
+    @location(9) vertex_color: vec4<f32>,
 };
 
 struct FragmentOut {
@@ -87,6 +93,7 @@ fn vs_main(
     out.world_pos = world_pos.xyz;
     out.instance_color = instance.color;
     out.vertex_color = vertex.color;
+    out.texture_id = vertex.texture_id;
     out.instance_id = instance_index;
     out.curr_pos_cs = out.clip_position;
     out.prev_pos_cs = uniforms.prev_view_proj * prev_world_pos;
@@ -100,7 +107,35 @@ fn vs_main(
 fn fs_main(in: VertexOutput) -> FragmentOut {
     var out: FragmentOut;
 
-    let base_color = in.vertex_color * in.instance_color;
+    // Sample texture based on texture_id, multiply by instance color
+    var tex_color: vec4<f32>;
+
+    switch (in.texture_id) {
+        case 1u: {
+            tex_color = textureSample(tex1, texture_sampler, in.uv);
+        }
+        case 2u: {
+            tex_color = textureSample(tex2, texture_sampler, in.uv);
+        }
+        case 3u: {
+            tex_color = textureSample(tex3, texture_sampler, in.uv);
+        }
+        case 4u: {
+            tex_color = textureSample(tex4, texture_sampler, in.uv);
+        }
+        default: {
+            // texture_id 0: flat color, no texture
+            tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+
+    // Combine texture with vertex and instance colors
+    let base_color = tex_color * in.vertex_color * in.instance_color;
+
+    // Alpha test for leaf cards and other transparent textures
+    if (base_color.a < 0.1) {
+        discard;
+    }
 
     let variant = in.misc.z;
     let seed = in.misc.x;
@@ -109,7 +144,7 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
         1.0 + sin(variant * 2.3 + seed) * 0.1,
         1.0 + sin(variant * 3.7 + seed) * 0.05
     );
-    let varied_color = base_color.xyz * color_variation;
+    let varied_color = base_color.rgb * color_variation;
 
     let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.3));
     let n_dot_l = max(dot(in.world_normal, light_dir), 0.0);
@@ -118,7 +153,7 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
     let diffuse = n_dot_l * 0.65;
     let lit_color = varied_color * (ambient + diffuse);
 
-    out.color = vec4<f32>(lit_color, base_color.w);
+    out.color = vec4<f32>(lit_color, base_color.a);
 
     out.normal = vec4<f32>(in.world_normal * 0.5 + 0.5, 1.0);
 

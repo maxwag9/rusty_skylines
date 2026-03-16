@@ -20,7 +20,7 @@ pub fn collect_car_audio(
     terrain: &Terrain,
     car_storage: &CarStorage,
 ) {
-    const MAX_DISTANCE: f32 = 300.0;
+    const MAX_DISTANCE: f64 = 300.0;
     const MAX_CARS: usize = 32;
 
     for car in car_storage.iter_cars() {

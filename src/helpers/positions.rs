@@ -267,9 +267,9 @@ impl WorldPos {
 
     /// Lerp between two WorldPos with maximum precision.
     #[inline]
-    pub fn lerp(self, other: WorldPos, t: f32, chunk_size: ChunkSize) -> WorldPos {
+    pub fn lerp(self, other: WorldPos, t: f64, chunk_size: ChunkSize) -> WorldPos {
         let cs = chunk_size as f64;
-        let t64 = t as f64;
+        let t64 = t;
 
         // Convert both to f64 world coords
         let self_x = self.chunk.x as f64 * cs + self.local.x as f64;
@@ -301,7 +301,7 @@ impl WorldPos {
 
     /// Distance between two WorldPos in meters (computed in WorldPos space).
     #[inline]
-    pub fn distance_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {
+    pub fn distance_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
         let cs = chunk_size as f64;
 
         // lossless chunk delta
@@ -313,12 +313,12 @@ impl WorldPos {
         let dy = rhs.local.y as f64 - self.local.y as f64;
         let dz = dcz as f64 * cs + (rhs.local.z as f64 - self.local.z as f64);
 
-        (dx * dx + dy * dy + dz * dz).sqrt() as f32
+        (dx * dx + dy * dy + dz * dz).sqrt()
     }
 
     /// Same as distance_to
     #[inline]
-    pub fn length_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {
+    pub fn length_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
         self.distance_to(rhs, chunk_size)
     }
 

@@ -4,7 +4,7 @@ use crate::helpers::paths::shader_dir;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
-use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
+use crate::renderer::props::Props;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
 use crate::ui::vertex::{LineVtxRender, Vertex};
@@ -603,35 +603,14 @@ pub fn render_props<'a>(
     // Upload instance data for visible chunks
     props.upload_instances(device, queue, camera, terrain);
 
-    let shader_path = shader_dir().join("props.wgsl");
-    let shadow = make_shadow_option(settings, pipelines);
-    let targets = color_and_normals_and_instance_targets(pipelines);
-
-    // Set up pipeline
-    render_manager.render(
-        &[],
-        shader_path.as_path(),
-        &PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(depth_stencil(Default::default(), settings)),
-            msaa_samples: settings.msaa_samples,
-            vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
-            cull_mode: Some(Face::Front),
-            targets: targets.clone(),
-            shadow: shadow.clone(),
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera],
-        pass,
-    );
-
-    props.upload_instances(device, queue, camera, terrain);
-
     // Draw all props
-    props.render(pass, camera, terrain);
+    props.render(render_manager, pass, camera, terrain, pipelines, settings);
 }
 
-fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {
+pub(crate) fn make_shadow_option(
+    settings: &Settings,
+    pipelines: &Pipelines,
+) -> Option<ShadowOptions> {
     match settings.shadow_type {
         ShadowType::CSM => match settings.reversed_depth_z {
             true => Some(ShadowOptions {
@@ -677,7 +656,9 @@ fn color_and_normals_and_motion_targets(pipelines: &Pipelines) -> Vec<Option<Col
         }),
     ]
 }
-fn color_and_normals_and_instance_targets(pipelines: &Pipelines) -> Vec<Option<ColorTargetState>> {
+pub(crate) fn color_and_normals_and_instance_targets(
+    pipelines: &Pipelines,
+) -> Vec<Option<ColorTargetState>> {
     vec![
         Some(ColorTargetState {
             format: pipelines.msaa.hdr.texture().format(),
@@ -712,7 +693,7 @@ pub fn color_target(
     })]
 }
 
-fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
+pub(crate) fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: true,

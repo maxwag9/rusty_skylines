@@ -31,7 +31,7 @@ use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 
-pub const METERS_PER_LANE_POLYLINE_STEP: f32 = 2.0;
+pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
 
 type PartitionId = u32;
 /// One physical "leg" of an intersection — a direction you can come from or go to.
@@ -627,7 +627,7 @@ impl NodeLane {
         &self.geometry
     }
     #[inline]
-    pub fn total_length(&self) -> f32 {
+    pub fn total_length(&self) -> f64 {
         self.geometry.total_len
     }
     #[inline]
@@ -671,8 +671,8 @@ impl NodeLane {
 #[derive(Clone, Debug, Default)]
 pub struct LaneGeometry {
     pub points: Vec<WorldPos>, // polyline
-    pub lengths: Vec<f32>,     // cumulative arc length
-    pub total_len: f32,
+    pub lengths: Vec<f64>,     // cumulative arc length
+    pub total_len: f64,
 }
 
 impl LaneGeometry {
@@ -1273,7 +1273,7 @@ impl Default for RoadManager {
 #[inline]
 pub fn sample_lane_position(
     lane: &Lane,
-    t: f32,
+    t: f64,
     storage: &RoadStorage,
     chunk_size: ChunkSize,
 ) -> Option<WorldPos> {
@@ -1294,7 +1294,7 @@ pub fn project_point_to_lane_xz(
     point: WorldPos,
     storage: &RoadStorage,
     chunk_size: ChunkSize,
-) -> Option<(f32, f32)> {
+) -> Option<(f64, f64)> {
     let from = storage.node(lane.from_node())?;
     let to = storage.node(lane.to_node())?;
 
@@ -1314,29 +1314,29 @@ pub fn project_point_to_segment_xz(
     seg_start: WorldPos,
     seg_end: WorldPos,
     chunk_size: ChunkSize,
-) -> (f32, f32) {
+) -> (f64, f64) {
     // Compute everything relative to seg_start for precision
     let d = seg_end.to_render_pos(seg_start, chunk_size);
     let p = point.to_render_pos(seg_start, chunk_size);
 
-    let dx = d.x;
-    let dz = d.z;
+    let dx = d.x as f64;
+    let dz = d.z as f64;
     let len_sq = dx * dx + dz * dz;
 
     if len_sq < 1e-10 {
         // Degenerate segment
-        return (0.0, p.x * p.x + p.z * p.z);
+        return (0.0, p.x as f64 * p.x as f64 + p.z as f64 * p.z as f64);
     }
 
     // Project point onto line
-    let t = (p.x * dx + p.z * dz) / len_sq;
+    let t = (p.x as f64 * dx + p.z as f64 * dz) / len_sq;
     let t_clamped = t.clamp(0.0, 1.0);
 
     // Compute the closest point on segment (relative to seg_start)
     let cx = t_clamped * dx;
     let cz = t_clamped * dz;
 
-    let dist_sq = (p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz);
+    let dist_sq = (p.x as f64 - cx) * (p.x as f64 - cx) + (p.z as f64 - cz) * (p.z as f64 - cz);
 
     (t_clamped, dist_sq)
 }
@@ -1352,7 +1352,7 @@ pub fn nearest_lane_to_point(
     chunk_size: ChunkSize,
 ) -> Option<LaneId> {
     let mut best_id: Option<LaneId> = None;
-    let mut best_dist_sq = f32::MAX;
+    let mut best_dist_sq = f64::MAX;
 
     for (id, lane) in storage.iter_lanes() {
         if !lane.is_enabled() {
@@ -2676,7 +2676,7 @@ fn compute_lane_geometries(
             road_style_params.road_type().structure,
         );
         let geometry = LaneGeometry::from_polyline(polyline, terrain_renderer.chunk_size);
-        let base_cost = geometry.total_len.max(0.1);
+        let base_cost = geometry.total_len.max(0.1) as f32;
 
         lanes.push(LaneDefinition {
             lane_index,
@@ -2698,7 +2698,7 @@ fn compute_lane_geometries(
         );
         polyline.reverse();
         let geometry = LaneGeometry::from_polyline(polyline, terrain_renderer.chunk_size);
-        let base_cost = geometry.total_len.max(0.1);
+        let base_cost = geometry.total_len.max(0.1) as f32;
 
         lanes.push(LaneDefinition {
             lane_index,

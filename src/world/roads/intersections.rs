@@ -150,7 +150,7 @@ impl IntersectionPolygon {
         for i in 0..polyline.len() - 1 {
             let seg_start = polyline[i];
             let seg_end = polyline[i + 1];
-            let seg_len = seg_start.distance_to(seg_end, self.chunk_size);
+            let seg_len = seg_start.distance_to(seg_end, self.chunk_size) as f32;
 
             if seg_len < 1e-6 {
                 continue;
@@ -285,16 +285,16 @@ fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage, chunk_size: Ch
 
         let mut total_len = 0.0f32;
         for i in 0..pts.len() - 1 {
-            total_len += pts[i].distance_to(pts[i + 1], chunk_size);
+            total_len += pts[i].distance_to(pts[i + 1], chunk_size) as f32;
         }
 
         let is_incoming = arm.incoming_lanes().contains(&lane_id);
 
         let preserve_len = if is_incoming {
-            pts[0].distance_to(pts[1], chunk_size)
+            pts[0].distance_to(pts[1], chunk_size) as f32
         } else {
             let n = pts.len();
-            pts[n - 2].distance_to(pts[n - 1], chunk_size)
+            pts[n - 2].distance_to(pts[n - 1], chunk_size) as f32
         };
 
         let available = (total_len - preserve_len - SAFETY_MARGIN).max(0.0);
@@ -1910,7 +1910,7 @@ fn build_node_lanes_for_intersection(
     node_lanes
 }
 
-fn compute_turn_tightness(chord: f32, dot: f32, params: &IntersectionBuildParams) -> f32 {
+fn compute_turn_tightness(chord: f64, dot: f32, params: &IntersectionBuildParams) -> f32 {
     let base = params.turn_tightness;
 
     let chord_factor = if chord > 25.0 {
@@ -1942,7 +1942,7 @@ pub fn generate_turn_geometry(
     tightness: f32,
     chunk_size: ChunkSize,
 ) -> LaneGeometry {
-    let dist = start.distance_to(end, chunk_size);
+    let dist = start.distance_to(end, chunk_size) as f32;
 
     if dist < 0.001 {
         return LaneGeometry::from_polyline(vec![start, end], chunk_size);
@@ -1987,14 +1987,14 @@ pub fn modify_polyline_start(
     let lengths = polyline_cumulative_lengths(points, chunk_size);
     let total = *lengths.last().unwrap();
 
-    if amount >= total - 0.01 {
+    if amount as f64 >= total - 0.01 {
         return None;
     }
 
-    let (new_start, _) = sample_polyline_at(points, &lengths, amount, chunk_size);
+    let (new_start, _) = sample_polyline_at(points, &lengths, amount as f64, chunk_size);
 
     let mut keep_from = 1;
-    while keep_from < lengths.len() && lengths[keep_from] <= amount {
+    while keep_from < lengths.len() && lengths[keep_from] <= amount as f64 {
         keep_from += 1;
     }
 
@@ -2017,11 +2017,11 @@ pub fn modify_polyline_end(
     let lengths = polyline_cumulative_lengths(points, chunk_size);
     let total = *lengths.last().unwrap();
 
-    if amount >= total - 0.01 {
+    if amount as f64 >= total - 0.01 {
         return None;
     }
 
-    let target_len = total - amount;
+    let target_len = total - amount as f64;
     let (new_end, _) = sample_polyline_at(points, &lengths, target_len, chunk_size);
 
     let mut keep_to = lengths.len() - 1;

@@ -720,7 +720,7 @@ pub fn build_ribbon_mesh(
         right_pos.local.y += height;
 
         // UV calculation: u based on arc length, v spans the width
-        let u = lane_geom.lengths[i] * uv_config.0;
+        let u = lane_geom.lengths[i] as f32 * uv_config.0 as f32;
         let v_min = 0.0;
         let v_max = width * uv_config.1;
 
@@ -861,7 +861,7 @@ pub fn build_vertical_face(
             high_res_height,
         );
         p_top.local.y += top_height;
-        let u = ref_geom.lengths[i] * uv_config.0;
+        let u = ref_geom.lengths[i] as f32 * uv_config.0 as f32;
         let v_h = (top_height - bottom_height).abs() * uv_config.1;
 
         // Bottom vertex

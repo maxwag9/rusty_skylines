@@ -80,6 +80,7 @@ pub enum DebugViewState {
     GtaoBlurred,
     RTRaw,
     Motion,
+    Texture,
 }
 impl Default for DebugViewState {
     fn default() -> Self {
@@ -136,7 +137,8 @@ impl_cycle!(DebugViewState:
     DebugViewState::GtaoRaw,
     DebugViewState::GtaoBlurred,
     DebugViewState::RTRaw,
-    DebugViewState::Motion
+    DebugViewState::Motion,
+    DebugViewState::Texture,
 );
 
 impl_cycle!(InternalMenu: InternalMenu::None, InternalMenu::MainMenu);

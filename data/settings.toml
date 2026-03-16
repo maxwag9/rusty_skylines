@@ -10,7 +10,7 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 256404.33778745006
+total_game_time = 257530.9211795393
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
@@ -22,7 +22,7 @@ gtao_enabled = false
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_partitions_gizmo = false
-render_chunk_bounds = false
+render_chunk_bounds = true
 chunk_size = 128
 tonemapping_state = "Cinematic"
 debug_view_state = "Off"
@@ -35,10 +35,10 @@ render_rt_gizmo = false
 noclip = false
 
 [player_pos.chunk]
-x = -141
-z = -176
+x = -148
+z = -178
 
 [player_pos.local]
-x = 123.12237
-y = 53.11315
-z = 19.508139
+x = 124.42045
+y = 50.984734
+z = 2.5967412

@@ -47,6 +47,7 @@ use wgpu::{
 };
 use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
+use wgpu_render_manager::generator::TextureKey;
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
@@ -1026,6 +1027,29 @@ impl RenderCore {
 
                 self.render_manager.render_fullscreen_debug(
                     &self.pipelines.post_fx.motion_full,
+                    DebugVisualization::Color,
+                    &self.pipelines.msaa.hdr,
+                    &mut pass,
+                );
+            }
+            DebugViewState::Texture => {
+                let color_attachment = create_color_attachment_load(
+                    &self.pipelines.msaa.hdr,
+                    &self.pipelines.resolved.hdr,
+                    self.msaa_samples,
+                );
+
+                let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                    label: Some("Texture Fullscreen Preview Pass"),
+                    color_attachments: &[Some(color_attachment)],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+                self.render_manager.render_fullscreen_debug_texture(
+                    &TextureKey::notex(),
                     DebugVisualization::Color,
                     &self.pipelines.msaa.hdr,
                     &mut pass,

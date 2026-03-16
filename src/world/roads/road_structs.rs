@@ -370,14 +370,14 @@ pub enum BuildMode {
 pub enum SnapKind {
     Free,
     Node { id: NodeId },
-    Lane { lane_id: LaneId, t: f32 },
+    Lane { lane_id: LaneId, t: f64 },
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct SnapResult {
     pub world_pos: WorldPos,
     pub kind: SnapKind,
-    pub distance: f32,
+    pub distance: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -391,7 +391,7 @@ pub enum NodePreviewResult {
 pub struct SnapPreview {
     pub world_pos: WorldPos,
     pub kind: SnapKind,
-    pub distance: f32,
+    pub distance: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -415,7 +415,7 @@ impl NodePreview {
 #[derive(Debug, Clone)]
 pub struct LanePreview {
     pub lane_id: LaneId,
-    pub projected_t: f32,
+    pub projected_t: f64,
     pub projected_point: WorldPos,
     pub sample_points: Vec<WorldPos>,
 }
@@ -423,7 +423,7 @@ pub struct LanePreview {
 #[derive(Debug, Clone)]
 pub struct SplitInfo {
     pub lane_id: LaneId,
-    pub t: f32,
+    pub t: f64,
     pub split_pos: WorldPos,
 }
 
@@ -442,7 +442,7 @@ pub struct SegmentPreview {
     pub would_merge_start: Option<NodeId>,
     pub would_merge_end: Option<NodeId>,
     pub lane_count_each_dir: (LeftLaneCount, RightLaneCount),
-    pub estimated_length: f32,
+    pub estimated_length: f64,
     pub crossing_count: usize,
 }
 
@@ -477,7 +477,7 @@ pub enum PlannedNode {
     },
     Split {
         lane_id: LaneId,
-        t: f32,
+        t: f64,
         pos: WorldPos,
     },
 }
@@ -567,7 +567,7 @@ impl IdAllocator {
 #[derive(Debug, Clone)]
 pub struct CrossingPoint {
     /// Position along the new road from 0.0 (start) to 1.0 (end)
-    pub(crate) t: f32,
+    pub(crate) t: f64,
     /// World position of the crossing
     pub(crate) world_pos: WorldPos,
     /// What we're crossing
@@ -579,14 +579,14 @@ pub enum CrossingKind {
     /// Crossing through an existing node
     ExistingNode(NodeId),
     /// Crossing through an existing lane segment
-    LaneCrossing { lane_id: LaneId, lane_t: f32 },
+    LaneCrossing { lane_id: LaneId, lane_t: f64 },
 }
 
 #[derive(Clone)]
 pub struct ResolvedWaypoint {
     pub(crate) node_id: NodeId,
     pub(crate) pos: WorldPos,
-    pub(crate) t: f32,
+    pub(crate) t: f64,
 }
 #[derive(Clone, Debug)]
 pub struct IntersectionArm {
