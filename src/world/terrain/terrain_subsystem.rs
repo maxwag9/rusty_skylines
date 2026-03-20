@@ -1,7 +1,7 @@
 use crate::commands::Command;
 use crate::data::{LodCenterType, Settings};
 use crate::helpers::mouse_ray::*;
-use crate::helpers::paths::data_dir;
+use crate::helpers::paths::rusty_skylines_dir;
 use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
@@ -10,6 +10,7 @@ use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::ui::vertex::Vertex;
 use crate::world::camera::Camera;
+use crate::world::game_state::SaveState;
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use crate::world::roads::road_structs::RoadType;
 use crate::world::terrain::chunk_builder::*;
@@ -245,7 +246,7 @@ impl TerrainRenderSubsystem {
     pub fn render(
         &self,
         pass: &mut RenderPass,
-        terrain_subsystem: &Terrain,
+        terrain: &Terrain,
         camera: &Camera,
         aspect: f32,
         settings: &Settings,
@@ -255,18 +256,17 @@ impl TerrainRenderSubsystem {
         let view_proj = camera.view_proj();
         let planes = extract_frustum_planes(view_proj);
 
-        let cs = terrain_subsystem.chunk_size;
+        let cs = terrain.chunk_size;
         let target_pos = camera.target;
         let target_cx = target_pos.chunk.x;
         let target_cz = target_pos.chunk.z;
 
-        let r = terrain_subsystem.view_radius_render as i32;
+        let r = terrain.view_radius_render as i32;
         let r2 = r * r;
 
-        let mut per_page: Vec<Vec<GpuChunkHandle>> =
-            vec![Vec::new(); terrain_subsystem.arena.pages.len()];
+        let mut per_page: Vec<Vec<GpuChunkHandle>> = vec![Vec::new(); terrain.arena.pages.len()];
 
-        for (&chunk_coord, chunk) in terrain_subsystem.chunks.iter() {
+        for (&chunk_coord, chunk) in terrain.chunks.iter() {
             let dx = (chunk_coord.x - target_cx).abs();
             if dx > r {
                 continue;
@@ -327,7 +327,7 @@ impl TerrainRenderSubsystem {
                 continue;
             }
 
-            let page = &terrain_subsystem.arena.pages[pi];
+            let page = &terrain.arena.pages[pi];
             pass.set_vertex_buffer(0, page.vertex_buf.slice(..));
             pass.set_index_buffer(page.index_buf.slice(..), IndexFormat::Uint32);
 
@@ -372,8 +372,8 @@ pub struct Terrain {
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
-    pub fn new(device: &Device, settings: &Settings) -> Self {
-        let chunk_size: ChunkSize = settings.chunk_size;
+    pub fn new(device: &Device, settings: &Settings, save_state: &mut SaveState) -> Self {
+        let chunk_size: ChunkSize = save_state.chunk_size;
         let view_radius_render = (64f32 * (64f32 / chunk_size as f32)) as usize;
         let view_radius_generate = (32f32 * (64f32 / chunk_size as f32)) as usize;
 
@@ -385,16 +385,17 @@ impl Terrain {
 
         let terrain_editor: TerrainEditor;
         if settings.show_world {
-            terrain_editor = match TerrainEditor::load_edits(data_dir("edited_chunks")) {
+            terrain_editor = match TerrainEditor::load_edits(rusty_skylines_dir("edited_chunks")) {
                 Ok(te) => {
-                    println!("World loaded");
+                    println!("Old World loaded");
                     te
                 }
                 Err(e) => {
-                    eprintln!("Failed to load World: {e}");
+                    //eprintln!("Failed to load Old World: {e}");
                     TerrainEditor::default()
                 }
             };
+            save_state.terrain_edits = terrain_editor.get_edits();
         } else {
             terrain_editor = TerrainEditor::default();
         }

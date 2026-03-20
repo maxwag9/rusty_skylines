@@ -142,6 +142,8 @@ keys = ["Shift+F7"]
 keys = ["Shift+F8"]
 ["Toggle Reversed Depth Z"]
 keys = ["Ctrl+F8"]
+["Screenshot"]
+keys = ["F2"]
 
 ["Leave Game"]
 keys = ["ESC"]

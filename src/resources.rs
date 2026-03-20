@@ -1,5 +1,5 @@
 use crate::data::Settings;
-use crate::helpers::paths::data_dir;
+use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::render_core::{
     RenderCore, create_device, create_surface_and_adapter, create_surface_config,
 };
@@ -11,6 +11,7 @@ use crate::world::world_core::WorldCore;
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::Surface;
+use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 pub struct CommandQueues {
@@ -40,11 +41,11 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(window: Arc<Window>) -> Self {
-        let mut settings = Settings::load(data_dir("settings.toml"));
+    pub fn new(window: Arc<Window>, event_loop: &ActiveEventLoop) -> Self {
+        let mut settings = Settings::load(rusty_skylines_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
 
-        let (surface, adapter, size) = create_surface_and_adapter(window.clone());
+        let (surface, adapter, size) = create_surface_and_adapter(window.clone(), event_loop);
         let (config, msaa_samples) = create_surface_config(&surface, &adapter, &mut settings, size);
         let (device, queue) = &create_device(&adapter);
 
@@ -52,7 +53,6 @@ impl Resources {
 
         let mut world_core = WorldCore::new(device, &settings);
         let camera = &mut world_core.world_state.camera;
-        camera.target = settings.player_pos;
 
         let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
 
@@ -81,31 +81,25 @@ pub struct Time {
     pub last_frame: Instant,
     pub start: Instant,
 
-    // Render timing
     pub render_dt: f32,
     pub render_fps: f32,
     pub target_fps: f32,
     pub target_frametime: f32,
 
-    // Fixed-step simulation timing
     pub sim_accumulator: f32,
     pub target_sim_dt: f32,
     pub prev_time_scale: f32,
 
-    // Achieved speed measurement (windowed)
     pub achieved_speed: f32,
     achieved_speed_window_time: f32,
     achieved_speed_window_steps: u32,
 
-    // Totals
     pub total_time: f64,
     pub total_game_time: f64,
     pub frame_count: u64,
 
-    // Safety
     pub max_frame_dt: f32,
 
-    // Speed-change detection
     pub speed_just_changed: bool,
     pub current_time_speed: f32,
 }
@@ -159,7 +153,20 @@ impl Time {
         self.target_frametime = 1.0 / self.target_fps;
     }
 
-    /// Call once per render frame.
+    #[inline]
+    pub fn is_rewinding(&self) -> bool {
+        self.current_time_speed < 0.0
+    }
+
+    #[inline]
+    pub fn time_direction(&self) -> f32 {
+        if self.current_time_speed >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        }
+    }
+
     pub fn begin_frame(&mut self, time_speed: f32) {
         let now = Instant::now();
         let mut dt = (now - self.last_frame).as_secs_f32();
@@ -173,7 +180,6 @@ impl Time {
         self.total_time += dt as f64;
         self.frame_count += 1;
 
-        // Detect speed change: flush accumulator immediately on ANY speed transition
         let speed_changed = (time_speed - self.current_time_speed).abs() > 1e-6;
         self.speed_just_changed = speed_changed;
 
@@ -181,37 +187,31 @@ impl Time {
             self.sim_accumulator = 0.0;
             self.prev_time_scale = self.current_time_speed;
             self.current_time_speed = time_speed;
-            // Reset measurement window on speed change
             self.achieved_speed = time_speed;
             self.achieved_speed_window_time = 0.0;
             self.achieved_speed_window_steps = 0;
         }
 
-        // Accumulate wall-clock time for the measurement window
         self.achieved_speed_window_time += dt;
 
-        // Accumulate sim time at current speed
-        if time_speed >= 0.0 {
-            self.sim_accumulator += dt * time_speed;
-        }
+        self.sim_accumulator += dt * time_speed.abs();
     }
 
-    /// Call after sim stepping is done for this frame, passing how many steps were taken.
     pub fn update_achieved_speed(&mut self, steps: u32) {
         self.achieved_speed_window_steps += steps;
 
-        // Evaluate every 0.5 seconds of wall-clock time
         const WINDOW_DURATION: f32 = 0.5;
 
         if self.achieved_speed_window_time >= WINDOW_DURATION {
             let sim_time = self.achieved_speed_window_steps as f32 * self.target_sim_dt;
-            self.achieved_speed = if self.achieved_speed_window_time > 0.0 {
+            let raw_speed = if self.achieved_speed_window_time > 0.0 {
                 sim_time / self.achieved_speed_window_time
             } else {
                 0.0
             };
 
-            // Reset window
+            self.achieved_speed = raw_speed * self.time_direction();
+
             self.achieved_speed_window_time = 0.0;
             self.achieved_speed_window_steps = 0;
         }
@@ -230,13 +230,24 @@ impl Time {
 
     #[inline]
     pub fn can_step_sim(&self) -> bool {
-        self.target_sim_dt > 0.0 && self.sim_accumulator >= self.target_sim_dt
+        if self.target_sim_dt <= 0.0 || self.sim_accumulator < self.target_sim_dt {
+            return false;
+        }
+        if self.is_rewinding() && self.total_game_time < 1e-9 {
+            return false;
+        }
+        true
     }
 
     #[inline]
     pub fn consume_sim_step(&mut self) {
         self.sim_accumulator -= self.target_sim_dt;
-        self.total_game_time += self.target_sim_dt as f64; // <-- achieved sim time.
+        let dt = self.target_sim_dt as f64;
+        if self.current_time_speed >= 0.0 {
+            self.total_game_time += dt;
+        } else {
+            self.total_game_time = (self.total_game_time - dt).max(0.0);
+        }
     }
 }
 

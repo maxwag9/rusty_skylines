@@ -9,7 +9,7 @@ pub fn run_ticked(resources: &mut Resources) {
     let (time, terrain, roads, cars, input) = (
         &mut world.time,
         &mut world.terrain,
-        &mut world.road_subsystem,
+        &mut world.road,
         &mut world.cars,
         &mut world.input,
     );
@@ -34,7 +34,7 @@ pub fn run_sim(resources: &mut Resources) {
     let cam_controller = &mut world.world_state.cam_controller;
     world.simulation.update(
         &mut world.terrain,
-        &mut world.road_subsystem,
+        &mut world.road,
         &mut world.cars,
         &resources.settings,
         &world.time,
@@ -59,12 +59,15 @@ pub fn run_ui(resources: &mut Resources, event_loop: &ActiveEventLoop) {
         input,
         time,
         &mut resources.world_core.terrain,
+        &mut resources.render_core.props,
         resources.window.inner_size(),
-        &mut resources.world_core.road_subsystem.road_editor.style,
+        &mut resources.world_core.road,
         &mut resources.command_queues,
         &mut resources.settings,
         &mut resources.world_core.world_state.camera,
+        &mut resources.world_core.world_state.cam_controller,
         event_loop,
+        &mut resources.world_core.world_state.game_state,
     );
 }
 

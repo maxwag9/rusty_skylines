@@ -5,18 +5,20 @@ use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::{
     color_and_normals_and_instance_targets, depth_stencil, make_shadow_option,
 };
+use crate::renderer::shadows::{shadow_bias_for_cascade, shadow_pipeline_options};
 use crate::ui::input::Input;
 use crate::world::camera::Camera;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat3, Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::util::DeviceExt;
 use wgpu::*;
 use wgpu_render_manager::generator::{TextureKey, TextureParams};
-use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 
 #[repr(C)]
@@ -156,6 +158,7 @@ impl GpuPropInstance {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PropInstance {
     pub pos: WorldPos,
     pub rotation_y_rad: f32,
@@ -188,22 +191,60 @@ impl PropChunk {
         }
     }
 }
-
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SavePropChunk {
+    pub chunk_coord: ChunkCoord,
+    pub archetype_instances: HashMap<String, Vec<PropInstance>>,
+}
 pub struct Props {
     pub props: HashMap<String, Prop>,
     pub chunks: HashMap<ChunkCoord, PropChunk>,
     pub prev_models: HashMap<u64, [[f32; 4]; 4]>, // key: hash of (chunk, archetype, index)
+    device: Device,
 }
 
 impl Props {
-    pub fn new() -> Self {
+    pub fn new(device: &Device) -> Self {
         Self {
             props: HashMap::new(),
             chunks: HashMap::new(),
             prev_models: HashMap::new(),
+            device: device.clone(),
         }
     }
 
+    pub fn get_props(&self) -> Vec<SavePropChunk> {
+        let mut prop_chunks: Vec<SavePropChunk> = Vec::new();
+
+        for chunk in self.chunks.values() {
+            prop_chunks.push(SavePropChunk {
+                chunk_coord: chunk.chunk_coord,
+                archetype_instances: chunk.archetype_instances.clone(),
+            })
+        }
+
+        prop_chunks
+    }
+    pub fn load_props(&mut self, chunks: Vec<SavePropChunk>) {
+        for chunk in chunks {
+            for archetype in chunk.archetype_instances.keys() {
+                let key = &archetype.to_lowercase();
+                if !self.is_registered(key) {
+                    if let Some(prop) = make_prop(key, &self.device) {
+                        self.register_prop(key.clone(), prop);
+                    }
+                }
+            }
+            self.chunks.insert(
+                chunk.chunk_coord,
+                PropChunk {
+                    chunk_coord: chunk.chunk_coord,
+                    archetype_instances: chunk.archetype_instances.clone(),
+                    gpu_instance_buffers: HashMap::new(),
+                },
+            );
+        }
+    }
     pub fn register_prop(&mut self, key: impl Into<String>, prop: Prop) {
         self.props.insert(key.into(), prop);
     }
@@ -371,6 +412,7 @@ impl Props {
         }
     }
 
+    /// Normal rendering pass
     pub fn render<'a>(
         &'a self,
         render_manager: &mut RenderManager,
@@ -382,8 +424,24 @@ impl Props {
     ) {
         let eye = camera.eye_world();
         let terrain_height = terrain.get_height_at(eye, true);
-        let height_above_terrain = (eye.local.y - terrain_height).max(0.0);
         let chunk_size = camera.chunk_size;
+
+        let shader_path = shader_dir().join("props.wgsl");
+        let shadow = make_shadow_option(settings, pipelines);
+        let targets = color_and_normals_and_instance_targets(pipelines);
+
+        let opts = PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(depth_stencil(Default::default(), settings)),
+            msaa_samples: settings.msaa_samples,
+            vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
+            cull_mode: Some(Face::Back),
+            fragment: FragmentOption::Default {
+                targets: targets.clone(),
+            },
+            shadow: shadow.clone(),
+            ..Default::default()
+        };
 
         for visible_chunk in terrain.visible.iter() {
             let coord = visible_chunk.coords.chunk_coord;
@@ -392,7 +450,6 @@ impl Props {
                 continue;
             };
 
-            // Calculate LOD for this chunk
             let instance_terrain_height = terrain.get_height_at(eye, true);
             let dist = eye.distance_to(
                 WorldPos::new(coord, LocalPos::new(0.0, instance_terrain_height, 0.0)),
@@ -415,28 +472,85 @@ impl Props {
                     continue;
                 };
 
-                let shader_path = shader_dir().join("props.wgsl");
-                let shadow = make_shadow_option(settings, pipelines);
-                let targets = color_and_normals_and_instance_targets(pipelines);
-
-                // Set up pipeline
                 render_manager.render(
                     &prop.texture_keys,
                     shader_path.as_path(),
-                    &PipelineOptions {
-                        topology: TriangleList,
-                        depth_stencil: Some(depth_stencil(Default::default(), settings)),
-                        msaa_samples: settings.msaa_samples,
-                        vertex_layouts: Vec::from([
-                            PropVertex::layout(),
-                            GpuPropInstance::layout(),
-                        ]),
-                        cull_mode: Some(Face::Front),
-                        targets: targets.clone(),
-                        shadow: shadow.clone(),
-                        ..Default::default()
-                    },
+                    &opts,
                     &[&pipelines.buffers.camera],
+                    pass,
+                );
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, inst_buf.slice(..));
+                pass.set_index_buffer(mesh.index_buffer.slice(..), IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..*count);
+            }
+        }
+    }
+
+    /// Shadow pass rendering
+    pub fn render_shadows<'a>(
+        &'a self,
+        render_manager: &mut RenderManager,
+        pass: &mut RenderPass<'a>,
+        camera: &'a Camera,
+        terrain: &'a Terrain,
+        pipelines: &Pipelines,
+        settings: &Settings,
+        shadow_mat_buffer: &'a Buffer,
+        cascade_idx: usize,
+    ) {
+        let eye = camera.eye_world();
+        let chunk_size = camera.chunk_size;
+
+        let bias = shadow_bias_for_cascade(
+            cascade_idx,
+            pipelines.resources.csm_shadows.texels[cascade_idx],
+            settings.reversed_depth_z,
+        );
+
+        let shader = shader_dir().join("props_shadows.wgsl");
+        let opts = shadow_pipeline_options(
+            settings,
+            bias,
+            vec![PropVertex::layout(), GpuPropInstance::layout()],
+            Face::Back,
+            FragmentOption::Default { targets: vec![] },
+        );
+
+        for visible_chunk in terrain.visible.iter() {
+            let coord = visible_chunk.coords.chunk_coord;
+
+            let Some(chunk) = self.chunks.get(&coord) else {
+                continue;
+            };
+
+            let instance_terrain_height = terrain.get_height_at(eye, true);
+            let dist = eye.distance_to(
+                WorldPos::new(coord, LocalPos::new(0.0, instance_terrain_height, 0.0)),
+                chunk_size,
+            );
+            let lod_level = select_lod(dist, chunk_size);
+
+            for (archetype, instances) in &chunk.archetype_instances {
+                if instances.is_empty() {
+                    continue;
+                }
+
+                let Some(prop) = self.props.get(archetype) else {
+                    continue;
+                };
+                let Some(mesh) = prop.get_lod(lod_level) else {
+                    continue;
+                };
+                let Some((inst_buf, count)) = chunk.gpu_instance_buffers.get(archetype) else {
+                    continue;
+                };
+
+                render_manager.render(
+                    &prop.texture_keys,
+                    shader.as_path(),
+                    &opts,
+                    &[&pipelines.buffers.camera, shadow_mat_buffer],
                     pass,
                 );
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -503,7 +617,7 @@ fn select_lod(dist: f64, chunk_size: ChunkSize) -> u32 {
     }
 }
 
-pub fn make_prop(key: &str, device: &Device) -> Option<Prop> {
+fn make_prop(key: &str, device: &Device) -> Option<Prop> {
     match key.to_lowercase().as_str() {
         "oak" | "oak_tree" => make_oak_tree(device),
         "pine" | "pine_tree" => make_pine_tree(device),
@@ -513,27 +627,26 @@ pub fn make_prop(key: &str, device: &Device) -> Option<Prop> {
 
 fn make_oak_tree(device: &Device) -> Option<Prop> {
     Some(Prop {
-        lod0: Some(make_oak_lod0(device)),
-        lod1: Some(make_oak_lod1(device)),
-        lod2: Some(make_oak_lod2(device)),
-        lod3: Some(make_oak_billboard(device)),
+        lod0: Some(make_oak_lod(device, 0)),
+        lod1: Some(make_oak_lod(device, 1)),
+        lod2: Some(make_oak_lod(device, 2)),
+        lod3: Some(make_oak_lod(device, 3)),
         texture_keys: [
             TextureKey::new(
                 "leaves",
                 TextureParams {
-                    // Good defaults for leaf cards:
-                    color_primary: [0.25, 0.45, 0.15, 1.0], // Deep green
-                    color_secondary: [0.35, 0.55, 0.20, 1.0], // Lighter green variation
-                    seed: 42,
-                    scale: 1.5,     // 1.0 = moderate density, 2.0+ = very dense
-                    roughness: 0.8, // Surface texture amount
+                    color_primary: [0.25, 0.45, 0.15, 1.0],
+                    color_secondary: [0.35, 0.55, 0.20, 1.0],
+                    seed: 69,
+                    scale: 1.5,
+                    roughness: 0.8,
                     octaves: 0.6,
                     persistence: 0.5,
                     lacunarity: 0.3,
                     _pad0: 0.0,
                     _pad1: 0.0,
                 },
-                512,
+                256,
             ),
             TextureKey::notex(),
             TextureKey::notex(),
@@ -542,497 +655,550 @@ fn make_oak_tree(device: &Device) -> Option<Prop> {
     })
 }
 
-/// LOD0: Full detail (~400 verts)
-fn make_oak_lod0(device: &Device) -> Mesh {
-    let mut verts: Vec<PropVertex> = Vec::new();
-    let mut idxs: Vec<u32> = Vec::new();
+fn make_pine_tree(device: &Device) -> Option<Prop> {
+    Some(Prop {
+        lod0: Some(make_pine_lod(device, 0)),
+        lod1: Some(make_pine_lod(device, 1)),
+        lod2: Some(make_pine_lod(device, 2)),
+        lod3: Some(make_pine_lod(device, 3)),
+        texture_keys: [
+            TextureKey::notex(),
+            TextureKey::notex(),
+            TextureKey::notex(),
+            TextureKey::notex(),
+        ],
+    })
+}
 
-    // Trunk parameters
-    let trunk_h = 4.0;
-    let trunk_r_bot = 0.35;
-    let trunk_r_top = 0.18;
-    let trunk_color = [0.35, 0.22, 0.12, 1.0];
-
-    // Generate trunk
-    generate_tapered_cylinder(
-        &mut verts,
-        &mut idxs,
-        Vec3::ZERO,
-        trunk_h,
-        trunk_r_bot,
-        trunk_r_top,
-        12,
-        5, // segments, rings
-        trunk_color,
-    );
-
-    // Main branches (3 big ones)
-    let branch_starts = [
-        (Vec3::new(0.0, trunk_h * 0.7, 0.0), Vec3::new(1.2, 1.5, 0.3)),
-        (
-            Vec3::new(0.0, trunk_h * 0.75, 0.0),
-            Vec3::new(-0.8, 1.6, 1.0),
-        ),
-        (
-            Vec3::new(0.0, trunk_h * 0.8, 0.0),
-            Vec3::new(0.2, 1.4, -1.1),
-        ),
-    ];
-    for (start, dir) in branch_starts {
-        generate_branch(
-            &mut verts,
-            &mut idxs,
-            start,
-            dir.normalize(),
-            dir.length(),
-            0.1,
-            0.04, // radius start/end
-            6,
-            3,
-            trunk_color,
+fn make_pine_lod(device: &Device, lod: u32) -> Mesh {
+    if lod >= 3 {
+        let mut vertices: Vec<PropVertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        generate_billboard_cross(
+            Vec3::new(0.0, 3.5, 0.0),
+            3.0,
+            7.0,
+            &mut vertices,
+            &mut indices,
         );
+        return create_mesh(device, &vertices, &indices);
     }
 
-    // Leaf crown parameters
-    let crown_center = Vec3::new(0.0, trunk_h + 1.8, 0.0);
-    let crown_radius_h = 2.8;
-    let crown_radius_v = 2.2;
-    let leaf_color = [0.25, 0.55, 0.18, 0.95];
-
-    // Generate leaf cards (12 cards in spherical arrangement)
-    generate_leaf_sphere(
-        &mut verts,
-        &mut idxs,
-        crown_center,
-        crown_radius_h,
-        crown_radius_v,
-        16,  // num cards
-        1.6, // card size
-        leaf_color,
-    );
-
-    // Inner leaf cards for density
-    generate_leaf_sphere(
-        &mut verts,
-        &mut idxs,
-        crown_center + Vec3::new(0.0, -0.3, 0.0),
-        crown_radius_h * 0.6,
-        crown_radius_v * 0.6,
-        8,
-        1.0,
-        [0.18, 0.45, 0.12, 0.9],
-    );
-
-    let bounds_center = Vec3::new(0.0, trunk_h / 2.0 + 1.0, 0.0);
-    let bounds_radius = trunk_h + crown_radius_v;
-
-    build_mesh(device, &verts, &idxs, (bounds_center, bounds_radius))
+    let structure = pine_tree_structure();
+    let render_params = LodRenderParams::pine_for_lod(lod);
+    generate_tree_mesh(device, &structure, &render_params)
 }
 
-/// LOD1: Medium detail (~200 verts)
-fn make_oak_lod1(device: &Device) -> Mesh {
-    let mut verts: Vec<PropVertex> = Vec::new();
-    let mut idxs: Vec<u32> = Vec::new();
-
-    let trunk_h = 4.0;
-    let trunk_color = [0.35, 0.22, 0.12, 1.0];
-
-    // Simpler trunk
-    generate_tapered_cylinder(
-        &mut verts,
-        &mut idxs,
-        Vec3::ZERO,
-        trunk_h,
-        0.35,
-        0.18,
-        8,
-        3,
-        trunk_color,
-    );
-
-    // Fewer leaf cards
-    let crown_center = Vec3::new(0.0, trunk_h + 1.8, 0.0);
-    generate_leaf_sphere(
-        &mut verts,
-        &mut idxs,
-        crown_center,
-        2.8,
-        2.2,
-        8,
-        2.0,
-        [0.25, 0.55, 0.18, 0.95],
-    );
-
-    let bounds_center = Vec3::new(0.0, trunk_h / 2.0 + 1.0, 0.0);
-    build_mesh(device, &verts, &idxs, (bounds_center, 6.0))
+struct LSystemRule {
+    from: char,
+    to: &'static str,
 }
 
-/// LOD2: Low detail (~80 verts)
-fn make_oak_lod2(device: &Device) -> Mesh {
-    let mut verts: Vec<PropVertex> = Vec::new();
-    let mut idxs: Vec<u32> = Vec::new();
-
-    let trunk_h = 4.0;
-
-    // Very simple trunk
-    generate_tapered_cylinder(
-        &mut verts,
-        &mut idxs,
-        Vec3::ZERO,
-        trunk_h,
-        0.35,
-        0.18,
-        6,
-        2,
-        [0.35, 0.22, 0.12, 1.0],
-    );
-
-    // Just 4 big leaf cards
-    let crown_center = Vec3::new(0.0, trunk_h + 1.5, 0.0);
-    generate_leaf_sphere(
-        &mut verts,
-        &mut idxs,
-        crown_center,
-        2.5,
-        2.0,
-        4,
-        2.5,
-        [0.25, 0.55, 0.18, 0.95],
-    );
-
-    build_mesh(device, &verts, &idxs, (Vec3::new(0.0, 3.0, 0.0), 6.0))
-}
-
-/// LOD3: Billboard (2 crossed quads)
-fn make_oak_billboard(device: &Device) -> Mesh {
-    let mut verts: Vec<PropVertex> = Vec::new();
-    let mut idxs: Vec<u32> = Vec::new();
-
-    let h = 7.0;
-    let w = 5.0;
-    let center_y = h / 2.0;
-
-    // Two crossed quads
-    for angle in [0.0, PI / 2.0] {
-        let rot = Mat3::from_rotation_y(angle);
-        let right = rot * Vec3::new(w / 2.0, 0.0, 0.0);
-
-        let base = idxs.len() as u32 / 6 * 4;
-
-        // Mixed color: trunk at bottom, leaves at top
-        let positions = [
-            Vec3::new(0.0, 0.0, 0.0) - right,
-            Vec3::new(0.0, 0.0, 0.0) + right,
-            Vec3::new(0.0, h, 0.0) + right,
-            Vec3::new(0.0, h, 0.0) - right,
-        ];
-        let colors = [
-            [0.35, 0.25, 0.12, 1.0], // bottom left - trunk
-            [0.35, 0.25, 0.12, 1.0], // bottom right - trunk
-            [0.25, 0.55, 0.18, 0.9], // top right - leaves
-            [0.25, 0.55, 0.18, 0.9], // top left - leaves
-        ];
-        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
-
-        let normal = rot * Vec3::Z;
-
-        for i in 0..4 {
-            verts.push(PropVertex {
-                position: positions[i].to_array(),
-                normal: normal.to_array(),
-                color: colors[i],
-                uv: uvs[i],
-                texture_id: 0,
-            });
-        }
-
-        idxs.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
-
-    build_mesh(
-        device,
-        &verts,
-        &idxs,
-        (Vec3::new(0.0, h / 2.0, 0.0), h / 2.0 + 1.0),
-    )
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// GEOMETRY GENERATORS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-fn generate_tapered_cylinder(
-    verts: &mut Vec<PropVertex>,
-    idxs: &mut Vec<u32>,
-    base: Vec3,
-    height: f32,
-    radius_bottom: f32,
-    radius_top: f32,
-    segments: u32,
-    rings: u32,
-    color: [f32; 4],
-) {
-    let base_idx = verts.len() as u32;
-
-    // Generate vertices
-    for ring in 0..=rings {
-        let t = ring as f32 / rings as f32;
-        let y = base.y + height * t;
-        let radius = radius_bottom + (radius_top - radius_bottom) * t;
-
-        // Slight wobble for organic look
-        let wobble = 1.0 + (ring as f32 * 2.3).sin() * 0.05;
-
-        for seg in 0..segments {
-            let angle = (seg as f32 / segments as f32) * PI * 2.0;
-            let seg_wobble = 1.0 + (seg as f32 * 1.7 + ring as f32).sin() * 0.08;
-            let r = radius * wobble * seg_wobble;
-
-            let x = base.x + angle.cos() * r;
-            let z = base.z + angle.sin() * r;
-
-            // Normal points outward
-            let normal = Vec3::new(angle.cos(), 0.15, angle.sin()).normalize();
-
-            // Slight color variation
-            let bark_variation = 1.0 + ((seg as f32 + ring as f32 * 0.5).sin() * 0.1);
-            let varied_color = [
-                color[0] * bark_variation,
-                color[1] * bark_variation,
-                color[2] * bark_variation,
-                color[3],
-            ];
-
-            verts.push(PropVertex {
-                position: [x, y, z],
-                normal: normal.to_array(),
-                color: varied_color,
-                uv: [seg as f32 / segments as f32, t],
-                texture_id: 0,
-            });
-        }
-    }
-
-    // Generate indices
-    for ring in 0..rings {
-        for seg in 0..segments {
-            let curr = base_idx + ring * segments + seg;
-            let next = base_idx + ring * segments + (seg + 1) % segments;
-            let curr_up = curr + segments;
-            let next_up = next + segments;
-
-            idxs.extend_from_slice(&[curr, next, curr_up]);
-            idxs.extend_from_slice(&[next, next_up, curr_up]);
-        }
-    }
-
-    // Cap the bottom
-    let center_idx = verts.len() as u32;
-    verts.push(PropVertex {
-        position: base.to_array(),
-        normal: [0.0, -1.0, 0.0],
-        color,
-        uv: [0.5, 0.5],
-        texture_id: 0,
-    });
-    for seg in 0..segments {
-        let next = (seg + 1) % segments;
-        idxs.extend_from_slice(&[center_idx, base_idx + next, base_idx + seg]);
-    }
-}
-
-fn generate_branch(
-    verts: &mut Vec<PropVertex>,
-    idxs: &mut Vec<u32>,
-    start: Vec3,
+#[derive(Clone)]
+struct TurtleState {
+    position: Vec3,
     direction: Vec3,
+    right: Vec3,
+    up: Vec3,
+    thickness: f32,
     length: f32,
-    radius_start: f32,
-    radius_end: f32,
-    segments: u32,
-    rings: u32,
-    color: [f32; 4],
-) {
-    let base_idx = verts.len() as u32;
+    depth: u32,
+}
 
-    // Build local coordinate frame
-    let up = if direction.y.abs() > 0.9 {
+impl TurtleState {
+    fn new(base_thickness: f32, base_length: f32) -> Self {
+        Self {
+            position: Vec3::ZERO,
+            direction: Vec3::Y,
+            right: Vec3::X,
+            up: Vec3::NEG_Z,
+            thickness: base_thickness,
+            length: base_length,
+            depth: 0,
+        }
+    }
+
+    fn rotate_yaw(&mut self, angle: f32) {
+        let rotation = Quat::from_axis_angle(self.up, angle);
+        self.direction = rotation * self.direction;
+        self.right = rotation * self.right;
+    }
+
+    fn rotate_pitch(&mut self, angle: f32) {
+        let rotation = Quat::from_axis_angle(self.right, angle);
+        self.direction = rotation * self.direction;
+        self.up = rotation * self.up;
+    }
+
+    fn rotate_roll(&mut self, angle: f32) {
+        let rotation = Quat::from_axis_angle(self.direction, angle);
+        self.right = rotation * self.right;
+        self.up = rotation * self.up;
+    }
+}
+
+struct BranchSegment {
+    start: Vec3,
+    end: Vec3,
+    start_radius: f32,
+    end_radius: f32,
+}
+
+// Replaces individual LeafCard - one cluster = what was 3-5 leaves
+struct LeafCluster {
+    position: Vec3,
+    direction: Vec3,
+    right: Vec3,
+    up: Vec3,
+    size: f32,
+}
+
+struct SimpleRng(u32);
+
+impl SimpleRng {
+    fn new(seed: u32) -> Self {
+        Self(seed)
+    }
+
+    fn next(&mut self) -> f32 {
+        self.0 = self.0.wrapping_mul(1103515245).wrapping_add(12345);
+        ((self.0 >> 16) & 0x7FFF) as f32 / 32767.0
+    }
+
+    fn range(&mut self, min: f32, max: f32) -> f32 {
+        min + self.next() * (max - min)
+    }
+}
+
+fn expand_lsystem(axiom: &str, rules: &[LSystemRule], iterations: u32) -> String {
+    let mut current = axiom.to_string();
+
+    for _ in 0..iterations {
+        let mut next = String::with_capacity(current.len() * 2);
+        for c in current.chars() {
+            let replacement = rules
+                .iter()
+                .find(|r| r.from == c)
+                .map(|r| r.to)
+                .unwrap_or("");
+
+            if replacement.is_empty() {
+                next.push(c);
+            } else {
+                next.push_str(replacement);
+            }
+        }
+        current = next;
+    }
+
+    current
+}
+
+fn interpret_lsystem(
+    lsystem: &str,
+    base_angle: f32,
+    length_decay: f32,
+    thickness_decay: f32,
+    base_length: f32,
+    base_thickness: f32,
+    seed: u32,
+) -> (Vec<BranchSegment>, Vec<LeafCluster>) {
+    let mut branches = Vec::new();
+    let mut leaves = Vec::new();
+    let mut stack: Vec<TurtleState> = Vec::new();
+    let mut state = TurtleState::new(base_thickness, base_length);
+    let mut rng = SimpleRng::new(seed);
+
+    for c in lsystem.chars() {
+        let angle_variation = rng.range(0.65, 1.35);
+        let length_variation = rng.range(0.8, 1.2);
+
+        match c {
+            'F' | 'G' => {
+                state.rotate_pitch(rng.range(-0.12, 0.12));
+                state.rotate_yaw(rng.range(-0.12, 0.12));
+
+                let start = state.position;
+                let start_radius = state.thickness;
+                let actual_length = state.length * length_variation;
+
+                state.position += state.direction * actual_length;
+
+                // More aggressive taper, especially for thin branches
+                let base_taper = rng.range(0.65, 0.78);
+                // Extra taper for already-thin branches (makes ends properly thin)
+                let thin_branch_factor = if start_radius < 0.05 {
+                    0.75
+                } else if start_radius < 0.08 {
+                    0.85
+                } else {
+                    1.0
+                };
+                let end_radius = (start_radius * base_taper * thin_branch_factor).max(0.004);
+                state.thickness = end_radius;
+
+                branches.push(BranchSegment {
+                    start,
+                    end: state.position,
+                    start_radius,
+                    end_radius,
+                });
+            }
+            'f' => {
+                state.position += state.direction * state.length * length_variation;
+            }
+            '+' => state.rotate_yaw(base_angle * angle_variation),
+            '-' => state.rotate_yaw(-base_angle * angle_variation),
+            '&' => state.rotate_pitch(base_angle * angle_variation),
+            '^' => state.rotate_pitch(-base_angle * angle_variation),
+            '\\' => state.rotate_roll(base_angle * angle_variation + rng.range(-0.1, 0.1)),
+            '/' => state.rotate_roll(-base_angle * angle_variation + rng.range(-0.1, 0.1)),
+            '|' => state.rotate_yaw(PI),
+            '[' => {
+                stack.push(state.clone());
+                state.depth += 1;
+                state.length *= length_decay * rng.range(0.85, 1.15);
+                // More aggressive thickness decay when branching
+                state.thickness *= thickness_decay * rng.range(0.65, 0.90);
+            }
+            ']' => {
+                if let Some(s) = stack.pop() {
+                    state = s;
+                }
+            }
+            'L' => {
+                // ONLY create leaves at branch ends (terminal branches)
+                // Terminal = thin enough OR deep enough in the tree
+                let is_terminal = state.thickness < 0.04 || state.depth >= 3;
+
+                if is_terminal {
+                    // One cluster replaces what was 3-5 individual leaves (~70% reduction)
+                    let size = rng.range(0.4, 0.75) * (state.length / base_length).sqrt().max(0.35);
+
+                    leaves.push(LeafCluster {
+                        position: state.position + state.direction * rng.range(-0.05, 0.12),
+                        direction: state.direction,
+                        right: state.right,
+                        up: state.up,
+                        size,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (branches, leaves)
+}
+
+fn generate_cylinder(
+    segment: &BranchSegment,
+    radial_segments: u32,
+    vertices: &mut Vec<PropVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let base_idx = vertices.len() as u32;
+    let axis = (segment.end - segment.start).normalize();
+
+    let up = if axis.y.abs() > 0.99 {
         Vec3::X
     } else {
         Vec3::Y
     };
-    let right = direction.cross(up).normalize();
-    let forward = right.cross(direction).normalize();
+    let right = axis.cross(up).normalize();
+    let forward = right.cross(axis).normalize();
 
-    for ring in 0..=rings {
-        let t = ring as f32 / rings as f32;
-        let pos = start + direction * length * t;
-        let radius = radius_start + (radius_end - radius_start) * t;
+    let bark_color = [0.30, 0.20, 0.12, 1.0];
 
-        for seg in 0..segments {
-            let angle = (seg as f32 / segments as f32) * PI * 2.0;
-            let offset = right * angle.cos() * radius + forward * angle.sin() * radius;
-            let p = pos + offset;
-            let normal = offset.normalize();
+    for ring in 0..2 {
+        let (center, radius) = if ring == 0 {
+            (segment.start, segment.start_radius)
+        } else {
+            (segment.end, segment.end_radius)
+        };
 
-            verts.push(PropVertex {
-                position: p.to_array(),
-                normal: normal.to_array(),
-                color,
-                uv: [seg as f32 / segments as f32, t],
+        for i in 0..=radial_segments {
+            let angle = (i as f32 / radial_segments as f32) * PI * 2.0;
+            let (sin_a, cos_a) = angle.sin_cos();
+            let normal = right * cos_a + forward * sin_a;
+            let position = center + normal * radius;
+
+            vertices.push(PropVertex {
+                position: position.into(),
+                normal: normal.into(),
+                color: bark_color,
+                uv: [i as f32 / radial_segments as f32, ring as f32 * 2.0],
                 texture_id: 0,
             });
         }
     }
 
-    for ring in 0..rings {
-        for seg in 0..segments {
-            let curr = base_idx + ring * segments + seg;
-            let next = base_idx + ring * segments + (seg + 1) % segments;
-            let curr_up = curr + segments;
-            let next_up = next + segments;
+    let ring_verts = radial_segments + 1;
+    for i in 0..radial_segments {
+        let bl = base_idx + i;
+        let br = base_idx + i + 1;
+        let tl = base_idx + ring_verts + i;
+        let tr = base_idx + ring_verts + i + 1;
 
-            idxs.extend_from_slice(&[curr, next, curr_up]);
-            idxs.extend_from_slice(&[next, next_up, curr_up]);
-        }
+        indices.extend_from_slice(&[bl, tl, br, br, tl, tr]);
     }
 }
 
-fn generate_leaf_sphere(
-    verts: &mut Vec<PropVertex>,
-    idxs: &mut Vec<u32>,
-    center: Vec3,
-    radius_h: f32,
-    radius_v: f32,
-    num_cards: u32,
-    card_size: f32,
-    color: [f32; 4],
+/// Generates a complex bent leaf cluster with 3-4 twisted quads
+/// NOT just two 45° planes - uses golden angle distribution and curved vertices
+fn generate_bent_leaf_cluster(
+    cluster: &LeafCluster,
+    seed: u32,
+    vertices: &mut Vec<PropVertex>,
+    indices: &mut Vec<u32>,
 ) {
-    let golden_ratio = (1.0 + 5.0_f32.sqrt()) / 2.0;
+    let mut rng = SimpleRng::new(seed);
 
-    for i in 0..num_cards {
-        let t = i as f32 / num_cards as f32;
-
-        // Fibonacci sphere distribution
-        let theta = 2.0 * PI * t * golden_ratio;
-        let phi = (1.0 - 2.0 * (i as f32 + 0.5) / num_cards as f32).acos();
-
-        let dir = Vec3::new(phi.sin() * theta.cos(), phi.cos(), phi.sin() * theta.sin());
-
-        let card_center = center + dir * Vec3::new(radius_h, radius_v, radius_h);
-
-        // Card faces outward with some random rotation
-        let seed = i as f32 * 1.618;
-        generate_leaf_card(
-            verts,
-            idxs,
-            card_center,
-            dir,
-            card_size * (0.8 + (seed * 2.3).sin().abs() * 0.4),
-            color,
-            seed,
-        );
-    }
-}
-
-fn generate_leaf_card(
-    verts: &mut Vec<PropVertex>,
-    idxs: &mut Vec<u32>,
-    center: Vec3,
-    facing: Vec3,
-    size: f32,
-    color: [f32; 4],
-    seed: f32,
-) {
-    let base_idx = verts.len() as u32;
-
-    // Build card orientation
-    let up = Vec3::Y;
-    let right = if facing.y.abs() > 0.9 {
-        Vec3::X
-    } else {
-        facing.cross(up).normalize()
-    };
-    let card_up = right.cross(facing).normalize();
-
-    // Rotate card by seed for variety
-    let rot_angle = seed * 0.5;
-    let cos_a = rot_angle.cos();
-    let sin_a = rot_angle.sin();
-    let rotated_right = right * cos_a + card_up * sin_a;
-    let rotated_up = card_up * cos_a - right * sin_a;
-
-    let half = size / 2.0;
-
-    // Quad corners
-    let corners = [
-        center - rotated_right * half - rotated_up * half,
-        center + rotated_right * half - rotated_up * half,
-        center + rotated_right * half + rotated_up * half,
-        center - rotated_right * half + rotated_up * half,
+    // Varied green tones for more natural look
+    let base_green = 0.50 + rng.range(-0.08, 0.08);
+    let leaf_color = [
+        0.30 + rng.range(-0.05, 0.05),
+        base_green,
+        0.22 + rng.range(-0.04, 0.04),
+        1.0,
     ];
 
-    let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    // 3-4 bent quads at various angles (NOT just two 45° planes)
+    let num_planes = 3 + (rng.next() * 2.0) as u32;
 
-    // Alpha falloff at edges for soft look
-    let alphas = [color[3] * 0.7, color[3] * 0.7, color[3], color[3]];
+    for plane_idx in 0..num_planes {
+        let base_idx = vertices.len() as u32;
 
-    // Slight color variation per card
-    let variation = 1.0 + (seed * 3.7).sin() * 0.15;
-    let varied_color = |alpha: f32| {
-        [
-            color[0] * variation,
-            color[1] * (variation * 0.9 + 0.1),
-            color[2] * variation,
-            alpha,
-        ]
-    };
+        // Golden angle distribution for non-uniform, natural-looking spread
+        // Plus random offset so it's never perfectly regular
+        let golden_angle = 2.39996; // ~137.5 degrees
+        let base_angle = (plane_idx as f32) * golden_angle + rng.range(-0.35, 0.35);
+
+        // Each plane has different tilt relative to branch
+        let tilt_amount = rng.range(0.2, 0.55);
+        let twist = rng.range(-0.25, 0.25);
+
+        // Rotate plane around the branch direction
+        let rotation = Quat::from_axis_angle(cluster.direction, base_angle);
+        let plane_right = rotation * cluster.right;
+        let plane_forward = rotation * cluster.up;
+
+        // Create tilted up vector - not aligned with branch, more natural
+        let tilted_up = (cluster.direction * (1.0 - tilt_amount)
+            + plane_forward * tilt_amount
+            + plane_right * twist)
+            .normalize();
+
+        // Asymmetric dimensions for organic look
+        let width_left = cluster.size * rng.range(0.32, 0.52);
+        let width_right = cluster.size * rng.range(0.32, 0.52);
+        let height = cluster.size * rng.range(0.75, 1.15);
+
+        // Bend parameters - vertices curve AROUND the branch
+        let bend_out_bottom = cluster.size * rng.range(0.06, 0.16);
+        let bend_out_top = cluster.size * rng.range(-0.04, 0.08);
+        let curve_inward = cluster.size * rng.range(0.02, 0.10);
+
+        // Slight random wobble for each vertex
+        let wobble = |rng: &mut SimpleRng| -> Vec3 {
+            Vec3::new(
+                rng.range(-0.025, 0.025),
+                rng.range(-0.025, 0.025),
+                rng.range(-0.025, 0.025),
+            ) * cluster.size
+        };
+
+        // Four corners with bending that wraps around the branch
+        let corners = [
+            // Bottom left - bends outward from branch
+            cluster.position - plane_right * width_left
+                + plane_forward * bend_out_bottom
+                + wobble(&mut rng),
+            // Bottom right - bends outward
+            cluster.position
+                + plane_right * width_right
+                + plane_forward * bend_out_bottom
+                + wobble(&mut rng),
+            // Top right - curves back toward branch center, narrower
+            cluster.position
+                + plane_right * (width_right * rng.range(0.7, 0.92))
+                + tilted_up * height
+                + plane_forward * bend_out_top
+                - cluster.direction * curve_inward
+                + wobble(&mut rng),
+            // Top left - curves back, narrower
+            cluster.position - plane_right * (width_left * rng.range(0.7, 0.92))
+                + tilted_up * height
+                + plane_forward * bend_out_top
+                - cluster.direction * curve_inward
+                + wobble(&mut rng),
+        ];
+
+        // Calculate face normal from bent geometry
+        let edge_bottom = corners[1] - corners[0];
+        let edge_left = corners[3] - corners[0];
+        let face_normal = edge_bottom.cross(edge_left).normalize();
+
+        // Varying normals per vertex for curved surface shading
+        let normal_bend = plane_forward * 0.25;
+        let normals = [
+            (face_normal + normal_bend).normalize(),
+            (face_normal + normal_bend).normalize(),
+            (face_normal - normal_bend * 0.4 + tilted_up * 0.15).normalize(),
+            (face_normal - normal_bend * 0.4 + tilted_up * 0.15).normalize(),
+        ];
+
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+
+        for i in 0..4 {
+            vertices.push(PropVertex {
+                position: corners[i].into(),
+                normal: normals[i].into(),
+                color: leaf_color,
+                uv: uvs[i],
+                texture_id: 1,
+            });
+        }
+
+        // Double-sided
+        indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
+        indices.extend_from_slice(&[base_idx, base_idx + 2, base_idx + 3]);
+        indices.extend_from_slice(&[base_idx + 2, base_idx + 1, base_idx]);
+        indices.extend_from_slice(&[base_idx + 3, base_idx + 2, base_idx]);
+    }
+}
+
+fn generate_billboard_cross(
+    center: Vec3,
+    width: f32,
+    height: f32,
+    vertices: &mut Vec<PropVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let half_width = width * 0.5;
+    let bottom_y = center.y - height * 0.3;
+    let top_y = center.y + height * 0.7;
+    let leaf_color = [0.32, 0.50, 0.22, 1.0];
+
+    let orientations = [
+        (Vec3::X, Vec3::Z),
+        (Vec3::new(0.707, 0.0, 0.707), Vec3::new(-0.707, 0.0, 0.707)),
+    ];
+
+    for (right_dir, normal) in orientations {
+        let base_idx = vertices.len() as u32;
+
+        let corners = [
+            Vec3::new(
+                center.x - right_dir.x * half_width,
+                bottom_y,
+                center.z - right_dir.z * half_width,
+            ),
+            Vec3::new(
+                center.x + right_dir.x * half_width,
+                bottom_y,
+                center.z + right_dir.z * half_width,
+            ),
+            Vec3::new(
+                center.x + right_dir.x * half_width,
+                top_y,
+                center.z + right_dir.z * half_width,
+            ),
+            Vec3::new(
+                center.x - right_dir.x * half_width,
+                top_y,
+                center.z - right_dir.z * half_width,
+            ),
+        ];
+
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+
+        for i in 0..4 {
+            vertices.push(PropVertex {
+                position: corners[i].into(),
+                normal: normal.into(),
+                color: leaf_color,
+                uv: uvs[i],
+                texture_id: 1,
+            });
+        }
+
+        indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2]);
+        indices.extend_from_slice(&[base_idx, base_idx + 2, base_idx + 3]);
+        indices.extend_from_slice(&[base_idx, base_idx + 2, base_idx + 1]);
+        indices.extend_from_slice(&[base_idx, base_idx + 3, base_idx + 2]);
+    }
+
+    let trunk_base_idx = vertices.len() as u32;
+    let trunk_radius = width * 0.08;
+    let trunk_color = [0.30, 0.20, 0.12, 1.0];
 
     for i in 0..4 {
-        verts.push(PropVertex {
-            position: corners[i].to_array(),
-            normal: facing.to_array(),
-            color: varied_color(alphas[i]),
-            uv: uvs[i],
-            texture_id: 1,
+        let angle = (i as f32 / 4.0) * PI * 2.0;
+        let (sin_a, cos_a) = angle.sin_cos();
+        let offset = Vec3::new(cos_a * trunk_radius, 0.0, sin_a * trunk_radius);
+        let normal = Vec3::new(cos_a, 0.0, sin_a);
+
+        vertices.push(PropVertex {
+            position: (center - Vec3::Y * height * 0.3 + offset).into(),
+            normal: normal.into(),
+            color: trunk_color,
+            uv: [i as f32 / 4.0, 0.0],
+            texture_id: 0,
+        });
+        vertices.push(PropVertex {
+            position: (center + offset).into(),
+            normal: normal.into(),
+            color: trunk_color,
+            uv: [i as f32 / 4.0, 1.0],
+            texture_id: 0,
         });
     }
 
-    // Two triangles, both sides (for alpha cards we want double-sided)
-    idxs.extend_from_slice(&[
-        base_idx,
-        base_idx + 1,
-        base_idx + 2,
-        base_idx,
-        base_idx + 2,
-        base_idx + 3,
-        // Backface
-        base_idx,
-        base_idx + 2,
-        base_idx + 1,
-        base_idx,
-        base_idx + 3,
-        base_idx + 2,
-    ]);
+    for i in 0..4 {
+        let next = (i + 1) % 4;
+        let b1 = trunk_base_idx + i * 2;
+        let t1 = trunk_base_idx + i * 2 + 1;
+        let b2 = trunk_base_idx + next * 2;
+        let t2 = trunk_base_idx + next * 2 + 1;
+        indices.extend_from_slice(&[b1, t1, b2, b2, t1, t2]);
+    }
 }
 
-fn build_mesh(
-    device: &Device,
-    vertices: &[PropVertex],
-    indices: &[u32],
-    bounds: (Vec3, f32),
-) -> Mesh {
-    let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-        label: Some("Prop Vertex Buffer"),
+fn calculate_bounds(vertices: &[PropVertex]) -> (Vec3, f32) {
+    if vertices.is_empty() {
+        return (Vec3::ZERO, 1.0);
+    }
+
+    let mut min = Vec3::splat(f32::MAX);
+    let mut max = Vec3::splat(f32::MIN);
+
+    for v in vertices {
+        let p = Vec3::from(v.position);
+        min = min.min(p);
+        max = max.max(p);
+    }
+
+    let center = (min + max) * 0.5;
+    let radius = (max - min).length() * 0.5;
+
+    (center, radius.max(0.1))
+}
+
+fn create_mesh(device: &Device, vertices: &[PropVertex], indices: &[u32]) -> Mesh {
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Tree Vertex Buffer"),
         contents: bytemuck::cast_slice(vertices),
-        usage: BufferUsages::VERTEX,
+        usage: wgpu::BufferUsages::VERTEX,
     });
 
-    let index_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-        label: Some("Prop Index Buffer"),
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Tree Index Buffer"),
         contents: bytemuck::cast_slice(indices),
-        usage: BufferUsages::INDEX,
+        usage: wgpu::BufferUsages::INDEX,
     });
+
+    let bounds = calculate_bounds(vertices);
 
     Mesh {
         vertex_buffer,
@@ -1042,163 +1208,176 @@ fn build_mesh(
     }
 }
 
-fn make_pine_tree(device: &Device) -> Option<Prop> {
-    Some(Prop {
-        lod0: Some(make_pine_lod0(device)),
-        lod1: Some(make_pine_lod1(device)),
-        lod2: Some(make_pine_lod2(device)),
-        lod3: Some(make_pine_billboard(device)),
-        texture_keys: [
-            TextureKey::notex(),
-            TextureKey::notex(),
-            TextureKey::notex(),
-            TextureKey::notex(),
-        ],
-    })
+// ============================================================================
+// Tree generation parameters
+// ============================================================================
+
+struct TreeStructure {
+    axiom: &'static str,
+    rules: Vec<LSystemRule>,
+    iterations: u32,
+    base_angle: f32,
+    length_decay: f32,
+    thickness_decay: f32,
+    base_length: f32,
+    base_thickness: f32,
+    seed: u32,
 }
 
-fn make_pine_lod0(device: &Device) -> Mesh {
-    let mut verts: Vec<PropVertex> = Vec::new();
-    let mut idxs: Vec<u32> = Vec::new();
+struct LodRenderParams {
+    branch_segments: u32,
+    leaf_density: f32,
+    min_branch_thickness: f32,
+}
 
-    let trunk_h = 6.0;
-    let trunk_color = [0.3, 0.18, 0.08, 1.0];
-    let needle_color = [0.1, 0.35, 0.15, 0.95];
+impl LodRenderParams {
+    fn oak_for_lod(lod: u32) -> Self {
+        match lod {
+            0 => Self {
+                branch_segments: 8,
+                leaf_density: 1.0,
+                min_branch_thickness: 0.005,
+            },
+            1 => Self {
+                branch_segments: 6,
+                leaf_density: 0.7,
+                min_branch_thickness: 0.008,
+            },
+            2 => Self {
+                branch_segments: 5,
+                leaf_density: 0.4,
+                min_branch_thickness: 0.012,
+            },
+            _ => Self {
+                branch_segments: 3,
+                leaf_density: 0.0,
+                min_branch_thickness: 1.0,
+            },
+        }
+    }
 
-    // Trunk
-    generate_tapered_cylinder(
-        &mut verts,
-        &mut idxs,
-        Vec3::ZERO,
-        trunk_h,
-        0.25,
-        0.08,
-        8,
-        4,
-        trunk_color,
+    fn pine_for_lod(lod: u32) -> Self {
+        match lod {
+            0 => Self {
+                branch_segments: 8,
+                leaf_density: 1.0,
+                min_branch_thickness: 0.005,
+            },
+            1 => Self {
+                branch_segments: 6,
+                leaf_density: 0.5,
+                min_branch_thickness: 0.015,
+            },
+            2 => Self {
+                branch_segments: 4,
+                leaf_density: 0.2,
+                min_branch_thickness: 0.025,
+            },
+            _ => Self {
+                branch_segments: 4,
+                leaf_density: 0.0,
+                min_branch_thickness: 1.0,
+            },
+        }
+    }
+}
+
+fn oak_tree_structure() -> TreeStructure {
+    TreeStructure {
+        axiom: "FFFA",
+        rules: vec![LSystemRule {
+            from: 'A',
+            to: "[&FLAL]////[&FLAL]////[&FLAL]////^FAL",
+        }],
+        iterations: 4,
+        base_angle: 14.0_f32.to_radians(),
+        length_decay: 0.74,
+        thickness_decay: 0.48, // More aggressive - branches thin faster
+        base_length: 0.8,
+        base_thickness: 0.28, // Start thicker so ends can be properly thin
+        seed: 2,
+    }
+}
+
+fn pine_tree_structure() -> TreeStructure {
+    TreeStructure {
+        axiom: "FFA",
+        rules: vec![LSystemRule {
+            from: 'A',
+            to: "[&FL]////[&FL]////[&FL]////[&FL]^FA",
+        }],
+        iterations: 5,
+        base_angle: 35.0_f32.to_radians(),
+        length_decay: 0.80,
+        thickness_decay: 0.55,
+        base_length: 0.7,
+        base_thickness: 0.18,
+        seed: 123,
+    }
+}
+
+fn generate_tree_mesh(
+    device: &Device,
+    structure: &TreeStructure,
+    render_params: &LodRenderParams,
+) -> Mesh {
+    let mut vertices: Vec<PropVertex> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    let lsystem_string = expand_lsystem(structure.axiom, &structure.rules, structure.iterations);
+
+    let (branches, leaf_clusters) = interpret_lsystem(
+        &lsystem_string,
+        structure.base_angle,
+        structure.length_decay,
+        structure.thickness_decay,
+        structure.base_length,
+        structure.base_thickness,
+        structure.seed,
     );
 
-    // Cone-shaped foliage layers
-    let layers = [
-        (1.5, 2.2, 1.6), // (y, radius, height)
-        (3.0, 1.8, 1.4),
-        (4.2, 1.3, 1.2),
-        (5.2, 0.8, 1.0),
-    ];
-
-    for (y, radius, height) in layers {
-        generate_cone_layer(&mut verts, &mut idxs, y, radius, height, 8, needle_color);
-    }
-
-    build_mesh(
-        device,
-        &verts,
-        &idxs,
-        (Vec3::new(0.0, trunk_h / 2.0, 0.0), trunk_h),
-    )
-}
-
-fn generate_cone_layer(
-    verts: &mut Vec<PropVertex>,
-    idxs: &mut Vec<u32>,
-    base_y: f32,
-    radius: f32,
-    height: f32,
-    segments: u32,
-    color: [f32; 4],
-) {
-    let base_idx = verts.len() as u32;
-
-    // Tip
-    verts.push(PropVertex {
-        position: [0.0, base_y + height, 0.0],
-        normal: [0.0, 1.0, 0.0],
-        color,
-        uv: [0.5, 0.0],
-        texture_id: 0,
-    });
-
-    // Base ring
-    for seg in 0..segments {
-        let angle = (seg as f32 / segments as f32) * PI * 2.0;
-        let x = angle.cos() * radius;
-        let z = angle.sin() * radius;
-
-        let normal = Vec3::new(angle.cos(), 0.3, angle.sin()).normalize();
-
-        let edge_alpha = color[3] * (0.6 + (seg as f32 * 0.7).sin().abs() * 0.4);
-
-        verts.push(PropVertex {
-            position: [x, base_y, z],
-            normal: normal.to_array(),
-            color: [color[0], color[1], color[2], edge_alpha],
-            uv: [seg as f32 / segments as f32, 1.0],
-            texture_id: 0,
-        });
-    }
-
-    // Indices (cone)
-    for seg in 0..segments {
-        let next = (seg + 1) % segments;
-        idxs.extend_from_slice(&[
-            base_idx,            // tip
-            base_idx + 1 + seg,  // current base
-            base_idx + 1 + next, // next base
-        ]);
-    }
-}
-
-fn make_pine_lod1(device: &Device) -> Mesh {
-    make_pine_lod0(device) // Simplified version
-}
-
-fn make_pine_lod2(device: &Device) -> Mesh {
-    make_pine_lod0(device) // Even simpler
-}
-
-fn make_pine_billboard(device: &Device) -> Mesh {
-    let mut verts: Vec<PropVertex> = Vec::new();
-    let mut idxs: Vec<u32> = Vec::new();
-
-    let h = 8.0;
-    let w = 3.5;
-
-    for angle in [0.0, PI / 2.0] {
-        let rot = Mat3::from_rotation_y(angle);
-        let right = rot * Vec3::new(w / 2.0, 0.0, 0.0);
-        let base = verts.len() as u32;
-
-        let positions = [
-            -right,
-            right,
-            right + Vec3::new(0.0, h, 0.0),
-            -right + Vec3::new(0.0, h, 0.0),
-        ];
-
-        let colors = [
-            [0.3, 0.18, 0.08, 1.0],
-            [0.3, 0.18, 0.08, 1.0],
-            [0.1, 0.35, 0.15, 0.9],
-            [0.1, 0.35, 0.15, 0.9],
-        ];
-
-        for i in 0..4 {
-            verts.push(PropVertex {
-                position: positions[i].to_array(),
-                normal: (rot * Vec3::Z).to_array(),
-                color: colors[i],
-                uv: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]][i],
-                texture_id: 0,
-            });
+    // Generate branch geometry
+    for branch in &branches {
+        if branch.start_radius >= render_params.min_branch_thickness {
+            generate_cylinder(
+                branch,
+                render_params.branch_segments,
+                &mut vertices,
+                &mut indices,
+            );
         }
-
-        idxs.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    build_mesh(
-        device,
-        &verts,
-        &idxs,
-        (Vec3::new(0.0, h / 2.0, 0.0), h / 2.0 + 1.0),
-    )
+    // Generate leaf clusters with bent cross-quads
+    if render_params.leaf_density > 0.0 {
+        let cluster_step = (1.0 / render_params.leaf_density).ceil() as usize;
+        for (i, cluster) in leaf_clusters.iter().enumerate() {
+            if i % cluster_step == 0 {
+                // Use index as part of seed for variation
+                let cluster_seed = structure.seed.wrapping_add(i as u32 * 7919);
+                generate_bent_leaf_cluster(cluster, cluster_seed, &mut vertices, &mut indices);
+            }
+        }
+    }
+
+    create_mesh(device, &vertices, &indices)
+}
+
+fn make_oak_lod(device: &Device, lod: u32) -> Mesh {
+    if lod >= 3 {
+        let mut vertices: Vec<PropVertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        generate_billboard_cross(
+            Vec3::new(0.0, 3.0, 0.0),
+            4.5,
+            6.0,
+            &mut vertices,
+            &mut indices,
+        );
+        return create_mesh(device, &vertices, &indices);
+    }
+
+    let structure = oak_tree_structure();
+    let render_params = LodRenderParams::oak_for_lod(lod);
+    generate_tree_mesh(device, &structure, &render_params)
 }

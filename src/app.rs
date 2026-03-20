@@ -1,5 +1,5 @@
 use crate::data::Cycle;
-use crate::helpers::paths::data_dir;
+use crate::helpers::paths::{data_dir, next_screenshot_path};
 use crate::resources::Resources;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
@@ -16,6 +16,7 @@ use glam::Vec2;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use wgpu::*;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
@@ -82,7 +83,7 @@ impl ApplicationHandler for App {
                 .expect("Failed to create window"),
         );
 
-        let mut resources = Resources::new(window.clone());
+        let mut resources = Resources::new(window.clone(), event_loop);
         let world = &mut resources.world_core;
         let time = &mut world.time;
         time.set_tps(resources.settings.target_tps.max(1.0));
@@ -202,6 +203,97 @@ impl ApplicationHandler for App {
                     settings.editor_mode = false;
                     resources.ui_loader.touch_manager.editor.enabled = settings.editor_mode;
                     variables.set_bool("editor_mode", settings.editor_mode)
+                }
+                if input.action_repeat("Screenshot") {
+                    let view = &resources.render_core.pipelines.resolved.tonemapped;
+                    let width = view.texture().width();
+                    let height = view.texture().height();
+
+                    let bytes_per_pixel = 4; // Rgba8UnormSrgb
+                    let unpadded_bytes_per_row = bytes_per_pixel * width;
+                    let padded_bytes_per_row = unpadded_bytes_per_row.next_multiple_of(256);
+                    let buffer_size = (padded_bytes_per_row * height) as BufferAddress;
+
+                    let output_buffer =
+                        resources
+                            .render_core
+                            .device
+                            .create_buffer(&BufferDescriptor {
+                                label: Some("Screenshot Buffer"),
+                                size: buffer_size,
+                                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                                mapped_at_creation: false,
+                            });
+
+                    let mut encoder = resources
+                        .render_core
+                        .device
+                        .create_command_encoder(&Default::default());
+                    encoder.copy_texture_to_buffer(
+                        TexelCopyTextureInfo {
+                            texture: &view.texture(),
+                            mip_level: 0,
+                            origin: Origin3d::ZERO,
+                            aspect: TextureAspect::All,
+                        },
+                        TexelCopyBufferInfo {
+                            buffer: &output_buffer,
+                            layout: TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(padded_bytes_per_row),
+                                rows_per_image: Some(height),
+                            },
+                        },
+                        Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    resources.render_core.queue.submit(Some(encoder.finish()));
+
+                    let buffer_slice = output_buffer.slice(..);
+                    buffer_slice.map_async(MapMode::Read, |_| {});
+                    resources
+                        .render_core
+                        .device
+                        .poll(PollType::Wait {
+                            submission_index: None,
+                            timeout: Some(Duration::from_secs(1)),
+                        })
+                        .ok();
+
+                    let data = buffer_slice.get_mapped_range();
+
+                    // Handle row padding when saving
+                    if padded_bytes_per_row != unpadded_bytes_per_row {
+                        // Strip padding
+                        let mut pixels =
+                            Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
+                        for row in 0..height {
+                            let start = (row * padded_bytes_per_row) as usize;
+                            let end = start + unpadded_bytes_per_row as usize;
+                            pixels.extend_from_slice(&data[start..end]);
+                        }
+                        image::save_buffer(
+                            next_screenshot_path(),
+                            &pixels,
+                            width,
+                            height,
+                            image::ColorType::Rgba8,
+                        )
+                        .unwrap();
+                    } else {
+                        image::save_buffer(
+                            next_screenshot_path(),
+                            &data,
+                            width,
+                            height,
+                            image::ColorType::Rgba8,
+                        )
+                        .unwrap();
+                    }
                 }
 
                 // Save GUI
@@ -458,9 +550,6 @@ fn update_time(resources: &mut Resources) {
         ..
     } = world_core;
 
-    // -----------------------------
-    // Time controls
-    // -----------------------------
     let can_time_control = !settings.editor_mode && !settings.drive_car && settings.show_world;
 
     if can_time_control && input.action_pressed_once("Toggle Stop Time") {
@@ -490,7 +579,6 @@ fn update_time(resources: &mut Resources) {
         .variables
         .set_f64("time_speed", time_speed);
 
-    // begin_frame detects speed changes internally and flushes accumulator
     time.begin_frame(time_speed);
 
     {

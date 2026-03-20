@@ -261,15 +261,6 @@ pub fn load_layer_from_file(
         }
     }
 }
-pub fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' => '_',
-            c if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' => c,
-            _ => '_',
-        })
-        .collect()
-}
 
 fn synthesize_layout_from_bytes(bytes: &[u8], rng: &mut SimpleRng) -> GuiLayout {
     // mix bytes into rng for more entropy

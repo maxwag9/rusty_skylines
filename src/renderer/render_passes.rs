@@ -20,7 +20,7 @@ use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::terrain::water::SimpleVertex;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
-use wgpu_render_manager::pipelines::{PipelineOptions, ShadowOptions};
+use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, ShadowOptions};
 use wgpu_render_manager::renderer::RenderManager;
 
 pub struct RenderPassConfig {
@@ -240,11 +240,11 @@ pub fn render_sky(
 ) {
     let sky_depth_stencil = Some(DepthStencilState {
         format: DEPTH_FORMAT,
-        depth_write_enabled: false,
+        depth_write_enabled: Some(false),
         depth_compare: if settings.reversed_depth_z {
-            CompareFunction::GreaterEqual
+            Some(CompareFunction::GreaterEqual)
         } else {
-            CompareFunction::LessEqual
+            Some(CompareFunction::LessEqual)
         },
         stencil: Default::default(),
         bias: Default::default(),
@@ -260,7 +260,9 @@ pub fn render_sky(
                 depth_stencil: sky_depth_stencil.clone(),
                 msaa_samples,
                 vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
-                targets: targets.clone(),
+                fragment: FragmentOption::Default {
+                    targets: targets.clone(),
+                },
                 ..Default::default()
             },
             &[&pipelines.buffers.camera, &pipelines.buffers.sky],
@@ -280,7 +282,7 @@ pub fn render_sky(
                 depth_stencil: sky_depth_stencil,
                 msaa_samples,
                 vertex_layouts: Vec::new(),
-                targets,
+                fragment: FragmentOption::Default { targets },
                 ..Default::default()
             },
             &[&pipelines.buffers.camera, &pipelines.buffers.sky],
@@ -307,11 +309,11 @@ pub fn render_terrain(
     let make_stencil = |write_mask: u32| -> DepthStencilState {
         DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: true,
+            depth_write_enabled: Some(true),
             depth_compare: if settings.reversed_depth_z {
-                CompareFunction::GreaterEqual
+                Some(CompareFunction::GreaterEqual)
             } else {
-                CompareFunction::LessEqual
+                Some(CompareFunction::LessEqual)
             },
             stencil: StencilState {
                 front: StencilFaceState {
@@ -345,7 +347,9 @@ pub fn render_terrain(
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
-            targets: targets.clone(),
+            fragment: FragmentOption::Default {
+                targets: targets.clone(),
+            },
             shadow: shadow.clone(),
             ..Default::default()
         },
@@ -365,7 +369,7 @@ pub fn render_terrain(
             msaa_samples,
             vertex_layouts: Vec::from([Vertex::desc()]),
             cull_mode: Some(Face::Front),
-            targets,
+            fragment: FragmentOption::Default { targets },
             shadow,
             ..Default::default()
         },
@@ -392,8 +396,8 @@ pub fn render_water(
             topology: TriangleList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::Always,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(CompareFunction::Always),
                 stencil: StencilState {
                     front: StencilFaceState {
                         compare: CompareFunction::Equal,
@@ -414,7 +418,7 @@ pub fn render_water(
             }),
             msaa_samples,
             vertex_layouts: Vec::from([SimpleVertex::layout()]),
-            targets,
+            fragment: FragmentOption::Default { targets },
             ..Default::default()
         },
         &[
@@ -467,7 +471,9 @@ pub fn render_roads(
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            targets: targets.clone(),
+            fragment: FragmentOption::Default {
+                targets: targets.clone(),
+            },
             shadow: shadow.clone(),
             ..Default::default()
         },
@@ -497,7 +503,7 @@ pub fn render_roads(
             msaa_samples,
             vertex_layouts: Vec::from([RoadVertex::layout()]),
             cull_mode: Some(Face::Back),
-            targets,
+            fragment: FragmentOption::Default { targets },
             shadow,
             ..Default::default()
         },
@@ -533,14 +539,14 @@ pub fn render_gizmo(
             topology: PrimitiveTopology::LineList,
             depth_stencil: Some(DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: CompareFunction::Always,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(CompareFunction::Always),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
             msaa_samples,
             vertex_layouts: Vec::from([LineVtxRender::layout()]),
-            targets,
+            fragment: FragmentOption::Default { targets },
             ..Default::default()
         },
         &[&pipelines.buffers.camera],
@@ -578,7 +584,7 @@ pub fn render_cars(
             msaa_samples: settings.msaa_samples,
             vertex_layouts: Vec::from([CarVertex::layout(), CarInstance::layout()]),
             cull_mode: Some(Face::Back),
-            targets: targets.clone(),
+            fragment: FragmentOption::Default { targets },
             shadow: shadow.clone(),
             ..Default::default()
         },
@@ -600,9 +606,6 @@ pub fn render_props<'a>(
     device: &Device,
     queue: &Queue,
 ) {
-    // Upload instance data for visible chunks
-    props.upload_instances(device, queue, camera, terrain);
-
     // Draw all props
     props.render(render_manager, pass, camera, terrain, pipelines, settings);
 }
@@ -696,11 +699,11 @@ pub fn color_target(
 pub(crate) fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,
-        depth_write_enabled: true,
+        depth_write_enabled: Some(true),
         depth_compare: if settings.reversed_depth_z {
-            CompareFunction::GreaterEqual
+            Some(CompareFunction::GreaterEqual)
         } else {
-            CompareFunction::LessEqual
+            Some(CompareFunction::LessEqual)
         },
         stencil: Default::default(),
         bias,

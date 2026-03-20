@@ -217,8 +217,8 @@ pub(crate) fn make_pipeline(
         },
         depth_stencil: Some(DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: false,
-            depth_compare: CompareFunction::Always,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(CompareFunction::Always),
             stencil: Default::default(),
             bias: Default::default(),
         }),

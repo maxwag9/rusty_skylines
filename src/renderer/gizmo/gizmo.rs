@@ -568,7 +568,7 @@ impl Gizmo {
         camera: &Camera,
     ) {
         self.total_game_time = total_game_time;
-        self.chunk_size = settings.chunk_size;
+        self.chunk_size = camera.chunk_size;
         let target = camera.target;
 
         if settings.render_partitions_gizmo {

@@ -19,7 +19,7 @@ use wgpu::{
     Buffer, CompareFunction, DepthBiasState, DepthStencilState, Device, Face, IndexFormat,
     RenderPass, StencilState, TextureView,
 };
-use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 
 pub const CSM_CASCADES: usize = 4;
@@ -27,6 +27,8 @@ pub const CSM_CASCADES: usize = 4;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShadowMatUniform {
     pub light_view_proj: [[f32; 4]; 4],
+    pub cascade_idx: u32,
+    pub pad: [f32; 3],
 }
 pub struct CascadedShadowMap {
     pub array_view: TextureView,
@@ -375,21 +377,22 @@ pub fn shadow_bias_for_cascade(
         clamp: 0.02,
     }
 }
-fn shadow_pipeline_options(
+pub fn shadow_pipeline_options<'a>(
     settings: &Settings,
     bias: DepthBiasState,
     vertex_layouts: Vec<wgpu::VertexBufferLayout<'static>>,
     cull_mode: Face,
+    fragment: FragmentOption,
 ) -> PipelineOptions {
     PipelineOptions {
         topology: TriangleList,
         depth_stencil: Some(DepthStencilState {
             format: Depth32Float,
-            depth_write_enabled: true,
+            depth_write_enabled: Some(true),
             depth_compare: if settings.reversed_depth_z {
-                CompareFunction::GreaterEqual
+                Some(CompareFunction::GreaterEqual)
             } else {
-                CompareFunction::LessEqual
+                Some(CompareFunction::LessEqual)
             },
             stencil: StencilState::default(),
             bias,
@@ -397,9 +400,9 @@ fn shadow_pipeline_options(
         msaa_samples: 1,
         vertex_layouts,
         cull_mode: Some(cull_mode),
-        vertex_only: true,
-        targets: vec![],
-        ..Default::default()
+
+        fragment,
+        shadow: None,
     }
 }
 pub fn render_roads_shadows(
@@ -418,7 +421,13 @@ pub fn render_roads_shadows(
     );
 
     let shader = shader_dir().join("shadows.wgsl");
-    let opts = shadow_pipeline_options(settings, bias, vec![RoadVertex::layout()], Face::Back);
+    let opts = shadow_pipeline_options(
+        settings,
+        bias,
+        vec![RoadVertex::layout()],
+        Face::Back,
+        FragmentOption::None,
+    );
 
     render_manager.render(
         &[],
@@ -442,6 +451,7 @@ pub fn render_roads_shadows(
             preview_bias,
             vec![RoadVertex::layout()],
             Face::Back,
+            FragmentOption::None,
         );
 
         render_manager.render(
@@ -461,7 +471,7 @@ pub fn render_terrain_shadows(
     pass: &mut RenderPass,
     render_manager: &mut RenderManager,
     terrain_renderer: &TerrainRenderSubsystem,
-    terrain_subsystem: &Terrain,
+    terrain: &Terrain,
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,
@@ -476,7 +486,13 @@ pub fn render_terrain_shadows(
     );
 
     let shader = shader_dir().join("shadows.wgsl");
-    let opts = shadow_pipeline_options(settings, bias, vec![Vertex::desc()], Face::Back);
+    let opts = shadow_pipeline_options(
+        settings,
+        bias,
+        vec![Vertex::desc()],
+        Face::Back,
+        FragmentOption::None,
+    );
 
     render_manager.render(
         &[],
@@ -486,7 +502,7 @@ pub fn render_terrain_shadows(
         pass,
     );
 
-    terrain_renderer.render(pass, terrain_subsystem, camera, aspect, settings, false);
+    terrain_renderer.render(pass, terrain, camera, aspect, settings, false);
 }
 pub fn render_cars_shadows(
     pass: &mut RenderPass,
@@ -512,6 +528,7 @@ pub fn render_cars_shadows(
         bias,
         vec![CarVertex::layout(), CarInstance::layout()],
         Face::Front,
+        FragmentOption::None,
     );
 
     render_manager.render(&[], shader.as_path(), &opts, &[shadow_mat_buffer], pass);

@@ -16,7 +16,7 @@ use crate::ui::vertex::{
 use std::fs;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
-use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 use wgpu_text::glyph_brush::ab_glyph::FontArc;
 use wgpu_text::{BrushBuilder, TextBrush};
@@ -303,8 +303,7 @@ impl UiRenderer {
                 depth_stencil: None,
                 vertex_layouts: vec![],
                 cull_mode: None,
-                targets,
-                vertex_only: false,
+                fragment: FragmentOption::Default { targets },
                 shadow: None,
             };
             render_manager.render(
@@ -442,7 +441,7 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                targets,
+                                fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
                             // UI Circle
@@ -467,7 +466,7 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                targets,
+                                fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
                             // UI Glow
@@ -496,7 +495,7 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                targets,
+                                fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
                             // UI Handle
@@ -525,7 +524,7 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                targets,
+                                fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
                             // UI Polygon
@@ -553,7 +552,7 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                targets,
+                                fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
                             // UI Outline
@@ -582,7 +581,7 @@ impl UiRenderer {
                                 msaa_samples: msaa,
                                 depth_stencil: depth_stencil.clone(),
                                 vertex_layouts: vec![UiVertexPoly::desc()],
-                                targets,
+                                fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
 
@@ -609,7 +608,7 @@ impl UiRenderer {
                     msaa_samples: msaa,
                     depth_stencil: depth_stencil.clone(),
                     vertex_layouts: vec![UiVertexText::desc()],
-                    targets,
+                    fragment: FragmentOption::Default { targets },
                     ..Default::default()
                 };
 

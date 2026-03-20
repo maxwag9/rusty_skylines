@@ -24,8 +24,8 @@ impl Camera {
         Self {
             target: WorldPos::zero(),
             orbit_radius: 50.0,
-            yaw: -230f32.to_radians(),
-            pitch: 52f32.to_radians(),
+            yaw: 1f32.to_radians(),
+            pitch: 80f32.to_radians(),
             near: 2.5,
             far: 10_000.0,
             fov: 55.0,

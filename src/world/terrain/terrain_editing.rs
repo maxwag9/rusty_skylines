@@ -12,7 +12,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use wgpu::{Device, Queue};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -21,18 +20,11 @@ pub enum RoadEditElement {
     Intersection(NodeId),
 }
 
-#[derive(Serialize, Deserialize)]
-struct PersistedChunk {
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct PersistedChunk {
     accumulated_deltas: Vec<((u16, u16), f32)>,
     road_deltas: Vec<(RoadEditElement, Vec<((u16, u16), f32)>)>,
     dirty: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct EditFile {
-    version: u32,
-    timestamp_unix: u64,
-    edits: HashMap<ChunkCoord, PersistedChunk>,
 }
 
 pub trait Falloff {
@@ -134,15 +126,14 @@ impl Default for TerrainEditor {
         }
     }
 }
-
+#[derive(Serialize, Deserialize, Default)]
+struct OldEditFile {
+    version: String,
+    timestamp_unix: u64,
+    edits: HashMap<ChunkCoord, PersistedChunk>,
+}
 impl TerrainEditor {
-    pub fn save_edits<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-        let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let tmp = path.with_extension("tmp");
-
+    pub fn get_edits(&self) -> HashMap<ChunkCoord, PersistedChunk> {
         let mut edits: HashMap<ChunkCoord, PersistedChunk> = HashMap::new();
         for (chunk_coord, chunk) in &self.edited_chunks {
             if !chunk.has_any_deltas() && !chunk.dirty {
@@ -183,47 +174,41 @@ impl TerrainEditor {
                 },
             );
         }
-
-        let meta = EditFile {
-            version: 3,
-            timestamp_unix: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-            edits,
-        };
-
-        let bytes = postcard::to_allocvec(&meta)?;
-        let compressed = zstd::encode_all(&bytes[..], 3)?;
-
-        let manual_count: usize = self
-            .edited_chunks
-            .values()
-            .map(|c| c.accumulated_deltas.len())
-            .sum();
-        let road_count: usize = self
-            .edited_chunks
-            .values()
-            .map(|c| c.road_deltas.values().map(|r| r.len()).sum::<usize>())
-            .sum();
-
-        println!(
-            "Deltas: {} manual, {} road/intersection, {} total",
-            manual_count,
-            road_count,
-            manual_count + road_count
-        );
-        println!("Compressed size: {} bytes", compressed.len());
-
-        fs::write(&tmp, compressed)?;
-        fs::rename(&tmp, path)?;
-
-        Ok(())
+        edits
     }
+    pub fn load_edits_from_hashmap(&mut self, edits: HashMap<ChunkCoord, PersistedChunk>) {
+        for (chunk_coord, persisted_chunk) in edits {
+            let mut acc = HashMap::with_capacity(persisted_chunk.accumulated_deltas.len());
+            for ((x16, z16), h) in persisted_chunk.accumulated_deltas {
+                acc.insert((x16, z16), h);
+            }
 
+            let mut road = HashMap::new();
+            for (elem, deltas) in persisted_chunk.road_deltas {
+                let mut elem_deltas = HashMap::with_capacity(deltas.len());
+                for ((x16, z16), h) in deltas {
+                    elem_deltas.insert((x16, z16), h);
+                }
+                road.insert(elem, elem_deltas);
+            }
+
+            self.edited_chunks.insert(
+                chunk_coord,
+                EditedChunk {
+                    pending_deltas: Vec::new(),
+                    accumulated_deltas: acc,
+                    road_deltas: road,
+                    dirty: persisted_chunk.dirty,
+                },
+            );
+        }
+    }
     pub fn load_edits<P: AsRef<Path>>(
         path: P,
     ) -> Result<TerrainEditor, Box<dyn std::error::Error>> {
         let data = fs::read(path)?;
         let decompressed = zstd::decode_all(&data[..])?;
-        let meta: EditFile = postcard::from_bytes(&decompressed)?;
+        let meta: OldEditFile = postcard::from_bytes(&decompressed)?;
 
         let mut editor = TerrainEditor {
             edited_chunks: HashMap::new(),

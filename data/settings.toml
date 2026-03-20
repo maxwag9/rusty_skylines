@@ -10,20 +10,19 @@ background_color = [
     0.0,
     1.0,
 ]
-total_game_time = 257530.9211795393
+total_game_time = 266875.70500024105
 world_generation_benchmark_mode = false
 bend_mode = "strict"
 show_world = true
 always_day = false
 msaa_samples = 4
 shadow_map_size = 2048
-shadow_type = "RT"
+shadow_type = "CSM"
 gtao_enabled = false
 zoom_speed = 10.0
 render_lanes_gizmo = false
 render_partitions_gizmo = false
 render_chunk_bounds = true
-chunk_size = 128
 tonemapping_state = "Cinematic"
 debug_view_state = "Off"
 starting_menu = "MainMenu"
@@ -33,12 +32,3 @@ show_fog = true
 drive_car = false
 render_rt_gizmo = false
 noclip = false
-
-[player_pos.chunk]
-x = -148
-z = -178
-
-[player_pos.local]
-x = 124.42045
-y = 50.984734
-z = 2.5967412

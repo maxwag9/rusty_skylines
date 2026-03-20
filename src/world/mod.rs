@@ -1,7 +1,7 @@
 pub mod astronomy;
 pub mod camera;
 pub mod cars;
-mod game_state;
+pub mod game_state;
 pub mod roads;
 pub mod sound;
 pub mod terrain;

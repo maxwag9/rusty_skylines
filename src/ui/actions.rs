@@ -2,15 +2,17 @@
 pub mod drag_hue_point;
 
 use crate::data::{SettingKey, SettingOp, Settings};
-use crate::helpers::paths::data_dir;
+use crate::helpers::paths::rusty_skylines_dir;
+use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::{Ui, get_layer_settings};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::UiValue;
-use crate::world::camera::Camera;
-use crate::world::roads::road_structs::RoadStyleParams;
+use crate::world::camera::{Camera, CameraController};
+use crate::world::game_state::{GameState, LoadResult, SaveResult};
+use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
 use std::collections::{HashMap, VecDeque};
@@ -280,6 +282,11 @@ pub enum UiCommand {
         value: UiValue,
         then: Vec<UiCommand>,
     },
+    SaveGame,
+    LoadSave {
+        save_name: String,
+        without_saving: bool,
+    },
     ExitGame,
     // ===== DEBUG COMMANDS =====
     Print {
@@ -378,10 +385,13 @@ pub struct CommandContext<'a> {
     pub terrain: &'a mut Terrain,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
-    pub road_style_params: &'a mut RoadStyleParams,
     pub settings: &'a mut Settings,
     pub camera: &'a mut Camera,
     pub event_loop: &'a ActiveEventLoop,
+    pub game_state: &'a mut GameState,
+    pub roads: &'a mut Roads,
+    pub props: &'a mut Props,
+    pub camera_controller: &'a mut CameraController,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -895,12 +905,49 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
+            UiCommand::SaveGame => {
+                save_game(
+                    ctx.game_state,
+                    ctx.camera,
+                    ctx.roads,
+                    ctx.terrain,
+                    ctx.props,
+                );
+                CommandResult::Ok
+            }
+            UiCommand::LoadSave {
+                save_name,
+                without_saving,
+            } => {
+                if !without_saving {
+                    save_game(
+                        ctx.game_state,
+                        ctx.camera,
+                        ctx.roads,
+                        ctx.terrain,
+                        ctx.props,
+                    );
+                }
+                load_save(
+                    ctx.game_state,
+                    ctx.camera,
+                    ctx.camera_controller,
+                    ctx.roads,
+                    ctx.terrain,
+                    ctx.props,
+                    save_name.as_str(),
+                );
+                CommandResult::Ok
+            }
             UiCommand::ExitGame => {
                 exit_game(
+                    ctx.game_state,
                     ctx.settings,
                     ctx.time,
                     ctx.camera,
+                    ctx.roads,
                     ctx.terrain,
+                    ctx.props,
                     ctx.event_loop,
                 );
                 CommandResult::Ok
@@ -1038,11 +1085,14 @@ pub fn process_commands(
     input: &Input,
     time: &Time,
     terrain: &mut Terrain,
+    props: &mut Props,
     window_size: PhysicalSize<u32>,
-    road_style_params: &mut RoadStyleParams,
+    roads: &mut Roads,
     settings: &mut Settings,
     camera: &mut Camera,
+    camera_controller: &mut CameraController,
     event_loop: &ActiveEventLoop,
+    game_state: &mut GameState,
 ) {
     let mut ctx = CommandContext {
         ui,
@@ -1051,10 +1101,13 @@ pub fn process_commands(
         terrain,
         hit,
         window_size,
-        road_style_params,
         settings,
         camera,
+        camera_controller,
         event_loop,
+        game_state,
+        roads,
+        props,
     };
 
     command_queue.drain(&mut ctx);
@@ -1074,25 +1127,53 @@ pub fn deactivate_action(loader: &mut Ui, action_name: &str) {
 }
 
 pub fn exit_game(
+    game_state: &mut GameState,
     settings: &mut Settings,
     time: &Time,
     camera: &Camera,
+    roads: &Roads,
     terrain: &Terrain,
+    props: &Props,
     event_loop: &ActiveEventLoop,
 ) {
     settings.total_game_time = time.total_game_time;
-    settings.player_pos = camera.target;
-    match settings.save(data_dir("settings.toml")) {
+    match settings.save(rusty_skylines_dir("settings.toml")) {
         Ok(_) => println!("Settings saved"),
         Err(e) => eprintln!("Failed to save Settings: {e}"),
     }
-    if settings.show_world {
-        match terrain.terrain_editor.save_edits(data_dir("edited_chunks")) {
-            Ok(_) => println!("World saved"),
-            Err(e) => eprintln!("Failed to save World: {e}"),
-        }
-    }
+    save_game(game_state, camera, roads, terrain, props);
 
     event_loop.exit();
     //std::process::exit(69); // Die.
+}
+pub fn save_game(
+    game_state: &mut GameState,
+    camera: &Camera,
+    roads: &Roads,
+    terrain: &Terrain,
+    props: &Props,
+) {
+    match game_state.save(camera, roads, terrain, props) {
+        SaveResult::Success => println!("World saved"),
+        e => eprintln!("Failed to save World: {:#?}", e),
+    }
+}
+pub fn load_save(
+    game_state: &mut GameState,
+    camera: &mut Camera,
+    camera_controller: &mut CameraController,
+    roads: &mut Roads,
+    terrain: &mut Terrain,
+    props: &mut Props,
+    save_name: &str,
+) {
+    match game_state.load(save_name, camera, camera_controller, roads, terrain, props) {
+        LoadResult::Success => println!(
+            "World '{}' loaded, {} Terrain Edited Chunks, {} Road Nodes",
+            game_state.current_save.name,
+            game_state.current_save.terrain_edits.len(),
+            game_state.current_save.roads.nodes.len()
+        ),
+        e => eprintln!("Failed to load World: {:#?}", e),
+    }
 }

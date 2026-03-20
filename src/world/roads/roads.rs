@@ -28,6 +28,7 @@ use crate::world::roads::road_mesh_manager::{
 use crate::world::roads::road_structs::*;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 
@@ -36,7 +37,7 @@ pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
 type PartitionId = u32;
 /// One physical "leg" of an intersection — a direction you can come from or go to.
 /// Arms are sorted by bearing angle (clockwise from north, or whatever convention).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Arm {
     segment: SegmentId,
     /// Bearing angle in radians [0, 2π), CCW from +X axis
@@ -229,7 +230,7 @@ impl Arm {
 }
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pos: WorldPos,
     enabled: bool,
@@ -362,7 +363,7 @@ impl Node {
 
 /// Road segment connecting two nodes, containing multiple lanes.
 /// Segments are grouping/metadata; lanes are the first-class graph edges.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub start: NodeId,
     pub end: NodeId,
@@ -436,7 +437,7 @@ impl Segment {
 
 /// Directed lane edge connecting two nodes within a segment.
 /// Lanes are the primary graph edges for pathfinding and simulation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Lane {
     from: NodeId,
     to: NodeId,
@@ -558,7 +559,7 @@ impl Lane {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LaneRef {
     Segment(LaneId, PolyIdx),
     NodeLane(NodeLaneId, PolyIdx),
@@ -566,7 +567,7 @@ pub enum LaneRef {
 
 /// Directed lane edge connecting two segments within a node.
 /// NodeLanes are the primary graph edges for pathfinding and simulation.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct NodeLane {
     id: NodeLaneId,
     merging: Vec<LaneRef>,
@@ -668,7 +669,7 @@ impl NodeLane {
         (self.vehicle_mask & vehicle_type) != 0
     }
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LaneGeometry {
     pub points: Vec<WorldPos>, // polyline
     pub lengths: Vec<f64>,     // cumulative arc length
@@ -701,6 +702,7 @@ impl LaneGeometry {
 
 pub type RoadRegionId = u32;
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RoadRegion {
     nodes: Vec<u32>,
 }
@@ -723,6 +725,7 @@ impl RoadRegion {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RoadStorage {
     pub nodes: Vec<Node>,
     pub segments: Vec<Segment>,
@@ -2816,7 +2819,7 @@ fn turn_cost(turn: TurnType) -> f32 {
 
 /// Tracks a running average that forgets old data exponentially.
 /// Recent reports matter more than ancient ones.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExponentialMovingAverage {
     value: f32,
     alpha: f32, // smoothing factor: 0.0 = never update, 1.0 = only latest

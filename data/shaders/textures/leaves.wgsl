@@ -1,4 +1,4 @@
-// leaves.wgsl - Scattered leaf card texture with many leaves
+// leaves.wgsl - Leaf card with multiple branches and depth perspective
 struct Params {
     color_primary: vec4<f32>,
     color_secondary: vec4<f32>,
@@ -45,44 +45,60 @@ fn rotate2d(p: vec2<f32>, angle: f32) -> vec2<f32> {
     return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
-// Returns vec3(alpha, vein_intensity, tip_t)
+// Realistic leaf shape with proper silhouette
 fn leaf_shape(p: vec2<f32>, seed: f32) -> vec3<f32> {
     let t = (p.y + 1.0) * 0.5;
 
-    // Leaf width - pointed oval shape
-    let base_width = sin(clamp(t, 0.0, 1.0) * 3.14159) * 0.35;
-    let edge_noise = value_noise(vec2(t * 12.0, seed)) * 0.04 * base_width;
-    let serration = sin(t * 20.0 + seed * 4.0) * 0.01 * base_width;
-    let width = base_width + edge_noise + serration;
+    // Ovate leaf profile - widest near base-middle, tapers to tip
+    let width_curve = sin(pow(clamp(t, 0.0, 1.0), 0.7) * 3.14159);
+    let taper = 1.0 - smoothstep(0.6, 1.0, t) * 0.4;
+    let base_width = width_curve * taper * 0.42;
 
-    let alpha = smoothstep(width + 0.02, width - 0.015, abs(p.x));
-    let v_mask = smoothstep(-0.92, -0.8, p.y) * smoothstep(0.92, 0.8, p.y);
+    // Serrated edges
+    let serration_freq = 16.0 + hash21(vec2(seed, 1.0)) * 8.0;
+    let serration = sin(t * serration_freq) * 0.02 * smoothstep(0.05, 0.25, t) * smoothstep(0.98, 0.6, t);
 
-    // Midrib
-    let midrib = exp(-abs(p.x) * 50.0);
+    // Subtle asymmetry
+    let asym = (hash21(vec2(seed * 2.3, 0.0)) - 0.5) * 0.025 * t;
+    let width = base_width + serration;
+    let px = p.x - asym;
 
-    // Secondary veins
+    let alpha = smoothstep(width + 0.018, width - 0.012, abs(px));
+    let stem_mask = smoothstep(-0.98, -0.85, p.y);
+    let tip_mask = smoothstep(1.0, 0.88, p.y);
+
+    // Midrib vein
+    let midrib = exp(-abs(px) * 50.0) * 0.9;
+
+    // Secondary veins - alternating, curved
     var secondary = 0.0;
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 7; i++) {
         let fi = f32(i);
-        let vein_y = -0.5 + fi * 0.25;
+        let vein_y = -0.65 + fi * 0.22;
+        let side = select(-1.0, 1.0, i % 2 == 0);
         let dy = p.y - vein_y;
-        if (dy > 0.0 && dy < 0.18) {
-            let expected_x = dy * 0.55;
-            let dist = abs(abs(p.x) - expected_x);
-            secondary = max(secondary, exp(-dist * 60.0) * smoothstep(0.18, 0.01, dy));
+
+        if (dy > 0.0 && dy < 0.25) {
+            let curve = dy * dy * 0.35;
+            let expected_x = side * (dy * 0.5 + curve);
+            let dist = abs(px - expected_x);
+            let vein_strength = exp(-dist * 65.0) * smoothstep(0.25, 0.03, dy);
+            secondary = max(secondary, vein_strength * 0.55);
         }
     }
 
-    return vec3(alpha * v_mask, midrib + secondary * 0.5, t);
+    // Tertiary vein hints
+    let tertiary = value_noise(vec2(px * 30.0, p.y * 15.0) + seed) * 0.15;
+
+    return vec3(alpha * stem_mask * tip_mask, midrib + secondary + tertiary * alpha, t);
 }
 
-fn sample_leaf(uv: vec2<f32>, leaf_pos: vec2<f32>, leaf_rot: f32, leaf_scale: f32, leaf_seed: f32) -> vec4<f32> {
+fn sample_leaf(uv: vec2<f32>, leaf_pos: vec2<f32>, leaf_rot: f32, leaf_scale: f32, leaf_seed: f32, depth: f32) -> vec4<f32> {
     var local = uv - leaf_pos;
     local = rotate2d(local, leaf_rot);
     local = local / leaf_scale;
 
-    if (abs(local.x) > 0.5 || abs(local.y) > 1.05) {
+    if (abs(local.x) > 0.6 || abs(local.y) > 1.15) {
         return vec4(0.0);
     }
 
@@ -96,7 +112,7 @@ fn sample_leaf(uv: vec2<f32>, leaf_pos: vec2<f32>, leaf_rot: f32, leaf_scale: f3
     let vein = shape.y;
     let t = shape.z;
 
-    // Color variation per leaf
+    // Color variation per leaf (original coloring)
     let color_var = hash21(vec2(leaf_seed, leaf_seed * 1.7));
     var color = mix(params.color_primary.rgb, params.color_secondary.rgb, color_var * 0.5 + fbm(local * 4.0) * 0.15);
 
@@ -110,14 +126,111 @@ fn sample_leaf(uv: vec2<f32>, leaf_pos: vec2<f32>, leaf_rot: f32, leaf_scale: f3
     let age = hash21(vec2(leaf_seed * 2.0, 0.0));
     color = mix(color, vec3(0.5, 0.45, 0.25), smoothstep(0.65, 0.95, t) * age * 0.2);
 
+    // Depth-based darkening (further = darker, less saturated)
+    color *= 1.0 - depth * 0.25;
+    color = mix(color, vec3(dot(color, vec3(0.3, 0.5, 0.2))), depth * 0.12);
+
     // Highlight
     let highlight = exp(-length(local - vec2(-0.1, 0.15)) * 3.0) * params.sheen_strength * 0.1;
-    color += highlight * (1.0 - params.roughness);
+    color += highlight * (1.0 - params.roughness) * (1.0 - depth * 0.5);
 
     // Fine texture
     color += (hash21(uv * 250.0 + leaf_seed) - 0.5) * 0.025 * params.roughness;
 
     return vec4(clamp(color, vec3(0.0), vec3(1.0)), alpha);
+}
+
+fn sample_branch(uv: vec2<f32>, p0: vec2<f32>, p1: vec2<f32>, thickness: f32, depth: f32, seed: f32) -> vec4<f32> {
+    let pa = uv - p0;
+    let ba = p1 - p0;
+    let len_sq = dot(ba, ba);
+    if (len_sq < 0.0001) { return vec4(0.0); }
+
+    let h = clamp(dot(pa, ba) / len_sq, 0.0, 1.0);
+    let dist = length(pa - ba * h);
+
+    // Taper along segment
+    let tapered_thick = thickness * (1.0 - h * 0.35);
+
+    // Slight organic wobble
+    let wobble = sin(h * 15.0 + seed * 3.0) * thickness * 0.15;
+    let effective_dist = dist + wobble;
+
+    let alpha = smoothstep(tapered_thick + 0.003, tapered_thick * 0.3, effective_dist);
+
+    if (alpha < 0.01) {
+        return vec4(0.0);
+    }
+
+    // Greenish-brown bark color derived from params
+    let bark_base = mix(params.color_primary.rgb, params.color_secondary.rgb, 0.5) * 0.5;
+    let bark_brown = vec3(0.25, 0.2, 0.1);
+    var color = mix(bark_brown, bark_base, 0.35);
+
+    // Bark texture variation
+    let bark_noise = value_noise(uv * 150.0 + seed);
+    color = mix(color, color * 0.7, bark_noise * 0.3);
+
+    // Cylindrical shading
+    let norm_dist = dist / tapered_thick;
+    let shade = 1.0 - norm_dist * 0.4;
+    color *= shade;
+
+    // Depth darkening
+    color *= 1.0 - depth * 0.3;
+
+    // Fine texture
+    color += (hash21(uv * 400.0 + seed) - 0.5) * 0.03;
+
+    return vec4(clamp(color, vec3(0.0), vec3(1.0)), alpha);
+}
+
+// Branch data structure
+struct BranchInfo {
+    start: vec2<f32>,
+    dir: vec2<f32>,
+    length: f32,
+    depth: f32,
+    thickness: f32,
+}
+
+fn get_branch_info(idx: i32, seed: f32) -> BranchInfo {
+    var b: BranchInfo;
+
+    let h1 = hash22(vec2(f32(idx) * 17.3 + seed, seed * 0.7));
+    let h2 = hash22(vec2(f32(idx) * 29.1 + seed, seed * 1.3 + 50.0));
+    let h3 = hash21(vec2(f32(idx) * 41.7, seed + 100.0));
+
+    // Different entry points/directions based on index
+    let entry_type = idx % 5;
+
+    if (entry_type == 0) {
+        // From bottom-left area
+        b.start = vec2(h1.x * 0.25, -0.02);
+        b.dir = normalize(vec2(0.3 + h2.x * 0.4, 0.7 + h2.y * 0.25));
+    } else if (entry_type == 1) {
+        // From bottom-right area
+        b.start = vec2(0.75 + h1.x * 0.25, -0.02);
+        b.dir = normalize(vec2(-0.3 - h2.x * 0.4, 0.7 + h2.y * 0.25));
+    } else if (entry_type == 2) {
+        // From left side
+        b.start = vec2(-0.02, 0.2 + h1.y * 0.5);
+        b.dir = normalize(vec2(0.75 + h2.x * 0.2, h2.y - 0.4));
+    } else if (entry_type == 3) {
+        // From right side
+        b.start = vec2(1.02, 0.2 + h1.y * 0.5);
+        b.dir = normalize(vec2(-0.75 - h2.x * 0.2, h2.y - 0.4));
+    } else {
+        // From bottom-center, branching up
+        b.start = vec2(0.35 + h1.x * 0.3, -0.02);
+        b.dir = normalize(vec2(h2.x - 0.5, 0.8 + h2.y * 0.15));
+    }
+
+    b.length = 0.5 + h3 * 0.45;
+    b.depth = h1.y * 0.85;  // Z-depth: 0 = front, ~0.85 = back
+    b.thickness = (0.006 + h2.y * 0.005) * (1.0 - b.depth * 0.4);
+
+    return b;
 }
 
 @compute @workgroup_size(16, 16)
@@ -130,56 +243,141 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let uv = vec2<f32>(f32(gid.x), f32(gid.y)) / vec2<f32>(f32(size.x), f32(size.y));
     let seed_f = f32(params.seed);
 
-    // Grid density controlled by scale
-    let grid_size = 10.0 * params.scale;
-    let cell_size = 1.0 / grid_size;
-
     var final_color = vec3(0.0);
     var final_alpha = 0.0;
 
-    // Multiple depth layers
-    let num_layers = 4;
-    let leaves_per_cell = 3;
+    let num_branches = 4 + i32(params.scale * 1.5);
+    let num_depth_passes = 4;
 
-    for (var layer = 0; layer < num_layers; layer++) {
-        let layer_seed = seed_f + f32(layer) * 137.0;
-        let cell = floor(uv * grid_size);
+    // Render back-to-front for proper depth ordering
+    for (var depth_pass = num_depth_passes - 1; depth_pass >= 0; depth_pass--) {
+        let depth_min = f32(depth_pass) / f32(num_depth_passes);
+        let depth_max = f32(depth_pass + 1) / f32(num_depth_passes);
 
-        // Check 3x3 neighborhood of cells
-        for (var dy = -1; dy <= 1; dy++) {
-            for (var dx = -1; dx <= 1; dx++) {
-                let check_cell = cell + vec2<f32>(f32(dx), f32(dy));
+        for (var bi = 0; bi < num_branches; bi++) {
+            let branch = get_branch_info(bi, seed_f);
 
-                for (var leaf_idx = 0; leaf_idx < leaves_per_cell; leaf_idx++) {
-                    let idx_f = f32(leaf_idx);
-                    let cell_key = check_cell + vec2(layer_seed, idx_f * 31.0);
+            // Check if branch belongs to this depth pass
+            if (branch.depth < depth_min || branch.depth >= depth_max) {
+                continue;
+            }
 
-                    // Skip some cells randomly for variation
-                    if (hash21(cell_key * 0.7) > 0.75) {
+            // Perspective scale factor (further = smaller)
+            let perspective_scale = 1.0 - branch.depth * 0.45;
+
+            // Draw branch as multiple curved segments
+            let num_segments = 5;
+            var prev_pos = branch.start;
+            var cur_dir = branch.dir;
+            let segment_len = branch.length / f32(num_segments);
+
+            for (var si = 0; si < num_segments; si++) {
+                let seg_t = f32(si) / f32(num_segments);
+                let seg_seed = seed_f + f32(bi) * 100.0 + f32(si) * 10.0;
+
+                // Gradual curve
+                let curve_noise = (hash21(vec2(seg_seed, 0.0)) - 0.5) * 0.25;
+                let perp = vec2(-cur_dir.y, cur_dir.x);
+                cur_dir = normalize(cur_dir + perp * curve_noise * 0.15);
+
+                let next_pos = prev_pos + cur_dir * segment_len;
+
+                // Segment thickness tapers
+                let seg_thick = branch.thickness * (1.0 - seg_t * 0.5) * perspective_scale;
+
+                // Draw branch segment
+                let branch_result = sample_branch(uv, prev_pos, next_pos, seg_thick, branch.depth, seg_seed);
+                if (branch_result.a > 0.01) {
+                    let shadow = final_alpha * params.shadow_strength * 0.1;
+                    let shaded = branch_result.rgb * (1.0 - shadow);
+                    final_color = mix(final_color, shaded, branch_result.a);
+                    final_alpha = final_alpha + branch_result.a * (1.0 - final_alpha);
+                }
+
+                // Add leaves along this segment
+                let leaves_per_seg = 2 + i32(hash21(vec2(seg_seed, 1.0)) * 2.5);
+
+                for (var li = 0; li < leaves_per_seg; li++) {
+                    let leaf_key = vec2(seg_seed + f32(li) * 7.7, f32(li) * 13.3);
+                    let lh1 = hash22(leaf_key);
+                    let lh2 = hash22(leaf_key + vec2(100.0, 0.0));
+                    let lh3 = hash21(leaf_key + vec2(200.0, 0.0));
+
+                    // Position along segment
+                    let leaf_t = lh1.x;
+                    let pos_on_branch = mix(prev_pos, next_pos, leaf_t);
+
+                    // Offset perpendicular to branch
+                    let side = select(-1.0, 1.0, lh1.y > 0.5);
+                    let offset_dist = 0.015 + lh2.x * 0.035;
+                    let leaf_pos = pos_on_branch + perp * side * offset_dist;
+
+                    // Skip if outside bounds
+                    let margin = 0.06;
+                    if (leaf_pos.x < margin || leaf_pos.x > 1.0 - margin ||
+                        leaf_pos.y < margin || leaf_pos.y > 1.0 - margin) {
                         continue;
                     }
 
-                    let rand1 = hash22(cell_key * 1.1);
-                    let rand2 = hash22(cell_key * 2.3);
-                    let rand3 = hash21(cell_key * 3.7);
+                    // Leaf rotation - generally pointing outward/upward from branch
+                    let branch_angle = atan2(cur_dir.y, cur_dir.x);
+                    let outward_angle = side * (1.0 + lh2.y * 0.7);
+                    let random_twist = (lh3 - 0.5) * 0.5;
+                    let leaf_rot = branch_angle + outward_angle + random_twist;
 
-                    // Leaf position with jitter beyond cell
-                    let leaf_pos = (check_cell + 0.5 + (rand1 - 0.5) * 1.4) * cell_size;
-                    let leaf_rot = rand2.x * 6.28318;
-                    let leaf_scale = (0.04 + rand2.y * 0.04) / params.scale;
-                    let leaf_seed = rand3 * 100.0;
+                    // Leaf scale - bigger, with perspective
+                    let base_leaf_size = 0.09 + lh2.y * 0.06;
+                    let leaf_scale = base_leaf_size * perspective_scale / params.scale;
 
-                    let leaf_result = sample_leaf(uv, leaf_pos, leaf_rot, leaf_scale, leaf_seed);
+                    let leaf_seed = lh3 * 100.0;
+
+                    let leaf_result = sample_leaf(uv, leaf_pos, leaf_rot, leaf_scale, leaf_seed, branch.depth);
 
                     if (leaf_result.a > 0.01) {
-                        // Self-shadowing from leaves above
-                        let shadow = final_alpha * params.shadow_strength * 0.2;
-                        let shaded_color = leaf_result.rgb * (1.0 - shadow);
-
-                        // Alpha composite
-                        final_color = mix(final_color, shaded_color, leaf_result.a);
+                        let shadow = final_alpha * params.shadow_strength * 0.15;
+                        let shaded = leaf_result.rgb * (1.0 - shadow);
+                        final_color = mix(final_color, shaded, leaf_result.a);
                         final_alpha = final_alpha + leaf_result.a * (1.0 - final_alpha);
                     }
+                }
+
+                prev_pos = next_pos;
+            }
+
+            // Add some leaves at branch tip
+            let tip_pos = prev_pos;
+            let tip_leaves = 2 + i32(hash21(vec2(seed_f + f32(bi) * 50.0, 999.0)) * 2.0);
+
+            for (var ti = 0; ti < tip_leaves; ti++) {
+                let tip_key = vec2(seed_f + f32(bi) * 77.0 + f32(ti) * 11.0, 888.0);
+                let th1 = hash22(tip_key);
+                let th2 = hash22(tip_key + vec2(50.0, 0.0));
+
+                let spread = (th1.x - 0.5) * 0.08;
+                let fwd = th1.y * 0.05;
+                let leaf_pos = tip_pos + cur_dir * fwd + vec2(-cur_dir.y, cur_dir.x) * spread;
+
+                let margin = 0.06;
+                if (leaf_pos.x < margin || leaf_pos.x > 1.0 - margin ||
+                    leaf_pos.y < margin || leaf_pos.y > 1.0 - margin) {
+                    continue;
+                }
+
+                let branch_angle = atan2(cur_dir.y, cur_dir.x);
+                let leaf_rot = branch_angle + (th2.x - 0.5) * 1.2;
+
+                let base_leaf_size = 0.1 + th2.y * 0.05;
+                let leaf_scale = base_leaf_size * perspective_scale / params.scale;
+
+                let leaf_seed = th1.x * 100.0;
+
+                let leaf_result = sample_leaf(uv, leaf_pos, leaf_rot, leaf_scale, leaf_seed, branch.depth);
+
+                if (leaf_result.a > 0.01) {
+                    let shadow = final_alpha * params.shadow_strength * 0.15;
+                    let shaded = leaf_result.rgb * (1.0 - shadow);
+                    final_color = mix(final_color, shaded, leaf_result.a);
+                    final_alpha = final_alpha + leaf_result.a * (1.0 - final_alpha);
                 }
             }
         }

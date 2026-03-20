@@ -4,12 +4,14 @@ use crate::ui::ui_editor::Ui;
 use crate::ui::variables::update_ui_variables;
 use crate::world::astronomy::{Astronomy, ObserverParams, TimeScales, compute_astronomy};
 use crate::world::camera::{Camera, CameraController};
+use crate::world::game_state::GameState;
 use glam::Mat4;
 
 pub struct WorldState {
     pub camera: Camera,
     pub cam_controller: CameraController,
     pub astronomy: Astronomy,
+    pub game_state: GameState,
 }
 
 impl WorldState {
@@ -20,6 +22,7 @@ impl WorldState {
             camera,
             cam_controller,
             astronomy: Astronomy::default(),
+            game_state: GameState::default(),
         };
         world
     }

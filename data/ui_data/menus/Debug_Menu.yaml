@@ -6,8 +6,8 @@ layers:
       - !Text
         id: fps_text
         actions: [ ]
-        x: 0.14294007
-        y: 0.014272322
+        x: 0.0
+        y: 0.0
         pt: 15.0
         color:
           - 1.0
@@ -15,11 +15,12 @@ layers:
           - 1.0
           - 1.0
         text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Render CPU: {(total_cpu_render_time):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
+        anchor: TopLeft
       - !Text
         id: frametime_main_pass_text
         actions: [ ]
-        x: 0.2334071
-        y: 0.07463002
+        x: 0.0
+        y: 0.06428572
         pt: 15.0
         color:
           - 1.0
@@ -27,11 +28,12 @@ layers:
           - 1.0
           - 1.0
         text: 'Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Stars: {(stars_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
+        anchor: TopLeft
       - !Text
         id: gtao_frametimes_text
         actions: [ ]
-        x: 0.17007855
-        y: 0.09733817
+        x: 0.0
+        y: 0.08571429
         pt: 15.0
         color:
           - 1.0
@@ -39,11 +41,12 @@ layers:
           - 0.2
           - 1.0
         text: 'GTAO: Total: {(gtao_frametime):.2}ms, Prep: {(gtao_prep_frametime):.2}ms, Generate: {(gtao_generate_frametime):.2}ms, Blur: {(gtao_blur_frametime):.2}ms, Upsample/Apply: {(gtao_upsample_apply_frametime):.2}ms'
+        anchor: TopLeft
       - !Text
         id: fog_frametime_text
         actions: [ ]
-        x: 0.17365062
-        y: 0.11989728
+        x: -0.0
+        y: 0.10714286
         pt: 15.0
         color:
           - 1.0
@@ -51,11 +54,12 @@ layers:
           - 1.0
           - 1.0
         text: 'Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Props: {(props_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
+        anchor: TopLeft
       - !Text
         id: shadows_frametime_text
         actions: [ ]
-        x: 0.18748729
-        y: 0.14183627
+        x: -0.0
+        y: 0.12857144
         pt: 15.0
         color:
           - 1.0
@@ -63,11 +67,12 @@ layers:
           - 1.0
           - 1.0
         text: 'CSM Shadows: {(csm_frametime):.2}ms, RT Total: {(rt_frametime):.2}ms, RT Rays: {(rt_tracing_frametime):.2}ms, RT Upsampling: {(rt_upsample_frametime):.2}ms, RT Apply: {(rt_apply_frametime):.2}ms'
+        anchor: TopLeft
       - !Text
         id: sky_info_text
         actions: [ ]
-        x: 0.31523323
-        y: 0.03565011
+        x: -0.0
+        y: 0.021428572
         pt: 15.0
         color:
           - 0.3
@@ -75,11 +80,12 @@ layers:
           - 1.0
           - 1.0
         text: 'Requested Time Speed: {time_speed:.2|fix}x, Actual Time Speed: {achieved_time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees'
+        anchor: TopLeft
       - !Text
         id: player_info_text
         actions: [ ]
-        x: 0.1452671
-        y: 0.054609943
+        x: -0.0
+        y: 0.042857144
         pt: 15.0
         color:
           - 0.0
@@ -87,11 +93,12 @@ layers:
           - 1.0
           - 1.0
         text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
+        anchor: TopLeft
       - !Text
         id: world_info_text
         actions: [ ]
-        x: 0.002197647
-        y: 0.16293806
+        x: -0.0
+        y: 0.15
         pt: 15.0
         color:
           - 0.0
@@ -100,188 +107,3 @@ layers:
           - 1.0
         text: 'Car Count: {car_count}, Cursor Mode: {cursor_mode}'
         anchor: TopLeft
-      - !Circle
-        id: '967'
-        actions: [ ]
-        x: 0.9281143
-        y: 0.8954688
-        radius: 0.07209885
-        border_thickness_percentage: 0.02282214
-        fill_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        border_color:
-          - 0.1
-          - 0.1
-          - 0.1
-          - 1.0
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-      - !Circle
-        id: '968'
-        actions: [ ]
-        x: 0.8455063
-        y: 0.93613005
-        radius: 0.043656804
-        border_thickness_percentage: 0.2
-        border_color:
-          - 1.0
-          - 0.0
-          - 0.0
-          - 0.98
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-      - !Polygon
-        id: '566'
-        actions: [ ]
-        x: 0.0
-        y: 0.0
-        vertices:
-          - pos:
-              - 0.8578537
-              - 0.85722375
-            color:
-              - 1.0
-              - 1.0
-              - 1.0
-              - 1.0
-          - pos:
-              - 0.9186829
-              - 0.8571847
-            color:
-              - 1.0
-              - 1.0
-              - 1.0
-              - 1.0
-          - pos:
-              - 0.9190384
-              - 0.971529
-            color:
-              - 1.0
-              - 1.0
-              - 0.0
-              - 1.0
-          - pos:
-              - 0.856781
-              - 0.970731
-            color:
-              - 1.0
-              - 1.0
-              - 1.0
-              - 1.0
-      - !Circle
-        id: '762'
-        actions: [ ]
-        x: 0.34766236
-        y: 0.09207589
-        radius: 0.0052822144
-        border_thickness_percentage: 1.0
-        fill_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        inside_border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-      - !Circle
-        id: '762'
-        actions: [ ]
-        x: 0.34766236
-        y: 0.09207589
-        radius: 0.0052822144
-        border_thickness_percentage: 1.0
-        fill_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        inside_border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-      - !Circle
-        id: '518'
-        actions: [ ]
-        x: 0.2682907
-        y: 0.12342076
-        radius: 0.0052822144
-        border_thickness_percentage: 1.0
-        fill_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        inside_border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0
-      - !Circle
-        id: '518'
-        actions: [ ]
-        x: 0.2699875
-        y: 0.12399275
-        radius: 0.0052822144
-        border_thickness_percentage: 1.0
-        fill_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        inside_border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        border_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 1.0
-        glow_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 0.0

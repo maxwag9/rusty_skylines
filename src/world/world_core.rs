@@ -16,21 +16,23 @@ pub struct WorldCore {
     pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub simulation: Simulation,
     pub terrain: Terrain,
-    pub road_subsystem: Roads,
+    pub road: Roads,
     pub cars: Cars,
     //pub job_pool: JobPool,         // persistent worker threads + channels
     // ... other sim-only subsystems (economy, citizens, etc)
 }
 
 impl WorldCore {
-    pub(crate) fn new(device: &Device, settings: &Settings) -> Self {
+    pub fn new(device: &Device, settings: &Settings) -> Self {
+        let mut world_state = WorldState::new();
+        let terrain = Terrain::new(device, settings, &mut world_state.game_state.current_save);
         Self {
-            world_state: WorldState::new(),
+            world_state,
             time: Time::new(),
             input: Input::new(),
             simulation: Simulation::new(),
-            terrain: Terrain::new(device, settings),
-            road_subsystem: Roads::new(),
+            terrain,
+            road: Roads::new(),
             cars: Cars::new(),
             events: CommandBuffer::new(),
         }

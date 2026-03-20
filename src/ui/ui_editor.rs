@@ -5,6 +5,7 @@
 use crate::data::{SettingValue, Settings};
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
+use crate::renderer::props::Props;
 use crate::resources::{CommandQueues, Time};
 use crate::ui::action_parser::actions_to_uicommands;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
@@ -19,7 +20,7 @@ use crate::ui::ui_edit_manager::{
 use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::{
     load_advanced_primitives_from_directory, load_global_actions, load_legacy_gui_layout,
-    load_menus_from_directory, sanitize_filename,
+    load_menus_from_directory,
 };
 use crate::ui::ui_text_editing::{HitResult, MouseSnapshot, handle_text_editing};
 use crate::ui::ui_touch_manager::{
@@ -28,9 +29,11 @@ use crate::ui::ui_touch_manager::{
 };
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
-use crate::world::camera::Camera;
-use crate::world::roads::road_structs::RoadStyleParams;
+use crate::world::camera::{Camera, CameraController};
+use crate::world::game_state::GameState;
+use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
+use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -221,12 +224,15 @@ impl Ui {
         input: &mut Input,
         time: &Time,
         terrain: &mut Terrain,
+        props: &mut Props,
         window_size: PhysicalSize<u32>,
-        road_style_params: &mut RoadStyleParams,
+        roads: &mut Roads,
         command_queues: &mut CommandQueues,
         settings: &mut Settings,
         camera: &mut Camera,
+        camera_controller: &mut CameraController,
         event_loop: &ActiveEventLoop,
+        game_state: &mut GameState,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
@@ -293,11 +299,14 @@ impl Ui {
             input,
             time,
             terrain,
+            props,
             window_size,
-            road_style_params,
+            roads,
             settings,
             camera,
+            camera_controller,
             event_loop,
+            game_state,
         );
 
         if self.touch_manager.selection.selection_changed {
@@ -1375,7 +1384,7 @@ impl Ui {
             if menu_yaml.layers.is_empty() {
                 continue;
             }
-            let safe_name = sanitize_filename(menu_name);
+            let safe_name = sanitize(menu_name);
             let file_path = menus_dir.join(format!("{}.{}", safe_name, "yaml"));
 
             let content = serde_yaml::to_string(&menu_yaml)?;

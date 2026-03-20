@@ -281,7 +281,10 @@ define_commands! {
 
     "ifvareq"
         => IfVarEq { var_name: String, value: UiValue, then: Vec<UiCommand> },
-
+    "save" | "save_game" | "savegame"
+        => SaveGame,
+    "load" | "load_game" | "loadgame" | "load_save" | "loadsave" | "load_world" | "loadworld"
+        => LoadSave {save_name: String, without_saving: bool  },
     "exit" | "quit" | "exit_game"
         => ExitGame,
     // ===== DEBUG COMMANDS =====

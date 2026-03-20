@@ -14,6 +14,7 @@ use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
     CSM_CASCADES, ShadowMatUniform, render_cars_shadows, render_roads_shadows,
+    render_terrain_shadows,
 };
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
@@ -35,22 +36,14 @@ use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
 use wgpu::wgt::PollType;
-use wgpu::{
-    Adapter, Backends, BlendComponent, BlendFactor, BlendOperation, BlendState, Color,
-    ColorTargetState, ColorWrites, CommandEncoder, CommandEncoderDescriptor, CompositeAlphaMode,
-    Device, DeviceDescriptor, ExperimentalFeatures, Features, Instance, InstanceDescriptor, Limits,
-    LoadOp, MemoryHints, Operations, PowerPreference, PresentMode, Queue, RenderPass,
-    RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-    RequestAdapterOptions, StoreOp, Surface, SurfaceConfiguration, SurfaceError, SurfaceTexture,
-    TextureFormat, TextureFormatFeatureFlags, TextureFormatFeatures, TextureUsages, TextureView,
-    TextureViewDescriptor, Trace,
-};
+use wgpu::*;
 use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
 use wgpu_render_manager::generator::TextureKey;
-use wgpu_render_manager::pipelines::PipelineOptions;
+use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
+use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 pub struct RenderCore {
@@ -96,7 +89,7 @@ impl RenderCore {
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let mut render_manager = RenderManager::new(device, queue, texture_dir());
-        let gizmo = Gizmo::new(device, settings.chunk_size);
+        let gizmo = Gizmo::new(device, camera.chunk_size);
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
@@ -125,11 +118,11 @@ impl RenderCore {
             profiler,
             rt_subsystem,
             partition_gizmo: PartitionGizmo::new(),
-            props: Props::new(),
+            props: Props::new(device),
         }
     }
 
-    pub(crate) fn resize(&mut self, surface: &Surface, new_size: PhysicalSize<u32>, ui: &mut Ui) {
+    pub fn resize(&mut self, surface: &Surface, new_size: PhysicalSize<u32>, ui: &mut Ui) {
         // Early exit for invalid sizes
         if new_size.width == 0 || new_size.height == 0 {
             return;
@@ -164,7 +157,7 @@ impl RenderCore {
         );
     }
 
-    pub(crate) fn render(
+    pub fn render(
         &mut self,
         surface: &Surface,
         world_core: &mut WorldCore,
@@ -184,7 +177,7 @@ impl RenderCore {
         let time = &world_core.time;
         let camera = &world_core.world_state.camera;
         let astronomy = &world_core.world_state.astronomy;
-        let terrain_subsystem = &mut world_core.terrain;
+        let terrain = &mut world_core.terrain;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -202,6 +195,7 @@ impl RenderCore {
                     aspect,
                     time,
                     settings,
+                    terrain,
                 );
             });
             self.execute_main_pass(
@@ -213,7 +207,7 @@ impl RenderCore {
                 time,
                 &world_core.input,
                 ui_loader,
-                terrain_subsystem,
+                terrain,
                 &world_core.cars.car_storage(),
                 settings,
                 astronomy,
@@ -266,6 +260,8 @@ impl RenderCore {
             let smu = ShadowMatUniform {
                 light_view_proj: self.pipelines.resources.csm_shadows.light_mats[i]
                     .to_cols_array_2d(),
+                cascade_idx: i as u32,
+                pad: [0.0; 3],
             };
             self.queue.write_buffer(
                 &self.pipelines.resources.csm_shadows.shadow_mat_buffers[i],
@@ -281,7 +277,7 @@ impl RenderCore {
             time,
             ui_loader,
             terrain,
-            &world_core.road_subsystem,
+            &world_core.road,
             &world_core.cars,
             astronomy,
         );
@@ -373,6 +369,9 @@ impl RenderCore {
         );
         self.gizmo
             .update_orbit_gizmo(camera.target, camera.orbit_radius, astronomy.sun_dir, false);
+
+        self.props
+            .upload_instances(&self.device, &self.queue, camera, terrain);
     }
 
     fn execute_shadow_pass(
@@ -383,6 +382,7 @@ impl RenderCore {
         aspect: f32,
         _time: &Time,
         settings: &Settings,
+        terrain: &Terrain,
     ) {
         for cascade_idx in 0..CSM_CASCADES {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -410,17 +410,18 @@ impl RenderCore {
             let shadow_buf = &self.pipelines.resources.csm_shadows.shadow_mat_buffers[cascade_idx];
 
             //if cascade_idx != 0 && cascade_idx != 1 {
-            //     render_terrain_shadows(
-            //         &mut pass,
-            //         &mut self.render_manager,
-            //         &self.terrain_renderer,
-            //         &self.pipelines,
-            //         settings,
-            //         camera,
-            //         aspect,
-            //         shadow_buf,
-            //         cascade_idx
-            //     );
+            render_terrain_shadows(
+                &mut pass,
+                &mut self.render_manager,
+                &self.terrain_renderer,
+                terrain,
+                &self.pipelines,
+                settings,
+                camera,
+                aspect,
+                shadow_buf,
+                cascade_idx,
+            );
             //}
             render_roads_shadows(
                 &mut pass,
@@ -442,7 +443,17 @@ impl RenderCore {
                 camera,
                 shadow_buf,
                 cascade_idx,
-            )
+            );
+            self.props.render_shadows(
+                &mut self.render_manager,
+                &mut pass,
+                camera,
+                terrain,
+                &self.pipelines,
+                settings,
+                shadow_buf,
+                cascade_idx,
+            );
         }
     }
 
@@ -498,8 +509,27 @@ impl RenderCore {
         self.execute_debug_preview_pass(encoder, settings);
 
         gpu_timestamp!(encoder, &mut self.profiler, "Tonemap", {
-            self.execute_tonemap_pass(encoder, surface_view, settings);
+            self.execute_tonemap_pass(encoder);
         });
+        encoder.copy_texture_to_texture(
+            TexelCopyTextureInfo {
+                texture: &self.pipelines.resolved.tonemapped.texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyTextureInfo {
+                texture: &surface_view.texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            Extent3d {
+                width: self.config.width,
+                height: self.config.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     fn execute_world_pass(
@@ -1058,23 +1088,21 @@ impl RenderCore {
         }
     }
 
-    fn execute_tonemap_pass(
-        &mut self,
-        encoder: &mut CommandEncoder,
-        surface_view: &TextureView,
-        _settings: &Settings,
-    ) {
+    fn execute_tonemap_pass(&mut self, encoder: &mut CommandEncoder) {
+        // Post-process passes don't need MSAA - render directly to target
+        let color_attachment = RenderPassColorAttachment {
+            view: &self.pipelines.resolved.tonemapped,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations {
+                load: LoadOp::Clear(Color::BLACK),
+                store: StoreOp::Store,
+            },
+        };
+
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Tonemap Pass"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: surface_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: Operations {
-                    load: LoadOp::Clear(Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
+            label: Some("Main Pass (Tonemapping)"),
+            color_attachments: &[Some(color_attachment)],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -1083,21 +1111,23 @@ impl RenderCore {
 
         let options = PipelineOptions {
             topology: TriangleList,
-            msaa_samples: 1,
+            msaa_samples: 1, // No MSAA for post-processing!
             depth_stencil: None,
             vertex_layouts: vec![],
             cull_mode: None,
-            targets: vec![Some(ColorTargetState {
-                format: surface_view.texture().format(),
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
-            vertex_only: false,
+            fragment: FragmentOption::Default {
+                targets: vec![Some(ColorTargetState {
+                    // Use the actual render target format, not surface format
+                    format: self.pipelines.resolved.tonemapped.texture().format(),
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            },
             shadow: None,
         };
 
         self.render_manager.render_with_textures(
-            &[&self.pipelines.resolved.hdr],
+            &[&self.pipelines.resolved.hdr], // Sample FROM non-msaa hdr
             shader_dir().join("tonemap.wgsl").as_path(),
             &options,
             &[&self.pipelines.buffers.tonemapping],
@@ -1201,12 +1231,16 @@ impl RenderCore {
 
 pub(crate) fn create_surface_and_adapter(
     window: Arc<Window>,
+    event_loop: &ActiveEventLoop,
 ) -> (Surface<'static>, Adapter, PhysicalSize<u32>) {
-    let instance = Instance::new(&InstanceDescriptor {
+    let display_handle = event_loop.owned_display_handle();
+
+    let instance = Instance::new(InstanceDescriptor {
         backends: Backends::all(),
         flags: Default::default(),
         memory_budget_thresholds: Default::default(),
         backend_options: Default::default(),
+        display: Some(Box::new(display_handle)),
     });
 
     let size = window.inner_size();
@@ -1225,8 +1259,8 @@ pub(crate) fn create_surface_and_adapter(
 
     (surface, adapter, size)
 }
-
-pub(crate) fn create_surface_config(
+pub const SURFACE_FORMAT: TextureFormat = Rgba8UnormSrgb;
+pub fn create_surface_config(
     surface: &Surface,
     adapter: &Adapter,
     settings: &mut Settings,
@@ -1238,7 +1272,7 @@ pub(crate) fn create_surface_config(
         .formats
         .iter()
         .copied()
-        .find(|f| *f == Rgba8UnormSrgb)
+        .find(|f| *f == SURFACE_FORMAT)
         .unwrap_or(surface_caps.formats[0]);
     // println!("{:?}", format);
 
@@ -1252,7 +1286,7 @@ pub(crate) fn create_surface_config(
     let present_mode = pick_present_mode(surface, adapter, settings.present_mode.clone().to_wgpu());
 
     let config = SurfaceConfiguration {
-        usage: TextureUsages::RENDER_ATTACHMENT,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST,
         format,
         width: size.width.max(1),
         height: size.height.max(1),
@@ -1375,34 +1409,39 @@ pub fn acquire_frame(
     config: &SurfaceConfiguration,
 ) -> Option<SurfaceTexture> {
     match surface.get_current_texture() {
-        Ok(frame) => Some(frame),
-        Err(SurfaceError::Outdated) => {
-            // Surface is temporarily invalid
-            None // skip this frame
+        CurrentSurfaceTexture::Success(surface) => Some(surface),
+        CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+            surface.configure(device, config);
+            Some(surface_texture)
         }
-        Err(SurfaceError::Lost) => {
+        CurrentSurfaceTexture::Lost | CurrentSurfaceTexture::Outdated => {
             surface.configure(device, config);
             None
         }
-        Err(SurfaceError::OutOfMemory) => {
-            panic!("OOM");
+        CurrentSurfaceTexture::Timeout => {
+            println!("Timeout while acquiring surface");
+            None
         }
-        Err(e) => {
-            eprintln!("Surface error: {:?}", e);
+        CurrentSurfaceTexture::Occluded => {
+            println!("occluded");
+            None
+        }
+        CurrentSurfaceTexture::Validation => {
+            println!("Validation error while acquiring surface");
             None
         }
     }
 }
 pub fn create_color_attachment_load<'a>(
     msaa_view: &'a TextureView,
-    surface_view: &'a TextureView,
+    resolved_view: &'a TextureView,
     msaa_samples: u32,
 ) -> RenderPassColorAttachment<'a> {
     if msaa_samples > 1 {
         RenderPassColorAttachment {
             view: msaa_view,
             depth_slice: None,
-            resolve_target: Some(surface_view),
+            resolve_target: Some(resolved_view),
             ops: Operations {
                 load: LoadOp::Load,
                 store: StoreOp::Store,
@@ -1410,7 +1449,7 @@ pub fn create_color_attachment_load<'a>(
         }
     } else {
         RenderPassColorAttachment {
-            view: surface_view,
+            view: resolved_view,
             depth_slice: None,
             resolve_target: None,
             ops: Operations {

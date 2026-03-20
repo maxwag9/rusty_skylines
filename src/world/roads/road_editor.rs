@@ -21,7 +21,7 @@ const CROSSING_SNAP_TO_NODE_RADIUS: f64 = 20.0;
 
 pub struct RoadEditor {
     allocator: IdAllocator,
-    pub(crate) style: RoadStyleParams,
+    pub style: RoadStyleParams,
 }
 
 impl RoadEditor {

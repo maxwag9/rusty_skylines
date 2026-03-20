@@ -43,6 +43,23 @@ fn find_data_root() -> PathBuf {
     exe.join("data")
 }
 
+fn rusty_skylines_root() -> PathBuf {
+    // 1. Prefer portable folder if it exists
+    let portable = exe_dir().join("RustySkylines");
+    if portable.exists() {
+        return portable;
+    }
+
+    // 2. Otherwise fallback to OS data dir
+    let base = dirs::data_local_dir().expect("Failed to get local data directory");
+    let dir = base.join("RustySkylines");
+
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create app dir: {}", e);
+    }
+    dir
+}
+
 /// Cache the data root to avoid repeated filesystem checks
 fn data_root() -> &'static PathBuf {
     use std::sync::OnceLock;
@@ -53,7 +70,9 @@ fn data_root() -> &'static PathBuf {
 pub fn data_dir(path: impl AsRef<Path>) -> PathBuf {
     data_root().join(path.as_ref())
 }
-
+pub fn rusty_skylines_dir(path: impl AsRef<Path>) -> PathBuf {
+    rusty_skylines_root().join(path.as_ref())
+}
 pub fn shader_dir() -> PathBuf {
     let dir = data_dir("shaders");
     if let Err(e) = fs::create_dir_all(&dir) {
@@ -76,4 +95,43 @@ pub fn compute_shader_dir() -> PathBuf {
         eprintln!("[data_path] Failed to create compute shader dir: {}", e);
     }
     dir
+}
+
+pub fn saves_dir() -> PathBuf {
+    let dir = rusty_skylines_dir("saves");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create saves dir: {}", e);
+    }
+    dir
+}
+
+pub fn screenshots_dir() -> PathBuf {
+    let dir = rusty_skylines_dir("screenshots");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("[data_path] Failed to create screenshots dir: {}", e);
+    }
+    dir
+}
+pub fn next_screenshot_path() -> PathBuf {
+    let dir = screenshots_dir();
+
+    let now = chrono::Local::now();
+    let base = now.format("%Y-%m-%d__%Hh-%Mm-%Ss").to_string(); // "2026-10-13__13h-56m-03s"
+
+    // Try without suffix first
+    let path = dir.join(format!("{}.png", base));
+
+    if !path.exists() {
+        return path;
+    }
+
+    // If exists, append _2, _3, ...
+    for i in 2.. {
+        let candidate = dir.join(format!("{}_{}.png", base, i));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
 }

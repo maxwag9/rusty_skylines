@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::WorldPos;
 use crate::renderer::pipelines::ToneMappingState;
 use crate::ui::variables::UiValue;
 use serde::{Deserialize, Serialize};
@@ -633,12 +633,6 @@ macro_rules! define_settings {
     };
 }
 
-// ============ Settings Definition (simplified - no $val!) ============
-
-fn default_chunk_size() -> ChunkSize {
-    128
-}
-
 define_settings! {
     TargetFps => target_fps: f32 = 60.0; Value,
     TargetTps => target_tps: f32 = 60.0; Value,
@@ -660,21 +654,19 @@ define_settings! {
     RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
     RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
-    ChunkSize => chunk_size: ChunkSize = default_chunk_size(); Value,
     TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Value,
     DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle,
     StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle,
     LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle,
     ReversedDepthZ => reversed_depth_z: bool = true; Bool,
     ShowFog => show_fog: bool = true; Bool,
-    PlayerPos => player_pos: WorldPos = WorldPos::default(); Value,
     DriveCar => drive_car: bool = false; Bool,
     RenderRtGizmo => render_rt_gizmo: bool = false; Bool,
     Noclip => noclip: bool = false; Bool,
 }
 
 impl Settings {
-    pub(crate) fn is_gtao_prep_off(&self) -> bool {
+    pub fn is_gtao_prep_off(&self) -> bool {
         !self.gtao_enabled
             && (self.shadow_type == ShadowType::OFF || self.shadow_type == ShadowType::CSM)
             && !self.show_fog

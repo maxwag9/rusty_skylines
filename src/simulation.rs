@@ -103,7 +103,7 @@ impl Simulation {
     }
 }
 
-pub(crate) fn update_picked_pos(
+pub fn update_picked_pos(
     terrain_subsystem: &mut Terrain,
     camera: &Camera,
     settings: &Settings,
@@ -118,7 +118,7 @@ pub(crate) fn update_picked_pos(
         view,
         proj,
         camera.eye_world(),
-        settings.chunk_size,
+        camera.chunk_size,
     );
     terrain_subsystem.pick_terrain_point(ray);
 }

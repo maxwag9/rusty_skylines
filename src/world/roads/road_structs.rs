@@ -131,9 +131,9 @@ impl From<SegmentId> for u32 {
 }
 
 /// Stable, monotonically increasing lane identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct LaneId(pub(crate) u32);
+pub struct LaneId(pub u32);
 
 impl LaneId {
     #[inline]
@@ -170,7 +170,7 @@ pub type NodeLaneId = u32;
 pub type PolyIdx = u16;
 
 /// Stable identifier for traffic control attachments within a node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct ControlId(u32);
 
@@ -191,7 +191,7 @@ impl ControlId {
     }
 }
 /// Physical structure type of a road segment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum StructureType {
     Surface,
     Bridge,
@@ -205,7 +205,7 @@ impl Default for StructureType {
 }
 
 /// Traffic signal configuration (no ticking logic).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrafficSignal {
     /// Duration of each phase in seconds.
     pub phase_durations: Vec<f32>,
@@ -231,7 +231,7 @@ impl TrafficSignal {
 }
 
 /// Traffic control device attached to a node intersection.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TrafficControl {
     None,
     Signal(TrafficSignal),
@@ -246,7 +246,7 @@ impl Default for TrafficControl {
 }
 
 /// Attached control with stable ID for removal/modification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachedControl {
     pub(crate) id: ControlId,
     pub(crate) control: TrafficControl,

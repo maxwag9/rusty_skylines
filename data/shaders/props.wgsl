@@ -1,3 +1,4 @@
+#include "includes/shadow.wgsl"
 #include "includes/uniforms.wgsl"
 
 @group(0) @binding(0) var texture_sampler: sampler;
@@ -5,6 +6,8 @@
 @group(0) @binding(2) var tex2: texture_2d<f32>;
 @group(0) @binding(3) var tex3: texture_2d<f32>;
 @group(0) @binding(4) var tex4: texture_2d<f32>;
+@group(0) @binding(5) var s_shadow: sampler_comparison;
+@group(0) @binding(6) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -133,7 +136,7 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
     let base_color = tex_color * in.vertex_color * in.instance_color;
 
     // Alpha test for leaf cards and other transparent textures
-    if (base_color.a < 0.1) {
+    if (base_color.a < 0.8) {
         discard;
     }
 
@@ -146,13 +149,15 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
     );
     let varied_color = base_color.rgb * color_variation;
 
-    let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.3));
-    let n_dot_l = max(dot(in.world_normal, light_dir), 0.0);
-
-    let ambient = 0.35;
+    let N = normalize(in.world_normal);
+    let L = normalize(uniforms.sun_direction);
+    let n_dot_l = max(dot(N, L), 0.0);
+    let shadow = fetch_shadow(in.world_pos, N, L);
+    let horizon_fade = smoothstep(0.0, 0.1, saturate(L.y));
+    let ambient = 0.05;
     let diffuse = n_dot_l * 0.65;
-    let lit_color = varied_color * (ambient + diffuse);
-
+    let light_factor = diffuse * shadow * horizon_fade + ambient;
+    let lit_color = varied_color * light_factor;
     out.color = vec4<f32>(lit_color, base_color.a);
 
     out.normal = vec4<f32>(in.world_normal * 0.5 + 0.5, 1.0);

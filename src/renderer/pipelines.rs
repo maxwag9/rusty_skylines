@@ -1,5 +1,6 @@
 use crate::data::{Settings, ShadowType};
 use crate::renderer::pipelines_outsource::*;
+use crate::renderer::render_core::SURFACE_FORMAT;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::renderer::taa::taa_jitter_pair;
 use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
@@ -112,6 +113,7 @@ pub struct MsaaTextures {
 pub struct ResolvedTextures {
     pub hdr: TextureView,
     pub normal: TextureView,
+    pub tonemapped: TextureView,
 }
 
 pub struct PostFxTextures {
@@ -238,9 +240,13 @@ impl Pipelines {
         device: &Device,
         config: &SurfaceConfiguration,
     ) -> ResolvedTextures {
-        let (hdr, normal) = create_resolved_targets(device, config);
+        let (hdr, normal, tonemapped) = create_resolved_targets(device, config);
 
-        ResolvedTextures { hdr, normal }
+        ResolvedTextures {
+            hdr,
+            normal,
+            tonemapped,
+        }
     }
 
     fn create_post_fx_textures(
@@ -376,7 +382,7 @@ const NORMAL_FORMAT: TextureFormat = Rgba8Unorm;
 pub fn create_resolved_targets(
     device: &Device,
     config: &SurfaceConfiguration,
-) -> (TextureView, TextureView) {
+) -> (TextureView, TextureView, TextureView) {
     let create_hdr = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),
@@ -391,7 +397,8 @@ pub fn create_resolved_targets(
             format: Rgba16Float,
             usage: TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::STORAGE_BINDING, // Added for compute
+                | TextureUsages::STORAGE_BINDING // Added for compute
+                | TextureUsages::COPY_SRC, // Added for Screenshots
             view_formats: &[],
         });
         tex.create_view(&TextureViewDescriptor::default())
@@ -414,7 +421,26 @@ pub fn create_resolved_targets(
     });
 
     let normal_view = normal_texture.create_view(&TextureViewDescriptor::default());
-    (resolved_hdr, normal_view)
+
+    let tonemap_texture = device.create_texture(&TextureDescriptor {
+        label: Some("Tonemap Output"),
+        size: Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: SURFACE_FORMAT,
+        usage: TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::COPY_SRC
+            | TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+
+    let tonemapped = tonemap_texture.create_view(&Default::default());
+    (resolved_hdr, normal_view, tonemapped)
 }
 pub fn create_resolved_hdr(
     device: &Device,

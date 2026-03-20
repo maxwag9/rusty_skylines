@@ -15,9 +15,10 @@ pub fn run_inputs(resources: &mut Resources) {
     let cam_ctrl = &mut world.world_state.cam_controller;
     let input = &mut world.input;
     let time = &world.time;
-    let chunk_size = resources.settings.chunk_size;
-    let noclip = resources.settings.noclip;
+
+    let chunk_size = world.world_state.game_state.current_save.chunk_size;
     camera.chunk_size = chunk_size;
+    let noclip = resources.settings.noclip;
     let eye = camera.eye_world();
     let mut fwd3d = eye.direction_to(camera.target, chunk_size);
     if fwd3d.length_squared() > 0.0 {
@@ -136,6 +137,11 @@ pub fn run_inputs(resources: &mut Resources) {
     }
     if (cam_ctrl.target_pitch - camera.pitch).abs() < 0.0001 {
         camera.pitch = cam_ctrl.target_pitch;
+    }
+    if camera.orbit_radius < 17.0 {
+        camera.near = 0.1;
+    } else {
+        camera.near = 8.0;
     }
 
     clamp_pitch(&mut camera.pitch);
