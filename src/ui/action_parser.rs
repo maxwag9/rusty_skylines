@@ -1,9 +1,10 @@
 use crate::data::Settings;
 #[allow(unused_mut, unused_assignments)]
 use crate::ui::actions::UiCommand;
+use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, TouchEvent};
-use crate::ui::variables::{UiValue, Variables};
+use crate::ui::variables::Variables;
 use std::cmp::PartialEq;
 
 /// Helper trait for parsing argument types
@@ -57,9 +58,9 @@ impl ParseArg for bool {
     }
 }
 
-impl ParseArg for UiValue {
+impl ParseArg for Value {
     fn parse_arg(settings: &Settings, variables: &Variables, s: &str) -> Option<Self> {
-        Some(UiValue::from_str(settings, variables, s))
+        Some(Value::from_str(settings, variables, s))
     }
 }
 
@@ -132,7 +133,7 @@ macro_rules! define_commands {
         $element:ident, args, $ftype:ty) => {{
         let out = $args.iter()
             .skip($idx)
-            .map(|s| UiValue::from_str($settings, $vars, s))
+            .map(|s| Value::from_str($settings, $vars, s))
             .collect();
         #[allow(unused_assignments)]
         {
@@ -238,7 +239,7 @@ define_commands! {
 
     // ===== VARIABLE COMMANDS =====
     "set_var" | "setvar" | "set" | "set_var_to" | "set_setting" | "setsetting" | "set_settings" | "setsettings" | "set_setting_to" | "set_av_setting_to" | "set_av_setting"
-        => SetVar { element_ref: ElementRef, name: String, value: UiValue },
+        => SetVar { element_ref: ElementRef, name: String, value: Value },
 
     "inc_var" | "incvar" | "inc" | "increment" | "add" | "cycle_setting" | "cyclesetting" | "cycle_settings" | "cyclesettings"
         => IncVar { element_ref: ElementRef, name: String, amount: f64 },
@@ -254,6 +255,9 @@ define_commands! {
 
     "clamp" | "clamp_var"
         => Clamp { element_ref: ElementRef, name: String, min: f64, max: f64 },
+
+    "set_var_expr" | "set_expr" | "expr"
+        => SetVarExpr { element_ref: ElementRef, name: String, expr: String },
 
     // ===== ACTION STATE COMMANDS =====
     "start_action" | "startaction" | "action_start"
@@ -277,10 +281,10 @@ define_commands! {
         => Skip { count: usize },
 
     "if"
-        => If { condition: UiValue, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
+        => If { condition: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
-        => IfVarEq { var_name: String, value: UiValue, then: Vec<UiCommand> },
+        => IfVarEq { var_name: String, value: Value, then: Vec<UiCommand> },
     "save" | "save_game" | "savegame"
         => SaveGame,
     "load" | "load_game" | "loadgame" | "load_save" | "loadsave" | "load_world" | "loadworld"
@@ -320,6 +324,7 @@ enum TouchEventKind {
     ScrollOnElement,
     Select,
     DeSelect,
+    DragMove,
 }
 pub fn actions_to_uicommands(
     ui: &mut Ui,
@@ -369,6 +374,12 @@ pub fn actions_to_uicommands(
             buttons,
             ..
         } => (TouchEventKind::DoubleClick, actions, element, *buttons),
+        TouchEvent::DragMove {
+            element,
+            actions,
+            buttons,
+            ..
+        } => (TouchEventKind::DragMove, actions, element, *buttons),
         TouchEvent::ScrollOnElement {
             actions, element, ..
         } => (
@@ -745,6 +756,9 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
                 ("click", TouchEventKind::Click),
                 ("double_click", TouchEventKind::DoubleClick),
                 ("doubleclick", TouchEventKind::DoubleClick),
+                ("drag_move", TouchEventKind::DragMove),
+                ("dragging", TouchEventKind::DragMove),
+                ("drag", TouchEventKind::DragMove),
                 ("scroll", TouchEventKind::ScrollOnElement),
                 ("h_enter", TouchEventKind::HoverEnter),
                 ("h", TouchEventKind::Hovering),
@@ -753,6 +767,7 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
                 ("r", TouchEventKind::Release),
                 ("c", TouchEventKind::Click),
                 ("dc", TouchEventKind::DoubleClick),
+                ("d", TouchEventKind::DragMove),
                 ("s", TouchEventKind::ScrollOnElement),
                 ("sel", TouchEventKind::Select),
                 ("desel", TouchEventKind::DeSelect),

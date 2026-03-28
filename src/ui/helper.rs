@@ -52,7 +52,7 @@ pub fn ensure_ccw(verts: &mut [UiVertex]) {
     }
 }
 
-pub(crate) fn triangulate_polygon(verts: &mut Vec<UiVertex>) -> Vec<UiVertex> {
+pub fn triangulate_polygon(verts: &Vec<UiVertex>) -> Vec<UiVertex> {
     let n = verts.len();
     if n < 3 {
         return Vec::new();

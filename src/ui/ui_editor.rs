@@ -49,7 +49,7 @@ use winit::event_loop::ActiveEventLoop;
 pub struct DragStartState {
     pub affected_element: ElementRef,
     pub start_pos: [f32; 2],
-    pub start_size: Option<f32>,
+    pub start_size: Option<SizeProperty>,
     pub start_vertices: Option<Vec<[f32; 2]>>,
 }
 
@@ -475,6 +475,8 @@ impl Ui {
             TouchEvent::DragMove {
                 element,
                 current_position,
+                actions,
+                buttons,
                 delta,
                 total_delta,
             } => {
@@ -673,7 +675,7 @@ impl Ui {
         // Capture start state for undo
         let start_size = get_element_size(&self.menus, element);
         let start_vertices = if element.kind == ElementKind::Polygon {
-            self.get_polygon_vertices(&element.menu, &element.layer, &element.id)
+            self.get_polygon_vertices(&element)
         } else {
             None
         };
@@ -719,57 +721,42 @@ impl Ui {
         };
 
         match element.kind {
-            ElementKind::Circle => self.ui_edit_manager.push_command(
-                MoveElementCommand {
+            ElementKind::Circle => self.ui_edit_manager.push_command(MoveElementCommand {
+                affected_element: element.clone(),
+                before: None,
+                after: snapped_pos,
+            }),
+            ElementKind::Text => {
+                self.ui_edit_manager.push_command(MoveElementCommand {
                     affected_element: element.clone(),
                     before: None,
                     after: snapped_pos,
-                },
-                true,
-            ),
-            ElementKind::Text => {
-                self.ui_edit_manager.push_command(
-                    MoveElementCommand {
-                        affected_element: element.clone(),
-                        before: None,
-                        after: snapped_pos,
-                    },
-                    true,
-                );
+                });
                 if let Some(text) = self.get_text_mut(element) {
                     text.clear_selection();
                 }
             }
             ElementKind::Polygon => {
                 if let Some(vertex_idx) = self.touch_manager.editor.active_vertex {
-                    self.ui_edit_manager.push_command(
-                        MoveVertexCommand {
-                            affected_element: element.clone(),
-                            vertex_index: vertex_idx,
-                            before: None,
-                            after: snapped_pos,
-                        },
-                        true,
-                    );
+                    self.ui_edit_manager.push_command(MoveVertexCommand {
+                        affected_element: element.clone(),
+                        vertex_index: vertex_idx,
+                        before: None,
+                        after: snapped_pos,
+                    });
                 } else {
-                    self.ui_edit_manager.push_command(
-                        MoveElementCommand {
-                            affected_element: element.clone(),
-                            before: None,
-                            after: snapped_pos,
-                        },
-                        true,
-                    )
+                    self.ui_edit_manager.push_command(MoveElementCommand {
+                        affected_element: element.clone(),
+                        before: None,
+                        after: snapped_pos,
+                    })
                 }
             }
-            ElementKind::Rect => self.ui_edit_manager.push_command(
-                MoveElementCommand {
-                    affected_element: element.clone(),
-                    before: None,
-                    after: snapped_pos,
-                },
-                true,
-            ),
+            ElementKind::Rect => self.ui_edit_manager.push_command(MoveElementCommand {
+                affected_element: element.clone(),
+                before: None,
+                after: snapped_pos,
+            }),
             ElementKind::Handle => {
                 self.handle_handle_drag(element, current_position, mouse);
             }
@@ -793,31 +780,23 @@ impl Ui {
             let new_pos = self.get_element_position(element);
 
             // Element move
-            self.ui_edit_manager.push_command(
-                MoveElementCommand {
-                    affected_element: element.clone(),
-                    before: None,
-                    after: new_pos,
-                },
-                false,
-            );
+            self.ui_edit_manager.push_command(MoveElementCommand {
+                affected_element: element.clone(),
+                before: None,
+                after: new_pos,
+            });
 
             // Polygon vertex move
             if element.kind == ElementKind::Polygon {
                 if let Some(idx) = vertex_index {
-                    if let Some(new_verts) =
-                        self.get_polygon_vertices(&element.menu, &element.layer, &element.id)
-                    {
+                    if let Some(new_verts) = self.get_polygon_vertices(&element) {
                         if let Some(new_pos) = new_verts.get(idx) {
-                            self.ui_edit_manager.push_command(
-                                MoveVertexCommand {
-                                    affected_element: element.clone(),
-                                    vertex_index: idx,
-                                    before: None,
-                                    after: *new_pos,
-                                },
-                                false,
-                            );
+                            self.ui_edit_manager.push_command(MoveVertexCommand {
+                                affected_element: element.clone(),
+                                vertex_index: idx,
+                                before: None,
+                                after: *new_pos,
+                            });
                         }
                     }
                 }
@@ -1027,8 +1006,8 @@ impl Ui {
                     self.ui_edit_manager.execute_command(
                         ResizeElementCommand {
                             affected_element,
-                            before: circle.radius,
-                            after: new_radius,
+                            before: Some(SizeProperty::Radius(circle.radius)),
+                            after: SizeProperty::Radius(new_radius),
                         },
                         &mut self.touch_manager,
                         &mut self.menus,
@@ -1040,10 +1019,6 @@ impl Ui {
             }
         }
     }
-
-    // ========================================================================
-    // ELEMENT GETTERS
-    // ========================================================================
 
     fn get_element(&self, element: &ElementRef) -> Option<&UiElement> {
         let menu_data = self.menus.get(&element.menu)?;
@@ -1086,13 +1061,16 @@ impl Ui {
             .unwrap_or([0.0, 0.0])
     }
 
-    fn get_polygon_vertices(&self, menu: &str, layer: &str, id: &str) -> Option<Vec<[f32; 2]>> {
-        let menu_data = self.menus.get(menu)?;
-        let layer_data = menu_data.layers.iter().find(|l| l.name == layer)?;
+    fn get_polygon_vertices(&self, element_ref: &ElementRef) -> Option<Vec<[f32; 2]>> {
+        let menu_data = self.menus.get(&element_ref.menu)?;
+        let layer_data = menu_data
+            .layers
+            .iter()
+            .find(|l| l.name == element_ref.layer)?;
         layer_data
             .iter_polygons()
-            .find(|p| p.id == id)
-            .map(|p| p.vertices.iter().map(|v| v.pos).collect())
+            .find(|p| p.id == element_ref.id)
+            .map(|p| p.scaled_vertices().iter().map(|v| v.pos).collect())
     }
 
     fn get_element_action(&self, element: &ElementRef) -> Vec<String> {
@@ -1114,14 +1092,6 @@ impl Ui {
             .map(|t| t.input_box)
             .unwrap_or(false)
     }
-
-    fn set_element_size(&mut self, element: &ElementRef, size: f32) {
-        set_element_size(&mut self.menus, element, size);
-    }
-
-    // ========================================================================
-    // KEYBOARD NAVIGATION
-    // ========================================================================
 
     fn handle_keyboard_navigation(&mut self, input: &mut Input) {
         if input.ctrl || !self.touch_manager.editor.enabled {
@@ -1326,12 +1296,8 @@ impl Ui {
 
         let HSV { h, s, v } = rgb_to_hsv(color);
 
-        self.variables.set_f64("color_picker.r", color[0]);
-        self.variables.set_f64("color_picker.g", color[1]);
-        self.variables.set_f64("color_picker.b", color[2]);
-        self.variables.set_f64("color_picker.h", h);
-        self.variables.set_f64("color_picker.s", s);
-        self.variables.set_f64("color_picker.v", v);
+        self.variables.set_array("color_picker_color", color);
+        self.variables.set_array("color_picker_hsv", [h, s, v]);
     }
 
     fn get_current_hit_for_actions(&self) -> Option<HitResult> {
@@ -1572,28 +1538,10 @@ impl Ui {
                                         if let Some(p) =
                                             layer.iter_polygons().find(|p| p.id == parent.id)
                                         {
-                                            let mut cx = 0.0;
-                                            let mut cy = 0.0;
-                                            for v in &p.vertices {
-                                                cx += v.pos[0];
-                                                cy += v.pos[1];
-                                            }
-                                            if !p.vertices.is_empty() {
-                                                cx /= p.vertices.len() as f32;
-                                                cy /= p.vertices.len() as f32;
-                                            }
-
-                                            let mut radius: f32 = 0.0;
-                                            for v in &p.vertices {
-                                                let dx = v.pos[0] - cx;
-                                                let dy = v.pos[1] - cy;
-                                                radius = radius.max((dx * dx + dy * dy).sqrt());
-                                            }
-
-                                            o.shape_data.x = cx;
-                                            o.shape_data.y = cy;
-                                            o.shape_data.radius = radius;
-                                            o.vertex_count = p.vertices.len() as u32;
+                                            o.shape_data.x = p.x;
+                                            o.shape_data.y = p.y;
+                                            o.shape_data.radius = 1.0;
+                                            o.vertex_count = p.scaled_vertices().len() as u32;
                                             o.misc = p.misc.clone();
                                         }
                                     }
@@ -1603,7 +1551,7 @@ impl Ui {
                                         {
                                             o.shape_data.x = r.x;
                                             o.shape_data.y = r.y;
-                                            o.shape_data.radius = r.size();
+                                            o.shape_data.radius = 1.0;
                                             o.misc = r.misc.clone();
                                         }
                                     }
@@ -1704,21 +1652,7 @@ impl Ui {
             }
             UiElement::Polygon(p) => {
                 if editor_mode && (p.misc.editable || override_mode) {
-                    let mut cx = 0.0;
-                    let mut cy = 0.0;
-                    for v in &p.vertices {
-                        cx += v.pos[0];
-                        cy += v.pos[1];
-                    }
-                    cx /= p.vertices.len() as f32;
-                    cy /= p.vertices.len() as f32;
-
-                    let mut radius: f32 = 0.0;
-                    for (i, v) in p.vertices.iter().enumerate() {
-                        let dx = v.pos[0] - cx;
-                        let dy = v.pos[1] - cy;
-                        radius = radius.max((dx * dx + dy * dy).sqrt());
-
+                    for (i, v) in p.scaled_vertices().iter().enumerate() {
                         let vertex_outline = UiButtonCircle {
                             id: format!("vertex_outline_{}", i),
                             actions: vec![],
@@ -1762,7 +1696,7 @@ impl Ui {
                         }),
                         mode: 1.0,
                         vertex_offset: 0,
-                        vertex_count: p.vertices.len() as u32,
+                        vertex_count: p.scaled_vertices().len() as u32,
                         dash_color: [0.2, 0.0, 0.4, 0.8],
                         dash_misc: DashMisc {
                             dash_len: 0.1,
@@ -1779,9 +1713,9 @@ impl Ui {
                         },
                         misc: p.misc.clone(),
                         shape_data: ShapeData {
-                            x: cx,
-                            y: cy,
-                            radius,
+                            x: p.x,
+                            y: p.y,
+                            radius: 1.0,
                             border_thickness: 0.9,
                         },
                     };
@@ -1822,7 +1756,7 @@ impl Ui {
                         shape_data: ShapeData {
                             x: r.x,
                             y: r.y,
-                            radius: r.size(),
+                            radius: 1.0,
                             border_thickness: 0.9,
                         },
                     };
@@ -1906,43 +1840,6 @@ impl Ui {
         }
         // Maybe just selected if just not deselected idk hopefully not
     }
-    // ========================================================================
-    // UNDO/REDO OPERATIONS
-    // ========================================================================
-
-    fn get_polygon(&self, menu: &str, layer: &str, id: &str) -> Option<UiButtonPolygon> {
-        let menu = self.menus.get(menu)?;
-        let layer = menu.layers.iter().find(|l| l.name == layer)?;
-        layer.iter_polygons().find(|p| p.id == id).cloned()
-    }
-
-    fn create_polygon_snapshot_with_vertices(
-        &self,
-        menu: &str,
-        layer: &str,
-        id: &str,
-        vertices: &[[f32; 2]],
-    ) -> Option<UiButtonPolygon> {
-        let mut poly = self.get_polygon(menu, layer, id)?;
-        for (i, pos) in vertices.iter().enumerate() {
-            if let Some(v) = poly.vertices.get_mut(i) {
-                v.pos = *pos;
-            }
-        }
-        Some(poly)
-    }
-
-    // ========================================================================
-    // UTILITY FUNCTIONS
-    // ========================================================================
-
-    fn generate_unique_id(&self) -> u32 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_micros() as u32)
-            .unwrap_or(0)
-    }
 
     pub fn apply_ui_edit_movement(&mut self, input_state: &mut Input, time: &Time) {
         let Some(sel) = &self.touch_manager.selection.primary else {
@@ -1982,14 +1879,11 @@ impl Ui {
             if dx != 0.0 || dy != 0.0 {
                 let before = self.get_element_position(sel);
                 let after = [before[0] + dx, before[1] + dy];
-                self.ui_edit_manager.push_command(
-                    MoveElementCommand {
-                        affected_element: sel.clone(),
-                        before: None,
-                        after,
-                    },
-                    true,
-                );
+                self.ui_edit_manager.push_command(MoveElementCommand {
+                    affected_element: sel.clone(),
+                    before: None,
+                    after,
+                });
                 changed = true;
             }
 
@@ -2029,14 +1923,11 @@ impl Ui {
             }
             if scale != 1.0 {
                 if let Some(before) = get_element_size(&self.menus, sel) {
-                    self.ui_edit_manager.push_command(
-                        ResizeElementCommand {
-                            affected_element: sel.clone(),
-                            before,
-                            after: before * scale,
-                        },
-                        true,
-                    );
+                    self.ui_edit_manager.push_command(ResizeElementCommand {
+                        affected_element: sel.clone(),
+                        before: Some(before.clone()),
+                        after: before.scale_by(scale),
+                    });
                 }
                 changed = true;
             }
@@ -2044,24 +1935,18 @@ impl Ui {
             // Element Z movement
             if !input_state.shift {
                 if input_state.action_repeat("Move Element Z Up") {
-                    self.ui_edit_manager.push_command(
-                        ChangeZIndexCommand {
-                            affected_element: sel.clone(),
-                            delta: 1,
-                        },
-                        true,
-                    );
+                    self.ui_edit_manager.push_command(ChangeZIndexCommand {
+                        affected_element: sel.clone(),
+                        delta: 1,
+                    });
                     changed = true;
                 }
 
                 if input_state.action_repeat("Move Element Z Down") {
-                    self.ui_edit_manager.push_command(
-                        ChangeZIndexCommand {
-                            affected_element: sel.clone(),
-                            delta: -1,
-                        },
-                        true,
-                    );
+                    self.ui_edit_manager.push_command(ChangeZIndexCommand {
+                        affected_element: sel.clone(),
+                        delta: -1,
+                    });
                     changed = true;
                 }
             }
@@ -2078,24 +1963,18 @@ impl Ui {
 
             if !input_state.shift {
                 if input_state.action_repeat("Move Layer Up") {
-                    self.ui_edit_manager.push_command(
-                        ChangeLayerOrderCommand {
-                            affected_element: sel.clone(),
-                            delta: 1,
-                        },
-                        true,
-                    );
+                    self.ui_edit_manager.push_command(ChangeLayerOrderCommand {
+                        affected_element: sel.clone(),
+                        delta: 1,
+                    });
                     changed = true;
                 }
 
                 if input_state.action_repeat("Move Layer Down") {
-                    self.ui_edit_manager.push_command(
-                        ChangeLayerOrderCommand {
-                            affected_element: sel.clone(),
-                            delta: -1,
-                        },
-                        true,
-                    );
+                    self.ui_edit_manager.push_command(ChangeLayerOrderCommand {
+                        affected_element: sel.clone(),
+                        delta: -1,
+                    });
                     changed = true;
                 }
             }
@@ -2253,6 +2132,16 @@ pub fn get_element(menus: &HashMap<String, Menu>, element: &ElementRef) -> Optio
 
     None
 }
+pub fn get_element_mut<'a>(
+    menus: &'a mut HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Option<&'a mut UiElement> {
+    let menu = menus.get_mut(&element.menu)?;
+    let layer = menu.layers.iter_mut().find(|l| l.name == element.layer)?;
+    let element_id = &element.id;
+
+    layer.find_element_mut(element_id)
+}
 pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<RuntimeLayer> {
     let menu = menus.get(&element.menu)?;
     let layer = menu
@@ -2279,7 +2168,10 @@ pub fn get_element_position(menus: &HashMap<String, Menu>, element: &ElementRef)
         [0.0, 0.0]
     }
 }
-pub fn get_element_size(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<f32> {
+pub fn get_element_size(
+    menus: &HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Option<SizeProperty> {
     let menu = menus.get(&element.menu)?;
     let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
 
@@ -2287,38 +2179,23 @@ pub fn get_element_size(menus: &HashMap<String, Menu>, element: &ElementRef) -> 
         ElementKind::Circle => layer
             .iter_circles()
             .find(|c| c.id == element.id)
-            .map(|c| c.radius),
+            .map(|c| SizeProperty::Radius(c.radius)),
         ElementKind::Text => layer
             .iter_texts()
             .find(|t| t.id == element.id)
-            .map(|t| t.pt),
+            .map(|t| SizeProperty::Pt(t.pt)),
         ElementKind::Handle => layer
             .iter_handles()
             .find(|h| h.id == element.id)
-            .map(|h| h.radius),
+            .map(|h| SizeProperty::Radius(h.radius)),
         ElementKind::Polygon => layer
             .iter_polygons()
             .find(|p| p.id == element.id)
-            .map(|p| p.size()),
+            .map(|p| SizeProperty::PolygonScale(p.scale)),
         ElementKind::Rect => layer
             .iter_rects()
             .find(|r| r.id == element.id)
-            .map(|r| r.size()),
+            .map(|r| SizeProperty::Rect(r.size())),
         _ => None,
     }
-}
-
-pub fn get_polygon_vertices(
-    menus: &HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    id: &str,
-) -> Option<Vec<[f32; 2]>> {
-    let menu = menus.get(menu_name)?;
-    let layer = menu.layers.iter().find(|l| l.name == layer_name)?;
-
-    layer
-        .iter_polygons() // mutable iterator
-        .find(|p| p.id == id)
-        .map(|p| p.vertices.iter().map(|v| v.pos).collect())
 }

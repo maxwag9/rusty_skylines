@@ -5,18 +5,21 @@ use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
 use crate::ui::actions::UiCommand;
+use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::ui_touch_manager::ElementRef;
-use crate::ui::variables::UiValue;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
 use crate::world::sound::run_sounds;
-use crate::world::world_core::WorldCore;
+use crate::world::world::World;
 use glam::Vec2;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use wgpu::*;
+use wgpu::{
+    BufferAddress, BufferDescriptor, BufferUsages, Extent3d, MapMode, Origin3d, PollType,
+    TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
+};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
@@ -334,7 +337,7 @@ impl ApplicationHandler for App {
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
                             name: "editor_mode".to_string(),
-                            value: UiValue::Bool(false),
+                            value: Value::Bool(false),
                         },
                         // UiCommand::SetVar {
                         //     element_ref: ElementRef::default(),
@@ -344,7 +347,7 @@ impl ApplicationHandler for App {
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
                             name: "override_mode".to_string(),
-                            value: UiValue::Bool(false),
+                            value: Value::Bool(false),
                         },
                     ];
                     resources.command_queues.ui_command_queue.push_many(cmds);
@@ -542,7 +545,7 @@ fn update_time(resources: &mut Resources) {
         ui_loader,
         ..
     } = resources;
-    let WorldCore {
+    let World {
         world_state,
         time,
         input,

@@ -4,7 +4,7 @@ use crate::resources::Time;
 use crate::world::cars::car_player::conform_car_to_terrain;
 use crate::world::cars::car_structs::{Car, CarId};
 use crate::world::terrain::terrain_subsystem::Terrain;
-use crate::world::world_core::WorldCore;
+use crate::world::world::World;
 use rayon::iter::ParallelIterator;
 
 use crate::data::Settings;
@@ -204,7 +204,7 @@ fn apply_car_changes(terrain: &Terrain, time: &Time, car: &mut Car, delta: Vec<C
     conform_car_to_terrain(car, terrain, time.render_dt);
 }
 
-pub fn interpolate_cars(world_core: &mut WorldCore, settings: &Settings) {
+pub fn interpolate_cars(world_core: &mut World, settings: &Settings) {
     let car_subsystem = &mut world_core.cars;
 
     // Get all CLOSE cars (far away cars are ghosts)

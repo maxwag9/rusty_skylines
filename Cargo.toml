@@ -1,16 +1,16 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.6.15"
+version = "0.6.16"
 edition = "2024"
 
 [dependencies]
 winit = { version = "0.30.12", features = ["serde"] }
 
-wgpu = "29.0.0"
+wgpu = "29.0.1"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 glam = { version = "0.32.1", features = ["serde"] }
-toml = "1.0.7"
+toml = "1.1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 anyhow = "1.0.102"
 notify = "9.0.0-rc.2"
@@ -36,7 +36,7 @@ chrono = "0.4.44"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults
-opt-level = 3         # override with release-level speed (the same lol)
+opt-level = 1         # override with release-level speed (the same lol)
 debug = true           # keep debug symbols
 split-debuginfo = "packed"
 overflow-checks = true

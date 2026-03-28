@@ -160,8 +160,8 @@ impl UIEditCommand for MoveElementCommand {
 #[derive(Clone, Debug)]
 pub struct ResizeElementCommand {
     pub affected_element: ElementRef,
-    pub before: f32,
-    pub after: f32,
+    pub before: Option<SizeProperty>,
+    pub after: SizeProperty,
 }
 
 impl UIEditCommand for ResizeElementCommand {
@@ -173,7 +173,9 @@ impl UIEditCommand for ResizeElementCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        set_element_size(menus, &self.affected_element, self.before);
+        if let Some(before) = &self.before {
+            set_element_size(menus, &self.affected_element, before);
+        }
     }
 
     fn redo(
@@ -184,7 +186,10 @@ impl UIEditCommand for ResizeElementCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        set_element_size(menus, &self.affected_element, self.after);
+        let before = set_element_size(menus, &self.affected_element, &self.after);
+        if self.before.is_none() {
+            self.before = before;
+        }
     }
 
     fn description(&self) -> String {
@@ -203,7 +208,7 @@ impl UIEditCommand for ResizeElementCommand {
             return false;
         };
         if self.affected_element == other.affected_element {
-            self.after = other.after;
+            self.after = other.after.clone();
             true
         } else {
             false
@@ -682,14 +687,7 @@ impl UIEditCommand for MoveVertexCommand {
         _mouse: &Mouse,
     ) {
         if let Some(before) = self.before {
-            set_vertex_position(
-                menus,
-                &self.affected_element.menu,
-                &self.affected_element.layer,
-                &self.affected_element.id,
-                self.vertex_index,
-                before,
-            );
+            set_vertex_position(menus, &self.affected_element, self.vertex_index, before);
         }
     }
 
@@ -701,14 +699,8 @@ impl UIEditCommand for MoveVertexCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        let before = set_vertex_position(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.vertex_index,
-            self.after,
-        );
+        let before =
+            set_vertex_position(menus, &self.affected_element, self.vertex_index, self.after);
         if self.before.is_none() {
             self.before = before;
         }
@@ -793,15 +785,7 @@ impl UIEditCommand for ChangeColorCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        set_element_color(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.affected_element.kind,
-            &self.property,
-            self.before,
-        );
+        set_element_color(menus, &self.affected_element, &self.property, self.before);
     }
 
     fn redo(
@@ -812,15 +796,7 @@ impl UIEditCommand for ChangeColorCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        set_element_color(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            &self.affected_element.id,
-            self.affected_element.kind,
-            &self.property,
-            self.after,
-        );
+        set_element_color(menus, &self.affected_element, &self.property, self.after);
     }
 
     fn description(&self) -> String {
@@ -1103,7 +1079,7 @@ struct BatchBuilder {
 pub struct UiEditManager {
     undo_stack: VecDeque<TimestampedCommand>,
     redo_stack: Vec<Box<dyn UIEditCommand>>,
-    immediate_commands: Vec<Box<dyn UIEditCommand>>,
+    commands_to_execute: Vec<Box<dyn UIEditCommand>>,
     in_undo_redo: bool,
     pending_batch: Option<BatchBuilder>,
     saved_position: Option<usize>,
@@ -1123,7 +1099,7 @@ impl UiEditManager {
         Self {
             undo_stack: VecDeque::with_capacity(MAX_UNDO_HISTORY),
             redo_stack: Vec::with_capacity(MAX_UNDO_HISTORY / 2),
-            immediate_commands: Vec::with_capacity(3),
+            commands_to_execute: Vec::with_capacity(3),
             in_undo_redo: false,
             pending_batch: None,
             saved_position: Some(0),
@@ -1140,7 +1116,7 @@ impl UiEditManager {
         variables: &mut Variables,
         mouse: &Mouse,
     ) {
-        let commands = std::mem::take(&mut self.immediate_commands);
+        let commands = std::mem::take(&mut self.commands_to_execute);
 
         for command in commands {
             self.execute(command, touch_manager, menus, variables, mouse);
@@ -1190,14 +1166,12 @@ impl UiEditManager {
     }
 
     /// Push a command (boxed)
-    pub fn push(&mut self, command: Box<dyn UIEditCommand>, immediate: bool) {
+    fn push(&mut self, command: Box<dyn UIEditCommand>) {
         if self.in_undo_redo {
             return;
         }
-        if immediate {
-            self.immediate_commands.push(command);
-            return;
-        }
+        self.commands_to_execute.push(command.clone());
+
         if let Some(ref mut batch) = self.pending_batch {
             batch.commands.push(command);
         } else {
@@ -1209,8 +1183,8 @@ impl UiEditManager {
     }
 
     /// Convenience: push without explicit Box
-    pub fn push_command<C: UIEditCommand + 'static>(&mut self, command: C, immediate: bool) {
-        self.push(Box::new(command), immediate);
+    pub fn push_command<C: UIEditCommand + 'static>(&mut self, command: C) {
+        self.push(Box::new(command));
     }
 
     /// Try to merge with previous command

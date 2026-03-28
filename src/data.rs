@@ -1,6 +1,6 @@
 use crate::helpers::positions::WorldPos;
 use crate::renderer::pipelines::ToneMappingState;
-use crate::ui::variables::UiValue;
+use crate::ui::parser::Value;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use wgpu::*;
@@ -185,19 +185,19 @@ impl SettingValue {
             SettingValue::U32(u) => u.to_string(),
         }
     }
-    pub fn to_ui_value(&self) -> UiValue {
+    pub fn to_ui_value(&self) -> Value {
         match self {
-            SettingValue::Bool(v) => UiValue::Bool(*v),
-            SettingValue::U16(v) => UiValue::I64(*v as i64),
-            SettingValue::U32(v) => UiValue::I64(*v as i64),
-            SettingValue::F32(v) => UiValue::F64(*v as f64),
-            SettingValue::F64(v) => UiValue::F64(*v),
-            SettingValue::Vec2(v) => UiValue::String(format!("[{}, {}]", v[0], v[1])),
-            SettingValue::Vec3(v) => UiValue::String(format!("[{}, {}, {}]", v[0], v[1], v[2])),
+            SettingValue::Bool(v) => Value::Bool(*v),
+            SettingValue::U16(v) => Value::I64(*v as i64),
+            SettingValue::U32(v) => Value::I64(*v as i64),
+            SettingValue::F32(v) => Value::F64(*v as f64),
+            SettingValue::F64(v) => Value::F64(*v),
+            SettingValue::Vec2(v) => Value::String(format!("[{}, {}]", v[0], v[1])),
+            SettingValue::Vec3(v) => Value::String(format!("[{}, {}, {}]", v[0], v[1], v[2])),
             SettingValue::Vec4(v) => {
-                UiValue::String(format!("[{}, {}, {}, {}]", v[0], v[1], v[2], v[3]))
+                Value::String(format!("[{}, {}, {}, {}]", v[0], v[1], v[2], v[3]))
             }
-            SettingValue::Enum(v) => UiValue::String(v.clone()),
+            SettingValue::Enum(v) => Value::String(v.clone()),
         }
     }
 
@@ -362,7 +362,7 @@ fn parse_enum_from_str<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
 pub trait SettingConvert: Sized + Clone {
     fn to_setting_value(&self) -> SettingValue;
     fn from_setting_value(value: SettingValue) -> Option<Self>;
-    fn from_ui_value(arg: &UiValue) -> Option<Self>;
+    fn from_value(arg: &Value) -> Option<Self>;
 }
 
 // Primitives
@@ -376,8 +376,8 @@ impl SettingConvert for bool {
             _ => None,
         }
     }
-    fn from_ui_value(arg: &UiValue) -> Option<Self> {
-        Some(arg.as_bool())
+    fn from_value(arg: &Value) -> Option<Self> {
+        Some(arg.is_truthy())
     }
 }
 
@@ -391,8 +391,8 @@ impl SettingConvert for u16 {
             _ => None,
         }
     }
-    fn from_ui_value(arg: &UiValue) -> Option<Self> {
-        arg.as_int().map(|i| i as u16)
+    fn from_value(arg: &Value) -> Option<Self> {
+        arg.as_i64().map(|i| i as u16)
     }
 }
 
@@ -406,8 +406,8 @@ impl SettingConvert for u32 {
             _ => None,
         }
     }
-    fn from_ui_value(arg: &UiValue) -> Option<Self> {
-        arg.as_int().map(|i| i as u32)
+    fn from_value(arg: &Value) -> Option<Self> {
+        arg.as_i64().map(|i| i as u32)
     }
 }
 
@@ -421,10 +421,10 @@ impl SettingConvert for f32 {
             _ => None,
         }
     }
-    fn from_ui_value(arg: &UiValue) -> Option<Self> {
+    fn from_value(arg: &Value) -> Option<Self> {
         match arg {
-            UiValue::F64(v) => Some(*v as f32),
-            UiValue::I64(v) => Some(*v as f32),
+            Value::F64(v) => Some(*v as f32),
+            Value::I64(v) => Some(*v as f32),
             other => None,
         }
     }
@@ -440,8 +440,8 @@ impl SettingConvert for f64 {
             _ => None,
         }
     }
-    fn from_ui_value(arg: &UiValue) -> Option<Self> {
-        arg.as_float().map(|f| f)
+    fn from_value(arg: &Value) -> Option<Self> {
+        arg.as_f64().map(|f| f)
     }
 }
 
@@ -456,7 +456,7 @@ impl SettingConvert for [f32; 2] {
             _ => None,
         }
     }
-    fn from_ui_value(_arg: &UiValue) -> Option<Self> {
+    fn from_value(_arg: &Value) -> Option<Self> {
         None
     }
 }
@@ -471,7 +471,7 @@ impl SettingConvert for [f32; 3] {
             _ => None,
         }
     }
-    fn from_ui_value(_arg: &UiValue) -> Option<Self> {
+    fn from_value(_arg: &Value) -> Option<Self> {
         None
     }
 }
@@ -486,7 +486,7 @@ impl SettingConvert for [f32; 4] {
             _ => None,
         }
     }
-    fn from_ui_value(_arg: &UiValue) -> Option<Self> {
+    fn from_value(_arg: &Value) -> Option<Self> {
         None
     }
 }
@@ -505,8 +505,8 @@ macro_rules! impl_setting_convert_enum {
                         _ => None,
                     }
                 }
-                fn from_ui_value(arg: &UiValue) -> Option<Self> {
-                    arg.as_str().and_then(parse_enum_from_str)
+                fn from_value(arg: &Value) -> Option<Self> {
+                    parse_enum_from_str(arg.to_string_value().as_str())
                 }
             }
         )*
@@ -611,10 +611,10 @@ macro_rules! define_settings {
             }
 
             /// Convert a CommandArg to the appropriate SettingValue for this key
-            pub fn parse_command_arg(self, arg: &UiValue) -> Option<SettingValue> {
+            pub fn parse_command_arg(self, arg: &Value) -> Option<SettingValue> {
                 match self {
                     $(SettingKey::$key => {
-                        <$ty as SettingConvert>::from_ui_value(arg)
+                        <$ty as SettingConvert>::from_value(arg)
                             .map(|v| v.to_setting_value())
                     },)*
                 }

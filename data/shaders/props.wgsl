@@ -154,8 +154,8 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
     let n_dot_l = max(dot(N, L), 0.0);
     let shadow = fetch_shadow(in.world_pos, N, L);
     let horizon_fade = smoothstep(0.0, 0.1, saturate(L.y));
-    let ambient = 0.05;
-    let diffuse = n_dot_l * 0.65;
+    let ambient = 0.2*horizon_fade;
+    let diffuse = n_dot_l * 0.5;
     let light_factor = diffuse * shadow * horizon_fade + ambient;
     let lit_color = varied_color * light_factor;
     out.color = vec4<f32>(lit_color, base_color.a);

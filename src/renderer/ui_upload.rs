@@ -1,4 +1,6 @@
-use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, UiRenderer};
+use crate::renderer::ui::{
+    CircleParams, HandleParams, OutlineParams, UiRenderer, make_poly_ssbo, upload_poly_vbo,
+};
 use crate::renderer::ui_text_rendering::{
     Anchor, anchor_to, render_corner_brackets, render_editor_caret, render_editor_outline,
     render_selection,
@@ -95,8 +97,12 @@ pub fn upload_polygons(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
 
     let poly_count = poly_vertices.len() as u32;
     if poly_count > 0 {
+        println!(
+            "{:?}",
+            poly_vertices.iter().map(|v| v.pos).collect::<Vec<_>>()
+        );
         // Uses the provided helper function
-        crate::renderer::ui::upload_poly_vbo(ui_renderer, poly_vertices, layer, queue);
+        upload_poly_vbo(ui_renderer, poly_vertices, layer, queue);
     }
     layer.gpu.poly_count = poly_count;
 
@@ -106,7 +112,7 @@ pub fn upload_polygons(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
 
     for poly in layer.iter_polygons() {
         infos.reserve(1);
-        crate::renderer::ui::make_poly_ssbo(&mut edges, poly, &mut infos);
+        make_poly_ssbo(&mut edges, poly, &mut infos);
     }
 
     upload_poly_metadata_ssbos(ui_renderer, queue, layer, &infos, &edges);

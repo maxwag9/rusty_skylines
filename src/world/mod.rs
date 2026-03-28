@@ -1,4 +1,5 @@
 pub mod astronomy;
+pub mod buildings;
 pub mod camera;
 pub mod cars;
 pub mod game_state;
@@ -6,4 +7,4 @@ pub mod roads;
 pub mod sound;
 pub mod terrain;
 pub mod world;
-pub mod world_core;
+pub mod world_state;

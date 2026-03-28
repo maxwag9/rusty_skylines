@@ -6,15 +6,19 @@ use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
-use crate::ui::ui_editor::{Ui, get_layer_settings};
+use crate::ui::parser::{Value, eval_expr};
+use crate::ui::ui_edit_manager::{MoveElementCommand, ResizeElementCommand};
+use crate::ui::ui_editor::{Ui, get_element_position, get_layer_settings};
+use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::ElementRef;
-use crate::ui::variables::UiValue;
+use crate::ui::variables::Variables;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::{GameState, LoadResult, SaveResult};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
+use std::cmp::PartialEq;
 use std::collections::{HashMap, VecDeque};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
@@ -225,7 +229,7 @@ pub enum UiCommand {
     SetVar {
         element_ref: ElementRef,
         name: String,
-        value: UiValue,
+        value: Value,
     },
     IncVar {
         element_ref: ElementRef,
@@ -273,13 +277,13 @@ pub enum UiCommand {
         count: usize,
     },
     If {
-        condition: UiValue,
+        condition: Value,
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
     IfVarEq {
         var_name: String,
-        value: UiValue,
+        value: Value,
         then: Vec<UiCommand>,
     },
     SaveGame,
@@ -290,7 +294,7 @@ pub enum UiCommand {
     ExitGame,
     // ===== DEBUG COMMANDS =====
     Print {
-        args: Vec<UiValue>,
+        args: Vec<Value>,
     },
     DebugVars,
     DebugMenus,
@@ -307,6 +311,11 @@ pub enum UiCommand {
         commands: Vec<UiCommand>,
     },
     Noop,
+    SetVarExpr {
+        element_ref: ElementRef,
+        name: String,
+        expr: String,
+    },
 }
 
 // ==================== ACTION STATE ====================
@@ -318,7 +327,7 @@ pub struct ActionState {
     pub started_at: f64,
     pub position: Option<Vec2>,
     pub last_pos: Option<Vec2>,
-    pub custom_data: HashMap<String, UiValue>,
+    pub custom_data: HashMap<String, Value>,
 }
 
 impl ActionState {
@@ -344,11 +353,11 @@ impl ActionState {
         }
     }
 
-    pub fn set_data(&mut self, key: &str, value: UiValue) {
+    pub fn set_data(&mut self, key: &str, value: Value) {
         self.custom_data.insert(key.to_string(), value);
     }
 
-    pub fn get_data(&self, key: &str) -> Option<&UiValue> {
+    pub fn get_data(&self, key: &str) -> Option<&Value> {
         self.custom_data.get(key)
     }
 }
@@ -559,6 +568,7 @@ impl CommandQueue {
             } => {
                 if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
+                        menu.active = true;
                         layer.active = true;
                         return CommandResult::Ok;
                     }
@@ -682,11 +692,11 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
-                    Some(UiValue::F64(f)) => UiValue::F64(f + amount),
-                    Some(UiValue::I64(i)) => UiValue::F64(*i as f64 + amount),
-                    _ => UiValue::F64(amount),
+                    Some(Value::F64(f)) => Value::F64(f + amount),
+                    Some(Value::I64(i)) => Value::F64(*i as f64 + amount),
+                    _ => Value::F64(amount),
                 };
-                ctx.ui.variables.set_var_ui_value(name, new_val);
+                ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
 
@@ -725,11 +735,11 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
-                    Some(UiValue::F64(f)) => UiValue::F64(f - amount),
-                    Some(UiValue::I64(i)) => UiValue::F64(*i as f64 - amount),
-                    _ => UiValue::F64(-amount),
+                    Some(Value::F64(f)) => Value::F64(f - amount),
+                    Some(Value::I64(i)) => Value::F64(*i as f64 - amount),
+                    _ => Value::F64(-amount),
                 };
-                ctx.ui.variables.set_var_ui_value(name, new_val);
+                ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
 
@@ -761,11 +771,11 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
-                    Some(UiValue::F64(f)) => UiValue::F64(f * factor),
-                    Some(UiValue::I64(i)) => UiValue::F64(*i as f64 * factor),
-                    _ => UiValue::F64(factor),
+                    Some(Value::F64(f)) => Value::F64(f * factor),
+                    Some(Value::I64(i)) => Value::F64(*i as f64 * factor),
+                    _ => Value::F64(factor),
                 };
-                ctx.ui.variables.set_var_ui_value(name, new_val);
+                ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
 
@@ -786,10 +796,12 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
-                    Some(UiValue::Bool(b)) => UiValue::Bool(!b),
-                    _ => UiValue::Bool(false),
+                    Some(Value::Bool(b)) => Value::Bool(!b),
+                    _ => Value::Bool(false),
                 };
-                ctx.ui.variables.set_var_ui_value(name, new_val);
+                set_element_property(ctx, element_ref, name.as_str(), &new_val);
+
+                ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
 
@@ -822,14 +834,56 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
-                    Some(UiValue::F64(f)) => UiValue::F64(f.clamp(min, max)),
-                    Some(UiValue::I64(i)) => UiValue::F64((*i as f64).clamp(min, max)),
-                    _ => UiValue::F64(min),
+                    Some(Value::F64(f)) => Value::F64(f.clamp(min, max)),
+                    Some(Value::I64(i)) => Value::F64((*i as f64).clamp(min, max)),
+                    _ => Value::F64(min),
                 };
-                ctx.ui.variables.set_var_ui_value(name, new_val);
+                ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
 
+            UiCommand::SetVarExpr {
+                element_ref,
+                name,
+                expr,
+            } => {
+                if let Some(menu) = ctx.ui.menus.get(&element_ref.menu) {
+                    if let Some(layer) = menu.layers.iter().find(|l| l.name == element_ref.layer) {
+                        if let Some(element) = layer.find_element(element_ref.id.as_str()) {
+                            //println!("Center: {:?}, Mouse: {:?}, Radius: {}", element.center(), ctx.input.mouse.pos.to_array(), element.size());
+                            ctx.ui.variables.set_array("self.center", element.center()); // Vec2
+                            ctx.ui
+                                .variables
+                                .set_array("mouse", ctx.input.mouse.pos.to_array()); // Vec2
+                            ctx.ui.variables.set_var(
+                                "self.radius",
+                                element
+                                    .size()
+                                    .radius()
+                                    .map(|r| Value::F64(r as f64))
+                                    .unwrap_or(Value::Null),
+                            ); // f64
+                            ctx.ui.variables.set_var(
+                                "self.pt",
+                                element
+                                    .size()
+                                    .pt()
+                                    .map(|r| Value::F64(r as f64))
+                                    .unwrap_or(Value::Null),
+                            ); // f64
+                        }
+                    }
+                }
+                //println!("Evaluating: *{}*", expr);
+                match eval_expr(&expr, &ctx.ui.variables) {
+                    Some(value) => {
+                        //println!("Result: *{}* to *{}*", value, name);
+                        ctx.ui.variables.set_var(name, value);
+                        CommandResult::Ok
+                    }
+                    None => CommandResult::Error(format!("Failed to eval expr '{}'", expr)),
+                }
+            }
             // ===== ACTION STATE COMMANDS =====
             UiCommand::StartAction { action_name } => {
                 let state = ActionState::with_time(&action_name, ctx.time.total_time);
@@ -995,11 +1049,10 @@ impl CommandQueue {
                 println!("[Event] {} from element {:?}", event_name, element_ref.id);
                 ctx.ui
                     .variables
-                    .set_var("_last_event", UiValue::String(event_name));
-                ctx.ui.variables.set_var(
-                    "_last_event_element",
-                    UiValue::String(element_ref.id.clone()),
-                );
+                    .set_var("_last_event", Value::String(event_name));
+                ctx.ui
+                    .variables
+                    .set_var("_last_event_element", Value::String(element_ref.id.clone()));
                 CommandResult::Ok
             }
 
@@ -1175,5 +1228,60 @@ pub fn load_save(
             game_state.current_save.roads.nodes.len()
         ),
         e => eprintln!("Failed to load World: {:#?}", e),
+    }
+}
+pub fn set_element_property(
+    ctx: &mut CommandContext,
+    element_ref: ElementRef,
+    name: &str,
+    new_val: &Value,
+) {
+    match name.split_once(".") {
+        None => {}
+        Some((base, suffix)) => {
+            // self / center.x
+            if base == "self" {
+                match suffix.split_once('.') {
+                    None => {}
+                    Some((base, suffix)) => {
+                        // center / x
+                        match base {
+                            "center" => {
+                                let after = new_val
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .map(|v| v.as_f64().unwrap() as f32)
+                                    .collect::<Vec<f32>>();
+                                let before = get_element_position(&ctx.ui.menus, &element_ref);
+                                let after = match Variables::component_index(suffix) {
+                                    None => [after[0], after[1]],
+                                    Some(idx) => match idx {
+                                        0 => [after[0], before[1]],
+                                        1 => [before[0], after[1]],
+                                        _ => [after[0], after[1]],
+                                    },
+                                };
+                                ctx.ui.ui_edit_manager.push_command(MoveElementCommand {
+                                    affected_element: element_ref,
+                                    before: None,
+                                    after,
+                                })
+                            }
+                            "radius" => {
+                                let after = SizeProperty::Radius(new_val.as_f64().unwrap() as f32);
+
+                                ctx.ui.ui_edit_manager.push_command(ResizeElementCommand {
+                                    affected_element: element_ref,
+                                    before: None,
+                                    after,
+                                })
+                            }
+                            &_ => {}
+                        }
+                    }
+                }
+            }
+        }
     }
 }

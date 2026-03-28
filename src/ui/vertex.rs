@@ -3,6 +3,7 @@ use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
+use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_touch_manager::ElementRef;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -462,15 +463,14 @@ pub struct UiButtonRect {
 
 impl UiButtonRect {
     pub fn from_yaml(r: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonRect {
             id: r.id,
             actions: r.actions,
             style: r.style,
             x: window_size.width as f32 * r.x,
             y: window_size.height as f32 * r.y,
-            w: r.w * scale,
-            h: r.h * scale,
+            w: window_size.width as f32 * r.w,
+            h: window_size.height as f32 * r.h,
             rotation: r.rotation,
             color: r.color,
             border_color: r.border_color,
@@ -489,15 +489,14 @@ impl UiButtonRect {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonRectYaml {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonRectYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
             style: self.style.clone(),
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
-            w: self.w / scale,
-            h: self.h / scale,
+            w: self.w / window_size.width as f32,
+            h: self.h / window_size.height as f32,
             rotation: self.rotation,
             color: self.color,
             border_color: self.border_color,
@@ -510,8 +509,12 @@ impl UiButtonRect {
     }
 
     #[inline]
-    pub fn size(&self) -> f32 {
+    pub fn mean_size(&self) -> f32 {
         (self.w + self.h) * 0.5
+    }
+    #[inline]
+    pub fn size(&self) -> [f32; 2] {
+        [self.w, self.h]
     }
 }
 #[derive(Debug, Clone)]
@@ -707,7 +710,16 @@ impl UiElement {
             UiElement::Rect(r) => [r.x, r.y],
         }
     }
-
+    pub fn size(&self) -> SizeProperty {
+        match self {
+            UiElement::Text(t) => SizeProperty::Pt(t.pt),
+            UiElement::Circle(c) => SizeProperty::Radius(c.radius),
+            UiElement::Handle(h) => SizeProperty::Radius(h.radius),
+            UiElement::Outline(o) => SizeProperty::Radius(o.shape_data.radius),
+            UiElement::Polygon(p) => SizeProperty::PolygonScale(p.scale),
+            UiElement::Rect(r) => SizeProperty::Rect(r.size()),
+        }
+    }
     pub fn kind(&self) -> ElementKind {
         match self {
             UiElement::Circle(_) => ElementKind::Circle,
@@ -734,10 +746,7 @@ impl UiElement {
                 h.radius *= scale;
             }
             UiElement::Polygon(p) => {
-                for (v, orig) in p.vertices.iter_mut().zip(&p.original_vertices) {
-                    v.pos[0] = orig.pos[0] * scale;
-                    v.pos[1] = orig.pos[1] * scale;
-                }
+                p.scale_by(scale);
             }
             UiElement::Rect(r) => {
                 r.w *= scale;
@@ -765,10 +774,8 @@ impl UiElement {
                 o.shape_data.y += dy;
             }
             UiElement::Polygon(p) => {
-                for v in &mut p.vertices {
-                    v.pos[0] += dx;
-                    v.pos[1] += dy;
-                }
+                p.x += dx;
+                p.y += dy;
             }
             UiElement::Rect(r) => {
                 r.x += dx;
@@ -796,13 +803,8 @@ impl UiElement {
                 o.shape_data.y = y;
             }
             UiElement::Polygon(p) => {
-                let center = p.center();
-                let dx = x - center[0];
-                let dy = y - center[1];
-                for v in &mut p.vertices {
-                    v.pos[0] += dx;
-                    v.pos[1] += dy;
-                }
+                p.x = x;
+                p.y = y;
             }
             UiElement::Rect(r) => {
                 r.x = x;
@@ -845,10 +847,8 @@ impl UiElement {
                 o.shape_data.y += offset_y;
             }
             UiElement::Polygon(p) => {
-                for v in &mut p.vertices {
-                    v.pos[0] += offset_x;
-                    v.pos[1] += offset_y;
-                }
+                p.x += offset_x;
+                p.y += offset_y;
             }
             UiElement::Rect(r) => {
                 r.x += offset_x;
@@ -1211,7 +1211,9 @@ impl RuntimeLayer {
     pub fn find_element_mut(&mut self, id: &str) -> Option<&mut UiElement> {
         self.elements.iter_mut().find(|e| e.id() == id)
     }
-
+    pub fn find_element(&self, id: &str) -> Option<&UiElement> {
+        self.elements.iter().find(|e| e.id() == id)
+    }
     pub fn iter_circles(&self) -> impl Iterator<Item = &UiButtonCircle> {
         self.elements.iter().filter_map(UiElement::as_circle)
     }
@@ -1331,8 +1333,12 @@ pub struct UiVertex {
 
 impl UiVertex {
     fn from_yaml(v: UiVertexYaml, id: usize, window_size: PhysicalSize<u32>) -> Self {
+        let mut pos = v.pos;
+        pos[0] *= window_size.width as f32;
+        pos[1] *= window_size.height as f32;
+
         UiVertex {
-            pos: v.pos,
+            pos,
             color: v.color,
             roundness: v.roundness,
             _selected: false,
@@ -1341,8 +1347,11 @@ impl UiVertex {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiVertexYaml {
+        let mut pos = self.pos;
+        pos[0] /= window_size.width as f32;
+        pos[1] /= window_size.height as f32;
         UiVertexYaml {
-            pos: self.pos,
+            pos,
             color: self.color,
             roundness: self.roundness,
         }
@@ -1563,10 +1572,11 @@ pub struct UiButtonPolygon {
     pub x: f32,
     pub y: f32,
     pub scale: f32,
+    cache_valid: bool,
     pub actions: Vec<String>,
     pub style: String,
-    pub vertices: Vec<UiVertex>,
-    pub original_vertices: Vec<UiVertex>,
+    cached_scaled_vertices: Vec<UiVertex>,
+    pub unscaled_vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
     pub tri_count: u32,
 }
@@ -1812,7 +1822,7 @@ impl UiButtonHandle {
 }
 
 impl UiButtonOutline {
-    pub(crate) fn from_yaml(o: UiButtonOutlineYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(o: UiButtonOutlineYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         UiButtonOutline {
             id: o.id,
@@ -1855,7 +1865,7 @@ impl UiButtonOutline {
 }
 
 impl UiButtonPolygon {
-    pub(crate) fn from_yaml(p: UiButtonPolygonYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(p: UiButtonPolygonYaml, window_size: PhysicalSize<u32>) -> Self {
         let mut id_gen = 1;
         let mut verts: Vec<UiVertex> = p
             .vertices
@@ -1868,15 +1878,16 @@ impl UiButtonPolygon {
 
         ensure_ccw(&mut verts);
 
-        UiButtonPolygon {
+        let mut polygon = UiButtonPolygon {
             id: p.id,
             x: p.x,
             y: p.y,
             scale: p.scale,
+            cache_valid: false,
             actions: p.actions,
             style: p.style,
-            vertices: verts.clone(),
-            original_vertices: verts,
+            cached_scaled_vertices: vec![],
+            unscaled_vertices: verts.clone(),
             misc: MiscButtonSettings {
                 active: p.misc.active,
                 touched_time: 0.0,
@@ -1885,7 +1896,9 @@ impl UiButtonPolygon {
                 editable: p.misc.editable,
             },
             tri_count: 0,
-        }
+        };
+        polygon.update_scaled_vertices();
+        polygon
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonPolygonYaml {
@@ -1898,7 +1911,7 @@ impl UiButtonPolygon {
             y: self.y,
             scale: self.scale,
             vertices: self
-                .vertices
+                .unscaled_vertices
                 .iter()
                 .map(|v| v.to_yaml(window_size))
                 .collect(),
@@ -1908,49 +1921,25 @@ impl UiButtonPolygon {
     }
 
     pub fn center(&self) -> [f32; 2] {
-        let count = self.vertices.len().max(1);
-        let sum = self
-            .vertices
-            .iter()
-            .fold((0.0, 0.0), |acc, v| (acc.0 + v.pos[0], acc.1 + v.pos[1]));
-        [sum.0 / count as f32, sum.1 / count as f32]
+        [self.x, self.y]
     }
 
     /// Resizes the polygon uniformly from its center.
-    /// `size` represents the target distance from center to the farthest vertex.
-    pub fn resize(&mut self, size: f32) {
-        let center = self.center();
-
-        // Find the current maximum distance from center to any vertex
-        let current_max_dist = self
-            .vertices
-            .iter()
-            .map(|v| {
-                let dx = v.pos[0] - center[0];
-                let dy = v.pos[1] - center[1];
-                (dx * dx + dy * dy).sqrt()
-            })
-            .fold(0.0_f32, |a, b| a.max(b));
-
-        // Avoid division by zero
-        if current_max_dist < f32::EPSILON {
-            return;
-        }
-
-        let scale = size / current_max_dist;
-
-        // Scale each vertex position relative to center
-        for v in &mut self.vertices {
-            v.pos[0] = center[0] + (v.pos[0] - center[0]) * scale;
-            v.pos[1] = center[1] + (v.pos[1] - center[1]) * scale;
-        }
+    /// `scale` represents the factor to resize by.
+    pub fn scale_by(&mut self, scale: f32) {
+        self.scale *= scale;
+        self.update_scaled_vertices();
+    }
+    pub fn scale_to(&mut self, scale: f32) {
+        self.scale = scale;
+        self.update_scaled_vertices();
     }
     /// Returns the current size of the polygon.
     /// Size is defined as the maximum distance from center to any vertex.
-    pub fn size(&self) -> f32 {
+    pub fn max_size(&self) -> f32 {
         let center = self.center();
 
-        self.vertices
+        self.scaled_vertices()
             .iter()
             .map(|v| {
                 let dx = v.pos[0] - center[0];
@@ -1958,6 +1947,36 @@ impl UiButtonPolygon {
                 (dx * dx + dy * dy).sqrt()
             })
             .fold(0.0_f32, |a, b| a.max(b))
+    }
+    pub fn scaled_vertices_are_valid(&self) -> bool {
+        self.cache_valid
+    }
+    pub fn invalidate_scaled_vertices_cache(&mut self) {
+        self.cache_valid = false;
+    }
+    fn validate_scaled_vertices_cache(&mut self) {
+        self.cache_valid = true;
+    }
+    pub fn scaled_vertices(&self) -> Vec<UiVertex> {
+        if self.scaled_vertices_are_valid() {
+            return self.cached_scaled_vertices.clone();
+        };
+        let center = [self.x, self.y];
+
+        self.unscaled_vertices
+            .iter()
+            .map(|v| UiVertex {
+                pos: [
+                    center[0] + (v.pos[0] - center[0]) * self.scale,
+                    center[1] + (v.pos[1] - center[1]) * self.scale,
+                ],
+                ..*v
+            })
+            .collect()
+    }
+    pub fn update_scaled_vertices(&mut self) {
+        self.cached_scaled_vertices = self.scaled_vertices();
+        self.validate_scaled_vertices_cache();
     }
 }
 
@@ -2034,10 +2053,11 @@ impl Default for UiButtonPolygon {
             x: 0.0,
             y: 0.0,
             scale: 1.0,
+            cache_valid: false,
             actions: vec![],
             style: "None".to_string(),
-            vertices: verts.clone(),
-            original_vertices: verts,
+            unscaled_vertices: verts.clone(),
+            cached_scaled_vertices: verts,
             misc: MiscButtonSettings::default(),
             tri_count: 0,
         }

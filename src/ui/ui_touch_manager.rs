@@ -239,6 +239,8 @@ pub enum TouchEvent {
     },
     DragMove {
         element: ElementRef,
+        actions: Vec<String>,
+        buttons: MouseButtons,
         current_position: [f32; 2],
         delta: [f32; 2],
         total_delta: [f32; 2],
@@ -391,14 +393,14 @@ impl Touchable for UiButtonPolygon {
     }
 
     fn hit_test(&self, point: [f32; 2]) -> Option<TouchableHit> {
-        if self.vertices.is_empty() {
+        if self.scaled_vertices().is_empty() {
             return None;
         }
 
         const VERTEX_RADIUS: f32 = 10.0;
 
         // Check vertex hits first
-        for (i, v) in self.vertices.iter().enumerate() {
+        for (i, v) in self.scaled_vertices().iter().enumerate() {
             let dx = point[0] - v.pos[0];
             let dy = point[1] - v.pos[1];
             let dist = (dx * dx + dy * dy).sqrt();
@@ -411,7 +413,7 @@ impl Touchable for UiButtonPolygon {
         }
 
         // Check polygon interior/edge
-        let sdf = polygon_sdf(point[0], point[1], &self.vertices);
+        let sdf = polygon_sdf(point[0], point[1], &self.scaled_vertices());
         let inside = sdf < 0.0;
         let near_edge = sdf.abs() < 8.0;
 
@@ -426,15 +428,7 @@ impl Touchable for UiButtonPolygon {
     }
 
     fn center(&self) -> [f32; 2] {
-        if self.vertices.is_empty() {
-            return [0.0, 0.0];
-        }
-        let n = self.vertices.len() as f32;
-        let (sx, sy) = self
-            .vertices
-            .iter()
-            .fold((0.0, 0.0), |(ax, ay), v| (ax + v.pos[0], ay + v.pos[1]));
-        [sx / n, sy / n]
+        self.center()
     }
 
     fn z_order(&self) -> u32 {
@@ -461,7 +455,7 @@ impl Touchable for UiButtonPolygon {
 impl Draggable for UiButtonPolygon {
     fn drag_anchor(&self, vertex_index: Option<usize>) -> [f32; 2] {
         if let Some(idx) = vertex_index {
-            if let Some(v) = self.vertices.get(idx) {
+            if let Some(v) = self.scaled_vertices().get(idx) {
                 return [v.pos[0], v.pos[1]];
             }
         }
@@ -910,6 +904,8 @@ pub struct DragCoordinator {
 pub struct ActiveDrag {
     pub element: ElementRef,
     pub affected_element: Option<ElementRef>,
+    pub actions: Vec<String>,
+    pub buttons: MouseButtons,
     pub start_position: [f32; 2],
     pub current_position: [f32; 2],
     pub offset: [f32; 2],
@@ -943,6 +939,8 @@ impl DragCoordinator {
         &mut self,
         element: ElementRef,
         affected_element: Option<ElementRef>,
+        actions: Vec<String>,
+        buttons: MouseButtons,
         mouse_pos: [f32; 2],
         anchor: [f32; 2],
         vertex_index: Option<usize>,
@@ -952,6 +950,8 @@ impl DragCoordinator {
         self.active_drag = Some(ActiveDrag {
             element,
             affected_element,
+            actions,
+            buttons,
             start_position: mouse_pos,
             current_position: mouse_pos,
             offset,
@@ -994,6 +994,8 @@ impl DragCoordinator {
 
             events.push(TouchEvent::DragMove {
                 element: drag.element.clone(),
+                actions: drag.actions.clone(),
+                buttons: drag.buttons,
                 current_position: drag.current_position,
                 delta,
                 total_delta,
@@ -1398,6 +1400,8 @@ impl UiTouchManager {
                 self.drag.begin(
                     element.clone(),
                     hit.affected_element.clone(),
+                    hit.actions.clone(),
+                    input.buttons,
                     input.position,
                     anchor,
                     hit.vertex_index,
@@ -1732,6 +1736,8 @@ mod tests {
         dc.begin(
             elem.clone(),
             Some(elem),
+            vec![],
+            MouseButtons::default(),
             [100.0, 100.0],
             [100.0, 100.0],
             None,

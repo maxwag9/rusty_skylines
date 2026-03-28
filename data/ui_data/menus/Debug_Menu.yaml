@@ -14,7 +14,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'FPS: {fps:.1|fix} | Frame: {(render_dt * 1000):.2}ms | Render CPU: {(total_cpu_render_time):.2}ms | Sim: {(sim_dt * 1000):.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
+        text: 'FPS: {fps:fix:.1} | Frame: {(render_dt * 1000):fix:.2}ms | Render CPU: {(total_cpu_render_time):fix:.2}ms | Sim: {(sim_dt * 1000):fix:.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
         anchor: TopLeft
       - !Text
         id: frametime_main_pass_text
@@ -79,7 +79,7 @@ layers:
           - 0.5
           - 1.0
           - 1.0
-        text: 'Requested Time Speed: {time_speed:.2|fix}x, Actual Time Speed: {achieved_time_speed:.2|fix}x, Total Game Time: {total_game_time:.2|fix}s, Day length: {day_length:.2|fix}s, Total_days: {total_days:.2|fix}d, Sun declination: {sun_declination:.2|fix} degrees'
+        text: 'Requested Time Speed: {time_speed:.2:fix}x, Actual Time Speed: {achieved_time_speed:.2:fix}x, Total Game Time: {total_game_time:fix:elapsed}, Day length: {day_length:.2:fix}s, Total_days: {total_days:.2:fix}d, Sun declination: {sun_declination:.2:fix} degrees'
         anchor: TopLeft
       - !Text
         id: player_info_text
@@ -92,7 +92,7 @@ layers:
           - 0.5
           - 1.0
           - 1.0
-        text: 'Player Pos: X: {target_pos_x:.2} Y: {target_pos_y:.2} Z: {target_pos_z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
+        text: 'Player Pos: X: {target_pos.x:.2} Y: {target_pos.y:.2} Z: {target_pos.z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
         anchor: TopLeft
       - !Text
         id: world_info_text
@@ -105,5 +105,5 @@ layers:
           - 0.3
           - 0.7
           - 1.0
-        text: 'Car Count: {car_count}, Cursor Mode: {cursor_mode}'
+        text: 'Car Count: {car_count}, Cursor Mode: {cursor_mode}, Color: {color_picker_color}'
         anchor: TopLeft

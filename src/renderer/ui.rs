@@ -250,8 +250,8 @@ impl UiRenderer {
         );
         let bg_uniform = Background {
             primary_color: settings.background_color.map(|c| c + 0.01f32),
-            secondary_color: settings.background_color.map(|c| c + 0.20f32),
-            block_size: 100f32,
+            secondary_color: settings.background_color.map(|c| c + 0.05f32),
+            block_size: 30f32,
 
             warp_strength: 0.02,
             warp_radius: 0.10,
@@ -681,7 +681,7 @@ impl UiRenderer {
     }
 }
 
-pub(crate) fn make_poly_ssbo(
+pub fn make_poly_ssbo(
     edges: &mut Vec<PolygonEdgeGpu>,
     poly: &UiButtonPolygon,
     infos: &mut Vec<PolygonInfoGpu>,
@@ -689,11 +689,11 @@ pub(crate) fn make_poly_ssbo(
     let edge_offset = edges.len() as u32;
     let mut edge_count = 0u32;
 
-    let n = poly.vertices.len();
+    let n = poly.scaled_vertices().len();
     if n >= 2 {
         for i in 0..n {
-            let a = poly.vertices[i].pos;
-            let b = poly.vertices[(i + 1) % n].pos;
+            let a = poly.scaled_vertices()[i].pos;
+            let b = poly.scaled_vertices()[(i + 1) % n].pos;
             edges.push(PolygonEdgeGpu { p0: a, p1: b });
             edge_count += 1;
         }
@@ -706,7 +706,7 @@ pub(crate) fn make_poly_ssbo(
     });
 }
 
-pub(crate) fn upload_poly_vbo(
+pub fn upload_poly_vbo(
     ui_renderer: &mut UiRenderer,
     poly_vertices: Vec<UiVertexPoly>,
     layer: &mut RuntimeLayer,

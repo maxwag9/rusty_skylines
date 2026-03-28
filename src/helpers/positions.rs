@@ -7,20 +7,20 @@ pub const CHUNK_MIN_Y: f32 = -512.0;
 pub const CHUNK_MAX_Y: f32 = 4096.0;
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct ChunkCoord {
-    pub(crate) x: i32,
-    pub(crate) z: i32,
+    pub x: i32,
+    pub z: i32,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalPos {
-    pub(crate) x: f32,
-    pub(crate) y: f32,
-    pub(crate) z: f32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct WorldPos {
-    pub(crate) chunk: ChunkCoord,
-    pub(crate) local: LocalPos,
+    pub chunk: ChunkCoord,
+    pub local: LocalPos,
 }
 
 impl ChunkCoord {

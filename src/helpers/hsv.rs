@@ -27,20 +27,21 @@ pub fn rgb_to_hsv([r, g, b, _a]: [f32; 4]) -> HSV {
 
 pub fn hsv_to_rgb(hsv: HSV) -> [f32; 3] {
     let h = hsv.h * 6.0;
-    let c = hsv.v * hsv.s;
-    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
-    let m = hsv.v - c;
+    let i = h.floor();
+    let f = h - i;
 
-    let (r, g, b) = match h as i32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
+    let p = hsv.v * (1.0 - hsv.s);
+    let q = hsv.v * (1.0 - hsv.s * f);
+    let t = hsv.v * (1.0 - hsv.s * (1.0 - f));
 
-    [r + m, g + m, b + m]
+    match i as i32 {
+        0 => [hsv.v, t, p],
+        1 => [q, hsv.v, p],
+        2 => [p, hsv.v, t],
+        3 => [p, q, hsv.v],
+        4 => [t, p, hsv.v],
+        _ => [hsv.v, p, q],
+    }
 }
 
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {

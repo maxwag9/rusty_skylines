@@ -648,7 +648,22 @@ fn make_oak_tree(device: &Device) -> Option<Prop> {
                 },
                 256,
             ),
-            TextureKey::notex(),
+            TextureKey::new(
+                "bark",
+                TextureParams {
+                    color_primary: [0.36, 0.26, 0.18, 1.0],
+                    color_secondary: [0.25, 0.18, 0.12, 1.0],
+                    seed: 69,
+                    scale: 1.5,
+                    roughness: 0.8,
+                    octaves: 0.0,
+                    persistence: 0.0,
+                    lacunarity: 0.0,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                },
+                256,
+            ),
             TextureKey::notex(),
             TextureKey::notex(),
         ],
@@ -928,7 +943,7 @@ fn generate_cylinder(
                 normal: normal.into(),
                 color: bark_color,
                 uv: [i as f32 / radial_segments as f32, ring as f32 * 2.0],
-                texture_id: 0,
+                texture_id: 2,
             });
         }
     }
@@ -1244,7 +1259,7 @@ impl LodRenderParams {
                 min_branch_thickness: 0.008,
             },
             2 => Self {
-                branch_segments: 5,
+                branch_segments: 4,
                 leaf_density: 0.4,
                 min_branch_thickness: 0.012,
             },

@@ -28,7 +28,7 @@ use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, Roads};
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
-use crate::world::world_core::WorldCore;
+use crate::world::world::World;
 use glam::UVec2;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -160,14 +160,13 @@ impl RenderCore {
     pub fn render(
         &mut self,
         surface: &Surface,
-        world_core: &mut WorldCore,
+        world_core: &mut World,
         ui_loader: &mut Ui,
         settings: &Settings,
     ) {
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
-
         //let t = Instant::now();
         self.update_render(world_core, ui_loader, settings, aspect, screen_size);
 
@@ -228,7 +227,7 @@ impl RenderCore {
 
     pub fn update_render(
         &mut self,
-        world_core: &mut WorldCore,
+        world_core: &mut World,
         ui_loader: &mut Ui,
         settings: &Settings,
         aspect: f32,
@@ -332,13 +331,7 @@ impl RenderCore {
             .set_i64("target_pos_cz", camera.target.chunk.z);
         ui_loader
             .variables
-            .set_f64("target_pos_x", target_pos_render.x);
-        ui_loader
-            .variables
-            .set_f64("target_pos_y", target_pos_render.y);
-        ui_loader
-            .variables
-            .set_f64("target_pos_z", target_pos_render.z);
+            .set_array("target_pos", target_pos_render.to_array());
         self.props.place_props(terrain, input, &self.device);
         self.ui_renderer.update(
             ui_loader,

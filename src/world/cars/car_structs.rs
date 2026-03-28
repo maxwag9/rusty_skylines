@@ -241,14 +241,15 @@ impl VehicleType {
         matches!(self.body_type, CarBodyType::Bus | CarBodyType::LKW)
     }
 }
+
 #[derive(Debug, PartialEq, Clone)]
-pub enum CarChunkDistance {
+pub enum ChunkDistance {
     Close,
     Medium,
     Far,
 }
 
-impl CarChunkDistance {
+impl ChunkDistance {
     #[inline]
     pub fn from_dist2(dist2: u64, chunk_size: ChunkSize) -> Self {
         const BASE_CHUNK_SIZE: f64 = 128.0;
@@ -279,25 +280,25 @@ impl CarChunkDistance {
         chunk_size: ChunkSize,
     ) -> Self {
         let dist2 = center_chunk.dist2(&other);
-        CarChunkDistance::from_dist2(dist2, chunk_size)
+        ChunkDistance::from_dist2(dist2, chunk_size)
     }
 }
 #[derive(Clone, Debug)]
 pub struct CarChunk {
-    pub distance: CarChunkDistance,
+    pub distance: ChunkDistance,
     pub car_ids: Vec<CarId>,
     pub last_update_time: SimTime,
 }
 
 impl CarChunk {
-    pub fn new(distance: CarChunkDistance, car_ids: Vec<CarId>) -> Self {
+    pub fn new(distance: ChunkDistance, car_ids: Vec<CarId>) -> Self {
         Self {
             distance,
             car_ids,
             last_update_time: 0.0,
         }
     }
-    pub fn empty(car_chunk_distance: CarChunkDistance) -> Self {
+    pub fn empty(car_chunk_distance: ChunkDistance) -> Self {
         Self {
             distance: car_chunk_distance,
             car_ids: Vec::new(),
@@ -333,7 +334,7 @@ impl CarStorage {
     ) {
         self.car_chunk_storage.remove_car(from, car_id);
         let car_chunk_distance =
-            CarChunkDistance::from_chunk_positions(self.center_chunk, to, self.chunk_size);
+            ChunkDistance::from_chunk_positions(self.center_chunk, to, self.chunk_size);
         self.car_chunk_storage
             .add_car(to, car_chunk_distance, car_id);
     }
@@ -394,7 +395,7 @@ impl CarStorage {
     pub fn spawn(
         &mut self,
         chunk_coord: ChunkCoord,
-        car_chunk_distance: CarChunkDistance,
+        car_chunk_distance: ChunkDistance,
         mut car: Car,
     ) -> CarId {
         let car_id = if let Some(reused_id) = self.free_list.pop() {
@@ -508,35 +509,32 @@ impl CarChunkStorage {
     // ========================================================================
 
     #[inline]
-    fn map_for_distance(&self, dist: &CarChunkDistance) -> &HashMap<ChunkCoord, CarChunk> {
+    fn map_for_distance(&self, dist: &ChunkDistance) -> &HashMap<ChunkCoord, CarChunk> {
         match dist {
-            CarChunkDistance::Close => &self.close,
-            CarChunkDistance::Medium => &self.medium,
-            CarChunkDistance::Far => &self.far,
+            ChunkDistance::Close => &self.close,
+            ChunkDistance::Medium => &self.medium,
+            ChunkDistance::Far => &self.far,
         }
     }
 
     #[inline]
-    fn map_for_distance_mut(
-        &mut self,
-        dist: &CarChunkDistance,
-    ) -> &mut HashMap<ChunkCoord, CarChunk> {
+    fn map_for_distance_mut(&mut self, dist: &ChunkDistance) -> &mut HashMap<ChunkCoord, CarChunk> {
         match dist {
-            CarChunkDistance::Close => &mut self.close,
-            CarChunkDistance::Medium => &mut self.medium,
-            CarChunkDistance::Far => &mut self.far,
+            ChunkDistance::Close => &mut self.close,
+            ChunkDistance::Medium => &mut self.medium,
+            ChunkDistance::Far => &mut self.far,
         }
     }
 
     /// Find which distance tier a chunk is in (if it exists)
     #[inline]
-    pub fn find_distance(&self, coord: &ChunkCoord) -> Option<CarChunkDistance> {
+    pub fn find_distance(&self, coord: &ChunkCoord) -> Option<ChunkDistance> {
         if self.close.contains_key(coord) {
-            Some(CarChunkDistance::Close)
+            Some(ChunkDistance::Close)
         } else if self.medium.contains_key(coord) {
-            Some(CarChunkDistance::Medium)
+            Some(ChunkDistance::Medium)
         } else if self.far.contains_key(coord) {
-            Some(CarChunkDistance::Far)
+            Some(ChunkDistance::Far)
         } else {
             None
         }
@@ -701,7 +699,7 @@ impl CarChunkStorage {
     // Mutation operations
     // ========================================================================
 
-    pub fn add_car(&mut self, chunk_coord: ChunkCoord, dist: CarChunkDistance, car_id: CarId) {
+    pub fn add_car(&mut self, chunk_coord: ChunkCoord, dist: ChunkDistance, car_id: CarId) {
         let map = self.map_for_distance_mut(&dist);
         let chunk = map
             .entry(chunk_coord)
@@ -735,15 +733,15 @@ impl CarChunkStorage {
     pub fn update_chunk_distance(
         &mut self,
         coord: ChunkCoord,
-        new_distance: CarChunkDistance,
+        new_distance: ChunkDistance,
     ) -> bool {
         // Find current tier
         let current = if self.close.contains_key(&coord) {
-            CarChunkDistance::Close
+            ChunkDistance::Close
         } else if self.medium.contains_key(&coord) {
-            CarChunkDistance::Medium
+            ChunkDistance::Medium
         } else if self.far.contains_key(&coord) {
-            CarChunkDistance::Far
+            ChunkDistance::Far
         } else {
             return false;
         };
@@ -755,9 +753,9 @@ impl CarChunkStorage {
 
         // Remove from old tier
         let mut chunk = match current {
-            CarChunkDistance::Close => self.close.remove(&coord),
-            CarChunkDistance::Medium => self.medium.remove(&coord),
-            CarChunkDistance::Far => self.far.remove(&coord),
+            ChunkDistance::Close => self.close.remove(&coord),
+            ChunkDistance::Medium => self.medium.remove(&coord),
+            ChunkDistance::Far => self.far.remove(&coord),
         }
         .expect("Chunk must exist, we just checked");
 
@@ -779,12 +777,12 @@ impl CarChunkStorage {
         let mut to_remove: Vec<ChunkCoord> = Vec::new();
 
         // Collect all coords and their new distances
-        let updates: Vec<(ChunkCoord, CarChunkDistance, bool)> = self
+        let updates: Vec<(ChunkCoord, ChunkDistance, bool)> = self
             .iter()
             .map(|(coord, chunk)| {
                 let is_empty = chunk.car_ids.is_empty();
                 let dist2 = center_chunk.dist2(coord);
-                let new_dist = CarChunkDistance::from_dist2(dist2, chunk_size);
+                let new_dist = ChunkDistance::from_dist2(dist2, chunk_size);
                 (*coord, new_dist, is_empty)
             })
             .collect();

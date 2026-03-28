@@ -1,0 +1,44 @@
+name: GUI
+layers:
+  - name: gui
+    order: 2
+    elements:
+      - !Rect
+        id: GUI Background
+        actions: [ ]
+        x: 0.5
+        y: 0.96
+        w: 1.0
+        h: 0.08
+        rotation: 0.0
+        color:
+          - 0.005
+          - 0.08
+          - 0.08
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.002
+        fade: 1.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+      - !Text
+        id: settings_text
+        actions: [ ]
+        x: 0.45
+        y: 0.05
+        pt: 19.396805
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: Settings
+

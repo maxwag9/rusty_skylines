@@ -38,6 +38,7 @@ layers:
           - on:r close_all_menus
           - on:r open_menu(Debug_Menu)
           - on:r load_save(first_save_ever, false)
+          - on:r open_menu(GUI)
         x: 0.5
         y: 0.3
         pt: 20.0

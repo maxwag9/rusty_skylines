@@ -12,7 +12,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_simulation::CarSimSystem;
-use crate::world::cars::car_structs::{Car, CarChunkDistance, CarStorage, SimTime};
+use crate::world::cars::car_structs::{Car, CarStorage, ChunkDistance, SimTime};
 use crate::world::cars::partitions::PartitionId;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::RoadManager;
@@ -259,7 +259,7 @@ impl Cars {
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
                         self.car_storage
-                            .spawn(picked.pos.chunk, CarChunkDistance::Close, car);
+                            .spawn(picked.pos.chunk, ChunkDistance::Close, car);
                     }
                 }
             }
@@ -352,7 +352,7 @@ impl Cars {
                 let lane = road_manager.roads.lane(&lane_id);
                 let polyline = lane.polyline();
                 let first_point = polyline.first().unwrap();
-                let car_chunk_distance = CarChunkDistance::from_chunk_positions(
+                let car_chunk_distance = ChunkDistance::from_chunk_positions(
                     target_pos.chunk,
                     first_point.chunk,
                     terrain_renderer.chunk_size,

@@ -247,9 +247,9 @@ pub fn rebuild_outline_cache(
             if o.mode == 1.0 {
                 if let Some(poly) = find_polygon_by_id(&o.parent, before, after) {
                     o.vertex_offset = layer.cache.outline_poly_vertices.len() as u32;
-                    o.vertex_count = poly.vertices.len() as u32;
+                    o.vertex_count = poly.scaled_vertices().len() as u32;
 
-                    for v in &poly.vertices {
+                    for v in &poly.scaled_vertices() {
                         layer.cache.outline_poly_vertices.push([v.pos[0], v.pos[1]]);
                     }
                 }
@@ -364,7 +364,8 @@ pub fn rebuild_polygon_cache(
             ];
 
             let poly_index_f = poly_index as f32;
-            let tris = triangulate_polygon(&mut poly.vertices);
+            poly.update_scaled_vertices();
+            let tris = triangulate_polygon(&poly.scaled_vertices());
             poly.tri_count = tris.len() as u32 / 3;
 
             cached_vertices.clear();

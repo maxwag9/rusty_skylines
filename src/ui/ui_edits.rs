@@ -9,6 +9,7 @@ use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 
 pub fn set_element_position(
     menus: &mut HashMap<String, Menu>,
@@ -58,14 +59,9 @@ pub fn set_element_position(
                 .filter_map(UiElement::as_polygon_mut)
                 .find(|p| p.id == element_ref.id)
             {
-                let [cx, cy] = p.center();
-                before = Some([cx, cy]);
-                let dx = pos[0] - cx;
-                let dy = pos[1] - cy;
-                for v in &mut p.vertices {
-                    v.pos[0] += dx;
-                    v.pos[1] += dy;
-                }
+                before = Some(p.center());
+                p.x = pos[0];
+                p.y = pos[1];
                 layer.dirty.mark_polygons();
             }
             before
@@ -102,15 +98,72 @@ pub fn set_element_position(
     }
 }
 
-pub fn set_element_size(menus: &mut HashMap<String, Menu>, element_ref: &ElementRef, size: f32) {
+/// Size properties that can be changed
+#[derive(Clone, Debug, PartialEq)]
+pub enum SizeProperty {
+    Radius(f32),
+    Pt(f32),
+    Width(f32),
+    Height(f32),
+    Rect([f32; 2]),
+    PolygonScale(f32),
+}
+impl SizeProperty {
+    pub fn radius(&self) -> Option<f32> {
+        match self {
+            SizeProperty::Radius(r) => Some(*r),
+            _ => None,
+        }
+    }
+    pub fn pt(&self) -> Option<f32> {
+        match self {
+            SizeProperty::Pt(pt) => Some(*pt),
+            _ => None,
+        }
+    }
+    pub fn scale_by(&self, scale: f32) -> Self {
+        let mut scaled = self.clone();
+        match &mut scaled {
+            SizeProperty::Radius(r) => {
+                *r *= scale;
+            }
+            SizeProperty::Pt(pt) => {
+                *pt *= scale;
+            }
+            SizeProperty::Width(w) => {
+                *w *= scale;
+            }
+            SizeProperty::Height(h) => {
+                *h *= scale;
+            }
+            SizeProperty::Rect(rect) => {
+                rect[0] *= scale;
+                rect[1] *= scale;
+            }
+            SizeProperty::PolygonScale(ps) => {
+                *ps *= scale;
+            }
+        }
+        scaled
+    }
+}
+
+impl Display for SizeProperty {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        format!("{:#?}", self).to_lowercase().fmt(f)
+    }
+}
+pub fn set_element_size(
+    menus: &mut HashMap<String, Menu>,
+    element_ref: &ElementRef,
+    size: &SizeProperty,
+) -> Option<SizeProperty> {
     let Some(menu) = menus.get_mut(&element_ref.menu) else {
-        return;
+        return None;
     };
     let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
-        return;
+        return None;
     };
-
-    let size = size.max(2.0);
 
     for element in &mut layer.elements {
         match element {
@@ -118,70 +171,114 @@ pub fn set_element_size(menus: &mut HashMap<String, Menu>, element_ref: &Element
             UiElement::Circle(c)
                 if element_ref.kind == ElementKind::Circle && c.id == element_ref.id =>
             {
-                c.radius = size;
+                match size {
+                    SizeProperty::Radius(r) => {
+                        c.radius = *r;
+                    }
+                    _ => {}
+                }
+
                 layer.dirty.mark_circles();
+                return Some(element.size());
             }
 
             UiElement::Text(t)
                 if element_ref.kind == ElementKind::Text && t.id == element_ref.id =>
             {
-                t.pt = size.max(4.0);
+                match size {
+                    SizeProperty::Pt(pt) => {
+                        t.pt = pt.max(4.0);
+                    }
+                    _ => {}
+                }
+
                 layer.dirty.mark_texts();
+                return Some(element.size());
             }
 
             // DEPENDENTS (always applied immediately)
             UiElement::Handle(h) if matches!(h.parent.as_ref(), Some(p) if p.id == element_ref.id) =>
             {
-                h.radius = size;
+                match size {
+                    SizeProperty::Radius(r) => {
+                        h.radius = *r;
+                    }
+                    _ => {}
+                }
                 layer.dirty.mark_handles();
+                return Some(element.size());
             }
 
             UiElement::Outline(o) if matches!(o.parent.as_ref(), Some(p) if p.id == element_ref.id) =>
             {
-                o.shape_data.radius = size;
+                match size {
+                    SizeProperty::Radius(r) => {
+                        o.shape_data.radius = *r;
+                    }
+                    _ => {}
+                }
                 layer.dirty.mark_outlines();
+                return Some(element.size());
             }
             UiElement::Polygon(p)
                 if element_ref.kind == ElementKind::Polygon && p.id == element_ref.id =>
             {
-                p.resize(size);
+                match size {
+                    SizeProperty::PolygonScale(s) => {
+                        p.scale = *s;
+                        p.scale_by(*s);
+                    }
+                    _ => {}
+                }
+
                 layer.dirty.mark_polygons();
+                return Some(element.size());
             }
             UiElement::Rect(r)
                 if element_ref.kind == ElementKind::Rect && r.id == element_ref.id =>
             {
-                r.w = size;
-                r.h = size;
+                match size {
+                    SizeProperty::Width(w) => {
+                        r.w = *w;
+                    }
+                    SizeProperty::Height(h) => {
+                        r.h = *h;
+                    }
+                    SizeProperty::Rect(rect) => {
+                        r.w = rect[0];
+                        r.h = rect[1];
+                    }
+                    _ => {}
+                }
                 layer.dirty.mark_rects();
+                return Some(element.size());
             }
             _ => {}
         }
     }
+    None
 }
 
 pub fn set_element_color(
     menus: &mut HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    id: &str,
-    kind: ElementKind,
+    element_ref: &ElementRef,
     property: &ColorProperty,
     color: [f32; 4],
 ) {
-    let Some(menu) = menus.get_mut(menu_name) else {
+    let Some(menu) = menus.get_mut(&element_ref.menu) else {
         return;
     };
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
+    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
         return;
     };
 
-    match kind {
+    match element_ref.kind {
         ElementKind::Circle => {
             if let Some(c) = layer
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_circle_mut)
-                .find(|c| c.id == id)
+                .find(|c| c.id == element_ref.id)
             {
                 match property {
                     ColorProperty::Fill => c.fill_color = color,
@@ -198,7 +295,7 @@ pub fn set_element_color(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_text_mut)
-                .find(|t| t.id == id)
+                .find(|t| t.id == element_ref.id)
             {
                 if matches!(property, ColorProperty::TextColor) {
                     t.color = color;
@@ -211,7 +308,7 @@ pub fn set_element_color(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_rect_mut)
-                .find(|r| r.id == id)
+                .find(|r| r.id == element_ref.id)
             {
                 if matches!(property, ColorProperty::Fill) {
                     r.color = color;
@@ -224,19 +321,21 @@ pub fn set_element_color(
                 .elements
                 .iter_mut()
                 .filter_map(UiElement::as_polygon_mut)
-                .find(|p| p.id == id)
+                .find(|p| p.id == element_ref.id)
             {
                 match property {
                     ColorProperty::Fill => {
-                        for v in &mut p.vertices {
+                        for v in &mut p.unscaled_vertices {
                             v.color = color;
                         }
+                        p.invalidate_scaled_vertices_cache();
                         layer.dirty.mark_rects();
                     }
 
                     ColorProperty::VertexIndex(i) => {
-                        if let Some(vertex) = p.vertices.get_mut(*i as usize) {
+                        if let Some(vertex) = p.unscaled_vertices.get_mut(*i as usize) {
                             vertex.color = color;
+                            p.invalidate_scaled_vertices_cache();
                             layer.dirty.mark_rects();
                         }
                     }
@@ -250,28 +349,27 @@ pub fn set_element_color(
 
 pub fn set_vertex_position(
     menus: &mut HashMap<String, Menu>,
-    menu_name: &str,
-    layer_name: &str,
-    id: &str,
+    element_ref: &ElementRef,
     vertex_index: usize,
     pos: [f32; 2],
 ) -> Option<[f32; 2]> {
-    let Some(menu) = menus.get_mut(menu_name) else {
+    let Some(menu) = menus.get_mut(&element_ref.menu) else {
         return None;
     };
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) else {
+    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
         return None;
     };
     let mut before = None;
-    if let Some(poly) = layer
+    if let Some(p) = layer
         .elements
         .iter_mut()
         .filter_map(UiElement::as_polygon_mut)
-        .find(|p| p.id == id)
+        .find(|p| p.id == element_ref.id)
     {
-        if let Some(v) = poly.vertices.get_mut(vertex_index) {
+        if let Some(v) = p.unscaled_vertices.get_mut(vertex_index) {
             before = Some(v.pos);
             v.pos = pos;
+            p.invalidate_scaled_vertices_cache();
             layer.dirty.mark_polygons();
         }
     }

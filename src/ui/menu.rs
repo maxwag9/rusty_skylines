@@ -121,9 +121,10 @@ impl Menu {
                     .filter_map(UiElement::as_polygon_mut)
                     .find(|p| p.id == element_id)
                 {
-                    for v in p.vertices.iter_mut() {
+                    for v in p.unscaled_vertices.iter_mut() {
                         v.color = new_color;
                     }
+                    p.invalidate_scaled_vertices_cache();
                     layer.dirty.mark_polygons();
                     return true;
                 }
@@ -182,7 +183,7 @@ pub fn get_selected_element_color(loader: &Ui) -> Option<[f32; 4]> {
             let poly = layer.iter_polygons().find(|p| p.id == sel.id)?;
 
             // take color from first vertex (but they are not all the same!!)
-            poly.vertices.get(0).map(|v| v.color)
+            poly.unscaled_vertices.get(0).map(|v| v.color)
         }
 
         ElementKind::Circle => {

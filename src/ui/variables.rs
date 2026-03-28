@@ -1,169 +1,11 @@
-use crate::data::{SettingKey, Settings};
+use crate::data::Settings;
+use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::{Astronomy, TimeScales};
 use std::collections::HashMap;
-use std::fmt;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum UiValue {
-    F64(f64),
-    I64(i64),
-    Bool(bool),
-    String(String),
-}
-
-impl UiValue {
-    pub fn from_str(settings: &Settings, variables: &Variables, s: &str) -> Self {
-        let s = s.trim();
-
-        if s.is_empty() {
-            return UiValue::String(String::new());
-        }
-
-        // Explicit type prefix
-        if let Some((ty, value)) = s.split_once(':') {
-            match ty.to_ascii_lowercase().as_str() {
-                "int" => {
-                    if let Ok(i) = value.parse::<i64>() {
-                        return UiValue::I64(i);
-                    }
-                }
-                "float" | "f32" | "f64" => {
-                    if let Ok(f) = value.parse::<f64>() {
-                        return UiValue::F64(f);
-                    }
-                }
-                "bool" => match value.to_ascii_lowercase().as_str() {
-                    "true" | "1" | "yes" | "on" => return UiValue::Bool(true),
-                    "false" | "0" | "no" | "off" => return UiValue::Bool(false),
-                    _ => {}
-                },
-                "string" | "str" => {
-                    return UiValue::String(value.to_string());
-                }
-                "setting" => {
-                    let key = SettingKey::from_str(value);
-                    if let Some(key) = key {
-                        return settings.read_setting(key).to_ui_value();
-                    }
-                }
-                "var" | "variable" => match Self::load_variable(variables, &s.to_string()) {
-                    Some(value) => return value,
-                    None => {}
-                },
-                _ => {}
-            }
-        }
-
-        // =========================
-        // Auto-detect bool
-        // =========================
-        match s.to_ascii_lowercase().as_str() {
-            "true" | "yes" | "on" => return UiValue::Bool(true),
-            "false" | "no" | "off" => return UiValue::Bool(false),
-            _ => {}
-        }
-
-        // =========================
-        // Auto-detect integer
-        // =========================
-        if let Ok(i) = s.parse::<i64>() {
-            return UiValue::I64(i);
-        }
-
-        // =========================
-        // Auto-detect float
-        // =========================
-        if let Ok(f) = s.parse::<f64>() {
-            return UiValue::F64(f);
-        }
-
-        // =========================
-        // Default: String
-        // =========================
-        UiValue::String(s.to_string())
-    }
-    pub fn is_truthy(&self) -> bool {
-        match self {
-            UiValue::Bool(b) => *b,
-            UiValue::I64(i) => *i != 0,
-            UiValue::F64(f) => *f != 0.0,
-            UiValue::String(s) => !s.is_empty() && s != "false" && s != "0",
-        }
-    }
-    fn load_variable(variables: &Variables, name: &String) -> Option<UiValue> {
-        variables.get(name).cloned()
-    }
-    pub fn as_str(&self) -> Option<&str> {
-        match self {
-            UiValue::String(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    pub fn as_float(&self) -> Option<f64> {
-        match self {
-            UiValue::F64(f) => Some(*f),
-            UiValue::I64(i) => Some(*i as f64),
-            _ => None,
-        }
-    }
-
-    pub fn as_int(&self) -> Option<i64> {
-        match self {
-            UiValue::I64(i) => Some(*i),
-            UiValue::F64(f) => Some(*f as i64),
-            _ => None,
-        }
-    }
-
-    pub fn as_bool(&self) -> bool {
-        self.is_truthy()
-    }
-}
-impl fmt::Display for UiValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UiValue::F64(v) => write!(f, "{v}"),
-            UiValue::I64(v) => write!(f, "{v}"),
-            UiValue::Bool(v) => write!(f, "{v}"),
-            UiValue::String(v) => write!(f, "{v}"),
-        }
-    }
-}
-
-impl From<f64> for UiValue {
-    fn from(v: f64) -> Self {
-        UiValue::F64(v)
-    }
-}
-
-impl From<i64> for UiValue {
-    fn from(v: i64) -> Self {
-        UiValue::I64(v)
-    }
-}
-
-impl From<bool> for UiValue {
-    fn from(v: bool) -> Self {
-        UiValue::Bool(v)
-    }
-}
-
-impl From<&str> for UiValue {
-    fn from(v: &str) -> Self {
-        UiValue::String(v.to_string())
-    }
-}
-
-impl From<String> for UiValue {
-    fn from(v: String) -> Self {
-        UiValue::String(v)
-    }
-}
 
 pub struct Variables {
-    vars: HashMap<String, UiValue>,
+    vars: HashMap<String, Value>,
 }
 
 impl Variables {
@@ -174,17 +16,17 @@ impl Variables {
     }
 
     pub fn set_f64<T: Into<f64>>(&mut self, name: &str, value: T) {
-        let value = UiValue::F64(value.into());
+        let value = Value::F64(value.into());
         self.vars.insert(name.to_string(), value);
     }
 
     pub fn set_i64<T: Into<i64>>(&mut self, name: &str, value: T) {
-        let value = UiValue::I64(value.into());
+        let value = Value::I64(value.into());
         self.vars.insert(name.to_string(), value);
     }
 
     pub fn set_bool(&mut self, name: &str, value: bool) {
-        let value = UiValue::Bool(value);
+        let value = Value::Bool(value);
         self.vars.insert(name.to_string(), value);
     }
 
@@ -192,55 +34,158 @@ impl Variables {
     where
         S: Into<String>,
     {
-        let value = UiValue::String(value.into());
+        let value = Value::String(value.into());
         self.vars.insert(name.to_string(), value);
     }
-    pub fn set_var_ui_value<S>(&mut self, name: S, value: UiValue)
+
+    pub fn set_array<I, T>(&mut self, name: &str, iter: I)
     where
-        S: AsRef<str>,
+        I: IntoIterator<Item = T>,
+        T: Into<Value>,
     {
-        let name = name.as_ref();
-        match value {
-            UiValue::String(v) => self.set_string(name, v),
-            UiValue::F64(v) => self.set_f64(name, v),
-            UiValue::I64(v) => self.set_i64(name, v),
-            UiValue::Bool(v) => self.set_bool(name, v),
+        let array_value = Value::Array(iter.into_iter().map(|e| e.into()).collect());
+
+        let (base, suffix_opt) = match name.rsplit_once('.') {
+            Some((base, suffix)) => {
+                if Self::component_index(suffix).is_some() {
+                    (base, Some(suffix))
+                } else {
+                    (name, None)
+                }
+            }
+            None => (name, None),
+        };
+
+        let suffix = match suffix_opt {
+            Some(s) => s,
+            None => {
+                self.vars.insert(base.to_string(), array_value);
+                return;
+            }
+        };
+
+        let idx = Self::component_index(suffix).unwrap();
+
+        if !matches!(self.vars.get(base), Some(Value::Array(_))) {
+            self.vars.insert(base.to_string(), Value::Array(Vec::new()));
+        }
+
+        if let Some(Value::Array(a)) = self.vars.get_mut(base) {
+            if idx >= a.len() {
+                a.resize(idx + 1, Value::Null);
+            }
+            a[idx] = array_value;
         }
     }
+
     pub fn set_var<S, V>(&mut self, name: S, value: V)
     where
         S: AsRef<str>,
-        V: Into<UiValue>,
+        V: Into<Value>,
     {
-        self.vars.insert(name.as_ref().to_string(), value.into());
+        let name = name.as_ref();
+        let value = value.into();
+
+        let (base, suffix_opt) = match name.rsplit_once('.') {
+            Some((base, suffix)) => {
+                if Self::component_index(suffix).is_some() {
+                    (base, Some(suffix))
+                } else {
+                    (name, None)
+                }
+            }
+            None => (name, None),
+        };
+
+        let suffix = match suffix_opt {
+            Some(s) => s,
+            None => {
+                self.vars.insert(base.to_string(), value);
+                return;
+            }
+        };
+
+        let idx = Self::component_index(suffix).unwrap();
+
+        // Ensure an array exists at base (create if missing or not an array)
+        if !matches!(self.vars.get(base), Some(Value::Array(_))) {
+            self.vars.insert(base.to_string(), Value::Array(Vec::new()));
+        }
+
+        if let Some(Value::Array(a)) = self.vars.get_mut(base) {
+            if idx >= a.len() {
+                a.resize(idx + 1, Value::Null);
+            }
+            a[idx] = value;
+        }
     }
-    pub fn get(&self, name: &str) -> Option<&UiValue> {
-        self.vars.get(name)
+    pub fn component_index(s: &str) -> Option<usize> {
+        match s {
+            "x" | "r" | "h" => Some(0),
+            "y" | "g" | "s" => Some(1),
+            "z" | "b" | "v" => Some(2),
+            "w" => Some(3),
+            _ => s.parse::<usize>().ok(),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        let (base, suffix_opt) = match name.rsplit_once('.') {
+            Some((base, suffix)) => {
+                if Self::component_index(suffix).is_some() {
+                    (base, Some(suffix))
+                } else {
+                    (name, None)
+                }
+            }
+            None => (name, None),
+        };
+
+        let v = self.vars.get(base)?;
+
+        let suffix = match suffix_opt {
+            Some(s) => s,
+            None => return Some(v),
+        };
+
+        let idx = Self::component_index(suffix)?;
+
+        match v {
+            Value::Array(a) => a.get(idx),
+            _ => None,
+        }
     }
     pub fn get_f64(&self, name: &str) -> Option<f64> {
         match self.vars.get(name)? {
-            UiValue::F64(v) => Some(*v),
+            Value::F64(v) => Some(*v),
             _ => None,
         }
     }
 
     pub fn get_i64(&self, name: &str) -> Option<i64> {
         match self.vars.get(name)? {
-            UiValue::I64(v) => Some(*v),
+            Value::I64(v) => Some(*v),
             _ => None,
         }
     }
 
     pub fn get_bool(&self, name: &str) -> Option<bool> {
         match self.vars.get(name)? {
-            UiValue::Bool(v) => Some(*v),
+            Value::Bool(v) => Some(*v),
             _ => None,
         }
     }
 
     pub fn get_string(&self, name: &str) -> Option<&str> {
         match self.vars.get(name)? {
-            UiValue::String(v) => Some(v),
+            Value::String(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn get_array(&self, name: &str) -> Option<&Vec<Value>> {
+        match self.get(name)? {
+            Value::Array(a) => Some(a),
             _ => None,
         }
     }
@@ -252,12 +197,7 @@ impl Variables {
 
         for key in keys {
             let value = &self.vars[key];
-            let type_tag = match value {
-                UiValue::F64(_) => "f32",
-                UiValue::I64(_) => "i32",
-                UiValue::Bool(_) => "bool",
-                UiValue::String(_) => "str",
-            };
+            let type_tag = value.type_name();
             println!(
                 "  {:width$} : {} ({})",
                 key,
@@ -287,6 +227,33 @@ impl Variables {
             let value = &self.vars[key];
             println!("  {:width$} : {}", key, value, width = max_len);
         }
+    }
+}
+impl From<glam::Vec3> for Value {
+    fn from(v: glam::Vec3) -> Self {
+        Value::Array(vec![
+            Value::F64(v.x as f64),
+            Value::F64(v.y as f64),
+            Value::F64(v.z as f64),
+        ])
+    }
+}
+
+// Bonus: Vec2 and Vec4 if you need them
+impl From<glam::Vec2> for Value {
+    fn from(v: glam::Vec2) -> Self {
+        Value::Array(vec![Value::F64(v.x as f64), Value::F64(v.y as f64)])
+    }
+}
+
+impl From<glam::Vec4> for Value {
+    fn from(v: glam::Vec4) -> Self {
+        Value::Array(vec![
+            Value::F64(v.x as f64),
+            Value::F64(v.y as f64),
+            Value::F64(v.z as f64),
+            Value::F64(v.w as f64),
+        ])
     }
 }
 

@@ -7,7 +7,7 @@ use crate::renderer::shadows::CSM_CASCADES;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::Ui;
 use crate::world::sound::Sounds;
-use crate::world::world_core::WorldCore;
+use crate::world::world::World;
 use std::sync::Arc;
 use std::time::Instant;
 use wgpu::Surface;
@@ -30,7 +30,7 @@ pub struct Resources {
     pub command_queues: CommandQueues,
 
     // The simulation & world core:
-    pub world_core: WorldCore,
+    pub world_core: World,
 
     // The GPU + render-only subsystems:
     pub render_core: RenderCore,
@@ -51,7 +51,7 @@ impl Resources {
 
         surface.configure(device, &config);
 
-        let mut world_core = WorldCore::new(device, &settings);
+        let mut world_core = World::new(device, &settings);
         let camera = &mut world_core.world_state.camera;
 
         let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
