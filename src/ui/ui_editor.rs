@@ -2,7 +2,7 @@
 //!
 //! Uses Command pattern for all undoable operations.
 
-use crate::data::{SettingValue, Settings};
+use crate::data::Settings;
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
@@ -40,9 +40,6 @@ use std::fs;
 use std::path::PathBuf;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
-// ============================================================================
-// DRAG STATE FOR UNDO TRACKING
-// ============================================================================
 
 /// Captured state when a drag operation begins
 #[derive(Clone, Debug)]
@@ -69,8 +66,8 @@ struct EventProcessingResult {
 }
 
 pub struct GuiOptions {
-    pub(crate) show_gui: bool,
-    pub(crate) override_mode: bool,
+    pub show_gui: bool,
+    pub override_mode: bool,
 }
 
 pub struct Ui {
@@ -80,7 +77,7 @@ pub struct Ui {
     pub variables: Variables,
     pub console_lines: VecDeque<String>,
 
-    // NEW: Touch manager (primary touch handling)
+    // Touch manager (primary touch handling)
     pub touch_manager: UiTouchManager,
 
     // Undo/Redo
@@ -118,7 +115,7 @@ impl Ui {
                     Vec::new()
                 })
                 .into_iter()
-                .map(|l| (l.name.clone(), l))
+                .map(|l| (l.name.clone(), l)) // This IS the AP name, not ID!
                 .collect();
         let global_actions: GlobalActions = load_global_actions(&menus_dir, bend_mode)
             .ok()
@@ -154,7 +151,7 @@ impl Ui {
                                 .or_default()
                                 .push((av.clone(), l.order));
 
-                            None
+                            UiElement::from_yaml(t, window_size)
                         }
                     })
                     .collect();
@@ -171,6 +168,7 @@ impl Ui {
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
                     saveable: true,
+                    editing_tool: l.editing_tool,
                 });
             }
 
@@ -191,7 +189,7 @@ impl Ui {
             };
             for (ap, order) in aps {
                 let mut layers =
-                    ap.to_runtime(settings, &advanced_primitives, order + 1, window_size);
+                    ap.to_layers(settings, &advanced_primitives, order + 1, window_size);
 
                 menu.layers.append(&mut layers);
             }
@@ -215,7 +213,7 @@ impl Ui {
             })
             .for_each(|e| {
                 e.rescale_to_window(old_size, new_size);
-                e.resize(scale_factor.powi(2));
+                e.scale_by(scale_factor.powi(2));
             });
     }
     pub fn handle_touches(
@@ -313,16 +311,13 @@ impl Ui {
             for (menu_name, menu) in self.menus.iter_mut() {
                 for layer in menu.layers.iter_mut() {
                     for text in layer.elements.iter_mut().filter_map(UiElement::as_text_mut) {
-                        let Some(sel) = &self.touch_manager.selection.primary else {
-                            continue;
-                        };
                         let text_ref = ElementRef::new(
                             menu_name,
                             layer.name.as_str(),
                             text.id.as_str(),
                             ElementKind::Text,
                         );
-                        if text_ref != *sel {
+                        if self.touch_manager.selection.is_selected(&text_ref) {
                             text.being_edited = false;
                             text.clear_selection();
                             layer.dirty.mark_texts()
@@ -618,7 +613,10 @@ impl Ui {
         self.touch_manager.drag.active_drag = None;
         self.touch_manager.editor.active_vertex = None;
 
-        result.update_selection = true;
+        if !is_layer_editor_tool(&self.menus, element).unwrap_or(false) {
+            result.update_selection = true;
+        }
+
         result.mark_dirty = true;
     }
 
@@ -823,19 +821,22 @@ impl Ui {
         // Get action for element
         let action = self.get_element_action(element);
         let is_input_box = self.is_input_box(element);
-
+        if let Some(editor_tool) = is_layer_editor_tool(&self.menus, element) {
+            if editor_tool {
+                self.touch_manager.selection.active_tool = Some(element.clone());
+                return;
+            }
+        }
         if multi {
             self.touch_manager
                 .selection
-                .move_primary_to_multi(element.clone(), action);
+                .add_to_selection(element.clone());
         } else if additive {
             self.touch_manager
                 .selection
                 .toggle_selection(element.clone());
         } else {
-            self.touch_manager
-                .selection
-                .select(element.clone(), action, is_input_box);
+            self.touch_manager.selection.select_single(element.clone());
         }
 
         result.update_selection = true;
@@ -844,8 +845,8 @@ impl Ui {
     fn handle_deselect_all(&mut self, result: &mut EventProcessingResult, mouse: &Mouse) {
         self.ui_edit_manager.execute_command(
             DeselectAllCommand {
-                primary: self.touch_manager.selection.primary.clone(),
-                secondary: self.touch_manager.selection.secondary.clone(),
+                selected: self.touch_manager.selection.selected.clone(),
+                active_tool: self.touch_manager.selection.active_tool.clone(),
             },
             &mut self.touch_manager,
             &mut self.menus,
@@ -926,7 +927,7 @@ impl Ui {
         direction: NavigationDirection,
         result: &mut EventProcessingResult,
     ) {
-        let current = match &self.touch_manager.selection.primary {
+        let current = match self.touch_manager.selection.selected.first() {
             Some(elem) => elem,
             None => return,
         };
@@ -935,14 +936,16 @@ impl Ui {
 
         // Find the best element in direction
         if let Some(next) = self.find_element_in_direction(current, current_pos, direction) {
-            self.touch_manager.selection.select(next, vec![], false);
+            self.touch_manager.selection.select_single(next);
             result.update_selection = true;
         }
     }
 
     fn is_editable(&self, element: &ElementRef) -> bool {
         if let Some(elem) = self.get_element(element) {
-            if !self.touch_manager.options.override_mode && !elem.is_editable() {
+            if !self.touch_manager.options.override_mode
+                && !elem.is_editable(self.touch_manager.options.override_mode)
+            {
                 return false;
             }
             return true;
@@ -1296,8 +1299,8 @@ impl Ui {
 
         let HSV { h, s, v } = rgb_to_hsv(color);
 
-        self.variables.set_array("color_picker_color", color);
-        self.variables.set_array("color_picker_hsv", [h, s, v]);
+        // self.variables.set_array("color_picker_color", color);
+        // self.variables.set_array("color_picker_hsv", [h, s, v]);
     }
 
     fn get_current_hit_for_actions(&self) -> Option<HitResult> {
@@ -1394,6 +1397,7 @@ impl Ui {
                         .map(|e| UiElement::to_yaml(e, window_size))
                         .collect(),
                 ),
+                editing_tool: l.editing_tool,
             })
             .collect();
 
@@ -1421,13 +1425,17 @@ impl Ui {
                     if t.being_edited || t.being_hovered || t.just_unhovered {
                         any_changed = true;
                     }
-
+                    let text_ref = &ElementRef::new(
+                        menu_name,
+                        layer.name.as_str(),
+                        t.id.clone().as_str(),
+                        ElementKind::Text,
+                    );
+                    let is_selected = self.touch_manager.selection.is_selected(text_ref);
                     if !being_hovered && t.being_hovered {
                         being_hovered = true;
-                        if let Some(sel) = &self.touch_manager.selection.primary {
-                            if t.id == sel.id {
-                                selected_being_hovered = true;
-                            }
+                        if is_selected {
+                            selected_being_hovered = true;
                         }
                     }
 
@@ -1446,15 +1454,7 @@ impl Ui {
                             any_changed = true;
                         }
                     } else {
-                        if this_text(
-                            &self.touch_manager.selection.primary,
-                            &ElementRef::new(
-                                menu_name,
-                                layer.name.as_str(),
-                                t.id.clone().as_str(),
-                                ElementKind::Text,
-                            ),
-                        ) {
+                        if is_selected {
                             let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
                             if new_text != t.text {
                                 t.text = new_text;
@@ -1470,15 +1470,7 @@ impl Ui {
                     }
 
                     if t.input_box && self.touch_manager.selection.just_deselected {
-                        if this_text(
-                            &self.touch_manager.selection.primary,
-                            &ElementRef::new(
-                                menu_name,
-                                layer.name.as_str(),
-                                t.id.clone().as_str(),
-                                ElementKind::Text,
-                            ),
-                        ) {
+                        if is_selected {
                             let new_text = set_input_box(&t.template, &t.text, &mut self.variables);
                             if new_text != t.text {
                                 t.text = new_text;
@@ -1568,6 +1560,7 @@ impl Ui {
 
     /// Creates selection visuals (outlines and handles) for the selected element
     fn create_selection_visuals(
+        &self,
         editor_layer: &mut RuntimeLayer,
         element: &UiElement,
         sel: &ElementRef,
@@ -1576,7 +1569,7 @@ impl Ui {
     ) {
         match element {
             UiElement::Circle(c) => {
-                if editor_mode && (c.misc.editable || override_mode) {
+                if self.is_editable(sel) {
                     let circle_outline = UiButtonOutline {
                         id: "Circle Outline".to_string(),
                         parent: Some(ElementRef {
@@ -1644,14 +1637,14 @@ impl Ui {
                             touched_time: 0.0,
                             is_touched: false,
                             pressable: true,
-                            editable: false,
+                            editable: Editability::HARDNOTEDITABLE,
                         },
                     };
                     editor_layer.elements.push(UiElement::Handle(handle));
                 }
             }
             UiElement::Polygon(p) => {
-                if editor_mode && (p.misc.editable || override_mode) {
+                if self.is_editable(sel) {
                     for (i, v) in p.scaled_vertices().iter().enumerate() {
                         let vertex_outline = UiButtonCircle {
                             id: format!("vertex_outline_{}", i),
@@ -1678,7 +1671,7 @@ impl Ui {
                                 touched_time: 0.0,
                                 is_touched: false,
                                 pressable: false,
-                                editable: false,
+                                editable: Editability::HARDNOTEDITABLE,
                             },
                         };
                         editor_layer
@@ -1726,7 +1719,7 @@ impl Ui {
                 }
             }
             UiElement::Rect(r) => {
-                if editor_mode && (r.misc.editable || override_mode) {
+                if self.is_editable(sel) {
                     let rect_outline = UiButtonOutline {
                         id: "Rect Outline".to_string(),
                         parent: Some(ElementRef {
@@ -1774,7 +1767,8 @@ impl Ui {
         {
             self.touch_manager.editor.editing_text = None;
         }
-        let Some(sel) = &self.touch_manager.selection.primary else {
+        let editor_mode = self.touch_manager.editor.enabled;
+        if self.touch_manager.selection.selected.is_empty() {
             if let Some(editor_menu) = self.menus.get_mut("Editor_Menu") {
                 if let Some(editor_layer) = editor_menu
                     .layers
@@ -1789,197 +1783,191 @@ impl Ui {
                     editor_layer.clear_rects();
                     editor_layer.dirty.mark_all()
                 }
-            }
+            };
             return;
-        };
-
-        if let Some(menu) = self.menus.get(&sel.menu) {
-            if let Some(layer) = menu.layers.iter().find(|l| l.name == sel.layer.to_string()) {
-                self.variables
-                    .set_i64("selected_layer.order", layer.order as i32);
-            }
         }
+        for sel in &self.touch_manager.selection.selected {
+            let element = get_element(&self.menus, &sel);
 
-        let element = get_element(&self.menus, &sel);
-
-        if let Some(element) = element {
-            let is_handle = element.kind() == ElementKind::Handle;
-            let editor_mode = self.touch_manager.editor.enabled;
-
-            // Temporarily remove Editor_Menu to avoid borrow conflicts
-            if let Some(mut editor_menu) = self.menus.remove("Editor_Menu") {
-                if let Some(editor_layer) = editor_menu
-                    .layers
-                    .iter_mut()
-                    .find(|l| l.name == "editor_selection")
-                {
-                    editor_layer.active = true;
-                    editor_layer.dirty.mark_all();
-                    editor_layer.clear_circles();
-                    editor_layer.clear_polygons();
-                    editor_layer.clear_rects();
-
-                    if is_handle {
-                        // Update existing handles/outlines from parent
-                        Self::update_selection_visuals(&self.menus, editor_layer);
-                    } else {
-                        // Create new selection visuals
-                        editor_layer.clear_handles();
-                        editor_layer.clear_outlines();
-                        Self::create_selection_visuals(
-                            editor_layer,
-                            &element,
-                            sel,
-                            editor_mode,
-                            self.touch_manager.options.override_mode,
-                        );
-                    }
+            if let Some(menu) = self.menus.get(&sel.menu) {
+                if let Some(layer) = menu.layers.iter().find(|l| l.name == sel.layer.to_string()) {
+                    self.variables
+                        .set_i64("selected_layer.order", layer.order as i32);
                 }
-                self.menus.insert("Editor_Menu".to_string(), editor_menu);
+            }
+
+            if let Some(element) = element {
+                let is_handle = element.kind() == ElementKind::Handle;
+
+                // Temporarily remove Editor_Menu to avoid borrow conflicts
+                if let Some(mut editor_menu) = self.menus.remove("Editor_Menu") {
+                    if let Some(editor_layer) = editor_menu
+                        .layers
+                        .iter_mut()
+                        .find(|l| l.name == "editor_selection")
+                    {
+                        editor_layer.active = true;
+                        editor_layer.dirty.mark_all();
+                        editor_layer.clear_circles();
+                        editor_layer.clear_polygons();
+                        editor_layer.clear_rects();
+
+                        if is_handle {
+                            // Update existing handles/outlines from parent
+                            Self::update_selection_visuals(&self.menus, editor_layer);
+                        } else {
+                            // Create new selection visuals
+                            editor_layer.clear_handles();
+                            editor_layer.clear_outlines();
+                            self.create_selection_visuals(
+                                editor_layer,
+                                &element,
+                                sel,
+                                editor_mode,
+                                self.touch_manager.options.override_mode,
+                            );
+                        }
+                    }
+                    self.menus.insert("Editor_Menu".to_string(), editor_menu);
+                }
             }
         }
         // Maybe just selected if just not deselected idk hopefully not
     }
 
     pub fn apply_ui_edit_movement(&mut self, input_state: &mut Input, time: &Time) {
-        let Some(sel) = &self.touch_manager.selection.primary else {
-            return;
-        };
-        if let Some(text) = self.get_text(sel) {
-            if text.being_edited {
-                return;
-            }
-        }
-        let mut changed = false;
-
-        // ============================================================
-        // BLOCK 1: Element XY movement, resizing, z-index movement
-        // ============================================================
-        {
-            // Movement (WASD)
-            let speed = calc_move_speed(input_state);
-            let mut dx = 0.0;
-            let mut dy = 0.0;
-
-            if input_state.gameplay_down("Move Element Left") {
-                dx -= speed;
-            }
-            if input_state.gameplay_down("Move Element Right") {
-                dx += speed;
-            }
-            if input_state.gameplay_down("Move Element Up") {
-                dy -= speed;
-            }
-            if input_state.gameplay_down("Move Element Down") {
-                dy += speed;
-            }
-            if input_state.ctrl {
-                return;
-            }
-            if dx != 0.0 || dy != 0.0 {
-                let before = self.get_element_position(sel);
-                let after = [before[0] + dx, before[1] + dy];
-                self.ui_edit_manager.push_command(MoveElementCommand {
-                    affected_element: sel.clone(),
-                    before: None,
-                    after,
-                });
-                changed = true;
-            }
-
-            // Resizing (+, -, scroll)
-            let mut scale = 1.0f32;
-            let scroll = input_state.mouse.scroll_delta;
-
-            let z = &mut self.touch_manager.config;
-
-            // Accumulate scroll input
-            z.zoom_target += scroll.y * 10.0;
-
-            // Smoothly interpolate towards target
-            let smooth_speed = 20.0;
-            z.zoom_current += (z.zoom_target - z.zoom_current) * smooth_speed * time.render_dt;
-
-            // Consume what we've interpolated
-            let zoom_delta = z.zoom_current;
-            z.zoom_target -= zoom_delta;
-            z.zoom_current = 0.0;
-
-            // Apply smoothed scaling
-            let scaling = 1.02_f32.powf(zoom_delta);
-
-            if input_state.action_repeat("Resize Element Bigger Scroll") {
-                scale = scaling;
-            }
-            if input_state.action_repeat("Resize Element Smaller Scroll") {
-                scale = scaling;
-            }
-
-            if input_state.action_repeat("Resize Element Bigger") {
-                scale = 1.05;
-            }
-            if input_state.action_repeat("Resize Element Smaller") {
-                scale = 0.95;
-            }
-            if scale != 1.0 {
-                if let Some(before) = get_element_size(&self.menus, sel) {
-                    self.ui_edit_manager.push_command(ResizeElementCommand {
-                        affected_element: sel.clone(),
-                        before: Some(before.clone()),
-                        after: before.scale_by(scale),
-                    });
+        let mut changed: bool = false;
+        for sel in &self.touch_manager.selection.selected {
+            if let Some(text) = self.get_text(sel) {
+                if text.being_edited {
+                    return;
                 }
-                changed = true;
             }
 
-            // Element Z movement
-            if !input_state.shift {
-                if input_state.action_repeat("Move Element Z Up") {
-                    self.ui_edit_manager.push_command(ChangeZIndexCommand {
+            // BLOCK 1: Element XY movement, resizing, z-index movement
+            {
+                // Movement (WASD)
+                let speed = calc_move_speed(input_state);
+                let mut dx = 0.0;
+                let mut dy = 0.0;
+
+                if input_state.gameplay_down("Move Element Left") {
+                    dx -= speed;
+                }
+                if input_state.gameplay_down("Move Element Right") {
+                    dx += speed;
+                }
+                if input_state.gameplay_down("Move Element Up") {
+                    dy -= speed;
+                }
+                if input_state.gameplay_down("Move Element Down") {
+                    dy += speed;
+                }
+                if input_state.ctrl {
+                    return;
+                }
+                if dx != 0.0 || dy != 0.0 {
+                    let before = self.get_element_position(sel);
+                    let after = [before[0] + dx, before[1] + dy];
+                    self.ui_edit_manager.push_command(MoveElementCommand {
                         affected_element: sel.clone(),
-                        delta: 1,
+                        before: None,
+                        after,
                     });
                     changed = true;
                 }
 
-                if input_state.action_repeat("Move Element Z Down") {
-                    self.ui_edit_manager.push_command(ChangeZIndexCommand {
-                        affected_element: sel.clone(),
-                        delta: -1,
-                    });
+                // Resizing (+, -, scroll)
+                let mut scale = 1.0f32;
+                let scroll = input_state.mouse.scroll_delta;
+
+                let z = &mut self.touch_manager.config;
+
+                // Accumulate scroll input
+                z.zoom_target += scroll.y * 10.0;
+
+                // Smoothly interpolate towards target
+                let smooth_speed = 20.0;
+                z.zoom_current += (z.zoom_target - z.zoom_current) * smooth_speed * time.render_dt;
+
+                // Consume what we've interpolated
+                let zoom_delta = z.zoom_current;
+                z.zoom_target -= zoom_delta;
+                z.zoom_current = 0.0;
+
+                // Apply smoothed scaling
+                let scaling = 1.02_f32.powf(zoom_delta);
+
+                if input_state.action_repeat("Resize Element Bigger Scroll") {
+                    scale = scaling;
+                }
+                if input_state.action_repeat("Resize Element Smaller Scroll") {
+                    scale = scaling;
+                }
+
+                if input_state.action_repeat("Resize Element Bigger") {
+                    scale = 1.05;
+                }
+                if input_state.action_repeat("Resize Element Smaller") {
+                    scale = 0.95;
+                }
+                if scale != 1.0 {
+                    if let Some(before) = get_element_size(&self.menus, sel) {
+                        self.ui_edit_manager.push_command(ResizeElementCommand {
+                            affected_element: sel.clone(),
+                            before: Some(before.clone()),
+                            after: before.scale_by(scale),
+                        });
+                    }
                     changed = true;
+                }
+
+                // Element Z movement
+                if !input_state.shift {
+                    if input_state.action_repeat("Move Element Z Up") {
+                        self.ui_edit_manager.push_command(ChangeZIndexCommand {
+                            affected_element: sel.clone(),
+                            delta: 1,
+                        });
+                        changed = true;
+                    }
+
+                    if input_state.action_repeat("Move Element Z Down") {
+                        self.ui_edit_manager.push_command(ChangeZIndexCommand {
+                            affected_element: sel.clone(),
+                            delta: -1,
+                        });
+                        changed = true;
+                    }
                 }
             }
-        }
 
-        // ============================================================
-        // BLOCK 2: LAYER ORDERING
-        // ============================================================
-        {
-            let menu = match self.menus.get_mut(&sel.menu) {
-                Some(m) => m,
-                None => return,
-            };
+            // BLOCK 2: LAYER ORDERING
+            {
+                let menu = match self.menus.get_mut(&sel.menu) {
+                    Some(m) => m,
+                    None => return,
+                };
 
-            if !input_state.shift {
-                if input_state.action_repeat("Move Layer Up") {
-                    self.ui_edit_manager.push_command(ChangeLayerOrderCommand {
-                        affected_element: sel.clone(),
-                        delta: 1,
-                    });
-                    changed = true;
-                }
+                if !input_state.shift {
+                    if input_state.action_repeat("Move Layer Up") {
+                        self.ui_edit_manager.push_command(ChangeLayerOrderCommand {
+                            affected_element: sel.clone(),
+                            delta: 1,
+                        });
+                        changed = true;
+                    }
 
-                if input_state.action_repeat("Move Layer Down") {
-                    self.ui_edit_manager.push_command(ChangeLayerOrderCommand {
-                        affected_element: sel.clone(),
-                        delta: -1,
-                    });
-                    changed = true;
+                    if input_state.action_repeat("Move Layer Down") {
+                        self.ui_edit_manager.push_command(ChangeLayerOrderCommand {
+                            affected_element: sel.clone(),
+                            delta: -1,
+                        });
+                        changed = true;
+                    }
                 }
             }
         }
-
         if changed {
             self.update_selection();
             self.mark_editor_layers_dirty();
@@ -2004,6 +1992,7 @@ impl Ui {
             gpu: LayerGpu::default(),
             opaque: true,
             saveable: false,
+            editing_tool: false,
         });
 
         menu.layers.push(RuntimeLayer {
@@ -2018,6 +2007,7 @@ impl Ui {
             gpu: LayerGpu::default(),
             opaque: true,
             saveable: false,
+            editing_tool: false,
         });
 
         menu.sort_layers();
@@ -2044,34 +2034,22 @@ impl Ui {
     }
 
     fn sync_settings_and_ui(&mut self, settings: &Settings) {
-        for menu in self.menus.values_mut() {
-            for layer in menu.layers.iter_mut() {
-                let Some(setting) = &layer.setting else {
-                    continue;
-                };
-
-                let value = settings.read_setting(setting.key);
-
-                match value {
-                    SettingValue::Bool(value) => {
-                        if value {
-                            if layer.ap_name == setting.true_ap {
-                                layer.active = true;
-                            } else {
-                                layer.active = false;
-                            }
-                        } else {
-                            if layer.ap_name == setting.false_ap {
-                                layer.active = true;
-                            } else {
-                                layer.active = false;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+        // for menu in self.menus.values_mut() {
+        //     for layer in menu.layers.iter_mut() {
+        //         let Some(setting) = &layer.setting else {
+        //             continue;
+        //         };
+        //
+        //         let value = settings.read_setting(setting.key);
+        //
+        //         match value {
+        //             SettingValue::Bool(value) => {
+        //
+        //             }
+        //             _ => {}
+        //         }
+        //     }
+        // }
     }
 }
 
@@ -2096,17 +2074,6 @@ fn push_commands(
 fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
     const EPSILON: f32 = 0.001;
     a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
-}
-fn this_text(selected: &Option<ElementRef>, other_element: &ElementRef) -> bool {
-    let Some(sel) = selected else { return false };
-    if sel.menu != other_element.menu {
-        return false;
-    }
-    if sel.layer != other_element.layer {
-        return false;
-    }
-
-    sel.id == other_element.id
 }
 
 pub fn get_element(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<UiElement> {
@@ -2161,12 +2128,17 @@ pub fn get_layer_settings(
 
     layer.setting.clone()
 }
-pub fn get_element_position(menus: &HashMap<String, Menu>, element: &ElementRef) -> [f32; 2] {
-    if let Some(element) = get_element(menus, element) {
-        element.center()
-    } else {
-        [0.0, 0.0]
-    }
+pub fn is_layer_editor_tool(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<bool> {
+    let menu = menus.get(&element.menu)?;
+    let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
+
+    Some(layer.editing_tool)
+}
+pub fn get_element_position(
+    menus: &HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Option<[f32; 2]> {
+    Some(get_element(menus, element)?.center())
 }
 pub fn get_element_size(
     menus: &HashMap<String, Menu>,

@@ -6,10 +6,8 @@ use std::collections::HashMap;
 /// Manages UI element selection state
 #[derive(Clone, Debug, Default)]
 pub struct SelectionManager {
-    /// Primary selected element
-    pub primary: Option<ElementRef>,
-    /// Additional selected elements (multi-select)
-    pub secondary: Vec<ElementRef>,
+    pub selected: Vec<ElementRef>,
+    pub active_tool: Option<ElementRef>,
     /// Anchor point for box selection
     pub box_select_anchor: Option<[f32; 2]>,
     /// Whether selection changed this frame
@@ -18,10 +16,6 @@ pub struct SelectionManager {
     pub just_selected: bool,
     /// Whether a deselection just happened
     pub just_deselected: bool,
-    /// Action associated with primary selection
-    pub primary_action: Vec<String>,
-    /// Whether primary is an input box
-    pub primary_is_input_box: bool,
 }
 
 impl SelectionManager {
@@ -29,94 +23,51 @@ impl SelectionManager {
         Self::default()
     }
 
-    /// Select a single element, clearing any existing selection
-    pub fn select(&mut self, element: ElementRef, action: Vec<String>, is_input_box: bool) {
-        self.just_deselected = false;
-        self.primary = Some(element);
-        self.secondary.clear();
-        self.primary_action = action;
-        self.primary_is_input_box = is_input_box;
-        self.selection_changed = true;
-        self.just_selected = true;
-    }
-
-    pub(crate) fn select_from_overwrite(
+    pub fn select_from_overwrite(
         &mut self,
         menus: &HashMap<String, Menu>,
-        primary: &Option<ElementRef>,
-        secondary: &Vec<ElementRef>,
+        selected: &Vec<ElementRef>,
+        active_tool: &Option<ElementRef>,
     ) {
-        if let Some(primary_some) = primary {
-            if let Some(menu) = menus.get(&primary_some.menu) {
-                if let Some(layer) = menu.layers.iter().find(|l| l.name == primary_some.layer) {
-                    if let Some(element) = layer.elements.iter().find(|e| e.id() == primary_some.id)
-                    {
-                        if let Some(text) = element.as_text() {
-                            self.primary_is_input_box = text.input_box;
-                        }
-                        self.primary_action = element.action();
-                    }
-                }
-            }
-        }
-
-        self.primary = primary.clone();
-        self.secondary = secondary.clone();
+        self.selected = selected.clone();
+        self.active_tool = active_tool.clone();
         self.just_selected = true;
         self.selection_changed = true;
         self.just_deselected = false;
     }
     /// Add element to selection (multi-select)
     pub fn add_to_selection(&mut self, element: ElementRef) {
-        // Don't add duplicates
-        if self.primary.as_ref() == Some(&element) {
-            return;
-        }
-        if self.secondary.contains(&element) {
-            return;
-        }
+        self.selected.push(element);
 
-        if self.primary.is_none() {
-            self.primary = Some(element);
-        } else {
-            self.secondary.push(element);
-        }
         self.selection_changed = true;
         self.just_selected = true;
     }
 
-    /// Toggle element in selection
     pub fn toggle_selection(&mut self, element: ElementRef) {
-        if self.primary.as_ref() == Some(&element) {
-            // Deselect primary, promote first secondary if any
-            self.primary = self.secondary.pop();
-            self.selection_changed = true;
-            self.just_deselected = true;
-        } else if let Some(pos) = self.secondary.iter().position(|e| e == &element) {
-            // Remove from secondary
-            self.secondary.remove(pos);
-            self.selection_changed = true;
+        if let Some(pos) = self.selected.iter().position(|e| e == &element) {
+            self.selected.swap_remove(pos);
+            self.active_tool = None;
             self.just_deselected = true;
         } else {
-            // Add to selection
-            self.add_to_selection(element);
+            self.selected.push(element);
+            self.just_selected = true;
+            self.just_deselected = false;
         }
+
+        self.selection_changed = true;
     }
 
-    /// Move primary to secondary and select new primary
-    pub fn move_primary_to_multi(&mut self, new_primary: ElementRef, action: Vec<String>) {
-        if let Some(old_primary) = self.primary.take() {
-            if old_primary != new_primary {
-                self.secondary.push(old_primary);
-            }
-        }
-        self.primary = Some(new_primary);
-        self.primary_action = action;
+    /// Clear all selections and add this element to selection.
+    pub fn select_single(&mut self, element: ElementRef) {
+        self.selected.clear();
+        self.selected.push(element);
+        self.active_tool = None;
         self.selection_changed = true;
         self.just_selected = true;
+        self.just_deselected = false;
     }
 
-    /// Clear all selection
+    /// Clear all selections
     pub fn deselect_all(&mut self, menus: &mut HashMap<String, Menu>) {
         for (_, menu) in menus.iter_mut() {
             for layer in menu.layers.iter_mut() {
@@ -126,43 +77,29 @@ impl SelectionManager {
                 }
             }
         }
-        self.just_deselected = self.primary.is_some() || !self.secondary.is_empty();
-        self.primary = None;
-        self.secondary.clear();
-        self.primary_action.clear();
-        self.primary_is_input_box = false;
+        self.just_deselected = !self.selected.is_empty() || self.active_tool.is_some();
+        self.selected.clear();
+        self.active_tool = None;
         self.selection_changed = true;
     }
 
     /// Set selection from box select results
     pub fn set_from_box(&mut self, elements: Vec<ElementRef>, menus: &mut HashMap<String, Menu>) {
         self.deselect_all(menus);
-        if let Some((first, rest)) = elements.split_first() {
-            self.primary = Some(first.clone());
-            self.secondary = rest.to_vec();
-            self.selection_changed = true;
-            self.just_selected = !elements.is_empty();
-        }
+        self.just_selected = !elements.is_empty();
+        self.selected = elements;
+        self.active_tool = None;
+        self.selection_changed = true;
     }
 
-    /// Check if element is selected (primary or secondary)
+    /// Check if element is selected
     pub fn is_selected(&self, element: &ElementRef) -> bool {
-        self.primary.as_ref() == Some(element) || self.secondary.contains(element)
-    }
-
-    /// Check if element is primary selection
-    pub fn is_primary(&self, element: &ElementRef) -> bool {
-        self.primary.as_ref() == Some(element)
-    }
-
-    /// Get all selected elements
-    pub fn all_selected(&self) -> impl Iterator<Item = &ElementRef> {
-        self.primary.iter().chain(self.secondary.iter())
+        self.selected.contains(element)
     }
 
     /// Get count of selected elements
     pub fn count(&self) -> usize {
-        self.primary.iter().count() + self.secondary.len()
+        self.selected.len()
     }
 
     /// Reset frame-specific flags

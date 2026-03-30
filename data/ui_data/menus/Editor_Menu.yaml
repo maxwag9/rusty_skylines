@@ -369,10 +369,12 @@ layers:
       - !Circle
         id: Color Picker Color Circle
         actions:
+          -
           - button:l, on:drag, in:editor_mode, set_expr(angle_shifted, atan2(mouse.y - self.center.y, mouse.x - self.center.x) + PI/2)
           - button:l, on:drag, in:editor_mode, set_expr(color_picker_hsv.h, atan2(sin(angle_shifted), cos(angle_shifted)) / (2*PI) + 0.5)
-          - button:l, on:drag, in:editor_mode, set_expr(color_picker_hsv.s, sqrt((mouse.x - self.center.x)**2 + (mouse.y - self.center.y)**2) / self.radius)
+          - button:l, on:drag, in:editor_mode, set_expr(color_picker_hsv.s, clamp(sqrt((mouse.x - self.center.x)**2 + (mouse.y - self.center.y)**2) / self.radius, 0.0, 1.0))
           - button:l, on:drag, in:editor_mode, set_expr(color_picker_color, hsv_to_rgb(color_picker_hsv.h, pow(color_picker_hsv.s, 0.47), 1.0))
+          - button:l, on:drag, in:editor_mode, set_var(editing.color.fill, color_picker_color)
         style: Hue Circle
         x: 0.34415
         y: 0.53456

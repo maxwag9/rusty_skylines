@@ -54,14 +54,28 @@ impl Value {
                 "setting" => {
                     let key = SettingKey::from_str(value);
                     if let Some(key) = key {
-                        return settings.read_setting(key).to_ui_value();
+                        return settings.read_setting(key).to_value();
                     }
                 }
                 "var" | "variable" => match Self::load_variable(variables, &s.to_string()) {
                     Some(value) => return value,
                     None => {}
                 },
+                "array" | "list" | "vec" | "slice" => {
+                    if let Some(arr) = Self::parse_array(settings, variables, value) {
+                        return Value::Array(arr);
+                    }
+                }
                 _ => {}
+            }
+        }
+
+        // =========================
+        // Auto-detect array (bracket notation)
+        // =========================
+        if s.starts_with('[') && s.ends_with(']') {
+            if let Some(arr) = Self::parse_array(settings, variables, s) {
+                return Value::Array(arr);
             }
         }
 
@@ -87,6 +101,11 @@ impl Value {
         if let Ok(f) = s.parse::<f64>() {
             return Value::F64(f);
         }
+
+        match Self::load_variable(variables, &s.to_string()) {
+            Some(value) => return value,
+            None => {}
+        };
 
         // =========================
         // Default: String
@@ -123,6 +142,35 @@ impl Value {
             Value::Array(arr) => Some(arr.clone()),
             _ => None,
         }
+    }
+
+    pub fn as_color3(&self) -> Option<[f32; 3]> {
+        let arr = self.as_array()?;
+        if arr.len() != 4 {
+            return None;
+        }
+        Some([
+            arr[0].as_f64()? as f32,
+            arr[1].as_f64()? as f32,
+            arr[2].as_f64()? as f32,
+        ])
+    }
+
+    pub fn as_color4(&self) -> Option<[f32; 4]> {
+        let arr = self.as_array()?;
+
+        let alpha = match arr.len() {
+            3 => 1.0,
+            4 => arr[3].as_f64()? as f32,
+            _ => return None,
+        };
+
+        Some([
+            arr[0].as_f64()? as f32,
+            arr[1].as_f64()? as f32,
+            arr[2].as_f64()? as f32,
+            alpha,
+        ])
     }
 
     pub fn is_truthy(&self) -> bool {
@@ -176,6 +224,82 @@ impl Value {
             Value::Array(_) => "array",
             Value::Null => "null",
         }
+    }
+
+    /// Split a string by commas, respecting nested brackets and quoted strings
+    fn split_array_elements(s: &str) -> Vec<&str> {
+        let mut elements = Vec::new();
+        let mut start = 0;
+        let mut bracket_depth: i32 = 0i32;
+        let mut in_quotes = false;
+        let mut chars = s.char_indices().peekable();
+        let mut prev_char = '\0';
+
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '"' if prev_char != '\\' => {
+                    in_quotes = !in_quotes;
+                }
+                '[' | '(' | '{' if !in_quotes => {
+                    bracket_depth += 1;
+                }
+                ']' | ')' | '}' if !in_quotes => {
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                }
+                ',' if !in_quotes && bracket_depth == 0 => {
+                    elements.push(&s[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+            prev_char = c;
+        }
+
+        // Add the remaining element
+        if start < s.len() {
+            elements.push(&s[start..]);
+        } else if start == s.len() && !s.is_empty() && s.ends_with(',') {
+            // Handle trailing comma - add empty element
+            elements.push("");
+        }
+
+        elements
+    }
+
+    /// Parse an array from a string like "[1, 2, 3]" or "1, 2, 3"
+    fn parse_array(settings: &Settings, variables: &Variables, s: &str) -> Option<Vec<Value>> {
+        let s = s.trim();
+
+        // Handle empty input
+        if s.is_empty() {
+            return Some(Vec::new());
+        }
+
+        // Remove surrounding brackets if present
+        let inner = if s.starts_with('[') && s.ends_with(']') {
+            &s[1..s.len() - 1]
+        } else {
+            s
+        };
+
+        let inner = inner.trim();
+
+        if inner.is_empty() {
+            return Some(Vec::new());
+        }
+
+        // Split by commas, respecting nested brackets and quotes
+        let elements = Self::split_array_elements(inner);
+
+        let mut result = Vec::with_capacity(elements.len());
+        for elem in elements {
+            let elem = elem.trim();
+            if !elem.is_empty() {
+                result.push(Value::from_str(settings, variables, elem));
+            }
+        }
+
+        Some(result)
     }
 }
 impl From<f64> for Value {

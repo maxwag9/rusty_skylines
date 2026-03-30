@@ -361,7 +361,8 @@ impl ApplicationHandler for App {
                 if input.action_repeat("Add GUI element")
                     && resources.ui_loader.touch_manager.editor.enabled
                 {
-                    if let Some(sel) = &resources.ui_loader.touch_manager.selection.primary {
+                    if let Some(sel) = resources.ui_loader.touch_manager.selection.selected.first()
+                    {
                         resources.ui_loader.ui_edit_manager.execute_command(
                             CreateElementCommand {
                                 affected_element: sel.clone(),

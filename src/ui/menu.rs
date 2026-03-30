@@ -58,6 +58,10 @@ impl Menu {
 
         init_cache_structure(layer);
 
+        if dirty.aps {
+            //rebuild_ap_cache() TODO
+        }
+
         if dirty.texts {
             rebuild_text_cache(brush, layer, &mut rebuilt, runtime);
         }
@@ -165,7 +169,7 @@ impl Menu {
 }
 
 pub fn get_selected_element_color(loader: &Ui) -> Option<[f32; 4]> {
-    let Some(sel) = &loader.touch_manager.selection.primary else {
+    let Some(sel) = &loader.touch_manager.selection.selected.first() else {
         return None;
     };
 

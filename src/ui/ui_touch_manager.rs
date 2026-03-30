@@ -311,7 +311,7 @@ pub trait Touchable {
     fn z_order(&self) -> u32;
     fn is_active(&self) -> bool;
     fn is_pressable(&self) -> bool;
-    fn is_editable(&self) -> bool;
+    fn is_editable(&self, override_mode: bool) -> bool;
     fn action(&self) -> Vec<String>;
 }
 
@@ -368,8 +368,8 @@ impl Touchable for UiButtonCircle {
         self.misc.pressable
     }
 
-    fn is_editable(&self) -> bool {
-        self.misc.editable
+    fn is_editable(&self, override_mode: bool) -> bool {
+        self.misc.editable.editable(override_mode)
     }
 
     fn action(&self) -> Vec<String> {
@@ -443,8 +443,8 @@ impl Touchable for UiButtonPolygon {
         self.misc.pressable
     }
 
-    fn is_editable(&self) -> bool {
-        self.misc.editable
+    fn is_editable(&self, override_mode: bool) -> bool {
+        self.misc.editable.editable(override_mode)
     }
 
     fn action(&self) -> Vec<String> {
@@ -513,8 +513,8 @@ impl Touchable for UiButtonRect {
         self.misc.pressable
     }
 
-    fn is_editable(&self) -> bool {
-        self.misc.editable
+    fn is_editable(&self, override_mode: bool) -> bool {
+        self.misc.editable.editable(override_mode)
     }
 
     fn action(&self) -> Vec<String> {
@@ -580,8 +580,8 @@ impl Touchable for UiButtonText {
         self.misc.pressable
     }
 
-    fn is_editable(&self) -> bool {
-        self.misc.editable
+    fn is_editable(&self, override_mode: bool) -> bool {
+        self.misc.editable.editable(override_mode)
     }
 
     fn action(&self) -> Vec<String> {
@@ -643,8 +643,8 @@ impl Touchable for UiButtonHandle {
         self.misc.pressable
     }
 
-    fn is_editable(&self) -> bool {
-        self.misc.editable
+    fn is_editable(&self, override_mode: bool) -> bool {
+        self.misc.editable.editable(override_mode)
     }
 
     fn action(&self) -> Vec<String> {
@@ -769,7 +769,7 @@ impl HitDetector {
                 ElementKind::Circle,
                 c.misc.active,
                 c.misc.pressable,
-                c.misc.editable,
+                &c.misc.editable,
                 c.actions.clone(),
             ),
             UiElement::Polygon(p) => (
@@ -777,7 +777,7 @@ impl HitDetector {
                 ElementKind::Polygon,
                 p.misc.active,
                 p.misc.pressable,
-                p.misc.editable,
+                &p.misc.editable,
                 p.actions.clone(),
             ),
             UiElement::Text(t) => (
@@ -785,7 +785,7 @@ impl HitDetector {
                 ElementKind::Text,
                 t.misc.active,
                 t.misc.pressable,
-                t.misc.editable,
+                &t.misc.editable,
                 t.actions.clone(),
             ),
             UiElement::Handle(h) => (
@@ -793,7 +793,7 @@ impl HitDetector {
                 ElementKind::Handle,
                 h.misc.active,
                 h.misc.pressable,
-                h.misc.editable,
+                &h.misc.editable,
                 vec![],
             ),
             UiElement::Outline(_) => return None, // Outlines aren't interactive
@@ -802,9 +802,10 @@ impl HitDetector {
                 ElementKind::Rect,
                 r.misc.active,
                 r.misc.pressable,
-                r.misc.editable,
+                &r.misc.editable,
                 r.actions.clone(),
             ),
+            UiElement::Advanced(_) => return None,
         };
 
         // Skip inactive or non-interactive elements
@@ -836,6 +837,7 @@ impl HitDetector {
             }
             UiElement::Outline(_) => return None,
             UiElement::Rect(r) => r.hit_test(point),
+            UiElement::Advanced(_) => return None,
         }?;
 
         Some(HitTestResult {
@@ -1207,10 +1209,6 @@ pub struct CurrentHover {
     pub actions: Vec<String>,
 }
 
-// ============================================================================
-// UI TOUCH MANAGER - MAIN COORDINATOR
-// ============================================================================
-
 /// Central coordinator for all UI touch interactions
 pub struct UiTouchManager {
     // Configuration
@@ -1492,7 +1490,6 @@ impl UiTouchManager {
         }
 
         for (id, _press_pos, was_drag) in releases {
-            // Find the element ref for this id (simplified - in real use would look up)
             if let Some(hover) = &self.current_hover {
                 if hover.element.id == id {
                     self.events.push(TouchEvent::Release {
@@ -1690,10 +1687,9 @@ mod tests {
         let mut sm = SelectionManager::new();
 
         let elem = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
-        sm.select(elem.clone(), vec!["action".into()], false);
+        sm.select_single(elem.clone());
 
         assert!(sm.is_selected(&elem));
-        assert!(sm.is_primary(&elem));
         assert_eq!(sm.count(), 1);
     }
 
@@ -1704,10 +1700,9 @@ mod tests {
         let elem1 = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
         let elem2 = ElementRef::new("menu", "layer", "elem2", ElementKind::Circle);
 
-        sm.select(elem1.clone(), vec![], false);
+        sm.select_single(elem1.clone());
         sm.add_to_selection(elem2.clone());
 
-        assert!(sm.is_primary(&elem1));
         assert!(sm.is_selected(&elem2));
         assert_eq!(sm.count(), 2);
     }
@@ -1717,7 +1712,7 @@ mod tests {
         let mut sm = SelectionManager::new();
 
         let elem = ElementRef::new("menu", "layer", "elem1", ElementKind::Circle);
-        sm.select(elem.clone(), vec![], false);
+        sm.select_single(elem.clone());
         sm.toggle_selection(elem.clone());
 
         assert!(!sm.is_selected(&elem));

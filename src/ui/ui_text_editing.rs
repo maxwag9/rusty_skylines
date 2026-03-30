@@ -47,55 +47,54 @@ pub fn handle_text_editing(
     selection: &mut SelectionManager,
     editor: &mut EditorTouchExtension,
     menus: &mut HashMap<String, Menu>,
-    undo_manager: &mut UiEditManager,
+    edit_manager: &mut UiEditManager,
     input: &mut Input,
     mouse_snapshot: MouseSnapshot,
 ) {
-    let Some(sel) = &selection.primary else {
-        return;
-    };
-    let sel_menu = sel.menu.clone();
-    let sel_layer = sel.layer.clone();
-    let sel_element_id = sel.id.clone();
+    for sel in &selection.selected {
+        let sel_menu = sel.menu.clone();
+        let sel_layer = sel.layer.clone();
+        let sel_element_id = sel.id.clone();
 
-    let Some((menu_name, menu)) = menus.iter_mut().find(|(n, m)| **n == sel_menu && m.active)
-    else {
-        return;
-    };
+        let Some((menu_name, menu)) = menus.iter_mut().find(|(n, m)| **n == sel_menu && m.active)
+        else {
+            return;
+        };
 
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == sel_layer) else {
-        return;
-    };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == sel_layer) else {
+            return;
+        };
 
-    let Some(text) = layer
-        .elements
-        .iter_mut()
-        .filter_map(UiElement::as_text_mut)
-        .find(|t| t.id == sel_element_id)
-    else {
-        return;
-    };
+        let Some(text) = layer
+            .elements
+            .iter_mut()
+            .filter_map(UiElement::as_text_mut)
+            .find(|t| t.id == sel_element_id)
+        else {
+            return;
+        };
 
-    let before_text = text.text.clone();
-    let before_template = text.template.clone();
-    let before_caret = text.caret;
-    process_text_editing_input(editor, input, mouse_snapshot, text, &mut layer.dirty);
+        let before_text = text.text.clone();
+        let before_template = text.template.clone();
+        let before_caret = text.caret;
+        process_text_editing_input(editor, input, mouse_snapshot, text, &mut layer.dirty);
 
-    if text.text != before_text || text.template != before_template {
-        undo_manager.push_command(TextEditCommand {
-            affected_element: ElementRef {
-                menu: menu_name.clone(),
-                layer: layer.name.clone(),
-                id: sel_element_id.clone(),
-                kind: ElementKind::Text,
-            },
-            before_text,
-            after_text: text.text.clone(),
-            before_template,
-            after_template: text.template.clone(),
-            before_caret,
-            after_caret: text.caret,
-        });
+        if text.text != before_text || text.template != before_template {
+            edit_manager.push_command(TextEditCommand {
+                affected_element: ElementRef {
+                    menu: menu_name.clone(),
+                    layer: layer.name.clone(),
+                    id: sel_element_id.clone(),
+                    kind: ElementKind::Text,
+                },
+                before_text,
+                after_text: text.text.clone(),
+                before_template,
+                after_template: text.template.clone(),
+                before_caret,
+                after_caret: text.caret,
+            });
+        }
     }
 }
 

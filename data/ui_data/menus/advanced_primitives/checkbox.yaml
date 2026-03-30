@@ -1,10 +1,10 @@
-name: checkbox_ticked
+name: checkbox
 elements:
   # Soft outer border
   - !Rect
     id: Checkbox Border
     actions:
-      - on:release, set_setting_to(ap, bool:false)
+      - on:release, toggle(ap)
     x: 0.0
     y: 0.0
     w: 0.02
@@ -25,7 +25,8 @@ elements:
   - !Rect
     id: Checkbox Indicator
     actions:
-      - on:release, set_setting_to(ap, bool:false)
+      - on:release, toggle(ap)
+      - on:release, ifvareq(ap, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
     y: 0.0
     w: 0.010
@@ -39,7 +40,7 @@ elements:
   - !Text
     id: setting_text
     x: 0.02
-    y: 0.0
+    y: 0.1
     pt: 15.0
     color:
       - 1.0

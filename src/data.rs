@@ -185,7 +185,7 @@ impl SettingValue {
             SettingValue::U32(u) => u.to_string(),
         }
     }
-    pub fn to_ui_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         match self {
             SettingValue::Bool(v) => Value::Bool(*v),
             SettingValue::U16(v) => Value::I64(*v as i64),

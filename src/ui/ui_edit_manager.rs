@@ -746,12 +746,34 @@ pub enum ColorProperty {
     Border,
     InsideBorder,
     Glow,
-    TextColor,
     DashColor,
     SubDashColor,
     VertexIndex(u32),
 }
+impl ColorProperty {
+    pub fn from_str(s: &str) -> ColorProperty {
+        match s {
+            "fill" => ColorProperty::Fill,
+            "border" => ColorProperty::Border,
+            "inside_border" => ColorProperty::InsideBorder,
+            "glow" => ColorProperty::Glow,
+            "dash_color" => ColorProperty::DashColor,
+            "sub_dash_color" => ColorProperty::SubDashColor,
+            _ if s.starts_with("vertex_index.") => {
+                let Some((_, suffix)) = s.split_once('.') else {
+                    return ColorProperty::VertexIndex(0);
+                };
 
+                let Some(idx) = suffix.parse::<u32>().ok() else {
+                    return ColorProperty::VertexIndex(0);
+                };
+
+                ColorProperty::VertexIndex(idx)
+            }
+            _ => ColorProperty::Fill,
+        }
+    }
+}
 impl Display for ColorProperty {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -759,7 +781,6 @@ impl Display for ColorProperty {
             Self::Border => write!(f, "border"),
             Self::InsideBorder => write!(f, "inside_border"),
             Self::Glow => write!(f, "glow"),
-            Self::TextColor => write!(f, "text"),
             Self::DashColor => write!(f, "dash"),
             Self::SubDashColor => write!(f, "sub_dash"),
             Self::VertexIndex(i) => write!(f, "vertex_index: {}", i),
@@ -772,7 +793,7 @@ impl Display for ColorProperty {
 pub struct ChangeColorCommand {
     pub affected_element: ElementRef,
     pub property: ColorProperty,
-    pub before: [f32; 4],
+    pub before: Option<[f32; 4]>,
     pub after: [f32; 4],
 }
 
@@ -785,7 +806,9 @@ impl UIEditCommand for ChangeColorCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        set_element_color(menus, &self.affected_element, &self.property, self.before);
+        if let Some(before) = self.before {
+            set_element_color(menus, &self.affected_element, &self.property, before);
+        }
     }
 
     fn redo(
@@ -796,7 +819,10 @@ impl UIEditCommand for ChangeColorCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        set_element_color(menus, &self.affected_element, &self.property, self.after);
+        let before = set_element_color(menus, &self.affected_element, &self.property, self.after);
+        if self.before.is_none() {
+            self.before = before;
+        }
     }
 
     fn description(&self) -> String {
@@ -871,8 +897,8 @@ impl UIEditCommand for DuplicateElementCommand {
 /// Command for deselecting all elements
 #[derive(Clone, Debug)]
 pub struct DeselectAllCommand {
-    pub(crate) primary: Option<ElementRef>,
-    pub(crate) secondary: Vec<ElementRef>,
+    pub selected: Vec<ElementRef>,
+    pub active_tool: Option<ElementRef>,
 }
 
 impl UIEditCommand for DeselectAllCommand {
@@ -886,7 +912,7 @@ impl UIEditCommand for DeselectAllCommand {
     ) {
         touch_manager
             .selection
-            .select_from_overwrite(menus, &self.primary, &self.secondary);
+            .select_from_overwrite(menus, &self.selected, &self.active_tool);
     }
 
     fn redo(

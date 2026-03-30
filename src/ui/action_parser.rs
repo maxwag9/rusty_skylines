@@ -250,7 +250,7 @@ define_commands! {
     "mul_var" | "mulvar" | "mul" | "multiply"
         => MulVar { element_ref: ElementRef, name: String, factor: f64 },
 
-    "toggle_var" | "togglevar" | "toggle_variable" | "flip_var" | "toggle_setting" | "togglesetting" | "toggle_settings" | "flip_setting"
+    "toggle_var" | "togglevar" | "toggle_variable" | "flip_var" | "toggle_setting" | "togglesetting" | "toggle_settings" | "flip_setting" | "toggle"
         => ToggleVar { element_ref: ElementRef, name: String },
 
     "clamp" | "clamp_var"
@@ -284,7 +284,7 @@ define_commands! {
         => If { condition: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
-        => IfVarEq { var_name: String, value: Value, then: Vec<UiCommand> },
+        => IfVarEq { element_ref: ElementRef, var_name: String, value: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
     "save" | "save_game" | "savegame"
         => SaveGame,
     "load" | "load_game" | "loadgame" | "load_save" | "loadsave" | "load_world" | "loadworld"
@@ -545,7 +545,7 @@ fn process_inner_content(
 ///
 /// Behavior:
 /// - If there is at least one TOP-LEVEL comma, we split ONLY on top-level commas.
-///   This preserves spaces inside an argument, e.g.:
+///   This preserves spaces inside an argument, e.g.:  BLALABLA DON'T LISTEN TO THIS AI'S BS!! MAYBE
 ///     "Editor_Menu, Color Picker" -> ["Editor_Menu", "Color Picker"]
 /// - If there are NO top-level commas, we fall back to the old behavior:
 ///   split on whitespace (still respecting nested parentheses).
@@ -561,19 +561,42 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
     let bytes = s.as_bytes();
     let len = s.len();
 
-    // -----------------------------
-    // Pass 1: split on top-level commas ONLY
-    // -----------------------------
     let mut args = Vec::new();
-    let mut depth = 0isize;
     let mut start = 0usize;
+
+    let mut paren_depth = 0isize;
+    let mut bracket_depth = 0isize;
+    let mut brace_depth = 0isize;
+    let mut in_string = false;
+    let mut escape = false;
+
     let mut saw_top_level_comma = false;
 
     for i in 0..len {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            b',' if depth == 0 => {
+        let b = bytes[i];
+
+        if in_string {
+            if escape {
+                escape = false;
+                continue;
+            }
+            match b {
+                b'\\' => escape = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match b {
+            b'"' => in_string = true,
+            b'(' => paren_depth += 1,
+            b')' => paren_depth -= 1,
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth -= 1,
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth -= 1,
+            b',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 saw_top_level_comma = true;
                 let part = s[start..i].trim();
                 if !part.is_empty() {
@@ -585,21 +608,15 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
         }
     }
 
-    // Push last part
     let part = s[start..].trim();
     if !part.is_empty() {
         args.push(part.to_string());
     }
 
-    // If the caller used commas, that's the syntax we honor.
     if saw_top_level_comma {
         return args;
     }
 
-    // -----------------------------
-    // Pass 2 (fallback): no commas present, split on whitespace like before
-    // Still respects nested parentheses.
-    // -----------------------------
     let mut args = Vec::new();
     let mut pos = 0usize;
 
@@ -612,20 +629,68 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
         }
 
         let arg_start = pos;
-        let mut depth = 0isize;
+
+        let mut paren_depth = 0isize;
+        let mut bracket_depth = 0isize;
+        let mut brace_depth = 0isize;
+        let mut in_string = false;
+        let mut escape = false;
 
         while pos < len {
             let b = bytes[pos];
-            if b == b'(' {
-                depth += 1;
+
+            if in_string {
+                if escape {
+                    escape = false;
+                    pos += 1;
+                    continue;
+                }
+                match b {
+                    b'\\' => escape = true,
+                    b'"' => in_string = false,
+                    _ => {}
+                }
                 pos += 1;
-            } else if b == b')' {
-                depth -= 1;
-                pos += 1;
-            } else if depth == 0 && b.is_ascii_whitespace() {
-                break;
-            } else {
-                pos += 1;
+                continue;
+            }
+
+            match b {
+                b'"' => {
+                    in_string = true;
+                    pos += 1;
+                }
+                b'(' => {
+                    paren_depth += 1;
+                    pos += 1;
+                }
+                b')' => {
+                    paren_depth -= 1;
+                    pos += 1;
+                }
+                b'[' => {
+                    bracket_depth += 1;
+                    pos += 1;
+                }
+                b']' => {
+                    bracket_depth -= 1;
+                    pos += 1;
+                }
+                b'{' => {
+                    brace_depth += 1;
+                    pos += 1;
+                }
+                b'}' => {
+                    brace_depth -= 1;
+                    pos += 1;
+                }
+                b if b.is_ascii_whitespace()
+                    && paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0 =>
+                {
+                    break;
+                }
+                _ => pos += 1,
             }
         }
 

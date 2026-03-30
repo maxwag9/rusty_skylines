@@ -7,7 +7,9 @@ use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::parser::{Value, eval_expr};
-use crate::ui::ui_edit_manager::{MoveElementCommand, ResizeElementCommand};
+use crate::ui::ui_edit_manager::{
+    ChangeColorCommand, ColorProperty, MoveElementCommand, ResizeElementCommand,
+};
 use crate::ui::ui_editor::{Ui, get_element_position, get_layer_settings};
 use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_text_editing::HitResult;
@@ -72,78 +74,13 @@ pub enum UiCommandType {
     // Events
     EmitEvent,
 
-    // Legacy/Special
-    DragHuePoint,
-    SetRoadsFourLanes,
-
     // No-op
     Noop,
 }
 
 impl UiCommandType {
-    /// Convert legacy string action names to explicit command types.
-    pub fn from_legacy_name(name: &str) -> Option<Self> {
-        let n = canonicalize_action_name(name);
-
-        Some(match n.as_str() {
-            // ===== MENU =====
-            "open_menu" | "show_menu" => UiCommandType::OpenMenu,
-            "close_menu" | "hide_menu" => UiCommandType::CloseMenu,
-            "toggle_menu" => UiCommandType::ToggleMenu,
-            "menu_active" => UiCommandType::MenuActive,
-
-            // ===== LAYERS =====
-            "open_layer" | "show_layer" => UiCommandType::OpenLayer,
-            "close_layer" | "hide_layer" => UiCommandType::CloseLayer,
-            "toggle_layer" => UiCommandType::ToggleLayer,
-
-            // ===== VARIABLES =====
-            "set" | "set_var" => UiCommandType::SetVar,
-            "inc" | "increment" | "add" => UiCommandType::IncVar,
-            "dec" | "decrement" | "sub" => UiCommandType::DecVar,
-            "mul" | "multiply" => UiCommandType::MulVar,
-            "toggle_bool" => UiCommandType::ToggleBool,
-            "clamp" => UiCommandType::Clamp,
-
-            // ===== ACTION STATE =====
-            "start" | "activate" | "start_action" => UiCommandType::StartAction,
-            "stop" | "deactivate" | "stop_action" => UiCommandType::StopAction,
-            "remove_action" => UiCommandType::RemoveAction,
-
-            // ===== WORLD RENDERER =====
-            "set_pick_radius" => UiCommandType::SetPickRadius,
-            "grow_pick_radius" => UiCommandType::GrowPickRadius,
-            "shrink_pick_radius" => UiCommandType::ShrinkPickRadius,
-
-            // ===== FLOW CONTROL =====
-            "delay" | "wait" => UiCommandType::Delay,
-            "halt" | "break" => UiCommandType::Halt,
-            "skip" => UiCommandType::Skip,
-            "if" => UiCommandType::If,
-            "if_var_eq" => UiCommandType::IfVarEq,
-
-            // ===== DEBUG =====
-            "print" | "log" => UiCommandType::Print,
-            "debug_vars" => UiCommandType::DebugVars,
-            "debug_menus" => UiCommandType::DebugMenus,
-            "debug_actions" => UiCommandType::DebugActions,
-
-            // ===== EVENTS =====
-            "emit" | "emit_event" => UiCommandType::EmitEvent,
-
-            // ===== SPECIAL =====
-            "drag_hue_point" | "drag_hue" | "drag_huepoint" => UiCommandType::DragHuePoint,
-            "set_roads_four_lanes" => UiCommandType::SetRoadsFourLanes,
-
-            // ===== NO-OP =====
-            "" | "none" | "noop" => UiCommandType::Noop,
-
-            _ => return None,
-        })
-    }
-
-    /// Get the canonical name for this command type.
-    pub fn canonical_name(self) -> &'static str {
+    /// Get the name for this command type.
+    pub fn name(self) -> &'static str {
         match self {
             UiCommandType::OpenMenu => "open_menu",
             UiCommandType::CloseMenu => "close_menu",
@@ -182,9 +119,6 @@ impl UiCommandType {
 
             UiCommandType::EmitEvent => "emit_event",
 
-            UiCommandType::DragHuePoint => "drag_hue_point",
-            UiCommandType::SetRoadsFourLanes => "set_roads_four_lanes",
-
             UiCommandType::Noop => "noop",
         }
     }
@@ -194,7 +128,7 @@ impl UiCommandType {
 
 /// A fully-specified UI command with all data embedded.
 /// Can be queued and executed without the original parsing context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UiCommand {
     // ===== MENU COMMANDS =====
     OpenMenu {
@@ -282,9 +216,11 @@ pub enum UiCommand {
         else_branch: Vec<UiCommand>,
     },
     IfVarEq {
+        element_ref: ElementRef,
         var_name: String,
         value: Value,
         then: Vec<UiCommand>,
+        else_branch: Vec<UiCommand>,
     },
     SaveGame,
     LoadSave {
@@ -372,7 +308,7 @@ struct DelayedCommands {
 
 // ==================== COMMAND RESULT ====================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CommandResult {
     Ok,
     Stop,
@@ -382,6 +318,7 @@ pub enum CommandResult {
     },
     Skip(usize),
     Error(String),
+    AnnoyingError(String),
 }
 
 // ==================== COMMAND CONTEXT ====================
@@ -489,6 +426,9 @@ impl CommandQueue {
                 }
                 CommandResult::Error(msg) => {
                     eprintln!("[CommandQueue] Error: {}", msg);
+                }
+                CommandResult::AnnoyingError(msg) => {
+                    //eprintln!("[CommandQueue] Annoying Error: {}", msg);
                 }
             }
         }
@@ -649,7 +589,10 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 if !matches!(result, CommandResult::Ok) {
-                    //let resolved = value.(&ctx.settings, &ctx.ui.variables);
+                    match set_element_property(ctx, element_ref, name.as_str(), &value) {
+                        CommandResult::Error(e) => return CommandResult::Error(e),
+                        _ => {}
+                    }
                     ctx.ui.variables.set_var(&name, value);
 
                     result = CommandResult::Ok
@@ -674,8 +617,8 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AV
-                if name == "av" {
+                // Secondary: AP
+                if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
                         let current = ctx.settings.read_setting(setting.key);
                         // Try numeric add first, fall back to cycle
@@ -696,6 +639,10 @@ impl CommandQueue {
                     Some(Value::I64(i)) => Value::F64(*i as f64 + amount),
                     _ => Value::F64(amount),
                 };
+                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
+                    CommandResult::Error(e) => return CommandResult::Error(e),
+                    _ => {}
+                }
                 ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
@@ -717,8 +664,8 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AV
-                if name == "av" {
+                // Secondary: AP
+                if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
                         let current = ctx.settings.read_setting(setting.key);
                         // Try numeric add first, fall back to cycle
@@ -739,6 +686,10 @@ impl CommandQueue {
                     Some(Value::I64(i)) => Value::F64(*i as f64 - amount),
                     _ => Value::F64(-amount),
                 };
+                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
+                    CommandResult::Error(e) => return CommandResult::Error(e),
+                    _ => {}
+                }
                 ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
@@ -757,8 +708,8 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AV
-                if name == "av" {
+                // Secondary: AP
+                if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
                         let current = ctx.settings.read_setting(setting.key);
                         if let Some(new_value) = current.multiply(factor) {
@@ -775,6 +726,10 @@ impl CommandQueue {
                     Some(Value::I64(i)) => Value::F64(*i as f64 * factor),
                     _ => Value::F64(factor),
                 };
+                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
+                    CommandResult::Error(e) => return CommandResult::Error(e),
+                    _ => {}
+                }
                 ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
@@ -786,8 +741,8 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AV
-                if name == "av" {
+                // Secondary: AP
+                if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
                         ctx.settings.apply_setting(setting.key, SettingOp::Toggle);
                         return CommandResult::Ok;
@@ -799,7 +754,10 @@ impl CommandQueue {
                     Some(Value::Bool(b)) => Value::Bool(!b),
                     _ => Value::Bool(false),
                 };
-                set_element_property(ctx, element_ref, name.as_str(), &new_val);
+                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
+                    CommandResult::Error(e) => return CommandResult::Error(e),
+                    _ => {}
+                }
 
                 ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
@@ -820,8 +778,8 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AV
-                if name == "av" {
+                // Secondary: AP
+                if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
                         let current = ctx.settings.read_setting(setting.key);
                         if let Some(new_value) = current.clamp_range(min, max) {
@@ -838,6 +796,10 @@ impl CommandQueue {
                     Some(Value::I64(i)) => Value::F64((*i as f64).clamp(min, max)),
                     _ => Value::F64(min),
                 };
+                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
+                    CommandResult::Error(e) => return CommandResult::Error(e),
+                    _ => {}
+                }
                 ctx.ui.variables.set_var(name, new_val);
                 CommandResult::Ok
             }
@@ -878,6 +840,10 @@ impl CommandQueue {
                 match eval_expr(&expr, &ctx.ui.variables) {
                     Some(value) => {
                         //println!("Result: *{}* to *{}*", value, name);
+                        match set_element_property(ctx, element_ref, name.as_str(), &value) {
+                            CommandResult::Error(e) => return CommandResult::Error(e),
+                            _ => {}
+                        }
                         ctx.ui.variables.set_var(name, value);
                         CommandResult::Ok
                     }
@@ -945,14 +911,31 @@ impl CommandQueue {
             }
 
             UiCommand::IfVarEq {
+                element_ref,
                 var_name,
                 value,
                 then,
+                else_branch,
             } => {
-                let current = ctx.ui.variables.get(&var_name).cloned();
-                let compare_to = Some(value);
-                if current == compare_to {
+                let var_value = if var_name == "ap" {
+                    get_layer_settings(&ctx.ui.menus, &element_ref)
+                        .map(|setting| ctx.settings.read_setting(setting.key).to_value())
+                } else {
+                    ctx.ui.variables.get(&var_name).cloned()
+                };
+
+                let Some(var_value) = var_value else {
+                    return CommandResult::Ok;
+                };
+
+                let compare_value = value;
+
+                if var_value == compare_value {
                     for cmd in then.into_iter().rev() {
+                        self.queue.push_front(cmd);
+                    }
+                } else {
+                    for cmd in else_branch.into_iter().rev() {
                         self.queue.push_front(cmd);
                     }
                 }
@@ -1235,53 +1218,136 @@ pub fn set_element_property(
     element_ref: ElementRef,
     name: &str,
     new_val: &Value,
-) {
-    match name.split_once(".") {
-        None => {}
-        Some((base, suffix)) => {
-            // self / center.x
-            if base == "self" {
-                match suffix.split_once('.') {
-                    None => {}
-                    Some((base, suffix)) => {
-                        // center / x
-                        match base {
-                            "center" => {
-                                let after = new_val
-                                    .as_array()
-                                    .unwrap()
-                                    .iter()
-                                    .map(|v| v.as_f64().unwrap() as f32)
-                                    .collect::<Vec<f32>>();
-                                let before = get_element_position(&ctx.ui.menus, &element_ref);
-                                let after = match Variables::component_index(suffix) {
-                                    None => [after[0], after[1]],
-                                    Some(idx) => match idx {
-                                        0 => [after[0], before[1]],
-                                        1 => [before[0], after[1]],
-                                        _ => [after[0], after[1]],
-                                    },
-                                };
-                                ctx.ui.ui_edit_manager.push_command(MoveElementCommand {
-                                    affected_element: element_ref,
-                                    before: None,
-                                    after,
-                                })
-                            }
-                            "radius" => {
-                                let after = SizeProperty::Radius(new_val.as_f64().unwrap() as f32);
+) -> CommandResult {
+    let Some((base, suffix)) = name.split_once('.') else {
+        return CommandResult::AnnoyingError(format!(
+            "set_element_property: invalid property name '{}', expected '.' separator",
+            name
+        ));
+    };
+    let (property, component) = match suffix.split_once('.') {
+        Some((property, component)) => (property, component),
+        None => (suffix, ""),
+    };
 
-                                ctx.ui.ui_edit_manager.push_command(ResizeElementCommand {
-                                    affected_element: element_ref,
-                                    before: None,
-                                    after,
-                                })
-                            }
-                            &_ => {}
+    let selections: Vec<ElementRef>;
+    match base {
+        "self" => selections = vec![element_ref],
+        "editing" => {
+            selections = ctx.ui.touch_manager.selection.selected.clone();
+        }
+        _ => {
+            return CommandResult::AnnoyingError(format!(
+                "set_element_property: unknown base '{}', expected 'self' or 'editing'",
+                base
+            ));
+        }
+    }
+
+    for element_ref in selections {
+        match property {
+            "center" => {
+                let Some(before) = get_element_position(&ctx.ui.menus, &element_ref) else {
+                    return CommandResult::Error(
+                        "get_element_position() failed in set_element_property".to_string(),
+                    );
+                };
+
+                let after = match Variables::component_index(component) {
+                    // Setting full vector
+                    None => {
+                        let Some(arr) = new_val.as_array() else {
+                            return CommandResult::Error("set_element_property: center requires an array value when no component specified".to_string());
+                        };
+                        if arr.len() != 2 {
+                            return CommandResult::Error(format!(
+                                "set_element_property: center array must have exactly 2 elements, got {}",
+                                arr.len()
+                            ));
                         }
+
+                        let Some(x) = arr[0].as_f64() else {
+                            return CommandResult::Error(
+                                "set_element_property: center array[0] is not a valid number"
+                                    .to_string(),
+                            );
+                        };
+                        let Some(y) = arr[1].as_f64() else {
+                            return CommandResult::Error(
+                                "set_element_property: center array[1] is not a valid number"
+                                    .to_string(),
+                            );
+                        };
+
+                        [x as f32, y as f32]
                     }
-                }
+
+                    // Setting single component
+                    Some(idx) => {
+                        let Some(val) = new_val.as_f64() else {
+                            return CommandResult::Error("set_element_property: center component value is not a valid number".to_string());
+                        };
+
+                        let mut after = before;
+                        match idx {
+                            0 => after[0] = val as f32,
+                            1 => after[1] = val as f32,
+                            _ => {
+                                return CommandResult::Error(format!(
+                                    "set_element_property: invalid center component index {}",
+                                    idx
+                                ));
+                            }
+                        }
+                        after
+                    }
+                };
+
+                ctx.ui.ui_edit_manager.push_command(MoveElementCommand {
+                    affected_element: element_ref,
+                    before: None,
+                    after,
+                });
+            }
+
+            "radius" => {
+                let Some(radius) = new_val.as_f64() else {
+                    return CommandResult::Error(
+                        "set_element_property: radius value is not a valid number".to_string(),
+                    );
+                };
+
+                ctx.ui.ui_edit_manager.push_command(ResizeElementCommand {
+                    affected_element: element_ref,
+                    before: None,
+                    after: SizeProperty::Radius(radius as f32),
+                });
+            }
+
+            "color" => {
+                let color_property = ColorProperty::from_str(component); // MSRV!!
+                println!("{}", new_val);
+                let Some(new_color) = new_val.as_color4() else {
+                    return CommandResult::Error(
+                        ".as_color4() failed in set_element_property".to_string(),
+                    );
+                };
+
+                ctx.ui.ui_edit_manager.push_command(ChangeColorCommand {
+                    affected_element: element_ref,
+                    property: color_property,
+                    before: None,
+                    after: new_color,
+                });
+            }
+
+            _ => {
+                return CommandResult::Error(format!(
+                    "set_element_property: unknown property '{}'",
+                    property
+                ));
             }
         }
     }
+    CommandResult::Ok
 }

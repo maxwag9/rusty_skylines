@@ -31,3 +31,15 @@ layers:
           - 1.0
           - 1.0
         text: <- To Main Menu
+      - !Advanced
+        name: checkbox_render_chunk_bounds
+        ap_name: checkbox
+        setting:
+          key: render_chunk_bounds
+          op: toggle
+        x: 0.1
+        y: 0.3
+        scale: 2.0
+        misc:
+          active: true
+          editable: true

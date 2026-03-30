@@ -107,6 +107,7 @@ pub enum SizeProperty {
     Height(f32),
     Rect([f32; 2]),
     PolygonScale(f32),
+    AdvancedPrimitiveScale(f32),
 }
 impl SizeProperty {
     pub fn radius(&self) -> Option<f32> {
@@ -141,6 +142,9 @@ impl SizeProperty {
                 rect[1] *= scale;
             }
             SizeProperty::PolygonScale(ps) => {
+                *ps *= scale;
+            }
+            SizeProperty::AdvancedPrimitiveScale(ps) => {
                 *ps *= scale;
             }
         }
@@ -264,13 +268,14 @@ pub fn set_element_color(
     element_ref: &ElementRef,
     property: &ColorProperty,
     color: [f32; 4],
-) {
+) -> Option<[f32; 4]> {
     let Some(menu) = menus.get_mut(&element_ref.menu) else {
-        return;
+        return None;
     };
     let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element_ref.layer) else {
-        return;
+        return None;
     };
+    let mut previous_color: Option<[f32; 4]> = None;
 
     match element_ref.kind {
         ElementKind::Circle => {
@@ -281,15 +286,28 @@ pub fn set_element_color(
                 .find(|c| c.id == element_ref.id)
             {
                 match property {
-                    ColorProperty::Fill => c.fill_color = color,
-                    ColorProperty::Border => c.border_color = color,
-                    ColorProperty::InsideBorder => c.inside_border_color = color,
-                    ColorProperty::Glow => c.glow_color = color,
+                    ColorProperty::Fill => {
+                        previous_color = Some(c.fill_color);
+                        c.fill_color = color;
+                    }
+                    ColorProperty::Border => {
+                        previous_color = Some(c.border_color);
+                        c.border_color = color;
+                    }
+                    ColorProperty::InsideBorder => {
+                        previous_color = Some(c.inside_border_color);
+                        c.inside_border_color = color;
+                    }
+                    ColorProperty::Glow => {
+                        previous_color = Some(c.glow_color);
+                        c.glow_color = color;
+                    }
                     _ => {}
                 }
                 layer.dirty.mark_circles();
             }
         }
+
         ElementKind::Text => {
             if let Some(t) = layer
                 .elements
@@ -297,12 +315,14 @@ pub fn set_element_color(
                 .filter_map(UiElement::as_text_mut)
                 .find(|t| t.id == element_ref.id)
             {
-                if matches!(property, ColorProperty::TextColor) {
+                if matches!(property, ColorProperty::Fill) {
+                    previous_color = Some(t.color);
                     t.color = color;
                     layer.dirty.mark_texts();
                 }
             }
         }
+
         ElementKind::Rect => {
             if let Some(r) = layer
                 .elements
@@ -311,11 +331,13 @@ pub fn set_element_color(
                 .find(|r| r.id == element_ref.id)
             {
                 if matches!(property, ColorProperty::Fill) {
+                    previous_color = Some(r.color);
                     r.color = color;
                     layer.dirty.mark_rects();
                 }
             }
         }
+
         ElementKind::Polygon => {
             if let Some(p) = layer
                 .elements
@@ -325,26 +347,38 @@ pub fn set_element_color(
             {
                 match property {
                     ColorProperty::Fill => {
+                        // Take color from first vertex as "previous"
+                        if let Some(first) = p.unscaled_vertices.first() {
+                            previous_color = Some(first.color);
+                        }
+
                         for v in &mut p.unscaled_vertices {
                             v.color = color;
                         }
+
                         p.invalidate_scaled_vertices_cache();
                         layer.dirty.mark_rects();
                     }
 
                     ColorProperty::VertexIndex(i) => {
                         if let Some(vertex) = p.unscaled_vertices.get_mut(*i as usize) {
+                            previous_color = Some(vertex.color);
                             vertex.color = color;
+
                             p.invalidate_scaled_vertices_cache();
                             layer.dirty.mark_rects();
                         }
                     }
+
                     _ => {}
                 }
             }
         }
+
         _ => {}
     }
+
+    previous_color
 }
 
 pub fn set_vertex_position(
@@ -527,6 +561,7 @@ pub fn delete_element(menus: &mut HashMap<String, Menu>, element: &ElementRef) {
             UiElement::Handle(_) => layer.dirty.mark_handles(),
             UiElement::Outline(_) => layer.dirty.mark_outlines(),
             UiElement::Rect(_) => layer.dirty.mark_rects(),
+            UiElement::Advanced(_) => layer.dirty.mark_advanced_primitives(),
         }
     }
 }
@@ -578,6 +613,11 @@ pub fn create_element(
             r.y = mouse.pos.y;
             r.id = id.to_string();
         }
+        UiElement::Advanced(ap) => {
+            ap.x = mouse.pos.x;
+            ap.y = mouse.pos.y;
+            ap.name = id.to_string();
+        }
     }
 
     // Push element veryyy simple
@@ -588,6 +628,7 @@ pub fn create_element(
         UiElement::Handle(_) => layer.dirty.mark_handles(),
         UiElement::Polygon(_) => layer.dirty.mark_polygons(),
         UiElement::Rect(_) => layer.dirty.mark_rects(),
+        UiElement::Advanced(ap) => layer.dirty.mark_advanced_primitives(),
     }
     layer.elements.push(element);
 

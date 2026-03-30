@@ -6,7 +6,7 @@ use crate::renderer::ui_text_rendering::{
     render_selection,
 };
 use crate::resources::Time;
-use crate::ui::ui_touch_manager::UiTouchManager;
+use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 use wgpu::{BufferDescriptor, BufferUsages, Queue};
@@ -97,10 +97,6 @@ pub fn upload_polygons(ui_renderer: &mut UiRenderer, queue: &Queue, layer: &mut 
 
     let poly_count = poly_vertices.len() as u32;
     if poly_count > 0 {
-        println!(
-            "{:?}",
-            poly_vertices.iter().map(|v| v.pos).collect::<Vec<_>>()
-        );
         // Uses the provided helper function
         upload_poly_vbo(ui_renderer, poly_vertices, layer, queue);
     }
@@ -269,10 +265,13 @@ pub fn upload_text(
             t.height = h;
         }
         let mut is_selected = false;
-        if let Some(sel) = &touch_manager.selection.primary {
-            if sel.id == t.id && sel.layer == layer_name && sel.menu == *menu_name {
-                is_selected = true;
-            }
+        if touch_manager.selection.is_selected(&ElementRef::new(
+            menu_name,
+            layer_name.as_str(),
+            t.id.as_str(),
+            ElementKind::Text,
+        )) {
+            is_selected = true;
         }
         let pos = anchor_to(
             t.anchor.unwrap_or(Anchor::Center),

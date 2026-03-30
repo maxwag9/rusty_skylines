@@ -372,6 +372,7 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
         elements: Some(elements),
         active: true,
         opaque: rng.next_bool(),
+        editing_tool: rng.next_bool(),
     }
 }
 

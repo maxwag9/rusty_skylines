@@ -1,4 +1,4 @@
-use crate::data::{SettingKey, SettingOp, SettingValue, Settings};
+use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
@@ -223,6 +223,7 @@ pub struct LayerDirty {
     pub handles: bool,
     pub polygons: bool,
     pub rects: bool,
+    pub aps: bool,
 }
 
 impl LayerDirty {
@@ -234,6 +235,7 @@ impl LayerDirty {
             handles: true,
             polygons: true,
             rects: true,
+            aps: true,
         }
     }
 
@@ -245,11 +247,12 @@ impl LayerDirty {
             handles: false,
             polygons: false,
             rects: false,
+            aps: false,
         }
     }
 
     pub fn any(self) -> bool {
-        self.texts || self.circles || self.outlines || self.handles || self.polygons
+        self.texts || self.circles || self.outlines || self.handles || self.polygons || self.aps
     }
 
     pub fn mark_texts(&mut self) {
@@ -273,7 +276,9 @@ impl LayerDirty {
     pub fn mark_polygons(&mut self) {
         self.polygons = true;
     }
-
+    pub fn mark_advanced_primitives(&mut self) {
+        self.aps = true;
+    }
     pub fn mark_all(&mut self) {
         *self = Self::all();
     }
@@ -285,6 +290,7 @@ impl LayerDirty {
         self.handles &= !d.handles;
         self.polygons &= !d.polygons;
         self.rects &= !d.rects;
+        self.aps &= !d.aps
     }
 }
 
@@ -300,7 +306,7 @@ pub enum UiElementYaml {
     Polygon(UiButtonPolygonYaml),
     Text(UiButtonTextYaml),
     Outline(UiButtonOutlineYaml),
-    Advanced(AdvancedPrimitive),
+    Advanced(AdvancedPrimitiveYaml),
     Rect(UiButtonRectYaml),
 }
 impl UiElementYaml {
@@ -315,9 +321,9 @@ impl UiElementYaml {
             UiElementYaml::Handle(_) => ElementKind::Handle,
         }
     }
-    pub fn advanced_primitive(&self) -> Option<&AdvancedPrimitive> {
+    pub fn advanced_primitive(&self) -> Option<AdvancedPrimitive> {
         match self {
-            UiElementYaml::Advanced(av) => Some(av),
+            UiElementYaml::Advanced(ap) => Some(AdvancedPrimitive::from_yaml(&ap)),
             _ => None,
         }
     }
@@ -326,15 +332,12 @@ impl UiElementYaml {
 pub struct SettingBinding {
     pub key: SettingKey,
     pub op: SettingOp,
-
-    pub true_ap: Option<String>,
-    pub false_ap: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AdvancedPrimitive {
+pub struct AdvancedPrimitiveYaml {
     pub name: String,
     #[serde(default)]
-    pub ap_name: Option<String>,
+    pub ap_name: String,
 
     #[serde(default)]
     pub setting: Option<SettingBinding>,
@@ -342,12 +345,57 @@ pub struct AdvancedPrimitive {
     pub y: f32,
     #[serde(skip_serializing_if = "is_one")]
     pub scale: f32,
-    pub editable: bool,
-    pub active: bool,
+    pub misc: MiscButtonSettingsYaml,
+    pub editing_tool: bool,
+}
+#[derive(Debug, Clone)]
+pub struct AdvancedPrimitive {
+    pub name: String,
+    pub ap_name: String,
+    pub setting: Option<SettingBinding>,
+    pub x: f32,
+    pub y: f32,
+    pub scale: f32,
+    pub misc: MiscButtonSettings,
+    pub editing_tool: bool,
 }
 
 impl AdvancedPrimitive {
-    pub fn to_runtime(
+    pub fn from_yaml(yaml: &AdvancedPrimitiveYaml) -> Self {
+        Self {
+            name: yaml.name.clone(),
+            ap_name: yaml.ap_name.clone(),
+            setting: yaml.setting.clone(),
+            x: yaml.x,
+            y: yaml.y,
+            scale: yaml.scale,
+            misc: MiscButtonSettings {
+                active: yaml.misc.active,
+                touched_time: 0.0,
+                is_touched: false,
+                pressable: yaml.misc.pressable,
+                editable: Editability::from_bool(yaml.misc.editable),
+            },
+            editing_tool: yaml.editing_tool,
+        }
+    }
+    pub fn to_yaml(&self) -> AdvancedPrimitiveYaml {
+        AdvancedPrimitiveYaml {
+            name: self.name.clone(),
+            ap_name: self.ap_name.clone(),
+            setting: self.setting.clone(),
+            x: self.x,
+            y: self.y,
+            scale: self.scale,
+            misc: MiscButtonSettingsYaml {
+                active: self.misc.active,
+                pressable: self.misc.pressable,
+                editable: self.misc.editable.to_bool(),
+            },
+            editing_tool: self.editing_tool,
+        }
+    }
+    pub fn to_layers(
         self,
         settings: &Settings,
         advanced_primitives: &HashMap<String, UiLayerYaml>,
@@ -355,20 +403,6 @@ impl AdvancedPrimitive {
         window_size: PhysicalSize<u32>,
     ) -> Vec<RuntimeLayer> {
         let mut layers: Vec<RuntimeLayer> = Vec::new();
-        let mut active_ap: Option<String> = self.ap_name.clone();
-
-        if active_ap.is_none() {
-            if let Some(setting) = &self.setting {
-                let value = settings.read_setting(setting.key);
-                if let SettingValue::Bool(b) = value {
-                    active_ap = if b {
-                        setting.true_ap.clone()
-                    } else {
-                        setting.false_ap.clone()
-                    };
-                }
-            }
-        }
 
         for (name, av) in advanced_primitives {
             let elements: Vec<UiElement> = av
@@ -378,9 +412,9 @@ impl AdvancedPrimitive {
                 .into_iter()
                 .filter_map(|e| UiElement::from_yaml(e, window_size))
                 .map(|mut el| {
-                    el.resize(self.scale);
+                    el.scale_by(self.scale);
                     el.offset_pos_normalized(self.x, self.y, window_size);
-                    el.set_editable(self.editable);
+                    el.set_editable(&self.misc.editable);
                     el.set_ap_text(&self.setting);
                     el
                 })
@@ -391,13 +425,14 @@ impl AdvancedPrimitive {
                 ap_name: Some(name.clone()),
                 order,
                 elements,
-                active: active_ap.as_ref() == Some(name) && self.active,
+                active: self.ap_name == *name && self.misc.active,
                 setting: self.setting.clone(),
                 cache: Default::default(),
                 dirty: LayerDirty::all(),
                 gpu: Default::default(),
                 opaque: false,
                 saveable: false,
+                editing_tool: self.editing_tool,
             });
         }
 
@@ -483,7 +518,7 @@ impl UiButtonRect {
                 touched_time: 0.0,
                 is_touched: false,
                 pressable: r.misc.pressable,
-                editable: r.misc.editable,
+                editable: Editability::from_bool(r.misc.editable),
             },
         }
     }
@@ -525,6 +560,7 @@ pub enum UiElement {
     Text(UiButtonText),
     Outline(UiButtonOutline),
     Rect(UiButtonRect),
+    Advanced(AdvancedPrimitive),
 }
 
 impl UiElement {
@@ -550,7 +586,9 @@ impl UiElement {
             UiElementYaml::Rect(e) => {
                 Some(UiElement::Rect(UiButtonRect::from_yaml(e, window_size)))
             }
-            _ => None,
+            UiElementYaml::Advanced(ap) => {
+                Some(UiElement::Advanced(AdvancedPrimitive::from_yaml(&ap)))
+            }
         }
     }
 
@@ -562,6 +600,7 @@ impl UiElement {
             UiElement::Text(e) => UiElementYaml::Text(e.to_yaml(window_size)),
             UiElement::Outline(e) => UiElementYaml::Outline(e.to_yaml(window_size)),
             UiElement::Rect(e) => UiElementYaml::Rect(e.to_yaml(window_size)),
+            UiElement::Advanced(ap) => UiElementYaml::Advanced(ap.to_yaml()),
         }
     }
     pub fn as_text_mut(&mut self) -> Option<&mut UiButtonText> {
@@ -653,6 +692,7 @@ impl UiElement {
             UiElement::Handle(_) => "Handle",
             UiElement::Outline(_) => "Outline",
             UiElement::Rect(_) => "Rect",
+            UiElement::Advanced(_) => "Advanced",
         }
     }
 
@@ -664,17 +704,19 @@ impl UiElement {
             UiElement::Handle(h) => &h.id,
             UiElement::Polygon(p) => &p.id,
             UiElement::Rect(r) => &r.id,
+            UiElement::Advanced(ap) => &ap.name,
         }
     }
 
-    pub fn is_editable(&self) -> bool {
+    pub fn is_editable(&self, override_mode: bool) -> bool {
         match self {
-            UiElement::Text(t) => t.misc.editable,
-            UiElement::Circle(c) => c.misc.editable,
-            UiElement::Outline(o) => o.misc.editable,
-            UiElement::Handle(h) => h.misc.editable,
-            UiElement::Polygon(p) => p.misc.editable,
-            UiElement::Rect(r) => r.misc.editable,
+            UiElement::Text(t) => t.misc.editable.editable(override_mode),
+            UiElement::Circle(c) => c.misc.editable.editable(override_mode),
+            UiElement::Outline(o) => o.misc.editable.editable(override_mode),
+            UiElement::Handle(h) => h.misc.editable.editable(override_mode),
+            UiElement::Polygon(p) => p.misc.editable.editable(override_mode),
+            UiElement::Rect(r) => r.misc.editable.editable(override_mode),
+            UiElement::Advanced(ap) => ap.misc.editable.editable(override_mode),
         }
     }
 
@@ -686,6 +728,7 @@ impl UiElement {
             UiElement::Handle(h) => h.misc.active,
             UiElement::Polygon(p) => p.misc.active,
             UiElement::Rect(r) => r.misc.active,
+            UiElement::Advanced(ap) => ap.misc.active,
         }
     }
 
@@ -697,6 +740,7 @@ impl UiElement {
             UiElement::Handle(_) => vec![],
             UiElement::Polygon(p) => p.actions.clone(),
             UiElement::Rect(r) => r.actions.clone(),
+            UiElement::Advanced(_) => vec![],
         }
     }
 
@@ -708,6 +752,7 @@ impl UiElement {
             UiElement::Outline(o) => [o.shape_data.x, o.shape_data.y],
             UiElement::Polygon(p) => p.center(),
             UiElement::Rect(r) => [r.x, r.y],
+            UiElement::Advanced(ap) => [ap.x, ap.y],
         }
     }
     pub fn size(&self) -> SizeProperty {
@@ -718,6 +763,7 @@ impl UiElement {
             UiElement::Outline(o) => SizeProperty::Radius(o.shape_data.radius),
             UiElement::Polygon(p) => SizeProperty::PolygonScale(p.scale),
             UiElement::Rect(r) => SizeProperty::Rect(r.size()),
+            UiElement::Advanced(ap) => SizeProperty::AdvancedPrimitiveScale(ap.scale),
         }
     }
     pub fn kind(&self) -> ElementKind {
@@ -728,10 +774,11 @@ impl UiElement {
             UiElement::Outline(_) => ElementKind::Outline,
             UiElement::Handle(_) => ElementKind::Handle,
             UiElement::Rect(_) => ElementKind::Rect,
+            UiElement::Advanced(_) => ElementKind::Advanced,
         }
     }
 
-    pub fn resize(&mut self, scale: f32) {
+    pub fn scale_by(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {
                 t.pt = t.original_pt * scale;
@@ -751,6 +798,9 @@ impl UiElement {
             UiElement::Rect(r) => {
                 r.w *= scale;
                 r.h *= scale;
+            }
+            UiElement::Advanced(ap) => {
+                ap.scale *= scale;
             }
         }
     }
@@ -781,6 +831,10 @@ impl UiElement {
                 r.x += dx;
                 r.y += dy;
             }
+            UiElement::Advanced(ap) => {
+                ap.x += dx;
+                ap.y += dy;
+            }
         }
     }
 
@@ -810,6 +864,10 @@ impl UiElement {
                 r.x = x;
                 r.y = y;
             }
+            UiElement::Advanced(ap) => {
+                ap.x = x;
+                ap.y = y;
+            }
         }
     }
 
@@ -828,33 +886,7 @@ impl UiElement {
     ) {
         let offset_x = norm_x * window_size.width as f32;
         let offset_y = norm_y * window_size.height as f32;
-
-        match self {
-            UiElement::Text(t) => {
-                t.x += offset_x;
-                t.y += offset_y;
-            }
-            UiElement::Circle(c) => {
-                c.x += offset_x;
-                c.y += offset_y;
-            }
-            UiElement::Handle(h) => {
-                h.x += offset_x;
-                h.y += offset_y;
-            }
-            UiElement::Outline(o) => {
-                o.shape_data.x += offset_x;
-                o.shape_data.y += offset_y;
-            }
-            UiElement::Polygon(p) => {
-                p.x += offset_x;
-                p.y += offset_y;
-            }
-            UiElement::Rect(r) => {
-                r.x += offset_x;
-                r.y += offset_y;
-            }
-        }
+        self.translate(offset_x, offset_y);
     }
     fn misc_mut(&mut self) -> &mut MiscButtonSettings {
         match self {
@@ -864,6 +896,7 @@ impl UiElement {
             UiElement::Outline(o) => &mut o.misc,
             UiElement::Polygon(p) => &mut p.misc,
             UiElement::Rect(r) => &mut r.misc,
+            UiElement::Advanced(ap) => &mut ap.misc,
         }
     }
 
@@ -875,8 +908,8 @@ impl UiElement {
             }
         }
     }
-    pub fn set_editable(&mut self, editable: bool) {
-        self.misc_mut().editable = editable;
+    pub fn set_editable(&mut self, editable: &Editability) {
+        self.misc_mut().editable = editable.clone();
     }
     pub fn rescale_to_window(
         &mut self,
@@ -920,6 +953,7 @@ impl UiElement {
             UiElement::Handle(_) => dirty.mark_handles(),
             UiElement::Outline(_) => dirty.mark_outlines(),
             UiElement::Rect(_) => dirty.mark_rects(),
+            UiElement::Advanced(_) => dirty.mark_advanced_primitives(),
         }
     }
 }
@@ -1145,6 +1179,7 @@ pub struct RuntimeLayer {
     pub gpu: LayerGpu,
     pub opaque: bool,
     pub saveable: bool,
+    pub editing_tool: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -1169,11 +1204,12 @@ impl From<&UiElement> for ElementKind {
             UiElement::Text(_) => ElementKind::Text,
             UiElement::Outline(_) => ElementKind::Outline,
             UiElement::Rect(_) => ElementKind::Rect,
+            UiElement::Advanced(_) => ElementKind::Advanced,
         }
     }
 }
-impl std::fmt::Display for ElementKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ElementKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
@@ -1205,7 +1241,7 @@ impl RuntimeLayer {
     // simplified resize_element using the helper
     pub fn resize_element(&mut self, id: &str, scale: f32) {
         if let Some(el) = self.find_element_mut(id) {
-            el.resize(scale);
+            el.scale_by(scale);
         }
     }
     pub fn find_element_mut(&mut self, id: &str) -> Option<&mut UiElement> {
@@ -1307,6 +1343,9 @@ pub struct UiLayerYaml {
     // Default is false. Skip if false.
     #[serde(default, skip_serializing_if = "is_default")]
     pub opaque: bool,
+
+    #[serde(default)]
+    pub editing_tool: bool,
 }
 
 // Manual Default impl required because of the custom default values (like active=true)
@@ -1318,6 +1357,7 @@ impl Default for UiLayerYaml {
             elements: None,
             active: true,
             opaque: false,
+            editing_tool: false,
         }
     }
 }
@@ -1465,14 +1505,42 @@ pub struct HandleMisc {
     pub handle_roundness: f32,
     pub handle_speed: f32,
 }
-
 #[derive(Deserialize, Serialize, Debug, Clone)]
+pub enum Editability {
+    Editable,
+    NotEditable,
+    HARDNOTEDITABLE,
+}
+impl Editability {
+    pub fn from_bool(editable: bool) -> Self {
+        if editable {
+            Editability::Editable
+        } else {
+            Editability::NotEditable
+        }
+    }
+    pub fn to_bool(&self) -> bool {
+        match self {
+            Editability::Editable => true,
+            Editability::NotEditable => false,
+            Editability::HARDNOTEDITABLE => false,
+        }
+    }
+    pub fn editable(&self, override_mode: bool) -> bool {
+        match self {
+            Editability::Editable => true,
+            Editability::NotEditable => override_mode,
+            Editability::HARDNOTEDITABLE => false,
+        }
+    }
+}
+#[derive(Debug, Clone)]
 pub struct MiscButtonSettings {
     pub active: bool,
     pub touched_time: f32,
     pub is_touched: bool,
     pub pressable: bool,
-    pub editable: bool,
+    pub editable: Editability,
 }
 
 impl MiscButtonSettings {
@@ -1480,15 +1548,18 @@ impl MiscButtonSettings {
         MiscButtonSettingsYaml {
             active: self.active,
             pressable: self.pressable,
-            editable: self.editable,
+            editable: self.editable.to_bool(),
         }
     }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct MiscButtonSettingsYaml {
+    #[serde(default)]
     pub active: bool,
+    #[serde(default)]
     pub pressable: bool,
+    #[serde(default)]
     pub editable: bool,
 }
 
@@ -1566,7 +1637,7 @@ pub struct UiButtonText {
     pub anchor: Option<Anchor>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct UiButtonPolygon {
     pub id: String,
     pub x: f32,
@@ -1581,7 +1652,7 @@ pub struct UiButtonPolygon {
     pub tri_count: u32,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct UiButtonCircle {
     pub id: String,
     pub actions: Vec<String>,
@@ -1601,7 +1672,7 @@ pub struct UiButtonCircle {
     pub misc: MiscButtonSettings,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct UiButtonOutline {
     pub id: String,
     pub parent: Option<ElementRef>,
@@ -1620,7 +1691,7 @@ pub struct UiButtonOutline {
     pub misc: MiscButtonSettings,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct UiButtonHandle {
     pub id: String,
     pub x: f32,
@@ -1664,7 +1735,7 @@ impl UiButtonText {
                 touched_time: 0.0,
                 is_touched: false,
                 pressable: t.misc.pressable,
-                editable: t.misc.editable,
+                editable: Editability::from_bool(t.misc.editable),
             },
             width: 50.0,
             height: 20.0,
@@ -1748,7 +1819,7 @@ impl UiButtonCircle {
                 touched_time: 0.0,
                 is_touched: false,
                 pressable: c.misc.pressable,
-                editable: c.misc.editable,
+                editable: Editability::from_bool(c.misc.editable),
             },
         }
     }
@@ -1796,7 +1867,7 @@ impl UiButtonHandle {
                 touched_time: 0.0,
                 is_touched: false,
                 pressable: h.misc.pressable,
-                editable: h.misc.editable,
+                editable: Editability::from_bool(h.misc.editable),
             },
         }
     }
@@ -1840,7 +1911,7 @@ impl UiButtonOutline {
                 touched_time: 0.0,
                 is_touched: false,
                 pressable: o.misc.pressable,
-                editable: o.misc.editable,
+                editable: Editability::from_bool(o.misc.editable),
             },
         }
     }
@@ -1893,7 +1964,7 @@ impl UiButtonPolygon {
                 touched_time: 0.0,
                 is_touched: false,
                 pressable: p.misc.pressable,
-                editable: p.misc.editable,
+                editable: Editability::from_bool(p.misc.editable),
             },
             tri_count: 0,
         };
@@ -2151,7 +2222,7 @@ impl Default for MiscButtonSettings {
             touched_time: 0.0,
             is_touched: false,
             pressable: true,
-            editable: true,
+            editable: Editability::Editable,
         }
     }
 }
