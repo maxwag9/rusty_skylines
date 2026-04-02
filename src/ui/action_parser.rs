@@ -1,55 +1,115 @@
 use crate::data::Settings;
 #[allow(unused_mut, unused_assignments)]
 use crate::ui::actions::UiCommand;
+use crate::ui::actions::send_element_properties_to_variables;
+use crate::ui::menu::Menu;
 use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
+use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, TouchEvent};
 use crate::ui::variables::Variables;
 use std::cmp::PartialEq;
+use std::collections::HashMap;
 
 /// Helper trait for parsing argument types
 trait ParseArg: Sized {
-    fn parse_arg(settings: &Settings, variables: &Variables, s: &str) -> Option<Self>;
+    fn parse_arg(
+        settings: &Settings,
+        variables: &mut Variables,
+        menus: &HashMap<String, Menu>,
+        touch_manager: &UiTouchManager,
+        element: &ElementRef,
+        s: &str,
+    ) -> Option<Self>;
 }
 
 impl ParseArg for String {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         Some(s.to_string())
     }
 }
 
 impl ParseArg for f32 {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for f64 {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for i32 {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for u32 {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for usize {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         s.parse().ok()
     }
 }
 
 impl ParseArg for bool {
-    fn parse_arg(_: &Settings, _: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        _settings: &Settings,
+        _variables: &mut Variables,
+        _menus: &HashMap<String, Menu>,
+        _touch_manager: &UiTouchManager,
+        _element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" | "on" | "enabled" => Some(true),
             "false" | "0" | "no" | "off" | "disabled" => Some(false),
@@ -59,7 +119,15 @@ impl ParseArg for bool {
 }
 
 impl ParseArg for Value {
-    fn parse_arg(settings: &Settings, variables: &Variables, s: &str) -> Option<Self> {
+    fn parse_arg(
+        settings: &Settings,
+        variables: &mut Variables,
+        menus: &HashMap<String, Menu>,
+        touch_manager: &UiTouchManager,
+        element: &ElementRef,
+        s: &str,
+    ) -> Option<Self> {
+        send_element_properties_to_variables(menus, variables, touch_manager, element);
         Some(Value::from_str(settings, variables, s))
     }
 }
@@ -75,7 +143,9 @@ macro_rules! define_commands {
 
         pub fn make_ui_command(
             settings: &Settings,
-            variables: &Variables,
+            variables: &mut Variables,
+            menus: &HashMap<String, Menu>,
+            touch_manager: &UiTouchManager,
             func_name: &str,
             args: Vec<String>,
             element: &ElementRef
@@ -85,7 +155,7 @@ macro_rules! define_commands {
             match name.as_str() {
                 $(
                     $( $name )|+ => {
-                        define_commands!(@build settings, variables, args, element, $variant $( { $( $field : $ftype ),* } )?)
+                        define_commands!(@build settings, variables, menus, touch_manager, args, element, $variant $( { $( $field : $ftype ),* } )?)
                     }
                 ),*,
                 _ => {
@@ -97,19 +167,17 @@ macro_rules! define_commands {
     };
 
     // unit variant
-    (@build $settings:ident, $vars:ident, $args:ident, $element:ident, $variant:ident) => {
-        Some(UiCommand::$variant)
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $variant:ident) => {
+    Some(UiCommand::$variant)
     };
 
     // struct variant
-    (@build $settings:ident, $vars:ident, $args:ident, $element:ident,
-        $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
-        #[allow(unused_mut, unused_assignments)]
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
         let mut idx = 0usize;
 
         $(
             let $field = define_commands!(
-                @parse $settings, $vars, $args, idx, $element, $field, $ftype
+                @parse $settings, $vars, $menus, $tm, $args, idx, $element, $field, $ftype
             )?;
         )*
 
@@ -120,7 +188,7 @@ macro_rules! define_commands {
     // SPECIAL FIELD: element_ref
     // -----------------------------
 
-    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, element_ref, $ftype:ty) => {{
         Some($element.clone())
     }};
@@ -129,8 +197,10 @@ macro_rules! define_commands {
     // SPECIAL FIELD: args
     // -----------------------------
 
-    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, args, $ftype:ty) => {{
+        send_element_properties_to_variables($menus, $vars, $tm, $element);
+
         let out = $args.iter()
             .skip($idx)
             .map(|s| Value::from_str($settings, $vars, s))
@@ -145,8 +215,7 @@ macro_rules! define_commands {
     // -----------------------------
     // SPECIAL FIELD: commands
     // -----------------------------
-
-    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, commands, $ftype:ty) => {{
         let out = $args.iter()
             .skip($idx)
@@ -163,17 +232,17 @@ macro_rules! define_commands {
     // SPECIAL FIELD: then / else_branch
     // -----------------------------
 
-    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, then, $ftype:ty) => {{
-        define_commands!(@branch $settings, $vars, $args, $idx, $element)
+        define_commands!(@branch $settings, $vars, $menus, $tm, $args, $idx, $element)
     }};
 
-    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, else_branch, $ftype:ty) => {{
-        define_commands!(@branch $settings, $vars, $args, $idx, $element)
+        define_commands!(@branch $settings, $vars, $menus, $tm, $args, $idx, $element)
     }};
 
-    (@branch $settings:ident, $vars:ident, $args:ident, $idx:ident, $element:ident) => {{
+    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element:ident) => {{
         let raw = $args.get($idx)?;
         #[allow(unused_assignments)]
         {
@@ -183,22 +252,22 @@ macro_rules! define_commands {
         let cmds = raw.split(';')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .filter_map(|s| parse_primitive_action($settings, $vars, s, $element))
+            .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
             .collect();
 
         Some(cmds)
     }};
 
-    // -----------------------------
     // GENERIC FIELD PARSER
-    // -----------------------------
-
-    (@parse $settings:ident, $vars:ident, $args:ident, $idx:ident,
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, $field:ident, $ftype:ty) => {{
 
         let val = <$ftype as ParseArg>::parse_arg(
             $settings,
             $vars,
+            $menus,
+            $tm,
+            $element,
             $args.get($idx)?
         )?;
         #[allow(unused_assignments)]
@@ -212,104 +281,137 @@ macro_rules! define_commands {
 // COMMAND DEFINITIONS - I Just add a line here when I add a new UiCommand!
 define_commands! {
     // ===== MENU COMMANDS =====
-    "open_menu" | "openmenu" | "menu_open"
+    "open_menu" | "openmenu"
         => OpenMenu { menu_name: String },
 
-    "close_menu" | "closemenu" | "menu_close"
+    "close_menu" | "closemenu"
         => CloseMenu { menu_name: String },
 
-    "close_all_menus" | "closeallmenus"
+    "close_all_menus" | "closeall"
         => CloseAllMenus,
 
-    "toggle_menu" | "togglemenu" | "menu_toggle"
+    "toggle_menu" | "togglemenu"
         => ToggleMenu { menu_name: String },
 
-    "menu_active" | "menuactive" | "is_menu_active"
+    "menu_active" | "menuactive"
         => MenuActive { menu_name: String },
 
     // ===== LAYER COMMANDS =====
-    "open_layer" | "openlayer" | "layer_open"
+    "open_layer" | "openlayer"
         => OpenLayer { menu_name: String, layer_name: String },
 
-    "close_layer" | "closelayer" | "layer_close"
+    "close_layer" | "closelayer"
         => CloseLayer { menu_name: String, layer_name: String },
 
-    "toggle_layer" | "togglelayer" | "layer_toggle"
+    "toggle_layer" | "togglelayer"
         => ToggleLayer { menu_name: String, layer_name: String },
 
     // ===== VARIABLE COMMANDS =====
-    "set_var" | "setvar" | "set" | "set_var_to" | "set_setting" | "setsetting" | "set_settings" | "setsettings" | "set_setting_to" | "set_av_setting_to" | "set_av_setting"
+    "set_var" | "setvar" | "set"
         => SetVar { element_ref: ElementRef, name: String, value: Value },
 
-    "inc_var" | "incvar" | "inc" | "increment" | "add" | "cycle_setting" | "cyclesetting" | "cycle_settings" | "cyclesettings"
+    "inc_var" | "incvar"
         => IncVar { element_ref: ElementRef, name: String, amount: f64 },
 
-    "dec_var" | "decvar" | "dec" | "decrement" | "sub" | "subtract"
+    "dec_var" | "decvar"
         => DecVar { element_ref: ElementRef, name: String, amount: f64 },
 
-    "mul_var" | "mulvar" | "mul" | "multiply"
+    "mul_var" | "mulvar"
         => MulVar { element_ref: ElementRef, name: String, factor: f64 },
 
-    "toggle_var" | "togglevar" | "toggle_variable" | "flip_var" | "toggle_setting" | "togglesetting" | "toggle_settings" | "flip_setting" | "toggle"
+    "toggle_var" | "togglevar" | "toggle"
         => ToggleVar { element_ref: ElementRef, name: String },
 
-    "clamp" | "clamp_var"
+    "clamp" | "clampvar"
         => Clamp { element_ref: ElementRef, name: String, min: f64, max: f64 },
 
-    "set_var_expr" | "set_expr" | "expr"
+    "set_var_expr" | "setexpr" | "set_expr"
         => SetVarExpr { element_ref: ElementRef, name: String, expr: String },
 
     // ===== ACTION STATE COMMANDS =====
-    "start_action" | "startaction" | "action_start"
+    "start_action" | "startaction"
         => StartAction { action_name: String },
 
-    "stop_action" | "stopaction" | "action_stop"
+    "stop_action" | "stopaction"
         => StopAction { action_name: String },
 
-    "remove_action" | "removeaction" | "action_remove" | "delete_action"
+    "remove_action" | "removeaction"
         => RemoveAction { action_name: String },
 
 
     // ===== FLOW CONTROL =====
-    "delay" | "wait" | "sleep" | "pause"
+    "delay" | "wait" | "sleep"
         => Delay { seconds: f64 },
 
-    "halt" | "stop" | "break"
+    "halt" | "break"
         => Halt,
 
     "skip"
         => Skip { count: usize },
 
-    "if"
-        => If { condition: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
+    "if" => If { condition: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
         => IfVarEq { element_ref: ElementRef, var_name: String, value: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
-    "save" | "save_game" | "savegame"
+
+    "add_element" | "addelem" | "add"
+        => AddElement {element_ref: ElementRef, menu: Value, layer: Value, id: Value, kind: Value, center: Value},
+
+    "clone_element" | "cloneelem" | "clone"
+        => CloneElement { element_ref: ElementRef,
+        from_menu: Value,
+        from_layer: Value,
+        from_id: Value,
+        to_menu: Value,
+        to_layer: Value,
+        to_id: Value,
+        center: Value,},
+
+    "clone_element_undoable" | "cloneu" | "copyu"
+        => CloneElementUndoable {
+        element_ref: ElementRef,
+        from_menu: Value,
+        from_layer: Value,
+        from_id: Value,
+        to_menu: Value,
+        to_layer: Value,
+        to_id: Value,
+        center: Value,},
+
+    "delete_element" | "delelem" | "delete"
+        => DeleteElement {element_ref: ElementRef, menu: Value, layer: Value, id: Value},
+
+    "delete_element_undoable" | "deleteu" | "removeu"
+        => DeleteElement {element_ref: ElementRef, menu: Value, layer: Value, id: Value},
+
+    "save" | "savegame"
         => SaveGame,
-    "load" | "load_game" | "loadgame" | "load_save" | "loadsave" | "load_world" | "loadworld"
+
+    "load" | "loadgame" | "load_save"
         => LoadSave {save_name: String, without_saving: bool  },
-    "exit" | "quit" | "exit_game"
+
+    "exit" | "quit"
         => ExitGame,
+
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
         => Print { args: Vec<UiValue> },
 
-    "debug_vars" | "debugvars" | "vars"
+    "debug_vars" | "debugvars"
         => DebugVars,
 
-    "debug_menus" | "debugmenus" | "menus"
+    "debug_menus" | "debugmenus"
         => DebugMenus,
 
-    "debug_actions" | "debugactions" | "actions"
+    "debug_actions" | "debugactions"
         => DebugActions,
 
     // ===== EVENT COMMANDS =====
-    "emit_event" | "emitevent" | "emit" | "event" | "fire"
+    "emit_event" | "emitevent" | "emit"
         => EmitEvent { element_ref: ElementRef, event_name: String },
 
     // ===== UTILITY =====
-    "noop" | "no_op" | "nothing" | "none"
+    "noop" | "no_op" | "none"
         => Noop,
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -412,9 +514,14 @@ pub fn actions_to_uicommands(
 
         if filters_match(settings, &filters, &event_kind, &buttons) {
             // Now action_owned only contains the actual command
-            if let Some(cmd) =
-                parse_primitive_action(settings, &ui.variables, action_owned.trim(), element)
-            {
+            if let Some(cmd) = parse_primitive_action(
+                settings,
+                &mut ui.variables,
+                &ui.menus,
+                &ui.touch_manager,
+                action_owned.trim(),
+                element,
+            ) {
                 cmds.push(cmd);
             }
         }
@@ -513,9 +620,14 @@ fn process_inner_content(
                         return Some(cmd);
                     }
                     // Try as primitive action
-                    if let Some(cmd) =
-                        parse_primitive_action(settings, &ui.variables, last_part, element)
-                    {
+                    if let Some(cmd) = parse_primitive_action(
+                        settings,
+                        &mut ui.variables,
+                        &ui.menus,
+                        &ui.touch_manager,
+                        last_part,
+                        element,
+                    ) {
                         return Some(cmd);
                     }
                 }
@@ -533,7 +645,14 @@ fn process_inner_content(
             return Some(cmd);
         }
         // Try as primitive action
-        if let Some(cmd) = parse_primitive_action(settings, &ui.variables, last_part, element) {
+        if let Some(cmd) = parse_primitive_action(
+            settings,
+            &mut ui.variables,
+            &ui.menus,
+            &ui.touch_manager,
+            last_part,
+            element,
+        ) {
             return Some(cmd);
         }
     }
@@ -707,7 +826,9 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
 /// Handles: "action_name" or "action_name(arg1, arg2, ...)"
 fn parse_primitive_action(
     settings: &Settings,
-    variables: &Variables,
+    variables: &mut Variables,
+    menus: &HashMap<String, Menu>,
+    touch_manager: &UiTouchManager,
     action: &str,
     element: &ElementRef,
 ) -> Option<UiCommand> {
@@ -745,12 +866,28 @@ fn parse_primitive_action(
 
             //println!("Primitive action: {}({:#?})", func_name, args); // Debug
 
-            return make_ui_command(settings, variables, func_name, args, element);
+            return make_ui_command(
+                settings,
+                variables,
+                menus,
+                touch_manager,
+                func_name,
+                args,
+                element,
+            );
         }
     }
 
     //println!("Simple action: {}", s); // Debug
-    make_ui_command(settings, variables, s, Vec::new(), element)
+    make_ui_command(
+        settings,
+        variables,
+        menus,
+        touch_manager,
+        s,
+        Vec::new(),
+        element,
+    )
 }
 
 fn button_matches(button: ParsedMouseButton, buttons: &MouseButtons) -> bool {

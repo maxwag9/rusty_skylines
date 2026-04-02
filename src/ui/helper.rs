@@ -1,4 +1,3 @@
-use crate::renderer::pipelines::DEPTH_FORMAT;
 use crate::ui::input::Input;
 use crate::ui::vertex::UiVertex;
 use std::cmp::Ordering;
@@ -176,57 +175,6 @@ fn compute_signed_area(verts: &[UiVertex]) -> f32 {
         area += p0[0] * p1[1] - p1[0] * p0[1];
     }
     area * 0.5
-}
-
-pub(crate) fn make_pipeline(
-    device: &Device,
-    label: &str,
-    layout: &PipelineLayout,
-    shader: &ShaderModule,
-    vs_entry: &str,
-    fs_entry: &str,
-    buffers: &[VertexBufferLayout],
-    format: TextureFormat,
-    blend: Option<BlendState>,
-    topology: PrimitiveTopology,
-    multisample: MultisampleState,
-) -> RenderPipeline {
-    device.create_render_pipeline(&RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: VertexState {
-            module: shader,
-            entry_point: Some(vs_entry),
-            buffers,
-            compilation_options: Default::default(),
-        },
-        fragment: Some(FragmentState {
-            module: shader,
-            entry_point: Some(fs_entry),
-            targets: &[Some(ColorTargetState {
-                format,
-                blend,
-                write_mask: ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
-        primitive: PrimitiveState {
-            topology,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: Some(DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(CompareFunction::Always),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-
-        multisample,
-        cache: None,
-        multiview_mask: None,
-    })
 }
 
 pub fn make_uniform_layout(device: &Device, label: &str) -> BindGroupLayout {

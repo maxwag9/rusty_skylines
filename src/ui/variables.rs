@@ -142,7 +142,7 @@ impl Variables {
         };
 
         let v = self.vars.get(base)?;
-
+        //println!("In Variables::get(): Name: {}, Value: {:?}", base, v);
         let suffix = match suffix_opt {
             Some(s) => s,
             None => return Some(v),

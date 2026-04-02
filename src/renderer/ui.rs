@@ -18,6 +18,7 @@ use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
+use wgpu_text::glyph_brush::Section;
 use wgpu_text::glyph_brush::ab_glyph::FontArc;
 use wgpu_text::{BrushBuilder, TextBrush};
 use winit::dpi::PhysicalSize;
@@ -323,6 +324,7 @@ impl UiRenderer {
         let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
         for (_, menu) in ui.menus.iter().filter(|(_, m)| m.active) {
             for layer in menu.layers.iter().filter(|l| l.active) {
+                //println!("{}", layer.name);
                 layers_to_render.push(layer);
             }
         }
@@ -331,6 +333,7 @@ impl UiRenderer {
         let depth_stencil = None;
         let msaa = self.pipelines.msaa_samples;
 
+        let mut text_sections: Vec<Section> = Vec::new();
         for layer in layers_to_render {
             // Build per-layer bind groups (same as before)
             let circle_bg = if layer.gpu.circle_count > 0 {
@@ -624,14 +627,18 @@ impl UiRenderer {
                 pass.set_vertex_buffer(0, text_vbo.slice(..));
                 pass.draw(0..layer.gpu.text_misc_vertex_count, 0..1);
             }
-
-            // Text on top
-            let _ = self
-                .brush
-                .queue(&self.device, queue, layer.gpu.text_sections.iter());
-
-            self.brush.draw(pass);
+            text_sections.extend(layer.gpu.text_sections.iter().map(|s| s.to_borrowed()));
         }
+
+        // Text on top
+        let result = self.brush.queue(&self.device, queue, text_sections.iter());
+        match result {
+            Ok(_) => {}
+            Err(e) => {
+                println!("{}", e)
+            }
+        }
+        self.brush.draw(pass);
     }
 
     pub fn write_storage_buffer(

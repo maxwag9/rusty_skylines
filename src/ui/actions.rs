@@ -6,15 +6,21 @@ use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
 use crate::resources::Time;
 use crate::ui::input::Input;
+use crate::ui::menu::Menu;
 use crate::ui::parser::{Value, eval_expr};
 use crate::ui::ui_edit_manager::{
-    ChangeColorCommand, ColorProperty, MoveElementCommand, ResizeElementCommand,
+    ChangeColorCommand, ColorProperty, CreateElementCommand, DeleteElementCommand,
+    DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
-use crate::ui::ui_editor::{Ui, get_element_position, get_layer_settings};
-use crate::ui::ui_edits::SizeProperty;
+use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_layer_settings};
+use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_text_editing::HitResult;
-use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::variables::Variables;
+use crate::ui::vertex::{
+    AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
+    UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
+};
 use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::{GameState, LoadResult, SaveResult};
 use crate::world::roads::road_subsystem::Roads;
@@ -221,6 +227,46 @@ pub enum UiCommand {
         value: Value,
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
+    },
+    AddElement {
+        element_ref: ElementRef,
+        menu: Value,
+        layer: Value,
+        id: Value,
+        kind: Value,
+        center: Value,
+    },
+    CloneElement {
+        element_ref: ElementRef,
+        from_menu: Value,
+        from_layer: Value,
+        from_id: Value,
+        to_menu: Value,
+        to_layer: Value,
+        to_id: Value,
+        center: Value,
+    },
+    CloneElementUndoable {
+        element_ref: ElementRef,
+        from_menu: Value,
+        from_layer: Value,
+        from_id: Value,
+        to_menu: Value,
+        to_layer: Value,
+        to_id: Value,
+        center: Value,
+    },
+    DeleteElement {
+        element_ref: ElementRef,
+        menu: Value,
+        layer: Value,
+        id: Value,
+    },
+    DeleteElementUndoable {
+        element_ref: ElementRef,
+        menu: Value,
+        layer: Value,
+        id: Value,
     },
     SaveGame,
     LoadSave {
@@ -809,33 +855,6 @@ impl CommandQueue {
                 name,
                 expr,
             } => {
-                if let Some(menu) = ctx.ui.menus.get(&element_ref.menu) {
-                    if let Some(layer) = menu.layers.iter().find(|l| l.name == element_ref.layer) {
-                        if let Some(element) = layer.find_element(element_ref.id.as_str()) {
-                            //println!("Center: {:?}, Mouse: {:?}, Radius: {}", element.center(), ctx.input.mouse.pos.to_array(), element.size());
-                            ctx.ui.variables.set_array("self.center", element.center()); // Vec2
-                            ctx.ui
-                                .variables
-                                .set_array("mouse", ctx.input.mouse.pos.to_array()); // Vec2
-                            ctx.ui.variables.set_var(
-                                "self.radius",
-                                element
-                                    .size()
-                                    .radius()
-                                    .map(|r| Value::F64(r as f64))
-                                    .unwrap_or(Value::Null),
-                            ); // f64
-                            ctx.ui.variables.set_var(
-                                "self.pt",
-                                element
-                                    .size()
-                                    .pt()
-                                    .map(|r| Value::F64(r as f64))
-                                    .unwrap_or(Value::Null),
-                            ); // f64
-                        }
-                    }
-                }
                 //println!("Evaluating: *{}*", expr);
                 match eval_expr(&expr, &ctx.ui.variables) {
                     Some(value) => {
@@ -941,7 +960,152 @@ impl CommandQueue {
                 }
                 CommandResult::Ok
             }
+            UiCommand::AddElement {
+                element_ref,
+                menu,
+                layer,
+                id,
+                kind,
+                center,
+            } => {
+                let kind = ElementKind::from_string(kind.to_string().as_str());
+                if kind == ElementKind::None {
+                    return CommandResult::Error(
+                        "Element Kind is None in AddElement kind argument".to_string(),
+                    );
+                }
+                let Some(center) = center.as_pos() else {
+                    return CommandResult::Error(
+                        "Couldn't unpack center pos from AddElement center argument".to_string(),
+                    );
+                };
+                let Some(element) = make_element(id.to_string(), &kind, center) else {
+                    return CommandResult::Error("Couldn't make element in AddElement".to_string());
+                };
+                ctx.ui.ui_edit_manager.push_command(CreateElementCommand {
+                    affected_element: ElementRef::new(
+                        menu.to_string().as_str(),
+                        layer.to_string().as_str(),
+                        id.to_string().as_str(),
+                        kind,
+                    ),
+                    element,
+                });
+                CommandResult::Ok
+            }
+            UiCommand::CloneElement {
+                element_ref,
+                from_menu,
+                from_layer,
+                from_id,
+                to_menu,
+                to_layer,
+                to_id,
+                center,
+            } => {
+                let from_element = ElementRef::new(
+                    from_menu.to_string().as_str(),
+                    from_layer.to_string().as_str(),
+                    from_id.to_string().as_str(),
+                    ElementKind::None,
+                );
+                let Some(mut element) = get_element(&ctx.ui.menus, &from_element) else {
+                    return CommandResult::Error(
+                        "Couldn't unpack element in CloneElement".to_string(),
+                    );
+                };
+                let to_element = ElementRef::new(
+                    to_menu.to_string().as_str(),
+                    to_layer.to_string().as_str(),
+                    to_id.to_string().as_str(),
+                    element.kind(),
+                );
 
+                element.set_id(&to_id.to_string());
+                if let Some(center) = center.as_pos() {
+                    element.set_pos(center[0], center[1])
+                };
+                let result = create_element(
+                    &mut ctx.ui.menus,
+                    &to_element.menu,
+                    &to_element.layer,
+                    element,
+                    &ctx.input.mouse,
+                );
+                match result {
+                    Ok(ok) => CommandResult::Ok,
+                    Err(err) => CommandResult::Error(err.to_string()),
+                }
+            }
+            UiCommand::CloneElementUndoable {
+                element_ref,
+                from_menu,
+                from_layer,
+                from_id,
+                to_menu,
+                to_layer,
+                to_id,
+                center,
+            } => {
+                let from_element = ElementRef::new(
+                    from_menu.to_string().as_str(),
+                    from_layer.to_string().as_str(),
+                    from_id.to_string().as_str(),
+                    ElementKind::None,
+                );
+                let to_element = ElementRef::new(
+                    to_menu.to_string().as_str(),
+                    to_layer.to_string().as_str(),
+                    to_id.to_string().as_str(),
+                    ElementKind::None,
+                );
+                ctx.ui
+                    .ui_edit_manager
+                    .push_command(DuplicateElementCommand {
+                        from_element,
+                        to_element,
+                        cached_element: None,
+                        optional_center: center.as_pos(),
+                    });
+                CommandResult::Ok
+            }
+            UiCommand::DeleteElement {
+                element_ref,
+                menu,
+                layer,
+                id,
+            } => {
+                let element = ElementRef::new(
+                    menu.to_string().as_str(),
+                    layer.to_string().as_str(),
+                    id.to_string().as_str(),
+                    ElementKind::None,
+                );
+
+                let result = delete_element(&mut ctx.ui.menus, &element);
+                match result {
+                    Ok(ok) => CommandResult::Ok,
+                    Err(err) => CommandResult::Error(err.to_string()),
+                }
+            }
+            UiCommand::DeleteElementUndoable {
+                element_ref,
+                menu,
+                layer,
+                id,
+            } => {
+                let element = ElementRef::new(
+                    menu.to_string().as_str(),
+                    layer.to_string().as_str(),
+                    id.to_string().as_str(),
+                    ElementKind::None,
+                );
+                ctx.ui.ui_edit_manager.push_command(DeleteElementCommand {
+                    affected_element: element,
+                    cached_element: None,
+                });
+                CommandResult::Ok
+            }
             UiCommand::SaveGame => {
                 save_game(
                     ctx.game_state,
@@ -1350,4 +1514,100 @@ pub fn set_element_property(
         }
     }
     CommandResult::Ok
+}
+
+pub fn make_element(id: String, kind: &ElementKind, center: [f32; 2]) -> Option<UiElement> {
+    match kind {
+        ElementKind::None => None,
+
+        ElementKind::Text => Some(UiElement::Text({
+            let mut el = UiButtonText::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+
+        ElementKind::Circle => Some(UiElement::Circle({
+            let mut el = UiButtonCircle::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+
+        ElementKind::Outline => Some(UiElement::Outline({
+            let mut el = UiButtonOutline::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+
+        ElementKind::Handle => Some(UiElement::Handle({
+            let mut el = UiButtonHandle::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+
+        ElementKind::Polygon => Some(UiElement::Polygon({
+            let mut el = UiButtonPolygon::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+
+        ElementKind::Advanced => Some(UiElement::Advanced({
+            let mut el = AdvancedPrimitive::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+
+        ElementKind::Rect => Some(UiElement::Rect({
+            let mut el = UiButtonRect::default();
+            el.id = id;
+            el.set_pos(center);
+            el
+        })),
+    }
+}
+
+pub fn send_element_properties_to_variables(
+    menus: &HashMap<String, Menu>,
+    variables: &mut Variables,
+    touch_manager: &UiTouchManager,
+    self_element_ref: &ElementRef,
+) {
+    if let Some(menu) = menus.get(&self_element_ref.menu) {
+        variables.set_string("self.menu", self_element_ref.menu.clone());
+        if let Some(layer) = menu
+            .layers
+            .iter()
+            .find(|l| l.name == self_element_ref.layer)
+        {
+            variables.set_string("self.layer", self_element_ref.layer.clone());
+            if let Some(element) = layer.find_element(self_element_ref.id.as_str()) {
+                variables.set_string("self.id", self_element_ref.id.clone());
+                variables.set_string("self.kind", self_element_ref.kind.to_string());
+                //println!("Center: {:?}, Mouse: {:?}, Radius: {}", element.center(), ctx.input.mouse.pos.to_array(), element.size());
+                variables.set_array("self.center", element.center()); // Vec2
+                variables.set_var(
+                    "self.radius",
+                    element
+                        .size()
+                        .radius()
+                        .map(|r| Value::F64(r as f64))
+                        .unwrap_or(Value::Null),
+                ); // f64
+                variables.set_var(
+                    "self.pt",
+                    element
+                        .size()
+                        .pt()
+                        .map(|r| Value::F64(r as f64))
+                        .unwrap_or(Value::Null),
+                ); // f64
+            }
+        }
+    }
+    //println!("{:?}", variables.get("self.layer"));
 }

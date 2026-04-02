@@ -43,8 +43,7 @@ pub struct TouchConfig {
     pub multi_select_active: bool,
     /// Modifier for additive select (true = Shift held)
     pub additive_select_active: bool,
-    pub zoom_target: f32,
-    pub zoom_current: f32,
+    pub zoom_states: HashMap<ElementRef, ZoomState>,
 }
 
 impl Default for TouchConfig {
@@ -57,8 +56,7 @@ impl Default for TouchConfig {
             snap_enabled: false,
             multi_select_active: false,
             additive_select_active: false,
-            zoom_target: 1.0,
-            zoom_current: 1.0,
+            zoom_states: HashMap::new(),
         }
     }
 }
@@ -1675,8 +1673,14 @@ pub fn sd_rounded_box(p: [f32; 2], center: [f32; 2], half_size: [f32; 2], r: f32
     outside_dist + inside_dist - r
 }
 
-// TESTS
+#[derive(Debug, Clone)]
+pub struct ZoomState {
+    pub zoom_target: f32,
+    pub zoom_current: f32,
+    pub last_used: f64, // time in seconds
+}
 
+// TESTS
 #[cfg(test)]
 mod tests {
     use super::*;

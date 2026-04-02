@@ -346,11 +346,12 @@ pub struct AdvancedPrimitiveYaml {
     #[serde(skip_serializing_if = "is_one")]
     pub scale: f32,
     pub misc: MiscButtonSettingsYaml,
+    #[serde(default)]
     pub editing_tool: bool,
 }
 #[derive(Debug, Clone)]
 pub struct AdvancedPrimitive {
-    pub name: String,
+    pub id: String,
     pub ap_name: String,
     pub setting: Option<SettingBinding>,
     pub x: f32,
@@ -363,7 +364,7 @@ pub struct AdvancedPrimitive {
 impl AdvancedPrimitive {
     pub fn from_yaml(yaml: &AdvancedPrimitiveYaml) -> Self {
         Self {
-            name: yaml.name.clone(),
+            id: yaml.name.clone(),
             ap_name: yaml.ap_name.clone(),
             setting: yaml.setting.clone(),
             x: yaml.x,
@@ -381,7 +382,7 @@ impl AdvancedPrimitive {
     }
     pub fn to_yaml(&self) -> AdvancedPrimitiveYaml {
         AdvancedPrimitiveYaml {
-            name: self.name.clone(),
+            name: self.id.clone(),
             ap_name: self.ap_name.clone(),
             setting: self.setting.clone(),
             x: self.x,
@@ -421,7 +422,7 @@ impl AdvancedPrimitive {
                 .collect();
 
             layers.push(RuntimeLayer {
-                name: self.name.clone(),
+                name: self.id.clone(),
                 ap_name: Some(name.clone()),
                 order,
                 elements,
@@ -437,6 +438,11 @@ impl AdvancedPrimitive {
         }
 
         layers
+    }
+
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.x = position[0];
+        self.y = position[1];
     }
 }
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -550,6 +556,11 @@ impl UiButtonRect {
     #[inline]
     pub fn size(&self) -> [f32; 2] {
         [self.w, self.h]
+    }
+    #[inline]
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.x = position[0];
+        self.y = position[1];
     }
 }
 #[derive(Debug, Clone)]
@@ -704,7 +715,20 @@ impl UiElement {
             UiElement::Handle(h) => &h.id,
             UiElement::Polygon(p) => &p.id,
             UiElement::Rect(r) => &r.id,
-            UiElement::Advanced(ap) => &ap.name,
+            UiElement::Advanced(ap) => &ap.id,
+        }
+    }
+
+    pub fn set_id(&mut self, new_id: &String) {
+        let new_id = new_id.clone();
+        match self {
+            UiElement::Text(t) => t.id = new_id,
+            UiElement::Circle(c) => c.id = new_id,
+            UiElement::Outline(o) => o.id = new_id,
+            UiElement::Handle(h) => h.id = new_id,
+            UiElement::Polygon(p) => p.id = new_id,
+            UiElement::Rect(r) => r.id = new_id,
+            UiElement::Advanced(ap) => ap.id = new_id,
         }
     }
 
@@ -1214,6 +1238,20 @@ impl fmt::Display for ElementKind {
     }
 }
 
+impl ElementKind {
+    pub fn from_string(kind: &str) -> Self {
+        match kind.to_lowercase().as_str() {
+            "rect" => ElementKind::Rect,
+            "text" => ElementKind::Text,
+            "circle" => ElementKind::Circle,
+            "polygon" => ElementKind::Polygon,
+            "advanced" => ElementKind::Advanced,
+            "handle" => ElementKind::Handle,
+            "outline" => ElementKind::Outline,
+            _ => ElementKind::None,
+        }
+    }
+}
 impl RuntimeLayer {
     pub fn bump_element_z(&mut self, id: &str, delta: i32) {
         let len = self.elements.len();
@@ -1706,7 +1744,7 @@ pub struct UiButtonHandle {
 }
 
 impl UiButtonText {
-    pub(crate) fn from_yaml(t: UiButtonTextYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(t: UiButtonTextYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         let length = t.text.len();
         UiButtonText {
@@ -1788,10 +1826,15 @@ impl UiButtonText {
             anchor: self.anchor,
         }
     }
+
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.x = position[0];
+        self.y = position[1];
+    }
 }
 
 impl UiButtonCircle {
-    pub(crate) fn from_yaml(c: UiButtonCircleYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(c: UiButtonCircleYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
         let radius = scale * c.radius;
         UiButtonCircle {
@@ -1847,6 +1890,11 @@ impl UiButtonCircle {
             misc: self.misc.to_yaml(),
         }
     }
+
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.x = position[0];
+        self.y = position[1];
+    }
 }
 
 impl UiButtonHandle {
@@ -1890,6 +1938,11 @@ impl UiButtonHandle {
             misc: self.misc.to_yaml(),
         }
     }
+
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.x = position[0];
+        self.y = position[1];
+    }
 }
 
 impl UiButtonOutline {
@@ -1932,6 +1985,11 @@ impl UiButtonOutline {
 
             misc: self.misc.to_yaml(),
         }
+    }
+
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.shape_data.x = position[0];
+        self.shape_data.y = position[1];
     }
 }
 
@@ -2049,6 +2107,11 @@ impl UiButtonPolygon {
         self.cached_scaled_vertices = self.scaled_vertices();
         self.validate_scaled_vertices_cache();
     }
+
+    pub fn set_pos(&mut self, position: [f32; 2]) {
+        self.x = position[0];
+        self.y = position[1];
+    }
 }
 
 impl Default for UiButtonText {
@@ -2066,8 +2129,8 @@ impl Default for UiButtonText {
             pt: 14.0,
             original_pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
-            text: "".into(),
-            template: "".to_string(),
+            text: "default".into(),
+            template: "default".to_string(),
             misc: MiscButtonSettings::default(),
             width: 50.0,
             height: 20.0,
@@ -2143,10 +2206,10 @@ impl Default for UiButtonCircle {
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
-            radius: 10.0,
-            original_radius: 10.0,
+            radius: 50.0,
+            original_radius: 50.0,
             inside_border_thickness_percentage: 0.0,
-            border_thickness_percentage: 1.0,
+            border_thickness_percentage: 0.05,
             fade: 0.0,
             fill_color: [1.0, 1.0, 1.0, 1.0],
             inside_border_color: [0.0, 0.0, 0.0, 1.0],
@@ -2192,7 +2255,41 @@ impl Default for UiButtonHandle {
         }
     }
 }
-
+impl Default for UiButtonRect {
+    fn default() -> Self {
+        Self {
+            id: "None".to_string(),
+            actions: vec![],
+            style: "".to_string(),
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+            rotation: 30.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            border_color: [1.0, 1.0, 1.0, 1.0],
+            texture: None,
+            roundness: 0.0,
+            border_thickness_percentage: 0.0,
+            fade: 0.0,
+            misc: MiscButtonSettings::default(),
+        }
+    }
+}
+impl Default for AdvancedPrimitive {
+    fn default() -> Self {
+        Self {
+            id: "default".to_string(),
+            ap_name: "".to_string(),
+            setting: None,
+            x: 0.0,
+            y: 0.0,
+            scale: 1.0,
+            misc: MiscButtonSettings::default(),
+            editing_tool: false,
+        }
+    }
+}
 impl Default for ShapeData {
     fn default() -> Self {
         Self {

@@ -34,7 +34,7 @@ layers:
         actions: [ ]
         x: 0.8455063
         y: 0.93613005
-        radius: 0.043656804
+        radius: 0.042793334
         border_thickness_percentage: 0.2
         border_color:
           - 1.0
@@ -49,8 +49,8 @@ layers:
       - !Polygon
         id: '5660'
         actions: [ ]
-        x: 0.0
-        y: 0.0
+        x: -10.146484
+        y: 5.2734375
         vertices:
           - pos:
               - 0.8578537
@@ -84,6 +84,7 @@ layers:
               - 1.0
               - 1.0
               - 1.0
+    editing_tool: false
   - name: editor_information
     order: 3
     elements:
@@ -270,16 +271,17 @@ layers:
           - 0.0
           - 1.0
     active: false
+    editing_tool: false
   - name: Color Picker
     order: 900
     elements:
       - !Rect
         id: Color Picker Body
         actions: [ ]
-        x: 0.34443054
-        y: 0.5594419
-        w: 0.15
-        h: 0.19802216
+        x: 0.36384544
+        y: 0.5413755
+        w: 0.19713876
+        h: 0.2602522
         rotation: 0.0
         color:
           - 0.001
@@ -302,13 +304,13 @@ layers:
       - !Text
         id: Color Picker Title
         actions: [ ]
-        x: 0.31479993
-        y: 0.43258864
-        pt: 15.0
+        x: 0.3345982
+        y: 0.4296485
+        pt: 19.188313
         color:
-          - 0.7
-          - 0.7
-          - 0.7
+          - 0.14588779
+          - 1.0
+          - 0.017024457
           - 1.0
         text: ColorPicker
         misc:
@@ -318,8 +320,8 @@ layers:
       - !Text
         id: Color Picker Red Input Box
         actions: [ ]
-        x: 0.30482832
-        y: 0.61743236
+        x: 0.29990196
+        y: 0.62142855
         pt: 15.0
         color:
           - 0.7
@@ -335,8 +337,8 @@ layers:
       - !Text
         id: Color Picker Green Input Box
         actions: [ ]
-        x: 0.30145305
-        y: 0.63390857
+        x: 0.30307388
+        y: 0.64189106
         pt: 15.0
         color:
           - 0.7
@@ -352,8 +354,8 @@ layers:
       - !Text
         id: Color Picker Blue Input Box
         actions: [ ]
-        x: 0.30354658
-        y: 0.65007895
+        x: 0.30085945
+        y: 0.6596226
         pt: 15.0
         color:
           - 0.7
@@ -369,21 +371,21 @@ layers:
       - !Circle
         id: Color Picker Color Circle
         actions:
-          -
+          - ''
           - button:l, on:drag, in:editor_mode, set_expr(angle_shifted, atan2(mouse.y - self.center.y, mouse.x - self.center.x) + PI/2)
           - button:l, on:drag, in:editor_mode, set_expr(color_picker_hsv.h, atan2(sin(angle_shifted), cos(angle_shifted)) / (2*PI) + 0.5)
           - button:l, on:drag, in:editor_mode, set_expr(color_picker_hsv.s, clamp(sqrt((mouse.x - self.center.x)**2 + (mouse.y - self.center.y)**2) / self.radius, 0.0, 1.0))
           - button:l, on:drag, in:editor_mode, set_expr(color_picker_color, hsv_to_rgb(color_picker_hsv.h, pow(color_picker_hsv.s, 0.47), 1.0))
           - button:l, on:drag, in:editor_mode, set_var(editing.color.fill, color_picker_color)
         style: Hue Circle
-        x: 0.34415
-        y: 0.53456
-        radius: 0.05804
+        x: 0.3325743
+        y: 0.5274939
+        radius: 0.06291461
         fill_color:
-          - 0.2
-          - 0.2
-          - 0.2
-          - 0.5
+          - 0.7994889
+          - 0.91996294
+          - 1.0
+          - 1.0
         misc:
           active: true
           pressable: true
@@ -405,3 +407,4 @@ layers:
           pressable: false
           editable: false
     active: false
+    editing_tool: false

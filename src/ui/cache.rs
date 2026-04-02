@@ -16,6 +16,10 @@ pub fn rebuild_text_cache(
     rebuilt: &mut LayerDirty,
     runtime: &UiRuntimes,
 ) {
+    let Some(font) = brush.fonts().first() else {
+        rebuilt.mark_texts();
+        return;
+    };
     for (element, cache_element) in layer
         .elements
         .iter_mut()
@@ -26,15 +30,12 @@ pub fn rebuild_text_cache(
         }
         if let (UiElement::Text(t), UiElementCache::Text(cached)) = (element, cache_element) {
             let (rt, hash) = runtime_info(runtime, &t.id);
-            let Some(font) = brush.fonts().first() else {
-                return;
-            };
 
             let mut glyph_bounds: Vec<Rect> = Vec::new();
             let mut char_spans: Vec<std::ops::Range<usize>> = Vec::new();
 
             let Some(px_scale) = font.pt_to_px_scale(t.pt) else {
-                return;
+                continue;
             };
             let scale_factor = px_scale.y / font.height_unscaled();
             let line_height = px_scale.y;

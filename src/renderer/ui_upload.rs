@@ -226,6 +226,7 @@ pub fn upload_text(
         .iter_mut()
         .filter_map(UiElementCache::as_text_mut)
     {
+        //println!("cached text layer: {}, name: {}", layer.name, tp.id);
         let layout = Layout::default()
             .v_align(VerticalAlign::Top)
             .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker);
@@ -242,6 +243,7 @@ pub fn upload_text(
                 .with_scale(px) // px -> font size in pixels
                 .with_color(tp.color),
         );
+        //println!("SECTION cached text layer: {}, name: {}, SECTION: {:?}", layer.name, tp.id, s);
         if let Some(rect) = ui_renderer.brush.glyph_bounds(&s) {
             let (w, h) = (rect.width(), rect.height());
             bounds_map.insert(tp.id.clone(), (w, h));

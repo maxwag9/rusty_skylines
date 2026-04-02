@@ -98,7 +98,7 @@ pub fn handle_text_editing(
     }
 }
 
-pub(crate) fn process_text_editing_input(
+pub fn process_text_editing_input(
     editor: &mut EditorTouchExtension,
     input: &mut Input,
     mouse_snapshot: MouseSnapshot,

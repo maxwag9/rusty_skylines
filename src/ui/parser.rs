@@ -107,10 +107,19 @@ impl Value {
             None => {}
         };
 
-        // =========================
-        // Default: String
-        // =========================
-        Value::String(s.to_string())
+        match eval_expr(s, variables) {
+            Some(value) => match value {
+                Value::Null => {
+                    println!("Input: {}, Output: Null!!!", s);
+                    Value::String(s.to_string())
+                }
+                _ => {
+                    println!("Input: {}, Output: {}", s, value);
+                    value
+                }
+            },
+            None => Value::String(s.to_string()),
+        }
     }
     pub fn from_vec<I, T>(iter: I) -> Self
     where
@@ -143,7 +152,13 @@ impl Value {
             _ => None,
         }
     }
-
+    pub fn as_pos(&self) -> Option<[f32; 2]> {
+        let arr = self.as_array()?;
+        if arr.len() != 2 {
+            return None;
+        }
+        Some([arr[0].as_f64()? as f32, arr[1].as_f64()? as f32])
+    }
     pub fn as_color3(&self) -> Option<[f32; 3]> {
         let arr = self.as_array()?;
         if arr.len() != 4 {
@@ -342,10 +357,6 @@ impl From<&str> for Value {
     fn from(v: &str) -> Self {
         Value::String(v.to_string())
     }
-}
-
-fn lookup_var(vars: &Variables, name: &str) -> Option<Value> {
-    vars.get(name).cloned()
 }
 
 // ------------------------------------------------------------
@@ -1646,632 +1657,518 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.pos).unwrap_or(&Token::End)
     }
 
-    fn next(&mut self) -> Token {
-        let t = self.peek().clone();
-        if !matches!(t, Token::End) {
+    fn advance(&mut self) -> Token {
+        let tok = self.peek().clone();
+        if !matches!(tok, Token::End) {
             self.pos += 1;
         }
-        t
+        tok
     }
 
-    // expr = pipeline
-    fn parse_expr(&mut self) -> Option<Value> {
-        let mut value = self.parse_ternary()?;
-
-        while let Token::Pipe = self.peek() {
-            self.next();
-            // Get the function name
-            if let Token::Ident(name) = self.next() {
-                // Check if it's a function call with parens
-                if let Token::LParen = self.peek() {
-                    self.next();
-                    let mut args = vec![value];
-                    args = self.parse_comma_separated_until_rparen(|s| s.parse_expr())?;
-
-                    self.next(); // consume )
-
-                    if let Some(func) = get_builtin(&name) {
-                        value = func(args)?;
-                    } else {
-                        return None;
-                    }
-                } else {
-                    // Just function name, pass current value as only arg
-                    if let Some(func) = get_builtin(&name) {
-                        value = func(vec![value])?;
-                    } else {
-                        return None;
-                    }
-                }
-            } else {
-                return None;
-            }
+    fn expect(&mut self, expected: &Token) -> Option<()> {
+        if self.peek() == expected {
+            self.advance();
+            Some(())
+        } else {
+            None
         }
-
-        Some(value)
     }
 
-    // ternary = null_coalesce ('?' expr ':' expr)?
-    fn parse_ternary(&mut self) -> Option<Value> {
-        let condition = self.parse_null_coalesce()?;
+    // ========== Main Entry Point ==========
 
-        if let Token::Question = self.peek() {
-            self.next();
-            let yes = self.parse_expr()?;
-            match self.next() {
-                Token::Colon => (),
-                _ => return None,
-            }
-            let no = self.parse_expr()?;
+    fn parse(&mut self) -> Option<Value> {
+        self.pipeline()
+    }
 
-            let cond_bool = condition.is_truthy();
-            return Some(if cond_bool { yes } else { no });
+    // ========== Precedence Levels (highest to lowest in parsing order) ==========
+
+    fn pipeline(&mut self) -> Option<Value> {
+        let mut val = self.ternary()?;
+
+        while matches!(self.peek(), Token::Pipe) {
+            self.advance();
+            let name = self.expect_ident()?;
+            let args = self.maybe_call_args(val)?;
+            val = call_builtin(&name, args)?;
         }
-
-        Some(condition)
+        Some(val)
     }
 
-    // null_coalesce = logical_or (?? logical_or)*
-    fn parse_null_coalesce(&mut self) -> Option<Value> {
-        let mut value = self.parse_logical_or()?;
+    fn ternary(&mut self) -> Option<Value> {
+        let cond = self.null_coalesce()?;
 
-        while let Token::NullCoalesce = self.peek() {
-            self.next();
-            if value.is_null() {
-                value = self.parse_logical_or()?;
-            } else {
-                // Still need to parse the RHS but discard it
-                self.parse_logical_or()?;
-            }
+        if !matches!(self.peek(), Token::Question) {
+            return Some(cond);
         }
+        self.advance();
 
-        Some(value)
+        let yes = self.pipeline()?;
+        self.expect(&Token::Colon)?;
+        let no = self.pipeline()?;
+
+        Some(if cond.is_truthy() { yes } else { no })
     }
 
-    // logical_or = logical_and ('||' logical_and)*
-    fn parse_logical_or(&mut self) -> Option<Value> {
-        let mut value = self.parse_logical_and()?;
-        loop {
-            match self.peek() {
-                Token::Or => {
-                    self.next();
-                    let rhs = self.parse_logical_and()?;
-                    let a = value.is_truthy();
-                    let b = rhs.is_truthy();
-                    value = Value::Bool(a || b);
-                }
-                _ => break,
-            }
+    fn null_coalesce(&mut self) -> Option<Value> {
+        let mut val = self.logical_or()?;
+        while matches!(self.peek(), Token::NullCoalesce) {
+            self.advance();
+            let rhs = self.logical_or()?;
+            // NOTE: Now we check for None semantically, not Value::Null
+            // You may need to adjust this based on your use case
+            val = rhs; // or keep val if you want short-circuit on "some" value
         }
-        Some(value)
+        Some(val)
     }
 
-    // logical_and = bitwise_or ('&&' bitwise_or)*
-    fn parse_logical_and(&mut self) -> Option<Value> {
-        let mut value = self.parse_bitwise_or()?;
-        loop {
-            match self.peek() {
-                Token::And => {
-                    self.next();
-                    let rhs = self.parse_bitwise_or()?;
-                    let a = value.is_truthy();
-                    let b = rhs.is_truthy();
-                    value = Value::Bool(a && b);
-                }
-                _ => break,
-            }
+    fn logical_or(&mut self) -> Option<Value> {
+        self.left_assoc(
+            Self::logical_and,
+            |tok| matches!(tok, Token::Or),
+            |l, r, _| Value::Bool(l.is_truthy() || r.is_truthy()),
+        )
+    }
+
+    fn logical_and(&mut self) -> Option<Value> {
+        self.left_assoc(
+            Self::bitwise_or,
+            |tok| matches!(tok, Token::And),
+            |l, r, _| Value::Bool(l.is_truthy() && r.is_truthy()),
+        )
+    }
+
+    fn bitwise_or(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::bitwise_xor,
+            |tok| matches!(tok, Token::BitOr),
+            |l, r, _| Some(Value::I64(l.as_i64()? | r.as_i64()?)),
+        )
+    }
+
+    fn bitwise_xor(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::bitwise_and,
+            |tok| matches!(tok, Token::BitXor),
+            |l, r, _| Some(Value::I64(l.as_i64()? ^ r.as_i64()?)),
+        )
+    }
+
+    fn bitwise_and(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::equality,
+            |tok| matches!(tok, Token::BitAnd),
+            |l, r, _| Some(Value::I64(l.as_i64()? & r.as_i64()?)),
+        )
+    }
+
+    fn equality(&mut self) -> Option<Value> {
+        self.left_assoc(
+            Self::comparison,
+            |tok| {
+                matches!(
+                    tok,
+                    Token::Eq | Token::Neq | Token::StrictEq | Token::StrictNeq
+                )
+            },
+            |l, r, tok| {
+                let eq = l == r;
+                Value::Bool(match tok {
+                    Token::Eq | Token::StrictEq => eq,
+                    _ => !eq,
+                })
+            },
+        )
+    }
+
+    fn comparison(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::shift,
+            |tok| matches!(tok, Token::Lt | Token::Gt | Token::Le | Token::Ge),
+            |l, r, tok| {
+                let (a, b) = (l.as_f64()?, r.as_f64()?);
+                Some(Value::Bool(match tok {
+                    Token::Lt => a < b,
+                    Token::Gt => a > b,
+                    Token::Le => a <= b,
+                    Token::Ge => a >= b,
+                    _ => unreachable!(),
+                }))
+            },
+        )
+    }
+
+    fn shift(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::additive,
+            |tok| matches!(tok, Token::Shl | Token::Shr),
+            |l, r, tok| {
+                let (a, b) = (l.as_i64()?, r.as_i64()? as u32);
+                Some(Value::I64(match tok {
+                    Token::Shl => a << b,
+                    Token::Shr => a >> b,
+                    _ => unreachable!(),
+                }))
+            },
+        )
+    }
+
+    fn additive(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::multiplicative,
+            |tok| matches!(tok, Token::Plus | Token::Minus),
+            |l, r, tok| match tok {
+                Token::Plus => add_values(l, r),
+                Token::Minus => Some(Value::F64(l.as_f64()? - r.as_f64()?)),
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    fn multiplicative(&mut self) -> Option<Value> {
+        self.left_assoc_opt(
+            Self::power,
+            |tok| matches!(tok, Token::Star | Token::Slash | Token::Percent),
+            |l, r, tok| match tok {
+                Token::Star => multiply_values(l, r),
+                Token::Slash => Some(Value::F64(l.as_f64()? / r.as_f64()?)),
+                Token::Percent => Some(Value::F64(l.as_f64()? % r.as_f64()?)),
+                _ => unreachable!(),
+            },
+        )
+    }
+
+    fn power(&mut self) -> Option<Value> {
+        let base = self.unary()?;
+        if matches!(self.peek(), Token::Power) {
+            self.advance();
+            let exp = self.power()?; // right-associative recursion
+            Some(Value::F64(base.as_f64()?.powf(exp.as_f64()?)))
+        } else {
+            Some(base)
         }
-        Some(value)
     }
 
-    // bitwise_or = bitwise_xor ('|' bitwise_xor)*
-    fn parse_bitwise_or(&mut self) -> Option<Value> {
-        let mut value = self.parse_bitwise_xor()?;
-        loop {
-            match self.peek() {
-                Token::BitOr => {
-                    self.next();
-                    let rhs = self.parse_bitwise_xor()?;
-                    value = Value::I64(value.as_i64()? | rhs.as_i64()?);
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // bitwise_xor = bitwise_and ('^' bitwise_and)*
-    fn parse_bitwise_xor(&mut self) -> Option<Value> {
-        let mut value = self.parse_bitwise_and()?;
-        loop {
-            match self.peek() {
-                Token::BitXor => {
-                    self.next();
-                    let rhs = self.parse_bitwise_and()?;
-                    value = Value::I64(value.as_i64()? ^ rhs.as_i64()?);
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // bitwise_and = equality ('&' equality)*
-    fn parse_bitwise_and(&mut self) -> Option<Value> {
-        let mut value = self.parse_equality()?;
-        loop {
-            match self.peek() {
-                Token::BitAnd => {
-                    self.next();
-                    let rhs = self.parse_equality()?;
-                    value = Value::I64(value.as_i64()? & rhs.as_i64()?);
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // equality = comparison (== | != | === | !== comparison)*
-    fn parse_equality(&mut self) -> Option<Value> {
-        let mut value = self.parse_comparison()?;
-        loop {
-            match self.peek() {
-                Token::Eq => {
-                    self.next();
-                    let rhs = self.parse_comparison()?;
-                    value = Value::Bool(value == rhs);
-                }
-                Token::Neq => {
-                    self.next();
-                    let rhs = self.parse_comparison()?;
-                    value = Value::Bool(!(value == rhs));
-                }
-                Token::StrictEq => {
-                    self.next();
-                    let rhs = self.parse_comparison()?;
-                    value = Value::Bool(value == rhs);
-                }
-                Token::StrictNeq => {
-                    self.next();
-                    let rhs = self.parse_comparison()?;
-                    value = Value::Bool(!(value == rhs));
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // comparison = shift (< | > | <= | >= shift)*
-    fn parse_comparison(&mut self) -> Option<Value> {
-        let mut value = self.parse_shift()?;
-        loop {
-            match self.peek() {
-                Token::Lt => {
-                    self.next();
-                    let rhs = self.parse_shift()?;
-                    value = Value::Bool(value.as_f64()? < rhs.as_f64()?);
-                }
-                Token::Gt => {
-                    self.next();
-                    let rhs = self.parse_shift()?;
-                    value = Value::Bool(value.as_f64()? > rhs.as_f64()?);
-                }
-                Token::Le => {
-                    self.next();
-                    let rhs = self.parse_shift()?;
-                    value = Value::Bool(value.as_f64()? <= rhs.as_f64()?);
-                }
-                Token::Ge => {
-                    self.next();
-                    let rhs = self.parse_shift()?;
-                    value = Value::Bool(value.as_f64()? >= rhs.as_f64()?);
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // shift = addition (<< | >> addition)*
-    fn parse_shift(&mut self) -> Option<Value> {
-        let mut value = self.parse_addition()?;
-        loop {
-            match self.peek() {
-                Token::Shl => {
-                    self.next();
-                    let rhs = self.parse_addition()?;
-                    value = Value::I64((value.as_i64()?) << (rhs.as_i64()? as u32));
-                }
-                Token::Shr => {
-                    self.next();
-                    let rhs = self.parse_addition()?;
-                    value = Value::I64((value.as_i64()?) >> (rhs.as_i64()? as u32));
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // addition = multiplication (+ | - multiplication)*
-    fn parse_addition(&mut self) -> Option<Value> {
-        let mut value = self.parse_multiplication()?;
-        loop {
-            match self.peek() {
-                Token::Plus => {
-                    self.next();
-                    let rhs = self.parse_multiplication()?;
-                    value = add_values(value, rhs)?;
-                }
-                Token::Minus => {
-                    self.next();
-                    let rhs = self.parse_multiplication()?;
-                    value = Value::F64(value.as_f64()? - rhs.as_f64()?);
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // multiplication = power (* | / | % power)*
-    fn parse_multiplication(&mut self) -> Option<Value> {
-        let mut value = self.parse_power()?;
-        loop {
-            match self.peek() {
-                Token::Star => {
-                    self.next();
-                    let rhs = self.parse_power()?;
-                    // String repetition: "abc" * 3 = "abcabcabc"
-                    match (&value, &rhs) {
-                        (Value::String(s), Value::I64(n)) => {
-                            value = Value::String(s.repeat(*n as usize));
-                        }
-                        (Value::I64(n), Value::String(s)) => {
-                            value = Value::String(s.repeat(*n as usize));
-                        }
-                        _ => {
-                            value = Value::F64(value.as_f64()? * rhs.as_f64()?);
-                        }
-                    }
-                }
-                Token::Slash => {
-                    self.next();
-                    let rhs = self.parse_power()?;
-                    value = Value::F64(value.as_f64()? / rhs.as_f64()?);
-                }
-                Token::Percent => {
-                    self.next();
-                    let rhs = self.parse_power()?;
-                    value = Value::F64(value.as_f64()? % rhs.as_f64()?);
-                }
-                _ => break,
-            }
-        }
-        Some(value)
-    }
-
-    // power = unary (** unary)*  (right associative)
-    fn parse_power(&mut self) -> Option<Value> {
-        let base = self.parse_unary()?;
-
-        if let Token::Power = self.peek() {
-            self.next();
-            let exp = self.parse_power()?; // Right associative
-            return Some(Value::F64(base.as_f64()?.powf(exp.as_f64()?)));
-        }
-
-        Some(base)
-    }
-
-    // unary = !unary | -unary | ~unary | postfix
-    fn parse_unary(&mut self) -> Option<Value> {
+    fn unary(&mut self) -> Option<Value> {
         match self.peek() {
             Token::Not => {
-                self.next();
-                let v = self.parse_unary()?;
-                Some(Value::Bool(!v.is_truthy()))
+                self.advance();
+                Some(Value::Bool(!self.unary()?.is_truthy()))
             }
             Token::Minus => {
-                self.next();
-                let v = self.parse_unary()?;
-                Some(Value::F64(-v.as_f64()?))
+                self.advance();
+                Some(Value::F64(-self.unary()?.as_f64()?))
             }
             Token::BitNot => {
-                self.next();
-                let v = self.parse_unary()?;
-                Some(Value::F64((!v.as_i64()?) as f64))
+                self.advance();
+                Some(Value::I64(!self.unary()?.as_i64()?))
             }
-            _ => self.parse_postfix(),
+            _ => self.postfix(),
         }
     }
 
-    // postfix = primary (. ident | [expr] | (args))*
-    fn parse_postfix(&mut self) -> Option<Value> {
-        let mut value = self.parse_primary()?;
-
+    fn postfix(&mut self) -> Option<Value> {
+        let mut val = self.primary()?;
         loop {
             match self.peek() {
                 Token::Dot => {
-                    self.next();
-                    if let Token::Ident(prop) = self.next() {
-                        value = self.get_property(&value, &prop)?;
-                    } else {
-                        return None;
-                    }
+                    self.advance();
+                    let prop = self.expect_ident()?;
+                    val = get_property(&val, &prop)?;
                 }
                 Token::LBracket => {
-                    self.next();
-                    let index = self.parse_expr()?;
-                    if !matches!(self.next(), Token::RBracket) {
-                        return None;
-                    }
-                    value = self.get_index(&value, &index)?;
-                }
-                Token::LParen if matches!(value, Value::String(_)) => {
-                    // This is a function call where we got the name as a string
-                    break;
+                    self.advance();
+                    let idx = self.pipeline()?;
+                    self.expect(&Token::RBracket)?;
+                    val = get_index(&val, &idx)?;
                 }
                 _ => break,
             }
         }
-
-        Some(value)
+        Some(val)
     }
 
-    fn get_property(&self, value: &Value, prop: &str) -> Option<Value> {
-        let result = match value {
-            Value::String(s) => match prop {
-                "length" | "len" => Some(Value::I64(s.len() as i64)),
-                "upper" => Some(Value::String(s.to_uppercase())),
-                "lower" => Some(Value::String(s.to_lowercase())),
-                "trim" => Some(Value::String(s.trim().to_string())),
-                "reverse" => Some(Value::String(s.chars().rev().collect())),
-                "first" => s.chars().next().map(|c| Value::String(c.to_string())),
-                "last" => s.chars().last().map(|c| Value::String(c.to_string())),
-                "empty" => Some(Value::Bool(s.is_empty())),
-                "chars" => Some(Value::Array(
-                    s.chars().map(|c| Value::String(c.to_string())).collect(),
-                )),
-                "lines" => Some(Value::Array(
-                    s.lines().map(|l| Value::String(l.to_string())).collect(),
-                )),
-                "words" => Some(Value::Array(
-                    s.split_whitespace()
-                        .map(|w| Value::String(w.to_string()))
-                        .collect(),
-                )),
-                _ => None,
-            },
-
-            Value::Array(arr) => match prop {
-                "length" | "len" | "count" => Some(Value::I64(arr.len() as i64)),
-                "first" => arr.first().cloned(),
-                "last" => arr.last().cloned(),
-                "empty" => Some(Value::Bool(arr.is_empty())),
-
-                "sum" => {
-                    let sum: f64 = arr.iter().filter_map(|v| v.as_f64()).sum();
-                    Some(Value::F64(sum))
-                }
-
-                "avg" => {
-                    let nums: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
-                    if nums.is_empty() {
-                        None
-                    } else {
-                        Some(Value::F64(nums.iter().sum::<f64>() / nums.len() as f64))
-                    }
-                }
-
-                "min" => arr
-                    .iter()
-                    .filter_map(|v| v.as_f64())
-                    .fold(None, |min, n| Some(min.map_or(n, |m: f64| m.min(n))))
-                    .map(Value::F64),
-
-                "max" => arr
-                    .iter()
-                    .filter_map(|v| v.as_f64())
-                    .fold(None, |max, n| Some(max.map_or(n, |m: f64| m.max(n))))
-                    .map(Value::F64),
-
-                "reverse" => Some(Value::Array(arr.iter().rev().cloned().collect())),
-
-                _ => None,
-            },
-
-            Value::F64(n) => match prop {
-                "abs" => Some(Value::F64(n.abs())),
-                "floor" => Some(Value::F64(n.floor())),
-                "ceil" => Some(Value::F64(n.ceil())),
-                "round" => Some(Value::F64(n.round())),
-                "trunc" => Some(Value::F64(n.trunc())),
-                "sqrt" => Some(Value::F64(n.sqrt())),
-                "sign" => Some(Value::F64(n.signum())),
-                "fract" => Some(Value::F64(n.fract())),
-                "int" => Some(Value::I64(n.trunc() as i64)),
-                "neg" => Some(Value::F64(-n)),
-
-                "isnan" => Some(Value::Bool(n.is_nan())),
-                "isinf" => Some(Value::Bool(n.is_infinite())),
-                "isfinite" => Some(Value::Bool(n.is_finite())),
-
-                "hex" => Some(Value::String(format!("{:x}", *n as i64))),
-                "bin" => Some(Value::String(format!("{:b}", *n as i64))),
-                "oct" => Some(Value::String(format!("{:o}", *n as i64))),
-
-                _ => None,
-            },
-
-            Value::I64(n) => match prop {
-                "abs" => Some(Value::I64(n.abs())),
-                "neg" => Some(Value::I64(-n)),
-                "sign" => Some(Value::I64(n.signum())),
-                "int" => Some(Value::I64(*n)),
-
-                "tofloat" => Some(Value::F64(*n as f64)),
-
-                "isnan" => Some(Value::Bool(false)),
-                "isinf" => Some(Value::Bool(false)),
-                "isfinite" => Some(Value::Bool(true)),
-
-                "hex" => Some(Value::String(format!("{:x}", n))),
-                "bin" => Some(Value::String(format!("{:b}", n))),
-                "oct" => Some(Value::String(format!("{:o}", n))),
-
-                _ => None,
-            },
-
-            _ => None,
-        };
-        match result {
-            None => None,
-            Some(v) => Some(v),
-        }
-    }
-
-    fn get_index(&self, value: &Value, index: &Value) -> Option<Value> {
-        match value {
-            Value::String(s) => {
-                let chars: Vec<char> = s.chars().collect();
-                let mut idx = index.as_f64()? as i64;
-                if idx < 0 {
-                    idx += chars.len() as i64;
-                }
-                if idx >= 0 && (idx as usize) < chars.len() {
-                    Some(Value::String(chars[idx as usize].to_string()))
-                } else {
-                    Some(Value::Null)
-                }
-            }
-            Value::Array(arr) => {
-                let mut idx = index.as_f64()? as i64;
-                if idx < 0 {
-                    idx += arr.len() as i64;
-                }
-                if idx >= 0 && (idx as usize) < arr.len() {
-                    Some(arr[idx as usize].clone())
-                } else {
-                    Some(Value::Null)
-                }
-            }
-            _ => None,
-        }
-    }
-
-    // primary = number | string | true/false/null | ident | function call | array | '(' expr ')'
-    fn parse_primary(&mut self) -> Option<Value> {
-        match self.next() {
-            Token::Number(v) => Some(Value::F64(v)),
+    fn primary(&mut self) -> Option<Value> {
+        match self.advance() {
+            Token::Number(n) => Some(Value::F64(n)),
             Token::StrLit(s) => Some(Value::String(s)),
             Token::True => Some(Value::Bool(true)),
             Token::False => Some(Value::Bool(false)),
-            Token::Null => Some(Value::Null),
-            Token::Ident(name) => {
-                // Check for function call
-                if let Token::LParen = self.peek() {
-                    self.next();
-                    let args: Vec<Value>;
-                    args = self.parse_comma_separated_until_rparen(|s| s.parse_expr())?;
-                    self.next(); // consume )
+            Token::Null => None, // Return None instead of Value::Null!
 
-                    // Try built-in function
-                    if let Some(func) = get_builtin(&name) {
-                        return func(args);
-                    }
+            Token::Ident(name) => self.resolve_identifier(&name),
 
-                    // Unknown function
-                    return None;
-                }
-
-                // Check for known math constants
-                match name.as_str() {
-                    "PI" | "pi" => return Some(Value::F64(std::f64::consts::PI)),
-                    "TAU" | "tau" => return Some(Value::F64(std::f64::consts::TAU)),
-                    "E" | "e" => return Some(Value::F64(std::f64::consts::E)),
-                    "INF" | "inf" => return Some(Value::F64(f64::INFINITY)),
-                    "NAN" | "NaN" => return Some(Value::F64(f64::NAN)),
-                    _ => {}
-                }
-
-                // Variable lookup
-                lookup_var(self.vars, &name).or(Some(Value::Null))
-            }
-            Token::LBracket => {
-                // Array literal
-                let mut items = Vec::new();
-                if !matches!(self.peek(), Token::RBracket) {
-                    loop {
-                        // Check for range syntax: [1..5] or [1..=5]
-                        let item = self.parse_expr()?;
-
-                        if matches!(self.peek(), Token::DotDot | Token::DotDotEq) {
-                            let inclusive = matches!(self.peek(), Token::DotDotEq);
-                            self.next();
-                            let end = self.parse_expr()?;
-
-                            let start = item.as_i64()?;
-                            let end_val = end.as_i64()?;
-
-                            if inclusive {
-                                for i in start..=end_val {
-                                    items.push(Value::F64(i as f64));
-                                }
-                            } else {
-                                for i in start..end_val {
-                                    items.push(Value::F64(i as f64));
-                                }
-                            }
-                        } else {
-                            items.push(item);
-                        }
-
-                        match self.peek() {
-                            Token::Comma => {
-                                self.next();
-                            }
-                            Token::RBracket => break,
-                            _ => return None,
-                        }
-                    }
-                }
-                self.next(); // consume ]
-                Some(Value::Array(items))
-            }
+            Token::LBracket => self.array_literal(),
             Token::LParen => {
-                let v = self.parse_expr()?;
-                match self.next() {
-                    Token::RParen => Some(v),
-                    _ => None,
-                }
+                let v = self.pipeline()?;
+                self.expect(&Token::RParen)?;
+                Some(v)
             }
             _ => None,
         }
     }
-    fn parse_comma_separated_until_rparen<F>(&mut self, mut parse_item: F) -> Option<Vec<Value>>
-    where
-        F: FnMut(&mut Self) -> Option<Value>,
-    {
-        let mut items = Vec::new();
 
+    // ========== Helpers ==========
+
+    /// Generic left-associative binary operator parser
+    fn left_assoc<F, P, A>(&mut self, next: F, predicate: P, apply: A) -> Option<Value>
+    where
+        F: Fn(&mut Self) -> Option<Value>,
+        P: Fn(&Token) -> bool,
+        A: Fn(Value, Value, &Token) -> Value,
+    {
+        let mut left = next(self)?;
+        while predicate(self.peek()) {
+            let op = self.advance();
+            let right = next(self)?;
+            left = apply(left, right, &op);
+        }
+        Some(left)
+    }
+
+    /// Like left_assoc but the apply function can fail
+    fn left_assoc_opt<F, P, A>(&mut self, next: F, predicate: P, apply: A) -> Option<Value>
+    where
+        F: Fn(&mut Self) -> Option<Value>,
+        P: Fn(&Token) -> bool,
+        A: Fn(Value, Value, &Token) -> Option<Value>,
+    {
+        let mut left = next(self)?;
+        while predicate(self.peek()) {
+            let op = self.advance();
+            let right = next(self)?;
+            left = apply(left, right, &op)?;
+        }
+        Some(left)
+    }
+
+    fn expect_ident(&mut self) -> Option<String> {
+        match self.advance() {
+            Token::Ident(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn maybe_call_args(&mut self, first: Value) -> Option<Vec<Value>> {
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            let mut args = self.comma_list()?;
+            args.insert(0, first);
+            Some(args)
+        } else {
+            Some(vec![first])
+        } // This is just vec![first] or parsed args
+    }
+
+    fn comma_list(&mut self) -> Option<Vec<Value>> {
+        let mut items = Vec::new();
         if !matches!(self.peek(), Token::RParen) {
             loop {
-                items.push(parse_item(self)?);
+                items.push(self.pipeline()?);
                 match self.peek() {
                     Token::Comma => {
-                        self.next();
+                        self.advance();
                     }
                     Token::RParen => break,
                     _ => return None,
                 }
             }
         }
-
+        self.advance(); // consume )
         Some(items)
     }
+
+    fn array_literal(&mut self) -> Option<Value> {
+        let mut items = Vec::new();
+
+        if !matches!(self.peek(), Token::RBracket) {
+            loop {
+                let item = self.pipeline()?;
+
+                // Handle range syntax: [1..5] or [1..=5]
+                if matches!(self.peek(), Token::DotDot | Token::DotDotEq) {
+                    let inclusive = matches!(self.peek(), Token::DotDotEq);
+                    self.advance();
+                    let end = self.pipeline()?.as_i64()?;
+                    let start = item.as_i64()?;
+
+                    let range: Box<dyn Iterator<Item = i64>> = if inclusive {
+                        Box::new(start..=end)
+                    } else {
+                        Box::new(start..end)
+                    };
+                    items.extend(range.map(|i| Value::F64(i as f64)));
+                } else {
+                    items.push(item);
+                }
+
+                match self.peek() {
+                    Token::Comma => {
+                        self.advance();
+                    }
+                    Token::RBracket => break,
+                    _ => return None,
+                }
+            }
+        }
+        self.advance(); // consume ]
+        Some(Value::Array(items))
+    }
+
+    fn resolve_identifier(&mut self, name: &str) -> Option<Value> {
+        // Function call?
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            let args = self.comma_list()?;
+            return call_builtin(name, args);
+        }
+
+        // Constants
+        match name {
+            "PI" | "pi" => return Some(Value::F64(std::f64::consts::PI)),
+            "TAU" | "tau" => return Some(Value::F64(std::f64::consts::TAU)),
+            "E" | "e" => return Some(Value::F64(std::f64::consts::E)),
+            "INF" | "inf" => return Some(Value::F64(f64::INFINITY)),
+            "NAN" | "NaN" => return Some(Value::F64(f64::NAN)),
+            _ => {}
+        }
+
+        let var = self.vars.get(name).cloned();
+        //println!("Lookup var in parser.rs resolve_identifier(): {}: {:?}", name, var);
+        var
+    }
+}
+
+fn multiply_values(l: Value, r: Value) -> Option<Value> {
+    match (&l, &r) {
+        (Value::String(s), Value::I64(n)) | (Value::I64(n), Value::String(s)) => {
+            Some(Value::String(s.repeat(*n as usize)))
+        }
+        _ => Some(Value::F64(l.as_f64()? * r.as_f64()?)),
+    }
+}
+
+fn get_property(value: &Value, prop: &str) -> Option<Value> {
+    match value {
+        Value::String(s) => string_property(s, prop),
+        Value::Array(arr) => array_property(arr, prop),
+        Value::F64(n) => float_property(*n, prop),
+        Value::I64(n) => int_property(*n, prop),
+        _ => None,
+    }
+}
+
+fn string_property(s: &str, prop: &str) -> Option<Value> {
+    Some(match prop {
+        "length" | "len" => Value::I64(s.len() as i64),
+        "upper" => Value::String(s.to_uppercase()),
+        "lower" => Value::String(s.to_lowercase()),
+        "trim" => Value::String(s.trim().to_string()),
+        "reverse" => Value::String(s.chars().rev().collect()),
+        "first" => Value::String(s.chars().next()?.to_string()),
+        "last" => Value::String(s.chars().last()?.to_string()),
+        "empty" => Value::Bool(s.is_empty()),
+        "chars" => Value::Array(s.chars().map(|c| Value::String(c.to_string())).collect()),
+        "lines" => Value::Array(s.lines().map(|l| Value::String(l.to_string())).collect()),
+        "words" => Value::Array(
+            s.split_whitespace()
+                .map(|w| Value::String(w.to_string()))
+                .collect(),
+        ),
+        _ => return None,
+    })
+}
+
+fn array_property(arr: &[Value], prop: &str) -> Option<Value> {
+    Some(match prop {
+        "length" | "len" | "count" => Value::I64(arr.len() as i64),
+        "first" => arr.first()?.clone(),
+        "last" => arr.last()?.clone(),
+        "empty" => Value::Bool(arr.is_empty()),
+        "sum" => Value::F64(arr.iter().filter_map(|v| v.as_f64()).sum()),
+        "avg" => {
+            let nums: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
+            Value::F64(nums.iter().sum::<f64>() / nums.len().max(1) as f64)
+        }
+        "min" => Value::F64(
+            arr.iter()
+                .filter_map(|v| v.as_f64())
+                .fold(f64::INFINITY, f64::min),
+        ),
+        "max" => Value::F64(
+            arr.iter()
+                .filter_map(|v| v.as_f64())
+                .fold(f64::NEG_INFINITY, f64::max),
+        ),
+        "reverse" => Value::Array(arr.iter().rev().cloned().collect()),
+        _ => return None,
+    })
+}
+
+fn float_property(n: f64, prop: &str) -> Option<Value> {
+    Some(match prop {
+        "abs" => Value::F64(n.abs()),
+        "floor" => Value::F64(n.floor()),
+        "ceil" => Value::F64(n.ceil()),
+        "round" => Value::F64(n.round()),
+        "trunc" => Value::F64(n.trunc()),
+        "sqrt" => Value::F64(n.sqrt()),
+        "sign" => Value::F64(n.signum()),
+        "fract" => Value::F64(n.fract()),
+        "int" => Value::I64(n as i64),
+        "neg" => Value::F64(-n),
+        "isnan" => Value::Bool(n.is_nan()),
+        "isinf" => Value::Bool(n.is_infinite()),
+        "isfinite" => Value::Bool(n.is_finite()),
+        "hex" => Value::String(format!("{:x}", n as i64)),
+        "bin" => Value::String(format!("{:b}", n as i64)),
+        "oct" => Value::String(format!("{:o}", n as i64)),
+        _ => return None,
+    })
+}
+
+fn int_property(n: i64, prop: &str) -> Option<Value> {
+    Some(match prop {
+        "abs" => Value::I64(n.abs()),
+        "neg" => Value::I64(-n),
+        "sign" => Value::I64(n.signum()),
+        "tofloat" => Value::F64(n as f64),
+        "isnan" | "isinf" => Value::Bool(false),
+        "isfinite" => Value::Bool(true),
+        "hex" => Value::String(format!("{:x}", n)),
+        "bin" => Value::String(format!("{:b}", n)),
+        "oct" => Value::String(format!("{:o}", n)),
+        _ => return None,
+    })
+}
+
+fn get_index(value: &Value, index: &Value) -> Option<Value> {
+    let idx = index.as_i64()?;
+
+    match value {
+        Value::String(s) => {
+            let chars: Vec<char> = s.chars().collect();
+            let i = normalize_index(idx, chars.len())?;
+            Some(Value::String(chars[i].to_string()))
+        }
+        Value::Array(arr) => {
+            let i = normalize_index(idx, arr.len())?;
+            Some(arr[i].clone())
+        }
+        _ => None,
+    }
+}
+
+fn normalize_index(idx: i64, len: usize) -> Option<usize> {
+    let i = if idx < 0 { idx + len as i64 } else { idx };
+    if i >= 0 && (i as usize) < len {
+        Some(i as usize)
+    } else {
+        None
+    }
+}
+
+fn call_builtin(name: &str, args: Vec<Value>) -> Option<Value> {
+    get_builtin(name)?(args)
 }
 
 fn add_values(a: Value, b: Value) -> Option<Value> {
@@ -2436,10 +2333,10 @@ fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
 
     None
 }
+
 pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
     let tokens = tokenize_expr(expr);
-    let mut parser = Parser::new(&tokens, vars);
-    parser.parse_expr()
+    Parser::new(&tokens, vars).parse()
 }
 
 //noinspection GrazieInspection

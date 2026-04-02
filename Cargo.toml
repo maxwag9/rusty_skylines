@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.6.16"
+version = "0.6.18"
 edition = "2024"
 
 [dependencies]
@@ -10,7 +10,7 @@ wgpu = "29.0.1"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 glam = { version = "0.32.1", features = ["serde"] }
-toml = "1.1.0"
+toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
 anyhow = "1.0.102"
 notify = "9.0.0-rc.2"
@@ -23,7 +23,7 @@ postcard = { version = "1.1.3", features = ["use-std"] }
 serde_yaml = { version = "0.9.34" }
 wgpu_render_manager = "0.2.7"
 earcutr = "0.5.0"
-clipper2-rust = "1.0.1"
+clipper2-rust = "1.0.2"
 log = "0.4.29"
 rayon = "1.11.0"
 cpal = "0.17.3"

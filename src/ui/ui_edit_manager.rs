@@ -7,6 +7,7 @@
 
 use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
+use crate::ui::ui_editor::get_element;
 use crate::ui::ui_edits::*;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
 use crate::ui::variables::Variables;
@@ -404,13 +405,12 @@ impl UIEditCommand for CreateElementCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        delete_element(menus, &self.affected_element);
+        let _ = delete_element(menus, &self.affected_element);
     }
 
     fn redo(
         &mut self,
         _touch_manager: &mut UiTouchManager,
-
         menus: &mut HashMap<String, Menu>,
         _variables: &mut Variables,
         mouse: &Mouse,
@@ -443,7 +443,7 @@ impl UIEditCommand for CreateElementCommand {
 #[derive(Clone, Debug)]
 pub struct DeleteElementCommand {
     pub affected_element: ElementRef,
-    pub element: UiElement,
+    pub cached_element: Option<UiElement>,
 }
 
 impl UIEditCommand for DeleteElementCommand {
@@ -454,13 +454,15 @@ impl UIEditCommand for DeleteElementCommand {
         _variables: &mut Variables,
         mouse: &Mouse,
     ) {
-        let _ = create_element(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            self.element.clone(),
-            mouse,
-        );
+        if let Some(cached_element) = &self.cached_element {
+            let _ = create_element(
+                menus,
+                &self.affected_element.menu,
+                &self.affected_element.layer,
+                cached_element.clone(),
+                mouse,
+            );
+        }
     }
 
     fn redo(
@@ -470,11 +472,25 @@ impl UIEditCommand for DeleteElementCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        delete_element(menus, &self.affected_element);
+        let result = delete_element(menus, &self.affected_element);
+        if self.cached_element.is_none() {
+            match result {
+                Ok(element) => {
+                    self.cached_element = Some(element);
+                }
+                Err(error) => {}
+            }
+        }
     }
 
     fn description(&self) -> String {
-        format!("Delete {}", self.element.kind_name())
+        format!(
+            "Delete {}",
+            self.cached_element
+                .as_ref()
+                .map(|e| e.kind_name())
+                .unwrap_or("None")
+        )
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -846,8 +862,10 @@ impl UIEditCommand for ChangeColorCommand {
 /// Command for duplicating an element
 #[derive(Clone, Debug)]
 pub struct DuplicateElementCommand {
-    pub affected_element: ElementRef,
-    pub new_element: UiElement,
+    pub from_element: ElementRef,
+    pub to_element: ElementRef,
+    pub cached_element: Option<UiElement>,
+    pub optional_center: Option<[f32; 2]>,
 }
 
 impl UIEditCommand for DuplicateElementCommand {
@@ -859,7 +877,7 @@ impl UIEditCommand for DuplicateElementCommand {
         _variables: &mut Variables,
         _mouse: &Mouse,
     ) {
-        delete_element(menus, &self.affected_element);
+        let _ = delete_element(menus, &self.to_element);
     }
 
     fn redo(
@@ -870,17 +888,28 @@ impl UIEditCommand for DuplicateElementCommand {
         _variables: &mut Variables,
         mouse: &Mouse,
     ) {
-        let _ = create_element(
-            menus,
-            &self.affected_element.menu,
-            &self.affected_element.layer,
-            self.new_element.clone(),
-            mouse,
-        );
+        if self.cached_element.is_none() {
+            self.cached_element = get_element(menus, &self.from_element);
+        }
+
+        if let Some(cached_element) = &mut self.cached_element {
+            if let Some(center) = self.optional_center {
+                cached_element.set_pos(center[0], center[1]);
+            }
+            let mut element = cached_element.clone();
+            element.set_id(&self.to_element.id);
+            let _ = create_element(
+                menus,
+                &self.to_element.menu,
+                &self.to_element.layer,
+                element,
+                mouse,
+            );
+        }
     }
 
     fn description(&self) -> String {
-        format!("Duplicate '{}'", self.affected_element.id)
+        format!("Duplicate '{}'", self.from_element.id)
     }
 
     fn as_any(&self) -> &dyn Any {

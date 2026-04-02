@@ -50,7 +50,7 @@ layers:
         text: Play
         misc:
           active: true
-          pressable: false
+          pressable: true
           editable: true
       - !Text
         id: settings_text
@@ -81,3 +81,47 @@ layers:
           - 1.0
           - 1.0
         text: Exit Game
+    editing_tool: false
+  - name: test_buttons
+    order: 3
+    elements:
+      - !Text
+        id: add_circle_test
+        actions:
+          - on:r add(self.menu, self.layer, heytherewhatsup, circle, [self.center.x, self.center.y+self.center.y*0.2])
+        x: 0.2
+        y: 0.35
+        pt: 18.0
+        color:
+          - 1.0
+          - 1.0
+          - 0.4
+          - 1.0
+        text: Add Circle
+      - !Text
+        id: clone_test
+        actions:
+          - on:r clone(self.menu, self.layer, self.id, self.menu, self.layer, heytherewhatsupduped, [self.center.x, self.center.y+self.center.y*0.2])
+        x: 0.2
+        y: 0.45
+        pt: 18.0
+        color:
+          - 1.0
+          - 1.0
+          - 0.4
+          - 1.0
+        text: Clone Myself By Clicking!
+      - !Text
+        id: delete_test
+        actions:
+          - on:r delete(self.menu, self.layer, heytherewhatsupduped)
+        x: 0.1
+        y: 0.50
+        pt: 18.0
+        color:
+          - 1.0
+          - 1.0
+          - 0.4
+          - 1.0
+        text: Delete the duped element By Clicking!
+    editing_tool: false

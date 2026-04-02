@@ -544,13 +544,23 @@ pub fn replace_polygon(
 }
 
 /// Delete element - takes element reference
-pub fn delete_element(menus: &mut HashMap<String, Menu>, element: &ElementRef) {
-    let Some(menu) = menus.get_mut(&element.menu) else {
-        return;
-    };
-    let Some(layer) = menu.layers.iter_mut().find(|l| l.name == element.layer) else {
-        return;
-    };
+pub fn delete_element(
+    menus: &mut HashMap<String, Menu>,
+    element: &ElementRef,
+) -> Result<UiElement, String> {
+    let menu = menus
+        .get_mut(&element.menu)
+        .ok_or_else(|| format!("Menu '{}' doesn't exist", element.menu))?;
+    let layer = menu
+        .layers
+        .iter_mut()
+        .find(|l| l.name == element.layer)
+        .ok_or_else(|| {
+            format!(
+                "Layer '{}' not found in menu '{}'",
+                element.layer, element.menu
+            )
+        })?;
 
     if let Some(id) = layer.elements.iter().position(|e| e.id() == element.id) {
         let removed = layer.elements.remove(id);
@@ -563,6 +573,12 @@ pub fn delete_element(menus: &mut HashMap<String, Menu>, element: &ElementRef) {
             UiElement::Rect(_) => layer.dirty.mark_rects(),
             UiElement::Advanced(_) => layer.dirty.mark_advanced_primitives(),
         }
+        Ok(removed)
+    } else {
+        Err(format!(
+            "Element '{}' not found in layer '{}'",
+            element.id, element.layer
+        ))
     }
 }
 
@@ -571,7 +587,7 @@ pub fn create_element(
     menus: &mut HashMap<String, Menu>,
     menu_name: &str,
     layer_name: &str,
-    mut element: UiElement,
+    element: UiElement,
     mouse: &Mouse,
 ) -> Result<(), String> {
     let menu = menus
@@ -582,43 +598,6 @@ pub fn create_element(
         .iter_mut()
         .find(|l| l.name == layer_name)
         .ok_or_else(|| format!("Layer '{}' not found in menu '{}'", layer_name, menu_name))?;
-
-    let id = mouse.pos.x as u32 - mouse.pos.y as u32;
-
-    // 3. Apply mouse positioning (editor placement)
-    match &mut element {
-        UiElement::Text(t) => {
-            t.x = mouse.pos.x;
-            t.y = mouse.pos.y;
-            t.id = id.to_string();
-        }
-        UiElement::Circle(c) => {
-            c.x = mouse.pos.x;
-            c.y = mouse.pos.y;
-            c.id = id.to_string();
-        }
-        UiElement::Outline(o) => {
-            o.id = id.to_string();
-        }
-        UiElement::Handle(h) => {
-            h.x = mouse.pos.x;
-            h.y = mouse.pos.y;
-            h.id = id.to_string();
-        }
-        UiElement::Polygon(p) => {
-            p.id = id.to_string();
-        }
-        UiElement::Rect(r) => {
-            r.x = mouse.pos.x;
-            r.y = mouse.pos.y;
-            r.id = id.to_string();
-        }
-        UiElement::Advanced(ap) => {
-            ap.x = mouse.pos.x;
-            ap.y = mouse.pos.y;
-            ap.name = id.to_string();
-        }
-    }
 
     // Push element veryyy simple
     match &element {

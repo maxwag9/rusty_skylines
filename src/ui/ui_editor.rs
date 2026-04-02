@@ -14,8 +14,8 @@ use crate::ui::input::{Input, Mouse};
 use crate::ui::menu::{Menu, get_selected_element_color};
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::ui_edit_manager::{
-    ChangeLayerOrderCommand, ChangeZIndexCommand, DeselectAllCommand, MoveElementCommand,
-    MoveVertexCommand, ResizeElementCommand, UIEditCommand, UiEditManager,
+    ChangeLayerOrderCommand, ChangeZIndexCommand, DeleteElementCommand, DeselectAllCommand,
+    MoveElementCommand, MoveVertexCommand, ResizeElementCommand, UIEditCommand, UiEditManager,
 };
 use crate::ui::ui_edits::*;
 use crate::ui::ui_loader::{
@@ -25,7 +25,7 @@ use crate::ui::ui_loader::{
 use crate::ui::ui_text_editing::{HitResult, MouseSnapshot, handle_text_editing};
 use crate::ui::ui_touch_manager::{
     DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection,
-    TouchEvent, UiTouchManager,
+    TouchEvent, UiTouchManager, ZoomState,
 };
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
@@ -1837,13 +1837,31 @@ impl Ui {
 
     pub fn apply_ui_edit_movement(&mut self, input_state: &mut Input, time: &Time) {
         let mut changed: bool = false;
+        let now = time.total_time;
+
+        self.touch_manager
+            .config
+            .zoom_states
+            .retain(|_, state| now - state.last_used <= 2.0);
+        let do_resize_bigger_scroll = input_state.action_repeat("Resize Element Bigger Scroll");
+        let do_resize_smaller_scroll = input_state.action_repeat("Resize Element Smaller Scroll");
+        let do_resize_bigger = input_state.action_repeat("Resize Element Bigger");
+        let do_resize_smaller = input_state.action_repeat("Resize Element Smaller");
+        let do_delete_element = input_state.action_released("Delete selected GUI Element");
+        let scroll = input_state.mouse.scroll_delta;
+
         for sel in &self.touch_manager.selection.selected {
             if let Some(text) = self.get_text(sel) {
                 if text.being_edited {
                     return;
                 }
             }
-
+            if do_delete_element {
+                self.ui_edit_manager.push_command(DeleteElementCommand {
+                    affected_element: sel.clone(),
+                    cached_element: None,
+                })
+            }
             // BLOCK 1: Element XY movement, resizing, z-index movement
             {
                 // Movement (WASD)
@@ -1879,38 +1897,42 @@ impl Ui {
 
                 // Resizing (+, -, scroll)
                 let mut scale = 1.0f32;
-                let scroll = input_state.mouse.scroll_delta;
 
-                let z = &mut self.touch_manager.config;
+                let state = self
+                    .touch_manager
+                    .config
+                    .zoom_states
+                    .entry(sel.clone())
+                    .or_insert(ZoomState {
+                        zoom_target: 0.0,
+                        zoom_current: 0.0,
+                        last_used: now,
+                    });
 
-                // Accumulate scroll input
-                z.zoom_target += scroll.y * 10.0;
+                state.last_used = now;
+                state.zoom_target += scroll.y * 10.0; // ✅ Use pre-captured scroll
 
-                // Smoothly interpolate towards target
-                let smooth_speed = 20.0;
-                z.zoom_current += (z.zoom_target - z.zoom_current) * smooth_speed * time.render_dt;
+                let smooth_speed = 10.0;
+                state.zoom_current +=
+                    (state.zoom_target - state.zoom_current) * smooth_speed * time.render_dt;
 
-                // Consume what we've interpolated
-                let zoom_delta = z.zoom_current;
-                z.zoom_target -= zoom_delta;
-                z.zoom_current = 0.0;
+                let zoom_delta = state.zoom_current;
+                state.zoom_target -= zoom_delta;
+                state.zoom_current = 0.0;
 
-                // Apply smoothed scaling
                 let scaling = 1.02_f32.powf(zoom_delta);
 
-                if input_state.action_repeat("Resize Element Bigger Scroll") {
+                // ✅ Use pre-captured booleans instead of calling action_repeat again
+                if do_resize_bigger_scroll || do_resize_smaller_scroll {
                     scale = scaling;
                 }
-                if input_state.action_repeat("Resize Element Smaller Scroll") {
-                    scale = scaling;
-                }
-
-                if input_state.action_repeat("Resize Element Bigger") {
+                if do_resize_bigger {
                     scale = 1.05;
                 }
-                if input_state.action_repeat("Resize Element Smaller") {
+                if do_resize_smaller {
                     scale = 0.95;
                 }
+
                 if scale != 1.0 {
                     if let Some(before) = get_element_size(&self.menus, sel) {
                         self.ui_edit_manager.push_command(ResizeElementCommand {
@@ -1967,6 +1989,12 @@ impl Ui {
                     }
                 }
             }
+        }
+        if do_delete_element {
+            self.ui_edit_manager.push_command(DeselectAllCommand {
+                selected: self.touch_manager.selection.selected.clone(),
+                active_tool: self.touch_manager.selection.active_tool.clone(),
+            })
         }
         if changed {
             self.update_selection();

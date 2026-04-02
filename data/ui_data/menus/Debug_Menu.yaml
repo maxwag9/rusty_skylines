@@ -71,8 +71,8 @@ layers:
       - !Text
         id: sky_info_text
         actions: [ ]
-        x: -0.0
-        y: 0.021428572
+        x: 0.00037002563
+        y: 0.021275112
         pt: 15.0
         color:
           - 0.3
@@ -97,13 +97,14 @@ layers:
       - !Text
         id: world_info_text
         actions: [ ]
-        x: -0.0
-        y: 0.15
+        x: 0.0
+        y: 0.16142859
         pt: 15.0
         color:
-          - 0.0
-          - 0.3
-          - 0.7
           - 1.0
-        text: 'Car Count: {car_count}, Cursor Mode: {cursor_mode}, Color: {color_picker_color}'
+          - 0.89762557
+          - 0.08484942
+          - 1.0
+        text: 'Car Count: {car_count}, Cursor Mode: {cursor_mode}, Color: {color_picker_color}s'
         anchor: TopLeft
+    editing_tool: false

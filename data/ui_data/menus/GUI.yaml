@@ -7,7 +7,7 @@ layers:
         id: GUI Background
         actions: [ ]
         x: 0.5
-        y: 0.96
+        y: 0.96428573
         w: 1.0
         h: 0.08
         rotation: 0.0
@@ -32,13 +32,13 @@ layers:
       - !Text
         id: settings_text
         actions: [ ]
-        x: 0.45
-        y: 0.05
+        x: 0.5162861
+        y: 0.18681292
         pt: 19.396805
         color:
           - 1.0
           - 1.0
           - 1.0
           - 1.0
-        text: Settings
-
+        text: Settingxs
+    editing_tool: false
