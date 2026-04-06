@@ -13,7 +13,7 @@
 use crate::data::Settings;
 use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
 use crate::ui::selections::SelectionManager;
-use crate::ui::ui_editor::{GuiOptions, Ui, get_element};
+use crate::ui::ui_editor::{GuiOptions, TouchableElement, Ui, get_element};
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::vertex::{
     ElementKind, UiButtonCircle, UiButtonHandle, UiButtonPolygon, UiButtonRect, UiButtonText,
@@ -77,7 +77,7 @@ pub struct ElementRef {
 impl ElementRef {
     pub fn action(&self, ui: &Ui) -> Vec<String> {
         match get_element(&ui.menus, self) {
-            Some(e) => e.action(),
+            Some(e) => e.actions(),
             None => vec![],
         }
     }
@@ -201,8 +201,19 @@ pub enum TouchEvent {
         actions: Vec<String>,
     },
 
+    Nothing {
+        element: ElementRef,
+        actions: Vec<String>,
+    },
     // Press/release events
     Press {
+        element: ElementRef,
+        position: [f32; 2],
+        vertex_index: Option<usize>,
+        actions: Vec<String>,
+        buttons: MouseButtons,
+    },
+    Down {
         element: ElementRef,
         position: [f32; 2],
         vertex_index: Option<usize>,
@@ -711,25 +722,22 @@ pub struct HitDetector;
 
 impl HitDetector {
     /// Find the topmost hit element at a point
-    pub fn find_top_hit<'a, I>(
+    pub fn find_top_hit(
         point: [f32; 2],
-        elements: I,
+        elements: &Vec<TouchableElement>,
         editor_mode: bool,
         override_mode: bool,
-    ) -> Option<HitTestResult>
-    where
-        I: Iterator<Item = (&'a str, &'a str, u32, usize, &'a UiElement)>,
-    {
+    ) -> Option<HitTestResult> {
         let mut best: Option<HitTestResult> = None;
 
-        for (menu_name, layer_name, layer_order, element_order, element) in elements {
+        for element in elements {
             let hit = Self::test_element(
                 point,
-                menu_name,
-                layer_name,
-                layer_order,
-                element_order,
-                element,
+                element.menu,
+                element.layer,
+                element.order,
+                element.idx,
+                element.element,
                 editor_mode,
                 override_mode,
             );
@@ -851,10 +859,11 @@ impl HitDetector {
     }
 
     /// Find all elements within a box selection region
-    pub fn find_in_box<'a, I>(start: [f32; 2], end: [f32; 2], elements: I) -> Vec<ElementRef>
-    where
-        I: Iterator<Item = (&'a str, &'a str, &'a UiElement)>,
-    {
+    pub fn find_in_box(
+        start: [f32; 2],
+        end: [f32; 2],
+        elements: &Vec<TouchableElement>,
+    ) -> Vec<ElementRef> {
         let min_x = start[0].min(end[0]);
         let max_x = start[0].max(end[0]);
         let min_y = start[1].min(end[1]);
@@ -862,8 +871,8 @@ impl HitDetector {
 
         let mut results = Vec::new();
 
-        for (menu_name, layer_name, element) in elements {
-            let (id, kind, center) = match element {
+        for touchable_element in elements {
+            let (id, kind, center) = match touchable_element.element {
                 UiElement::Circle(c) if c.misc.active => {
                     (c.id.clone(), ElementKind::Circle, c.center())
                 }
@@ -881,7 +890,12 @@ impl HitDetector {
 
             if center[0] >= min_x && center[0] <= max_x && center[1] >= min_y && center[1] <= max_y
             {
-                results.push(ElementRef::new(menu_name, layer_name, id.as_str(), kind));
+                results.push(ElementRef::new(
+                    touchable_element.menu,
+                    touchable_element.layer,
+                    id.as_str(),
+                    kind,
+                ));
             }
         }
 
@@ -1251,10 +1265,7 @@ impl UiTouchManager {
     }
 
     /// Update touch manager with new input
-    pub fn update<'a, I>(&mut self, dt: f32, input: InputSnapshot, elements: I)
-    where
-        I: Iterator<Item = (&'a str, &'a str, u32, usize, &'a UiElement)> + Clone,
-    {
+    pub fn update(&mut self, dt: f32, input: InputSnapshot, elements: &Vec<TouchableElement>) {
         self.accumulated_time += dt;
         self.selection.reset_frame_flags();
         self.events.clear();
@@ -1266,7 +1277,7 @@ impl UiTouchManager {
         // Find what we're hitting
         let top_hit = HitDetector::find_top_hit(
             input.position,
-            elements.clone(),
+            &elements,
             self.editor.enabled,
             self.options.override_mode,
         );
@@ -1288,7 +1299,17 @@ impl UiTouchManager {
                 current: input.position,
             });
         }
-
+        for touchable_element in elements {
+            self.events.push(TouchEvent::Nothing {
+                element: ElementRef::new(
+                    touchable_element.menu,
+                    touchable_element.layer,
+                    touchable_element.element.id(),
+                    touchable_element.element.kind(),
+                ),
+                actions: touchable_element.element.actions(),
+            });
+        }
         self.last_input = input;
     }
 
@@ -1360,7 +1381,7 @@ impl UiTouchManager {
 
         // Held (potential drag)
         if input.buttons.pressed() && !input.buttons.just_pressed() {
-            self.handle_held(input);
+            self.handle_held(input, top_hit);
         }
 
         // Just released
@@ -1389,7 +1410,13 @@ impl UiTouchManager {
                 actions: hit.actions.clone(),
                 buttons: input.buttons,
             });
-
+            self.events.push(TouchEvent::Down {
+                element: element.clone(),
+                position: input.position,
+                vertex_index: hit.vertex_index,
+                actions: hit.actions.clone(),
+                buttons: input.buttons,
+            });
             // Begin potential drag
             if !hit.text_being_edited.unwrap_or(false) {
                 let anchor = input.position; // Could get from element's drag anchor
@@ -1445,7 +1472,7 @@ impl UiTouchManager {
     }
 
     /// Handle mouse held
-    fn handle_held(&mut self, input: &InputSnapshot) {
+    fn handle_held(&mut self, input: &InputSnapshot, top_hit: &Option<HitTestResult>) {
         // Update drag
         let drag_events = self.drag.update(input.position, &self.config);
 
@@ -1458,6 +1485,16 @@ impl UiTouchManager {
         for state in self.element_states.values_mut() {
             if let ElementTouchState::Pressed { frame_count } = &mut state.state {
                 *frame_count += 1;
+                if let Some(hit) = top_hit {
+                    let element = &hit.element_ref;
+                    self.events.push(TouchEvent::Down {
+                        element: element.clone(),
+                        position: input.position,
+                        vertex_index: hit.vertex_index,
+                        actions: hit.actions.clone(),
+                        buttons: input.buttons,
+                    });
+                }
             }
         }
     }

@@ -757,7 +757,7 @@ impl UIEditCommand for MoveVertexCommand {
 
 /// Color properties that can be changed
 #[derive(Clone, Debug, PartialEq)]
-pub enum ColorProperty {
+pub enum ColorComponent {
     Fill,
     Border,
     InsideBorder,
@@ -766,31 +766,31 @@ pub enum ColorProperty {
     SubDashColor,
     VertexIndex(u32),
 }
-impl ColorProperty {
-    pub fn from_str(s: &str) -> ColorProperty {
+impl ColorComponent {
+    pub fn from_str(s: &str) -> ColorComponent {
         match s {
-            "fill" => ColorProperty::Fill,
-            "border" => ColorProperty::Border,
-            "inside_border" => ColorProperty::InsideBorder,
-            "glow" => ColorProperty::Glow,
-            "dash_color" => ColorProperty::DashColor,
-            "sub_dash_color" => ColorProperty::SubDashColor,
+            "fill" => ColorComponent::Fill,
+            "border" => ColorComponent::Border,
+            "inside_border" => ColorComponent::InsideBorder,
+            "glow" => ColorComponent::Glow,
+            "dash_color" => ColorComponent::DashColor,
+            "sub_dash_color" => ColorComponent::SubDashColor,
             _ if s.starts_with("vertex_index.") => {
                 let Some((_, suffix)) = s.split_once('.') else {
-                    return ColorProperty::VertexIndex(0);
+                    return ColorComponent::VertexIndex(0);
                 };
 
                 let Some(idx) = suffix.parse::<u32>().ok() else {
-                    return ColorProperty::VertexIndex(0);
+                    return ColorComponent::VertexIndex(0);
                 };
 
-                ColorProperty::VertexIndex(idx)
+                ColorComponent::VertexIndex(idx)
             }
-            _ => ColorProperty::Fill,
+            _ => ColorComponent::Fill,
         }
     }
 }
-impl Display for ColorProperty {
+impl Display for ColorComponent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Fill => write!(f, "fill"),
@@ -808,7 +808,7 @@ impl Display for ColorProperty {
 #[derive(Clone, Debug)]
 pub struct ChangeColorCommand {
     pub affected_element: ElementRef,
-    pub property: ColorProperty,
+    pub property: ColorComponent,
     pub before: Option<[f32; 4]>,
     pub after: [f32; 4],
 }

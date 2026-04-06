@@ -215,6 +215,8 @@ impl Ui {
                 e.rescale_to_window(old_size, new_size);
                 e.scale_by(scale_factor.powi(2));
             });
+        self.variables
+            .set_array("screen", vec![new_size.width, new_size.height]);
     }
     pub fn handle_touches(
         &mut self,
@@ -259,12 +261,11 @@ impl Ui {
         let elements = Self::collect_touchable_elements(&self.menus);
 
         // Now we can mutably borrow touch_manager separately
-        self.touch_manager
-            .update(dt, input_snapshot, elements.into_iter());
+        self.touch_manager.update(dt, input_snapshot, &elements);
 
         // Process all emitted events
         let result =
-            self.process_touch_events(&mut command_queues.ui_command_queue, &input.mouse, settings);
+            self.process_touch_events(&mut command_queues.ui_command_queue, input, settings);
 
         // Apply results
         self.apply_event_results(result, &input.mouse);
@@ -349,9 +350,7 @@ impl Ui {
     }
 
     /// Collect all touchable elements from menus - return references, not owned Strings
-    fn collect_touchable_elements(
-        menus: &HashMap<String, Menu>,
-    ) -> Vec<(&str, &str, u32, usize, &UiElement)> {
+    fn collect_touchable_elements(menus: &'_ HashMap<String, Menu>) -> Vec<TouchableElement<'_>> {
         let mut elements = Vec::new();
 
         for (menu_name, menu) in menus {
@@ -365,13 +364,13 @@ impl Ui {
                 }
 
                 for (idx, element) in layer.elements.iter().enumerate() {
-                    elements.push((
-                        menu_name.as_str(),  // &'a str - borrows from HashMap key
-                        layer.name.as_str(), // &'a str - borrows from Layer in Menu
-                        layer.order,
+                    elements.push(TouchableElement {
+                        menu: menu_name.as_str(),   // &'a str - borrows from HashMap key
+                        layer: layer.name.as_str(), // &'a str - borrows from Layer in Menu
+                        order: layer.order,
                         idx,
                         element,
-                    ));
+                    });
                 }
             }
         }
@@ -383,16 +382,16 @@ impl Ui {
     fn process_touch_events(
         &mut self,
         ui_command_queue: &mut CommandQueue,
-        mouse: &Mouse,
+        input: &mut Input,
         settings: &Settings,
     ) -> EventProcessingResult {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
         let events: Vec<TouchEvent> = self.touch_manager.events.drain().collect();
-        push_commands(ui_command_queue, self, &events, mouse, settings);
+        push_commands(ui_command_queue, self, &events, input, settings);
 
         for event in events {
-            self.handle_touch_event(&event, &mut result, mouse);
+            self.handle_touch_event(&event, &mut result, &input.mouse);
         }
 
         result
@@ -419,9 +418,8 @@ impl Ui {
                 self.handle_hover_exit(element, result);
             }
 
-            // ----------------------------------------------------------------
+            TouchEvent::Nothing { .. } => {}
             // PRESS/RELEASE EVENTS
-            // ----------------------------------------------------------------
             TouchEvent::Press {
                 element,
                 position,
@@ -431,6 +429,7 @@ impl Ui {
             } => {
                 self.handle_press(element, *position, *vertex_index, result);
             }
+            TouchEvent::Down { .. } => {}
             TouchEvent::Release {
                 element,
                 position,
@@ -870,13 +869,9 @@ impl Ui {
         result: &mut EventProcessingResult,
     ) {
         // Find all elements in box
-        let elements: Vec<_> = Self::collect_touchable_elements(&self.menus)
-            .into_iter()
-            .map(|(menu, layer, _, _, elem)| (menu, layer, elem))
-            .collect();
+        let elements: Vec<TouchableElement> = Self::collect_touchable_elements(&self.menus);
 
-        let selected =
-            HitDetector::find_in_box(start, end, elements.iter().map(|(m, l, e)| (*m, *l, *e)));
+        let selected = HitDetector::find_in_box(start, end, &elements);
 
         self.touch_manager
             .selection
@@ -2085,20 +2080,17 @@ fn push_commands(
     ui_command_queue: &mut CommandQueue,
     ui: &mut Ui,
     events: &Vec<TouchEvent>,
-    mouse: &Mouse,
+    input: &mut Input,
     settings: &Settings,
 ) {
     for event in events {
-        let commands = actions_to_uicommands(ui, event, settings);
+        let commands = actions_to_uicommands(ui, event, settings, input);
 
         ui_command_queue.push_many(commands);
     }
 }
 
-// ============================================================================
 // HELPER FUNCTIONS
-// ============================================================================
-
 fn colors_equal(a: &[f32; 4], b: &[f32; 4]) -> bool {
     const EPSILON: f32 = 0.001;
     a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
@@ -2124,7 +2116,12 @@ pub fn get_element(menus: &HashMap<String, Menu>, element: &ElementRef) -> Optio
     if let Some(o) = layer.iter_outlines().find(|o| o.id == *element_id) {
         return Some(UiElement::Outline(o.clone()));
     }
-
+    if let Some(r) = layer.iter_rects().find(|r| r.id == *element_id) {
+        return Some(UiElement::Rect(r.clone()));
+    }
+    if let Some(ap) = layer.iter_aps().find(|ap| ap.id == *element_id) {
+        return Some(UiElement::Advanced(ap.clone()));
+    }
     None
 }
 pub fn get_element_mut<'a>(
@@ -2198,4 +2195,12 @@ pub fn get_element_size(
             .map(|r| SizeProperty::Rect(r.size())),
         _ => None,
     }
+}
+
+pub struct TouchableElement<'a> {
+    pub menu: &'a str,
+    pub layer: &'a str,
+    pub order: u32,
+    pub idx: usize,
+    pub element: &'a UiElement,
 }

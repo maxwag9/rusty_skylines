@@ -3,6 +3,7 @@ use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::ui::helper::ensure_ccw;
+use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_touch_manager::ElementRef;
 use serde::de::Visitor;
@@ -687,6 +688,13 @@ impl UiElement {
         }
     }
 
+    pub fn as_ap(&self) -> Option<&AdvancedPrimitive> {
+        match self {
+            UiElement::Advanced(ap) => Some(ap),
+            _ => None,
+        }
+    }
+
     pub fn as_outline(&self) -> Option<&UiButtonOutline> {
         match self {
             UiElement::Outline(o) => Some(o),
@@ -756,7 +764,7 @@ impl UiElement {
         }
     }
 
-    pub fn action(&self) -> Vec<String> {
+    pub fn actions(&self) -> Vec<String> {
         match self {
             UiElement::Text(t) => t.actions.clone(),
             UiElement::Circle(c) => c.actions.clone(),
@@ -802,6 +810,21 @@ impl UiElement {
         }
     }
 
+    pub fn color_components(&self) -> Vec<ColorComponent> {
+        match self {
+            UiElement::Circle(_) => vec![
+                ColorComponent::Fill,
+                ColorComponent::Border,
+                ColorComponent::InsideBorder,
+            ],
+            UiElement::Text(_) => vec![ColorComponent::Fill],
+            UiElement::Polygon(_) => vec![ColorComponent::Fill, ColorComponent::VertexIndex(1)],
+            UiElement::Outline(_) => vec![ColorComponent::DashColor, ColorComponent::SubDashColor],
+            UiElement::Handle(_) => vec![ColorComponent::DashColor, ColorComponent::SubDashColor],
+            UiElement::Rect(_) => vec![ColorComponent::Fill, ColorComponent::Border],
+            UiElement::Advanced(_) => vec![],
+        }
+    }
     pub fn scale_by(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {
@@ -1308,6 +1331,9 @@ impl RuntimeLayer {
     }
     pub fn iter_rects(&self) -> impl Iterator<Item = &UiButtonRect> {
         self.elements.iter().filter_map(UiElement::as_rect)
+    }
+    pub fn iter_aps(&self) -> impl Iterator<Item = &AdvancedPrimitive> {
+        self.elements.iter().filter_map(UiElement::as_ap)
     }
     pub fn iter_outlines(&self) -> impl Iterator<Item = &UiButtonOutline> {
         self.elements.iter().filter_map(UiElement::as_outline)

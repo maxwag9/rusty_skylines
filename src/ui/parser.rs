@@ -1,6 +1,8 @@
 use crate::data::{SettingKey, Settings};
 use crate::helpers::hsv::{HSV, hsv_to_rgb};
 use crate::ui::variables::Variables;
+use rand::RngExt;
+use rand::rngs::ThreadRng;
 use std::fmt;
 
 // ------------------------------------------------------------
@@ -29,7 +31,6 @@ impl Value {
         if s.is_empty() {
             return Value::String(String::new());
         }
-
         // Explicit type prefix
         if let Some((ty, value)) = s.split_once(':') {
             match ty.to_ascii_lowercase().as_str() {
@@ -70,34 +71,26 @@ impl Value {
             }
         }
 
-        // =========================
         // Auto-detect array (bracket notation)
-        // =========================
         if s.starts_with('[') && s.ends_with(']') {
             if let Some(arr) = Self::parse_array(settings, variables, s) {
                 return Value::Array(arr);
             }
         }
 
-        // =========================
         // Auto-detect bool
-        // =========================
         match s.to_ascii_lowercase().as_str() {
             "true" | "yes" | "on" => return Value::Bool(true),
             "false" | "no" | "off" => return Value::Bool(false),
             _ => {}
         }
 
-        // =========================
         // Auto-detect integer
-        // =========================
         if let Ok(i) = s.parse::<i64>() {
             return Value::I64(i);
         }
 
-        // =========================
         // Auto-detect float
-        // =========================
         if let Ok(f) = s.parse::<f64>() {
             return Value::F64(f);
         }
@@ -106,7 +99,7 @@ impl Value {
             Some(value) => return value,
             None => {}
         };
-
+        //println!("In from_str() Evaluating Expression... Input: {} ", s);
         match eval_expr(s, variables) {
             Some(value) => match value {
                 Value::Null => {
@@ -114,11 +107,14 @@ impl Value {
                     Value::String(s.to_string())
                 }
                 _ => {
-                    println!("Input: {}, Output: {}", s, value);
+                    //println!("Input: {}, Output: {}({})", s, value.type_name(), value);
                     value
                 }
             },
-            None => Value::String(s.to_string()),
+            None => {
+                //println!("NONE!! in from_str() NONE!!: {}", s);
+                Value::String(s.to_string())
+            }
         }
     }
     pub fn from_vec<I, T>(iter: I) -> Self
@@ -131,6 +127,12 @@ impl Value {
     fn load_variable(variables: &Variables, name: &String) -> Option<Value> {
         variables.get(name).cloned()
     }
+    pub fn is_f64(&self) -> Option<Value> {
+        match self {
+            Value::F64(n) => Some(self.clone()),
+            _ => None,
+        }
+    }
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::F64(n) => Some(*n),
@@ -141,11 +143,28 @@ impl Value {
             Value::Null => Some(0.0),
         }
     }
-
+    pub fn is_i64(&self) -> Option<Value> {
+        match self {
+            Value::I64(n) => Some(self.clone()),
+            _ => None,
+        }
+    }
     pub fn as_i64(&self) -> Option<i64> {
         self.as_f64().map(|n| n as i64)
     }
 
+    pub fn is_string(&self) -> Option<Value> {
+        match self {
+            Value::String(n) => Some(self.clone()),
+            _ => None,
+        }
+    }
+    pub fn is_bool(&self) -> Option<Value> {
+        match self {
+            Value::Bool(n) => Some(self.clone()),
+            _ => None,
+        }
+    }
     pub fn as_array(&self) -> Option<Vec<Value>> {
         match self {
             Value::Array(arr) => Some(arr.clone()),
@@ -326,6 +345,24 @@ impl From<f64> for Value {
 impl From<f32> for Value {
     fn from(v: f32) -> Self {
         Value::F64(v as f64)
+    }
+}
+
+impl From<u64> for Value {
+    fn from(v: u64) -> Self {
+        Value::I64(v as i64)
+    }
+}
+
+impl From<u32> for Value {
+    fn from(v: u32) -> Self {
+        Value::I64(v as i64)
+    }
+}
+
+impl From<usize> for Value {
+    fn from(v: usize) -> Self {
+        Value::I64(v as i64)
     }
 }
 
@@ -805,9 +842,7 @@ fn tokenize_expr(input: &str) -> Vec<Token> {
     tokens
 }
 
-// ------------------------------------------------------------
 // Built-in functions registry
-// ------------------------------------------------------------
 type BuiltinFn = fn(Vec<Value>) -> Option<Value>;
 
 fn get_builtin(name: &str) -> Option<BuiltinFn> {
@@ -884,7 +919,12 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
         },
         "log2" => |args| args.first()?.as_f64().map(|n| Value::F64(n.log2())),
         "log10" => |args| args.first()?.as_f64().map(|n| Value::F64(n.log10())),
-        "sin" => |args| args.first()?.as_f64().map(|n| Value::F64(n.sin())),
+        "sin" => |args| {
+            args.first()?.as_f64().map(|n| {
+                //println!("Sin() in get_builtin() input: {n}");
+                Value::F64(n.sin())
+            })
+        },
         "cos" => |args| args.first()?.as_f64().map(|n| Value::F64(n.cos())),
         "tan" => |args| args.first()?.as_f64().map(|n| Value::F64(n.tan())),
         "asin" => |args| args.first()?.as_f64().map(|n| Value::F64(n.asin())),
@@ -922,7 +962,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             let val = args.first()?.as_f64()?;
             let min = args.get(1)?.as_f64()?;
             let max = args.get(2)?.as_f64()?;
-            println!("{}, {}, {}, {}", val, min, max, val.clamp(min, max));
+            //println!("{}, {}, {}, {}", val, min, max, val.clamp(min, max));
             Some(Value::F64(val.clamp(min, max)))
         },
         "lerp" => |args| {
@@ -1631,13 +1671,224 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             }
             _ => Some(Value::Null),
         },
+        "random" => |args| {
+            println!("{:?}", args);
+            let mut rng = ThreadRng::default();
+            match args.first() {
+                Some(Value::Array(array)) => {
+                    // Array as [min, max] range, or pick random element
+                    if array.len() == 2 {
+                        match (&array[0], &array[1]) {
+                            (Value::F64(min), Value::F64(max)) => {
+                                Some(Value::F64(rng.random_range(*min..=*max)))
+                            }
+                            (Value::I64(min), Value::I64(max)) => {
+                                Some(Value::I64(rng.random_range(*min..=*max)))
+                            }
+                            _ => None,
+                        }
+                    } else if !array.is_empty() {
+                        // Pick random element from array
+                        let idx = rng.random_range(0..array.len());
+                        Some(array[idx].clone())
+                    } else {
+                        None
+                    }
+                }
+                Some(Value::F64(first)) => {
+                    // Check for second argument to form range
+                    match args.get(1) {
+                        Some(Value::F64(second)) => {
+                            Some(Value::F64(rng.random_range(*first..=*second)))
+                        }
+                        _ => {
+                            // Single value: random from 0.0 to first
+                            Some(Value::F64(rng.random_range(0.0..=*first)))
+                        }
+                    }
+                }
+                Some(Value::I64(first)) => {
+                    // Check for second argument to form range
+                    match args.get(1) {
+                        Some(Value::I64(second)) => {
+                            Some(Value::I64(rng.random_range(*first..=*second)))
+                        }
+                        _ => {
+                            // Single value: random from 0 to first
+                            Some(Value::I64(rng.random_range(0..=*first)))
+                        }
+                    }
+                }
+                Some(Value::String(string)) => {
+                    // Hash the string for deterministic-ish random value
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = DefaultHasher::new();
+                    string.hash(&mut hasher);
+                    Some(Value::F64((hasher.finish() % 1000000) as f64 / 1000000.0))
+                }
+                Some(Value::Bool(_)) => {
+                    // Return random boolean
+                    Some(Value::Bool(rng.random()))
+                }
+                _ => {
+                    // Default: random f64 between 0.0 and 1.0
+                    Some(Value::F64(rng.random()))
+                }
+            }
+        },
         _ => return None,
     })
 }
 
-// ------------------------------------------------------------
-// Parser
-// ------------------------------------------------------------
+#[derive(Debug, Clone)]
+pub enum ParseError {
+    UnexpectedToken {
+        expected: String,
+        found: Token,
+        pos: usize,
+    },
+    UnexpectedEnd {
+        expected: String,
+    },
+    TypeMismatch {
+        operation: String,
+        expected: String,
+        found: String,
+        pos: usize,
+    },
+    UndefinedVariable {
+        name: String,
+        pos: usize,
+    },
+    UndefinedFunction {
+        name: String,
+        pos: usize,
+    },
+    InvalidPropertyAccess {
+        property: String,
+        on_type: String,
+        pos: usize,
+    },
+    InvalidIndexAccess {
+        index_type: String,
+        on_type: String,
+        pos: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum AnnoyingError {
+    DivisionByZero { pos: usize },
+    NullValue { pos: usize },
+    OverflowWarning { pos: usize },
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::UnexpectedToken {
+                expected,
+                found,
+                pos,
+            } => {
+                write!(
+                    f,
+                    "Parse error at position {}: expected {}, but found {:?}",
+                    pos, expected, found
+                )
+            }
+            Self::UnexpectedEnd { expected } => {
+                write!(
+                    f,
+                    "Parse error: unexpected end of input, expected {}",
+                    expected
+                )
+            }
+            Self::TypeMismatch {
+                operation,
+                expected,
+                found,
+                pos,
+            } => {
+                write!(
+                    f,
+                    "Type error at position {}: {} requires {}, but got {}",
+                    pos, operation, expected, found
+                )
+            }
+            Self::UndefinedVariable { name, pos } => {
+                write!(
+                    f,
+                    "Reference error at position {}: undefined variable '{}'",
+                    pos, name
+                )
+            }
+            Self::UndefinedFunction { name, pos } => {
+                write!(
+                    f,
+                    "Reference error at position {}: undefined function '{}'",
+                    pos, name
+                )
+            }
+            Self::InvalidPropertyAccess {
+                property,
+                on_type,
+                pos,
+            } => {
+                write!(
+                    f,
+                    "Property error at position {}: type '{}' has no property '{}'",
+                    pos, on_type, property
+                )
+            }
+            Self::InvalidIndexAccess {
+                index_type,
+                on_type,
+                pos,
+            } => {
+                write!(
+                    f,
+                    "Index error at position {}: cannot index '{}' with '{}'",
+                    pos, on_type, index_type
+                )
+            }
+        }
+    }
+}
+
+impl fmt::Display for AnnoyingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::DivisionByZero { pos } => {
+                write!(
+                    f,
+                    "Warning at position {}: division by zero (result is Infinity)",
+                    pos
+                )
+            }
+            Self::NullValue { pos } => {
+                write!(
+                    f,
+                    "Warning at position {}: null value used in operation",
+                    pos
+                )
+            }
+            Self::OverflowWarning { pos } => {
+                write!(
+                    f,
+                    "Warning at position {}: potential overflow in operation",
+                    pos
+                )
+            }
+        }
+    }
+}
+
+type ParseResult<T> = Result<T, ParseError>;
+
+// ========== PARSER ==========
+
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -1653,6 +1904,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn current_pos(&self) -> usize {
+        self.pos
+    }
+
     fn peek(&self) -> &Token {
         self.tokens.get(self.pos).unwrap_or(&Token::End)
     }
@@ -1665,319 +1920,525 @@ impl<'a> Parser<'a> {
         tok
     }
 
-    fn expect(&mut self, expected: &Token) -> Option<()> {
-        if self.peek() == expected {
+    fn expect(&mut self, expected: Token) -> ParseResult<()> {
+        if self.peek() == &expected {
             self.advance();
-            Some(())
+            Ok(())
         } else {
-            None
+            Err(ParseError::UnexpectedToken {
+                expected: format!("{:?}", expected),
+                found: self.peek().clone(),
+                pos: self.pos,
+            })
         }
     }
 
-    // ========== Main Entry Point ==========
+    fn expect_ident(&mut self) -> ParseResult<String> {
+        match self.advance() {
+            Token::Ident(s) => Ok(s),
+            tok => Err(ParseError::UnexpectedToken {
+                expected: "identifier".to_string(),
+                found: tok,
+                pos: self.pos - 1,
+            }),
+        }
+    }
 
-    fn parse(&mut self) -> Option<Value> {
+    // ========== MAIN ENTRY ==========
+
+    pub fn parse(&mut self) -> ParseResult<Value> {
         self.pipeline()
     }
 
-    // ========== Precedence Levels (highest to lowest in parsing order) ==========
+    // ========== EXPRESSION PARSING (Precedence Climbing) ==========
 
-    fn pipeline(&mut self) -> Option<Value> {
+    fn pipeline(&mut self) -> ParseResult<Value> {
         let mut val = self.ternary()?;
 
         while matches!(self.peek(), Token::Pipe) {
+            let pipe_pos = self.pos;
             self.advance();
             let name = self.expect_ident()?;
             let args = self.maybe_call_args(val)?;
-            val = call_builtin(&name, args)?;
+            val = call_builtin(&name, args).ok_or_else(|| ParseError::UndefinedFunction {
+                name: name.clone(),
+                pos: pipe_pos,
+            })?;
         }
-        Some(val)
+        Ok(val)
     }
 
-    fn ternary(&mut self) -> Option<Value> {
+    fn ternary(&mut self) -> ParseResult<Value> {
         let cond = self.null_coalesce()?;
 
         if !matches!(self.peek(), Token::Question) {
-            return Some(cond);
+            return Ok(cond);
         }
         self.advance();
 
         let yes = self.pipeline()?;
-        self.expect(&Token::Colon)?;
+        self.expect(Token::Colon)?;
         let no = self.pipeline()?;
 
-        Some(if cond.is_truthy() { yes } else { no })
+        Ok(if cond.is_truthy() { yes } else { no })
     }
 
-    fn null_coalesce(&mut self) -> Option<Value> {
-        let mut val = self.logical_or()?;
-        while matches!(self.peek(), Token::NullCoalesce) {
-            self.advance();
-            let rhs = self.logical_or()?;
-            // NOTE: Now we check for None semantically, not Value::Null
-            // You may need to adjust this based on your use case
-            val = rhs; // or keep val if you want short-circuit on "some" value
+    fn null_coalesce(&mut self) -> ParseResult<Value> {
+        let val = self.binary_ops(
+            Self::binary_ops_logical,
+            &[Token::NullCoalesce],
+            Self::eval_null_coalesce,
+        )?;
+        Ok(val)
+    }
+
+    // Consolidate all binary operations into one pattern
+    fn binary_ops<F, E>(
+        &mut self,
+        next_precedence: F,
+        operators: &[Token],
+        evaluator: E,
+    ) -> ParseResult<Value>
+    where
+        F: Fn(&mut Self) -> ParseResult<Value>,
+        E: Fn(&mut Self, Value, Value, &Token, usize) -> ParseResult<Value>,
+    {
+        let mut left = next_precedence(self)?;
+
+        while operators.iter().any(|op| self.peek() == op) {
+            let op = self.advance();
+            let op_pos = self.pos - 1;
+            let right = next_precedence(self)?;
+            left = evaluator(self, left, right, &op, op_pos)?;
         }
-        Some(val)
+        Ok(left)
     }
 
-    fn logical_or(&mut self) -> Option<Value> {
-        self.left_assoc(
-            Self::logical_and,
-            |tok| matches!(tok, Token::Or),
-            |l, r, _| Value::Bool(l.is_truthy() || r.is_truthy()),
+    fn binary_ops_logical(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
+            Self::binary_ops_bitwise,
+            &[Token::Or, Token::And],
+            Self::eval_logical,
         )
     }
 
-    fn logical_and(&mut self) -> Option<Value> {
-        self.left_assoc(
-            Self::bitwise_or,
-            |tok| matches!(tok, Token::And),
-            |l, r, _| Value::Bool(l.is_truthy() && r.is_truthy()),
+    fn binary_ops_bitwise(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
+            Self::binary_ops_equality,
+            &[Token::BitOr, Token::BitXor, Token::BitAnd],
+            Self::eval_bitwise,
         )
     }
 
-    fn bitwise_or(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
-            Self::bitwise_xor,
-            |tok| matches!(tok, Token::BitOr),
-            |l, r, _| Some(Value::I64(l.as_i64()? | r.as_i64()?)),
+    fn binary_ops_equality(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
+            Self::binary_ops_comparison,
+            &[Token::Eq, Token::Neq, Token::StrictEq, Token::StrictNeq],
+            Self::eval_equality,
         )
     }
 
-    fn bitwise_xor(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
-            Self::bitwise_and,
-            |tok| matches!(tok, Token::BitXor),
-            |l, r, _| Some(Value::I64(l.as_i64()? ^ r.as_i64()?)),
+    fn binary_ops_comparison(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
+            Self::binary_ops_shift,
+            &[Token::Lt, Token::Gt, Token::Le, Token::Ge],
+            Self::eval_comparison,
         )
     }
 
-    fn bitwise_and(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
-            Self::equality,
-            |tok| matches!(tok, Token::BitAnd),
-            |l, r, _| Some(Value::I64(l.as_i64()? & r.as_i64()?)),
+    fn binary_ops_shift(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
+            Self::binary_ops_additive,
+            &[Token::Shl, Token::Shr],
+            Self::eval_shift,
         )
     }
 
-    fn equality(&mut self) -> Option<Value> {
-        self.left_assoc(
-            Self::comparison,
-            |tok| {
-                matches!(
-                    tok,
-                    Token::Eq | Token::Neq | Token::StrictEq | Token::StrictNeq
-                )
-            },
-            |l, r, tok| {
-                let eq = l == r;
-                Value::Bool(match tok {
-                    Token::Eq | Token::StrictEq => eq,
-                    _ => !eq,
-                })
-            },
+    fn binary_ops_additive(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
+            Self::binary_ops_multiplicative,
+            &[Token::Plus, Token::Minus],
+            Self::eval_additive,
         )
     }
 
-    fn comparison(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
-            Self::shift,
-            |tok| matches!(tok, Token::Lt | Token::Gt | Token::Le | Token::Ge),
-            |l, r, tok| {
-                let (a, b) = (l.as_f64()?, r.as_f64()?);
-                Some(Value::Bool(match tok {
-                    Token::Lt => a < b,
-                    Token::Gt => a > b,
-                    Token::Le => a <= b,
-                    Token::Ge => a >= b,
-                    _ => unreachable!(),
-                }))
-            },
-        )
-    }
-
-    fn shift(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
-            Self::additive,
-            |tok| matches!(tok, Token::Shl | Token::Shr),
-            |l, r, tok| {
-                let (a, b) = (l.as_i64()?, r.as_i64()? as u32);
-                Some(Value::I64(match tok {
-                    Token::Shl => a << b,
-                    Token::Shr => a >> b,
-                    _ => unreachable!(),
-                }))
-            },
-        )
-    }
-
-    fn additive(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
-            Self::multiplicative,
-            |tok| matches!(tok, Token::Plus | Token::Minus),
-            |l, r, tok| match tok {
-                Token::Plus => add_values(l, r),
-                Token::Minus => Some(Value::F64(l.as_f64()? - r.as_f64()?)),
-                _ => unreachable!(),
-            },
-        )
-    }
-
-    fn multiplicative(&mut self) -> Option<Value> {
-        self.left_assoc_opt(
+    fn binary_ops_multiplicative(&mut self) -> ParseResult<Value> {
+        self.binary_ops(
             Self::power,
-            |tok| matches!(tok, Token::Star | Token::Slash | Token::Percent),
-            |l, r, tok| match tok {
-                Token::Star => multiply_values(l, r),
-                Token::Slash => Some(Value::F64(l.as_f64()? / r.as_f64()?)),
-                Token::Percent => Some(Value::F64(l.as_f64()? % r.as_f64()?)),
-                _ => unreachable!(),
-            },
+            &[Token::Star, Token::Slash, Token::Percent],
+            Self::eval_multiplicative,
         )
     }
 
-    fn power(&mut self) -> Option<Value> {
+    // ========== BINARY OPERATION EVALUATORS ==========
+
+    fn eval_null_coalesce(
+        &mut self,
+        _left: Value,
+        right: Value,
+        _op: &Token,
+        _pos: usize,
+    ) -> ParseResult<Value> {
+        Ok(right) // Simple implementation; adjust for your null semantics
+    }
+
+    fn eval_logical(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        _pos: usize,
+    ) -> ParseResult<Value> {
+        Ok(Value::Bool(match op {
+            Token::Or => left.is_truthy() || right.is_truthy(),
+            Token::And => left.is_truthy() && right.is_truthy(),
+            _ => unreachable!(),
+        }))
+    }
+
+    fn eval_bitwise(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        pos: usize,
+    ) -> ParseResult<Value> {
+        let l = left.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+            operation: format!("bitwise {:?}", op),
+            expected: "integer".to_string(),
+            found: left.type_name().to_string(),
+            pos,
+        })?;
+        let r = right.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+            operation: format!("bitwise {:?}", op),
+            expected: "integer".to_string(),
+            found: right.type_name().to_string(),
+            pos,
+        })?;
+
+        Ok(Value::I64(match op {
+            Token::BitOr => l | r,
+            Token::BitXor => l ^ r,
+            Token::BitAnd => l & r,
+            _ => unreachable!(),
+        }))
+    }
+
+    fn eval_equality(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        _pos: usize,
+    ) -> ParseResult<Value> {
+        let eq = left == right;
+        Ok(Value::Bool(match op {
+            Token::Eq | Token::StrictEq => eq,
+            Token::Neq | Token::StrictNeq => !eq,
+            _ => unreachable!(),
+        }))
+    }
+
+    fn eval_comparison(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        pos: usize,
+    ) -> ParseResult<Value> {
+        let a = left.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+            operation: "comparison".to_string(),
+            expected: "number".to_string(),
+            found: left.type_name().to_string(),
+            pos,
+        })?;
+        let b = right.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+            operation: "comparison".to_string(),
+            expected: "number".to_string(),
+            found: right.type_name().to_string(),
+            pos,
+        })?;
+
+        Ok(Value::Bool(match op {
+            Token::Lt => a < b,
+            Token::Gt => a > b,
+            Token::Le => a <= b,
+            Token::Ge => a >= b,
+            _ => unreachable!(),
+        }))
+    }
+
+    fn eval_shift(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        pos: usize,
+    ) -> ParseResult<Value> {
+        let a = left.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+            operation: "shift".to_string(),
+            expected: "integer".to_string(),
+            found: left.type_name().to_string(),
+            pos,
+        })?;
+        let b = right.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+            operation: "shift amount".to_string(),
+            expected: "integer".to_string(),
+            found: right.type_name().to_string(),
+            pos,
+        })? as u32;
+
+        Ok(Value::I64(match op {
+            Token::Shl => a << b,
+            Token::Shr => a >> b,
+            _ => unreachable!(),
+        }))
+    }
+
+    fn eval_additive(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        pos: usize,
+    ) -> ParseResult<Value> {
+        let left_type = left.type_name();
+        let right_type = right.type_name();
+        match op {
+            Token::Plus => add_values(left, right).ok_or_else(|| ParseError::TypeMismatch {
+                operation: "addition".to_string(),
+                expected: "number or string".to_string(),
+                found: format!("{} + {}", left_type, right_type),
+                pos,
+            }),
+            Token::Minus => {
+                let a = left.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                    operation: "subtraction".to_string(),
+                    expected: "number".to_string(),
+                    found: left.type_name().to_string(),
+                    pos,
+                })?;
+                let b = right.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                    operation: "subtraction".to_string(),
+                    expected: "number".to_string(),
+                    found: right.type_name().to_string(),
+                    pos,
+                })?;
+                Ok(Value::F64(a - b))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn eval_multiplicative(
+        &mut self,
+        left: Value,
+        right: Value,
+        op: &Token,
+        pos: usize,
+    ) -> ParseResult<Value> {
+        match op {
+            Token::Star => multiply_values(left, right).ok_or_else(|| ParseError::TypeMismatch {
+                operation: "multiplication".to_string(),
+                expected: "number".to_string(),
+                found: "incompatible types".to_string(),
+                pos,
+            }),
+            Token::Slash | Token::Percent => {
+                let a = left.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                    operation: if matches!(op, Token::Slash) {
+                        "division".to_string()
+                    } else {
+                        "modulo".to_string()
+                    },
+                    expected: "number".to_string(),
+                    found: left.type_name().to_string(),
+                    pos,
+                })?;
+                let b = right.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                    operation: if matches!(op, Token::Slash) {
+                        "division".to_string()
+                    } else {
+                        "modulo".to_string()
+                    },
+                    expected: "number".to_string(),
+                    found: right.type_name().to_string(),
+                    pos,
+                })?;
+                Ok(Value::F64(if matches!(op, Token::Slash) {
+                    a / b
+                } else {
+                    a % b
+                }))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // ========== SPECIAL PRECEDENCE LEVELS ==========
+
+    fn power(&mut self) -> ParseResult<Value> {
         let base = self.unary()?;
         if matches!(self.peek(), Token::Power) {
+            let pow_pos = self.pos;
             self.advance();
-            let exp = self.power()?; // right-associative recursion
-            Some(Value::F64(base.as_f64()?.powf(exp.as_f64()?)))
+            let exp = self.power()?; // right-associative
+            let b = base.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                operation: "exponentiation (base)".to_string(),
+                expected: "number".to_string(),
+                found: base.type_name().to_string(),
+                pos: pow_pos,
+            })?;
+            let e = exp.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                operation: "exponentiation (exponent)".to_string(),
+                expected: "number".to_string(),
+                found: exp.type_name().to_string(),
+                pos: pow_pos,
+            })?;
+            Ok(Value::F64(b.powf(e)))
         } else {
-            Some(base)
+            Ok(base)
         }
     }
 
-    fn unary(&mut self) -> Option<Value> {
-        match self.peek() {
+    fn unary(&mut self) -> ParseResult<Value> {
+        let op = self.peek().clone();
+        let op_pos = self.pos;
+
+        match op {
             Token::Not => {
                 self.advance();
-                Some(Value::Bool(!self.unary()?.is_truthy()))
+                Ok(Value::Bool(!self.unary()?.is_truthy()))
             }
             Token::Minus => {
                 self.advance();
-                Some(Value::F64(-self.unary()?.as_f64()?))
+                let val = self.unary()?;
+                let n = val.as_f64().ok_or_else(|| ParseError::TypeMismatch {
+                    operation: "unary negation".to_string(),
+                    expected: "number".to_string(),
+                    found: val.type_name().to_string(),
+                    pos: op_pos,
+                })?;
+                Ok(Value::F64(-n))
             }
             Token::BitNot => {
                 self.advance();
-                Some(Value::I64(!self.unary()?.as_i64()?))
+                let val = self.unary()?;
+                let n = val.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+                    operation: "bitwise NOT".to_string(),
+                    expected: "integer".to_string(),
+                    found: val.type_name().to_string(),
+                    pos: op_pos,
+                })?;
+                Ok(Value::I64(!n))
             }
             _ => self.postfix(),
         }
     }
 
-    fn postfix(&mut self) -> Option<Value> {
+    fn postfix(&mut self) -> ParseResult<Value> {
         let mut val = self.primary()?;
+
         loop {
             match self.peek() {
                 Token::Dot => {
+                    let dot_pos = self.pos;
                     self.advance();
                     let prop = self.expect_ident()?;
-                    val = get_property(&val, &prop)?;
+                    val = get_property(&val, &prop).ok_or_else(|| {
+                        ParseError::InvalidPropertyAccess {
+                            property: prop.clone(),
+                            on_type: val.type_name().to_string(),
+                            pos: dot_pos,
+                        }
+                    })?;
                 }
                 Token::LBracket => {
+                    let bracket_pos = self.pos;
                     self.advance();
                     let idx = self.pipeline()?;
-                    self.expect(&Token::RBracket)?;
-                    val = get_index(&val, &idx)?;
+                    self.expect(Token::RBracket)?;
+                    val = get_index(&val, &idx).ok_or_else(|| ParseError::InvalidIndexAccess {
+                        index_type: idx.type_name().to_string(),
+                        on_type: val.type_name().to_string(),
+                        pos: bracket_pos,
+                    })?;
                 }
                 _ => break,
             }
         }
-        Some(val)
+        Ok(val)
     }
 
-    fn primary(&mut self) -> Option<Value> {
-        match self.advance() {
-            Token::Number(n) => Some(Value::F64(n)),
-            Token::StrLit(s) => Some(Value::String(s)),
-            Token::True => Some(Value::Bool(true)),
-            Token::False => Some(Value::Bool(false)),
-            Token::Null => None, // Return None instead of Value::Null!
+    fn primary(&mut self) -> ParseResult<Value> {
+        let tok = self.advance();
+        let tok_pos = self.pos - 1;
 
-            Token::Ident(name) => self.resolve_identifier(&name),
-
-            Token::LBracket => self.array_literal(),
+        match tok {
+            Token::Number(n) => Ok(Value::F64(n)),
+            Token::StrLit(s) => Ok(Value::String(s)),
+            Token::True => Ok(Value::Bool(true)),
+            Token::False => Ok(Value::Bool(false)),
+            Token::Null => Err(ParseError::TypeMismatch {
+                operation: "null literal".to_string(),
+                expected: "value".to_string(),
+                found: "null".to_string(),
+                pos: tok_pos,
+            }),
+            Token::Ident(name) => self.resolve_identifier(&name, tok_pos),
+            Token::LBracket => self.parse_array_literal(),
             Token::LParen => {
                 let v = self.pipeline()?;
-                self.expect(&Token::RParen)?;
-                Some(v)
+                self.expect(Token::RParen)?;
+                Ok(v)
             }
-            _ => None,
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "expression".to_string(),
+                found: tok,
+                pos: tok_pos,
+            }),
         }
     }
 
-    // ========== Helpers ==========
+    // ========== HELPERS ==========
 
-    /// Generic left-associative binary operator parser
-    fn left_assoc<F, P, A>(&mut self, next: F, predicate: P, apply: A) -> Option<Value>
-    where
-        F: Fn(&mut Self) -> Option<Value>,
-        P: Fn(&Token) -> bool,
-        A: Fn(Value, Value, &Token) -> Value,
-    {
-        let mut left = next(self)?;
-        while predicate(self.peek()) {
-            let op = self.advance();
-            let right = next(self)?;
-            left = apply(left, right, &op);
-        }
-        Some(left)
-    }
-
-    /// Like left_assoc but the apply function can fail
-    fn left_assoc_opt<F, P, A>(&mut self, next: F, predicate: P, apply: A) -> Option<Value>
-    where
-        F: Fn(&mut Self) -> Option<Value>,
-        P: Fn(&Token) -> bool,
-        A: Fn(Value, Value, &Token) -> Option<Value>,
-    {
-        let mut left = next(self)?;
-        while predicate(self.peek()) {
-            let op = self.advance();
-            let right = next(self)?;
-            left = apply(left, right, &op)?;
-        }
-        Some(left)
-    }
-
-    fn expect_ident(&mut self) -> Option<String> {
-        match self.advance() {
-            Token::Ident(s) => Some(s),
-            _ => None,
-        }
-    }
-
-    fn maybe_call_args(&mut self, first: Value) -> Option<Vec<Value>> {
+    fn maybe_call_args(&mut self, first: Value) -> ParseResult<Vec<Value>> {
         if matches!(self.peek(), Token::LParen) {
             self.advance();
-            let mut args = self.comma_list()?;
+            let mut args = self.parse_arg_list()?;
             args.insert(0, first);
-            Some(args)
+            Ok(args)
         } else {
-            Some(vec![first])
-        } // This is just vec![first] or parsed args
+            Ok(vec![first])
+        }
     }
 
-    fn comma_list(&mut self) -> Option<Vec<Value>> {
+    fn parse_arg_list(&mut self) -> ParseResult<Vec<Value>> {
         let mut items = Vec::new();
+
         if !matches!(self.peek(), Token::RParen) {
             loop {
                 items.push(self.pipeline()?);
                 match self.peek() {
                     Token::Comma => {
-                        self.advance();
+                        let _ = self.advance();
                     }
                     Token::RParen => break,
-                    _ => return None,
+                    tok => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "',' or ')'".to_string(),
+                            found: tok.clone(),
+                            pos: self.pos,
+                        });
+                    }
                 }
             }
         }
         self.advance(); // consume )
-        Some(items)
+        Ok(items)
     }
 
-    fn array_literal(&mut self) -> Option<Value> {
+    fn parse_array_literal(&mut self) -> ParseResult<Value> {
         let mut items = Vec::new();
 
         if !matches!(self.peek(), Token::RBracket) {
@@ -1987,9 +2448,22 @@ impl<'a> Parser<'a> {
                 // Handle range syntax: [1..5] or [1..=5]
                 if matches!(self.peek(), Token::DotDot | Token::DotDotEq) {
                     let inclusive = matches!(self.peek(), Token::DotDotEq);
+                    let range_pos = self.pos;
                     self.advance();
-                    let end = self.pipeline()?.as_i64()?;
-                    let start = item.as_i64()?;
+
+                    let end_val = self.pipeline()?;
+                    let start = item.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+                        operation: "range start".to_string(),
+                        expected: "integer".to_string(),
+                        found: item.type_name().to_string(),
+                        pos: range_pos,
+                    })?;
+                    let end = end_val.as_i64().ok_or_else(|| ParseError::TypeMismatch {
+                        operation: "range end".to_string(),
+                        expected: "integer".to_string(),
+                        found: end_val.type_name().to_string(),
+                        pos: range_pos,
+                    })?;
 
                     let range: Box<dyn Iterator<Item = i64>> = if inclusive {
                         Box::new(start..=end)
@@ -2003,38 +2477,52 @@ impl<'a> Parser<'a> {
 
                 match self.peek() {
                     Token::Comma => {
-                        self.advance();
+                        let _ = self.advance();
                     }
                     Token::RBracket => break,
-                    _ => return None,
+                    tok => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "',' or ']'".to_string(),
+                            found: tok.clone(),
+                            pos: self.pos,
+                        });
+                    }
                 }
             }
         }
         self.advance(); // consume ]
-        Some(Value::Array(items))
+        Ok(Value::Array(items))
     }
 
-    fn resolve_identifier(&mut self, name: &str) -> Option<Value> {
+    fn resolve_identifier(&mut self, name: &str, name_pos: usize) -> ParseResult<Value> {
         // Function call?
         if matches!(self.peek(), Token::LParen) {
             self.advance();
-            let args = self.comma_list()?;
-            return call_builtin(name, args);
+            let args = self.parse_arg_list()?;
+            return call_builtin(name, args).ok_or_else(|| ParseError::UndefinedFunction {
+                name: name.to_string(),
+                pos: name_pos,
+            });
         }
 
         // Constants
         match name {
-            "PI" | "pi" => return Some(Value::F64(std::f64::consts::PI)),
-            "TAU" | "tau" => return Some(Value::F64(std::f64::consts::TAU)),
-            "E" | "e" => return Some(Value::F64(std::f64::consts::E)),
-            "INF" | "inf" => return Some(Value::F64(f64::INFINITY)),
-            "NAN" | "NaN" => return Some(Value::F64(f64::NAN)),
+            "PI" | "pi" => return Ok(Value::F64(std::f64::consts::PI)),
+            "TAU" | "tau" => return Ok(Value::F64(std::f64::consts::TAU)),
+            "E" | "e" => return Ok(Value::F64(std::f64::consts::E)),
+            "INF" | "inf" => return Ok(Value::F64(f64::INFINITY)),
+            "NAN" | "NaN" => return Ok(Value::F64(f64::NAN)),
             _ => {}
         }
 
-        let var = self.vars.get(name).cloned();
-        //println!("Lookup var in parser.rs resolve_identifier(): {}: {:?}", name, var);
-        var
+        // Variable lookup
+        self.vars
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ParseError::UndefinedVariable {
+                name: name.to_string(),
+                pos: name_pos,
+            })
     }
 }
 
@@ -2174,6 +2662,8 @@ fn call_builtin(name: &str, args: Vec<Value>) -> Option<Value> {
 fn add_values(a: Value, b: Value) -> Option<Value> {
     match (a, b) {
         (Value::F64(x), Value::F64(y)) => Some(Value::F64(x + y)),
+        (Value::I64(x), Value::F64(y)) => Some(Value::F64(x as f64 + y)),
+        (Value::F64(x), Value::I64(y)) => Some(Value::F64(x + y as f64)),
         (Value::String(s), Value::F64(n)) => Some(Value::String(format!("{}{}", s, n))),
         (Value::F64(n), Value::String(s)) => Some(Value::String(format!("{}{}", n, s))),
         (Value::I64(x), Value::I64(y)) => Some(Value::I64(x + y)),
@@ -2336,7 +2826,16 @@ fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
 
 pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
     let tokens = tokenize_expr(expr);
-    Parser::new(&tokens, vars).parse()
+    //println!("{:?}", tokens);
+    let result = Parser::new(&tokens, vars).parse();
+    //println!("{}: {:?}", expr, result);
+    match result {
+        Ok(result) => Some(result),
+        Err(e) => {
+            //println!("{}", e);
+            None
+        }
+    }
 }
 
 //noinspection GrazieInspection

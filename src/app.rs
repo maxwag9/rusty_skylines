@@ -5,7 +5,6 @@ use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
 use crate::ui::actions::UiCommand;
-use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::UiButtonCircle;
@@ -95,6 +94,10 @@ impl ApplicationHandler for App {
             .ui_loader
             .variables
             .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
+        resources.ui_loader.variables.set_array(
+            "screen",
+            vec![window.inner_size().width, window.inner_size().height],
+        );
         self.window = Some(window.clone());
         self.resources = Some(resources);
 
@@ -337,17 +340,17 @@ impl ApplicationHandler for App {
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
                             name: "editor_mode".to_string(),
-                            value: Value::Bool(false),
+                            value: "false".to_string(),
                         },
                         // UiCommand::SetVar {
                         //     element_ref: ElementRef::default(),
                         //     name: "show_world".to_string(),
-                        //     value: UiValue::Bool(false),
+                        //     value: "false".to_string(),
                         // },
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
                             name: "override_mode".to_string(),
-                            value: Value::Bool(false),
+                            value: "false".to_string(),
                         },
                     ];
                     resources.command_queues.ui_command_queue.push_many(cmds);

@@ -1,9 +1,8 @@
 use crate::data::Settings;
 #[allow(unused_mut, unused_assignments)]
 use crate::ui::actions::UiCommand;
-use crate::ui::actions::send_element_properties_to_variables;
+use crate::ui::input::Input;
 use crate::ui::menu::Menu;
-use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, TouchEvent};
@@ -118,20 +117,6 @@ impl ParseArg for bool {
     }
 }
 
-impl ParseArg for Value {
-    fn parse_arg(
-        settings: &Settings,
-        variables: &mut Variables,
-        menus: &HashMap<String, Menu>,
-        touch_manager: &UiTouchManager,
-        element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        send_element_properties_to_variables(menus, variables, touch_manager, element);
-        Some(Value::from_str(settings, variables, s))
-    }
-}
-
 /// Macro to define command mappings - just add lines when you add commands!
 macro_rules! define_commands {
     (
@@ -147,7 +132,7 @@ macro_rules! define_commands {
             menus: &HashMap<String, Menu>,
             touch_manager: &UiTouchManager,
             func_name: &str,
-            args: Vec<String>,
+            mut args: Vec<String>,
             element: &ElementRef
         ) -> Option<UiCommand> {
             let name = func_name.to_ascii_lowercase();
@@ -199,12 +184,7 @@ macro_rules! define_commands {
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, args, $ftype:ty) => {{
-        send_element_properties_to_variables($menus, $vars, $tm, $element);
-
-        let out = $args.iter()
-            .skip($idx)
-            .map(|s| Value::from_str($settings, $vars, s))
-            .collect();
+        let out = $args.split_off($idx);
         #[allow(unused_assignments)]
         {
             $idx = $args.len();
@@ -228,18 +208,45 @@ macro_rules! define_commands {
         Some(out)
     }};
 
-    // -----------------------------
     // SPECIAL FIELD: then / else_branch
-    // -----------------------------
-
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, then, $ftype:ty) => {{
-        define_commands!(@branch $settings, $vars, $menus, $tm, $args, $idx, $element)
+        if let Some(raw) = $args.get($idx) {
+            #[allow(unused_assignments)]
+            {
+                $idx += 1;
+            }
+
+            let cmds = raw.split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+                .collect();
+
+            Some(cmds)
+        } else {
+            Some(Vec::new())
+        }
     }};
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, else_branch, $ftype:ty) => {{
-        define_commands!(@branch $settings, $vars, $menus, $tm, $args, $idx, $element)
+        if let Some(raw) = $args.get($idx) {
+            #[allow(unused_assignments)]
+            {
+                $idx += 1;
+            }
+
+            let cmds = raw.split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+                .collect();
+
+            Some(cmds)
+        } else {
+            Some(Vec::new())
+        }
     }};
 
     (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element:ident) => {{
@@ -308,15 +315,15 @@ define_commands! {
 
     // ===== VARIABLE COMMANDS =====
     "set_var" | "setvar" | "set"
-        => SetVar { element_ref: ElementRef, name: String, value: Value },
+        => SetVar { element_ref: ElementRef, name: String, value: String },
 
-    "inc_var" | "incvar"
+    "inc_var" | "incvar" | "inc"
         => IncVar { element_ref: ElementRef, name: String, amount: f64 },
 
-    "dec_var" | "decvar"
+    "dec_var" | "decvar" | "dec"
         => DecVar { element_ref: ElementRef, name: String, amount: f64 },
 
-    "mul_var" | "mulvar"
+    "mul_var" | "mulvar" | "mul"
         => MulVar { element_ref: ElementRef, name: String, factor: f64 },
 
     "toggle_var" | "togglevar" | "toggle"
@@ -349,40 +356,40 @@ define_commands! {
     "skip"
         => Skip { count: usize },
 
-    "if" => If { condition: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
+    "if" => If { element_ref: ElementRef, condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
-        => IfVarEq { element_ref: ElementRef, var_name: String, value: Value, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
+        => IfVarEq { element_ref: ElementRef, var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
 
     "add_element" | "addelem" | "add"
-        => AddElement {element_ref: ElementRef, menu: Value, layer: Value, id: Value, kind: Value, center: Value},
+        => AddElement { element_ref: ElementRef, menu: String, layer: String, id: String, kind: String, center: String},
 
     "clone_element" | "cloneelem" | "clone"
         => CloneElement { element_ref: ElementRef,
-        from_menu: Value,
-        from_layer: Value,
-        from_id: Value,
-        to_menu: Value,
-        to_layer: Value,
-        to_id: Value,
-        center: Value,},
+        from_menu: String,
+        from_layer: String,
+        from_id: String,
+        to_menu: String,
+        to_layer: String,
+        to_id: String,
+        center: String,},
 
     "clone_element_undoable" | "cloneu" | "copyu"
         => CloneElementUndoable {
         element_ref: ElementRef,
-        from_menu: Value,
-        from_layer: Value,
-        from_id: Value,
-        to_menu: Value,
-        to_layer: Value,
-        to_id: Value,
-        center: Value,},
+        from_menu: String,
+        from_layer: String,
+        from_id: String,
+        to_menu: String,
+        to_layer: String,
+        to_id: String,
+        center: String,},
 
     "delete_element" | "delelem" | "delete"
-        => DeleteElement {element_ref: ElementRef, menu: Value, layer: Value, id: Value},
+        => DeleteElement {element_ref: ElementRef, menu: String, layer: String, id: String},
 
     "delete_element_undoable" | "deleteu" | "removeu"
-        => DeleteElement {element_ref: ElementRef, menu: Value, layer: Value, id: Value},
+        => DeleteElement {element_ref: ElementRef, menu: String, layer: String, id: String},
 
     "save" | "savegame"
         => SaveGame,
@@ -395,7 +402,7 @@ define_commands! {
 
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
-        => Print { args: Vec<UiValue> },
+        => Print { element_ref: ElementRef, args: Vec<String> },
 
     "debug_vars" | "debugvars"
         => DebugVars,
@@ -420,6 +427,7 @@ enum TouchEventKind {
     Hovering,
     HoverExit,
     Press,
+    Down,
     Release,
     Click,
     DoubleClick,
@@ -427,11 +435,13 @@ enum TouchEventKind {
     Select,
     DeSelect,
     DragMove,
+    Nothing,
 }
 pub fn actions_to_uicommands(
     ui: &mut Ui,
     event: &TouchEvent,
     settings: &Settings,
+    input: &mut Input,
 ) -> Vec<UiCommand> {
     let (event_kind, actions, element, buttons) = match event {
         TouchEvent::HoverEnter { actions, element } => (
@@ -458,6 +468,12 @@ pub fn actions_to_uicommands(
             buttons,
             ..
         } => (TouchEventKind::Press, actions, element, *buttons),
+        TouchEvent::Down {
+            actions,
+            element,
+            buttons,
+            ..
+        } => (TouchEventKind::Down, actions, element, *buttons),
         TouchEvent::Release {
             actions,
             element,
@@ -502,6 +518,12 @@ pub fn actions_to_uicommands(
             &ElementRef::default(),
             MouseButtons::default(),
         ),
+        TouchEvent::Nothing { element, actions } => (
+            TouchEventKind::Nothing,
+            actions,
+            element,
+            MouseButtons::default(),
+        ),
         _ => return vec![],
     };
 
@@ -512,7 +534,7 @@ pub fn actions_to_uicommands(
 
         let filters = parse_action_filters(&mut action_owned);
 
-        if filters_match(settings, &filters, &event_kind, &buttons) {
+        if filters_match(input, settings, &filters, &event_kind, &buttons) {
             // Now action_owned only contains the actual command
             if let Some(cmd) = parse_primitive_action(
                 settings,
@@ -866,7 +888,7 @@ fn parse_primitive_action(
 
             //println!("Primitive action: {}({:#?})", func_name, args); // Debug
 
-            return make_ui_command(
+            let command = make_ui_command(
                 settings,
                 variables,
                 menus,
@@ -875,6 +897,8 @@ fn parse_primitive_action(
                 args,
                 element,
             );
+            //println!("Command: {:?}", command);
+            return command;
         }
     }
 
@@ -890,20 +914,28 @@ fn parse_primitive_action(
     )
 }
 
-fn button_matches(button: ParsedMouseButton, buttons: &MouseButtons) -> bool {
+fn button_matches(input: &mut Input, button: ParsedButton, buttons: &MouseButtons) -> bool {
     let state = match button {
-        ParsedMouseButton::Any => return true,
-        ParsedMouseButton::Left => &buttons.left,
-        ParsedMouseButton::Right => &buttons.right,
-        ParsedMouseButton::Middle => &buttons.middle,
-        ParsedMouseButton::Back => &buttons.back,
-        ParsedMouseButton::Forward => &buttons.forward,
+        ParsedButton::Any => return true,
+        ParsedButton::Left => &buttons.left,
+        ParsedButton::Right => &buttons.right,
+        ParsedButton::Middle => &buttons.middle,
+        ParsedButton::Back => &buttons.back,
+        ParsedButton::Forward => &buttons.forward,
+        ParsedButton::Key(s) => {
+            let s = s.as_str();
+            return if input.ensure_known_action(s) {
+                input.action_down(s)
+            } else {
+                input.combo_down(s)
+            };
+        }
     };
     state.pressed || state.just_released
 }
 #[derive(Default, Debug)]
 struct ActionFilters {
-    buttons: Vec<ParsedMouseButton>,
+    buttons: Vec<ParsedButton>,
     events: Vec<TouchEventKind>,
     modes: Vec<String>,
 }
@@ -914,32 +946,47 @@ struct ParsedAction {
 }
 
 fn parse_action_filters(action: &mut String) -> ActionFilters {
+    // ALWAYS remove the found filter!!!!
     let mut filters = ActionFilters::default();
 
     // Keep removing filters until none are found
-
     loop {
+        let mut found_something = false;
+        let button_prefix = "button:";
         // Try to extract a button: filter
         if let Some(button) = try_extract_filter(
             action,
-            "button:",
+            button_prefix,
             &[
-                ("any", ParsedMouseButton::Any),
-                ("right", ParsedMouseButton::Right),
-                ("middle", ParsedMouseButton::Middle),
-                ("back", ParsedMouseButton::Back),
-                ("forward", ParsedMouseButton::Forward),
-                ("left", ParsedMouseButton::Left),
-                ("a", ParsedMouseButton::Any),
-                ("l", ParsedMouseButton::Left),
-                ("r", ParsedMouseButton::Right),
-                ("m", ParsedMouseButton::Middle),
-                ("b", ParsedMouseButton::Back),
-                ("f", ParsedMouseButton::Forward),
+                ("any", ParsedButton::Any),
+                ("right", ParsedButton::Right),
+                ("middle", ParsedButton::Middle),
+                ("back", ParsedButton::Back),
+                ("forward", ParsedButton::Forward),
+                ("left", ParsedButton::Left),
+                ("a", ParsedButton::Any),
+                ("l", ParsedButton::Left),
+                ("r", ParsedButton::Right),
+                ("m", ParsedButton::Middle),
+                ("b", ParsedButton::Back),
+                ("f", ParsedButton::Forward),
             ],
         ) {
             filters.buttons.push(button);
-            continue;
+            found_something = true;
+        } else if let Some(start) = action.find(button_prefix) {
+            let rest = &action[start + button_prefix.len()..];
+
+            // Handle quoted string
+            if rest.starts_with('"') {
+                if let Some(end_quote) = rest[1..].find('"') {
+                    let key = rest[1..=end_quote].to_string();
+                    let total_len = button_prefix.len() + end_quote + 2; // +2 for both quotes
+                    remove_filter_span(action, start, start + total_len);
+                    filters.buttons.push(ParsedButton::Key(key));
+                    found_something = true;
+                }
+            }
         }
 
         // Try to extract an on: filter (event type)
@@ -947,6 +994,7 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
             action,
             "on:",
             &[
+                ("n", TouchEventKind::Nothing),
                 ("hover_enter", TouchEventKind::HoverEnter),
                 ("hoverenter", TouchEventKind::HoverEnter),
                 ("hovering", TouchEventKind::Hovering),
@@ -961,6 +1009,9 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
                 ("drag_move", TouchEventKind::DragMove),
                 ("dragging", TouchEventKind::DragMove),
                 ("drag", TouchEventKind::DragMove),
+                ("down", TouchEventKind::Down),
+                ("d", TouchEventKind::Down),
+                ("hold", TouchEventKind::Down),
                 ("scroll", TouchEventKind::ScrollOnElement),
                 ("h_enter", TouchEventKind::HoverEnter),
                 ("h", TouchEventKind::Hovering),
@@ -969,45 +1020,50 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
                 ("r", TouchEventKind::Release),
                 ("c", TouchEventKind::Click),
                 ("dc", TouchEventKind::DoubleClick),
-                ("d", TouchEventKind::DragMove),
+                ("dr", TouchEventKind::DragMove),
                 ("s", TouchEventKind::ScrollOnElement),
                 ("sel", TouchEventKind::Select),
                 ("desel", TouchEventKind::DeSelect),
             ],
         ) {
             filters.events.push(event);
-            continue;
+            found_something = true;
         }
 
         // Try to extract an in: filter (mode)
         if let Some(mode) = try_extract_string_filter(action, "in:") {
             filters.modes.push(mode);
-            continue;
+            found_something = true;
         }
 
-        break;
+        // If nothing was extracted, we're done
+        if !found_something {
+            break;
+        }
     }
     if filters.buttons.is_empty() {
-        filters.buttons.push(ParsedMouseButton::Left);
+        filters.buttons.push(ParsedButton::Left);
     }
     filters
 }
 
-fn try_extract_filter<T: Copy>(
+fn try_extract_filter<T: Clone>(
     action: &mut String,
     prefix: &str,
     options: &[(&str, T)],
 ) -> Option<T> {
     if let Some(start) = action.find(prefix) {
         let rest = &action[start + prefix.len()..];
-
+        if rest.starts_with('"') {
+            return None;
+        }
         for (name, value) in options {
             if rest.starts_with(name) {
                 // Verify it's a complete token (followed by separator or end)
                 let after = start + prefix.len() + name.len();
                 if after >= action.len() || is_separator(action.as_bytes()[after]) {
                     remove_filter_span(action, start, after);
-                    return Some(*value);
+                    return Some(value.clone());
                 }
             }
         }
@@ -1083,6 +1139,7 @@ fn remove_filter_span(action: &mut String, start: usize, end: usize) {
 }
 
 fn filters_match(
+    input: &mut Input,
     settings: &Settings,
     filters: &ActionFilters,
     event_kind: &TouchEventKind,
@@ -1090,7 +1147,10 @@ fn filters_match(
 ) -> bool {
     // Check button filters (if any specified, at least one must match)
     if !filters.buttons.is_empty() {
-        let any_button_matches = filters.buttons.iter().any(|b| button_matches(*b, buttons));
+        let any_button_matches = filters
+            .buttons
+            .iter()
+            .any(|b| button_matches(input, b.clone(), buttons));
         if !any_button_matches {
             return false;
         }
@@ -1128,12 +1188,13 @@ fn filters_match(
     true
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum ParsedMouseButton {
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum ParsedButton {
     Left,
     Right,
     Middle,
     Back,
     Forward,
     Any,
+    Key(String),
 }

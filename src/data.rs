@@ -154,7 +154,7 @@ impl_cycle!(ShadowType: ShadowType::OFF, ShadowType::CSM, ShadowType::RT);
 pub enum SettingKind {
     Bool,
     Cycle,
-    Value,
+    Val,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -550,7 +550,7 @@ macro_rules! apply_setting_arm {
             _ => {}
         }
     };
-    (Value, $s:ident, $field:ident, $op:ident) => {
+    (Val, $s:ident, $field:ident, $op:ident) => {
         if let SettingOp::Set(v) = $op {
             if let Some(val) = SettingConvert::from_setting_value(v) {
                 $s.$field = val;
@@ -634,27 +634,27 @@ macro_rules! define_settings {
 }
 
 define_settings! {
-    TargetFps => target_fps: f32 = 60.0; Value,
-    TargetTps => target_tps: f32 = 60.0; Value,
+    TargetFps => target_fps: f32 = 60.0; Val,
+    TargetTps => target_tps: f32 = 60.0; Val,
     PresentMode => present_mode: PresentModeSetting = PresentModeSetting::Mailbox; Cycle,
     EditorMode => editor_mode: bool = false; Bool,
     OverrideMode => override_mode: bool = false; Bool,
     ShowGui => show_gui: bool = true; Bool,
-    BackgroundColor => background_color: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; Value,
-    TotalGameTime => total_game_time: f64 = 0.0; Value,
+    BackgroundColor => background_color: [f32; 4] = [0.0, 0.0, 0.0, 1.0]; Val,
+    TotalGameTime => total_game_time: f64 = 0.0; Val,
     WorldGenerationBenchmarkMode => world_generation_benchmark_mode: bool = false; Bool,
     BendMode => bend_mode: BendMode = BendMode::Strict; Cycle,
     ShowWorld => show_world: bool = true; Bool,
     AlwaysDay => always_day: bool = false; Bool,
-    MsaaSamples => msaa_samples: u32 = 4; Value,
-    ShadowMapSize => shadow_map_size: u32 = 4096; Value,
+    MsaaSamples => msaa_samples: u32 = 4; Val,
+    ShadowMapSize => shadow_map_size: u32 = 4096; Val,
     ShadowType => shadow_type: ShadowType = ShadowType::default(); Cycle,
     GtaoEnabled => gtao_enabled: bool = true; Bool,
-    ZoomSpeed => zoom_speed: f32 = 10.0; Value,
+    ZoomSpeed => zoom_speed: f32 = 10.0; Val,
     RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
     RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
-    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Value,
+    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Val,
     DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle,
     StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle,
     LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle,

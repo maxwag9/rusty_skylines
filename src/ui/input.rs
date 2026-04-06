@@ -86,26 +86,30 @@ enum BindingKey {
 }
 
 #[derive(Debug, Clone)]
-struct ParsedKeyCombo {
-    require_ctrl: bool,
-    require_shift: bool,
-    require_alt: bool,
-    key: BindingKey,
+pub struct ParsedKeyCombo {
+    pub require_ctrl: bool,
+    pub require_shift: bool,
+    pub require_alt: bool,
+    pub require_mouse_left: bool,
+    pub require_mouse_right: bool,
+    pub require_mouse_middle: bool,
+    pub require_mouse_back: bool,
+    pub require_mouse_forward: bool,
+    pub key: BindingKey,
 }
 
 impl ParsedKeyCombo {
-    fn matches(&self, input: &Input) -> bool {
-        // STRICT: modifiers must match exactly
-        if input.ctrl != self.require_ctrl {
-            return false;
-        }
-        if input.shift != self.require_shift {
-            return false;
-        }
-        if input.alt != self.require_alt {
-            return false;
-        }
-        input.key_active(&self.key)
+    pub fn matches(&self, input: &Input) -> bool {
+        let modifiers_ok = (!self.require_ctrl || input.ctrl)
+            && (!self.require_shift || input.shift)
+            && (!self.require_alt || input.alt)
+            && (!self.require_mouse_left || input.mouse.is_button_down(MouseButton::Left))
+            && (!self.require_mouse_right || input.mouse.is_button_down(MouseButton::Right))
+            && (!self.require_mouse_middle || input.mouse.is_button_down(MouseButton::Middle))
+            && (!self.require_mouse_back || input.mouse.is_button_down(MouseButton::Back))
+            && (!self.require_mouse_forward || input.mouse.is_button_down(MouseButton::Forward));
+
+        modifiers_ok && input.key_active(&self.key)
     }
 }
 
@@ -452,7 +456,7 @@ impl Input {
         false
     }
 
-    fn ensure_known_action(&mut self, action: &str) -> bool {
+    pub fn ensure_known_action(&mut self, action: &str) -> bool {
         if self.parsed.contains_key(action) {
             return true;
         }
@@ -588,6 +592,50 @@ impl Input {
     pub fn named_just_pressed(&mut self, key: NamedKey) -> bool {
         self.logical_just_pressed.contains(&key)
     }
+
+    /// Check if a raw key combo string (e.g. "Ctrl+S", "Alt+F4") is currently down
+    /// without needing it defined in keybinds
+    pub fn combo_down(&self, combo_str: &str) -> bool {
+        if let Some(combo) = parse_combo(combo_str) {
+            combo.matches(self)
+        } else {
+            false
+        }
+    }
+
+    // /// Check if combo was just pressed this frame
+    // pub fn combo_pressed_once(&mut self, combo_str: &str) -> bool {
+    //     let now = self.combo_down(combo_str);
+    //     let last = self
+    //         .named_last_down
+    //         .entry(combo_str.to_string())
+    //         .or_insert(false);
+    //     let fired = now && !*last;
+    //     *last = now;
+    //     fired
+    // }
+    //
+    // /// Check if combo was just released this frame
+    // pub fn combo_released(&mut self, combo_str: &str) -> bool {
+    //     let now = self.combo_down(combo_str);
+    //     let last = self
+    //         .named_last_down
+    //         .entry(combo_str.to_string())
+    //         .or_insert(false);
+    //     let released = *last && !now;
+    //     *last = now;
+    //     released
+    // }
+
+    /// Check combo with key repeat
+    pub fn combo_repeat(&mut self, combo_str: &str) -> bool {
+        let down = self.combo_down(combo_str);
+        let timer = self
+            .repeat_timers
+            .entry(combo_str.to_string())
+            .or_insert_with(RepeatTimer::new);
+        timer.tick(self.now, down)
+    }
 }
 
 fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
@@ -597,6 +645,11 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
             require_ctrl: false,
             require_shift: false,
             require_alt: false,
+            require_mouse_left: false,
+            require_mouse_right: false,
+            require_mouse_middle: false,
+            require_mouse_back: false,
+            require_mouse_forward: false,
             key: BindingKey::Character(ch),
         });
     }
@@ -604,6 +657,11 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
     let mut require_ctrl = false;
     let mut require_shift = false;
     let mut require_alt = false;
+    let mut require_mouse_left = false;
+    let mut require_mouse_right = false;
+    let mut require_mouse_middle = false;
+    let mut require_mouse_back = false;
+    let mut require_mouse_forward = false;
     let mut key_part: Option<BindingKey> = None;
 
     for raw in s.split('+') {
@@ -615,12 +673,24 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
             require_shift = true;
         } else if t.eq_ignore_ascii_case("alt") {
             require_alt = true;
+        } else if let Some(m) = map_to_mouse(t) {
+            // Treat mouse buttons as modifiers
+            match m {
+                MouseButton::Left => require_mouse_left = true,
+                MouseButton::Right => require_mouse_right = true,
+                MouseButton::Middle => require_mouse_middle = true,
+                MouseButton::Back => require_mouse_back = true,
+                MouseButton::Forward => require_mouse_forward = true,
+                MouseButton::Other(_) => {}
+            }
+            // If no other key found yet, use this as the main key
+            if key_part.is_none() {
+                key_part = Some(BindingKey::Mouse(m));
+            }
         } else if let Some(k) = map_to_keycode(t) {
             key_part = Some(BindingKey::Physical(PhysicalKey::Code(k)));
         } else if let Some(n) = map_to_named(t) {
             key_part = Some(BindingKey::Logical(n));
-        } else if let Some(m) = map_to_mouse(t) {
-            key_part = Some(BindingKey::Mouse(m));
         } else if let Some(ch) = map_to_char(t) {
             key_part = Some(BindingKey::Character(ch));
         } else if t.eq_ignore_ascii_case("WheelUp") {
@@ -635,7 +705,6 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
     }
 
     // If no key found, promote last modifier to be the key
-    // This allows bindings like "Shift" or "Ctrl+Shift"
     if key_part.is_none() {
         if require_shift {
             key_part = Some(BindingKey::AnyShift);
@@ -655,6 +724,11 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
         require_ctrl,
         require_shift,
         require_alt,
+        require_mouse_left,
+        require_mouse_right,
+        require_mouse_middle,
+        require_mouse_back,
+        require_mouse_forward,
         key,
     })
 }

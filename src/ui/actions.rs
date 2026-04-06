@@ -9,14 +9,14 @@ use crate::ui::input::Input;
 use crate::ui::menu::Menu;
 use crate::ui::parser::{Value, eval_expr};
 use crate::ui::ui_edit_manager::{
-    ChangeColorCommand, ColorProperty, CreateElementCommand, DeleteElementCommand,
+    ChangeColorCommand, ColorComponent, CreateElementCommand, DeleteElementCommand,
     DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
 use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_layer_settings};
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
-use crate::ui::variables::Variables;
+use crate::ui::variables::{Variables, initialize_value};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
@@ -169,7 +169,7 @@ pub enum UiCommand {
     SetVar {
         element_ref: ElementRef,
         name: String,
-        value: Value,
+        value: String,
     },
     IncVar {
         element_ref: ElementRef,
@@ -217,56 +217,57 @@ pub enum UiCommand {
         count: usize,
     },
     If {
-        condition: Value,
+        element_ref: ElementRef,
+        condition: String,
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
     IfVarEq {
         element_ref: ElementRef,
         var_name: String,
-        value: Value,
+        value: String,
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
     AddElement {
         element_ref: ElementRef,
-        menu: Value,
-        layer: Value,
-        id: Value,
-        kind: Value,
-        center: Value,
+        menu: String,
+        layer: String,
+        id: String,
+        kind: String,
+        center: String,
     },
     CloneElement {
         element_ref: ElementRef,
-        from_menu: Value,
-        from_layer: Value,
-        from_id: Value,
-        to_menu: Value,
-        to_layer: Value,
-        to_id: Value,
-        center: Value,
+        from_menu: String,
+        from_layer: String,
+        from_id: String,
+        to_menu: String,
+        to_layer: String,
+        to_id: String,
+        center: String,
     },
     CloneElementUndoable {
         element_ref: ElementRef,
-        from_menu: Value,
-        from_layer: Value,
-        from_id: Value,
-        to_menu: Value,
-        to_layer: Value,
-        to_id: Value,
-        center: Value,
+        from_menu: String,
+        from_layer: String,
+        from_id: String,
+        to_menu: String,
+        to_layer: String,
+        to_id: String,
+        center: String,
     },
     DeleteElement {
         element_ref: ElementRef,
-        menu: Value,
-        layer: Value,
-        id: Value,
+        menu: String,
+        layer: String,
+        id: String,
     },
     DeleteElementUndoable {
         element_ref: ElementRef,
-        menu: Value,
-        layer: Value,
-        id: Value,
+        menu: String,
+        layer: String,
+        id: String,
     },
     SaveGame,
     LoadSave {
@@ -276,7 +277,8 @@ pub enum UiCommand {
     ExitGame,
     // ===== DEBUG COMMANDS =====
     Print {
-        args: Vec<Value>,
+        element_ref: ElementRef,
+        args: Vec<String>,
     },
     DebugVars,
     DebugMenus,
@@ -600,6 +602,10 @@ impl CommandQueue {
                 name,
                 value,
             } => {
+                //println!("Value BEFORE: {} for {}", value, name);
+                let value = string_to_value(ctx, &element_ref, value);
+                //println!("Value AFTER: {} for {}", value, name);
+                let (name, value) = initialize_value(name.as_str(), value);
                 let mut result: CommandResult = CommandResult::Error(
                     "No settings nor vars found to set using UiCommand::SetVar".into(),
                 );
@@ -635,7 +641,8 @@ impl CommandQueue {
 
                 // Ternary: Variables
                 if !matches!(result, CommandResult::Ok) {
-                    match set_element_property(ctx, element_ref, name.as_str(), &value) {
+                    //println!("In setVAR: {} {}({})", name, value.type_name(), value);
+                    match set_element_property(ctx, element_ref, name, &value) {
                         CommandResult::Error(e) => return CommandResult::Error(e),
                         _ => {}
                     }
@@ -913,12 +920,15 @@ impl CommandQueue {
             UiCommand::Skip { count } => CommandResult::Skip(count),
 
             UiCommand::If {
+                element_ref,
                 condition,
-                then: then_branch,
+                then,
                 else_branch,
             } => {
+                //println!("{} {:?} {:?}", condition, then, else_branch);
+                let condition = string_to_value(ctx, &element_ref, condition);
                 if condition.is_truthy() {
-                    for cmd in then_branch.into_iter().rev() {
+                    for cmd in then.into_iter().rev() {
                         self.queue.push_front(cmd);
                     }
                 } else {
@@ -946,8 +956,7 @@ impl CommandQueue {
                 let Some(var_value) = var_value else {
                     return CommandResult::Ok;
                 };
-
-                let compare_value = value;
+                let compare_value = string_to_value(ctx, &element_ref, value);
 
                 if var_value == compare_value {
                     for cmd in then.into_iter().rev() {
@@ -974,6 +983,7 @@ impl CommandQueue {
                         "Element Kind is None in AddElement kind argument".to_string(),
                     );
                 }
+                let center = string_to_value(ctx, &element_ref, center);
                 let Some(center) = center.as_pos() else {
                     return CommandResult::Error(
                         "Couldn't unpack center pos from AddElement center argument".to_string(),
@@ -982,15 +992,21 @@ impl CommandQueue {
                 let Some(element) = make_element(id.to_string(), &kind, center) else {
                     return CommandResult::Error("Couldn't make element in AddElement".to_string());
                 };
-                ctx.ui.ui_edit_manager.push_command(CreateElementCommand {
-                    affected_element: ElementRef::new(
-                        menu.to_string().as_str(),
-                        layer.to_string().as_str(),
-                        id.to_string().as_str(),
-                        kind,
-                    ),
-                    element,
-                });
+                ctx.ui.ui_edit_manager.execute_command(
+                    CreateElementCommand {
+                        affected_element: ElementRef::new(
+                            menu.to_string().as_str(),
+                            layer.to_string().as_str(),
+                            id.to_string().as_str(),
+                            kind,
+                        ),
+                        element,
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.input.mouse,
+                );
                 CommandResult::Ok
             }
             UiCommand::CloneElement {
@@ -1022,6 +1038,7 @@ impl CommandQueue {
                 );
 
                 element.set_id(&to_id.to_string());
+                let center = string_to_value(ctx, &element_ref, center);
                 if let Some(center) = center.as_pos() {
                     element.set_pos(center[0], center[1])
                 };
@@ -1059,14 +1076,19 @@ impl CommandQueue {
                     to_id.to_string().as_str(),
                     ElementKind::None,
                 );
-                ctx.ui
-                    .ui_edit_manager
-                    .push_command(DuplicateElementCommand {
+                let center = string_to_value(ctx, &element_ref, center);
+                ctx.ui.ui_edit_manager.execute_command(
+                    DuplicateElementCommand {
                         from_element,
                         to_element,
                         cached_element: None,
                         optional_center: center.as_pos(),
-                    });
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.input.mouse,
+                );
                 CommandResult::Ok
             }
             UiCommand::DeleteElement {
@@ -1100,10 +1122,16 @@ impl CommandQueue {
                     id.to_string().as_str(),
                     ElementKind::None,
                 );
-                ctx.ui.ui_edit_manager.push_command(DeleteElementCommand {
-                    affected_element: element,
-                    cached_element: None,
-                });
+                ctx.ui.ui_edit_manager.execute_command(
+                    DeleteElementCommand {
+                        affected_element: element,
+                        cached_element: None,
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.input.mouse,
+                );
                 CommandResult::Ok
             }
             UiCommand::SaveGame => {
@@ -1155,10 +1183,10 @@ impl CommandQueue {
             }
 
             // ===== DEBUG COMMANDS =====
-            UiCommand::Print { args } => {
+            UiCommand::Print { element_ref, args } => {
                 let msg: String = args
-                    .iter()
-                    .map(|a| a.to_string())
+                    .into_iter()
+                    .map(|s| string_to_value(ctx, &element_ref, s).to_string())
                     .collect::<Vec<_>>()
                     .join(" ");
                 println!("[UI] {}", msg);
@@ -1240,6 +1268,17 @@ impl CommandQueue {
     }
 }
 
+fn string_to_value(ctx: &mut CommandContext, self_element_ref: &ElementRef, s: String) -> Value {
+    send_element_properties_to_variables(
+        &ctx.ui.menus,
+        &mut ctx.ui.variables,
+        &ctx.ui.touch_manager,
+        self_element_ref,
+    );
+    let val = Value::from_str(ctx.settings, &ctx.ui.variables, s.as_str());
+    //println!("Parse arg for Value in action_parser input: {}: {}", s, val);
+    val
+}
 // ==================== PARSER ====================
 
 /// Canonicalize action names for legacy string conversion.
@@ -1377,12 +1416,14 @@ pub fn load_save(
         e => eprintln!("Failed to load World: {:#?}", e),
     }
 }
+/// ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
 pub fn set_element_property(
     ctx: &mut CommandContext,
     element_ref: ElementRef,
     name: &str,
     new_val: &Value,
 ) -> CommandResult {
+    // ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
     let Some((base, suffix)) = name.split_once('.') else {
         return CommandResult::AnnoyingError(format!(
             "set_element_property: invalid property name '{}', expected '.' separator",
@@ -1413,7 +1454,7 @@ pub fn set_element_property(
             "center" => {
                 let Some(before) = get_element_position(&ctx.ui.menus, &element_ref) else {
                     return CommandResult::Error(
-                        "get_element_position() failed in set_element_property".to_string(),
+                        format!("get_element_position() failed in set_element_property for element {:?}", element_ref).to_string(),
                     );
                 };
 
@@ -1466,12 +1507,18 @@ pub fn set_element_property(
                         after
                     }
                 };
-
-                ctx.ui.ui_edit_manager.push_command(MoveElementCommand {
-                    affected_element: element_ref,
-                    before: None,
-                    after,
-                });
+                //println!("Setting CENTER to: {:?}, with {:?} and {:?}", after, name, new_val);
+                ctx.ui.ui_edit_manager.execute_command(
+                    MoveElementCommand {
+                        affected_element: element_ref,
+                        before: None,
+                        after,
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.input.mouse,
+                );
             }
 
             "radius" => {
@@ -1481,28 +1528,40 @@ pub fn set_element_property(
                     );
                 };
 
-                ctx.ui.ui_edit_manager.push_command(ResizeElementCommand {
-                    affected_element: element_ref,
-                    before: None,
-                    after: SizeProperty::Radius(radius as f32),
-                });
+                ctx.ui.ui_edit_manager.execute_command(
+                    ResizeElementCommand {
+                        affected_element: element_ref,
+                        before: None,
+                        after: SizeProperty::Radius(radius as f32),
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.input.mouse,
+                );
             }
 
             "color" => {
-                let color_property = ColorProperty::from_str(component); // MSRV!!
-                println!("{}", new_val);
+                let color_property = ColorComponent::from_str(component); // MSRV!!
+                //println!("{}", new_val);
                 let Some(new_color) = new_val.as_color4() else {
                     return CommandResult::Error(
                         ".as_color4() failed in set_element_property".to_string(),
                     );
                 };
 
-                ctx.ui.ui_edit_manager.push_command(ChangeColorCommand {
-                    affected_element: element_ref,
-                    property: color_property,
-                    before: None,
-                    after: new_color,
-                });
+                ctx.ui.ui_edit_manager.execute_command(
+                    ChangeColorCommand {
+                        affected_element: element_ref,
+                        property: color_property,
+                        before: None,
+                        after: new_color,
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.input.mouse,
+                );
             }
 
             _ => {
@@ -1606,6 +1665,17 @@ pub fn send_element_properties_to_variables(
                         .map(|r| Value::F64(r as f64))
                         .unwrap_or(Value::Null),
                 ); // f64
+                let size = element.size().value_size2().unwrap_or(Value::Null);
+                //println!("{:?}", element.size());
+                variables.set_var("self.size", size);
+                variables.set_array(
+                    "self.color_components",
+                    element
+                        .color_components()
+                        .iter()
+                        .map(|c| Value::String(c.to_string()))
+                        .collect::<Vec<Value>>(),
+                );
             }
         }
     }

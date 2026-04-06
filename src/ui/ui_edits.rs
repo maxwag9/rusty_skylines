@@ -4,7 +4,8 @@
 
 use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
-use crate::ui::ui_edit_manager::ColorProperty;
+use crate::ui::parser::Value;
+use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
@@ -122,6 +123,23 @@ impl SizeProperty {
             _ => None,
         }
     }
+    pub fn size2(&self) -> Option<[f32; 2]> {
+        match self {
+            SizeProperty::Rect(size) => Some(*size),
+            _ => None,
+        }
+    }
+
+    pub fn value_size2(&self) -> Option<Value> {
+        self.size2().map(|r| {
+            Value::Array(
+                r.iter()
+                    .map(|s| Value::F64(*s as f64))
+                    .collect::<Vec<Value>>(),
+            )
+        })
+    }
+
     pub fn scale_by(&self, scale: f32) -> Self {
         let mut scaled = self.clone();
         match &mut scaled {
@@ -266,7 +284,7 @@ pub fn set_element_size(
 pub fn set_element_color(
     menus: &mut HashMap<String, Menu>,
     element_ref: &ElementRef,
-    property: &ColorProperty,
+    property: &ColorComponent,
     color: [f32; 4],
 ) -> Option<[f32; 4]> {
     let Some(menu) = menus.get_mut(&element_ref.menu) else {
@@ -286,19 +304,19 @@ pub fn set_element_color(
                 .find(|c| c.id == element_ref.id)
             {
                 match property {
-                    ColorProperty::Fill => {
+                    ColorComponent::Fill => {
                         previous_color = Some(c.fill_color);
                         c.fill_color = color;
                     }
-                    ColorProperty::Border => {
+                    ColorComponent::Border => {
                         previous_color = Some(c.border_color);
                         c.border_color = color;
                     }
-                    ColorProperty::InsideBorder => {
+                    ColorComponent::InsideBorder => {
                         previous_color = Some(c.inside_border_color);
                         c.inside_border_color = color;
                     }
-                    ColorProperty::Glow => {
+                    ColorComponent::Glow => {
                         previous_color = Some(c.glow_color);
                         c.glow_color = color;
                     }
@@ -315,7 +333,7 @@ pub fn set_element_color(
                 .filter_map(UiElement::as_text_mut)
                 .find(|t| t.id == element_ref.id)
             {
-                if matches!(property, ColorProperty::Fill) {
+                if matches!(property, ColorComponent::Fill) {
                     previous_color = Some(t.color);
                     t.color = color;
                     layer.dirty.mark_texts();
@@ -330,7 +348,7 @@ pub fn set_element_color(
                 .filter_map(UiElement::as_rect_mut)
                 .find(|r| r.id == element_ref.id)
             {
-                if matches!(property, ColorProperty::Fill) {
+                if matches!(property, ColorComponent::Fill) {
                     previous_color = Some(r.color);
                     r.color = color;
                     layer.dirty.mark_rects();
@@ -346,7 +364,7 @@ pub fn set_element_color(
                 .find(|p| p.id == element_ref.id)
             {
                 match property {
-                    ColorProperty::Fill => {
+                    ColorComponent::Fill => {
                         // Take color from first vertex as "previous"
                         if let Some(first) = p.unscaled_vertices.first() {
                             previous_color = Some(first.color);
@@ -360,7 +378,7 @@ pub fn set_element_color(
                         layer.dirty.mark_rects();
                     }
 
-                    ColorProperty::VertexIndex(i) => {
+                    ColorComponent::VertexIndex(i) => {
                         if let Some(vertex) = p.unscaled_vertices.get_mut(*i as usize) {
                             previous_color = Some(vertex.color);
                             vertex.color = color;
