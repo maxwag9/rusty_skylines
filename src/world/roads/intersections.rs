@@ -1650,7 +1650,7 @@ fn build_sidewalk_mesh(
     triangulate_polygon(ring, base, indices);
 }
 
-pub(crate) fn gather_arms(
+pub fn gather_arms(
     storage: &RoadStorage,
     node_id: NodeId,
     intersection_build_params: &IntersectionBuildParams,

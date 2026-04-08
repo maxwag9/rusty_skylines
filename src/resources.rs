@@ -1,7 +1,7 @@
 use crate::data::Settings;
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::render_core::{
-    RenderCore, create_device, create_surface_and_adapter, create_surface_config,
+    Renderer, create_device, create_surface_and_adapter, create_surface_config,
 };
 use crate::renderer::shadows::CSM_CASCADES;
 use crate::ui::actions::CommandQueue;
@@ -33,7 +33,7 @@ pub struct Resources {
     pub world_core: World,
 
     // The GPU + render-only subsystems:
-    pub render_core: RenderCore,
+    pub render_core: Renderer,
 
     pub ui_loader: Ui,
     pub sounds: Sounds,
@@ -54,7 +54,7 @@ impl Resources {
         let mut world_core = World::new(device, &settings);
         let camera = &mut world_core.world_state.camera;
 
-        let render_core = RenderCore::new(device, queue, &config, size, adapter, &settings, camera);
+        let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera);
 
         let mut ui_loader = Ui::new(&settings, window.inner_size());
         ui_loader

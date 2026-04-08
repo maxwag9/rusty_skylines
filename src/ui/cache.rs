@@ -409,6 +409,13 @@ pub fn rebuild_rect_cache(
                 border_thickness: border,
                 rotation: -rect.rotation.to_radians(), // NEGATIVE so that it feels intuitive for us mere mortal humans who have a preference for positive rotation to go CW instead of CCW!
                 fade: rect.fade,
+                glow_color: rect.glow_color,
+                glow_misc: [
+                    rect.glow_misc.glow_size,
+                    rect.glow_misc.glow_speed,
+                    rect.glow_misc.glow_intensity,
+                    1.0,
+                ],
                 misc: [
                     f32::from(rect.misc.active),
                     rt.touched_time,

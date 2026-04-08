@@ -14,7 +14,10 @@ struct RectGpu {
     border_thickness: f32,
     rotation: f32,
     fade: f32,
-    misc: vec4<f32>,  // active, touched_time, is_down, hash
+    glow_color: vec4<f32>,
+    // (glow_size, glow_speed, glow_intensity, pad)
+    glow_misc: vec4<f32>,
+    misc: vec4<f32>, // active, touched_time, is_down, hash
 };
 
 @group(0) @binding(0) var<uniform> screen: ScreenUniform;

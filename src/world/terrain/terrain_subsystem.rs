@@ -48,15 +48,17 @@ struct FrameState {
 pub enum CursorMode {
     None,
     Roads,
+    Zoning,
     Props,
     TerrainEditing,
     Cars,
 }
 
 impl CursorMode {
-    fn order() -> [CursorMode; 5] {
+    fn order() -> [CursorMode; 6] {
         [
             CursorMode::Roads,
+            CursorMode::Zoning,
             CursorMode::Props,
             CursorMode::TerrainEditing,
             CursorMode::Cars,
@@ -72,6 +74,7 @@ impl CursorMode {
                 | (CursorMode::Cars, CursorMode::Cars)
                 | (CursorMode::TerrainEditing, CursorMode::TerrainEditing)
                 | (CursorMode::Roads, CursorMode::Roads)
+                | (CursorMode::Zoning, CursorMode::Zoning)
         )
     }
 

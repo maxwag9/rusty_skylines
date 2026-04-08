@@ -482,6 +482,12 @@ pub struct UiButtonRectYaml {
     #[serde(default)]
     pub fade: f32,
     #[serde(default)]
+    pub glow_color: [f32; 4],
+
+    // If glow settings are all 0.0, remove bloc
+    #[serde(default)]
+    pub glow_misc: GlowMisc,
+    #[serde(default)]
     pub misc: MiscButtonSettingsYaml,
 }
 #[derive(Debug, Clone)]
@@ -500,6 +506,8 @@ pub struct UiButtonRect {
     pub roundness: f32, // corner radius
     pub border_thickness_percentage: f32,
     pub fade: f32,
+    pub glow_color: [f32; 4],
+    pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
 }
 
@@ -520,6 +528,8 @@ impl UiButtonRect {
             roundness: r.roundness,
             border_thickness_percentage: r.border_thickness_percentage,
             fade: r.fade,
+            glow_color: r.glow_color,
+            glow_misc: r.glow_misc,
             misc: MiscButtonSettings {
                 active: r.misc.active,
                 touched_time: 0.0,
@@ -546,6 +556,8 @@ impl UiButtonRect {
             roundness: self.roundness,
             border_thickness_percentage: self.border_thickness_percentage,
             fade: self.fade,
+            glow_color: self.glow_color,
+            glow_misc: self.glow_misc.clone(),
             misc: self.misc.to_yaml(),
         }
     }
@@ -1181,7 +1193,9 @@ pub struct RectGpu {
     pub border_thickness: f32, // computed from percentage
     pub rotation: f32,         // RAD to the GPU! DEG User-Facing in YAML and Runtime.
     pub fade: f32,
-    pub misc: [f32; 4], // active, touched_time, is_down, hash
+    pub glow_color: [f32; 4],
+    pub glow_misc: [f32; 4], // glow_size, glow_speed, glow_intensity
+    pub misc: [f32; 4],      // active, touched_time, is_down, hash
 }
 // For text — pos + uv + color
 #[repr(C)]
@@ -2298,6 +2312,8 @@ impl Default for UiButtonRect {
             roundness: 0.0,
             border_thickness_percentage: 0.0,
             fade: 0.0,
+            glow_color: [0.2, 0.0, 0.8, 0.98],
+            glow_misc: GlowMisc::default(),
             misc: MiscButtonSettings::default(),
         }
     }
@@ -2473,12 +2489,9 @@ pub struct UiButtonCircleYaml {
     #[serde(skip_serializing_if = "is_default")]
     pub border_color: [f32; 4],
 
-    // Default implies [0,0,0,0] (transparent). Skip if so.
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
     pub glow_color: [f32; 4],
-
-    // If glow settings are all 0.0, remove block
-    #[serde(skip_serializing_if = "is_default")]
+    #[serde(default)]
     pub glow_misc: GlowMisc,
 
     #[serde(skip_serializing_if = "is_default")]

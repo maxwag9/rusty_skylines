@@ -1,6 +1,11 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::renderer::gizmo::gizmo::Gizmo;
+use crate::ui::input::Input;
+use crate::world::buildings::zoning::Zoning;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
 use crate::world::roads::road_structs::SegmentId;
+use crate::world::roads::road_subsystem::Roads;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use rayon::iter::IntoParallelRefMutIterator;
 use std::collections::HashMap;
 use std::slice::{Iter, IterMut};
@@ -69,13 +74,24 @@ pub struct Building {
 
 pub struct Buildings {
     pub storage: BuildingStorage,
+    pub zoning: Zoning,
 }
 
 impl Buildings {
     pub fn new() -> Buildings {
         Self {
             storage: BuildingStorage::new(),
+            zoning: Zoning::new(),
         }
+    }
+    pub fn update(
+        &mut self,
+        terrain: &Terrain,
+        roads: &Roads,
+        input: &mut Input,
+        gizmo: &mut Gizmo,
+    ) {
+        self.zoning.update(terrain, roads, input, gizmo);
     }
 }
 

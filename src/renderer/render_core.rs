@@ -23,6 +23,7 @@ use crate::simulation::update_picked_pos;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
@@ -46,7 +47,7 @@ use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-pub struct RenderCore {
+pub struct Renderer {
     // gpu objects
     pub adapter: Adapter,
     pub device: Device,
@@ -70,7 +71,7 @@ pub struct RenderCore {
     pub props: Props,
 }
 
-impl RenderCore {
+impl Renderer {
     pub fn new(
         device: &Device,
         queue: &Queue,
@@ -160,7 +161,7 @@ impl RenderCore {
     pub fn render(
         &mut self,
         surface: &Surface,
-        world_core: &mut World,
+        world: &mut World,
         ui_loader: &mut Ui,
         settings: &Settings,
     ) {
@@ -168,15 +169,15 @@ impl RenderCore {
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         //let t = Instant::now();
-        self.update_render(world_core, ui_loader, settings, aspect, screen_size);
+        self.update_render(world, ui_loader, settings, aspect, screen_size);
 
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
         };
-        let time = &world_core.time;
-        let camera = &world_core.world_state.camera;
-        let astronomy = &world_core.world_state.astronomy;
-        let terrain = &mut world_core.terrain;
+        let time = &world.time;
+        let camera = &world.world_state.camera;
+        let astronomy = &world.world_state.astronomy;
+        let terrain = &mut world.terrain;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -189,7 +190,7 @@ impl RenderCore {
             gpu_timestamp!(encoder, &mut self.profiler, "CSM", {
                 self.execute_shadow_pass(
                     &mut encoder,
-                    world_core.cars.car_storage(),
+                    world.cars.car_storage(),
                     camera,
                     aspect,
                     time,
@@ -204,10 +205,10 @@ impl RenderCore {
                 camera,
                 aspect,
                 time,
-                &world_core.input,
+                &world.input,
                 ui_loader,
                 terrain,
-                &world_core.cars.car_storage(),
+                &world.cars.car_storage(),
                 settings,
                 astronomy,
             );
@@ -279,6 +280,7 @@ impl RenderCore {
             &world_core.road,
             &world_core.cars,
             astronomy,
+            &mut world_core.buildings,
         );
     }
 
@@ -320,6 +322,7 @@ impl RenderCore {
         roads: &Roads,
         cars: &Cars,
         astronomy: &Astronomy,
+        buildings: &mut Buildings,
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
@@ -332,6 +335,7 @@ impl RenderCore {
         ui_loader
             .variables
             .set_array("target_pos", target_pos_render.to_array());
+        buildings.update(terrain, roads, input, &mut self.gizmo);
         self.props.place_props(terrain, input, &self.device);
         self.ui_renderer.update(
             ui_loader,

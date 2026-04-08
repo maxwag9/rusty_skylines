@@ -18,20 +18,21 @@ const DITHER_MATRIX : array<array<f32, 4>, 4> = array(
     array(15.0/16.0,  7.0/16.0, 13.0/16.0,  5.0/16.0 )
 );
 
-
 struct CircleParams {
-    // (cx, cy, radius, border)
+    // center.x, center.y, radius, outer_border_thickness_percentage
     center_radius_border: vec4<f32>,
-    fade: vec4<f32>,
-    // colors + alpha :)
-    fill_color:   vec4<f32>,
+    fill_color: vec4<f32>,
+    inside_border_color: vec4<f32>,
     border_color: vec4<f32>,
-    glow_color:   vec4<f32>,
-    // (glow_size, glow_speed, glow_intensity, pad)
-    glow_misc:    vec4<f32>,
-    misc:         vec4<f32>,
-};
+    glow_color: vec4<f32>,
+    glow_misc: vec4<f32>,
+    misc: vec4<f32>,
 
+    fade: f32,
+    style: u32,
+    inside_border_thickness_percentage: f32,
+    _pad0: u32,
+};
 fn hash(p: vec2<f32>) -> f32 {
     // deterministic pseudo-random hash
     return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
@@ -68,9 +69,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // quad covers full circle + halo
     let world = center + in.pos * (radius + glow_size);
 
-
-
-
     let x = (world.x / screen.size.x) * 2.0 - 1.0;
     let y = 1.0 - (world.y / screen.size.y) * 2.0;
     out.pos = vec4<f32>(x, y, 0.0, 1.0);
@@ -100,9 +98,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // radial distance from center
     let dist = distance(in.local_pos, center);
 
-    // ---------------------------------------------------------------
     // Base pulsing glow
-    // ---------------------------------------------------------------
     let pulse = 0.5 + 0.5 * sin(screen.time * glow_speed + id_hash * 314.15);
     let base_glow = mix(0.15, 1.0, pulse) * glow_intensity;
 

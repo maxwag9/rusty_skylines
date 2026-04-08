@@ -184,13 +184,20 @@ impl Gizmo {
 
     pub fn circle(&mut self, center: WorldPos, radius: f32, color: [f32; 3], duration: f32) {
         let cs = self.chunk_size;
-        let verts: Vec<_> = (0..CIRCLE_SEGMENT_COUNT)
-            .map(|i| {
-                let angle = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
-                let offset = Vec3::new(radius * angle.cos(), 0.0, radius * angle.sin());
-                LineVtxWorld::new(center.add_vec3(offset, cs), color)
-            })
-            .collect();
+
+        let mut verts = Vec::with_capacity(CIRCLE_SEGMENT_COUNT * 2);
+
+        for i in 0..CIRCLE_SEGMENT_COUNT {
+            let a0 = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
+            let a1 = ((i + 1) as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
+
+            let p0 = center.add_vec3(Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), cs);
+            let p1 = center.add_vec3(Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), cs);
+
+            verts.push(LineVtxWorld::new(p0, color));
+            verts.push(LineVtxWorld::new(p1, color));
+        }
+
         self.push(verts, duration);
     }
 

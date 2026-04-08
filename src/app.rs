@@ -23,7 +23,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Cursor, CustomCursor, Window, WindowId};
 
 const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
     ("Speed up Time 100x", 100.0),
@@ -98,6 +98,20 @@ impl ApplicationHandler for App {
             "screen",
             vec![window.inner_size().width, window.inner_size().height],
         );
+
+        let width = 32u16;
+        let height = 32u16;
+
+        let rgba: Vec<u8> = vec![64; width as usize * height as usize * 4];
+
+        let source = CustomCursor::from_rgba(
+            rgba, width, height, 0, // hotspot x
+            0, // hotspot y
+        )
+        .unwrap();
+        let custom_cursor = event_loop.create_custom_cursor(source);
+        window.set_cursor(Cursor::Custom(custom_cursor));
+
         self.window = Some(window.clone());
         self.resources = Some(resources);
 

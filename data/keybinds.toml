@@ -94,6 +94,8 @@ keys = ["MouseLeft"]
 keys = ["MouseLeft"]
 ["Place Prop"]
 keys = ["MouseLeft"]
+["Place Zoning Point"]
+keys = ["MouseLeft"]
 ["Cancel"]
 keys = ["MouseRight"]
 

@@ -229,6 +229,11 @@ pub enum UiCommand {
         then: Vec<UiCommand>,
         else_branch: Vec<UiCommand>,
     },
+    For {
+        element_ref: ElementRef,
+        value: String,
+        commands: Vec<UiCommand>,
+    },
     AddElement {
         element_ref: ElementRef,
         menu: String,
@@ -501,6 +506,31 @@ impl CommandQueue {
         }
     }
 
+    fn execute_multiple_for(
+        &mut self,
+        val: Vec<Value>,
+        commands: Vec<UiCommand>,
+        ctx: &mut CommandContext,
+    ) {
+        for (idx, value) in val.into_iter().enumerate() {
+            ctx.ui.variables.set_var("idx", idx);
+            ctx.ui.variables.set_var("val", value);
+            for cmd in commands.iter().rev() {
+                match self.execute_one(cmd.clone(), ctx) {
+                    CommandResult::Ok => {}
+                    CommandResult::Stop => {}
+                    CommandResult::Skip(n) => {}
+                    CommandResult::Delay { seconds, remaining } => {}
+                    CommandResult::Error(msg) => {
+                        eprintln!("[CommandQueue] Error inside for loop: {}", msg);
+                    }
+                    CommandResult::AnnoyingError(msg) => {
+                        //eprintln!("[CommandQueue] Annoying Error inside for loop: {}", msg);
+                    }
+                }
+            }
+        }
+    }
     fn execute_one(&mut self, cmd: UiCommand, ctx: &mut CommandContext) -> CommandResult {
         match cmd {
             // ===== MENU COMMANDS =====
@@ -967,6 +997,41 @@ impl CommandQueue {
                         self.queue.push_front(cmd);
                     }
                 }
+                CommandResult::Ok
+            }
+
+            UiCommand::For {
+                element_ref,
+                value,
+                commands,
+            } => {
+                let val = string_to_value(ctx, &element_ref, value);
+                match val {
+                    Value::Null => {}
+                    Value::F64(n) => {
+                        let vec = (0..n as i64).map(|i| Value::F64(i as f64)).collect();
+                        self.execute_multiple_for(vec, commands, ctx);
+                    }
+                    Value::I64(n) => {
+                        let vec = (0..n).map(|i| Value::I64(i)).collect();
+                        self.execute_multiple_for(vec, commands, ctx);
+                    }
+                    Value::Bool(_) => {}
+                    Value::String(s) => {
+                        self.execute_multiple_for(
+                            s.chars()
+                                .into_iter()
+                                .map(|char| Value::String(char.to_string()))
+                                .collect::<Vec<Value>>(),
+                            commands,
+                            ctx,
+                        );
+                    }
+                    Value::Array(arr) => {
+                        self.execute_multiple_for(arr, commands, ctx);
+                    }
+                }
+
                 CommandResult::Ok
             }
             UiCommand::AddElement {

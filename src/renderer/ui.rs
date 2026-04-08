@@ -335,7 +335,6 @@ impl UiRenderer {
 
         let mut text_sections: Vec<Section> = Vec::new();
         for layer in layers_to_render {
-            // Build per-layer bind groups (same as before)
             let circle_bg = if layer.gpu.circle_count > 0 {
                 Some(self.device.create_bind_group(&BindGroupDescriptor {
                     label: None,
@@ -434,9 +433,36 @@ impl UiRenderer {
             let mut rect_idx: u32 = 0;
 
             for element in &layer.elements {
+                if !element.is_active() {
+                    continue;
+                }
                 match element {
                     UiElement::Circle(_) => {
                         if let Some(bg1) = circle_bg.as_ref() {
+                            // Glow
+                            let targets =
+                                color_target(pipelines, Some(self.pipelines.additive_blend));
+                            let options = &PipelineOptions {
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                fragment: FragmentOption::Default { targets },
+                                ..Default::default()
+                            };
+                            // UI Glow
+                            render_manager.render_with_layouts(
+                                &shader_dir().join("ui_circle_glow.wgsl"),
+                                &[
+                                    &self.pipelines.uniform_layout,
+                                    &self.pipelines.circle_layout,
+                                ],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, circle_idx..circle_idx + 1);
                             // Circle
                             let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
                             let options = &PipelineOptions {
@@ -455,32 +481,6 @@ impl UiRenderer {
                                     &self.pipelines.circle_layout,
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
-                                options,
-                                pass,
-                            );
-                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
-                            pass.draw(0..4, circle_idx..circle_idx + 1);
-
-                            // Glow
-                            let targets =
-                                color_target(pipelines, Some(self.pipelines.additive_blend));
-                            let options = &PipelineOptions {
-                                topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
-                                vertex_layouts: vec![UiVertexPoly::desc()],
-                                fragment: FragmentOption::Default { targets },
-                                ..Default::default()
-                            };
-                            // UI Glow
-                            render_manager.render_with_layouts(
-                                //cannot borrow `*render_manager` as mutable more than once at a time [E0499] second mutable borrow occurs here
-                                &shader_dir().join("ui_circle_glow.wgsl"),
-                                &[
-                                    &self.pipelines.uniform_layout,
-                                    &self.pipelines.circle_layout,
-                                ],
-                                &[&self.pipelines.uniform_bind_group, bg1], // `bg1` does not live long enough [E0597] borrowed value does not live long enough  EVERYWHERE
                                 options,
                                 pass,
                             );
@@ -578,6 +578,27 @@ impl UiRenderer {
                     UiElement::Text(_) => {}
                     UiElement::Rect(_) => {
                         if let Some(bg1) = rect_bg.as_ref() {
+                            // Glow
+                            let targets =
+                                color_target(pipelines, Some(self.pipelines.additive_blend));
+                            let options = &PipelineOptions {
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: msaa,
+                                depth_stencil: depth_stencil.clone(),
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                fragment: FragmentOption::Default { targets },
+                                ..Default::default()
+                            };
+                            // UI Glow
+                            render_manager.render_with_layouts(
+                                &shader_dir().join("ui_rect_glow.wgsl"),
+                                &[&self.pipelines.uniform_layout, &self.pipelines.rect_layout],
+                                &[&self.pipelines.uniform_bind_group, bg1],
+                                options,
+                                pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, rect_idx..rect_idx + 1);
                             let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,

@@ -22,6 +22,7 @@ use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
 };
 use crate::world::roads::road_editor::offset_polyline;
+use crate::world::roads::road_helpers::tangent_and_lateral_right;
 use crate::world::roads::road_mesh_manager::{
     ChunkId, RoadMeshManager, chunk_coord_to_id, world_pos_chunk_to_id,
 };
@@ -329,6 +330,11 @@ impl Node {
     #[inline]
     pub fn outgoing_lanes(&self) -> &[LaneId] {
         &self.outgoing_lanes
+    }
+
+    #[inline]
+    pub fn lanes(&self) -> impl Iterator<Item = &LaneId> {
+        self.incoming_lanes.iter().chain(self.outgoing_lanes.iter())
     }
     #[inline]
     pub fn node_lane(&self, node_lane_id: NodeLaneId) -> &NodeLane {
@@ -696,6 +702,25 @@ impl LaneGeometry {
             total_len,
         }
     }
+
+    pub fn closest_point_to(&self, pos: &WorldPos, chunk_size: ChunkSize) -> (WorldPos, f64, Vec3) {
+        debug_assert!(self.points.len() >= 2);
+
+        let mut best_point = self.points[0];
+        let mut best_dist = f64::MAX;
+        let mut best_idx = 0;
+
+        for (i, point) in self.points.iter().enumerate() {
+            let dist = point.distance_to(*pos, chunk_size);
+            if dist <= best_dist {
+                best_dist = dist;
+                best_point = *point;
+                best_idx = i;
+            }
+        }
+        let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx, chunk_size);
+        (best_point, best_dist, tangent)
+    }
 }
 
 // RoadManager
@@ -918,7 +943,7 @@ impl RoadStorage {
     }
 
     #[inline]
-    pub(crate) fn lane_counts_for_segment(&self, segment: &Segment) -> (usize, usize) {
+    pub fn lane_counts_for_segment(&self, segment: &Segment) -> (usize, usize) {
         let mut left_lanes = 0;
         let mut right_lanes = 0;
         let seg_node_a_id = segment.start();
@@ -1184,7 +1209,7 @@ impl RoadStorage {
         }
     }
 
-    pub(crate) fn add_node_lane(
+    pub fn add_node_lane(
         &mut self,
         node_id: NodeId,
         merging: Vec<LaneRef>,
@@ -1236,6 +1261,34 @@ impl RoadStorage {
             .filter(|(_, n)| n.is_enabled() && n.chunk_id() == chunk_id)
             .map(|(id, _)| id)
             .collect()
+    }
+
+    /// Expensive!
+    pub fn closest_point_to(
+        &self,
+        pos: &WorldPos,
+        chunk_size: ChunkSize,
+    ) -> Option<(WorldPos, f64, Vec3)> {
+        let mut best: Option<(WorldPos, f64, Vec3)> = None;
+        for segment_id in self.segment_ids_touching_chunk(pos.chunk, chunk_size) {
+            let segment = self.segment(segment_id);
+            for lane_id in segment.lanes() {
+                let lane = self.lane(lane_id);
+                if lane.is_disabled() {
+                    continue;
+                }
+
+                let (lane_pos, dist, tangent) = lane.geometry.closest_point_to(pos, chunk_size);
+                if let Some(best) = best.as_mut() {
+                    if dist < best.1 {
+                        *best = (lane_pos, dist, tangent);
+                    }
+                } else {
+                    best = Some((lane_pos, dist, tangent));
+                }
+            }
+        }
+        best
     }
 }
 
@@ -1657,7 +1710,7 @@ impl RoadCommand {
     /// For `AddNode`, the chunk is derived from `world_pos` and must be computed separately.
     pub fn chunk_id(&self) -> ChunkId {
         match self {
-            RoadCommand::AddNode { world_pos } => world_pos_chunk_to_id(*world_pos),
+            RoadCommand::AddNode { world_pos } => world_pos_chunk_to_id(world_pos),
             RoadCommand::AddSegment { chunk_id, .. } => *chunk_id,
             RoadCommand::AddLane { chunk_id, .. } => *chunk_id,
             RoadCommand::AddNodeLane { chunk_id, .. } => *chunk_id,
@@ -1819,7 +1872,7 @@ pub fn apply_command_world(
             if !is_preview {
                 car_subsystem.add_spawning_node(id);
             }
-            let chunk_id = world_pos_chunk_to_id(*world_pos);
+            let chunk_id = world_pos_chunk_to_id(world_pos);
             CommandResult::NodeCreated(chunk_id, id)
         }
         RoadCommand::AddSegment {
@@ -2054,7 +2107,7 @@ pub fn apply_command(
                     if !is_preview {
                         car_subsystem.add_spawning_node(id);
                     }
-                    let chunk_id = world_pos_chunk_to_id(world_pos);
+                    let chunk_id = world_pos_chunk_to_id(&world_pos);
                     affected_chunk = Some(chunk_id);
                     CommandResult::NodeCreated(chunk_id, id)
                 }

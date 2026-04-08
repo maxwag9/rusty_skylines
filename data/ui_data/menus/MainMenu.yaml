@@ -90,6 +90,7 @@ layers:
           - on:r set(ball.speed, 3.0)
           - on:r set(ball.velocity.x, cos(ball.direction)*2)
           - on:r set(ball.velocity.y, sin(ball.direction)*2)
+          - on:r set(paddle_speed, 30)
           - on:r set(show_world, false)
           - on:r set(ball.home_score, 0)
           - on:r set(ball.visitor_score, 0)

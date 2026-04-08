@@ -166,8 +166,8 @@ layers:
       - !Rect
         id: left paddle
         actions:
-          - on:n button:"KeyW" if(self.center.y - self.size.y*0.5 > 17, set(self.center.y, self.center.y - 16))
-          - on:n button:"KeyS" if(self.center.y + self.size.y*0.5 < screen.y - 17, set(self.center.y, self.center.y + 16))
+          - on:n button:"KeyW" if(self.center.y - self.size.y*0.5 > paddle_speed+1, set(self.center.y, self.center.y - paddle_speed))
+          - on:n button:"KeyS" if(self.center.y + self.size.y*0.5 < screen.y - (paddle_speed+1), set(self.center.y, self.center.y + paddle_speed))
           - on:n button:a set(left_paddle.size, self.size)
           - on:n button:a set(left_paddle.center, self.center)
         x: 0.02
@@ -179,6 +179,11 @@ layers:
         border_color: [ 0.0, 0.0, 0.0, 1.0 ]
         roundness: 0.3
         border_thickness_percentage: 0.01
+        glow_color: [ 0.2, 0.7, 0.2, 0.98 ]
+        glow_misc:
+          glow_size: 30.0
+          glow_speed: 4.0
+          glow_intensity: 0.5
         misc:
           active: true
           pressable: false
@@ -187,12 +192,12 @@ layers:
       - !Rect
         id: right paddle
         actions:
-          - on:n button:"ArrowUp" if(self.center.y - self.size.y*0.5 > 17, set(self.center.y, self.center.y - 16))
-          - on:n button:"ArrowDown" if(self.center.y + self.size.y*0.5 < screen.y - 17, set(self.center.y, self.center.y + 16))
+          - on:n button:"ArrowUp" if(self.center.y - self.size.y*0.5 > paddle_speed+1, set(self.center.y, self.center.y - paddle_speed))
+          - on:n button:"ArrowDown" if(self.center.y + self.size.y*0.5 < screen.y - (paddle_speed+1), set(self.center.y, self.center.y + paddle_speed))
           - on:n button:a set(right_paddle.size, self.size)
           - on:n button:a set(right_paddle.center, self.center)
         x: 0.98
-        y: 0.6
+        y: 0.5
         w: 0.02
         h: 0.20
         rotation: 0.0
@@ -200,6 +205,11 @@ layers:
         border_color: [ 0.0, 0.0, 0.0, 1.0 ]
         roundness: 0.3
         border_thickness_percentage: 0.01
+        glow_color: [ 0.7, 0.0, 0.2, 0.98 ]
+        glow_misc:
+          glow_size: 30.0
+          glow_speed: 4.0
+          glow_intensity: 0.5
         misc:
           active: true
           pressable: false

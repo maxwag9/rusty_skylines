@@ -49,8 +49,9 @@ fn part1by1(n: u32) -> u64 {
 pub fn chunk_coord_to_id(cx: i32, cz: i32) -> ChunkId {
     part1by1(zigzag_i32(cx)) | (part1by1(zigzag_i32(cz)) << 1)
 }
+
 #[inline(always)]
-pub fn world_pos_chunk_to_id(world_pos: WorldPos) -> ChunkId {
+pub fn world_pos_chunk_to_id(world_pos: &WorldPos) -> ChunkId {
     part1by1(zigzag_i32(world_pos.chunk.x)) | (part1by1(zigzag_i32(world_pos.chunk.z)) << 1)
 }
 #[inline]
@@ -666,18 +667,18 @@ pub fn build_ribbon_mesh(
         Some(cid) => {
             for i in 0..lane_geom.points.len() {
                 let p = lane_geom.points[i];
-                let in_chunk = world_pos_chunk_to_id(p) == cid;
+                let in_chunk = world_pos_chunk_to_id(&p) == cid;
 
                 let prev_in = i > 0 && {
                     let pp = lane_geom.points[i - 1];
-                    world_pos_chunk_to_id(pp) == cid
+                    world_pos_chunk_to_id(&pp) == cid
                 };
 
                 if in_chunk || prev_in {
                     included_indices.push(i);
                 } else if i + 1 < lane_geom.points.len() {
                     let pn = lane_geom.points[i + 1];
-                    let next_in = world_pos_chunk_to_id(pn) == cid;
+                    let next_in = world_pos_chunk_to_id(&pn) == cid;
                     if next_in {
                         included_indices.push(i);
                     }
@@ -798,11 +799,11 @@ pub fn build_vertical_face(
         Some(cid) => {
             for i in 0..ref_geom.points.len() {
                 let p = ref_geom.points[i];
-                if world_pos_chunk_to_id(p) == cid {
+                if world_pos_chunk_to_id(&p) == cid {
                     included_indices.push(i);
                 } else if i + 1 < ref_geom.points.len() {
                     let pn = ref_geom.points[i + 1];
-                    if world_pos_chunk_to_id(pn) == cid {
+                    if world_pos_chunk_to_id(&pn) == cid {
                         included_indices.push(i);
                     }
                 }

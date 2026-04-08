@@ -197,15 +197,22 @@ macro_rules! define_commands {
     // -----------------------------
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, commands, $ftype:ty) => {{
-        let out = $args.iter()
-            .skip($idx)
-            .filter_map(|s| make_ui_command($settings, $vars, s, Vec::new(), $element))
-            .collect();
-        #[allow(unused_assignments)]
-        {
-            $idx = $args.len();
+        if let Some(raw) = $args.get($idx) {
+            #[allow(unused_assignments)]
+            {
+                $idx += 1;
+            }
+
+            let cmds = raw.split(';')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+                .collect();
+
+            Some(cmds)
+        } else {
+            Some(Vec::new())
         }
-        Some(out)
     }};
 
     // SPECIAL FIELD: then / else_branch
@@ -355,7 +362,7 @@ define_commands! {
 
     "skip"
         => Skip { count: usize },
-
+    "for" | "forin" => For { element_ref: ElementRef, value: String, commands: Vec<UiCommand> },
     "if" => If { element_ref: ElementRef, condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
