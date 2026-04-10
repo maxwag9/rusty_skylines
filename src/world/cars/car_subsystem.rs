@@ -286,7 +286,7 @@ impl Cars {
 
         // live visualization
         if !updated_chunks.is_empty() {
-            gizmo.visualize_chunk_updates_numbered(&updated_chunks, current_sim_time);
+            gizmo.visualize_chunk_updates_numbered(&updated_chunks, current_sim_time, 0.0);
         }
     }
     /// Manual batch simulation for specific chunks

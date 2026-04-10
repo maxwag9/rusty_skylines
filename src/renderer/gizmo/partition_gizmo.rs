@@ -113,6 +113,7 @@ impl PartitionGizmo {
                     child_pos,
                     color,
                     config.dashed_arrows,
+                    config.thickness,
                     config.duration,
                 );
             }
@@ -142,7 +143,14 @@ impl PartitionGizmo {
             let label_pos =
                 pos.add_vec3(Vec3::new(config.id_offset_x, config.id_offset_y, 0.0), cs);
 
-            gizmo.number(id as isize, label_pos, scale, color, config.duration);
+            gizmo.number(
+                id as isize,
+                label_pos,
+                scale,
+                color,
+                config.thickness,
+                config.duration,
+            );
         }
     }
 
@@ -177,6 +185,7 @@ impl PartitionGizmo {
                 label_pos,
                 config.id_scale_base * 0.6,
                 [0.8, 0.8, 0.8],
+                config.thickness,
                 config.duration,
             );
         }
@@ -206,18 +215,20 @@ impl PartitionGizmo {
                     pos,
                     config.leaf_marker_radius,
                     config.leaf_color,
+                    config.thickness,
                     config.duration,
                 );
                 gizmo.cross(
                     pos,
                     config.leaf_marker_radius * 0.8,
                     config.leaf_color,
+                    config.thickness,
                     config.duration,
                 );
             } else {
                 let color = depth_to_color(depth, self.max_depth);
                 let radius = config.internal_marker_radius / (1.0 + depth as f32 * 0.25);
-                gizmo.sphere(pos, radius, color, config.duration);
+                gizmo.sphere(pos, radius, color, config.thickness, config.duration);
             }
         }
     }
@@ -247,12 +258,14 @@ impl PartitionGizmo {
                 pos,
                 config.root_marker_size,
                 config.root_color,
+                config.thickness,
                 config.duration,
             );
             gizmo.circle(
                 pos,
                 config.root_marker_size * 0.7,
                 config.root_color,
+                config.thickness,
                 config.duration,
             );
 
@@ -261,6 +274,7 @@ impl PartitionGizmo {
                 pos.add_vec3(crown_offset, cs),
                 config.root_marker_size * 0.4,
                 config.root_color,
+                config.thickness,
                 config.duration,
             );
         }
@@ -292,7 +306,13 @@ impl PartitionGizmo {
                 let ring_radius = config.internal_marker_radius * (1.0 + i as f32 * 0.3);
                 let alpha = 1.0 - (i as f32 * 0.25);
                 let ring_color = [color[0] * alpha, color[1] * alpha, color[2] * alpha];
-                gizmo.circle(pos, ring_radius, ring_color, config.duration);
+                gizmo.circle(
+                    pos,
+                    ring_radius,
+                    ring_color,
+                    config.thickness,
+                    config.duration,
+                );
             }
         }
     }
@@ -319,9 +339,16 @@ impl PartitionGizmo {
                 node_pos,
                 partition_pos,
                 config.node_link_color,
+                config.thickness,
                 config.duration,
             );
-            gizmo.cross(node_pos, 2.0, config.node_link_color, config.duration);
+            gizmo.cross(
+                node_pos,
+                2.0,
+                config.node_link_color,
+                config.thickness,
+                config.duration,
+            );
         }
     }
 
@@ -353,7 +380,14 @@ impl PartitionGizmo {
                 continue;
             };
 
-            gizmo.arrow(p1, p2, config.highlight_color, false, config.duration);
+            gizmo.arrow(
+                p1,
+                p2,
+                config.highlight_color,
+                false,
+                config.thickness,
+                config.duration,
+            );
         }
 
         for (i, &id) in path.iter().enumerate() {
@@ -369,12 +403,13 @@ impl PartitionGizmo {
                 config.highlight_color[2] * brightness,
             ];
 
-            gizmo.sphere(pos, radius, color, config.duration);
+            gizmo.sphere(pos, radius, color, config.thickness, config.duration);
             gizmo.number(
                 id as isize,
                 pos.add_vec3(Vec3::new(radius * 1.5, 0.0, 0.0), cs),
                 config.id_scale_base,
                 color,
+                config.thickness,
                 config.duration,
             );
         }
@@ -397,7 +432,14 @@ impl PartitionGizmo {
                 continue;
             };
 
-            gizmo.arrow(p1, p2, config.address_color, false, config.duration);
+            gizmo.arrow(
+                p1,
+                p2,
+                config.address_color,
+                false,
+                config.thickness,
+                config.duration,
+            );
         }
 
         for (i, &id) in address.iter().enumerate() {
@@ -406,12 +448,19 @@ impl PartitionGizmo {
             };
             let radius = config.address_marker_radius * (1.0 - i as f32 * 0.1).max(0.5);
 
-            gizmo.sphere(pos, radius, config.address_color, config.duration);
+            gizmo.sphere(
+                pos,
+                radius,
+                config.address_color,
+                config.thickness,
+                config.duration,
+            );
             gizmo.number(
                 (i + 1) as isize,
                 pos.add_vec3(Vec3::new(0.0, radius * 2.0, 0.0), cs),
                 config.id_scale_base * 0.8,
                 config.address_color,
+                config.thickness,
                 config.duration,
             );
         }
@@ -440,12 +489,19 @@ impl PartitionGizmo {
             };
             let color = depth_to_color(depth, self.max_depth);
 
-            gizmo.sphere(pos, config.depth_level_radius, color, config.duration);
+            gizmo.sphere(
+                pos,
+                config.depth_level_radius,
+                color,
+                config.thickness,
+                config.duration,
+            );
             gizmo.number(
                 id as isize,
                 pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0), cs),
                 config.id_scale_base,
                 color,
+                config.thickness,
                 config.duration,
             );
         }
@@ -473,12 +529,13 @@ impl PartitionGizmo {
             let color = depth_to_color(global_depth, self.max_depth);
 
             let radius = config.subtree_node_radius / (1.0 + local_depth as f32 * 0.2);
-            gizmo.sphere(pos, radius, color, config.duration);
+            gizmo.sphere(pos, radius, color, config.thickness, config.duration);
             gizmo.number(
                 id as isize,
                 pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0), cs),
                 config.id_scale_base / (1.0 + local_depth as f32 * 0.15),
                 color,
+                config.thickness,
                 config.duration,
             );
 
@@ -486,7 +543,14 @@ impl PartitionGizmo {
                 let Some(child_pos) = self.display_position(child_id, config, cs) else {
                     continue;
                 };
-                gizmo.arrow(pos, child_pos, color, false, config.duration);
+                gizmo.arrow(
+                    pos,
+                    child_pos,
+                    color,
+                    false,
+                    config.thickness,
+                    config.duration,
+                );
                 stack.push((child_id, local_depth + 1));
             }
         }
@@ -524,7 +588,14 @@ impl PartitionGizmo {
 
         for (i, (value, color)) in stats.iter().enumerate() {
             let pos = anchor.add_vec3(Vec3::new(0.0, 0.0, i as f32 * line_height), cs);
-            gizmo.number(*value, pos, config.id_scale_base, *color, config.duration);
+            gizmo.number(
+                *value,
+                pos,
+                config.id_scale_base,
+                *color,
+                config.thickness,
+                config.duration,
+            );
         }
     }
 
@@ -702,6 +773,7 @@ pub struct PartitionVisualizationConfig {
     pub leaf_color: [f32; 3],
     pub root_color: [f32; 3],
     pub node_link_color: [f32; 3],
+    pub thickness: f32,
     pub duration: f32,
 }
 
@@ -733,6 +805,7 @@ impl Default for PartitionVisualizationConfig {
             leaf_color: [0.2, 0.9, 0.3],
             root_color: [1.0, 0.85, 0.0],
             node_link_color: [0.4, 0.4, 0.7],
+            thickness: 0.0,
             duration: 0.0,
         }
     }

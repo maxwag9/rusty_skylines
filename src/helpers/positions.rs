@@ -1,5 +1,6 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub type LodStep = u16;
 pub type ChunkSize = u16;
@@ -83,7 +84,8 @@ impl WorldPos {
     }
 
     #[inline]
-    pub fn from_world_f32(fpos: Vec3, chunk_size: f32) -> Self {
+    pub fn from_world_f32(fpos: Vec3, chunk_size: ChunkSize) -> Self {
+        let chunk_size = chunk_size as f32;
         let cx = (fpos.x / chunk_size).floor() as i32;
         let cz = (fpos.z / chunk_size).floor() as i32;
 
@@ -439,9 +441,39 @@ impl WorldPos {
             ),
         }
     }
+
+    /// Signed XZ offset from `self` to `other`, in world units.
+    /// (chunk delta × chunk_size) + local delta
+    #[inline]
+    pub fn dx(self, other: WorldPos, chunk_size: ChunkSize) -> f32 {
+        (other.chunk.x - self.chunk.x) as f32 * chunk_size as f32 + (other.local.x - self.local.x)
+    }
+    /// Signed XZ offset from `self` to `other`, in world units.
+    /// (chunk delta × chunk_size) + local delta
+    #[inline]
+    pub fn dz(self, other: WorldPos, chunk_size: ChunkSize) -> f32 {
+        (other.chunk.z - self.chunk.z) as f32 * chunk_size as f32 + (other.local.z - self.local.z)
+    }
 }
 impl Default for WorldPos {
     fn default() -> Self {
         WorldPos::zero()
+    }
+}
+impl fmt::Display for ChunkCoord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Chunk({}, {})", self.x, self.z)
+    }
+}
+
+impl fmt::Display for LocalPos {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Local({:.2}, {:.2}, {:.2})", self.x, self.y, self.z)
+    }
+}
+
+impl fmt::Display for WorldPos {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} + {}", self.chunk, self.local)
     }
 }

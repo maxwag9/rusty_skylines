@@ -1,7 +1,7 @@
 // intersections.rs - Fixed Clipper2 API usage
 
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
-use crate::renderer::gizmo::gizmo::{DEBUG_DRAW_DURATION, Gizmo};
+use crate::renderer::gizmo::gizmo::{DEBUG_DRAW_DURATION, Gizmo, ROAD_GIZMO_THICKNESS};
 use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_mesh_manager::*;
@@ -695,7 +695,7 @@ fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut G
     for i in 0..poly.ring.len() {
         let a = poly.ring[i];
         let b = poly.ring[(i + 1) % poly.ring.len()];
-        gizmo.line(a, b, color, DEBUG_DRAW_DURATION);
+        gizmo.line(a, b, color, ROAD_GIZMO_THICKNESS, DEBUG_DRAW_DURATION);
     }
 }
 
@@ -1811,13 +1811,37 @@ fn build_node_lanes_for_intersection(
 
             if is_incoming {
                 // Debug: green for incoming
-                gizmo.cross(endpoint, 0.3, [0.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
-                gizmo.direction(endpoint, direction, [0.0, 0.8, 0.0], DEBUG_DRAW_DURATION);
+                gizmo.cross(
+                    endpoint,
+                    0.3,
+                    [0.0, 1.0, 0.0],
+                    ROAD_GIZMO_THICKNESS,
+                    DEBUG_DRAW_DURATION,
+                );
+                gizmo.direction(
+                    endpoint,
+                    direction,
+                    [0.0, 0.8, 0.0],
+                    ROAD_GIZMO_THICKNESS,
+                    DEBUG_DRAW_DURATION,
+                );
                 incoming_lanes.push((*lane_id, node_idx, endpoint, direction));
             } else {
                 // Debug: red for outgoing
-                gizmo.cross(endpoint, 0.3, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
-                gizmo.direction(endpoint, direction, [0.8, 0.0, 0.0], DEBUG_DRAW_DURATION);
+                gizmo.cross(
+                    endpoint,
+                    0.3,
+                    [1.0, 0.0, 0.0],
+                    ROAD_GIZMO_THICKNESS,
+                    DEBUG_DRAW_DURATION,
+                );
+                gizmo.direction(
+                    endpoint,
+                    direction,
+                    [0.8, 0.0, 0.0],
+                    ROAD_GIZMO_THICKNESS,
+                    DEBUG_DRAW_DURATION,
+                );
                 outgoing_lanes.push((*lane_id, node_idx, endpoint, direction));
             }
         }
@@ -1825,7 +1849,13 @@ fn build_node_lanes_for_intersection(
 
     // Debug: print lane counts
     if incoming_lanes.is_empty() || outgoing_lanes.is_empty() {
-        gizmo.cross(node_pos, 1.0, [1.0, 0.0, 1.0], DEBUG_DRAW_DURATION); // Magenta = missing in/out
+        gizmo.cross(
+            node_pos,
+            1.0,
+            [1.0, 0.0, 1.0],
+            ROAD_GIZMO_THICKNESS,
+            DEBUG_DRAW_DURATION,
+        ); // Magenta = missing in/out
         return Vec::new();
     }
 
@@ -1883,6 +1913,7 @@ fn build_node_lanes_for_intersection(
                     turn_pts[i],
                     turn_pts[i + 1],
                     [1.0, 1.0, 0.0],
+                    ROAD_GIZMO_THICKNESS,
                     DEBUG_DRAW_DURATION,
                 );
             }
@@ -1904,7 +1935,13 @@ fn build_node_lanes_for_intersection(
 
     // Debug: orange if no node lanes generated
     if node_lanes.is_empty() {
-        gizmo.cross(node_pos, 1.5, [1.0, 0.5, 0.0], DEBUG_DRAW_DURATION);
+        gizmo.cross(
+            node_pos,
+            1.5,
+            [1.0, 0.5, 0.0],
+            ROAD_GIZMO_THICKNESS,
+            DEBUG_DRAW_DURATION,
+        );
     }
 
     node_lanes

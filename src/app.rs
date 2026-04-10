@@ -23,7 +23,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Cursor, CustomCursor, Window, WindowId};
+use winit::window::{CustomCursor, Window, WindowId};
 
 const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
     ("Speed up Time 100x", 100.0),

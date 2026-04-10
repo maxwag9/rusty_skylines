@@ -54,17 +54,28 @@ pub fn run_inputs(resources: &mut Resources) {
             wish -= up;
         }
 
-        let orbit_speed = 1.5 / world.time.render_fps;
-        if input.gameplay_down("Orbit Left") {
+        let orbit_speed = 1.5 * world.time.render_dt;
+        if cam_ctrl.target_yaw.is_nan() {
+            camera.yaw = 0.0;
+            cam_ctrl.target_yaw = 0.0;
+            eprintln!("Yaw was NaN!");
+        }
+        if cam_ctrl.target_pitch.is_nan() {
+            camera.pitch = 45.0;
+            cam_ctrl.target_pitch = 45.0;
+            eprintln!("Pitch was NaN!");
+        }
+
+        if input.action_down("Orbit Left") {
             cam_ctrl.target_yaw -= orbit_speed;
         }
-        if input.gameplay_down("Orbit Right") {
+        if input.action_down("Orbit Right") {
             cam_ctrl.target_yaw += orbit_speed;
         }
-        if input.gameplay_down("Orbit Up") {
+        if input.action_down("Orbit Up") {
             cam_ctrl.target_pitch -= orbit_speed;
         }
-        if input.gameplay_down("Orbit Down") {
+        if input.action_down("Orbit Down") {
             cam_ctrl.target_pitch += orbit_speed;
         }
     }
@@ -161,6 +172,7 @@ pub fn run_inputs(resources: &mut Resources) {
     clamp_pitch(&mut camera.pitch);
     clamp_pitch(&mut cam_ctrl.target_pitch);
 }
+
 fn clamp_pitch(p: &mut f32) {
     *p = p.clamp(-60.0f32.to_radians(), 89.0f32.to_radians());
 }

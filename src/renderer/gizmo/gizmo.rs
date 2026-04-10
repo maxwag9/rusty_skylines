@@ -17,20 +17,27 @@ use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 
 const CIRCLE_SEGMENT_COUNT: usize = 16;
 pub const DEBUG_DRAW_DURATION: f32 = 20.0; // Seconds
+pub const ROAD_GIZMO_THICKNESS: f32 = 0.0; // M!
 pub struct PendingGizmoRender {
     pub vertices: Vec<LineVtxWorld>,
     pub thickness: f32,
     pub duration: f32,
     pub start_time: f64,
+    pub filled: bool,
 }
 pub struct Gizmo {
     partition_gizmo: PartitionGizmo,
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
+    pub thick_buffer: Buffer,
     total_game_time: f64,
     pub chunk_size: ChunkSize,
 }
-
+#[derive(Default)]
+pub struct GizmoBatches {
+    pub thin_vertices: Vec<LineVtxRender>,
+    pub thick_vertices: Vec<LineVtxRender>,
+}
 impl Gizmo {
     pub fn new(device: &Device, chunk_size: ChunkSize) -> Self {
         let gizmo_buffer = device.create_buffer(&BufferDescriptor {
@@ -39,10 +46,17 @@ impl Gizmo {
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let thick_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Gizmo Custom Thickness VB"),
+            size: (size_of::<LineVtxRender>() * 2048) as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
             partition_gizmo: PartitionGizmo::new(),
             pending_renders: Vec::new(),
             gizmo_buffer,
+            thick_buffer,
             total_game_time: 0.0,
             chunk_size,
         }
@@ -65,23 +79,54 @@ impl Gizmo {
             .collect()
     }
 
-    pub fn update_buffer(&mut self, device: &Device, queue: &Queue, camera_pos: WorldPos) -> u32 {
-        let vertices = self.collect_vertices(camera_pos);
-        let byte_size = (vertices.len() * size_of::<LineVtxRender>()) as u64;
+    pub fn update_buffers(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        batches: &GizmoBatches,
+    ) -> (u32, u32) {
+        let thin_count = batches.thin_vertices.len() as u32;
+        let thick_count = batches.thick_vertices.len() as u32;
 
-        // Grow buffer if needed
-        if byte_size > self.gizmo_buffer.size() {
-            let new_size = (self.gizmo_buffer.size() * 2).max(byte_size);
-            self.gizmo_buffer = device.create_buffer(&BufferDescriptor {
-                label: Some("Gizmo VB"),
-                size: new_size,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
+        // Update thin line buffer
+        if thin_count > 0 {
+            let byte_size = (batches.thin_vertices.len() * size_of::<LineVtxRender>()) as u64;
+            if byte_size > self.gizmo_buffer.size() {
+                let new_size = (self.gizmo_buffer.size() * 2).max(byte_size);
+                self.gizmo_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("Gizmo Thin Lines VB"),
+                    size: new_size,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            queue.write_buffer(
+                &self.gizmo_buffer,
+                0,
+                bytemuck::cast_slice(&batches.thin_vertices),
+            );
         }
 
-        queue.write_buffer(&self.gizmo_buffer, 0, bytemuck::cast_slice(&vertices));
-        vertices.len() as u32
+        // Update thick geometry buffer
+        if thick_count > 0 {
+            let byte_size = (batches.thick_vertices.len() * size_of::<LineVtxRender>()) as u64;
+            if byte_size > self.thick_buffer.size() {
+                let new_size = (self.thick_buffer.size() * 2).max(byte_size);
+                self.thick_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("Gizmo Thick Geometry VB"),
+                    size: new_size,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            queue.write_buffer(
+                &self.thick_buffer,
+                0,
+                bytemuck::cast_slice(&batches.thick_vertices),
+            );
+        }
+
+        (thin_count, thick_count)
     }
 
     pub fn visualize_partitions(
@@ -103,7 +148,7 @@ impl Gizmo {
     /// - Cross markers at node positions for clarity
     /// - A number label showing the region ID at the region centroid
     /// - A small white circle marking the centroid position
-    pub fn visualize_regions(&mut self, road_storage: &RoadStorage, duration: f32) {
+    pub fn visualize_regions(&mut self, road_storage: &RoadStorage, thickness: f32, duration: f32) {
         let cs = self.chunk_size;
 
         for (region_id, region) in road_storage.iter_active_regions() {
@@ -130,8 +175,8 @@ impl Gizmo {
                 if let Some(node) = road_storage.node(NodeId::new(node_idx)) {
                     let pos = node.position();
                     positions.push(pos);
-                    self.circle(pos, 4.0, color, duration);
-                    self.cross(pos, 2.0, secondary_color, duration);
+                    self.circle(pos, 4.0, color, thickness, duration);
+                    self.cross(pos, 2.0, secondary_color, thickness, duration);
                 }
             }
 
@@ -152,28 +197,31 @@ impl Gizmo {
             };
 
             let label_pos = centroid.add_vec3(Vec3::new(0.0, 5.0, 0.0), cs);
-            self.number(region_id as isize, label_pos, 4.0, color, duration);
-            self.circle(centroid, 2.0, [1.0, 1.0, 1.0], duration);
+            self.number(
+                region_id as isize,
+                label_pos,
+                4.0,
+                color,
+                thickness,
+                duration,
+            );
+            self.circle(centroid, 2.0, [1.0, 1.0, 1.0], thickness, duration);
         }
     }
-    // ─────────────────────────────────────────────────────────────────────────
-    // Internal: push a gizmo render
-    // ─────────────────────────────────────────────────────────────────────────
 
+    // Internal: push a gizmo render
     #[inline]
-    fn push(&mut self, vertices: Vec<LineVtxWorld>, duration: f32, thickness: f32) {
+    fn push(&mut self, vertices: Vec<LineVtxWorld>, thickness: f32, duration: f32, filled: bool) {
         self.pending_renders.push(PendingGizmoRender {
             vertices,
             thickness,
             duration,
+            filled,
             start_time: self.total_game_time,
         });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // Basic primitives
-    // ─────────────────────────────────────────────────────────────────────────
-
     pub fn line(
         &mut self,
         start: WorldPos,
@@ -187,11 +235,20 @@ impl Gizmo {
                 LineVtxWorld::new(start, color),
                 LineVtxWorld::new(end, color),
             ],
+            thickness,
             duration,
+            false,
         );
     }
 
-    pub fn circle(&mut self, center: WorldPos, radius: f32, color: [f32; 3], duration: f32) {
+    pub fn circle(
+        &mut self,
+        center: WorldPos,
+        radius: f32,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         let cs = self.chunk_size;
 
         let mut verts = Vec::with_capacity(CIRCLE_SEGMENT_COUNT * 2);
@@ -207,10 +264,17 @@ impl Gizmo {
             verts.push(LineVtxWorld::new(p1, color));
         }
 
-        self.push(verts, duration);
+        self.push(verts, thickness, duration, false);
     }
 
-    pub fn sphere(&mut self, center: WorldPos, radius: f32, color: [f32; 3], duration: f32) {
+    pub fn sphere(
+        &mut self,
+        center: WorldPos,
+        radius: f32,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         let cs = self.chunk_size;
         let mut verts = Vec::new();
         let rings = CIRCLE_SEGMENT_COUNT;
@@ -261,10 +325,17 @@ impl Gizmo {
                 ));
             }
         }
-        self.push(verts, duration);
+        self.push(verts, thickness, duration, false);
     }
 
-    pub fn box_xz(&mut self, center: WorldPos, half_size: f32, color: [f32; 3], duration: f32) {
+    pub fn box_xz(
+        &mut self,
+        center: WorldPos,
+        half_size: f32,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         let cs = self.chunk_size;
         let corners = [
             center.add_vec3(Vec3::new(-half_size, 0.0, -half_size), cs),
@@ -273,16 +344,24 @@ impl Gizmo {
             center.add_vec3(Vec3::new(-half_size, 0.0, half_size), cs),
         ];
         for i in 0..4 {
-            self.line(corners[i], corners[(i + 1) % 4], color, duration);
+            self.line(corners[i], corners[(i + 1) % 4], color, thickness, duration);
         }
     }
 
-    pub fn direction(&mut self, center: WorldPos, direction: Vec3, color: [f32; 3], duration: f32) {
+    pub fn direction(
+        &mut self,
+        center: WorldPos,
+        direction: Vec3,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         self.arrow(
             center,
             center.add_vec3(direction, self.chunk_size),
             color,
             false,
+            thickness,
             duration,
         );
     }
@@ -291,7 +370,7 @@ impl Gizmo {
     // Axes gizmo
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub fn axes(&mut self, origin: WorldPos, scale: f32, duration: f32) {
+    pub fn axes(&mut self, origin: WorldPos, scale: f32, thickness: f32, duration: f32) {
         let cs = self.chunk_size;
         let axes = [
             (Vec3::X, [1.0, 0.2, 0.2]),
@@ -299,15 +378,28 @@ impl Gizmo {
             (Vec3::Z, [0.2, 0.6, 1.0]),
         ];
         for (dir, color) in axes {
-            self.line(origin, origin.add_vec3(dir * scale, cs), color, duration);
+            self.line(
+                origin,
+                origin.add_vec3(dir * scale, cs),
+                color,
+                thickness,
+                duration,
+            );
         }
     }
 
-    pub fn axes_with_sun(&mut self, origin: WorldPos, scale: f32, sun_dir: Vec3, duration: f32) {
-        self.axes(origin, scale, duration);
+    pub fn axes_with_sun(
+        &mut self,
+        origin: WorldPos,
+        scale: f32,
+        sun_dir: Vec3,
+        thickness: f32,
+        duration: f32,
+    ) {
+        self.axes(origin, scale, thickness, duration);
         let cs = self.chunk_size;
         let sun_end = origin.add_vec3(sun_dir.normalize_or_zero() * scale, cs);
-        self.arrow(origin, sun_end, [1.0, 1.0, 0.0], false, duration);
+        self.arrow(origin, sun_end, [1.0, 1.0, 0.0], false, thickness, duration);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -320,6 +412,7 @@ impl Gizmo {
         end: WorldPos,
         color: [f32; 3],
         dashed: bool,
+        thickness: f32,
         duration: f32,
     ) {
         let cs = self.chunk_size;
@@ -376,19 +469,17 @@ impl Gizmo {
             ));
         }
 
-        self.push(verts, duration);
+        self.push(verts, thickness, duration, false);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // Polyline (anchor + relative points for now, or full WorldPos slice)
-    // ─────────────────────────────────────────────────────────────────────────
-
     /// Render polyline with arrows. Points are WorldPos.
     pub fn polyline(
         &mut self,
         points: &[WorldPos],
         color: [f32; 3],
         arrow_spacing: f32,
+        thickness: f32,
         duration: f32,
     ) {
         if points.len() < 2 {
@@ -413,7 +504,7 @@ impl Gizmo {
         }
         let total_len = *lengths.last().unwrap();
         if total_len < 0.001 {
-            self.push(verts, duration);
+            self.push(verts, thickness, duration, false);
             return;
         }
 
@@ -446,7 +537,7 @@ impl Gizmo {
         let mut t = arrow_spacing;
         let mut idx = 0;
         if t == 0.0 {
-            self.push(verts, duration);
+            self.push(verts, thickness, duration, false);
             return;
         }
         while t < total_len {
@@ -473,7 +564,7 @@ impl Gizmo {
             t += arrow_spacing;
         }
 
-        self.push(verts, duration);
+        self.push(verts, thickness, duration, false);
     }
 
     /// Polyline from an anchor WorldPos and relative Vec3 offsets.
@@ -484,11 +575,12 @@ impl Gizmo {
         offsets: &[Vec3],
         color: [f32; 3],
         arrow_spacing: f32,
+        thickness: f32,
         duration: f32,
     ) {
         let cs = self.chunk_size;
         let points: Vec<_> = offsets.iter().map(|&o| anchor.add_vec3(o, cs)).collect();
-        self.polyline(&points, color, arrow_spacing, duration);
+        self.polyline(&points, color, arrow_spacing, thickness, duration);
     }
 
     /// Render polyline with arrows. Points are WorldPos.
@@ -498,91 +590,28 @@ impl Gizmo {
         }
 
         let cs = self.chunk_size;
-        let flap = flap_color(color);
-        let mut verts = Vec::new();
 
-        // Draw line segments
-        for w in points.windows(2) {
-            verts.push(LineVtxWorld::new(w[0], color));
-            verts.push(LineVtxWorld::new(w[1], color));
-        }
+        let verts: Vec<LineVtxWorld> = points
+            .iter()
+            .map(|&p| LineVtxWorld::new(p, color))
+            .collect();
 
-        // Compute cumulative lengths
-        let mut lengths = vec![0.0f32];
-        for w in points.windows(2) {
-            let d = w[1].to_render_pos(w[0], cs).length();
-            lengths.push(lengths.last().unwrap() + d);
-        }
-        let total_len = *lengths.last().unwrap();
-        if total_len < 0.001 {
-            self.push(verts, duration);
-            return;
-        }
-
-        // Sample position and direction at distance t along polyline
-        let sample_at = |t: f32| -> (WorldPos, Vec3) {
-            let mut i = 1;
-            while i < lengths.len() && lengths[i] < t {
-                i += 1;
-            }
-            let i0 = i - 1;
-            let i1 = i.min(points.len() - 1);
-            let seg_t = if lengths[i1] > lengths[i0] {
-                (t - lengths[i0]) / (lengths[i1] - lengths[i0])
-            } else {
-                0.0
-            };
-
-            let pos = points[i0].lerp(points[i1], seg_t as f64, cs);
-            let dir = points[i1].to_render_pos(points[i0], cs).normalize_or_zero();
-            (pos, dir)
-        };
-
-        // Arrow parameters
-        let head_len = 0.30;
-        let head_width = 0.25;
-        let spin_speed = 1.0;
-        let time = self.total_game_time as f32;
-
-        // Place arrows along polyline
-        let mut t = arrow_spacing;
-        let mut idx = 0;
-        if t == 0.0 {
-            self.push(verts, duration);
-            return;
-        }
-        while t < total_len {
-            let (pos, dir) = sample_at(t);
-            if dir.length_squared() < 0.0001 {
-                t += arrow_spacing;
-                continue;
-            }
-
-            let (side, up_perp) = build_frame(dir);
-            let angle = time * spin_speed + idx as f32 * 1.7;
-            let rot = rotate_frame(side, up_perp, angle);
-            let back = pos.add_vec3(-dir * head_len, cs);
-
-            verts.push(LineVtxWorld::new(pos, flap));
-            verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width, cs), flap));
-            verts.push(LineVtxWorld::new(pos, flap));
-            verts.push(LineVtxWorld::new(
-                back.add_vec3(-rot * head_width, cs),
-                flap,
-            ));
-
-            idx += 1;
-            t += arrow_spacing;
-        }
-
-        self.push(verts, duration);
+        self.push(verts, duration, 0.0, true);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Digit rendering
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub fn digit(&mut self, digit: u8, pos: WorldPos, scale: f32, color: [f32; 3], duration: f32) {
+    pub fn digit(
+        &mut self,
+        digit: u8,
+        pos: WorldPos,
+        scale: f32,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         const SEGMENTS: [&[([f32; 2], [f32; 2])]; 10] = [
             &[
                 ([0., 0.], [1., 0.]),
@@ -652,7 +681,7 @@ impl Gizmo {
             })
             .collect();
 
-        self.push(verts, duration);
+        self.push(verts, duration, thickness, false);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -676,7 +705,7 @@ impl Gizmo {
 
         if settings.render_partitions_gizmo {
             self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
-            self.visualize_regions(&road_manager.roads, 0.0);
+            self.visualize_regions(&road_manager.roads, 0.0, 0.0);
         }
 
         // self.sphere(camera.eye_world(), 400.0, [1.0, 1.0, 1.0], 0.0);
@@ -689,7 +718,8 @@ impl Gizmo {
                 8,                  // TLAS BVH max depth to show
                 false,              // show BLAS (usually false - it's object-space)
                 8,                  // BLAS BVH max depth
-                0.0,                // duration (0 = single frame)
+                0.0,
+                0.0, // duration (0 = single frame)
             );
         }
         if settings.render_chunk_bounds {
@@ -706,6 +736,7 @@ impl Gizmo {
                     ),
                     chunk_size_f * 0.5,
                     [0.2, 0.8, 0.6],
+                    0.0,
                     0.0,
                 );
             }
@@ -726,7 +757,7 @@ impl Gizmo {
                 } else {
                     [1.0, 0.0, 0.0]
                 };
-                self.circle(node_pos, 2.0, node_color, 0.0);
+                self.circle(node_pos, 2.0, node_color, 0.0, 0.0);
 
                 // Incoming lanes
                 for lane_id in node.incoming_lanes() {
@@ -751,11 +782,11 @@ impl Gizmo {
                     // Convert polyline to WorldPos
                     let points: &Vec<WorldPos> = lane.polyline();
 
-                    self.polyline(&points, color, 15.0, 0.0);
+                    self.polyline(&points, color, 15.0, 0.0, 0.0);
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
-                            self.arrow(*last, node_pos, color, false, 0.0);
+                            self.arrow(*last, node_pos, color, false, 0.0, 0.0);
                         }
                     }
                 }
@@ -774,11 +805,11 @@ impl Gizmo {
 
                     let points: &Vec<WorldPos> = node_lane.polyline();
 
-                    self.polyline(&points, color, 4.0, 0.0);
+                    self.polyline(&points, color, 4.0, 0.0, 0.0);
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
-                            self.arrow(*last, node_pos, color, false, 0.0);
+                            self.arrow(*last, node_pos, color, false, 0.0, 0.0);
                         }
                     }
                 }
@@ -793,6 +824,7 @@ impl Gizmo {
         center: WorldPos,
         scale: f32,
         color: [f32; 3],
+        thickness: f32,
         duration: f32,
     ) {
         let is_negative = value < 0;
@@ -827,31 +859,47 @@ impl Gizmo {
             let half = scale * 0.35;
             let left = sign_pos.add_vec3(Vec3::new(-half, 0.0, 0.0), cs);
             let right = sign_pos.add_vec3(Vec3::new(half, 0.0, 0.0), cs);
-            self.line(left, right, color, duration);
+            self.line(left, right, color, thickness, duration);
             slot += 1;
         }
 
         for &d in &digits {
             let offset = Vec3::new(start_offset + slot as f32 * spacing, 0.0, 0.0);
-            self.digit(d, center.add_vec3(offset, cs), scale, color, duration);
+            self.digit(
+                d,
+                center.add_vec3(offset, cs),
+                scale,
+                color,
+                thickness,
+                duration,
+            );
             slot += 1;
         }
     }
 
     /// Draw a cross marker at position.
-    pub fn cross(&mut self, pos: WorldPos, size: f32, color: [f32; 3], duration: f32) {
+    pub fn cross(
+        &mut self,
+        pos: WorldPos,
+        size: f32,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         let cs = self.chunk_size;
         let half = size * 0.5;
         self.line(
             pos.add_vec3(Vec3::new(-half, 0.0, 0.0), cs),
             pos.add_vec3(Vec3::new(half, 0.0, 0.0), cs),
             color,
+            thickness,
             duration,
         );
         self.line(
             pos.add_vec3(Vec3::new(0.0, 0.0, -half), cs),
             pos.add_vec3(Vec3::new(0.0, 0.0, half), cs),
             color,
+            thickness,
             duration,
         );
     }
@@ -865,11 +913,18 @@ impl Gizmo {
         let scale = scale_with_orbit
             .then_some(orbit_radius * 0.1)
             .unwrap_or(1.0);
-        self.axes_with_sun(target, scale, sun_direction, 0.0);
+        self.axes_with_sun(target, scale, sun_direction, 0.0, 0.0);
     }
 
     /// Draw a 3D wireframe axis-aligned bounding box
-    pub fn aabb(&mut self, aabb: &Aabb, reference: WorldPos, color: [f32; 3], duration: f32) {
+    pub fn aabb(
+        &mut self,
+        aabb: &Aabb,
+        reference: WorldPos,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         if !aabb.is_valid() {
             return;
         }
@@ -907,7 +962,7 @@ impl Gizmo {
         ];
 
         for (i, j) in edges {
-            self.line(c[i], c[j], color, duration);
+            self.line(c[i], c[j], color, thickness, duration);
         }
     }
 
@@ -918,12 +973,22 @@ impl Gizmo {
         reference: WorldPos,
         max_depth: u32,
         leaves_only: bool,
+        thickness: f32,
         duration: f32,
     ) {
         if nodes.is_empty() {
             return;
         }
-        self.visualize_bvh_recursive(nodes, 0, reference, 0, max_depth, leaves_only, duration);
+        self.visualize_bvh_recursive(
+            nodes,
+            0,
+            reference,
+            0,
+            max_depth,
+            leaves_only,
+            thickness,
+            duration,
+        );
     }
 
     fn visualize_bvh_recursive(
@@ -934,6 +999,7 @@ impl Gizmo {
         depth: u32,
         max_depth: u32,
         leaves_only: bool,
+        thickness: f32,
         duration: f32,
     ) {
         if node_idx >= nodes.len() || depth > max_depth {
@@ -947,7 +1013,7 @@ impl Gizmo {
         if !leaves_only || is_leaf {
             let aabb = Aabb::new(node.aabb_min, node.aabb_max);
             let color = depth_to_color(depth, max_depth);
-            self.aabb(&aabb, reference, color, duration);
+            self.aabb(&aabb, reference, color, thickness, duration);
         }
 
         // Recurse into children if not a leaf
@@ -962,6 +1028,7 @@ impl Gizmo {
                 depth + 1,
                 max_depth,
                 leaves_only,
+                thickness,
                 duration,
             );
             self.visualize_bvh_recursive(
@@ -971,6 +1038,7 @@ impl Gizmo {
                 depth + 1,
                 max_depth,
                 leaves_only,
+                thickness,
                 duration,
             );
         }
@@ -984,6 +1052,7 @@ impl Gizmo {
         show_instances: bool,
         show_bvh: bool,
         bvh_max_depth: u32,
+        thickness: f32,
         duration: f32,
     ) {
         // Draw instance AABBs in cyan
@@ -997,13 +1066,20 @@ impl Gizmo {
                     s: 0.7,
                     v: 0.9,
                 });
-                self.aabb(&aabb, reference, color, duration);
+                self.aabb(&aabb, reference, color, thickness, duration);
             }
         }
 
         // Draw BVH structure with depth coloring
         if show_bvh && !tlas.bvh_nodes.is_empty() {
-            self.visualize_bvh_nodes(&tlas.bvh_nodes, reference, bvh_max_depth, false, duration);
+            self.visualize_bvh_nodes(
+                &tlas.bvh_nodes,
+                reference,
+                bvh_max_depth,
+                false,
+                thickness,
+                duration,
+            );
         }
     }
 
@@ -1015,16 +1091,30 @@ impl Gizmo {
         show_root: bool,
         show_bvh: bool,
         bvh_max_depth: u32,
+        thickness: f32,
         duration: f32,
     ) {
         // Draw root AABB in magenta
         if show_root {
-            self.aabb(blas.root_aabb(), reference, [1.0, 0.0, 1.0], duration);
+            self.aabb(
+                blas.root_aabb(),
+                reference,
+                [1.0, 0.0, 1.0],
+                thickness,
+                duration,
+            );
         }
 
         // Draw BVH structure
         if show_bvh {
-            self.visualize_bvh_nodes(&blas.bvh_nodes, reference, bvh_max_depth, false, duration);
+            self.visualize_bvh_nodes(
+                &blas.bvh_nodes,
+                reference,
+                bvh_max_depth,
+                false,
+                thickness,
+                duration,
+            );
         }
     }
 
@@ -1038,6 +1128,7 @@ impl Gizmo {
         tlas_bvh_depth: u32,
         show_blas: bool,
         blas_bvh_depth: u32,
+        thickness: f32,
         duration: f32,
     ) {
         // Visualize TLAS
@@ -1047,20 +1138,34 @@ impl Gizmo {
             show_tlas_instances,
             show_tlas_bvh,
             tlas_bvh_depth,
+            thickness,
             duration,
         );
 
         // Visualize BLAS (at origin reference - instances handle world transforms)
         if show_blas {
             if let Some(blas) = &rt_subsystem.car_blas {
-                self.visualize_blas(blas, reference, true, true, blas_bvh_depth, duration);
+                self.visualize_blas(
+                    blas,
+                    reference,
+                    true,
+                    true,
+                    blas_bvh_depth,
+                    thickness,
+                    duration,
+                );
             }
         }
     }
 
     /// Visualize chunks that were just updated with colorful pulsing boxes.
     /// Call this right after `job_system.update_chunks()` with the results.
-    pub fn visualize_chunk_updates(&mut self, updated_chunks: &[ChunkCoord], current_time: f64) {
+    pub fn visualize_chunk_updates(
+        &mut self,
+        updated_chunks: &[ChunkCoord],
+        current_time: f64,
+        thickness: f32,
+    ) {
         let cs = self.chunk_size;
         let chunk_size_f = cs as f32;
         let duration = 2.0; // Visible for 2 seconds (matches tick interval)
@@ -1084,7 +1189,7 @@ impl Gizmo {
             );
 
             // Draw box outline
-            self.box_xz(center, chunk_size_f * 0.48, color, duration);
+            self.box_xz(center, chunk_size_f * 0.48, color, thickness, duration);
 
             // Draw an X across the chunk for extra visibility
             let corners = [
@@ -1102,11 +1207,11 @@ impl Gizmo {
                     cs,
                 ),
             ];
-            self.line(corners[0], corners[1], color, duration);
-            self.line(corners[2], corners[3], color, duration);
+            self.line(corners[0], corners[1], color, thickness, duration);
+            self.line(corners[2], corners[3], color, thickness, duration);
 
             // Small circle in center
-            self.circle(center, chunk_size_f * 0.15, color, duration);
+            self.circle(center, chunk_size_f * 0.15, color, thickness, duration);
         }
     }
 
@@ -1115,6 +1220,7 @@ impl Gizmo {
         &mut self,
         updated_chunks: &[ChunkCoord],
         current_time: f64,
+        thickness: f32,
     ) {
         let cs = self.chunk_size;
         let chunk_size_f = cs as f32;
@@ -1135,12 +1241,178 @@ impl Gizmo {
             );
 
             // Box outline
-            self.box_xz(center, chunk_size_f * 0.49, color, duration);
+            self.box_xz(center, chunk_size_f * 0.49, color, thickness, duration);
 
             // Show update order number
             let label_pos = center.add_vec3(Vec3::new(0.0, 0.0, 0.0), cs);
-            self.number(i as isize, label_pos, chunk_size_f * 0.15, color, duration);
+            self.number(
+                i as isize,
+                label_pos,
+                chunk_size_f * 0.15,
+                color,
+                thickness,
+                duration,
+            );
         }
+    }
+
+    pub fn collect_batches(&self, camera: &Camera) -> GizmoBatches {
+        let mut batches = GizmoBatches::default();
+        let eye = camera.eye_world();
+        for render in &self.pending_renders {
+            if render.filled {
+                // Triangulate filled area
+                batches.thick_vertices.extend(Self::triangulate_filled(
+                    &render.vertices,
+                    eye,
+                    self.chunk_size,
+                ));
+            } else if render.thickness > 0.0 {
+                // Generate thick line quads
+
+                batches.thick_vertices.extend(Self::generate_thick_lines(
+                    &render.vertices,
+                    render.thickness,
+                    eye,
+                    camera,
+                    self.chunk_size,
+                ));
+            } else {
+                // Thin lines - pass through as-is
+                batches.thin_vertices.extend(
+                    render
+                        .vertices
+                        .iter()
+                        .map(|v| v.to_render(eye, self.chunk_size)),
+                );
+            }
+        }
+
+        batches
+    }
+
+    fn generate_thick_lines(
+        vertices: &[LineVtxWorld],
+        thickness: f32,
+        eye: WorldPos,
+        camera: &Camera,
+        chunk_size: ChunkSize,
+    ) -> Vec<LineVtxRender> {
+        let mut result = Vec::new();
+        let half_thick = thickness * 0.5;
+
+        // Process pairs of vertices (line segments)
+        for pair in vertices.chunks_exact(2) {
+            let v0 = pair[0].to_render(eye, chunk_size);
+            let v1 = pair[1].to_render(eye, chunk_size);
+
+            // Calculate perpendicular offset in screen space (we'll do this in shader for better performance)
+            // For now, generate a quad with metadata
+            // We'll use a modified shader approach - pass thickness as a vertex attribute
+
+            // Generate quad (2 triangles = 6 vertices)
+            let quad = Self::line_to_quad(v0, v1, half_thick, eye, chunk_size);
+            result.extend_from_slice(&quad);
+        }
+
+        result
+    }
+
+    fn line_to_quad(
+        v0: LineVtxRender,
+        v1: LineVtxRender,
+        half_thickness: f32,
+        eye: WorldPos,
+        chunk_size: ChunkSize,
+    ) -> [LineVtxRender; 6] {
+        let dx = v1.pos[0] - v0.pos[0];
+        let dy = v1.pos[1] - v0.pos[1];
+        let dz = v1.pos[2] - v0.pos[2];
+
+        let len = (dx * dx + dy * dy + dz * dz).sqrt();
+        if len < 0.0001 {
+            return [v0; 6];
+        }
+
+        let dir = [dx / len, dy / len, dz / len];
+
+        // midpoint of segment
+        let mx = (v0.pos[0] + v1.pos[0]) * 0.5;
+        let my = (v0.pos[1] + v1.pos[1]) * 0.5;
+        let mz = (v0.pos[2] + v1.pos[2]) * 0.5;
+
+        let camera_pos = eye.to_render_pos(eye, chunk_size);
+
+        // view direction
+        let mut vx = camera_pos[0] - mx;
+        let mut vy = camera_pos[1] - my;
+        let mut vz = camera_pos[2] - mz;
+
+        let vlen = (vx * vx + vy * vy + vz * vz).sqrt();
+        if vlen > 0.0001 {
+            vx /= vlen;
+            vy /= vlen;
+            vz /= vlen;
+        }
+
+        // perpendicular = dir × view
+        let mut ox = dir[1] * vz - dir[2] * vy;
+        let mut oy = dir[2] * vx - dir[0] * vz;
+        let mut oz = dir[0] * vy - dir[1] * vx;
+
+        let olen = (ox * ox + oy * oy + oz * oz).sqrt();
+        if olen < 0.0001 {
+            return [v0; 6];
+        }
+
+        let scale = half_thickness / olen;
+        ox *= scale;
+        oy *= scale;
+        oz *= scale;
+
+        let p0 = LineVtxRender {
+            pos: [v0.pos[0] + ox, v0.pos[1] + oy, v0.pos[2] + oz],
+            color: v0.color,
+        };
+        let p1 = LineVtxRender {
+            pos: [v0.pos[0] - ox, v0.pos[1] - oy, v0.pos[2] - oz],
+            color: v0.color,
+        };
+        let p2 = LineVtxRender {
+            pos: [v1.pos[0] + ox, v1.pos[1] + oy, v1.pos[2] + oz],
+            color: v1.color,
+        };
+        let p3 = LineVtxRender {
+            pos: [v1.pos[0] - ox, v1.pos[1] - oy, v1.pos[2] - oz],
+            color: v1.color,
+        };
+
+        [p0, p1, p2, p1, p3, p2]
+    }
+
+    fn triangulate_filled(
+        vertices: &[LineVtxWorld],
+        camera: WorldPos,
+        chunk_size: ChunkSize,
+    ) -> Vec<LineVtxRender> {
+        if vertices.len() < 3 {
+            return Vec::new();
+        }
+
+        // Simple fan triangulation (works for convex polygons)
+        // For concave polygons, you'd need a proper triangulation library
+        let mut result = Vec::new();
+        let first = vertices[0].to_render(camera, chunk_size);
+
+        for i in 1..vertices.len() - 1 {
+            let v1 = vertices[i].to_render(camera, chunk_size);
+            let v2 = vertices[i + 1].to_render(camera, chunk_size);
+            result.push(first);
+            result.push(v1);
+            result.push(v2);
+        }
+
+        result
     }
 }
 #[inline]

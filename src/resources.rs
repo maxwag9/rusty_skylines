@@ -172,15 +172,13 @@ impl Time {
         let raw_dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
 
-        let raw_dt = raw_dt.clamp(0.0, self.max_frame_dt) * time_speed;
-
-        // 0.0 = frozen, 1.0 = no smoothing
-        let smoothing = 0.05;
+        // Pure wall-clock dt, no time_speed here
+        let raw_dt = raw_dt.clamp(0.0, self.max_frame_dt);
 
         if self.render_dt == 0.0 {
             self.render_dt = raw_dt;
         } else {
-            self.render_dt += (raw_dt - self.render_dt) * smoothing;
+            self.render_dt += (raw_dt - self.render_dt) * 0.05;
         }
 
         self.render_fps = if self.render_dt > 0.0 {
@@ -206,9 +204,9 @@ impl Time {
 
         self.achieved_speed_window_time += self.render_dt;
 
+        // time_speed scaling only applies to the sim accumulator
         self.sim_accumulator += self.render_dt * time_speed.abs();
     }
-
     pub fn update_achieved_speed(&mut self, steps: u32) {
         self.achieved_speed_window_steps += steps;
 

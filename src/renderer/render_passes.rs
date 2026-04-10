@@ -531,31 +531,63 @@ pub fn render_gizmo(
     queue: &Queue,
 ) {
     let targets = color_and_normals_and_motion_targets(pipelines);
-    // Gizmo
-    render_manager.render(
-        &[],
-        shader_dir().join("lines.wgsl").as_path(),
-        &PipelineOptions {
-            topology: PrimitiveTopology::LineList,
-            depth_stencil: Some(DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            msaa_samples,
-            vertex_layouts: Vec::from([LineVtxRender::layout()]),
-            fragment: FragmentOption::Default { targets },
-            ..Default::default()
-        },
-        &[&pipelines.buffers.camera],
-        pass,
-    );
+    let batches = gizmo.collect_batches(camera);
+    let (thin_count, thick_count) = gizmo.update_buffers(device, queue, &batches);
 
-    let vertex_count = gizmo.update_buffer(device, queue, camera.eye_world());
-    pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
-    pass.draw(0..vertex_count, 0..1);
+    // Render thin lines with LineList
+    if thin_count > 0 {
+        render_manager.render(
+            &[],
+            shader_dir().join("lines.wgsl").as_path(),
+            &PipelineOptions {
+                topology: PrimitiveTopology::LineList,
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                msaa_samples,
+                vertex_layouts: Vec::from([LineVtxRender::layout()]),
+                fragment: FragmentOption::Default {
+                    targets: targets.clone(),
+                },
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera],
+            pass,
+        );
+        pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
+        pass.draw(0..thin_count, 0..1);
+    }
+
+    // Render thick lines and filled areas with TriangleList
+    if thick_count > 0 {
+        render_manager.render(
+            &[],
+            shader_dir().join("lines.wgsl").as_path(),
+            &PipelineOptions {
+                topology: TriangleList,
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                msaa_samples,
+                vertex_layouts: Vec::from([LineVtxRender::layout()]),
+                fragment: FragmentOption::Default { targets },
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera],
+            pass,
+        );
+        pass.set_vertex_buffer(0, gizmo.thick_buffer.slice(..));
+        pass.draw(0..thick_count, 0..1);
+    }
+
     gizmo.clear();
 }
 
