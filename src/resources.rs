@@ -169,15 +169,27 @@ impl Time {
 
     pub fn begin_frame(&mut self, time_speed: f32) {
         let now = Instant::now();
-        let mut dt = (now - self.last_frame).as_secs_f32();
+        let raw_dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
 
-        dt = dt.clamp(0.0, self.max_frame_dt);
+        let raw_dt = raw_dt.clamp(0.0, self.max_frame_dt) * time_speed;
 
-        self.render_dt = dt;
-        self.render_fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        // 0.0 = frozen, 1.0 = no smoothing
+        let smoothing = 0.05;
 
-        self.total_time += dt as f64;
+        if self.render_dt == 0.0 {
+            self.render_dt = raw_dt;
+        } else {
+            self.render_dt += (raw_dt - self.render_dt) * smoothing;
+        }
+
+        self.render_fps = if self.render_dt > 0.0 {
+            1.0 / self.render_dt
+        } else {
+            0.0
+        };
+
+        self.total_time += self.render_dt as f64;
         self.frame_count += 1;
 
         let speed_changed = (time_speed - self.current_time_speed).abs() > 1e-6;
@@ -192,9 +204,9 @@ impl Time {
             self.achieved_speed_window_steps = 0;
         }
 
-        self.achieved_speed_window_time += dt;
+        self.achieved_speed_window_time += self.render_dt;
 
-        self.sim_accumulator += dt * time_speed.abs();
+        self.sim_accumulator += self.render_dt * time_speed.abs();
     }
 
     pub fn update_achieved_speed(&mut self, steps: u32) {

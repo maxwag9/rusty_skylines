@@ -110,7 +110,7 @@ impl ApplicationHandler for App {
         )
         .unwrap();
         let custom_cursor = event_loop.create_custom_cursor(source);
-        window.set_cursor(Cursor::Custom(custom_cursor));
+        //window.set_cursor(Cursor::Custom(custom_cursor));
 
         self.window = Some(window.clone());
         self.resources = Some(resources);

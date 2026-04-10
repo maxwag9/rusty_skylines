@@ -19,6 +19,7 @@ const CIRCLE_SEGMENT_COUNT: usize = 16;
 pub const DEBUG_DRAW_DURATION: f32 = 20.0; // Seconds
 pub struct PendingGizmoRender {
     pub vertices: Vec<LineVtxWorld>,
+    pub thickness: f32,
     pub duration: f32,
     pub start_time: f64,
 }
@@ -160,9 +161,10 @@ impl Gizmo {
     // ─────────────────────────────────────────────────────────────────────────
 
     #[inline]
-    fn push(&mut self, vertices: Vec<LineVtxWorld>, duration: f32) {
+    fn push(&mut self, vertices: Vec<LineVtxWorld>, duration: f32, thickness: f32) {
         self.pending_renders.push(PendingGizmoRender {
             vertices,
+            thickness,
             duration,
             start_time: self.total_game_time,
         });
@@ -172,7 +174,14 @@ impl Gizmo {
     // Basic primitives
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub fn line(&mut self, start: WorldPos, end: WorldPos, color: [f32; 3], duration: f32) {
+    pub fn line(
+        &mut self,
+        start: WorldPos,
+        end: WorldPos,
+        color: [f32; 3],
+        thickness: f32,
+        duration: f32,
+    ) {
         self.push(
             vec![
                 LineVtxWorld::new(start, color),
@@ -480,6 +489,93 @@ impl Gizmo {
         let cs = self.chunk_size;
         let points: Vec<_> = offsets.iter().map(|&o| anchor.add_vec3(o, cs)).collect();
         self.polyline(&points, color, arrow_spacing, duration);
+    }
+
+    /// Render polyline with arrows. Points are WorldPos.
+    pub fn area(&mut self, points: &[WorldPos], color: [f32; 3], duration: f32) {
+        if points.len() < 2 {
+            return;
+        }
+
+        let cs = self.chunk_size;
+        let flap = flap_color(color);
+        let mut verts = Vec::new();
+
+        // Draw line segments
+        for w in points.windows(2) {
+            verts.push(LineVtxWorld::new(w[0], color));
+            verts.push(LineVtxWorld::new(w[1], color));
+        }
+
+        // Compute cumulative lengths
+        let mut lengths = vec![0.0f32];
+        for w in points.windows(2) {
+            let d = w[1].to_render_pos(w[0], cs).length();
+            lengths.push(lengths.last().unwrap() + d);
+        }
+        let total_len = *lengths.last().unwrap();
+        if total_len < 0.001 {
+            self.push(verts, duration);
+            return;
+        }
+
+        // Sample position and direction at distance t along polyline
+        let sample_at = |t: f32| -> (WorldPos, Vec3) {
+            let mut i = 1;
+            while i < lengths.len() && lengths[i] < t {
+                i += 1;
+            }
+            let i0 = i - 1;
+            let i1 = i.min(points.len() - 1);
+            let seg_t = if lengths[i1] > lengths[i0] {
+                (t - lengths[i0]) / (lengths[i1] - lengths[i0])
+            } else {
+                0.0
+            };
+
+            let pos = points[i0].lerp(points[i1], seg_t as f64, cs);
+            let dir = points[i1].to_render_pos(points[i0], cs).normalize_or_zero();
+            (pos, dir)
+        };
+
+        // Arrow parameters
+        let head_len = 0.30;
+        let head_width = 0.25;
+        let spin_speed = 1.0;
+        let time = self.total_game_time as f32;
+
+        // Place arrows along polyline
+        let mut t = arrow_spacing;
+        let mut idx = 0;
+        if t == 0.0 {
+            self.push(verts, duration);
+            return;
+        }
+        while t < total_len {
+            let (pos, dir) = sample_at(t);
+            if dir.length_squared() < 0.0001 {
+                t += arrow_spacing;
+                continue;
+            }
+
+            let (side, up_perp) = build_frame(dir);
+            let angle = time * spin_speed + idx as f32 * 1.7;
+            let rot = rotate_frame(side, up_perp, angle);
+            let back = pos.add_vec3(-dir * head_len, cs);
+
+            verts.push(LineVtxWorld::new(pos, flap));
+            verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width, cs), flap));
+            verts.push(LineVtxWorld::new(pos, flap));
+            verts.push(LineVtxWorld::new(
+                back.add_vec3(-rot * head_width, cs),
+                flap,
+            ));
+
+            idx += 1;
+            t += arrow_spacing;
+        }
+
+        self.push(verts, duration);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

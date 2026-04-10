@@ -1,12 +1,17 @@
+use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
+use std::collections::HashMap;
 
 struct ZoningState {}
-
+pub struct Zone {
+    pub points: Vec<WorldPos>,
+}
 pub struct Zoning {
     zoning_state: Option<ZoningState>,
+    zones: Vec<Zone>,
 }
 
 impl Zoning {
@@ -32,6 +37,10 @@ impl Zoning {
             {
                 gizmo.circle(closest_point, 2.5, [0.7, 0.5, 0.9], 0.0);
                 gizmo.line(closest_point, picked.pos, [0.7, 0.8, 0.9], 0.0);
+            }
+            for zone in self.zones.iter() {
+                gizmo.area(zone.points);
+                gizmo.polyline(zone.points.as_slice(), [0.3, 0.5, 0.9], 0.0, 0.0);
             }
         }
 

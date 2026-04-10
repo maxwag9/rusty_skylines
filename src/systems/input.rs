@@ -53,6 +53,20 @@ pub fn run_inputs(resources: &mut Resources) {
         if input.gameplay_down("Fly Camera Down") {
             wish -= up;
         }
+
+        let orbit_speed = 1.5 / world.time.render_fps;
+        if input.gameplay_down("Orbit Left") {
+            cam_ctrl.target_yaw -= orbit_speed;
+        }
+        if input.gameplay_down("Orbit Right") {
+            cam_ctrl.target_yaw += orbit_speed;
+        }
+        if input.gameplay_down("Orbit Up") {
+            cam_ctrl.target_pitch -= orbit_speed;
+        }
+        if input.gameplay_down("Orbit Down") {
+            cam_ctrl.target_pitch += orbit_speed;
+        }
     }
 
     let speed = calc_move_speed(input);
