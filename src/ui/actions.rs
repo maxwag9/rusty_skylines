@@ -16,11 +16,12 @@ use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_layer_sett
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
-use crate::ui::variables::{Variables, initialize_value};
+use crate::ui::variables::{Variables, initialize_value, save_colors};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
+use crate::world::buildings::zoning::ZoneType;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::{GameState, LoadResult, SaveResult};
 use crate::world::roads::road_subsystem::Roads;
@@ -1237,6 +1238,7 @@ impl CommandQueue {
                 exit_game(
                     ctx.game_state,
                     ctx.settings,
+                    &mut ctx.ui.variables,
                     ctx.time,
                     ctx.camera,
                     ctx.roads,
@@ -1433,6 +1435,7 @@ pub fn deactivate_action(loader: &mut Ui, action_name: &str) {
 pub fn exit_game(
     game_state: &mut GameState,
     settings: &mut Settings,
+    variables: &mut Variables,
     time: &Time,
     camera: &Camera,
     roads: &Roads,
@@ -1445,6 +1448,7 @@ pub fn exit_game(
         Ok(_) => println!("Settings saved"),
         Err(e) => eprintln!("Failed to save Settings: {e}"),
     }
+    save_colors(rusty_skylines_dir("colors.toml"), variables);
     save_game(game_state, camera, roads, terrain, props);
 
     event_loop.exit();
@@ -1488,6 +1492,14 @@ pub fn set_element_property(
     name: &str,
     new_val: &Value,
 ) -> CommandResult {
+    match name {
+        "new_zone_type" => {
+            let zone_type = ZoneType::from_value(new_val);
+            ctx.terrain.cursor.zone_type = zone_type;
+            ctx.ui.variables.set_var(name, zone_type.to_string());
+        }
+        _ => {}
+    }
     // ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
     let Some((base, suffix)) = name.split_once('.') else {
         return CommandResult::AnnoyingError(format!(

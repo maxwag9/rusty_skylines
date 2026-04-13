@@ -91,6 +91,8 @@ keys = ["KeyE"]
 keys = ["KeyQ"]
 ["Orbit"]
 keys = ["MouseMiddle"]
+["Zoom"]
+keys = ["KeyC"]
 
 ["Edit Terrain +"]
 keys = ["MouseLeft"]

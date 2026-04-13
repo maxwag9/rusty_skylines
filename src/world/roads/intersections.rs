@@ -610,9 +610,9 @@ pub fn build_intersection_at_node(
         if let Some(geom) =
             compute_intersection_geometry(storage, node_id, params, chunk_size, gizmo)
         {
-            debug_draw_polygon(&geom.polygon, [0.0, 0.8, 0.2], gizmo);
+            debug_draw_polygon(&geom.polygon, [0.0, 0.8, 0.2, 1.0], gizmo);
             if let Some(ref sw) = geom.sidewalk_polygon {
-                debug_draw_polygon(sw, [0.5, 0.5, 0.5], gizmo);
+                debug_draw_polygon(sw, [0.5, 0.5, 0.5, 1.0], gizmo);
             }
 
             carve_lanes_with_polygon(storage, node_id, &geom, chunk_size, gizmo);
@@ -688,7 +688,7 @@ fn compute_intersection_center_height(
     sum / count
 }
 
-fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 3], gizmo: &mut Gizmo) {
+fn debug_draw_polygon(poly: &IntersectionPolygon, color: [f32; 4], gizmo: &mut Gizmo) {
     if poly.ring.len() < 2 {
         return;
     }
@@ -1814,14 +1814,14 @@ fn build_node_lanes_for_intersection(
                 gizmo.cross(
                     endpoint,
                     0.3,
-                    [0.0, 1.0, 0.0],
+                    [0.0, 1.0, 0.0, 1.0],
                     ROAD_GIZMO_THICKNESS,
                     DEBUG_DRAW_DURATION,
                 );
                 gizmo.direction(
                     endpoint,
                     direction,
-                    [0.0, 0.8, 0.0],
+                    [0.0, 0.8, 0.0, 1.0],
                     ROAD_GIZMO_THICKNESS,
                     DEBUG_DRAW_DURATION,
                 );
@@ -1831,14 +1831,14 @@ fn build_node_lanes_for_intersection(
                 gizmo.cross(
                     endpoint,
                     0.3,
-                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0, 1.0],
                     ROAD_GIZMO_THICKNESS,
                     DEBUG_DRAW_DURATION,
                 );
                 gizmo.direction(
                     endpoint,
                     direction,
-                    [0.8, 0.0, 0.0],
+                    [0.8, 0.0, 0.0, 1.0],
                     ROAD_GIZMO_THICKNESS,
                     DEBUG_DRAW_DURATION,
                 );
@@ -1852,7 +1852,7 @@ fn build_node_lanes_for_intersection(
         gizmo.cross(
             node_pos,
             1.0,
-            [1.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0, 1.0],
             ROAD_GIZMO_THICKNESS,
             DEBUG_DRAW_DURATION,
         ); // Magenta = missing in/out
@@ -1912,7 +1912,7 @@ fn build_node_lanes_for_intersection(
                 gizmo.line(
                     turn_pts[i],
                     turn_pts[i + 1],
-                    [1.0, 1.0, 0.0],
+                    [1.0, 1.0, 0.0, 1.0],
                     ROAD_GIZMO_THICKNESS,
                     DEBUG_DRAW_DURATION,
                 );
@@ -1938,7 +1938,7 @@ fn build_node_lanes_for_intersection(
         gizmo.cross(
             node_pos,
             1.5,
-            [1.0, 0.5, 0.0],
+            [1.0, 0.5, 0.0, 1.0],
             ROAD_GIZMO_THICKNESS,
             DEBUG_DRAW_DURATION,
         );

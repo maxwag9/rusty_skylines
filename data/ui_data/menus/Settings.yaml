@@ -42,4 +42,7 @@ layers:
         scale: 2.0
         misc:
           active: true
+          pressable: false
           editable: true
+        editing_tool: false
+    editing_tool: false

@@ -5,6 +5,7 @@ pub mod cars;
 pub mod game_state;
 pub mod roads;
 pub mod sound;
+pub mod statisticals;
 pub mod terrain;
 pub mod world;
 pub mod world_state;

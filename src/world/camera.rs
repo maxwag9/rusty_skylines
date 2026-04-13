@@ -1,7 +1,9 @@
 use crate::data::Settings;
+use crate::helpers::hsv::lerp;
 use crate::helpers::positions::*;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Mat4, Vec3};
+use std::time::Instant;
 
 pub struct Camera {
     pub target: WorldPos,
@@ -119,6 +121,10 @@ pub struct CameraController {
     pub pitch_velocity: f32,
     pub orbit_damping_release: f32,
     pub zoom_damping: f32,
+    pub prev_fov: f32,
+    pub target_zoom_fov: f32,
+    pub zoom_time_start: Option<Instant>,
+    pub zoom_time_end: Option<Instant>,
 }
 
 impl CameraController {
@@ -133,6 +139,63 @@ impl CameraController {
             pitch_velocity: 0.0,
             orbit_damping_release: 3.0,
             zoom_damping: 13.0,
+            prev_fov: camera.fov,
+            target_zoom_fov: 15.0,
+            zoom_time_start: None,
+            zoom_time_end: None,
+        }
+    }
+
+    pub fn zoom(&mut self, camera: &mut Camera, zoom_speed: f32) {
+        if self.zoom_time_start.is_none() {
+            self.zoom_time_start = Some(Instant::now());
+            // Only update prev_fov if not currently in unzoom animation
+            if self.zoom_time_end.is_none() {
+                self.prev_fov = camera.fov;
+            }
+        }
+
+        let zoom_time = 0.5 * zoom_speed;
+        let Some(start) = self.zoom_time_start else {
+            return;
+        };
+        let now = Instant::now();
+        let elapsed = (now - start).as_secs_f32();
+        let t = (elapsed / zoom_time).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t); // smoothstep
+
+        camera.fov = lerp(self.prev_fov, self.target_zoom_fov, t);
+    }
+
+    pub fn zoom_deactivate(&mut self) {
+        self.zoom_time_start = None;
+        self.zoom_time_end = Some(Instant::now());
+    }
+
+    pub fn zoom_end(&mut self, camera: &mut Camera, unzoom_speed: f32) {
+        let zooming = self.zoom_time_start.is_some();
+        if !zooming {
+            // Fix: Only animate if zoom_time_end is Some
+            if let Some(end_time) = self.zoom_time_end {
+                if (camera.fov - self.prev_fov).abs() < 1e-4 {
+                    camera.fov = self.prev_fov;
+                    self.zoom_time_end = None; // Reset state
+                    return;
+                }
+
+                let unzoom_time = 0.5 * unzoom_speed;
+                let now = Instant::now();
+                let elapsed = (now - end_time).as_secs_f32();
+                let t = (elapsed / unzoom_time).clamp(0.0, 1.0);
+                let t = t * t * (3.0 - 2.0 * t); // smoothstep
+
+                camera.fov = lerp(self.target_zoom_fov, self.prev_fov, t);
+
+                // Clear zoom_time_end when animation completes
+                if t >= 1.0 {
+                    self.zoom_time_end = None;
+                }
+            }
         }
     }
 }

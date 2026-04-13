@@ -9,6 +9,7 @@ use crate::resources::Time;
 use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::ui::vertex::Vertex;
+use crate::world::buildings::zoning::ZoneType;
 use crate::world::camera::Camera;
 use crate::world::game_state::SaveState;
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
@@ -93,6 +94,7 @@ pub struct Cursor {
     pub mode: CursorMode,
     pub road_type: Option<RoadType>,
     pub prop_name: Option<String>,
+    pub zone_type: ZoneType,
 }
 
 impl Cursor {
@@ -101,6 +103,7 @@ impl Cursor {
             mode: CursorMode::Roads,
             road_type: Some(RoadType::default()),
             prop_name: Some("oak".to_string()),
+            zone_type: ZoneType::None,
         }
     }
 }

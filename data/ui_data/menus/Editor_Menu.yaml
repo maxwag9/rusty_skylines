@@ -25,6 +25,7 @@ layers:
           - 1.0
           - 1.0
           - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: true
@@ -46,6 +47,7 @@ layers:
           - 1.0
           - 1.0
           - 0.0
+        glow_misc: { }
       - !Polygon
         id: '5660'
         actions: [ ]
@@ -270,6 +272,7 @@ layers:
           - 0.0
           - 0.0
           - 1.0
+        glow_misc: { }
     active: false
     editing_tool: false
   - name: Color Picker
@@ -297,6 +300,12 @@ layers:
         roundness: 0.2
         border_thickness_percentage: 0.005
         fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: true
@@ -386,6 +395,12 @@ layers:
           - 0.91996294
           - 1.0
           - 1.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: true
@@ -402,6 +417,12 @@ layers:
           - 0.2
           - 0.2
           - 0.98
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: false

@@ -20,9 +20,9 @@ pub fn run_sounds(resources: &mut Resources) {
 
     let mut state = sounds.state.lock().unwrap();
 
-    let camera = &resources.world_core.world_state.camera;
-    let terrain = &resources.world_core.terrain;
-    let car_storage = resources.world_core.cars.car_storage();
+    let camera = &resources.world.world_state.camera;
+    let terrain = &resources.world.terrain;
+    let car_storage = resources.world.cars.car_storage();
 
     let current_eye = camera.eye_world();
     let prev_eye = camera.prev_eye_world();

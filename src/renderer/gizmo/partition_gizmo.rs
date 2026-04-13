@@ -184,7 +184,7 @@ impl PartitionGizmo {
                 child_count as isize,
                 label_pos,
                 config.id_scale_base * 0.6,
-                [0.8, 0.8, 0.8],
+                [0.8, 0.8, 0.8, 1.0],
                 config.thickness,
                 config.duration,
             );
@@ -305,7 +305,7 @@ impl PartitionGizmo {
             for i in 1..=depth.min(3) {
                 let ring_radius = config.internal_marker_radius * (1.0 + i as f32 * 0.3);
                 let alpha = 1.0 - (i as f32 * 0.25);
-                let ring_color = [color[0] * alpha, color[1] * alpha, color[2] * alpha];
+                let ring_color = [color[0] * alpha, color[1] * alpha, color[2] * alpha, 1.0];
                 gizmo.circle(
                     pos,
                     ring_radius,
@@ -401,6 +401,7 @@ impl PartitionGizmo {
                 config.highlight_color[0] * brightness,
                 config.highlight_color[1] * brightness,
                 config.highlight_color[2] * brightness,
+                1.0,
             ];
 
             gizmo.sphere(pos, radius, color, config.thickness, config.duration);
@@ -580,10 +581,10 @@ impl PartitionGizmo {
 
         let line_height = config.id_scale_base * 3.0;
         let stats = [
-            (total_partitions as isize, [0.9, 0.9, 0.9]),
-            (internal_count as isize, [0.7, 0.7, 1.0]),
+            (total_partitions as isize, [0.9, 0.9, 0.9, 1.0]),
+            (internal_count as isize, [0.7, 0.7, 1.0, 1.0]),
             (leaf_count as isize, config.leaf_color),
-            (self.max_depth as isize, [1.0, 0.8, 0.3]),
+            (self.max_depth as isize, [1.0, 0.8, 0.3, 1.0]),
         ];
 
         for (i, (value, color)) in stats.iter().enumerate() {
@@ -765,14 +766,14 @@ pub struct PartitionVisualizationConfig {
     pub id_offset_x: f32,
     pub id_offset_y: f32,
     pub highlight_radius: f32,
-    pub highlight_color: [f32; 3],
+    pub highlight_color: [f32; 4],
     pub address_marker_radius: f32,
-    pub address_color: [f32; 3],
+    pub address_color: [f32; 4],
     pub depth_level_radius: f32,
     pub subtree_node_radius: f32,
-    pub leaf_color: [f32; 3],
-    pub root_color: [f32; 3],
-    pub node_link_color: [f32; 3],
+    pub leaf_color: [f32; 4],
+    pub root_color: [f32; 4],
+    pub node_link_color: [f32; 4],
     pub thickness: f32,
     pub duration: f32,
 }
@@ -797,14 +798,14 @@ impl Default for PartitionVisualizationConfig {
             id_offset_x: 5.0,
             id_offset_y: 10.0,
             highlight_radius: 6.0,
-            highlight_color: [1.0, 0.9, 0.1],
+            highlight_color: [1.0, 0.9, 0.1, 1.0],
             address_marker_radius: 5.0,
-            address_color: [1.0, 0.5, 0.0],
+            address_color: [1.0, 0.5, 0.0, 1.0],
             depth_level_radius: 5.0,
             subtree_node_radius: 6.0,
-            leaf_color: [0.2, 0.9, 0.3],
-            root_color: [1.0, 0.85, 0.0],
-            node_link_color: [0.4, 0.4, 0.7],
+            leaf_color: [0.2, 0.9, 0.3, 1.0],
+            root_color: [1.0, 0.85, 0.0, 1.0],
+            node_link_color: [0.4, 0.4, 0.7, 1.0],
             thickness: 0.0,
             duration: 0.0,
         }

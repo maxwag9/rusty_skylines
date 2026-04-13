@@ -20,12 +20,12 @@ use winit::dpi::PhysicalSize;
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LineVtxRender {
     pub pos: [f32; 3],
-    pub color: [f32; 3],
+    pub color: [f32; 4],
 }
 
 impl LineVtxRender {
     pub fn layout<'a>() -> VertexBufferLayout<'a> {
-        const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x4];
         VertexBufferLayout {
             array_stride: size_of::<LineVtxRender>() as u64,
             step_mode: VertexStepMode::Vertex,
@@ -36,7 +36,7 @@ impl LineVtxRender {
 #[derive(Clone)]
 pub struct LineVtxWorld {
     pub pos: WorldPos,
-    pub color: [f32; 3],
+    pub color: [f32; 4],
 }
 #[derive(Debug, Clone)]
 pub struct LayerGpu {

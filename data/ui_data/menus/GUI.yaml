@@ -25,6 +25,12 @@ layers:
         roundness: 0.0
         border_thickness_percentage: 0.002
         fade: 1.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: false
@@ -40,5 +46,170 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: Settingxs
+        text: Settings
+      - !Rect
+        id: set_none_zone
+        actions:
+          - set(new_zone_type, none)
+        x: 0.16796875
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.6
+          - 0.6
+          - 0.65
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.003
+        fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_residential_zone
+        actions:
+          - set(new_zone_type, residential)
+        x: 0.19140625
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.005
+          - 0.6
+          - 0.1
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.001
+        fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_commercial_zone
+        actions:
+          - set(new_zone_type, commercial)
+        x: 0.21484375
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.005
+          - 0.1
+          - 0.6
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.001
+        fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_industrial_zone
+        actions:
+          - set(new_zone_type, industrial)
+        x: 0.26171875
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.6
+          - 0.6
+          - 0.1
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.001
+        fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_office_zone
+        actions:
+          - set(new_zone_type, office)
+        x: 0.23828125
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.6
+          - 0.1
+          - 0.6
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.001
+        fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
     editing_tool: false

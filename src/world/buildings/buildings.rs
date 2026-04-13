@@ -1,6 +1,7 @@
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
+use crate::ui::variables::Variables;
 use crate::world::buildings::zoning::Zoning;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
 use crate::world::roads::road_structs::SegmentId;
@@ -90,8 +91,9 @@ impl Buildings {
         roads: &Roads,
         input: &mut Input,
         gizmo: &mut Gizmo,
+        variables: &Variables,
     ) {
-        self.zoning.update(terrain, roads, input, gizmo);
+        self.zoning.update(terrain, roads, input, gizmo, variables);
     }
 }
 

@@ -6,6 +6,7 @@ use crate::renderer::render_core::{
 use crate::renderer::shadows::CSM_CASCADES;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::Ui;
+use crate::ui::variables::load_colors;
 use crate::world::sound::Sounds;
 use crate::world::world::World;
 use std::sync::Arc;
@@ -30,12 +31,12 @@ pub struct Resources {
     pub command_queues: CommandQueues,
 
     // The simulation & world core:
-    pub world_core: World,
+    pub world: World,
 
     // The GPU + render-only subsystems:
     pub render_core: Renderer,
 
-    pub ui_loader: Ui,
+    pub ui: Ui,
     pub sounds: Sounds,
     pub surface: Surface<'static>,
 }
@@ -60,6 +61,11 @@ impl Resources {
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);
+        load_colors(
+            rusty_skylines_dir("colors.toml"),
+            &settings,
+            &mut ui_loader.variables,
+        );
         let mut command_queues = CommandQueues::new();
         ui_loader.set_starting_menu(&settings, &mut command_queues.ui_command_queue);
         world_core.time.total_game_time = settings.total_game_time;
@@ -67,10 +73,10 @@ impl Resources {
         Self {
             surface,
             settings,
-            ui_loader,
+            ui: ui_loader,
             window,
             command_queues,
-            world_core,
+            world: world_core,
             render_core,
             sounds: Sounds::new(),
         }

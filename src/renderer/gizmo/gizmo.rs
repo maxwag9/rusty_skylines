@@ -6,6 +6,7 @@ use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualiza
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld};
+use crate::world::buildings::zoning::point_inside_polygon;
 use crate::world::camera::Camera;
 use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::road_structs::NodeId;
@@ -158,11 +159,18 @@ impl Gizmo {
                 s: 0.8,
                 v: 0.9,
             });
+            let color = [color[0], color[1], color[2], 1.0];
             let secondary_color = hsv_to_rgb(HSV {
                 h: hue,
                 s: 0.5,
                 v: 0.7,
             });
+            let secondary_color = [
+                secondary_color[0],
+                secondary_color[1],
+                secondary_color[2],
+                1.0,
+            ];
 
             let node_indices = region.node_indices();
             if node_indices.is_empty() {
@@ -205,7 +213,7 @@ impl Gizmo {
                 thickness,
                 duration,
             );
-            self.circle(centroid, 2.0, [1.0, 1.0, 1.0], thickness, duration);
+            self.circle(centroid, 2.0, [1.0, 1.0, 1.0, 1.0], thickness, duration);
         }
     }
 
@@ -226,7 +234,7 @@ impl Gizmo {
         &mut self,
         start: WorldPos,
         end: WorldPos,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -245,7 +253,7 @@ impl Gizmo {
         &mut self,
         center: WorldPos,
         radius: f32,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -271,7 +279,7 @@ impl Gizmo {
         &mut self,
         center: WorldPos,
         radius: f32,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -332,7 +340,7 @@ impl Gizmo {
         &mut self,
         center: WorldPos,
         half_size: f32,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -352,7 +360,7 @@ impl Gizmo {
         &mut self,
         center: WorldPos,
         direction: Vec3,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -373,9 +381,9 @@ impl Gizmo {
     pub fn axes(&mut self, origin: WorldPos, scale: f32, thickness: f32, duration: f32) {
         let cs = self.chunk_size;
         let axes = [
-            (Vec3::X, [1.0, 0.2, 0.2]),
-            (Vec3::Y, [0.2, 1.0, 0.2]),
-            (Vec3::Z, [0.2, 0.6, 1.0]),
+            (Vec3::X, [1.0, 0.2, 0.2, 1.0]),
+            (Vec3::Y, [0.2, 1.0, 0.2, 1.0]),
+            (Vec3::Z, [0.2, 0.6, 1.0, 1.0]),
         ];
         for (dir, color) in axes {
             self.line(
@@ -399,7 +407,14 @@ impl Gizmo {
         self.axes(origin, scale, thickness, duration);
         let cs = self.chunk_size;
         let sun_end = origin.add_vec3(sun_dir.normalize_or_zero() * scale, cs);
-        self.arrow(origin, sun_end, [1.0, 1.0, 0.0], false, thickness, duration);
+        self.arrow(
+            origin,
+            sun_end,
+            [1.0, 1.0, 0.0, 1.0],
+            false,
+            thickness,
+            duration,
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -410,7 +425,7 @@ impl Gizmo {
         &mut self,
         start: WorldPos,
         end: WorldPos,
-        color: [f32; 3],
+        color: [f32; 4],
         dashed: bool,
         thickness: f32,
         duration: f32,
@@ -477,7 +492,7 @@ impl Gizmo {
     pub fn polyline(
         &mut self,
         points: &[WorldPos],
-        color: [f32; 3],
+        color: [f32; 4],
         arrow_spacing: f32,
         thickness: f32,
         duration: f32,
@@ -573,7 +588,7 @@ impl Gizmo {
         &mut self,
         anchor: WorldPos,
         offsets: &[Vec3],
-        color: [f32; 3],
+        color: [f32; 4],
         arrow_spacing: f32,
         thickness: f32,
         duration: f32,
@@ -583,9 +598,9 @@ impl Gizmo {
         self.polyline(&points, color, arrow_spacing, thickness, duration);
     }
 
-    /// Render polyline with arrows. Points are WorldPos.
-    pub fn area(&mut self, points: &[WorldPos], color: [f32; 3], duration: f32) {
-        if points.len() < 2 {
+    /// Render area. Points are WorldPos.
+    pub fn area(&mut self, points: &[WorldPos], color: [f32; 4], duration: f32) {
+        if points.len() < 3 {
             return;
         }
 
@@ -599,6 +614,84 @@ impl Gizmo {
         self.push(verts, duration, 0.0, true);
     }
 
+    pub fn area_textured(&mut self, points: &[WorldPos], color: [f32; 4], duration: f32) {
+        self.area(points, color, duration);
+
+        if points.len() < 3 {
+            return;
+        }
+
+        let color = [
+            color[0] * 1.1,
+            color[1] * 1.1,
+            color[2] * 1.1,
+            color[3] * 1.1,
+        ];
+        let cs = self.chunk_size;
+        let origin = points[0];
+
+        // Precompute render positions ONCE
+        let renders: Vec<Vec3> = points
+            .iter()
+            .map(|&p| p.to_render_pos(origin, cs))
+            .collect();
+
+        // AABB in render space
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+
+        for rp in &renders {
+            min_x = min_x.min(rp.x);
+            max_x = max_x.max(rp.x);
+            min_z = min_z.min(rp.z);
+            max_z = max_z.max(rp.z);
+        }
+
+        let spacing = cs as f32 * 0.025;
+
+        // height sampling via triangle fan
+        let sample_y = |x: f32, z: f32| -> f32 {
+            let p = Vec3::new(x, 0.0, z);
+
+            for i in 1..renders.len() - 1 {
+                if let Some(y) = barycentric_y(p, renders[0], renders[i], renders[i + 1]) {
+                    return y;
+                }
+            }
+
+            // fallback (should rarely happen if inside polygon)
+            renders[0].y
+        };
+
+        let mut z = min_z;
+        let mut row = 0;
+
+        while z <= max_z {
+            let mut x = min_x;
+
+            // offset every second row (less grid look)
+            if row % 2 == 1 {
+                x += spacing * 0.678;
+            }
+
+            while x <= max_x {
+                let y = sample_y(x, z);
+                let p = origin.add_vec3(Vec3::new(x, y, z), cs);
+
+                if point_inside_polygon(p, points, cs, true) {
+                    self.cross(p, spacing * 0.1, color, 0.0, duration);
+                }
+
+                x += spacing;
+            }
+
+            z += spacing;
+            row += 1;
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Digit rendering
     // ─────────────────────────────────────────────────────────────────────────
@@ -608,7 +701,7 @@ impl Gizmo {
         digit: u8,
         pos: WorldPos,
         scale: f32,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -735,7 +828,7 @@ impl Gizmo {
                         self.chunk_size,
                     ),
                     chunk_size_f * 0.5,
-                    [0.2, 0.8, 0.6],
+                    [0.2, 0.8, 0.6, 0.9],
                     0.0,
                     0.0,
                 );
@@ -753,9 +846,9 @@ impl Gizmo {
                 // Node circle
                 let node_pos = node.position();
                 let node_color = if node.is_enabled() {
-                    [0.0, 0.0, 0.9]
+                    [0.0, 0.0, 0.9, 1.0]
                 } else {
-                    [1.0, 0.0, 0.0]
+                    [1.0, 0.0, 0.0, 1.0]
                 };
                 self.circle(node_pos, 2.0, node_color, 0.0, 0.0);
 
@@ -771,12 +864,12 @@ impl Gizmo {
 
                     let color = if lane.is_enabled() {
                         if is_forward {
-                            [0.0, 0.9, 0.0]
+                            [0.0, 0.9, 0.0, 1.0]
                         } else {
-                            [0.2, 0.9, 0.0]
+                            [0.2, 0.9, 0.0, 1.0]
                         }
                     } else {
-                        [1.0, 0.05, 0.0]
+                        [1.0, 0.05, 0.0, 1.0]
                     };
 
                     // Convert polyline to WorldPos
@@ -798,9 +891,9 @@ impl Gizmo {
                     }
 
                     let color = if node_lane.is_enabled() {
-                        [0.7, 0.5, 0.0]
+                        [0.7, 0.5, 0.0, 1.0]
                     } else {
-                        [1.0, 0.05, 0.0]
+                        [1.0, 0.05, 0.0, 1.0]
                     };
 
                     let points: &Vec<WorldPos> = node_lane.polyline();
@@ -823,7 +916,7 @@ impl Gizmo {
         value: isize,
         center: WorldPos,
         scale: f32,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -882,7 +975,7 @@ impl Gizmo {
         &mut self,
         pos: WorldPos,
         size: f32,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -921,7 +1014,7 @@ impl Gizmo {
         &mut self,
         aabb: &Aabb,
         reference: WorldPos,
-        color: [f32; 3],
+        color: [f32; 4],
         thickness: f32,
         duration: f32,
     ) {
@@ -1066,6 +1159,7 @@ impl Gizmo {
                     s: 0.7,
                     v: 0.9,
                 });
+                let color = [color[0], color[1], color[2], 1.0];
                 self.aabb(&aabb, reference, color, thickness, duration);
             }
         }
@@ -1099,7 +1193,7 @@ impl Gizmo {
             self.aabb(
                 blas.root_aabb(),
                 reference,
-                [1.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0, 1.0],
                 thickness,
                 duration,
             );
@@ -1181,7 +1275,7 @@ impl Gizmo {
                 s: 0.9,
                 v: 1.0,
             });
-
+            let color = [color[0], color[1], color[2], 1.0];
             // Chunk center at y=0
             let center = WorldPos::new(
                 chunk_coord,
@@ -1234,6 +1328,7 @@ impl Gizmo {
                 s: 0.85,
                 v: 1.0,
             });
+            let color = [color[0], color[1], color[2], 1.0];
 
             let center = WorldPos::new(
                 chunk_coord,
@@ -1398,26 +1493,19 @@ impl Gizmo {
         if vertices.len() < 3 {
             return Vec::new();
         }
-
-        // Simple fan triangulation (works for convex polygons)
-        // For concave polygons, you'd need a proper triangulation library
-        let mut result = Vec::new();
-        let first = vertices[0].to_render(camera, chunk_size);
-
-        for i in 1..vertices.len() - 1 {
-            let v1 = vertices[i].to_render(camera, chunk_size);
-            let v2 = vertices[i + 1].to_render(camera, chunk_size);
-            result.push(first);
-            result.push(v1);
-            result.push(v2);
-        }
+        let result = triangulate_ear_clipping(vertices, camera, chunk_size);
 
         result
     }
 }
 #[inline]
-fn flap_color(c: [f32; 3]) -> [f32; 3] {
-    [(c[0] + 1.0) * 0.5, (c[1] + 1.0) * 0.5, (c[2] + 1.0) * 0.5]
+fn flap_color(c: [f32; 4]) -> [f32; 4] {
+    [
+        (c[0] + 1.0) * 0.5,
+        (c[1] + 1.0) * 0.5,
+        (c[2] + 1.0) * 0.5,
+        c[3],
+    ]
 }
 
 /// Build orthonormal frame from direction vector
@@ -1437,7 +1525,7 @@ fn rotate_frame(side: Vec3, up_perp: Vec3, angle: f32) -> Vec3 {
 
 impl LineVtxWorld {
     #[inline]
-    pub fn new(pos: WorldPos, color: [f32; 3]) -> Self {
+    pub fn new(pos: WorldPos, color: [f32; 4]) -> Self {
         Self { pos, color }
     }
 
@@ -1449,4 +1537,158 @@ impl LineVtxWorld {
             color: self.color,
         }
     }
+}
+fn barycentric_y(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let v0x = b.x - a.x;
+    let v0z = b.z - a.z;
+    let v1x = c.x - a.x;
+    let v1z = c.z - a.z;
+    let v2x = p.x - a.x;
+    let v2z = p.z - a.z;
+
+    let denom = v0x * v1z - v1x * v0z;
+    if denom.abs() < 1e-6 {
+        return None;
+    }
+
+    let v = (v2x * v1z - v1x * v2z) / denom;
+    let w = (v0x * v2z - v2x * v0z) / denom;
+    let u = 1.0 - v - w;
+
+    if u >= 0.0 && v >= 0.0 && w >= 0.0 {
+        Some(a.y * u + b.y * v + c.y * w)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+struct P {
+    x: f32,
+    z: f32,
+}
+
+fn cross(a: P, b: P, c: P) -> f32 {
+    (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)
+}
+
+fn is_convex(prev: P, curr: P, next: P) -> bool {
+    cross(prev, curr, next) < 0.0
+}
+
+fn point_in_triangle(a: P, b: P, c: P, p: P) -> bool {
+    let c1 = cross(a, b, p);
+    let c2 = cross(b, c, p);
+    let c3 = cross(c, a, p);
+    (c1 < 0.0) && (c2 < 0.0) && (c3 < 0.0)
+}
+
+pub fn triangulate_ear_clipping(
+    vertices: &[LineVtxWorld],
+    camera: WorldPos,
+    chunk_size: ChunkSize,
+) -> Vec<LineVtxRender> {
+    let n = vertices.len();
+    if n < 3 {
+        return vec![];
+    }
+
+    let poly: Vec<P> = vertices
+        .iter()
+        .map(|v| {
+            let r = v.to_render(camera, chunk_size);
+            P {
+                x: r.pos[0],
+                z: r.pos[2],
+            }
+        })
+        .collect();
+
+    // Detect and Correct Winding Order
+
+    // Calculate signed area using the Shoelace formula.
+    // Area > 0 indicates Counter-Clockwise (CCW) in a standard coordinate system (X-right, Z-up).
+    // Area < 0 indicates Clockwise (CW).
+    let mut signed_area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        signed_area += (poly[i].x * poly[j].z) - (poly[j].x * poly[i].z);
+    }
+
+    // Your logic assumes CW winding (convex check is cross < 0).
+    // If the polygon is CCW (positive area), we reverse the indices to make it CW.
+    let mut indices: Vec<usize> = (0..n).collect();
+    if signed_area > 0.0 {
+        indices.reverse();
+    }
+
+    let mut result = Vec::new();
+    let mut guard = 0;
+
+    while indices.len() > 3 && guard < 10_000 {
+        guard += 1;
+        let mut ear_found = false;
+
+        for i in 0..indices.len() {
+            let prev_i = indices[(i + indices.len() - 1) % indices.len()];
+            let curr_i = indices[i];
+            let next_i = indices[(i + 1) % indices.len()];
+
+            let a = poly[prev_i];
+            let b = poly[curr_i];
+            let c = poly[next_i];
+
+            // This check now works correctly because we ensured CW winding above
+            if !is_convex(a, b, c) {
+                continue;
+            }
+
+            let mut contains_point = false;
+            for &j in &indices {
+                if j == prev_i || j == curr_i || j == next_i {
+                    continue;
+                }
+                // This check now works correctly because we ensured CW winding above
+                if point_in_triangle(a, b, c, poly[j]) {
+                    contains_point = true;
+                    break;
+                }
+            }
+
+            if contains_point {
+                continue;
+            }
+
+            // ear found
+            let v_a = vertices[prev_i].to_render(camera, chunk_size);
+            let v_b = vertices[curr_i].to_render(camera, chunk_size);
+            let v_c = vertices[next_i].to_render(camera, chunk_size);
+
+            result.push(v_a);
+            result.push(v_b);
+            result.push(v_c);
+
+            indices.remove(i);
+            ear_found = true;
+            break;
+        }
+
+        if !ear_found {
+            // This should theoretically not happen for valid simple polygons
+            // if winding is correct, but we keep the guard.
+            break;
+        }
+    }
+
+    if indices.len() == 3 {
+        let a = vertices[indices[0]].to_render(camera, chunk_size);
+        let b = vertices[indices[1]].to_render(camera, chunk_size);
+        let c = vertices[indices[2]].to_render(camera, chunk_size);
+
+        result.push(a);
+        result.push(b);
+        result.push(c);
+    }
+
+    result
 }

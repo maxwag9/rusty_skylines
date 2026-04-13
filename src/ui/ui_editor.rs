@@ -285,7 +285,8 @@ impl Ui {
 
         // Execute actions
         let top_hit = self.get_current_hit_for_actions();
-        if top_hit.is_some() || self.touch_manager.editor.enabled {
+        if top_hit.is_some() {
+            // || self.touch_manager.editor.enabled {
             terrain.last_picked = None;
         }
 

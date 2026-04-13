@@ -44,19 +44,23 @@ fn find_data_root() -> PathBuf {
 }
 
 fn rusty_skylines_root() -> PathBuf {
-    // 1. Prefer portable folder if it exists
+    // Prefer portable folder if it exists
     let portable = exe_dir().join("RustySkylines");
     if portable.exists() {
         return portable;
     }
 
-    // 2. Otherwise fallback to OS data dir
-    let base = dirs::data_local_dir().expect("Failed to get local data directory");
+    // If not portable, then Documents folder on systems that have it
+    let base = dirs::document_dir()
+        .or_else(dirs::data_local_dir) // if documents doesn't exist, then appdata/local or user/.local/share on Linux. Inconvenient path, I know it from Minecraft Roaming! Annoying! So I chose documents instead!
+        .expect("Failed to get documents or local data directory");
+
     let dir = base.join("RustySkylines");
 
     if let Err(e) = fs::create_dir_all(&dir) {
         eprintln!("[data_path] Failed to create app dir: {}", e);
     }
+
     dir
 }
 

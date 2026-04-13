@@ -4,7 +4,7 @@ use crate::world::camera::{ground_camera_target, resolve_pitch_by_search};
 use glam::Vec3;
 
 pub fn run_inputs(resources: &mut Resources) {
-    let world = &mut resources.world_core;
+    let world = &mut resources.world;
     let dt = world.time.target_sim_dt;
     if dt <= 0.0 {
         return;
@@ -32,6 +32,28 @@ pub fn run_inputs(resources: &mut Resources) {
 
     let right = forward.cross(Vec3::Y).normalize();
     let up = Vec3::Y;
+
+    let zooming = input.gameplay_down("Zoom");
+    if zooming {
+        cam_ctrl.zoom(
+            camera,
+            resources.ui.variables.get_f64("zoom_speed").unwrap_or(1.0) as f32,
+        );
+        resources.ui.variables.set_bool("zoomed", true);
+    } else {
+        if cam_ctrl.zoom_time_start.is_some() {
+            cam_ctrl.zoom_deactivate(); // only once
+        }
+        cam_ctrl.zoom_end(
+            camera,
+            resources
+                .ui
+                .variables
+                .get_f64("unzoom_speed")
+                .unwrap_or(1.0) as f32,
+        );
+        resources.ui.variables.set_bool("zoomed", false);
+    }
 
     let mut wish = Vec3::ZERO;
     if !resources.settings.editor_mode && !resources.settings.drive_car {

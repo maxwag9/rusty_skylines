@@ -13,7 +13,7 @@ pub fn cursor_system(cursor: &mut Cursor, event: &Command, variables: &mut Varia
     }
 }
 pub fn run_commands(resources: &mut Resources) {
-    let world = &mut resources.world_core;
+    let world = &mut resources.world;
     world.events.flip();
 
     for event in world.events.drain() {
@@ -22,7 +22,7 @@ pub fn run_commands(resources: &mut Resources) {
         cursor_system(
             &mut world.terrain.cursor,
             &event,
-            &mut resources.ui_loader.variables,
+            &mut resources.ui.variables,
         );
         // later:
         // audio_event_system(...)

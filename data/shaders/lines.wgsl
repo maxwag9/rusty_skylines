@@ -13,13 +13,13 @@ struct PickUniform {
 //var<uniform> pick: PickUniform;
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    @location(0) color: vec4<f32>,
     @location(1) curr_clip: vec4<f32>,
     @location(2) prev_clip: vec4<f32>,
 };
 
 @vertex
-fn vs_main(@location(0) pos: vec3<f32>, @location(1) color: vec3<f32>) -> VSOut {
+fn vs_main(@location(0) pos: vec3<f32>, @location(1) color: vec4<f32>) -> VSOut {
     var out: VSOut;
     let clip = uniforms.view_proj * vec4<f32>(pos, 1.0);
     out.pos = clip;
@@ -40,7 +40,7 @@ struct FragOut {
 @fragment
 fn fs_main(in: VSOut) -> FragOut {
     var out: FragOut;
-    out.color = vec4<f32>(in.color, 1.0);
+    out.color = in.color;
 
     let curr_ndc = in.curr_clip.xy / in.curr_clip.w;
     let prev_ndc = in.prev_clip.xy / in.prev_clip.w;

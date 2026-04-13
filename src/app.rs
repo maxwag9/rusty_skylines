@@ -1,6 +1,7 @@
 use crate::data::Cycle;
 use crate::helpers::paths::{data_dir, next_screenshot_path};
 use crate::resources::Resources;
+use crate::simulation::update_picked_pos;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
@@ -53,7 +54,7 @@ impl App {
 impl ApplicationHandler for App {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
         if let Some(resources) = self.resources.as_mut() {
-            let world = &mut resources.world_core;
+            let world = &mut resources.world;
             let input = &mut world.input;
             let time = &world.time;
             input.mouse.delta = Vec2::ZERO;
@@ -61,16 +62,10 @@ impl ApplicationHandler for App {
             let pos = input.mouse.pos;
             let delta = input.mouse.delta;
 
-            resources.ui_loader.variables.set_f64("mouse_pos.x", pos.x);
-            resources
-                .ui_loader
-                .variables
-                .set_f64("mouse_pos_delta.x", delta.x);
-            resources.ui_loader.variables.set_f64("mouse_pos.y", pos.y);
-            resources
-                .ui_loader
-                .variables
-                .set_f64("mouse_pos_delta.y", delta.y);
+            resources.ui.variables.set_f64("mouse_pos.x", pos.x);
+            resources.ui.variables.set_f64("mouse_pos_delta.x", delta.x);
+            resources.ui.variables.set_f64("mouse_pos.y", pos.y);
+            resources.ui.variables.set_f64("mouse_pos_delta.y", delta.y);
         }
     }
 
@@ -86,15 +81,15 @@ impl ApplicationHandler for App {
         );
 
         let mut resources = Resources::new(window.clone(), event_loop);
-        let world = &mut resources.world_core;
+        let world = &mut resources.world;
         let time = &mut world.time;
         time.set_tps(resources.settings.target_tps.max(1.0));
         time.set_fps(resources.settings.target_fps.max(1.0));
         resources
-            .ui_loader
+            .ui
             .variables
             .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
-        resources.ui_loader.variables.set_array(
+        resources.ui.variables.set_array(
             "screen",
             vec![window.inner_size().width, window.inner_size().height],
         );
@@ -126,11 +121,12 @@ impl ApplicationHandler for App {
                 let Some(resources) = self.resources.as_mut() else {
                     return;
                 };
-                let world = &mut resources.world_core;
-                let camera = &world.world_state.camera;
-                let variables = &mut resources.ui_loader.variables;
+                let world = &mut resources.world;
+                let camera = &mut world.world_state.camera;
+                let cam_ctrl = &mut world.world_state.cam_controller;
+                let variables = &mut resources.ui.variables;
                 let settings = &mut resources.settings;
-                let ui_options = &mut resources.ui_loader.touch_manager.options;
+                let ui_options = &mut resources.ui.touch_manager.options;
                 let input = &mut world.input;
                 let time = &world.time;
                 let down = event.state == ElementState::Pressed;
@@ -187,7 +183,7 @@ impl ApplicationHandler for App {
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
                     settings.editor_mode = !settings.editor_mode;
-                    resources.ui_loader.touch_manager.editor.enabled = settings.editor_mode;
+                    resources.ui.touch_manager.editor.enabled = settings.editor_mode;
                     variables.set_bool("editor_mode", settings.editor_mode);
                     settings.show_world = !settings.editor_mode;
                     variables.set_bool("show_world", settings.show_world);
@@ -221,7 +217,7 @@ impl ApplicationHandler for App {
                     ui_options.override_mode = settings.override_mode;
                     variables.set_bool("override_mode", settings.override_mode);
                     settings.editor_mode = false;
-                    resources.ui_loader.touch_manager.editor.enabled = settings.editor_mode;
+                    resources.ui.touch_manager.editor.enabled = settings.editor_mode;
                     variables.set_bool("editor_mode", settings.editor_mode)
                 }
                 if input.action_repeat("Screenshot") {
@@ -318,7 +314,7 @@ impl ApplicationHandler for App {
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
-                    match resources.ui_loader.save_gui_to_file(
+                    match resources.ui.save_gui_to_file(
                         data_dir("ui_data/menus"),
                         data_dir("ui_data/menus/advanced_primitives"),
                         resources.window.inner_size(),
@@ -338,7 +334,7 @@ impl ApplicationHandler for App {
                             menu_name: "Debug_Menu".to_string(),
                         });
                 }
-                let main_menu_active = resources.ui_loader.menus.get("MainMenu").unwrap().active;
+                let main_menu_active = resources.ui.menus.get("MainMenu").unwrap().active;
 
                 if !main_menu_active && input.action_released("Exit to Main Menu") {
                     let cmds: Vec<UiCommand> = vec![
@@ -376,18 +372,17 @@ impl ApplicationHandler for App {
                 }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
-                    && resources.ui_loader.touch_manager.editor.enabled
+                    && resources.ui.touch_manager.editor.enabled
                 {
-                    if let Some(sel) = resources.ui_loader.touch_manager.selection.selected.first()
-                    {
-                        resources.ui_loader.ui_edit_manager.execute_command(
+                    if let Some(sel) = resources.ui.touch_manager.selection.selected.first() {
+                        resources.ui.ui_edit_manager.execute_command(
                             CreateElementCommand {
                                 affected_element: sel.clone(),
                                 element: Circle(UiButtonCircle::default()),
                             },
-                            &mut resources.ui_loader.touch_manager,
-                            &mut resources.ui_loader.menus,
-                            &mut resources.ui_loader.variables,
+                            &mut resources.ui.touch_manager,
+                            &mut resources.ui.menus,
+                            &mut resources.ui.variables,
                             &input.mouse,
                         )
                     }
@@ -396,34 +391,25 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseInput { state, button, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources
-                        .world_core
-                        .input
-                        .handle_mouse_button(button, state);
+                    resources.world.input.handle_mouse_button(button, state);
                 }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let input = &mut resources.world_core.input;
+                    let input = &mut resources.world.input;
                     input.handle_mouse_move(position.x, position.y);
 
                     let pos = input.mouse.pos;
                     let delta = input.mouse.delta;
 
-                    resources.ui_loader.variables.set_f64("mouse_pos.x", pos.x);
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_f64("mouse_pos_delta.x", delta.x);
-                    resources.ui_loader.variables.set_f64("mouse_pos.y", pos.y);
-                    resources
-                        .ui_loader
-                        .variables
-                        .set_f64("mouse_pos_delta.y", delta.y);
+                    resources.ui.variables.set_f64("mouse_pos.x", pos.x);
+                    resources.ui.variables.set_f64("mouse_pos_delta.x", delta.x);
+                    resources.ui.variables.set_f64("mouse_pos.y", pos.y);
+                    resources.ui.variables.set_f64("mouse_pos_delta.y", delta.y);
                     // camera rotation ONLY if needed & dragging
                     if input.mouse.buttons.middle.pressed {
-                        let cam_controller = &mut resources.world_core.world_state.cam_controller;
+                        let cam_controller = &mut resources.world.world_state.cam_controller;
                         let pitch_s = 0.002;
                         let yaw_s = 0.0016;
 
@@ -438,10 +424,10 @@ impl ApplicationHandler for App {
 
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let scroll = resources.world_core.input.handle_mouse_wheel(delta);
+                    let scroll = resources.world.input.handle_mouse_wheel(delta);
 
                     if !resources.settings.editor_mode {
-                        let cam_controller = &mut resources.world_core.world_state.cam_controller;
+                        let cam_controller = &mut resources.world.world_state.cam_controller;
                         let zoom_factor = 10.0;
                         cam_controller.zoom_velocity -= scroll.y * zoom_factor;
                     }
@@ -449,22 +435,18 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.render_core.resize(
-                        &resources.surface,
-                        size,
-                        &mut resources.ui_loader,
-                    );
+                    resources
+                        .render_core
+                        .resize(&resources.surface, size, &mut resources.ui);
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(resources) = self.resources.as_mut() {
                     let size = resources.window.inner_size(); // << get the real physical size
                     if size.width > 0 && size.height > 0 {
-                        resources.render_core.resize(
-                            &resources.surface,
-                            size,
-                            &mut resources.ui_loader,
-                        );
+                        resources
+                            .render_core
+                            .resize(&resources.surface, size, &mut resources.ui);
                     }
                 }
             }
@@ -486,41 +468,41 @@ impl ApplicationHandler for App {
                 let mut steps = 0u32;
 
                 // If speed just changed, skip sim this frame for clean transition
-                if !resources.world_core.time.speed_just_changed {
+                if !resources.world.time.speed_just_changed {
                     resources
-                        .world_core
+                        .world
                         .time
                         .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
 
                     let sim_budget = Duration::from_secs_f32(
-                        (resources.world_core.time.target_frametime * 0.6).max(0.0),
+                        (resources.world.time.target_frametime * 0.6).max(0.0),
                     );
                     let sim_deadline = Instant::now() + sim_budget;
 
-                    while resources.world_core.time.can_step_sim()
+                    while resources.world.time.can_step_sim()
                         && (steps as usize) < MAX_SIM_STEPS_PER_FRAME
                         && Instant::now() < sim_deadline
                     {
                         run_sim(resources);
-                        resources.world_core.time.consume_sim_step();
+                        resources.world.time.consume_sim_step();
                         steps += 1;
                     }
                 }
 
                 // Update achieved speed (windowed measurement)
-                resources.world_core.time.update_achieved_speed(steps);
-                resources.ui_loader.variables.set_f64(
-                    "achieved_time_speed",
-                    resources.world_core.time.achieved_speed,
-                );
+                resources.world.time.update_achieved_speed(steps);
+                resources
+                    .ui
+                    .variables
+                    .set_f64("achieved_time_speed", resources.world.time.achieved_speed);
 
                 // Render
                 {
-                    let camera = &resources.world_core.world_state.camera;
+                    let camera = &resources.world.world_state.camera;
                     let proj = camera.proj();
-                    resources.world_core.world_state.update(
-                        &mut resources.ui_loader,
-                        &resources.world_core.time,
+                    resources.world.world_state.update(
+                        &mut resources.ui,
+                        &resources.world.time,
                         &resources.settings,
                         proj,
                     );
@@ -533,7 +515,7 @@ impl ApplicationHandler for App {
                 // FPS cap
                 let elapsed = frame_start.elapsed();
                 let target =
-                    Duration::from_secs_f32(resources.world_core.time.target_frametime.max(0.0));
+                    Duration::from_secs_f32(resources.world.time.target_frametime.max(0.0));
                 if target > Duration::ZERO && elapsed < target {
                     thread::sleep(target - elapsed);
                 }
@@ -545,8 +527,8 @@ impl ApplicationHandler for App {
 
             WindowEvent::Focused(false) | WindowEvent::Focused(true) => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let input = &mut resources.world_core.input;
-                    let time = &mut resources.world_core.time;
+                    let input = &mut resources.world.input;
+                    let time = &mut resources.world.time;
                     input.reset_all(time.total_time);
                 }
             }
@@ -558,9 +540,10 @@ impl ApplicationHandler for App {
 
 fn update_time(resources: &mut Resources) {
     let Resources {
-        world_core,
+        world,
         settings,
-        ui_loader,
+        ui,
+        render_core,
         ..
     } = resources;
     let World {
@@ -568,9 +551,21 @@ fn update_time(resources: &mut Resources) {
         time,
         input,
         simulation,
+        terrain,
         ..
-    } = world_core;
-
+    } = world;
+    update_picked_pos(
+        terrain,
+        &world_state.camera,
+        settings,
+        &render_core.config,
+        input,
+    );
+    terrain.make_pick_uniforms(
+        &render_core.queue,
+        &render_core.pipelines.buffers.pick,
+        &world_state.camera,
+    );
     let can_time_control = !settings.editor_mode && !settings.drive_car && settings.show_world;
 
     if can_time_control && input.action_pressed_once("Toggle Stop Time") {
@@ -595,15 +590,12 @@ fn update_time(resources: &mut Resources) {
         time_speed = 0.0;
     }
 
-    resources
-        .ui_loader
-        .variables
-        .set_f64("time_speed", time_speed);
+    resources.ui.variables.set_f64("time_speed", time_speed);
 
     time.begin_frame(time_speed);
 
     {
-        let ui = &mut resources.ui_loader;
+        let ui = &mut resources.ui;
         ui.variables.set_f64("fps", time.render_fps);
         ui.variables.set_f64("render_dt", time.render_dt);
         ui.variables.set_f64("sim_dt", time.target_sim_dt);

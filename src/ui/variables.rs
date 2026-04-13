@@ -3,6 +3,8 @@ use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::{Astronomy, TimeScales};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 pub struct Variables {
     vars: HashMap<String, Value>,
@@ -362,4 +364,85 @@ pub fn update_ui_variables(
     ui_loader
         .variables
         .set_bool("reversed_depth_z", settings.reversed_depth_z);
+}
+
+pub fn load_colors(path: PathBuf, settings: &Settings, vars: &mut Variables) {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[colors] Failed to read file: {}", e);
+            return;
+        }
+    };
+    let mut keys: Vec<&str> = Vec::new();
+    for (line_idx, line) in content.lines().enumerate() {
+        let line = line.trim();
+
+        // skip empty lines and comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let (key, value_str) = match line.split_once(':') {
+            Some((k, v)) => (k.trim(), v.trim()),
+            None => {
+                eprintln!("[colors] Invalid line {}: '{}'", line_idx + 1, line);
+                continue;
+            }
+        };
+        keys.push(key);
+        let value = Value::from_str(settings, vars, value_str);
+        match &value {
+            Value::Array(_) => {}
+            _ => {
+                eprintln!(
+                    "[colors] Failed to parse value for '{}': {}  From: {}",
+                    key, value, value_str
+                );
+                continue;
+            }
+        };
+        let out = match value.as_color4() {
+            Some(c) => c,
+            None => {
+                eprintln!(
+                    "[colors] '{}' must have 3 or 4 elements in F64 format (WITH a DOT '.' and decimal like 0.0!)",
+                    key
+                );
+                continue;
+            }
+        };
+
+        vars.set_array(key, out);
+    }
+    vars.set_array("color_keys", keys)
+}
+
+pub fn save_colors(path: PathBuf, vars: &Variables) {
+    let mut out = String::new();
+    for key in vars.get_array("color_keys").into_iter().flatten() {
+        let key = match key {
+            Value::String(key) => key.as_str(),
+            _ => continue,
+        };
+        let color = match vars.get(key) {
+            None => continue,
+            Some(value) => value.as_color4().unwrap_or([1.0, 0.0, 1.0, 1.0]),
+        };
+        if (color[3] - 1.0).abs() < f32::EPSILON {
+            out.push_str(&format!(
+                "{}: [{}, {}, {}]\n",
+                key, color[0], color[1], color[2]
+            ));
+        } else {
+            out.push_str(&format!(
+                "{}: [{}, {}, {}, {}]\n",
+                key, color[0], color[1], color[2], color[3]
+            ));
+        }
+    }
+
+    if let Err(e) = fs::write(path, out) {
+        eprintln!("[colors] Failed to write file: {}", e);
+    }
 }

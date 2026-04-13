@@ -25,12 +25,19 @@ layers:
         roundness: 0.0
         border_thickness_percentage: 0.01
         fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: false
           editable: true
       - !Text
         id: ping_pong_text
+        actions: [ ]
         x: 0.5
         y: 0.07
         pt: 25.0
@@ -40,10 +47,6 @@ layers:
           - 1.0
           - 1.0
         text: Ping Pong in Rusty Skylines UI!
-        misc:
-          active: true
-          pressable: true
-          editable: true
       - !Text
         id: back_text
         actions:
@@ -88,6 +91,7 @@ layers:
         text: Make ball slower...
       - !Text
         id: home_score_text
+        actions: [ ]
         x: 0.05
         y: 0.02
         pt: 16.0
@@ -96,14 +100,15 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: "Home Score: {ball.home_score}"
+        text: 'Home Score: {ball.home_score}'
         misc:
           active: true
           pressable: false
           editable: true
       - !Text
         id: visitor_score_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.02
         pt: 16.0
         color:
@@ -111,7 +116,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: "Visitor Score: {ball.visitor_score}"
+        text: 'Visitor Score: {ball.visitor_score}'
         misc:
           active: true
           pressable: false
@@ -123,26 +128,13 @@ layers:
       - !Circle
         id: ball
         actions:
-          # Movement
           - on:n button:a set(self.center.x, self.center.x + ball.velocity.x * ball.speed)
           - on:n button:a set(self.center.y, self.center.y + ball.velocity.y * ball.speed)
-
-          # Top / Bottom bounce
           - on:n button:a if(self.center.y < self.radius, if(ball.velocity.y * ball.speed < 0, set(ball.velocity.y, -ball.velocity.y)))
           - on:n button:a if(self.center.y > screen.y - self.radius, if(ball.velocity.y * ball.speed > 0, set(ball.velocity.y, -ball.velocity.y)))
-          # Paddle collisions
           - on:n button:a if(self.center.x - self.radius < left_paddle.center.x + left_paddle.size.x*0.5 && self.center.x + self.radius > left_paddle.center.x - left_paddle.size.x*0.5 && self.center.y > left_paddle.center.y - left_paddle.size.y*0.5 && self.center.y < left_paddle.center.y + left_paddle.size.y*0.5 && ball.velocity.x < 0, set(ball.velocity.x, -ball.velocity.x))
           - on:n button:a if(self.center.x - self.radius < right_paddle.center.x + right_paddle.size.x*0.5 && self.center.x + self.radius > right_paddle.center.x - right_paddle.size.x*0.5 && self.center.y > right_paddle.center.y - right_paddle.size.y*0.5 && self.center.y < right_paddle.center.y + right_paddle.size.y*0.5 && ball.velocity.x > 0, set(ball.velocity.x, -ball.velocity.x))
-
-          # Scoring
-          - on:n button:a if(self.center.x < 0, set(ball.visitor_score, ball.visitor_score + 1);
-            set(ball.velocity.x, 1.5);
-            set(ball.velocity.y, random(-1.5, 1.5));
-            set(self.center.x, screen.x * 0.5);
-            set(self.center.y, screen.y * 0.5);
-            )
-
-
+          - on:n button:a if(self.center.x < 0, set(ball.visitor_score, ball.visitor_score + 1); set(ball.velocity.x, 1.5); set(ball.velocity.y, random(-1.5, 1.5)); set(self.center.x, screen.x * 0.5); set(self.center.y, screen.y * 0.5); )
           - on:n button:a if(self.center.x > screen.x, inc(ball.home_score, 1))
           - on:n button:a if(self.center.x > screen.x, set(ball.velocity.x, -1.5))
           - on:n button:a if(self.center.x > screen.x, set(ball.velocity.y, random(-1.5, 1.5)))
@@ -152,8 +144,16 @@ layers:
         x: 0.6
         y: 0.5
         radius: 0.02804
-        fill_color: [ 0.5, 0.5, 0.5, 0.98 ]
-        glow_color: [ 0.2, 0.0, 0.7, 0.98 ]
+        fill_color:
+          - 0.5
+          - 0.5
+          - 0.5
+          - 0.98
+        glow_color:
+          - 0.2
+          - 0.0
+          - 0.7
+          - 0.98
         glow_misc:
           glow_size: 40.0
           glow_speed: 5.0
@@ -162,7 +162,6 @@ layers:
           active: true
           pressable: false
           editable: true
-
       - !Rect
         id: left paddle
         actions:
@@ -173,13 +172,27 @@ layers:
         x: 0.02
         y: 0.5
         w: 0.02
-        h: 0.20
+        h: 0.2
         rotation: 0.0
-        color: [ 0.5, 1.0, 0.5, 1.0 ]
-        border_color: [ 0.0, 0.0, 0.0, 1.0 ]
+        color:
+          - 0.5
+          - 1.0
+          - 0.5
+          - 1.0
+        border_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        texture: null
         roundness: 0.3
         border_thickness_percentage: 0.01
-        glow_color: [ 0.2, 0.7, 0.2, 0.98 ]
+        fade: 0.0
+        glow_color:
+          - 0.2
+          - 0.7
+          - 0.2
+          - 0.98
         glow_misc:
           glow_size: 30.0
           glow_speed: 4.0
@@ -188,7 +201,6 @@ layers:
           active: true
           pressable: false
           editable: true
-
       - !Rect
         id: right paddle
         actions:
@@ -199,13 +211,27 @@ layers:
         x: 0.98
         y: 0.5
         w: 0.02
-        h: 0.20
+        h: 0.2
         rotation: 0.0
-        color: [ 1.0, 0.5, 0.5, 1.0 ]
-        border_color: [ 0.0, 0.0, 0.0, 1.0 ]
+        color:
+          - 1.0
+          - 0.5
+          - 0.5
+          - 1.0
+        border_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        texture: null
         roundness: 0.3
         border_thickness_percentage: 0.01
-        glow_color: [ 0.7, 0.0, 0.2, 0.98 ]
+        fade: 0.0
+        glow_color:
+          - 0.7
+          - 0.0
+          - 0.2
+          - 0.98
         glow_misc:
           glow_size: 30.0
           glow_speed: 4.0

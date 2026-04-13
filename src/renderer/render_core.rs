@@ -19,7 +19,6 @@ use crate::renderer::shadows::{
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::Time;
-use crate::simulation::update_picked_pos;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
@@ -244,8 +243,6 @@ impl Renderer {
 
         let (view, proj, view_proj) = camera.matrices();
         let prev_view_proj = camera.prev_view_proj;
-        update_picked_pos(terrain, camera, settings, &self.config, &world_core.input);
-        terrain.make_pick_uniforms(&self.queue, &self.pipelines.buffers.pick, &camera);
         self.render_manager.update_depth_params(DepthDebugParams {
             near: camera.near,
             far: camera.far,
@@ -317,7 +314,7 @@ impl Renderer {
         settings: &Settings,
         input: &mut Input,
         time: &Time,
-        ui_loader: &mut Ui,
+        ui: &mut Ui,
         terrain: &mut Terrain,
         roads: &Roads,
         cars: &Cars,
@@ -326,19 +323,14 @@ impl Renderer {
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
-        ui_loader
-            .variables
-            .set_i64("target_pos_cx", camera.target.chunk.x);
-        ui_loader
-            .variables
-            .set_i64("target_pos_cz", camera.target.chunk.z);
-        ui_loader
-            .variables
+        ui.variables.set_i64("target_pos_cx", camera.target.chunk.x);
+        ui.variables.set_i64("target_pos_cz", camera.target.chunk.z);
+        ui.variables
             .set_array("target_pos", target_pos_render.to_array());
-        buildings.update(terrain, roads, input, &mut self.gizmo);
+        buildings.update(terrain, roads, input, &mut self.gizmo, &ui.variables);
         self.props.place_props(terrain, input, &self.device);
         self.ui_renderer.update(
-            ui_loader,
+            ui,
             time,
             input,
             &self.queue,

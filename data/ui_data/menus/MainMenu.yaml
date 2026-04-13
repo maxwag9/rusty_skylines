@@ -25,6 +25,12 @@ layers:
         roundness: 0.2
         border_thickness_percentage: 0.01
         fade: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
         misc:
           active: true
           pressable: false
@@ -48,10 +54,6 @@ layers:
           - 1.0
           - 1.0
         text: Play
-        misc:
-          active: true
-          pressable: true
-          editable: true
       - !Text
         id: settings_text
         actions:
@@ -138,7 +140,7 @@ layers:
         actions:
           - on:r delete(self.menu, self.layer, heytherewhatsupduped)
         x: 0.1
-        y: 0.50
+        y: 0.5
         pt: 18.0
         color:
           - 1.0

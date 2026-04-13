@@ -144,15 +144,7 @@ impl WorldPos {
     }
 
     pub fn add_render_offset(self, v: Vec3, chunk_size: ChunkSize) -> Self {
-        WorldPos {
-            chunk: self.chunk,
-            local: LocalPos {
-                x: self.local.x + v.x,
-                y: self.local.y + v.y,
-                z: self.local.z + v.z,
-            },
-        }
-        .normalize(chunk_size)
+        self.add_vec3(v, chunk_size)
     }
 
     #[inline]
