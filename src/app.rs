@@ -124,9 +124,9 @@ impl ApplicationHandler for App {
                 let world = &mut resources.world;
                 let camera = &mut world.world_state.camera;
                 let cam_ctrl = &mut world.world_state.cam_controller;
-                let variables = &mut resources.ui.variables;
+                let ui = &mut resources.ui;
                 let settings = &mut resources.settings;
-                let ui_options = &mut resources.ui.touch_manager.options;
+                let ui_options = &mut ui.touch_manager.options;
                 let input = &mut world.input;
                 let time = &world.time;
                 let down = event.state == ElementState::Pressed;
@@ -183,42 +183,44 @@ impl ApplicationHandler for App {
                 // Toggle editor mode
                 if input.action_repeat("Toggle editor mode") {
                     settings.editor_mode = !settings.editor_mode;
-                    resources.ui.touch_manager.editor.enabled = settings.editor_mode;
-                    variables.set_bool("editor_mode", settings.editor_mode);
+                    ui.touch_manager.editor.enabled = settings.editor_mode;
+                    ui.variables.set_bool("editor_mode", settings.editor_mode);
                     settings.show_world = !settings.editor_mode;
-                    variables.set_bool("show_world", settings.show_world);
+                    ui.variables.set_bool("show_world", settings.show_world);
                     settings.show_gui = true;
-                    variables.set_bool("show_gui", settings.show_gui);
+                    ui.variables.set_bool("show_gui", settings.show_gui);
                 }
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
                     settings.override_mode = !settings.override_mode;
                     ui_options.override_mode = settings.override_mode;
-                    variables.set_bool("override_mode", settings.override_mode)
+                    ui.variables
+                        .set_bool("override_mode", settings.override_mode)
                 }
                 if input.action_repeat("Toggle show world") {
                     settings.show_world = !settings.show_world;
-                    variables.set_bool("show_world", settings.show_world);
+                    ui.variables.set_bool("show_world", settings.show_world);
                 }
                 if input.action_repeat("Toggle drive car") {
                     settings.drive_car = !settings.drive_car;
-                    variables.set_bool("drive_car", settings.drive_car);
+                    ui.variables.set_bool("drive_car", settings.drive_car);
                 }
                 if input.action_repeat("Toggle noclip") {
                     settings.noclip = !settings.noclip;
-                    variables.set_bool("noclip", settings.noclip);
+                    ui.variables.set_bool("noclip", settings.noclip);
                 }
                 // Toggle show_gui
                 if input.action_repeat("Toggle show gui") {
                     settings.show_gui = !settings.show_gui;
                     ui_options.show_gui = settings.show_gui;
-                    variables.set_bool("show_gui", settings.show_gui);
+                    ui.variables.set_bool("show_gui", settings.show_gui);
                     settings.override_mode = false;
                     ui_options.override_mode = settings.override_mode;
-                    variables.set_bool("override_mode", settings.override_mode);
+                    ui.variables
+                        .set_bool("override_mode", settings.override_mode);
                     settings.editor_mode = false;
-                    resources.ui.touch_manager.editor.enabled = settings.editor_mode;
-                    variables.set_bool("editor_mode", settings.editor_mode)
+                    ui.touch_manager.editor.enabled = settings.editor_mode;
+                    ui.variables.set_bool("editor_mode", settings.editor_mode)
                 }
                 if input.action_repeat("Screenshot") {
                     let view = &resources.render_core.pipelines.resolved.tonemapped;
@@ -314,7 +316,7 @@ impl ApplicationHandler for App {
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
-                    match resources.ui.save_gui_to_file(
+                    match ui.save_gui_to_file(
                         data_dir("ui_data/menus"),
                         data_dir("ui_data/menus/advanced_primitives"),
                         resources.window.inner_size(),
@@ -333,6 +335,8 @@ impl ApplicationHandler for App {
                         .push(UiCommand::ToggleMenu {
                             menu_name: "Debug_Menu".to_string(),
                         });
+                    let debug_menu_active = ui.menus.get("Debug_Menu").unwrap().active;
+                    ui.variables.set_bool("debug_mode", debug_menu_active);
                 }
                 let main_menu_active = resources.ui.menus.get("MainMenu").unwrap().active;
 

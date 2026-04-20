@@ -5,6 +5,7 @@ use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
 use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualizationConfig};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
+use crate::ui::ui_editor::Ui;
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld};
 use crate::world::buildings::zoning::point_inside_polygon;
 use crate::world::camera::Camera;
@@ -401,6 +402,7 @@ impl Gizmo {
         origin: WorldPos,
         scale: f32,
         sun_dir: Vec3,
+        moon_dir: Vec3,
         thickness: f32,
         duration: f32,
     ) {
@@ -411,6 +413,15 @@ impl Gizmo {
             origin,
             sun_end,
             [1.0, 1.0, 0.0, 1.0],
+            false,
+            thickness,
+            duration,
+        );
+        let moon_end = origin.add_vec3(moon_dir.normalize_or_zero() * scale, cs);
+        self.arrow(
+            origin,
+            moon_end,
+            [1.0, 1.0, 1.0, 1.0],
             false,
             thickness,
             duration,
@@ -603,8 +614,6 @@ impl Gizmo {
         if points.len() < 3 {
             return;
         }
-
-        let cs = self.chunk_size;
 
         let verts: Vec<LineVtxWorld> = points
             .iter()
@@ -998,15 +1007,21 @@ impl Gizmo {
     }
     pub fn update_orbit_gizmo(
         &mut self,
+        ui: &mut Ui,
         target: WorldPos,
         orbit_radius: f32,
         sun_direction: Vec3,
+        moon_direction: Vec3,
         scale_with_orbit: bool,
     ) {
-        let scale = scale_with_orbit
-            .then_some(orbit_radius * 0.1)
-            .unwrap_or(1.0);
-        self.axes_with_sun(target, scale, sun_direction, 0.0, 0.0);
+        let debug_menu_active = ui.menus.get("Debug_Menu").unwrap().active;
+        ui.variables.set_bool("debug_mode", debug_menu_active);
+        if debug_menu_active {
+            let scale = scale_with_orbit
+                .then_some(orbit_radius * 0.1)
+                .unwrap_or(1.0);
+            self.axes_with_sun(target, scale, sun_direction, moon_direction, 0.0, 0.0);
+        }
     }
 
     /// Draw a 3D wireframe axis-aligned bounding box
@@ -1264,7 +1279,7 @@ impl Gizmo {
         let chunk_size_f = cs as f32;
         let duration = 2.0; // Visible for 2 seconds (matches tick interval)
 
-        for (i, &chunk_coord) in updated_chunks.iter().enumerate() {
+        for &chunk_coord in updated_chunks.iter() {
             // Rainbow color based on chunk position + time for variety
             let hash = (chunk_coord.x.wrapping_mul(73856093) ^ chunk_coord.z.wrapping_mul(19349663))
                 as f32;
@@ -1390,7 +1405,7 @@ impl Gizmo {
         vertices: &[LineVtxWorld],
         thickness: f32,
         eye: WorldPos,
-        camera: &Camera,
+        _camera: &Camera,
         chunk_size: ChunkSize,
     ) -> Vec<LineVtxRender> {
         let mut result = Vec::new();
@@ -1538,7 +1553,7 @@ impl LineVtxWorld {
         }
     }
 }
-fn barycentric_y(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+pub fn barycentric_y(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let v0x = b.x - a.x;
     let v0z = b.z - a.z;
     let v1x = c.x - a.x;

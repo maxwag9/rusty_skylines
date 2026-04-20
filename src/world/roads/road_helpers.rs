@@ -1,7 +1,7 @@
 use crate::helpers::positions::{ChunkSize, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{IntersectionBuildParams, IntersectionPolygon};
-use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
+use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId, Edges};
 use crate::world::roads::road_structs::{NodeId, RoadStyleParams, StructureType};
 use crate::world::roads::roads::RoadCommand;
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -136,7 +136,7 @@ pub fn push_intersection_for_node(
 }
 
 pub fn clip_ribbon_edges_to_polygon(
-    edges: &mut [(WorldPos, WorldPos)],
+    edges: &mut Edges,
     poly: &IntersectionPolygon,
     at_start: bool,
     gizmo: &mut Gizmo,
@@ -154,21 +154,27 @@ pub fn clip_ribbon_edges_to_polygon(
         (n - 1, 0.max(n.saturating_sub(6)))
     };
 
-    let (left_near, right_near) = edges[idx_near];
-    let (left_far, right_far) = edges[idx_far];
+    let (left_near, right_near) = edges.get(idx_near);
+    let (left_far, right_far) = edges.get(idx_far);
 
     // Cast ray from FAR point through NEAR point, find first polygon hit
-    let new_left = ray_to_polygon(left_far, left_near, poly, gizmo).unwrap_or(left_near);
-    let new_right = ray_to_polygon(right_far, right_near, poly, gizmo).unwrap_or(right_near);
+    if let (Some(left_near), Some(left_far), Some(right_near), Some(right_far)) =
+        (left_near, left_far, right_near, right_far)
+    {
+        let new_left = ray_to_polygon(left_far, left_near, poly, gizmo).unwrap_or(*left_near);
 
-    edges[idx_near] = (new_left, new_right);
+        let new_right = ray_to_polygon(right_far, right_near, poly, gizmo).unwrap_or(*right_near);
+
+        edges.left_points[idx_near] = new_left;
+        edges.right_points[idx_near] = new_right;
+    }
 }
 
 /// Cast ray from `from` through `through` and beyond, find first polygon intersection.
 /// Ray extends far beyond 'through' to find distant intersections.
 pub fn ray_to_polygon(
-    from: WorldPos,
-    through: WorldPos,
+    from: &WorldPos,
+    through: &WorldPos,
     poly: &IntersectionPolygon,
     gizmo: &mut Gizmo,
 ) -> Option<WorldPos> {
@@ -178,7 +184,7 @@ pub fn ray_to_polygon(
     }
 
     // Direction from 'from' to 'through'
-    let dir = through.to_render_pos(from, gizmo.chunk_size);
+    let dir = through.to_render_pos(*from, gizmo.chunk_size);
     let len_sq = dir.x * dir.x + dir.z * dir.z;
 
     if len_sq < 1e-6 {
@@ -202,7 +208,7 @@ pub fn ray_to_polygon(
         let edge = b.to_render_pos(a, gizmo.chunk_size);
 
         // Vector from 'from' to edge start
-        let to_seg = a.to_render_pos(from, gizmo.chunk_size);
+        let to_seg = a.to_render_pos(*from, gizmo.chunk_size);
 
         let cross = ray_dir.x * edge.z - ray_dir.z * edge.x;
         if cross.abs() < 1e-10 {
@@ -221,15 +227,15 @@ pub fn ray_to_polygon(
         }
     }
 
-    if let Some(hit) = best_hit {
-        //gizmo.cross(hit, 10.0, [0.0, 0.0, 1.0], 50.0);
+    if let Some(_hit) = best_hit {
+        //gizmo.cross(_hit, 10.0, [0.0, 0.0, 1.0], 50.0);
     }
 
     best_hit
 }
 
 /// Find intersection point of two segments (XZ plane).
-pub fn segment_intersection_xz(
+pub fn _segment_intersection_xz(
     a1: WorldPos,
     a2: WorldPos,
     b1: WorldPos,
@@ -307,6 +313,6 @@ pub fn tangent_and_lateral_right(
     };
 
     let lateral_right = tangent.cross(Vec3::Y).normalize_or_zero();
-    // equivalent to: Vec3::new(tangent.z, 0.0, -tangent.x)
+    // equivalent to: Vec3::new(-tangent.z, 0.0, tangent.x)
     (tangent, lateral_right)
 }

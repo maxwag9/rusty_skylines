@@ -552,10 +552,9 @@ pub struct IntersectionMeshResult {
 #[derive(Clone, Debug)]
 pub struct IntersectionBuildParams {
     pub turn_samples: usize,
-    pub turn_tightness: f32,
     pub round_corners: bool,
     pub simplify_tolerance: f32,
-    pub road_type: RoadType,
+    pub road_type_id: RoadTypeId,
 
     pub corner_radius: f32,
     pub corner_segments: usize, // ← More intuitive! e.g., 8 = smooth, 16 = very smooth
@@ -565,10 +564,9 @@ impl Default for IntersectionBuildParams {
     fn default() -> Self {
         Self {
             turn_samples: 12,
-            turn_tightness: 1.0,
             round_corners: false,
             simplify_tolerance: 0.1,
-            road_type: Default::default(),
+            road_type_id: Default::default(),
             corner_radius: 1.5,
             corner_segments: 8,
         }
@@ -577,10 +575,8 @@ impl Default for IntersectionBuildParams {
 
 impl IntersectionBuildParams {
     pub fn from_style(style: &RoadStyleParams) -> Self {
-        let road_type = style.road_type();
         Self {
-            road_type: road_type.clone(),
-            turn_tightness: style.turn_tightness(),
+            road_type_id: style.road_type_id(),
             ..Default::default()
         }
     }
@@ -598,17 +594,18 @@ impl IntersectionBuildParams {
 pub fn build_intersection_at_node(
     terrain: &mut Terrain,
     storage: &mut RoadStorage,
+    road_types: &RoadTypes,
     node_id: NodeId,
     params: &IntersectionBuildParams,
+    road_type: &RoadType,
     recalc_clearance: bool,
     gizmo: &mut Gizmo,
 ) -> HashSet<ChunkCoord> {
     let chunk_size = terrain.chunk_size;
     let mut affected_chunks = HashSet::new();
-
     if recalc_clearance {
         if let Some(geom) =
-            compute_intersection_geometry(storage, node_id, params, chunk_size, gizmo)
+            compute_intersection_geometry(storage, node_id, params, road_type, chunk_size, gizmo)
         {
             debug_draw_polygon(&geom.polygon, [0.0, 0.8, 0.2, 1.0], gizmo);
             if let Some(ref sw) = geom.sidewalk_polygon {
@@ -631,8 +628,6 @@ pub fn build_intersection_at_node(
                     chunk_size,
                 );
 
-                let road_type = params.road_type;
-
                 affected_chunks = terrain
                     .terrain_editor
                     .apply_intersection_polygon_flattening(
@@ -640,8 +635,8 @@ pub fn build_intersection_at_node(
                         flattening_polygon,
                         center_height,
                         -road_type.lane_height - 0.25,
-                        params.road_type.sidewalk_width * 2.0
-                            + params.road_type.lane_width * params.road_type.total_lanes() as f32,
+                        road_type.sidewalk_width * 2.0
+                            + road_type.lane_width * road_type.total_lanes() as f32,
                         chunk_size,
                         &terrain.chunks,
                     );
@@ -650,8 +645,10 @@ pub fn build_intersection_at_node(
     }
 
     storage.node_mut(node_id).clear_node_lanes();
-    let node_lanes =
-        build_node_lanes_for_intersection(terrain, storage, node_id, params, chunk_size, gizmo);
+
+    let node_lanes = build_node_lanes_for_intersection(
+        terrain, storage, road_types, node_id, params, chunk_size, gizmo,
+    );
     storage.node_mut(node_id).add_node_lanes(node_lanes);
 
     affected_chunks
@@ -668,7 +665,7 @@ fn compute_intersection_center_height(
     terrain: &Terrain,
     center: &WorldPos,
     polygon: &[WorldPos],
-    chunk_size: ChunkSize,
+    _chunk_size: ChunkSize,
 ) -> f32 {
     if polygon.is_empty() {
         return terrain.get_height_at(*center, true);
@@ -1177,10 +1174,11 @@ fn build_polygon_curbs_filtered(
 
 pub fn build_intersection_mesh(
     terrain: &Terrain,
-    node_id: NodeId,
+    _node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,
     style: &RoadStyleParams,
+    road_type: &RoadType,
     config: &MeshConfig,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
@@ -1189,7 +1187,6 @@ pub fn build_intersection_mesh(
     let center = node.position();
     let chunk_size = terrain.chunk_size;
 
-    let road_type = style.road_type();
     let params = IntersectionBuildParams::from_style(style);
 
     let arms = node.arms();
@@ -1198,11 +1195,11 @@ pub fn build_intersection_mesh(
     }
 
     let corridor_lengths =
-        compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
+        compute_corridor_lengths(&arms, road_type.sidewalk_width, storage, chunk_size);
 
     let asphalt_hw: Vec<f32> = arms
         .iter()
-        .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
+        .map(|a| (a.half_width() - road_type.sidewalk_width).max(0.5))
         .collect();
 
     let mut asphalt_corridors: Vec<LocalPolygon> = arms
@@ -1210,7 +1207,7 @@ pub fn build_intersection_mesh(
         .zip(corridor_lengths.iter())
         .map(|(arm, &len)| {
             let dir_2d = arm.direction().xz();
-            let asphalt_half_width = (arm.half_width() - params.road_type.sidewalk_width).max(0.5);
+            let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width).max(0.5);
             LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
         })
         .collect();
@@ -1313,8 +1310,7 @@ pub fn build_intersection_mesh(
             .zip(corridor_lengths.iter())
             .map(|(arm, &len)| {
                 let dir_2d = arm.direction().xz();
-                let asphalt_half_width =
-                    (arm.half_width() - params.road_type.sidewalk_width).max(0.5);
+                let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width).max(0.5);
                 LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
             })
             .collect();
@@ -1347,7 +1343,7 @@ pub fn build_intersection_mesh(
         };
 
         let end_clips =
-            create_corridor_end_clips(&arms, &corridor_lengths, params.road_type.sidewalk_width);
+            create_corridor_end_clips(&arms, &corridor_lengths, road_type.sidewalk_width);
 
         let sidewalk_polys = compute_sidewalk_ring_polygons(
             &[full_rounded.clone()],
@@ -1429,6 +1425,7 @@ fn compute_intersection_geometry(
     storage: &RoadStorage,
     node_id: NodeId,
     params: &IntersectionBuildParams,
+    road_type: &RoadType,
     chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) -> Option<IntersectionGeometry> {
@@ -1442,7 +1439,7 @@ fn compute_intersection_geometry(
     }
 
     let corridor_lengths =
-        compute_corridor_lengths(&arms, params.road_type.sidewalk_width, storage, chunk_size);
+        compute_corridor_lengths(&arms, road_type.sidewalk_width, storage, chunk_size);
 
     let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
 
@@ -1492,10 +1489,10 @@ fn compute_intersection_geometry(
 
     let polygon = IntersectionPolygon::new(ring, center, chunk_size);
 
-    let sidewalk_polygon = if params.road_type.sidewalk_width > 0.01 {
+    let sidewalk_polygon = if road_type.sidewalk_width > 0.01 {
         let asphalt_hw: Vec<f32> = arms
             .iter()
-            .map(|a| (a.half_width() - params.road_type.sidewalk_width).max(0.5))
+            .map(|a| (a.half_width() - road_type.sidewalk_width).max(0.5))
             .collect();
 
         let mut asphalt_corridors: Vec<LocalPolygon> = arms
@@ -1503,8 +1500,7 @@ fn compute_intersection_geometry(
             .zip(corridor_lengths.iter())
             .map(|(arm, &len)| {
                 let dir_2d = Vec2::new(arm.direction().x, arm.direction().z);
-                let asphalt_half_width =
-                    (arm.half_width() - params.road_type.sidewalk_width).max(0.5);
+                let asphalt_half_width = (arm.half_width() - road_type.sidewalk_width).max(0.5);
                 LocalPolygon::corridor(dir_2d, asphalt_half_width, len)
             })
             .collect();
@@ -1652,19 +1648,22 @@ fn build_sidewalk_mesh(
 
 pub fn gather_arms(
     storage: &RoadStorage,
+    road_types: &RoadTypes,
     node_id: NodeId,
     intersection_build_params: &IntersectionBuildParams,
     chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) -> Vec<Arm> {
     let segment_ids = storage.enabled_segments_connected_to_node(node_id);
-    let node = match storage.node(node_id) {
-        Some(n) => n,
-        None => return Vec::new(),
+    // let node = match storage.node(node_id) {
+    //     Some(n) => n,
+    //     None => return Vec::new(),
+    // };
+    let Some(road_type) = road_types.get_road_type(intersection_build_params.road_type_id) else {
+        return Vec::new();
     };
-
-    let lane_width = intersection_build_params.road_type.lane_width;
-    let sidewalk_width = intersection_build_params.road_type.sidewalk_width;
+    let lane_width = road_type.lane_width;
+    let sidewalk_width = road_type.sidewalk_width;
 
     let mut arms: Vec<Arm> = segment_ids
         .into_iter()
@@ -1737,6 +1736,7 @@ pub fn road_vertex(world_pos: WorldPos, normal: [f32; 3], mat: u32, u: f32, v: f
 fn build_node_lanes_for_intersection(
     terrain: &Terrain,
     storage: &RoadStorage,
+    road_types: &RoadTypes,
     node_id: NodeId,
     params: &IntersectionBuildParams,
     chunk_size: ChunkSize,
@@ -1861,7 +1861,9 @@ fn build_node_lanes_for_intersection(
 
     let mut node_lanes = Vec::new();
     let lane_idx_base = storage.node_lane_count_for_node(node_id);
-
+    let Some(road_type) = road_types.get_road_type(params.road_type_id) else {
+        return Vec::new();
+    };
     for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
         let in_lane = storage.lane(in_id);
 
@@ -1893,7 +1895,7 @@ fn build_node_lanes_for_intersection(
 
             // Compute turn geometry
             let chord = in_pt.distance_to(*out_pt, chunk_size);
-            let tightness = compute_turn_tightness(chord, dot, params);
+            let tightness = compute_turn_tightness(chord, dot, road_type);
 
             let geom = generate_turn_geometry(
                 terrain,
@@ -1947,8 +1949,8 @@ fn build_node_lanes_for_intersection(
     node_lanes
 }
 
-fn compute_turn_tightness(chord: f64, dot: f32, params: &IntersectionBuildParams) -> f32 {
-    let base = params.turn_tightness;
+fn compute_turn_tightness(chord: f64, dot: f32, road_type: &RoadType) -> f32 {
+    let base = road_type.turn_tightness;
 
     let chord_factor = if chord > 25.0 {
         1.3

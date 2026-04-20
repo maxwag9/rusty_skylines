@@ -837,6 +837,50 @@ impl UiElement {
             UiElement::Advanced(_) => vec![],
         }
     }
+    pub fn color(&self, component: &ColorComponent) -> Option<[f32; 4]> {
+        match self {
+            UiElement::Circle(c) => match component {
+                ColorComponent::Fill => Some(c.fill_color),
+                ColorComponent::Border => Some(c.border_color),
+                ColorComponent::InsideBorder => Some(c.inside_border_color),
+                ColorComponent::Glow => Some(c.glow_color),
+                _ => None,
+            },
+
+            UiElement::Text(t) => match component {
+                ColorComponent::Fill => Some(t.color),
+                _ => None,
+            },
+
+            UiElement::Polygon(p) => match component {
+                ColorComponent::Fill => p.unscaled_vertices.first().map(|v| v.color),
+                ColorComponent::VertexIndex(i) => {
+                    p.unscaled_vertices.get(*i as usize).map(|v| v.color)
+                }
+                _ => None,
+            },
+
+            UiElement::Outline(o) => match component {
+                ColorComponent::DashColor => Some(o.dash_color),
+                ColorComponent::SubDashColor => Some(o.sub_dash_color),
+                _ => None,
+            },
+
+            UiElement::Handle(h) => match component {
+                ColorComponent::DashColor => Some(h.handle_color),
+                ColorComponent::SubDashColor => Some(h.sub_handle_color),
+                _ => None,
+            },
+
+            UiElement::Rect(r) => match component {
+                ColorComponent::Fill => Some(r.color),
+                ColorComponent::Border => Some(r.border_color),
+                _ => None,
+            },
+
+            UiElement::Advanced(_) => None,
+        }
+    }
     pub fn scale_by(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {

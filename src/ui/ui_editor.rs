@@ -29,6 +29,7 @@ use crate::ui::ui_touch_manager::{
 };
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::GameState;
 use crate::world::roads::road_subsystem::Roads;
@@ -225,6 +226,7 @@ impl Ui {
         time: &Time,
         terrain: &mut Terrain,
         props: &mut Props,
+        buildings: &mut Buildings,
         window_size: PhysicalSize<u32>,
         roads: &mut Roads,
         command_queues: &mut CommandQueues,
@@ -300,6 +302,7 @@ impl Ui {
             time,
             terrain,
             props,
+            buildings,
             window_size,
             roads,
             settings,

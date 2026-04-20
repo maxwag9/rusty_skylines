@@ -35,30 +35,20 @@ layers:
           active: true
           pressable: false
           editable: true
-      - !Text
-        id: settings_text
-        actions: [ ]
-        x: 0.5162861
-        y: 0.18681292
-        pt: 19.396805
-        color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        text: Settings
+
       - !Rect
         id: set_none_zone
         actions:
           - set(new_zone_type, none)
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
         x: 0.16796875
         y: 0.96428573
         w: 0.02
         h: 0.02
         rotation: 0.0
         color:
-          - 0.6
-          - 0.6
+          - 0.72
+          - 0.72
           - 0.65
           - 0.99
         border_color:
@@ -84,6 +74,7 @@ layers:
         id: set_residential_zone
         actions:
           - set(new_zone_type, residential)
+          - button:a show_interaction([0.005, 0.72, 0.1, 1.0])
         x: 0.19140625
         y: 0.96428573
         w: 0.02
@@ -91,7 +82,7 @@ layers:
         rotation: 0.0
         color:
           - 0.005
-          - 0.6
+          - 0.72
           - 0.1
           - 0.99
         border_color:
@@ -117,6 +108,7 @@ layers:
         id: set_commercial_zone
         actions:
           - set(new_zone_type, commercial)
+          - button:a show_interaction([0.005, 0.1, 0.72, 1.0])
         x: 0.21484375
         y: 0.96428573
         w: 0.02
@@ -125,7 +117,7 @@ layers:
         color:
           - 0.005
           - 0.1
-          - 0.6
+          - 0.72
           - 0.99
         border_color:
           - 1.0
@@ -150,14 +142,15 @@ layers:
         id: set_industrial_zone
         actions:
           - set(new_zone_type, industrial)
+          - button:a show_interaction([0.72, 0.72, 0.1, 1.0])
         x: 0.26171875
         y: 0.96428573
         w: 0.02
         h: 0.02
         rotation: 0.0
         color:
-          - 0.6
-          - 0.6
+          - 0.72
+          - 0.72
           - 0.1
           - 0.99
         border_color:
@@ -183,15 +176,16 @@ layers:
         id: set_office_zone
         actions:
           - set(new_zone_type, office)
+          - button:a show_interaction([0.72, 0.1, 0.72, 1.0])
         x: 0.23828125
         y: 0.96428573
         w: 0.02
         h: 0.02
         rotation: 0.0
         color:
-          - 0.6
+          - 0.72
           - 0.1
-          - 0.6
+          - 0.72
           - 0.99
         border_color:
           - 1.0

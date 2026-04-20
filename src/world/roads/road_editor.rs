@@ -34,18 +34,19 @@ impl RoadEditor {
 
     pub fn update(
         &mut self,
-        road_manager: &RoadManager,
+        road_manager: &mut RoadManager,
         terrain: &Terrain,
         input: &mut Input,
         gizmo: &mut Gizmo,
     ) -> Vec<RoadEditorCommand> {
         let Some(road_type) = (match terrain.cursor.mode {
-            CursorMode::Roads => terrain.cursor.road_type,
-            _ => None,
+            CursorMode::Roads => &terrain.cursor.road_type,
+            _ => &None,
         }) else {
             return Vec::new();
         };
-        self.style.set_road_type(road_type);
+        let road_type_id = road_manager.road_types.add_road_type(&road_type);
+        self.style.set_road_type_id(road_type_id);
         self.allocator.update(&road_manager.roads);
         let storage = &road_manager.roads;
         let mut output = Vec::new();
@@ -92,7 +93,7 @@ impl RoadEditor {
             EditorState::StraightPickEnd { start } => {
                 self.handle_straight_pick_end(
                     terrain,
-                    storage,
+                    road_manager,
                     &start,
                     &snap,
                     place_pressed,
@@ -103,7 +104,7 @@ impl RoadEditor {
             }
             EditorState::CurvePickControl { start } => {
                 self.handle_curve_pick_control(
-                    storage,
+                    road_manager,
                     &start,
                     &snap,
                     place_pressed,
@@ -114,7 +115,7 @@ impl RoadEditor {
             EditorState::CurvePickEnd { start, control } => {
                 self.handle_curve_pick_end(
                     terrain,
-                    storage,
+                    road_manager,
                     &start,
                     control,
                     &snap,
@@ -158,7 +159,7 @@ impl RoadEditor {
     fn handle_straight_pick_end(
         &mut self,
         terrain_renderer: &Terrain,
-        storage: &RoadStorage,
+        road_manager: &RoadManager,
         start: &Anchor,
         snap: &SnapResult,
         place_pressed: bool,
@@ -166,6 +167,7 @@ impl RoadEditor {
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) {
+        let storage = &road_manager.roads;
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
@@ -173,15 +175,13 @@ impl RoadEditor {
             self.style.set_state(EditorState::Idle);
             return;
         };
-
+        let Some(road_type) = self.style.road_type(&road_manager.road_types) else {
+            return;
+        };
         let end_anchor = self.build_anchor_from_snap(snap);
         let end_pos = snap.world_pos;
-        let polyline = make_straight_centerline(
-            terrain_renderer,
-            start_pos,
-            end_pos,
-            self.style.road_type().structure,
-        );
+        let polyline =
+            make_straight_centerline(terrain_renderer, start_pos, end_pos, road_type.structure);
         let estimated_length = end_pos.length_to(start_pos, terrain_renderer.chunk_size);
 
         let (is_valid, reason) =
@@ -191,7 +191,7 @@ impl RoadEditor {
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
-            self.style.road_type().structure(),
+            road_type.structure(),
             start_pos,
             end_pos,
             None,
@@ -201,7 +201,7 @@ impl RoadEditor {
         );
         // println!("{:?}", reason);
         let seg_preview = SegmentPreview {
-            road_type: self.style.road_type().clone(),
+            road_type_id: self.style.road_type_id(),
             mode: self.style.mode(),
             is_valid,
             reason_invalid: reason,
@@ -213,7 +213,6 @@ impl RoadEditor {
             would_split_end: end_anchor.planned_node.split_info(),
             would_merge_start: start.planned_node.merged_node_id(),
             would_merge_end: end_anchor.planned_node.merged_node_id(),
-            lane_count_each_dir: self.style.road_type().lanes_each_direction(),
             estimated_length,
             crossing_count: crossings.len(),
         };
@@ -232,6 +231,7 @@ impl RoadEditor {
             let road_cmds = self.commit_road_with_crossings(
                 terrain_renderer,
                 storage,
+                road_type,
                 start,
                 &end_anchor,
                 None,
@@ -252,14 +252,14 @@ impl RoadEditor {
 
     fn handle_curve_pick_control(
         &mut self,
-        storage: &RoadStorage,
+        road_manager: &RoadManager,
         start: &Anchor,
         snap: &SnapResult,
         place_pressed: bool,
         output: &mut Vec<RoadEditorCommand>,
         chunk_size: ChunkSize,
     ) {
-        let Some(start_pos) = start.planned_node.position(storage) else {
+        let Some(start_pos) = start.planned_node.position(&road_manager.roads) else {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
             ));
@@ -272,7 +272,7 @@ impl RoadEditor {
         let estimated_length = control_pos.length_to(start_pos, chunk_size);
 
         let seg_preview = SegmentPreview {
-            road_type: self.style.road_type().clone(),
+            road_type_id: self.style.road_type_id(),
             mode: self.style.mode(),
             is_valid: true,
             reason_invalid: None,
@@ -284,7 +284,6 @@ impl RoadEditor {
             would_split_end: None,
             would_merge_start: start.planned_node.merged_node_id(),
             would_merge_end: None,
-            lane_count_each_dir: self.style.road_type().lanes_each_direction(),
             estimated_length,
             crossing_count: 0,
         };
@@ -301,7 +300,7 @@ impl RoadEditor {
     fn handle_curve_pick_end(
         &mut self,
         terrain_renderer: &Terrain,
-        storage: &RoadStorage,
+        road_manager: &RoadManager,
         start: &Anchor,
         control: WorldPos,
         snap: &SnapResult,
@@ -310,11 +309,15 @@ impl RoadEditor {
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) {
+        let storage = &road_manager.roads;
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
             ));
             self.style.set_to_idle();
+            return;
+        };
+        let Some(road_type) = self.style.road_type(&road_manager.road_types) else {
             return;
         };
         let chunk_size = terrain_renderer.chunk_size;
@@ -323,7 +326,7 @@ impl RoadEditor {
 
         let estimated_length = estimate_bezier_arc_length(
             terrain_renderer,
-            self.style.road_type().structure(),
+            road_type.structure(),
             start_pos,
             control,
             end_pos,
@@ -331,7 +334,7 @@ impl RoadEditor {
         let segment_count = compute_curve_segment_count(estimated_length);
         let polyline = sample_quadratic_bezier(
             terrain_renderer,
-            self.style.road_type().structure(),
+            road_type.structure(),
             start_pos,
             control,
             end_pos,
@@ -344,7 +347,7 @@ impl RoadEditor {
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
-            self.style.road_type().structure(),
+            road_type.structure(),
             start_pos,
             end_pos,
             Some(control),
@@ -354,7 +357,7 @@ impl RoadEditor {
         );
 
         let seg_preview = SegmentPreview {
-            road_type: self.style.road_type().clone(),
+            road_type_id: self.style.road_type_id(),
             mode: self.style.mode(),
             is_valid,
             reason_invalid: reason,
@@ -366,7 +369,6 @@ impl RoadEditor {
             would_split_end: end_anchor.planned_node.split_info(),
             would_merge_start: start.planned_node.merged_node_id(),
             would_merge_end: end_anchor.planned_node.merged_node_id(),
-            lane_count_each_dir: self.style.road_type().lanes_each_direction(),
             estimated_length,
             crossing_count: crossings.len(),
         };
@@ -384,6 +386,7 @@ impl RoadEditor {
             let road_cmds = self.commit_road_with_crossings(
                 terrain_renderer,
                 storage,
+                road_type,
                 start,
                 &end_anchor,
                 Some(control),
@@ -414,7 +417,7 @@ impl RoadEditor {
         control: Option<WorldPos>,
         start_anchor: &Anchor,
         end_anchor: &Anchor,
-        gizmo: &mut Gizmo,
+        _gizmo: &mut Gizmo,
     ) -> Vec<CrossingPoint> {
         let chunk_size = terrain_renderer.chunk_size;
         let mut crossings = Vec::new();
@@ -872,6 +875,7 @@ impl RoadEditor {
         &mut self,
         terrain_renderer: &Terrain,
         storage: &RoadStorage,
+        road_type: &RoadType,
         start: &Anchor,
         end: &Anchor,
         control: Option<WorldPos>,
@@ -880,7 +884,6 @@ impl RoadEditor {
         gizmo: &mut Gizmo,
     ) -> Vec<RoadCommand> {
         let mut cmds = Vec::new();
-
         // Get positions
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
@@ -894,7 +897,7 @@ impl RoadEditor {
         let crossings = self.find_all_crossings(
             storage,
             terrain_renderer,
-            self.style.road_type().structure(),
+            road_type.structure(),
             start_pos,
             end_pos,
             control,
@@ -981,7 +984,7 @@ impl RoadEditor {
             // Calculate centerline for this segment
             let segment_centerline = self.compute_segment_centerline(
                 terrain_renderer,
-                self.style.road_type().structure(),
+                road_type.structure(),
                 start_pos,
                 end_pos,
                 control,
@@ -998,12 +1001,13 @@ impl RoadEditor {
             cmds.push(RoadCommand::AddSegment {
                 start: from.node_id,
                 end: to.node_id,
-                structure: self.style.road_type().structure(),
+                structure: road_type.structure(),
                 chunk_id,
             });
 
             self.emit_lanes_from_centerline(
                 terrain_renderer,
+                road_type,
                 &mut cmds,
                 segment_id,
                 from.node_id,
@@ -1130,7 +1134,7 @@ impl RoadEditor {
         storage: &RoadStorage,
         terrain_renderer: &Terrain,
         pos: WorldPos,
-        gizmo: &mut Gizmo,
+        _gizmo: &mut Gizmo,
     ) -> Option<(LaneId, f64, WorldPos, f64)> {
         let nearest_lane_id = nearest_lane_to_point(storage, pos, terrain_renderer.chunk_size)?;
         let nearest_lane = storage.lane(&nearest_lane_id);
@@ -1523,7 +1527,8 @@ impl RoadEditor {
 
     fn emit_lanes_from_centerline(
         &self,
-        terrain_renderer: &Terrain,
+        terrain: &Terrain,
+        road_type: &RoadType,
         cmds: &mut Vec<RoadCommand>,
         segment: SegmentId,
         start: NodeId,
@@ -1531,23 +1536,23 @@ impl RoadEditor {
         centerline: &[WorldPos],
         chunk_id: ChunkId,
     ) {
-        let (left_lanes, right_lanes) = self.style.road_type().lanes_each_direction();
-        let speed = self.style.road_type().speed_limit();
-        let capacity = self.style.road_type().capacity();
-        let mask = self.style.road_type().vehicle_mask();
-        let lane_width = self.style.road_type().lane_width;
+        let (left_lanes, right_lanes) = road_type.lanes_each_direction();
+        let speed = road_type.speed_limit();
+        let capacity = road_type.capacity();
+        let mask = road_type.vehicle_mask();
+        let lane_width = road_type.lane_width;
 
         // Right side lanes (start -> end)
         for i in 0..right_lanes {
             let lane_index = (i as i8) + 1;
             let poly = offset_polyline(
-                terrain_renderer,
+                terrain,
                 centerline,
                 lane_index,
                 lane_width,
-                self.style.road_type().structure,
+                road_type.structure,
             );
-            let geom = LaneGeometry::from_polyline(poly, terrain_renderer.chunk_size);
+            let geom = LaneGeometry::from_polyline(poly, terrain.chunk_size);
             let base_cost = geom.total_len.max(0.1) as f32;
             cmds.push(RoadCommand::AddLane {
                 from: start,
@@ -1567,14 +1572,14 @@ impl RoadEditor {
         for i in 0..left_lanes {
             let lane_index = -((i as i8) + 1);
             let mut poly = offset_polyline(
-                terrain_renderer,
+                terrain,
                 centerline,
                 lane_index,
                 lane_width,
-                self.style.road_type().structure,
+                road_type.structure(),
             );
             poly.reverse();
-            let geom = LaneGeometry::from_polyline(poly, terrain_renderer.chunk_size);
+            let geom = LaneGeometry::from_polyline(poly, terrain.chunk_size);
             let base_cost = geom.total_len.max(0.1) as f32;
             cmds.push(RoadCommand::AddLane {
                 from: end,
@@ -1807,7 +1812,7 @@ pub fn sample_polyline_at(
         0.0
     };
 
-    let pos = points[i0].lerp(points[i1], seg_t as f64, chunk_size);
+    let pos = points[i0].lerp(points[i1], seg_t, chunk_size);
     let dir = points[i1]
         .to_render_pos(points[i0], chunk_size)
         .normalize_or_zero();

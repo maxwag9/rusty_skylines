@@ -29,7 +29,7 @@ impl WorldState {
 
     pub fn update(&mut self, ui_loader: &mut Ui, time: &Time, settings: &Settings, proj: Mat4) {
         let time_scales = TimeScales::from_game_time(time.total_game_time, settings.always_day);
-        let observer = ObserverParams::new(time_scales.day_angle);
+        let observer = ObserverParams::from_jd(time_scales.jd);
         let astronomy = compute_astronomy(&time_scales, proj);
 
         update_ui_variables(

@@ -107,6 +107,8 @@ keys = ["MouseLeft"]
 keys = ["MouseLeft"]
 ["Place Zoning Point"]
 keys = ["MouseLeft"]
+["Remove Lot"]
+keys = ["MouseRight"]
 ["Cancel"]
 keys = ["MouseRight"]
 

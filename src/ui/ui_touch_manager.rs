@@ -127,14 +127,14 @@ impl HitTestResult {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ButtonState {
     pub pressed: bool,
     pub just_pressed: bool,
     pub just_released: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MouseButtons {
     pub left: ButtonState,
     pub right: ButtonState,

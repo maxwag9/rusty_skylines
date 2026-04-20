@@ -45,4 +45,18 @@ layers:
           pressable: false
           editable: true
         editing_tool: false
+      - !Advanced
+        name: checkbox_always_day
+        ap_name: checkbox
+        setting:
+          key: always_day
+          op: toggle
+        x: 0.1
+        y: 0.4
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
     editing_tool: false

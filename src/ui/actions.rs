@@ -5,6 +5,7 @@ use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
 use crate::resources::Time;
+use crate::ui::action_parser::{TouchEventKind, parse_action};
 use crate::ui::input::Input;
 use crate::ui::menu::Menu;
 use crate::ui::parser::{Value, eval_expr};
@@ -15,20 +16,22 @@ use crate::ui::ui_edit_manager::{
 use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_layer_settings};
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_text_editing::HitResult;
-use crate::ui::ui_touch_manager::{ElementRef, UiTouchManager};
+use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, UiTouchManager};
 use crate::ui::variables::{Variables, initialize_value, save_colors};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
+use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::ZoneType;
 use crate::world::camera::{Camera, CameraController};
-use crate::world::game_state::{GameState, LoadResult, SaveResult};
+use crate::world::game_state::{GameState, LoadResult, SaveResult, SaveState};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
 use std::cmp::PartialEq;
 use std::collections::{HashMap, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 // ==================== COMMAND TYPE ENUM ====================
@@ -281,6 +284,12 @@ pub enum UiCommand {
         without_saving: bool,
     },
     ExitGame,
+    ShowInteraction {
+        element_ref: ElementRef,
+        event_kind: TouchEventKind,
+        buttons: MouseButtons,
+        color: String,
+    },
     // ===== DEBUG COMMANDS =====
     Print {
         element_ref: ElementRef,
@@ -380,7 +389,7 @@ pub enum CommandResult {
 /// Context provided only during command execution (drain phase).
 pub struct CommandContext<'a> {
     pub ui: &'a mut Ui,
-    pub input: &'a Input,
+    pub input: &'a mut Input,
     pub time: &'a Time,
     pub terrain: &'a mut Terrain,
     pub hit: &'a Option<HitResult>,
@@ -391,6 +400,7 @@ pub struct CommandContext<'a> {
     pub game_state: &'a mut GameState,
     pub roads: &'a mut Roads,
     pub props: &'a mut Props,
+    pub buildings: &'a mut Buildings,
     pub camera_controller: &'a mut CameraController,
 }
 
@@ -1207,6 +1217,7 @@ impl CommandQueue {
                     ctx.roads,
                     ctx.terrain,
                     ctx.props,
+                    ctx.buildings,
                 );
                 CommandResult::Ok
             }
@@ -1221,6 +1232,7 @@ impl CommandQueue {
                         ctx.roads,
                         ctx.terrain,
                         ctx.props,
+                        ctx.buildings,
                     );
                 }
                 load_save(
@@ -1230,6 +1242,7 @@ impl CommandQueue {
                     ctx.roads,
                     ctx.terrain,
                     ctx.props,
+                    ctx.buildings,
                     save_name.as_str(),
                 );
                 CommandResult::Ok
@@ -1244,11 +1257,107 @@ impl CommandQueue {
                     ctx.roads,
                     ctx.terrain,
                     ctx.props,
+                    ctx.buildings,
                     ctx.event_loop,
                 );
                 CommandResult::Ok
             }
+            UiCommand::ShowInteraction {
+                element_ref,
+                event_kind,
+                buttons,
+                color,
+            } => {
+                let mut hasher = DefaultHasher::new();
+                element_ref.hash(&mut hasher);
+                let element_hash = hasher.finish();
 
+                let key = format!("original_color_fill_{}", element_hash);
+
+                // Only store if it doesn't exist yet
+                if ctx.ui.variables.get(&key).is_none() {
+                    let current_color =
+                        string_to_value(ctx, &element_ref, "self.color.fill".to_string());
+                    ctx.ui.variables.set_var(&key, current_color);
+                }
+
+                let Some(color_value) = ctx.ui.variables.get(&key) else {
+                    return CommandResult::Error(
+                        format!("Couldn't get value from variables, variable key: {}", key)
+                            .to_string(),
+                    );
+                };
+                let Some(color) = color_value.as_color4() else {
+                    return CommandResult::Error(
+                        format!(
+                            "Couldn't unpack value as color, you typed: {}, parsed to: {}",
+                            color, color_value
+                        )
+                        .to_string(),
+                    );
+                };
+                fn clamp(v: f32) -> f32 {
+                    v.max(0.0).min(1.0)
+                }
+                let return_color = format!(
+                    "on:h_exit on:r button:a set(self.color.fill, [{}, {}, {}, {}])",
+                    color[0], color[1], color[2], color[3]
+                );
+
+                // noticeable hover: brighter + more visible
+                let hover_color = format!(
+                    "on:h button:a set(self.color.fill, [{}, {}, {}, {}])",
+                    clamp(color[0] * 1.8 + 0.05),
+                    clamp(color[1] * 1.8 + 0.05),
+                    clamp(color[2] * 1.8 + 0.05),
+                    clamp(color[3] + 0.1)
+                );
+
+                // strong press: darker + slight shrink in alpha
+                let press_color = format!(
+                    "on:d set(self.color.fill, [{}, {}, {}, {}])",
+                    clamp(color[0] * 0.5),
+                    clamp(color[1] * 0.5),
+                    clamp(color[2] * 0.5),
+                    clamp(color[3] * 0.95)
+                );
+                let commands: Vec<Option<UiCommand>> = vec![
+                    parse_action(
+                        &return_color,
+                        ctx.ui,
+                        ctx.settings,
+                        ctx.input,
+                        &event_kind,
+                        &buttons,
+                        &element_ref,
+                    ),
+                    parse_action(
+                        &hover_color,
+                        ctx.ui,
+                        ctx.settings,
+                        ctx.input,
+                        &event_kind,
+                        &buttons,
+                        &element_ref,
+                    ),
+                    parse_action(
+                        &press_color,
+                        ctx.ui,
+                        ctx.settings,
+                        ctx.input,
+                        &event_kind,
+                        &buttons,
+                        &element_ref,
+                    ),
+                ];
+                for command in commands {
+                    if let Some(command) = command {
+                        self.execute_one(command, ctx);
+                    }
+                }
+
+                CommandResult::Ok
+            }
             // ===== DEBUG COMMANDS =====
             UiCommand::Print { element_ref, args } => {
                 let msg: String = args
@@ -1388,10 +1497,11 @@ pub fn process_commands(
     command_queue: &mut CommandQueue,
     ui: &mut Ui,
     hit: &Option<HitResult>,
-    input: &Input,
+    input: &mut Input,
     time: &Time,
     terrain: &mut Terrain,
     props: &mut Props,
+    buildings: &mut Buildings,
     window_size: PhysicalSize<u32>,
     roads: &mut Roads,
     settings: &mut Settings,
@@ -1414,6 +1524,7 @@ pub fn process_commands(
         game_state,
         roads,
         props,
+        buildings,
     };
 
     command_queue.drain(&mut ctx);
@@ -1441,6 +1552,7 @@ pub fn exit_game(
     roads: &Roads,
     terrain: &Terrain,
     props: &Props,
+    buildings: &Buildings,
     event_loop: &ActiveEventLoop,
 ) {
     settings.total_game_time = time.total_game_time;
@@ -1449,7 +1561,7 @@ pub fn exit_game(
         Err(e) => eprintln!("Failed to save Settings: {e}"),
     }
     save_colors(rusty_skylines_dir("colors.toml"), variables);
-    save_game(game_state, camera, roads, terrain, props);
+    save_game(game_state, camera, roads, terrain, props, buildings);
 
     event_loop.exit();
     //std::process::exit(69); // Die.
@@ -1460,8 +1572,9 @@ pub fn save_game(
     roads: &Roads,
     terrain: &Terrain,
     props: &Props,
+    buildings: &Buildings,
 ) {
-    match game_state.save(camera, roads, terrain, props) {
+    match game_state.save(camera, roads, terrain, props, buildings) {
         SaveResult::Success => println!("World saved"),
         e => eprintln!("Failed to save World: {:#?}", e),
     }
@@ -1473,15 +1586,42 @@ pub fn load_save(
     roads: &mut Roads,
     terrain: &mut Terrain,
     props: &mut Props,
+    buildings: &mut Buildings,
     save_name: &str,
 ) {
-    match game_state.load(save_name, camera, camera_controller, roads, terrain, props) {
-        LoadResult::Success => println!(
-            "World '{}' loaded, {} Terrain Edited Chunks, {} Road Nodes",
+    match game_state.load(
+        save_name,
+        camera,
+        camera_controller,
+        roads,
+        terrain,
+        props,
+        buildings,
+    ) {
+        LoadResult::Success(version) => println!(
+            "World '{}', Version {} loaded, {} Terrain Edited Chunks, {} Road Nodes",
             game_state.current_save.name,
+            version,
             game_state.current_save.terrain_edits.len(),
-            game_state.current_save.roads.nodes.len()
+            game_state.current_save.roads.nodes.len(),
         ),
+        LoadResult::FileNonExistent(e) => {
+            eprintln!("Failed to load World: {:#?}", e);
+            let mut save_state = SaveState::new(camera.chunk_size);
+            save_state.name = save_name.to_string();
+            game_state.current_save = save_state;
+            game_state.save(camera, roads, terrain, props, buildings);
+            load_save(
+                game_state,
+                camera,
+                camera_controller,
+                roads,
+                terrain,
+                props,
+                buildings,
+                save_name,
+            );
+        }
         e => eprintln!("Failed to load World: {:#?}", e),
     }
 }
@@ -1745,14 +1885,20 @@ pub fn send_element_properties_to_variables(
                 let size = element.size().value_size2().unwrap_or(Value::Null);
                 //println!("{:?}", element.size());
                 variables.set_var("self.size", size);
+                let color_components = element.color_components();
                 variables.set_array(
                     "self.color_components",
-                    element
-                        .color_components()
+                    color_components
                         .iter()
                         .map(|c| Value::String(c.to_string()))
                         .collect::<Vec<Value>>(),
                 );
+                for component in color_components {
+                    let name = format!("self.color.{}", component.to_string());
+                    if let Some(color) = element.color(&component) {
+                        variables.set_array(name.as_str(), color)
+                    }
+                }
             }
         }
     }

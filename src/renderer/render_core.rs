@@ -327,7 +327,15 @@ impl Renderer {
         ui.variables.set_i64("target_pos_cz", camera.target.chunk.z);
         ui.variables
             .set_array("target_pos", target_pos_render.to_array());
-        buildings.update(terrain, roads, input, &mut self.gizmo, &ui.variables);
+        buildings.update(
+            camera,
+            terrain,
+            roads,
+            &self.road_renderer.mesh_manager,
+            input,
+            &mut self.gizmo,
+            &ui.variables,
+        );
         self.props.place_props(terrain, input, &self.device);
         self.ui_renderer.update(
             ui,
@@ -356,8 +364,14 @@ impl Renderer {
             settings,
             camera,
         );
-        self.gizmo
-            .update_orbit_gizmo(camera.target, camera.orbit_radius, astronomy.sun_dir, false);
+        self.gizmo.update_orbit_gizmo(
+            ui,
+            camera.target,
+            camera.orbit_radius,
+            astronomy.sun_dir,
+            astronomy.moon_dir,
+            false,
+        );
 
         self.props
             .upload_instances(&self.device, &self.queue, camera, terrain);

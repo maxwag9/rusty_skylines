@@ -1,6 +1,7 @@
 use crate::helpers::positions::ChunkSize;
 use crate::world::roads::road_structs::{LaneId, NodeId, SegmentId};
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub type PartitionId = u32;
@@ -68,6 +69,7 @@ impl HierarchicalAddress {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Partition {
     pub parent: Option<PartitionId>,
     pub children: Vec<PartitionId>,
@@ -76,8 +78,9 @@ pub struct Partition {
     pub region: RoadRegionId,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PartitionStorage {
-    pub(crate) partitions: Vec<Partition>,
+    pub partitions: Vec<Partition>,
     alive: Vec<bool>,
     free_list: Vec<u32>,
 }
@@ -270,9 +273,10 @@ impl<'a> Iterator for AncestorIter<'a> {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct PartitionManager {
     pub storage: PartitionStorage,
-    pub(crate) node_to_leaf: HashMap<NodeId, PartitionId>,
+    pub node_to_leaf: HashMap<NodeId, PartitionId>,
     /// Maps each active road region to its root partition.
     /// Each root has `parent: None` and represents a completely separate partition tree.
     region_roots: HashMap<RoadRegionId, PartitionId>,

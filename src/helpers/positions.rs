@@ -6,7 +6,7 @@ pub type LodStep = u16;
 pub type ChunkSize = u16;
 pub const CHUNK_MIN_Y: f32 = -512.0;
 pub const CHUNK_MAX_Y: f32 = 4096.0;
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq, Default)]
 pub struct ChunkCoord {
     pub x: i32,
     pub z: i32,

@@ -95,15 +95,15 @@ impl<'a> UniformUpdater<'a> {
         );
     }
     pub fn update_sky_uniforms(&self, astronomy: &Astronomy) {
-        let moon_phase: f32 = astronomy.moon_phase;
+        let moon_phase: f32 = astronomy.moon_phase as f32;
 
         let sky_uniform = SkyUniform {
             star_rotation: astronomy.star_rotation.to_cols_array_2d(),
             exposure: 1.0,
             moon_phase,
-            sun_size: astronomy.sun_size_ndc,
+            sun_size: astronomy.sun_size_ndc as f32,
             sun_intensity: 1.0,
-            moon_size: astronomy.moon_size_ndc,
+            moon_size: astronomy.moon_size_ndc as f32,
             moon_intensity: 1.0,
             _pad1: 1.0,
             _pad2: 0.0,

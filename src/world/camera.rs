@@ -121,10 +121,11 @@ pub struct CameraController {
     pub pitch_velocity: f32,
     pub orbit_damping_release: f32,
     pub zoom_damping: f32,
-    pub prev_fov: f32,
-    pub target_zoom_fov: f32,
-    pub zoom_time_start: Option<Instant>,
-    pub zoom_time_end: Option<Instant>,
+    prev_fov: f32,      // the resting FOV to return to
+    zoom_from_fov: f32, // FOV at the start of the current animation
+    pub(crate) zoom_time_start: Option<Instant>,
+    zoom_time_end: Option<Instant>,
+    target_zoom_fov: f32,
 }
 
 impl CameraController {
@@ -143,59 +144,55 @@ impl CameraController {
             target_zoom_fov: 15.0,
             zoom_time_start: None,
             zoom_time_end: None,
+            zoom_from_fov: 14.0,
         }
     }
 
     pub fn zoom(&mut self, camera: &mut Camera, zoom_speed: f32) {
+        // Starting a zoom cancels any unzoom and begins from the CURRENT FOV.
         if self.zoom_time_start.is_none() {
+            self.zoom_time_end = None;
             self.zoom_time_start = Some(Instant::now());
-            // Only update prev_fov if not currently in unzoom animation
-            if self.zoom_time_end.is_none() {
-                self.prev_fov = camera.fov;
-            }
+            self.zoom_from_fov = camera.fov;
         }
 
-        let zoom_time = 0.5 * zoom_speed;
         let Some(start) = self.zoom_time_start else {
             return;
         };
-        let now = Instant::now();
-        let elapsed = (now - start).as_secs_f32();
-        let t = (elapsed / zoom_time).clamp(0.0, 1.0);
-        let t = t * t * (3.0 - 2.0 * t); // smoothstep
 
-        camera.fov = lerp(self.prev_fov, self.target_zoom_fov, t);
+        let zoom_time = (0.5 * zoom_speed).max(0.0001);
+        let elapsed = (Instant::now() - start).as_secs_f32();
+        let t = (elapsed / zoom_time).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+
+        camera.fov = lerp(self.zoom_from_fov, self.target_zoom_fov, t);
     }
 
-    pub fn zoom_deactivate(&mut self) {
+    pub fn zoom_deactivate(&mut self, camera: &Camera) {
+        // Start unzooming from the CURRENT FOV, not from target_zoom_fov.
+        self.zoom_from_fov = camera.fov;
         self.zoom_time_start = None;
         self.zoom_time_end = Some(Instant::now());
     }
 
     pub fn zoom_end(&mut self, camera: &mut Camera, unzoom_speed: f32) {
-        let zooming = self.zoom_time_start.is_some();
-        if !zooming {
-            // Fix: Only animate if zoom_time_end is Some
-            if let Some(end_time) = self.zoom_time_end {
-                if (camera.fov - self.prev_fov).abs() < 1e-4 {
-                    camera.fov = self.prev_fov;
-                    self.zoom_time_end = None; // Reset state
-                    return;
-                }
+        if self.zoom_time_start.is_some() {
+            return;
+        }
 
-                let unzoom_time = 0.5 * unzoom_speed;
-                let now = Instant::now();
-                let elapsed = (now - end_time).as_secs_f32();
-                let t = (elapsed / unzoom_time).clamp(0.0, 1.0);
-                let t = t * t * (3.0 - 2.0 * t); // smoothstep
+        let Some(end_time) = self.zoom_time_end else {
+            return;
+        };
 
-                camera.fov = lerp(self.target_zoom_fov, self.prev_fov, t);
+        let unzoom_time = (0.5 * unzoom_speed).max(0.0001);
+        let elapsed = (Instant::now() - end_time).as_secs_f32();
+        let t = (elapsed / unzoom_time).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
 
-                // Clear zoom_time_end when animation completes
-                if t >= 1.0 {
-                    self.zoom_time_end = None;
-                }
-            }
+        camera.fov = lerp(self.zoom_from_fov, self.prev_fov, t);
+
+        if t >= 1.0 {
+            self.zoom_time_end = None;
         }
     }
 }

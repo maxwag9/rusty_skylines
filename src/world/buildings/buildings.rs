@@ -2,12 +2,15 @@ use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
 use crate::ui::variables::Variables;
-use crate::world::buildings::zoning::Zoning;
+use crate::world::buildings::zoning::{LotId, Zoning};
+use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
+use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use rayon::iter::IntoParallelRefMutIterator;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::slice::{Iter, IterMut};
 use wgpu_render_manager::generator::TextureKey;
@@ -15,49 +18,60 @@ use wgpu_render_manager::generator::TextureKey;
 pub type Color = [f32; 3];
 pub type BuildingId = u32;
 
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub enum RoofType {
     /// Just a flat Roof
+    #[default]
     Flat,
     /// Roof with just one side inclined, deg
     Angled(f32),
     /// Roof with two sides at an equal but opposite incline, deg
     Triangle(f32),
 }
-
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub enum RoofMaterial {
+    #[default]
     Shingles,
     Metal,
     Custom(TextureKey),
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct MiscBuildingParams {
     pub window_material_accent: WallMaterial,
     pub solar_modules: bool,
     pub antenna: bool,
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BasementParams {}
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub enum WallMaterial {
+    #[default]
     None,
     Paint(Color),
     Metal,
     Custom(TextureKey),
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub enum GardenLook {
+    #[default]
     Normal,
     Overgrown,
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct GardenParams {
     pub look: GardenLook,
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BuildingParams {
     pub roof: RoofType,
     pub roof_material: RoofMaterial,
     pub wall_material: WallMaterial,
     pub height: f32,
-    pub bounds: Vec<WorldPos>, // polyline edge
     pub basement: BasementParams,
     pub garden: GardenParams,
     pub miscellaneous: MiscBuildingParams,
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BuildingParamsLevels {
     pub level0: BuildingParams,
     pub level1: BuildingParams,
@@ -66,13 +80,16 @@ pub struct BuildingParamsLevels {
     pub level4: BuildingParams,
     pub level5: BuildingParams,
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Building {
     pub id: BuildingId,
     pub position: WorldPos,
     pub road_segment: SegmentId,
+    pub lot_id: LotId,
     pub building_params: BuildingParamsLevels,
 }
 
+#[derive(Clone, Default)]
 pub struct Buildings {
     pub storage: BuildingStorage,
     pub zoning: Zoning,
@@ -87,16 +104,27 @@ impl Buildings {
     }
     pub fn update(
         &mut self,
+        camera: &Camera,
         terrain: &Terrain,
         roads: &Roads,
+        road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
         gizmo: &mut Gizmo,
         variables: &Variables,
     ) {
-        self.zoning.update(terrain, roads, input, gizmo, variables);
+        self.zoning.update(
+            camera,
+            terrain,
+            roads,
+            road_mesh_manager,
+            input,
+            gizmo,
+            variables,
+        );
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BuildingStorage {
     pub building_chunk_storage: BuildingChunkStorage,
     buildings: Vec<Option<Building>>,
@@ -228,7 +256,7 @@ impl BuildingStorage {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BuildingChunk {
     pub distance: ChunkDistance,
     pub building_ids: Vec<BuildingId>,
@@ -250,6 +278,7 @@ impl BuildingChunk {
         }
     }
 }
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BuildingChunkStorage {
     close: HashMap<ChunkCoord, BuildingChunk>,
     medium: HashMap<ChunkCoord, BuildingChunk>,

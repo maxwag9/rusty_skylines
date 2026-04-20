@@ -109,8 +109,7 @@ fn fs_main(input: VSOut) -> FragOut {
     }
 
     // Moon
-    let moon_view = normalize((u.view * vec4<f32>(moon_dir, 0.0)).xyz);
-    let moon_clip = u.proj * vec4<f32>(moon_view, 1.0);
+    let moon_clip = u.view_proj * vec4<f32>(moon_dir, 0.0);
 
     if moon_clip.w > 0.0 {
         let moon_ndc = moon_clip.xy / moon_clip.w;

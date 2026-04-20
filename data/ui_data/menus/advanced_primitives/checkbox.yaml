@@ -40,11 +40,11 @@ elements:
   - !Text
     id: setting_text
     x: 0.02
-    y: 0.1
-    pt: 15.0
+    y: 0.04
+    pt: 10.0
     color:
       - 1.0
       - 1.0
       - 1.0
-      - 1.0
+      - 0.9
     text: '{ap}'

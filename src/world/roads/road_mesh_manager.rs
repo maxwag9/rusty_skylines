@@ -11,7 +11,9 @@ use crate::world::roads::intersections::{
 };
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_structs::*;
-use crate::world::roads::roads::{LaneGeometry, Node, RoadStorage, Segment};
+use crate::world::roads::roads::{
+    LaneGeometry, Node, RoadManager, RoadStorage, RoadTypes, Segment,
+};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
 use std::collections::HashMap;
@@ -182,6 +184,7 @@ fn mesh_segment_with_boundaries(
     _seg_id: SegmentId,
     segment: &Segment,
     storage: &RoadStorage,
+    road_type: &RoadType,
     style: &RoadStyleParams,
     config: &MeshConfig,
     chunk_filter: Option<ChunkId>,
@@ -189,12 +192,12 @@ fn mesh_segment_with_boundaries(
     end_result: Option<&IntersectionMeshResult>,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
-) {
+) -> RoadEdges {
     let lane_ids = segment.lanes();
+    let mut road_edges = RoadEdges::new(style.road_type_id());
     if lane_ids.is_empty() {
-        return;
+        return road_edges;
     }
-    let road_type = style.road_type();
     // Extract clip polygons
     let start_clip = start_result
         .map(|r| &r.polygon)
@@ -202,14 +205,14 @@ fn mesh_segment_with_boundaries(
     let end_clip = end_result.map(|r| &r.polygon).filter(|p| p.ring.len() >= 3);
     if let Some(start_clip) = start_clip {
         //gizmo.polyline(&start_clip.ring, [0.2, 0.1, 0.8], 10.0, 25.0);
-        for p in start_clip.ring.iter() {
-            //gizmo.cross(*p, 0.3, [0.2, 0.1, 0.8], 25.0);
+        for _p in start_clip.ring.iter() {
+            //gizmo.cross(*_p, 0.3, [0.2, 0.1, 0.8], 25.0);
         }
     }
     if let Some(end_clip) = end_clip {
         //gizmo.polyline(&end_clip.ring, [0.8, 0.1, 0.2], 5.0, 25.0);
-        for p in end_clip.ring.iter() {
-            //gizmo.cross(*p, 0.2, [0.8, 0.1, 0.2], 25.0);
+        for _p in end_clip.ring.iter() {
+            //gizmo.cross(*_p, 0.2, [0.8, 0.1, 0.2], 25.0);
         }
     }
     let mut lane_data: Vec<(i8, LaneId)> = Vec::new();
@@ -245,50 +248,52 @@ fn mesh_segment_with_boundaries(
     // 1. Draw lane surfaces
     for (_idx, lane_id) in &lane_data {
         let geom = storage.lane(&lane_id).geometry();
+        let width = road_type.lane_width;
+        let edges = make_ribbon_edges(gizmo, geom, width, 0.0, start_clip, end_clip);
         build_ribbon_mesh(
             terrain_renderer,
             gizmo,
-            style,
+            road_type,
             geom,
-            road_type.lane_width,
+            width,
             road_type.lane_height,
-            0.0,
             road_type.lane_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
-            start_clip,
-            end_clip,
+            &edges,
             vertices,
             indices,
         );
+
+        road_edges.lane_edges.insert(*lane_id, edges);
     }
 
     // 2. Draw sidewalks on outer edges
     if let Some((_idx, lane_id)) = min_lane {
         let geom = storage.lane(&lane_id).geometry();
         let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
-
+        let width = road_type.sidewalk_width;
+        let edges = make_ribbon_edges(gizmo, geom, width, offset, start_clip, end_clip);
         build_ribbon_mesh(
             terrain_renderer,
             gizmo,
-            style,
+            road_type,
             geom,
-            road_type.sidewalk_width,
+            width,
             road_type.sidewalk_height,
-            offset,
             road_type.sidewalk_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
-            start_clip,
-            end_clip,
+            &edges,
             vertices,
             indices,
         );
+        road_edges.left_sidewalk_edge = edges;
 
         let inner_offset = offset - road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
-            style,
+            road_type,
             geom,
             inner_offset,
             road_type.lane_height,
@@ -307,7 +312,7 @@ fn mesh_segment_with_boundaries(
         let outer_offset = offset + road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
-            style,
+            road_type,
             geom,
             outer_offset,
             road_type.lane_height,
@@ -328,27 +333,27 @@ fn mesh_segment_with_boundaries(
         let geom = storage.lane(&lane_id).geometry();
         let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
 
+        let width = road_type.sidewalk_width;
+        let edges = make_ribbon_edges(gizmo, geom, width, offset, start_clip, end_clip);
         build_ribbon_mesh(
             terrain_renderer,
             gizmo,
-            style,
+            road_type,
             geom,
-            road_type.sidewalk_width,
+            width,
             road_type.sidewalk_height,
-            offset,
             road_type.sidewalk_material_id,
             chunk_filter,
             (config.uv_scale_u, config.uv_scale_v),
-            start_clip,
-            end_clip,
+            &edges,
             vertices,
             indices,
         );
-
+        road_edges.right_sidewalk_edge = edges;
         let inner_offset = offset - road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
-            style,
+            road_type,
             geom,
             inner_offset,
             road_type.lane_height,
@@ -367,7 +372,7 @@ fn mesh_segment_with_boundaries(
         let outer_offset = offset + road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
-            style,
+            road_type,
             geom,
             outer_offset,
             road_type.lane_height,
@@ -390,19 +395,19 @@ fn mesh_segment_with_boundaries(
             let geom = storage.lane(&lane_id).geometry();
             let offset = -road_type.lane_width * 0.5;
 
+            let width = road_type.median_width;
+            let edges = make_ribbon_edges(gizmo, geom, width, offset, start_clip, end_clip);
             build_ribbon_mesh(
                 terrain_renderer,
                 gizmo,
-                style,
+                road_type,
                 geom,
-                road_type.median_width,
+                width,
                 road_type.median_height,
-                offset,
                 road_type.median_material_id,
                 chunk_filter,
                 (config.uv_scale_u, config.uv_scale_v),
-                start_clip,
-                end_clip,
+                &edges,
                 vertices,
                 indices,
             );
@@ -410,7 +415,7 @@ fn mesh_segment_with_boundaries(
             let curb_offset_right = offset + road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
-                style,
+                road_type,
                 geom,
                 curb_offset_right,
                 road_type.lane_height,
@@ -429,7 +434,7 @@ fn mesh_segment_with_boundaries(
             let curb_offset_left = offset - road_type.median_width * 0.5;
             build_vertical_face(
                 terrain_renderer,
-                style,
+                road_type,
                 geom,
                 curb_offset_left,
                 road_type.lane_height,
@@ -446,21 +451,36 @@ fn mesh_segment_with_boundaries(
             );
         }
     }
+    road_edges
 }
-
+pub struct RoadEdges {
+    pub lane_edges: HashMap<LaneId, Edges>,
+    pub left_sidewalk_edge: Edges,
+    pub right_sidewalk_edge: Edges,
+    pub road_type_id: RoadTypeId,
+}
+impl RoadEdges {
+    pub fn new(road_type_id: RoadTypeId) -> RoadEdges {
+        RoadEdges {
+            lane_edges: HashMap::new(),
+            left_sidewalk_edge: Edges::new(),
+            right_sidewalk_edge: Edges::new(),
+            road_type_id,
+        }
+    }
+}
 fn draw_node_geometry(
     terrain_renderer: &Terrain,
     gizmo: &mut Gizmo,
+    road_type: &RoadType,
     node_pos: WorldPos,
     connected_lanes_info: &[(i8, f32)],
     cap_direction: Option<Vec3>,
-    style: &RoadStyleParams,
     config: &MeshConfig,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
     let chunk_size = terrain_renderer.chunk_size;
-    let road_type = style.road_type();
 
     let mut max_radius = 2.0_f32;
     for (idx, width) in connected_lanes_info {
@@ -554,20 +574,19 @@ fn draw_node_geometry(
     let sidewalk_mid_radius = (sw_inner + sw_outer) / 2.0;
     let sidewalk_width = sw_outer - sw_inner;
     let sidewalk_geom = create_circular_geom(sidewalk_mid_radius);
+    let edges = make_ribbon_edges(gizmo, &sidewalk_geom, sidewalk_width, 0.0, None, None);
 
     build_ribbon_mesh(
         terrain_renderer,
         gizmo,
-        style,
+        road_type,
         &sidewalk_geom,
         sidewalk_width,
         road_type.sidewalk_height,
-        0.0,
         road_type.sidewalk_material_id,
         None,
         (1.0 / config.uv_scale_u, 1.0 / config.uv_scale_v),
-        None,
-        None,
+        &edges,
         vertices,
         indices,
     );
@@ -576,7 +595,7 @@ fn draw_node_geometry(
 
     build_vertical_face(
         terrain_renderer,
-        style,
+        road_type,
         &inner_curb_geom,
         0.0,
         road_type.lane_height,
@@ -596,7 +615,7 @@ fn draw_node_geometry(
 
     build_vertical_face(
         terrain_renderer,
-        style,
+        road_type,
         &outer_curb_geom,
         0.0,
         road_type.lane_height,
@@ -612,44 +631,77 @@ fn draw_node_geometry(
         gizmo,
     );
 }
-
-/// Builds a ribbon mesh for a single lane or strip.
-pub fn build_ribbon_mesh(
-    terrain_renderer: &Terrain,
+pub struct Edges {
+    pub left_points: Vec<WorldPos>,
+    pub right_points: Vec<WorldPos>,
+    pub right_tangents: Vec<Vec3>,
+    pub right_laterals: Vec<Vec3>,
+}
+impl Edges {
+    pub fn new() -> Self {
+        Self {
+            left_points: vec![],
+            right_points: vec![],
+            right_tangents: vec![],
+            right_laterals: vec![],
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.right_points.is_empty() && self.left_points.is_empty()
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            left_points: Vec::with_capacity(capacity),
+            right_points: Vec::with_capacity(capacity),
+            right_tangents: Vec::with_capacity(capacity),
+            right_laterals: Vec::with_capacity(capacity),
+        }
+    }
+    pub fn push(
+        &mut self,
+        left_point: WorldPos,
+        right_point: WorldPos,
+        right_tangent: Vec3,
+        right_lateral: Vec3,
+    ) {
+        self.left_points.push(left_point);
+        self.right_points.push(right_point);
+        self.right_tangents.push(right_tangent);
+        self.right_laterals.push(right_lateral);
+    }
+    pub fn len(&self) -> usize {
+        self.left_points.len()
+    }
+    pub fn get_mut(&mut self, index: usize) -> (Option<&mut WorldPos>, Option<&mut WorldPos>) {
+        (
+            self.left_points.get_mut(index),
+            self.right_points.get_mut(index),
+        )
+    }
+    pub fn get(&self, index: usize) -> (Option<&WorldPos>, Option<&WorldPos>) {
+        (self.left_points.get(index), self.right_points.get(index))
+    }
+}
+fn make_ribbon_edges(
     gizmo: &mut Gizmo,
-    style: &RoadStyleParams,
     lane_geom: &LaneGeometry,
     width: f32,
-    height: f32,
     offset_from_center: f32,
-    material_id: u32,
-    chunk_filter: Option<ChunkId>,
-    uv_config: (f32, f32),
     start_clip: Option<&IntersectionPolygon>,
     end_clip: Option<&IntersectionPolygon>,
-    vertices: &mut Vec<RoadVertex>,
-    indices: &mut Vec<u32>,
-) {
-    if lane_geom.points.len() < 2 {
-        return;
-    }
-    let high_res_height = chunk_filter.is_some();
-    let chunk_size = terrain_renderer.chunk_size;
+) -> Edges {
+    let mut edges: Edges = Edges::with_capacity(lane_geom.points.len());
+    let chunk_size = gizmo.chunk_size;
     let half_width = width * 0.5;
-    let base_vertex = vertices.len() as u32;
-
-    // === Pre-calculate all edge positions in XZ ===
-    let mut edges: Vec<(WorldPos, WorldPos)> = Vec::with_capacity(lane_geom.points.len());
-
     for i in 0..lane_geom.points.len() {
         let p = lane_geom.points[i];
-        let (_, lateral) = tangent_and_lateral_right(&lane_geom.points, i, chunk_size);
-        //gizmo.direction(p, lateral, [1.0, 0.0, 0.0], 0.0);
+        let (tangent, lateral) = tangent_and_lateral_right(&lane_geom.points, i, chunk_size);
+        //gizmo.direction(p, lateral, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
         let center_pos = p.add_vec3(lateral * offset_from_center, chunk_size);
-        let left_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
-        let right_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
+        let right_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
+        let left_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
 
-        edges.push((left_pos, right_pos));
+        edges.push(left_pos, right_pos, tangent, lateral);
     }
 
     if let Some(poly) = start_clip {
@@ -659,8 +711,30 @@ pub fn build_ribbon_mesh(
     if let Some(poly) = end_clip {
         clip_ribbon_edges_to_polygon(&mut edges, poly, false, gizmo);
     }
+    edges
+}
+/// Builds a ribbon mesh for a single lane or strip.
+pub fn build_ribbon_mesh(
+    terrain_renderer: &Terrain,
+    _gizmo: &mut Gizmo,
+    road_type: &RoadType,
+    lane_geom: &LaneGeometry,
+    width: f32,
+    height: f32,
+    material_id: u32,
+    chunk_filter: Option<ChunkId>,
+    uv_config: (f32, f32),
+    edges: &Edges,
+    vertices: &mut Vec<RoadVertex>,
+    indices: &mut Vec<u32>,
+) {
+    if lane_geom.points.len() < 2 {
+        return;
+    }
+    let high_res_height = chunk_filter.is_some();
+    let base_vertex = vertices.len() as u32;
 
-    // === Chunk filtering (unchanged) ===
+    // === Chunk filtering ===
     let mut included_indices = Vec::new();
 
     match chunk_filter {
@@ -702,17 +776,17 @@ pub fn build_ribbon_mesh(
     let mut current_vert_idx = 0;
 
     for &i in &included_indices {
-        let (mut left_pos, mut right_pos) = edges[i];
-
+        let mut left_pos = edges.left_points[i];
+        let mut right_pos = edges.right_points[i];
         set_point_height_with_structure_type(
             terrain_renderer,
-            style.road_type().structure(),
+            road_type.structure(),
             &mut left_pos,
             high_res_height,
         );
         set_point_height_with_structure_type(
             terrain_renderer,
-            style.road_type().structure(),
+            road_type.structure(),
             &mut right_pos,
             high_res_height,
         );
@@ -753,14 +827,14 @@ pub fn build_ribbon_mesh(
         let v_base = base_vertex + point_idx_to_vert_idx[&a];
         let v_next = base_vertex + point_idx_to_vert_idx[&b];
 
-        // CCW winding, top-facing
-        indices.push(v_base);
-        indices.push(v_next);
+        // CCW winding, top-facing (left = v_base+1, right = v_base)
         indices.push(v_base + 1);
-
-        indices.push(v_base + 1);
-        indices.push(v_next);
         indices.push(v_next + 1);
+        indices.push(v_base);
+
+        indices.push(v_base);
+        indices.push(v_next + 1);
+        indices.push(v_next);
     }
 }
 
@@ -768,7 +842,7 @@ pub fn build_ribbon_mesh(
 /// Updated to accept start/end overrides to snap to intersection boundaries.
 pub fn build_vertical_face(
     terrain_renderer: &Terrain,
-    style: &RoadStyleParams,
+    road_type: &RoadType,
     ref_geom: &LaneGeometry,
     offset_lateral: f32,
     bottom_height: f32,
@@ -781,7 +855,7 @@ pub fn build_vertical_face(
     end_override: Option<WorldPos>,
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
-    gizmo: &mut Gizmo,
+    _gizmo: &mut Gizmo,
 ) {
     if (top_height - bottom_height).abs() < 0.001 {
         return;
@@ -849,7 +923,7 @@ pub fn build_vertical_face(
         let mut p_bottom = face_pos;
         set_point_height_with_structure_type(
             terrain_renderer,
-            style.road_type().structure(),
+            road_type.structure(),
             &mut p_bottom,
             high_res_height,
         );
@@ -857,7 +931,7 @@ pub fn build_vertical_face(
         let mut p_top = face_pos;
         set_point_height_with_structure_type(
             terrain_renderer,
-            style.road_type().structure(),
+            road_type.structure(),
             &mut p_top,
             high_res_height,
         );
@@ -941,6 +1015,7 @@ fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32,
 pub struct RoadMeshManager {
     chunk_cache: HashMap<ChunkId, ChunkMesh>,
     pub config: MeshConfig,
+    pub road_edges: HashMap<SegmentId, RoadEdges>,
 }
 
 impl RoadMeshManager {
@@ -948,6 +1023,7 @@ impl RoadMeshManager {
         Self {
             chunk_cache: HashMap::new(),
             config,
+            road_edges: HashMap::new(),
         }
     }
 
@@ -977,10 +1053,11 @@ impl RoadMeshManager {
 
     /// Build mesh for a chunk (Some) or all geometry (None for previews)
     pub fn build_mesh(
-        &self,
+        &mut self,
         terrain: &Terrain,
         chunk_id: Option<ChunkId>,
         storage: &RoadStorage,
+        road_types: &RoadTypes,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,
     ) -> ChunkMesh {
@@ -1004,6 +1081,9 @@ impl RoadMeshManager {
 
             let segment_count = storage.enabled_segment_count_connected_to_node(*node_id);
 
+            let Some(road_type) = style.road_type(road_types) else {
+                continue;
+            };
             if segment_count >= 2 {
                 let result = build_intersection_mesh(
                     terrain,
@@ -1011,6 +1091,7 @@ impl RoadMeshManager {
                     node,
                     storage,
                     style,
+                    road_type,
                     &self.config,
                     &mut vertices,
                     &mut indices,
@@ -1028,7 +1109,7 @@ impl RoadMeshManager {
                     .chain(node.outgoing_lanes().iter())
                 {
                     let lane = storage.lane(lane_id);
-                    connected_lanes_info.push((lane.lane_index(), style.road_type().lane_width));
+                    connected_lanes_info.push((lane.lane_index(), road_type.lane_width));
                 }
 
                 if connected_lanes_info.is_empty() {
@@ -1041,10 +1122,10 @@ impl RoadMeshManager {
                 draw_node_geometry(
                     terrain,
                     gizmo,
+                    road_type,
                     center,
                     connected_lanes_info.as_slice(),
                     cap_direction,
-                    style,
                     &self.config,
                     &mut vertices,
                     &mut indices,
@@ -1068,7 +1149,9 @@ impl RoadMeshManager {
             if !segment.enabled {
                 continue;
             }
-
+            let Some(road_type) = style.road_type(road_types) else {
+                continue;
+            };
             // Get boundary data from start and end nodes
             let start_boundary = intersection_results.get(&segment.start());
             let end_boundary = intersection_results.get(&segment.end());
@@ -1078,12 +1161,13 @@ impl RoadMeshManager {
             // if let Some(end_boundary) = end_boundary {
             //     gizmo.polyline(&end_boundary.polygon.ring, [0.0, 0.0, 0.2], 2.0, 50.0);
             // }
-            mesh_segment_with_boundaries(
+            let road_edges = mesh_segment_with_boundaries(
                 terrain,
                 gizmo,
                 seg_id,
                 segment,
                 storage,
+                road_type,
                 style,
                 &self.config,
                 chunk_id,
@@ -1092,6 +1176,15 @@ impl RoadMeshManager {
                 &mut vertices,
                 &mut indices,
             );
+            // gizmo.polyline(&road_edges.right_sidewalk_edge.right_points, [0.8, 0.0, 0.0, 1.0], 4.0, 0.2, 0.0);
+            // gizmo.polyline(&road_edges.right_sidewalk_edge.left_points, [0.0, 0.0, 0.8, 1.0], 4.0, 0.2, 0.0);
+            // gizmo.polyline(&road_edges.left_sidewalk_edge.right_points, [0.8, 0.0, 0.0, 1.0], 4.0, 0.2, 0.0);
+            // gizmo.polyline(&road_edges.left_sidewalk_edge.left_points, [0.0, 0.0, 0.8, 1.0], 4.0, 0.2, 0.0);
+            // for lane in road_edges.lane_edges.values() {
+            //     gizmo.polyline(&lane.right_points, [0.8, 0.5, 0.0, 1.0], 8.0, 0.0, 0.0);
+            //     gizmo.polyline(&lane.left_points, [0.0, 0.5, 0.8, 1.0], 8.0, 0.0, 0.0);
+            // }
+            self.road_edges.insert(seg_id, road_edges);
         }
 
         ChunkMesh {
@@ -1106,29 +1199,43 @@ impl RoadMeshManager {
         &mut self,
         terrain: &Terrain,
         chunk_id: ChunkId,
-        storage: &RoadStorage,
+        road_manager: &RoadManager,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,
     ) -> &ChunkMesh {
-        let mesh = self.build_mesh(terrain, Some(chunk_id), storage, style, gizmo);
+        let mesh = self.build_mesh(
+            terrain,
+            Some(chunk_id),
+            &road_manager.roads,
+            &road_manager.road_types,
+            style,
+            gizmo,
+        );
         self.chunk_cache.insert(chunk_id, mesh);
         self.chunk_cache.get(&chunk_id).unwrap()
     }
 
     /// Convenience wrapper for building preview meshes (no chunking)
     pub fn build_preview_mesh(
-        &self,
+        &mut self,
         terrain: &Terrain,
-        preview_storage: &RoadStorage,
+        road_manager: &RoadManager,
         style: &RoadStyleParams,
         gizmo: &mut Gizmo,
     ) -> ChunkMesh {
-        self.build_mesh(terrain, None, preview_storage, style, gizmo)
+        self.build_mesh(
+            terrain,
+            None,
+            &road_manager.preview_roads,
+            &road_manager.road_types,
+            style,
+            gizmo,
+        )
     }
 }
 
 fn compute_cap_direction(
-    gizmo: &mut Gizmo,
+    _gizmo: &mut Gizmo,
     node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,

@@ -399,6 +399,79 @@ pub fn set_element_color(
     previous_color
 }
 
+pub fn get_element_color(
+    menus: &HashMap<String, Menu>,
+    element_ref: &ElementRef,
+    property: &ColorComponent,
+) -> Option<[f32; 4]> {
+    let menu = menus.get(&element_ref.menu)?;
+    let layer = menu.layers.iter().find(|l| l.name == element_ref.layer)?;
+
+    match element_ref.kind {
+        ElementKind::Circle => {
+            let c = layer
+                .elements
+                .iter()
+                .filter_map(UiElement::as_circle)
+                .find(|c| c.id == element_ref.id)?;
+
+            match property {
+                ColorComponent::Fill => Some(c.fill_color),
+                ColorComponent::Border => Some(c.border_color),
+                ColorComponent::InsideBorder => Some(c.inside_border_color),
+                ColorComponent::Glow => Some(c.glow_color),
+                _ => None,
+            }
+        }
+
+        ElementKind::Text => {
+            let t = layer
+                .elements
+                .iter()
+                .filter_map(UiElement::as_text)
+                .find(|t| t.id == element_ref.id)?;
+
+            match property {
+                ColorComponent::Fill => Some(t.color),
+                _ => None,
+            }
+        }
+
+        ElementKind::Rect => {
+            let r = layer
+                .elements
+                .iter()
+                .filter_map(UiElement::as_rect)
+                .find(|r| r.id == element_ref.id)?;
+
+            match property {
+                ColorComponent::Fill => Some(r.color),
+                _ => None,
+            }
+        }
+
+        ElementKind::Polygon => {
+            let p = layer
+                .elements
+                .iter()
+                .filter_map(UiElement::as_polygon)
+                .find(|p| p.id == element_ref.id)?;
+
+            match property {
+                ColorComponent::Fill => p.unscaled_vertices.first().map(|v| v.color),
+
+                ColorComponent::VertexIndex(i) => {
+                    p.unscaled_vertices.get(*i as usize).map(|v| v.color)
+                }
+
+                _ => None,
+            }
+        }
+
+        _ => None,
+    }
+}
+
 pub fn set_vertex_position(
     menus: &mut HashMap<String, Menu>,
     element_ref: &ElementRef,

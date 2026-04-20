@@ -34,6 +34,7 @@ pub fn run_inputs(resources: &mut Resources) {
     let up = Vec3::Y;
 
     let zooming = input.gameplay_down("Zoom");
+
     if zooming {
         cam_ctrl.zoom(
             camera,
@@ -42,7 +43,7 @@ pub fn run_inputs(resources: &mut Resources) {
         resources.ui.variables.set_bool("zoomed", true);
     } else {
         if cam_ctrl.zoom_time_start.is_some() {
-            cam_ctrl.zoom_deactivate(); // only once
+            cam_ctrl.zoom_deactivate(camera);
         }
         cam_ctrl.zoom_end(
             camera,

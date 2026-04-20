@@ -133,14 +133,16 @@ macro_rules! define_commands {
             touch_manager: &UiTouchManager,
             func_name: &str,
             mut args: Vec<String>,
-            element: &ElementRef
+            element: &ElementRef,
+            event_kind: &TouchEventKind,
+            buttons: &MouseButtons
         ) -> Option<UiCommand> {
             let name = func_name.to_ascii_lowercase();
 
             match name.as_str() {
                 $(
                     $( $name )|+ => {
-                        define_commands!(@build settings, variables, menus, touch_manager, args, element, $variant $( { $( $field : $ftype ),* } )?)
+                        define_commands!(@build settings, variables, menus, touch_manager, args, element, event_kind, buttons, $variant $( { $( $field : $ftype ),* } )?)
                     }
                 ),*,
                 _ => {
@@ -152,17 +154,17 @@ macro_rules! define_commands {
     };
 
     // unit variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $variant:ident) => {
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $event_kind:ident, $buttons:ident, $variant:ident) => {
     Some(UiCommand::$variant)
     };
 
     // struct variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $event_kind:ident, $buttons:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
         let mut idx = 0usize;
 
         $(
             let $field = define_commands!(
-                @parse $settings, $vars, $menus, $tm, $args, idx, $element, $field, $ftype
+                @parse $settings, $vars, $menus, $tm, $args, idx, $element, $event_kind, $buttons, $field, $ftype
             )?;
         )*
 
@@ -174,8 +176,20 @@ macro_rules! define_commands {
     // -----------------------------
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, element_ref, $ftype:ty) => {{
+        $element:ident, $event_kind:ident, $buttons:ident, element_ref, $ftype:ty) => {{
         Some($element.clone())
+    }};
+
+    // SPECIAL FIELD: event_kind
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
+        $element:ident, $event_kind:ident, $buttons:ident, event_kind, $ftype:ty) => {{
+        Some($event_kind.clone())
+    }};
+
+    // SPECIAL FIELD: buttons
+    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
+        $element:ident, $event_kind:ident, $buttons:ident, buttons, $ftype:ty) => {{
+        Some($buttons.clone())
     }};
 
     // -----------------------------
@@ -183,7 +197,7 @@ macro_rules! define_commands {
     // -----------------------------
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, args, $ftype:ty) => {{
+        $element:ident, $event_kind:ident, $buttons:ident, args, $ftype:ty) => {{
         let out = $args.split_off($idx);
         #[allow(unused_assignments)]
         {
@@ -196,7 +210,7 @@ macro_rules! define_commands {
     // SPECIAL FIELD: commands
     // -----------------------------
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, commands, $ftype:ty) => {{
+        $element:ident, $event_kind:ident, $buttons:ident, commands, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -206,7 +220,7 @@ macro_rules! define_commands {
             let cmds = raw.split(';')
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
                 .collect();
 
             Some(cmds)
@@ -217,7 +231,7 @@ macro_rules! define_commands {
 
     // SPECIAL FIELD: then / else_branch
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, then, $ftype:ty) => {{
+        $element:ident, $event_kind:ident, $buttons:ident, then, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -227,7 +241,7 @@ macro_rules! define_commands {
             let cmds = raw.split(';')
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
                 .collect();
 
             Some(cmds)
@@ -237,7 +251,7 @@ macro_rules! define_commands {
     }};
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, else_branch, $ftype:ty) => {{
+        $element:ident, $event_kind:ident, $buttons:ident, else_branch, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -247,7 +261,7 @@ macro_rules! define_commands {
             let cmds = raw.split(';')
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
                 .collect();
 
             Some(cmds)
@@ -256,7 +270,7 @@ macro_rules! define_commands {
         }
     }};
 
-    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element:ident) => {{
+    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element:ident, $event_kind:ident, $buttons:ident) => {{
         let raw = $args.get($idx)?;
         #[allow(unused_assignments)]
         {
@@ -266,7 +280,7 @@ macro_rules! define_commands {
         let cmds = raw.split(';')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element))
+            .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
             .collect();
 
         Some(cmds)
@@ -274,7 +288,7 @@ macro_rules! define_commands {
 
     // GENERIC FIELD PARSER
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $field:ident, $ftype:ty) => {{
+        $element:ident, $event_kind:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
 
         let val = <$ftype as ParseArg>::parse_arg(
             $settings,
@@ -407,6 +421,8 @@ define_commands! {
     "exit" | "quit"
         => ExitGame,
 
+    "show_interaction" => ShowInteraction {element_ref: ElementRef, event_kind: TouchEventKind, buttons: MouseButtons, color: String},
+
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
         => Print { element_ref: ElementRef, args: Vec<String> },
@@ -429,7 +445,7 @@ define_commands! {
         => Noop,
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
-enum TouchEventKind {
+pub enum TouchEventKind {
     HoverEnter,
     Hovering,
     HoverExit,
@@ -443,6 +459,7 @@ enum TouchEventKind {
     DeSelect,
     DragMove,
     Nothing,
+    Always,
 }
 pub fn actions_to_uicommands(
     ui: &mut Ui,
@@ -536,33 +553,51 @@ pub fn actions_to_uicommands(
 
     let mut cmds = Vec::new();
 
-    for action in actions.iter().chain(ui.global_actions.actions.iter()) {
-        let mut action_owned = action.clone();
-
-        let filters = parse_action_filters(&mut action_owned);
-
-        if filters_match(input, settings, &filters, &event_kind, &buttons) {
-            // Now action_owned only contains the actual command
-            if let Some(cmd) = parse_primitive_action(
-                settings,
-                &mut ui.variables,
-                &ui.menus,
-                &ui.touch_manager,
-                action_owned.trim(),
-                element,
-            ) {
-                cmds.push(cmd);
-            }
+    for action in actions
+        .iter()
+        .chain(ui.global_actions.actions.clone().iter())
+    {
+        if let Some(cmd) = parse_action(action, ui, settings, input, &event_kind, &buttons, element)
+        {
+            cmds.push(cmd);
         }
     }
     cmds
 }
+pub fn parse_action(
+    action: &String,
+    ui: &mut Ui,
+    settings: &Settings,
+    input: &mut Input,
+    event_kind: &TouchEventKind,
+    buttons: &MouseButtons,
+    element: &ElementRef,
+) -> Option<UiCommand> {
+    let mut action_owned = action.clone();
 
+    let filters = parse_action_filters(&mut action_owned);
+
+    if filters_match(input, settings, &filters, &event_kind, &buttons) {
+        // Now action_owned only contains the actual command
+        return parse_primitive_action(
+            settings,
+            &mut ui.variables,
+            &ui.menus,
+            &ui.touch_manager,
+            action_owned.trim(),
+            element,
+            event_kind,
+            buttons,
+        );
+    };
+    None
+}
 /// Handle a single action string that may be an event wrapper
 fn handle_action_str(
     settings: &Settings,
     ui: &mut Ui,
     event_kind: &TouchEventKind,
+    buttons: &MouseButtons,
     action: &str,
     element: &ElementRef,
 ) -> Option<UiCommand> {
@@ -612,7 +647,7 @@ fn handle_action_str(
     };
 
     let inner = s[open_paren + 1..close_paren].trim();
-    process_inner_content(settings, ui, event_kind, inner, element)
+    process_inner_content(settings, ui, event_kind, buttons, inner, element)
 }
 
 /// Process the inner content of a matched event wrapper
@@ -620,6 +655,7 @@ fn process_inner_content(
     settings: &Settings,
     ui: &mut Ui,
     event_kind: &TouchEventKind,
+    buttons: &MouseButtons,
     inner: &str,
     element: &ElementRef,
 ) -> Option<UiCommand> {
@@ -644,7 +680,7 @@ fn process_inner_content(
                 if !last_part.is_empty() {
                     // Try as nested event wrapper first
                     if let Some(cmd) =
-                        handle_action_str(settings, ui, event_kind, last_part, element)
+                        handle_action_str(settings, ui, event_kind, buttons, last_part, element)
                     {
                         return Some(cmd);
                     }
@@ -656,6 +692,8 @@ fn process_inner_content(
                         &ui.touch_manager,
                         last_part,
                         element,
+                        event_kind,
+                        buttons,
                     ) {
                         return Some(cmd);
                     }
@@ -670,7 +708,8 @@ fn process_inner_content(
     let last_part = s[part_start..].trim();
     if !last_part.is_empty() {
         // Try as nested event wrapper
-        if let Some(cmd) = handle_action_str(settings, ui, event_kind, last_part, element) {
+        if let Some(cmd) = handle_action_str(settings, ui, event_kind, buttons, last_part, element)
+        {
             return Some(cmd);
         }
         // Try as primitive action
@@ -681,6 +720,8 @@ fn process_inner_content(
             &ui.touch_manager,
             last_part,
             element,
+            event_kind,
+            buttons,
         ) {
             return Some(cmd);
         }
@@ -860,6 +901,8 @@ fn parse_primitive_action(
     touch_manager: &UiTouchManager,
     action: &str,
     element: &ElementRef,
+    event_kind: &TouchEventKind,
+    buttons: &MouseButtons,
 ) -> Option<UiCommand> {
     let s = action.trim();
 
@@ -903,6 +946,8 @@ fn parse_primitive_action(
                 func_name,
                 args,
                 element,
+                event_kind,
+                buttons,
             );
             //println!("Command: {:?}", command);
             return command;
@@ -918,6 +963,8 @@ fn parse_primitive_action(
         s,
         Vec::new(),
         element,
+        event_kind,
+        buttons,
     )
 }
 
@@ -1001,7 +1048,10 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
             action,
             "on:",
             &[
+                ("a", TouchEventKind::Always),
+                ("always", TouchEventKind::Always),
                 ("n", TouchEventKind::Nothing),
+                ("nothing", TouchEventKind::Nothing),
                 ("hover_enter", TouchEventKind::HoverEnter),
                 ("hoverenter", TouchEventKind::HoverEnter),
                 ("hovering", TouchEventKind::Hovering),

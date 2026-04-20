@@ -1,29 +1,26 @@
 #![allow(dead_code)]
 
 use crate::helpers::positions::WorldPos;
-use crate::world::roads::roads::{RoadCommand, RoadStorage};
+use crate::world::roads::roads::{RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
-
+pub type RoadTypeId = u64;
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
     state: EditorState,
     mode: BuildMode,
-    road_type: RoadType,
+    road_type_id: RoadTypeId,
 }
 
 impl RoadStyleParams {
-    pub fn turn_tightness(&self) -> f32 {
-        self.road_type.turn_tightness
-    }
     pub fn _set_mode(&mut self, mode: BuildMode) {
         if self.mode != mode {
             self.mode = mode;
             self.state = EditorState::Idle;
         }
     }
-    pub fn set_road_type(&mut self, ty: RoadType) {
-        self.road_type = ty;
+    pub fn set_road_type_id(&mut self, id: RoadTypeId) {
+        self.road_type_id = id;
     }
     pub fn set_state(&mut self, editor_state: EditorState) {
         self.state = editor_state;
@@ -31,8 +28,11 @@ impl RoadStyleParams {
     pub fn mode(&self) -> BuildMode {
         self.mode
     }
-    pub fn road_type(&self) -> &RoadType {
-        &self.road_type
+    pub fn road_type<'a>(&self, road_types: &'a RoadTypes) -> Option<&'a RoadType> {
+        road_types.get_road_type(self.road_type_id)
+    }
+    pub fn road_type_id(&self) -> RoadTypeId {
+        self.road_type_id
     }
     pub fn state(&self) -> &EditorState {
         &self.state
@@ -53,7 +53,7 @@ impl Default for RoadStyleParams {
         Self {
             state: EditorState::Idle,
             mode: BuildMode::Straight,
-            road_type: RoadType::default(),
+            road_type_id: 0,
         }
     }
 }
@@ -95,7 +95,9 @@ impl From<NodeId> for u32 {
 }
 
 /// Stable, monotonically increasing segment identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[repr(transparent)]
 pub struct SegmentId(pub u32);
 
@@ -277,9 +279,9 @@ impl AttachedControl {
 
 pub type LeftLaneCount = usize;
 pub type RightLaneCount = usize;
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct RoadType {
-    pub name: &'static str,
+    pub name: String,
 
     pub lanes_each_direction: (LeftLaneCount, RightLaneCount),
 
@@ -303,7 +305,7 @@ pub struct RoadType {
 impl Default for RoadType {
     fn default() -> Self {
         Self {
-            name: "Small Road",
+            name: "Small Road".to_string(),
 
             lanes_each_direction: (1, 1),
 
@@ -328,10 +330,12 @@ impl Default for RoadType {
 }
 
 impl RoadType {
+    #[inline]
     pub fn total_lanes(&self) -> usize {
         self.lanes_each_direction.0 + self.lanes_each_direction.1
     }
 
+    #[inline]
     pub fn capacity(&self) -> u32 {
         let lanes = self.total_lanes() as f32;
         let base_per_lane = 900.0;
@@ -339,24 +343,29 @@ impl RoadType {
 
         (lanes * base_per_lane * speed_factor) as u32
     }
+    #[inline]
     pub fn speed_limit(&self) -> f32 {
         self.speed_limit
     }
 
+    #[inline]
     pub fn vehicle_mask(&self) -> u32 {
         self.vehicle_mask
     }
 
+    #[inline]
     pub fn structure(&self) -> StructureType {
         self.structure
     }
 
+    #[inline]
     pub fn lanes_each_direction(&self) -> (LeftLaneCount, RightLaneCount) {
         self.lanes_each_direction
     }
 
-    pub fn name(&self) -> &'static str {
-        self.name
+    #[inline]
+    pub fn name(&self) -> &str {
+        self.name.as_str()
     }
 }
 
@@ -429,7 +438,7 @@ pub struct SplitInfo {
 
 #[derive(Debug, Clone)]
 pub struct SegmentPreview {
-    pub road_type: RoadType,
+    pub road_type_id: RoadTypeId,
     pub mode: BuildMode,
     pub is_valid: bool,
     pub reason_invalid: Option<PreviewError>,
@@ -441,7 +450,6 @@ pub struct SegmentPreview {
     pub would_split_end: Option<SplitInfo>,
     pub would_merge_start: Option<NodeId>,
     pub would_merge_end: Option<NodeId>,
-    pub lane_count_each_dir: (LeftLaneCount, RightLaneCount),
     pub estimated_length: f64,
     pub crossing_count: usize,
 }

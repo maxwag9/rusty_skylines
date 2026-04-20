@@ -339,7 +339,7 @@ pub fn update_ui_variables(
     ui_loader: &mut Ui,
     time_scales: &TimeScales,
     astronomy: &Astronomy,
-    obliquity: f32,
+    obliquity: f64,
     settings: &Settings,
 ) {
     ui_loader

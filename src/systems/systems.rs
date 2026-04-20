@@ -60,6 +60,7 @@ pub fn run_ui(resources: &mut Resources, event_loop: &ActiveEventLoop) {
         time,
         &mut resources.world.terrain,
         &mut resources.render_core.props,
+        &mut resources.world.buildings,
         resources.window.inner_size(),
         &mut resources.world.road,
         &mut resources.command_queues,

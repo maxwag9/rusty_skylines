@@ -53,13 +53,15 @@ pub enum CursorMode {
     Props,
     TerrainEditing,
     Cars,
+    Area,
 }
 
 impl CursorMode {
-    fn order() -> [CursorMode; 6] {
+    fn order() -> [CursorMode; 7] {
         [
             CursorMode::Roads,
             CursorMode::Zoning,
+            CursorMode::Area,
             CursorMode::Props,
             CursorMode::TerrainEditing,
             CursorMode::Cars,
@@ -76,6 +78,7 @@ impl CursorMode {
                 | (CursorMode::TerrainEditing, CursorMode::TerrainEditing)
                 | (CursorMode::Roads, CursorMode::Roads)
                 | (CursorMode::Zoning, CursorMode::Zoning)
+                | (CursorMode::Area, CursorMode::Area)
         )
     }
 
@@ -254,8 +257,8 @@ impl TerrainRenderSubsystem {
         pass: &mut RenderPass,
         terrain: &Terrain,
         camera: &Camera,
-        aspect: f32,
-        settings: &Settings,
+        _aspect: f32,
+        _settings: &Settings,
         underwater: bool,
     ) {
         let t_frame = Instant::now();
@@ -346,7 +349,7 @@ impl TerrainRenderSubsystem {
                 pass.draw_indexed(start..start + count, h.base_vertex, 0..1);
             }
         }
-        let total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
+        //let total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
         // println!("{}", total_ms);
     }
 }
@@ -554,7 +557,7 @@ impl Terrain {
         }
     }
 
-    fn frame_state(&self, settings: &Settings, camera: &Camera, aspect: f32) -> FrameState {
+    fn frame_state(&self, settings: &Settings, camera: &Camera, _aspect: f32) -> FrameState {
         let cs = self.chunk_size;
 
         let cam_pos = match settings.lod_center {

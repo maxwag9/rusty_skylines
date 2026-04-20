@@ -61,7 +61,7 @@ impl RoadRenderSubsystem {
         // Rebuild preview mesh from the (already-mutated) preview_roads
         let preview_mesh = self.mesh_manager.build_preview_mesh(
             terrain,
-            &road_subsystem.road_manager.preview_roads,
+            &road_subsystem.road_manager,
             &road_subsystem.road_editor.style,
             gizmo,
         );
@@ -80,7 +80,7 @@ impl RoadRenderSubsystem {
             self.mesh_manager.update_chunk_mesh(
                 terrain,
                 *chunk_id,
-                &road_subsystem.road_manager.roads,
+                &road_subsystem.road_manager,
                 &road_subsystem.road_editor.style,
                 gizmo,
             );
@@ -102,7 +102,7 @@ impl RoadRenderSubsystem {
                 self.mesh_manager.update_chunk_mesh(
                     terrain,
                     chunk_id,
-                    &road_subsystem.road_manager.roads,
+                    &road_subsystem.road_manager,
                     &road_subsystem.road_editor.style,
                     gizmo,
                 )
@@ -158,7 +158,7 @@ pub struct Roads {
     pub road_manager: RoadManager,
     pub road_editor: RoadEditor,
     pub partition_manager: PartitionManager,
-    road_commands: Vec<RoadEditorCommand>,
+    pub road_commands: Vec<RoadEditorCommand>,
     pub tick_20hz: Ticker,
 }
 impl Roads {
@@ -178,29 +178,21 @@ impl Roads {
         terrain: &mut Terrain,
         car_subsystem: &mut Cars,
         input: &mut Input,
-        time: &Time,
+        _time: &Time,
         gizmo: &mut Gizmo,
     ) {
         self.road_commands = self
             .road_editor
-            .update(&self.road_manager, terrain, input, gizmo);
+            .update(&mut self.road_manager, terrain, input, gizmo);
 
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
-        apply_preview_commands_world(
-            terrain,
-            &self.road_editor.style,
-            &mut self.road_manager.preview_roads,
-            &self.road_manager.roads,
-            car_subsystem,
-            &self.road_commands,
-            gizmo,
-        );
+        apply_preview_commands_world(terrain, self, car_subsystem, gizmo);
 
         // Apply real commands to roads storage
         if !self.road_commands.is_empty() {
             apply_commands_world(
                 terrain,
-                &mut self.road_manager.roads,
+                &mut self.road_manager,
                 car_subsystem,
                 gizmo,
                 &self.road_commands,
