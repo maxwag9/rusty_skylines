@@ -143,11 +143,12 @@ impl PartitionGizmo {
             let label_pos =
                 pos.add_vec3(Vec3::new(config.id_offset_x, config.id_offset_y, 0.0), cs);
 
-            gizmo.number(
-                id as isize,
+            gizmo.text(
+                id.to_string(),
                 label_pos,
                 scale,
                 color,
+                None,
                 config.thickness,
                 config.duration,
             );
@@ -180,11 +181,12 @@ impl PartitionGizmo {
                 cs,
             );
 
-            gizmo.number(
-                child_count as isize,
+            gizmo.text(
+                child_count.to_string(),
                 label_pos,
                 config.id_scale_base * 0.6,
                 [0.8, 0.8, 0.8, 1.0],
+                None,
                 config.thickness,
                 config.duration,
             );
@@ -405,11 +407,12 @@ impl PartitionGizmo {
             ];
 
             gizmo.sphere(pos, radius, color, config.thickness, config.duration);
-            gizmo.number(
-                id as isize,
+            gizmo.text(
+                id.to_string(),
                 pos.add_vec3(Vec3::new(radius * 1.5, 0.0, 0.0), cs),
                 config.id_scale_base,
                 color,
+                None,
                 config.thickness,
                 config.duration,
             );
@@ -456,11 +459,12 @@ impl PartitionGizmo {
                 config.thickness,
                 config.duration,
             );
-            gizmo.number(
-                (i + 1) as isize,
+            gizmo.text(
+                (i + 1).to_string(),
                 pos.add_vec3(Vec3::new(0.0, radius * 2.0, 0.0), cs),
                 config.id_scale_base * 0.8,
                 config.address_color,
+                None,
                 config.thickness,
                 config.duration,
             );
@@ -497,11 +501,12 @@ impl PartitionGizmo {
                 config.thickness,
                 config.duration,
             );
-            gizmo.number(
-                id as isize,
+            gizmo.text(
+                id.to_string(),
                 pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0), cs),
                 config.id_scale_base,
                 color,
+                None,
                 config.thickness,
                 config.duration,
             );
@@ -531,11 +536,12 @@ impl PartitionGizmo {
 
             let radius = config.subtree_node_radius / (1.0 + local_depth as f32 * 0.2);
             gizmo.sphere(pos, radius, color, config.thickness, config.duration);
-            gizmo.number(
-                id as isize,
+            gizmo.text(
+                id.to_string(),
                 pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0), cs),
                 config.id_scale_base / (1.0 + local_depth as f32 * 0.15),
                 color,
+                None,
                 config.thickness,
                 config.duration,
             );
@@ -589,11 +595,12 @@ impl PartitionGizmo {
 
         for (i, (value, color)) in stats.iter().enumerate() {
             let pos = anchor.add_vec3(Vec3::new(0.0, 0.0, i as f32 * line_height), cs);
-            gizmo.number(
-                *value,
+            gizmo.text(
+                value.to_string(),
                 pos,
                 config.id_scale_base,
                 *color,
+                None,
                 config.thickness,
                 config.duration,
             );

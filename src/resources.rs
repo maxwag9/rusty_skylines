@@ -27,7 +27,7 @@ impl CommandQueues {
 }
 pub struct Resources {
     pub settings: Settings,
-    pub window: Arc<Window>,
+    pub window: Arc<Box<dyn Window>>,
     pub command_queues: CommandQueues,
 
     // The simulation & world core:
@@ -42,7 +42,7 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(window: Arc<Window>, event_loop: &ActiveEventLoop) -> Self {
+    pub fn new(window: Arc<Box<dyn Window>>, event_loop: &dyn ActiveEventLoop) -> Self {
         let mut settings = Settings::load(rusty_skylines_dir("settings.toml"));
         let editor_mode = settings.editor_mode.clone();
 
@@ -57,7 +57,7 @@ impl Resources {
 
         let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera);
 
-        let mut ui_loader = Ui::new(&settings, window.inner_size());
+        let mut ui_loader = Ui::new(&settings, window.surface_size());
         ui_loader
             .variables
             .set_bool("editor_mode", settings.editor_mode);

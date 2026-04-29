@@ -242,20 +242,20 @@ impl Cars {
         gizmo: &mut Gizmo,
         road_manager: &RoadManager,
         terrain: &Terrain,
-        input_state: &mut Input,
-        time_system: &Time,
+        input: &mut Input,
+        time: &Time,
         variables: &mut Variables,
         target_pos: WorldPos,
     ) {
         variables.set_i64("car_count", self.car_storage.car_count() as i32);
         self.car_storage
             .update_target_and_chunk_size(target_pos.chunk, terrain.chunk_size);
-        self.spawn_cars(road_manager, terrain, target_pos, time_system);
+        self.spawn_cars(road_manager, terrain, target_pos, time);
 
         match terrain.cursor.mode {
             CursorMode::Cars => {
                 if let Some(picked) = &terrain.last_picked {
-                    if input_state.gameplay_repeat("Place Car") {
+                    if input.gameplay_repeat("Place Car") {
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
                         self.car_storage
@@ -274,7 +274,7 @@ impl Cars {
                 .cleanup_stale_jitter(&self.car_storage.car_chunk_storage);
         }
 
-        let current_sim_time = time_system.total_game_time;
+        let current_sim_time = time.total_game_time;
         let mut rng = rng();
         let updated_chunks = self.car_simulation.update_chunks(
             &mut self.car_storage,

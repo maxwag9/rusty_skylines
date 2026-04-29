@@ -21,10 +21,11 @@ use wgpu::{
     TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
 };
 use winit::application::ApplicationHandler;
+use winit::cursor::CustomCursorSource;
 use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{CustomCursor, Window, WindowId};
+use winit::window::{Window, WindowAttributes, WindowId};
 
 const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
     ("Speed up Time 100x", 100.0),
@@ -38,7 +39,7 @@ const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
 const MAX_SIM_STEPS_PER_FRAME: usize = 1_000;
 
 pub struct App {
-    window: Option<Arc<Window>>,
+    window: Option<Arc<Box<dyn Window>>>,
     resources: Option<Resources>,
 }
 
@@ -52,7 +53,7 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {
+    fn new_events(&mut self, _event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
         if let Some(resources) = self.resources.as_mut() {
             let world = &mut resources.world;
             let input = &mut world.input;
@@ -69,13 +70,15 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {} // For Mobile only
+
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let window = Arc::new(
             event_loop
                 .create_window(
-                    Window::default_attributes()
+                    WindowAttributes::default()
                         .with_title("Rusty Skylines")
-                        .with_inner_size(winit::dpi::PhysicalSize::new(2560, 1400)),
+                        .with_surface_size(winit::dpi::PhysicalSize::new(2560, 1400)),
                 )
                 .expect("Failed to create window"),
         );
@@ -91,7 +94,7 @@ impl ApplicationHandler for App {
             .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
         resources.ui.variables.set_array(
             "screen",
-            vec![window.inner_size().width, window.inner_size().height],
+            vec![window.surface_size().width, window.surface_size().height],
         );
 
         let width = 32u16;
@@ -99,7 +102,7 @@ impl ApplicationHandler for App {
 
         let rgba: Vec<u8> = vec![64; width as usize * height as usize * 4];
 
-        let source = CustomCursor::from_rgba(
+        let source = CustomCursorSource::from_rgba(
             rgba, width, height, 0, // hotspot x
             0, // hotspot y
         )
@@ -112,9 +115,14 @@ impl ApplicationHandler for App {
 
         event_loop.set_control_flow(ControlFlow::Poll);
         window.request_redraw();
-    }
+    } // resumed() but new
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        _id: WindowId,
+        event: WindowEvent,
+    ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::KeyboardInput { event, .. } => {
@@ -147,9 +155,6 @@ impl ApplicationHandler for App {
                         }
                         if *named == NamedKey::Alt {
                             input.alt = down;
-                        }
-                        if *named == NamedKey::Space {
-                            input.set_character(" ", down);
                         }
                     }
 
@@ -319,7 +324,7 @@ impl ApplicationHandler for App {
                     match ui.save_gui_to_file(
                         data_dir("ui_data/menus"),
                         data_dir("ui_data/menus/advanced_primitives"),
-                        resources.window.inner_size(),
+                        resources.window.surface_size(),
                     ) {
                         Ok(_) => println!("GUI layout saved"),
                         Err(e) => eprintln!("Failed to save GUI layout: {e}"),
@@ -393,13 +398,18 @@ impl ApplicationHandler for App {
                 }
             }
 
-            WindowEvent::MouseInput { state, button, .. } => {
+            WindowEvent::PointerButton { state, button, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    resources.world.input.handle_mouse_button(button, state);
+                    if let Some(mouse_button) = button.mouse_button() {
+                        resources
+                            .world
+                            .input
+                            .handle_mouse_button(mouse_button, state);
+                    }
                 }
             }
 
-            WindowEvent::CursorMoved { position, .. } => {
+            WindowEvent::PointerMoved { position, .. } => {
                 if let Some(resources) = self.resources.as_mut() {
                     let input = &mut resources.world.input;
                     input.handle_mouse_move(position.x, position.y);
@@ -437,7 +447,7 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::Resized(size) => {
+            WindowEvent::SurfaceResized(size) => {
                 if let Some(resources) = self.resources.as_mut() {
                     resources
                         .render_core
@@ -446,7 +456,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(resources) = self.resources.as_mut() {
-                    let size = resources.window.inner_size(); // << get the real physical size
+                    let size = resources.window.surface_size(); // << get the real physical size
                     if size.width > 0 && size.height > 0 {
                         resources
                             .render_core

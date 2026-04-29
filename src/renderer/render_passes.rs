@@ -7,7 +7,7 @@ use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
 use crate::renderer::props::Props;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
-use crate::ui::vertex::{LineVtxRender, Vertex};
+use crate::ui::vertex::{LineVtxRender, TextVtxRender, Vertex};
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
@@ -531,8 +531,8 @@ pub fn render_gizmo(
     queue: &Queue,
 ) {
     let targets = color_and_normals_and_motion_targets(pipelines);
-    let batches = gizmo.collect_batches(camera);
-    let (thin_count, thick_count) = gizmo.update_buffers(device, queue, &batches);
+    let batches = gizmo.collect_batches(camera, pipelines, queue);
+    let (thin_count, thick_count, text_count) = gizmo.update_buffers(device, queue, &batches);
 
     // Render thin lines with LineList
     if thin_count > 0 {
@@ -564,7 +564,7 @@ pub fn render_gizmo(
 
     // Render thick lines and filled areas with TriangleList
     if thick_count > 0 {
-        render_manager.render(
+        render_manager.render_with_textures(
             &[],
             shader_dir().join("lines.wgsl").as_path(),
             &PipelineOptions {
@@ -578,7 +578,9 @@ pub fn render_gizmo(
                 }),
                 msaa_samples,
                 vertex_layouts: Vec::from([LineVtxRender::layout()]),
-                fragment: FragmentOption::Default { targets },
+                fragment: FragmentOption::Default {
+                    targets: targets.clone(),
+                },
                 ..Default::default()
             },
             &[&pipelines.buffers.camera],
@@ -586,6 +588,42 @@ pub fn render_gizmo(
         );
         pass.set_vertex_buffer(0, gizmo.thick_buffer.slice(..));
         pass.draw(0..thick_count, 0..1);
+    }
+
+    // Render text in 3D
+    if text_count > 0 {
+        render_manager.render_with_textures(
+            &[&pipelines.resolved.atlas],
+            shader_dir().join("text3d.wgsl").as_path(),
+            &PipelineOptions {
+                topology: TriangleList,
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                msaa_samples,
+                vertex_layouts: Vec::from([TextVtxRender::layout()]),
+                fragment: FragmentOption::Default { targets },
+                sampler: SamplerDescriptor {
+                    label: Some("text sampler"),
+                    address_mode_u: AddressMode::ClampToEdge,
+                    address_mode_v: AddressMode::ClampToEdge,
+                    address_mode_w: AddressMode::ClampToEdge,
+                    mag_filter: FilterMode::Linear,
+                    min_filter: FilterMode::Linear,
+                    mipmap_filter: MipmapFilterMode::Nearest,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera],
+            pass,
+        );
+        pass.set_vertex_buffer(0, gizmo.text_buffer.slice(..));
+        pass.draw(0..text_count, 0..1);
     }
 
     gizmo.clear();
@@ -727,7 +765,16 @@ pub fn color_target(
         write_mask: ColorWrites::ALL,
     })]
 }
-
+pub fn color_target_ui(
+    pipelines: &Pipelines,
+    blend: Option<BlendState>,
+) -> Vec<Option<ColorTargetState>> {
+    vec![Some(ColorTargetState {
+        format: pipelines.resolved.ui.texture().format(),
+        blend,
+        write_mask: ColorWrites::ALL,
+    })]
+}
 pub(crate) fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,

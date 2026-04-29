@@ -383,7 +383,7 @@ pub fn shadow_pipeline_options<'a>(
     vertex_layouts: Vec<wgpu::VertexBufferLayout<'static>>,
     cull_mode: Face,
     fragment: FragmentOption,
-) -> PipelineOptions {
+) -> PipelineOptions<'a> {
     PipelineOptions {
         topology: TriangleList,
         depth_stencil: Some(DepthStencilState {
@@ -403,6 +403,7 @@ pub fn shadow_pipeline_options<'a>(
 
         fragment,
         shadow: None,
+        sampler: Default::default(),
     }
 }
 pub fn render_roads_shadows(

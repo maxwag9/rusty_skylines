@@ -223,7 +223,7 @@ impl Mouse {
             MouseButton::Middle => self.buttons.middle.pressed,
             MouseButton::Back => self.buttons.back.pressed,
             MouseButton::Forward => self.buttons.forward.pressed,
-            MouseButton::Other(_) => false,
+            _ => false,
         }
     }
 
@@ -393,7 +393,7 @@ impl Input {
             MouseButton::Middle => &mut self.mouse.buttons.middle,
             MouseButton::Back => &mut self.mouse.buttons.back,
             MouseButton::Forward => &mut self.mouse.buttons.forward,
-            MouseButton::Other(_) => return,
+            _ => return,
         };
 
         if down && !state.pressed {
@@ -681,7 +681,7 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
                 MouseButton::Middle => require_mouse_middle = true,
                 MouseButton::Back => require_mouse_back = true,
                 MouseButton::Forward => require_mouse_forward = true,
-                MouseButton::Other(_) => {}
+                _ => {}
             }
             // If no other key found yet, use this as the main key
             if key_part.is_none() {
@@ -797,6 +797,7 @@ fn map_to_keycode(token: &str) -> Option<KeyCode> {
     }
 
     match token {
+        "Space" => Some(KeyCode::Space),
         "LeftShift" | "ShiftLeft" | "LShift" => Some(KeyCode::ShiftLeft),
         "RightShift" | "ShiftRight" | "RShift" => Some(KeyCode::ShiftRight),
         "LeftCtrl" | "CtrlLeft" | "LCtrl" | "LeftControl" => Some(KeyCode::ControlLeft),
@@ -832,7 +833,6 @@ fn map_to_named(token: &str) -> Option<NamedKey> {
         "ArrowRight" => Some(NamedKey::ArrowRight),
         "ArrowUp" => Some(NamedKey::ArrowUp),
         "ArrowDown" => Some(NamedKey::ArrowDown),
-        "Space" => Some(NamedKey::Space),
         "Enter" => Some(NamedKey::Enter),
         "Backspace" => Some(NamedKey::Backspace),
 

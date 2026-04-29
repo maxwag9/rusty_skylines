@@ -25,7 +25,7 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VSOut {
 }
 @group(0) @binding(0) var hdr_sampler: sampler;
 @group(0) @binding(1) var hdr_tex: texture_2d<f32>;
-
+@group(0) @binding(2) var ui_tex: texture_2d<f32>;
 
 struct ToneMappingUniforms {
     a: f32,
@@ -45,6 +45,11 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let uv = in.uv;
 
     let hdr = textureSample(hdr_tex, hdr_sampler, uv).rgb;
+    let ui = textureSample(ui_tex, hdr_sampler, uv);
+    let ui_alpha = ui.a;
+
+    // UI replaces only where alpha > 0
+    let composed_rgb = mix(hdr, ui.rgb, ui_alpha);
 
     let dims = vec2<f32>(textureDimensions(hdr_tex, 0));
     let aspect = dims.x / dims.y;
@@ -52,7 +57,7 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let v = vignette(uv, 0.65, 0.70, 0.40, aspect);
 
     // Apply vignette in HDR (exposure domain)
-    let hdr_v = hdr * v;
+    let hdr_v = composed_rgb * v;
 
     let color = tonemap_aces(uniforms.a, uniforms.b, uniforms.c, uniforms.d, uniforms.e, hdr_v);
     return vec4(color, 1.0);

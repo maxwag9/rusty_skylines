@@ -2,7 +2,7 @@
 //!
 //! Uses Command pattern for all undoable operations.
 
-use crate::data::Settings;
+use crate::data::{SettingKey, Settings};
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
@@ -233,7 +233,7 @@ impl Ui {
         settings: &mut Settings,
         camera: &mut Camera,
         camera_controller: &mut CameraController,
-        event_loop: &ActiveEventLoop,
+        event_loop: &dyn ActiveEventLoop,
         game_state: &mut GameState,
     ) {
         if !self.touch_manager.options.show_gui {
@@ -1601,6 +1601,7 @@ impl Ui {
                             radius: c.radius,
                             border_thickness: 0.08,
                         },
+                        yaml_element: None,
                     };
                     editor_layer
                         .elements
@@ -1638,6 +1639,7 @@ impl Ui {
                             pressable: true,
                             editable: Editability::HARDNOTEDITABLE,
                         },
+                        yaml_element: None,
                     };
                     editor_layer.elements.push(UiElement::Handle(handle));
                 }
@@ -1672,6 +1674,7 @@ impl Ui {
                                 pressable: false,
                                 editable: Editability::HARDNOTEDITABLE,
                             },
+                            yaml_element: None,
                         };
                         editor_layer
                             .elements
@@ -1710,6 +1713,7 @@ impl Ui {
                             radius: 1.0,
                             border_thickness: 0.9,
                         },
+                        yaml_element: None,
                     };
 
                     editor_layer
@@ -1751,6 +1755,7 @@ impl Ui {
                             radius: 1.0,
                             border_thickness: 0.9,
                         },
+                        yaml_element: None,
                     };
 
                     editor_layer.elements.push(UiElement::Outline(rect_outline));
@@ -2151,7 +2156,7 @@ pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<
 pub fn get_layer_settings(
     menus: &HashMap<String, Menu>,
     element: &ElementRef,
-) -> Option<SettingBinding> {
+) -> Option<SettingKey> {
     let menu = menus.get(&element.menu)?;
     let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
 

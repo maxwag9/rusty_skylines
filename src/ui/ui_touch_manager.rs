@@ -555,10 +555,10 @@ impl Touchable for UiButtonText {
             self.height,
         );
         let pad = 2f32;
-        let x0 = pos[0] + self.top_left_offset[0];
-        let y0 = pos[1] + self.top_left_offset[1];
-        let x1 = x0 + self.width + self.top_right_offset[0] + pad;
-        let y1 = y0 + self.height + self.bottom_left_offset[1] + pad;
+        let x0 = pos[0];
+        let y0 = pos[1];
+        let x1 = x0 + self.width + pad;
+        let y1 = y0 + self.height + pad;
 
         if point[0] >= x0 && point[0] <= x1 && point[1] >= y0 && point[1] <= y1 {
             let cx = (x0 + x1) / 2.0;

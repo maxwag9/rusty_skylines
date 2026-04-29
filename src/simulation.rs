@@ -1,18 +1,20 @@
 use crate::commands::Command;
 use crate::data::Settings;
 use crate::helpers::mouse_ray::WorldRay;
-use crate::renderer::gizmo::gizmo::Gizmo;
+use crate::renderer::render_core::Renderer;
 use crate::resources::Time;
 use crate::ui::input::Input;
-use crate::ui::variables::Variables;
-use crate::world::camera::{Camera, CameraController};
+use crate::ui::ui_editor::Ui;
+use crate::world::buildings::buildings::Buildings;
+use crate::world::camera::Camera;
 use crate::world::cars::car_player::drive_car;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
+use crate::world::world_state::WorldState;
 use glam::Vec2;
 use std::time::Instant;
-use wgpu::{Device, Queue, SurfaceConfiguration};
+use wgpu::SurfaceConfiguration;
 
 pub struct Simulation {
     pub running: bool,
@@ -58,19 +60,16 @@ impl Simulation {
     }
     pub fn update(
         &mut self,
-        terrain: &mut Terrain,
-        road_subsystem: &mut Roads,
-        car_subsystem: &mut Cars,
-        settings: &Settings,
-        time: &Time,
+        world_state: &mut WorldState,
+        cars: &mut Cars,
+        roads: &Roads,
+        terrain: &Terrain,
         input: &mut Input,
-        variables: &mut Variables,
-        camera: &mut Camera,
-        cam_controller: &mut CameraController,
-        device: &Device,
-        queue: &Queue,
-        config: &SurfaceConfiguration,
-        gizmo: &mut Gizmo,
+        time: &Time,
+        buildings: &mut Buildings,
+        renderer: &mut Renderer,
+        ui: &mut Ui,
+        settings: &Settings,
     ) {
         if !self.running {
             return;
@@ -79,19 +78,21 @@ impl Simulation {
         self.tick += 1;
         self.last_update = Instant::now();
 
-        let aspect = config.width as f32 / config.height as f32;
+        let camera = &mut world_state.camera;
+        let cam_controller = &mut world_state.cam_controller;
 
-        car_subsystem.update(
-            gizmo,
-            &road_subsystem.road_manager,
-            &terrain,
+        cars.update(
+            &mut renderer.gizmo,
+            &roads.road_manager,
+            terrain,
             input,
             time,
-            variables,
+            &mut ui.variables,
             camera.target,
         );
+
         drive_car(
-            car_subsystem,
+            cars,
             terrain,
             settings,
             input,
@@ -99,7 +100,12 @@ impl Simulation {
             camera,
             time.target_sim_dt,
         );
-        //println!("Simulation finished: {}", time.frame_count);
+
+        buildings.zoning.update_districts(
+            time,
+            terrain.chunk_size,
+            &renderer.road_renderer.mesh_manager.road_edge_storage,
+        );
     }
 }
 
@@ -123,6 +129,7 @@ pub fn update_picked_pos(
     terrain_subsystem.pick_terrain_point(ray);
 }
 
+#[derive(Clone)]
 pub struct Ticker {
     interval: f32, // seconds per tick
     accumulator: f32,
@@ -144,5 +151,10 @@ impl Ticker {
         } else {
             false
         }
+    }
+}
+impl Default for Ticker {
+    fn default() -> Self {
+        Self::new(0.1)
     }
 }

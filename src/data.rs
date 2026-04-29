@@ -1,8 +1,8 @@
-use crate::helpers::positions::WorldPos;
 use crate::renderer::pipelines::ToneMappingState;
 use crate::ui::parser::Value;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
+use strum_macros::{Display, EnumString};
 use wgpu::*;
 
 macro_rules! impl_cycle {
@@ -32,7 +32,7 @@ pub trait Cycle {
     fn prev(&self) -> Self;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
 pub enum BendMode {
     Strict,
@@ -46,7 +46,7 @@ impl Default for BendMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
 pub enum PresentModeSetting {
     Immediate,
@@ -71,7 +71,7 @@ impl Default for PresentModeSetting {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Display, EnumString)]
 pub enum DebugViewState {
     Off,
     Normals,
@@ -88,7 +88,7 @@ impl Default for DebugViewState {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Display, EnumString)]
 pub enum InternalMenu {
     None,
     MainMenu,
@@ -99,7 +99,7 @@ impl Default for InternalMenu {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Display, EnumString)]
 pub enum LodCenterType {
     Eye,
     Target,
@@ -110,7 +110,7 @@ impl Default for LodCenterType {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Display, EnumString)]
 pub enum ShadowType {
     OFF,
     CSM,
@@ -146,6 +146,8 @@ impl_cycle!(InternalMenu: InternalMenu::None, InternalMenu::MainMenu);
 impl_cycle!(LodCenterType: LodCenterType::Eye, LodCenterType::Target);
 
 impl_cycle!(ShadowType: ShadowType::OFF, ShadowType::CSM, ShadowType::RT);
+
+impl_cycle!(ToneMappingState: ToneMappingState::Off, ToneMappingState::Cinematic, ToneMappingState::GoldenHour, ToneMappingState::Night, ToneMappingState::Overcast, ToneMappingState::SunnyDay);
 
 // ============ Simplified SettingValue ============
 
@@ -497,16 +499,19 @@ macro_rules! impl_setting_convert_enum {
         $(
             impl SettingConvert for $ty {
                 fn to_setting_value(&self) -> SettingValue {
-                    SettingValue::Enum(toml::to_string(self).unwrap_or_default())
+                    //println!("{:?}", SettingValue::Enum(self.to_string()));
+                    SettingValue::Enum(self.to_string())
                 }
+
                 fn from_setting_value(value: SettingValue) -> Option<Self> {
                     match value {
-                        SettingValue::Enum(s) => toml::from_str(&s).ok(),
+                        SettingValue::Enum(s) => s.parse().ok(),
                         _ => None,
                     }
                 }
+
                 fn from_value(arg: &Value) -> Option<Self> {
-                    parse_enum_from_str(arg.to_string_value().as_str())
+                    arg.to_string_value().parse().ok()
                 }
             }
         )*
@@ -520,8 +525,7 @@ impl_setting_convert_enum!(
     DebugViewState,
     InternalMenu,
     LodCenterType,
-    ToneMappingState,
-    WorldPos,
+    ToneMappingState
 );
 
 // ============ Settings Macros ============
@@ -529,7 +533,9 @@ impl_setting_convert_enum!(
 macro_rules! apply_setting_arm {
     (Bool, $s:ident, $field:ident, $op:ident) => {
         match $op {
-            SettingOp::Toggle => $s.$field = !$s.$field,
+            SettingOp::Toggle => {
+                $s.$field = !$s.$field;
+            }
             SettingOp::Set(v) => {
                 if let Some(val) = SettingConvert::from_setting_value(v) {
                     $s.$field = val;
@@ -540,7 +546,10 @@ macro_rules! apply_setting_arm {
     };
     (Cycle, $s:ident, $field:ident, $op:ident) => {
         match $op {
-            SettingOp::CycleNext => $s.$field = Cycle::next(&$s.$field),
+            SettingOp::CycleNext => {
+                //println!("{:?}, {:?}, {:?}", stringify!($field), $op, $s.$field);
+                $s.$field = Cycle::next(&$s.$field);
+            }
             SettingOp::CyclePrev => $s.$field = Cycle::prev(&$s.$field),
             SettingOp::Set(v) => {
                 if let Some(val) = SettingConvert::from_setting_value(v) {
@@ -654,7 +663,7 @@ define_settings! {
     RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
     RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
-    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Val,
+    TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Cycle,
     DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle,
     StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle,
     LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle,

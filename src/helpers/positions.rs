@@ -446,6 +446,106 @@ impl WorldPos {
     pub fn dz(self, other: WorldPos, chunk_size: ChunkSize) -> f32 {
         (other.chunk.z - self.chunk.z) as f32 * chunk_size as f32 + (other.local.z - self.local.z)
     }
+    pub fn area(points: &[WorldPos], chunk_size: ChunkSize) -> f64 {
+        let n = points.len();
+        if n < 3 {
+            return 0.0;
+        }
+
+        let origin = points[0];
+        let mut sum = 0.0;
+
+        for i in 1..n - 1 {
+            let a = points[i];
+            let b = points[i + 1];
+
+            let ax = origin.dx(a, chunk_size) as f64;
+            let az = origin.dz(a, chunk_size) as f64;
+
+            let bx = origin.dx(b, chunk_size) as f64;
+            let bz = origin.dz(b, chunk_size) as f64;
+
+            sum += ax * bz - az * bx;
+        }
+
+        sum.abs() * 0.5
+    }
+    /// Returns the area-weighted centroid of the polygon (true geometric center, may lie outside for concave shapes).
+    pub fn centroid(points: &[WorldPos], chunk_size: ChunkSize) -> WorldPos {
+        let n = points.len();
+        if n == 0 {
+            return WorldPos::zero();
+        }
+        if n == 1 {
+            return points[0];
+        }
+        if n == 2 {
+            return points[0].lerp(points[1], 0.5, chunk_size);
+        }
+
+        let origin = points[0];
+
+        let mut area_acc = 0.0f64;
+        let mut cx_acc = 0.0f64;
+        let mut cz_acc = 0.0f64;
+
+        for i in 1..n - 1 {
+            let a = points[i];
+            let b = points[i + 1];
+
+            // Work in origin-relative space (stable, no precision loss)
+            let ax = origin.dx(a, chunk_size) as f64;
+            let az = origin.dz(a, chunk_size) as f64;
+
+            let bx = origin.dx(b, chunk_size) as f64;
+            let bz = origin.dz(b, chunk_size) as f64;
+
+            // Triangle area (signed *2)
+            let cross = ax * bz - az * bx;
+
+            // Triangle centroid = (0 + A + B) / 3
+            let tri_cx = (ax + bx) / 3.0;
+            let tri_cz = (az + bz) / 3.0;
+
+            cx_acc += tri_cx * cross;
+            cz_acc += tri_cz * cross;
+            area_acc += cross;
+        }
+
+        if area_acc.abs() < 1e-6 {
+            // fallback: average (degenerate polygon) Because you are an insane, degenerate piece of filth, and you deserve to die!!
+            let mut sum = Vec3::ZERO;
+            for p in points {
+                sum += origin.direction_to(*p, chunk_size);
+            }
+            let avg = sum / points.len() as f32;
+            return origin.add_vec3(avg, chunk_size);
+        }
+
+        let inv = 1.0 / area_acc;
+
+        let cx = cx_acc * inv;
+        let cz = cz_acc * inv;
+
+        origin.add_vec3(Vec3::new(cx as f32, 0.0, cz as f32), chunk_size)
+    }
+
+    /// Returns the average of all input points (fast barycenter, biased by vertex distribution).
+    /// Centroid of a WorldPos slice, fully WorldPos-native (dx/dz offsets from points[0]).
+    pub fn barycenter(points: &[WorldPos], chunk_size: ChunkSize) -> WorldPos {
+        if points.is_empty() {
+            return WorldPos::zero();
+        }
+        let origin = points[0];
+        let n = points.len() as f32;
+        let mut sum = Vec3::ZERO;
+        for p in points {
+            sum.x += origin.dx(*p, chunk_size);
+            sum.y += p.local.y - origin.local.y;
+            sum.z += origin.dz(*p, chunk_size);
+        }
+        origin.add_vec3(sum / n, chunk_size)
+    }
 }
 impl Default for WorldPos {
     fn default() -> Self {

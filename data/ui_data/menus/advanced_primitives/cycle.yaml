@@ -1,0 +1,51 @@
+name: cycle
+elements:
+  # Soft outer border
+  - !Rect
+    id: Cycle Border
+    actions:
+      - on:release, inc(ap, 1)
+    x: 0.0
+    y: 0.0
+    w: 0.04
+    h: 0.02
+    color:
+      - 0.00
+      - 0.00
+      - 0.00
+      - 1.0
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.1
+    border_thickness_percentage: 0.05
+  # inner indicator
+  - !Rect
+    id: Cycle Indicator
+    actions:
+      - on:release, inc(ap, 1)
+      #- on:release, ifvareq(ap, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
+    x: 0.0
+    y: 0.0
+    w: 0.03
+    h: 0.010
+    color:
+      - 0.2
+      - 0.2
+      - 0.6
+      - 0.8
+    roundness: 0.5
+    blur: 0.5
+  - !Text
+    id: setting_text
+    x: 0.0
+    y: 0.05
+    pt: 10.0
+    color:
+      - 0.8
+      - 1.0
+      - 1.0
+      - 0.9
+    text: '{ap}'

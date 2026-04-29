@@ -99,6 +99,15 @@ impl Value {
             Some(value) => return value,
             None => {}
         };
+
+        // Might be setting key?
+        let key = SettingKey::from_str(s);
+        if let Some(key) = key {
+            let value = settings.read_setting(key).to_value();
+            //println!("{:?} {:?}", key, value);
+            return value;
+        }
+
         //println!("In from_str() Evaluating Expression... Input: {} ", s);
         match eval_expr(s, variables) {
             Some(value) => match value {

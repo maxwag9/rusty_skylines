@@ -23,7 +23,7 @@ use crate::ui::vertex::{
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
 use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::zoning::ZoneType;
+use crate::world::buildings::zoning::ZoningType;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::{GameState, LoadResult, SaveResult, SaveState};
 use crate::world::roads::road_subsystem::Roads;
@@ -396,7 +396,7 @@ pub struct CommandContext<'a> {
     pub window_size: PhysicalSize<u32>,
     pub settings: &'a mut Settings,
     pub camera: &'a mut Camera,
-    pub event_loop: &'a ActiveEventLoop,
+    pub event_loop: &'a dyn ActiveEventLoop,
     pub game_state: &'a mut GameState,
     pub roads: &'a mut Roads,
     pub props: &'a mut Props,
@@ -667,9 +667,9 @@ impl CommandQueue {
                 // Secondary: AP (layer settings)
                 if name == "ap" && !matches!(result, CommandResult::Ok) {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        if let Some(setting_value) = setting.key.parse_command_arg(&value) {
+                        if let Some(setting_value) = setting.parse_command_arg(&value) {
                             ctx.settings
-                                .apply_setting(setting.key, SettingOp::Set(setting_value.clone()));
+                                .apply_setting(setting, SettingOp::Set(setting_value.clone()));
                             result = CommandResult::Ok
                         } else {
                             result = CommandResult::Error(format!(
@@ -699,6 +699,7 @@ impl CommandQueue {
                 name,
                 amount,
             } => {
+                //println!("In INCVAR: {} {}", name, amount);
                 // Primary: Settings
                 if let Some(key) = SettingKey::from_str(&name) {
                     let current = ctx.settings.read_setting(key);
@@ -706,7 +707,10 @@ impl CommandQueue {
                     if let Some(new_value) = current.add(amount) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     } else {
-                        ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                        let steps = amount.max(0f64) as usize;
+                        for _ in 0..steps {
+                            ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                        }
                     }
                     return CommandResult::Ok;
                 }
@@ -714,14 +718,18 @@ impl CommandQueue {
                 // Secondary: AP
                 if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting.key);
+                        let current = ctx.settings.read_setting(setting);
+                        //println!("In INCVAR ap: Inferred SettingKey: {:?}, Current Value: {:?}", setting, current);
                         // Try numeric add first, fall back to cycle
                         if let Some(new_value) = current.add(amount) {
                             ctx.settings
-                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                                .apply_setting(setting, SettingOp::Set(new_value));
                         } else {
-                            ctx.settings
-                                .apply_setting(setting.key, SettingOp::CycleNext);
+                            let steps = amount.max(0f64) as usize;
+                            for idx in 0..steps {
+                                //println!("Step {} in CycleNext loop in incvar", idx);
+                                ctx.settings.apply_setting(setting, SettingOp::CycleNext);
+                            }
                         }
                         return CommandResult::Ok;
                     }
@@ -753,7 +761,10 @@ impl CommandQueue {
                     if let Some(new_value) = current.subtract(amount) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     } else {
-                        ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                        let steps = amount.max(0f64) as usize;
+                        for _ in 0..steps {
+                            ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                        }
                     }
                     return CommandResult::Ok;
                 }
@@ -761,14 +772,16 @@ impl CommandQueue {
                 // Secondary: AP
                 if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting.key);
+                        let current = ctx.settings.read_setting(setting);
                         // Try numeric add first, fall back to cycle
                         if let Some(new_value) = current.subtract(amount) {
                             ctx.settings
-                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                                .apply_setting(setting, SettingOp::Set(new_value));
                         } else {
-                            ctx.settings
-                                .apply_setting(setting.key, SettingOp::CyclePrev);
+                            let steps = amount.max(0f64) as usize;
+                            for _ in 0..steps {
+                                ctx.settings.apply_setting(setting, SettingOp::CyclePrev);
+                            }
                         }
                         return CommandResult::Ok;
                     }
@@ -805,10 +818,10 @@ impl CommandQueue {
                 // Secondary: AP
                 if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting.key);
+                        let current = ctx.settings.read_setting(setting);
                         if let Some(new_value) = current.multiply(factor) {
                             ctx.settings
-                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                                .apply_setting(setting, SettingOp::Set(new_value));
                         }
                         return CommandResult::Ok;
                     }
@@ -838,7 +851,7 @@ impl CommandQueue {
                 // Secondary: AP
                 if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        ctx.settings.apply_setting(setting.key, SettingOp::Toggle);
+                        ctx.settings.apply_setting(setting, SettingOp::Toggle);
                         return CommandResult::Ok;
                     }
                 }
@@ -875,10 +888,10 @@ impl CommandQueue {
                 // Secondary: AP
                 if name == "ap" {
                     if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting.key);
+                        let current = ctx.settings.read_setting(setting);
                         if let Some(new_value) = current.clamp_range(min, max) {
                             ctx.settings
-                                .apply_setting(setting.key, SettingOp::Set(new_value));
+                                .apply_setting(setting, SettingOp::Set(new_value));
                         }
                         return CommandResult::Ok;
                     }
@@ -989,7 +1002,7 @@ impl CommandQueue {
             } => {
                 let var_value = if var_name == "ap" {
                     get_layer_settings(&ctx.ui.menus, &element_ref)
-                        .map(|setting| ctx.settings.read_setting(setting.key).to_value())
+                        .map(|setting| ctx.settings.read_setting(setting).to_value())
                 } else {
                     ctx.ui.variables.get(&var_name).cloned()
                 };
@@ -1507,7 +1520,7 @@ pub fn process_commands(
     settings: &mut Settings,
     camera: &mut Camera,
     camera_controller: &mut CameraController,
-    event_loop: &ActiveEventLoop,
+    event_loop: &dyn ActiveEventLoop,
     game_state: &mut GameState,
 ) {
     let mut ctx = CommandContext {
@@ -1553,7 +1566,7 @@ pub fn exit_game(
     terrain: &Terrain,
     props: &Props,
     buildings: &Buildings,
-    event_loop: &ActiveEventLoop,
+    event_loop: &dyn ActiveEventLoop,
 ) {
     settings.total_game_time = time.total_game_time;
     match settings.save(rusty_skylines_dir("settings.toml")) {
@@ -1634,9 +1647,15 @@ pub fn set_element_property(
 ) -> CommandResult {
     match name {
         "new_zone_type" => {
-            let zone_type = ZoneType::from_value(new_val);
-            ctx.terrain.cursor.zone_type = zone_type;
-            ctx.ui.variables.set_var(name, zone_type.to_string());
+            let zoning_type = ZoningType::from_value(new_val);
+            ctx.terrain.cursor.zoning_type = zoning_type;
+            ctx.ui.variables.set_var(name, zoning_type.to_string());
+        }
+        "target_pos.y" => {
+            if let Some(y) = new_val.as_f64() {
+                ctx.camera.target.local.y = y as f32;
+                ctx.ui.variables.set_f64(name, y);
+            }
         }
         _ => {}
     }

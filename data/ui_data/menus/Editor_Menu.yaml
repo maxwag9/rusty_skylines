@@ -3,12 +3,46 @@ layers:
   - name: adding_elements
     order: 2
     elements:
+      - !Rect
+        id: add_circle_bg
+        actions: [ ]
+        x: 0.10796875
+        y: 0.9
+        w: 0.04
+        h: 0.04
+        rotation: 0.0
+        color:
+          - 0.72
+          - 0.72
+          - 0.65
+          - 0.99
+        border_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.006
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
       - !Circle
         id: Add Circle
-        actions: [ ]
-        x: 0.6281143
-        y: 0.8954688
-        radius: 0.031416472
+        actions:
+          - add(here, there, you, circle, [1000, 1000])
+        x: 0.10796875
+        y: 0.9
+        radius: 0.0015
         border_thickness_percentage: 0.03282214
         fill_color:
           - 0.0
@@ -300,6 +334,7 @@ layers:
         roundness: 0.2
         border_thickness_percentage: 0.005
         fade: 0.0
+        blur: 0.0
         glow_color:
           - 0.0
           - 0.0

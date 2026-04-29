@@ -1,4 +1,4 @@
-use crate::data::{SettingKey, SettingOp, Settings};
+use crate::data::{SettingKey, Settings};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
@@ -28,6 +28,25 @@ impl LineVtxRender {
         const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x4];
         VertexBufferLayout {
             array_stride: size_of::<LineVtxRender>() as u64,
+            step_mode: VertexStepMode::Vertex,
+            attributes: ATTRS,
+        }
+    }
+}
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TextVtxRender {
+    pub pos: [f32; 3],
+    pub uv: [f32; 2],
+    pub color: [f32; 4],
+}
+
+impl TextVtxRender {
+    pub fn layout<'a>() -> VertexBufferLayout<'a> {
+        const ATTRS: &[VertexAttribute] =
+            &vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x4];
+        VertexBufferLayout {
+            array_stride: size_of::<TextVtxRender>() as u64,
             step_mode: VertexStepMode::Vertex,
             attributes: ATTRS,
         }
@@ -330,18 +349,13 @@ impl UiElementYaml {
     }
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SettingBinding {
-    pub key: SettingKey,
-    pub op: SettingOp,
-}
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AdvancedPrimitiveYaml {
     pub name: String,
     #[serde(default)]
     pub ap_name: String,
 
     #[serde(default)]
-    pub setting: Option<SettingBinding>,
+    pub setting: Option<SettingKey>,
     pub x: f32,
     pub y: f32,
     #[serde(skip_serializing_if = "is_one")]
@@ -354,7 +368,7 @@ pub struct AdvancedPrimitiveYaml {
 pub struct AdvancedPrimitive {
     pub id: String,
     pub ap_name: String,
-    pub setting: Option<SettingBinding>,
+    pub setting: Option<SettingKey>,
     pub x: f32,
     pub y: f32,
     pub scale: f32,
@@ -482,6 +496,8 @@ pub struct UiButtonRectYaml {
     #[serde(default)]
     pub fade: f32,
     #[serde(default)]
+    pub blur: f32,
+    #[serde(default)]
     pub glow_color: [f32; 4],
 
     // If glow settings are all 0.0, remove bloc
@@ -506,37 +522,62 @@ pub struct UiButtonRect {
     pub roundness: f32, // corner radius
     pub border_thickness_percentage: f32,
     pub fade: f32,
+    pub blur: f32,
     pub glow_color: [f32; 4],
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
+    pub yaml_element: Option<UiButtonRectYaml>,
 }
 
 impl UiButtonRect {
-    pub fn from_yaml(r: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(e: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
+        let x = if e.x < 2.0 {
+            window_size.width as f32 * e.x
+        } else {
+            e.x
+        };
+        let y = if e.y < 2.0 {
+            window_size.height as f32 * e.y
+        } else {
+            e.y
+        };
+        let w = if e.w < 2.0 {
+            window_size.width as f32 * e.w
+        } else {
+            e.w
+        };
+        let h = if e.h < 2.0 {
+            window_size.height as f32 * e.h
+        } else {
+            e.h
+        };
+        let yaml_element = Some(e.clone());
         UiButtonRect {
-            id: r.id,
-            actions: r.actions,
-            style: r.style,
-            x: window_size.width as f32 * r.x,
-            y: window_size.height as f32 * r.y,
-            w: window_size.width as f32 * r.w,
-            h: window_size.height as f32 * r.h,
-            rotation: r.rotation,
-            color: r.color,
-            border_color: r.border_color,
-            texture: r.texture,
-            roundness: r.roundness,
-            border_thickness_percentage: r.border_thickness_percentage,
-            fade: r.fade,
-            glow_color: r.glow_color,
-            glow_misc: r.glow_misc,
+            id: e.id,
+            actions: e.actions,
+            style: e.style,
+            x,
+            y,
+            w,
+            h,
+            rotation: e.rotation,
+            color: e.color,
+            border_color: e.border_color,
+            texture: e.texture,
+            roundness: e.roundness,
+            border_thickness_percentage: e.border_thickness_percentage,
+            fade: e.fade,
+            blur: e.blur,
+            glow_color: e.glow_color,
+            glow_misc: e.glow_misc,
             misc: MiscButtonSettings {
-                active: r.misc.active,
+                active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: r.misc.pressable,
-                editable: Editability::from_bool(r.misc.editable),
+                pressable: e.misc.pressable,
+                editable: Editability::from_bool(e.misc.editable),
             },
+            yaml_element,
         }
     }
 
@@ -556,6 +597,7 @@ impl UiButtonRect {
             roundness: self.roundness,
             border_thickness_percentage: self.border_thickness_percentage,
             fade: self.fade,
+            blur: self.blur,
             glow_color: self.glow_color,
             glow_misc: self.glow_misc.clone(),
             misc: self.misc.to_yaml(),
@@ -1003,10 +1045,10 @@ impl UiElement {
         }
     }
 
-    pub fn set_ap_text(&mut self, setting: &Option<SettingBinding>) {
-        if let Some(setting) = setting {
+    pub fn set_ap_text(&mut self, setting_key: &Option<SettingKey>) {
+        if let Some(setting_key) = setting_key {
             if let Some(text) = self.as_text_mut() {
-                let key = setting.key;
+                let key = setting_key;
                 text.text = text.template.replace("{ap}", format!("{:?}", key).as_str())
             }
         }
@@ -1240,6 +1282,8 @@ pub struct RectGpu {
     pub glow_color: [f32; 4],
     pub glow_misc: [f32; 4], // glow_size, glow_speed, glow_intensity
     pub misc: [f32; 4],      // active, touched_time, is_down, hash
+    pub blur: f32,
+    pub _pad0: [f32; 3],
 }
 // For text — pos + uv + color
 #[repr(C)]
@@ -1276,7 +1320,7 @@ pub struct RuntimeLayer {
     pub order: u32,
     pub elements: Vec<UiElement>,
     pub active: bool,
-    pub setting: Option<SettingBinding>,
+    pub setting: Option<SettingKey>,
     // NEW: cached GPU data!!!
     pub cache: LayerCache,
 
@@ -1593,24 +1637,31 @@ pub struct ShapeData {
 }
 
 impl ShapeData {
-    pub(crate) fn scale_from_normalized(
-        &self,
-        window_size: PhysicalSize<u32>,
-        scale: f32,
-    ) -> ShapeData {
+    pub fn scale_from_normalized(&self, window_size: PhysicalSize<u32>, scale: f32) -> ShapeData {
+        let x = if self.x < 2.0 {
+            window_size.width as f32 * self.x
+        } else {
+            self.x
+        };
+        let y = if self.y < 2.0 {
+            window_size.height as f32 * self.y
+        } else {
+            self.y
+        };
+        let radius = if self.radius < 2.0 {
+            scale * self.radius
+        } else {
+            self.radius
+        };
         ShapeData {
-            x: self.x * window_size.width as f32,
-            y: self.y * window_size.height as f32,
-            radius: self.radius * scale,
+            x,
+            y,
+            radius,
             border_thickness: self.border_thickness,
         }
     }
 
-    pub(crate) fn scale_to_normalized(
-        &self,
-        window_size: PhysicalSize<u32>,
-        scale: f32,
-    ) -> ShapeData {
+    pub fn scale_to_normalized(&self, window_size: PhysicalSize<u32>, scale: f32) -> ShapeData {
         ShapeData {
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
@@ -1731,10 +1782,6 @@ pub struct UiButtonText {
     pub style: String,
     pub x: f32,
     pub y: f32,
-    pub top_left_offset: [f32; 2],
-    pub bottom_left_offset: [f32; 2],
-    pub top_right_offset: [f32; 2],
-    pub bottom_right_offset: [f32; 2],
     pub pt: f32,
     pub original_pt: f32,
     pub color: [f32; 4],
@@ -1757,6 +1804,7 @@ pub struct UiButtonText {
 
     pub input_box: bool,
     pub anchor: Option<Anchor>,
+    pub yaml_element: Option<UiButtonTextYaml>,
 }
 
 #[derive(Debug, Clone)]
@@ -1772,6 +1820,7 @@ pub struct UiButtonPolygon {
     pub unscaled_vertices: Vec<UiVertex>,
     pub misc: MiscButtonSettings,
     pub tri_count: u32,
+    pub yaml_element: Option<UiButtonPolygonYaml>,
 }
 
 #[derive(Debug, Clone)]
@@ -1792,6 +1841,7 @@ pub struct UiButtonCircle {
     pub glow_color: [f32; 4],
     pub glow_misc: GlowMisc,
     pub misc: MiscButtonSettings,
+    pub yaml_element: Option<UiButtonCircleYaml>,
 }
 
 #[derive(Debug, Clone)]
@@ -1811,6 +1861,7 @@ pub struct UiButtonOutline {
     pub sub_dash_misc: DashMisc,
 
     pub misc: MiscButtonSettings,
+    pub yaml_element: Option<UiButtonOutlineYaml>,
 }
 
 #[derive(Debug, Clone)]
@@ -1825,39 +1876,41 @@ pub struct UiButtonHandle {
     pub sub_handle_misc: HandleMisc,
     pub misc: MiscButtonSettings,
     pub parent: Option<ElementRef>,
+    pub yaml_element: Option<UiButtonHandleYaml>,
 }
 
 impl UiButtonText {
-    pub fn from_yaml(t: UiButtonTextYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(e: UiButtonTextYaml, window_size: PhysicalSize<u32>) -> Self {
+        let x = if e.x < 2.0 {
+            window_size.width as f32 * e.x
+        } else {
+            e.x
+        };
+        let y = if e.y < 2.0 {
+            window_size.height as f32 * e.y
+        } else {
+            e.y
+        };
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        let length = t.text.len();
+        let length = e.text.len();
+        let yaml_element = Some(e.clone());
         UiButtonText {
-            id: t.id,
-            actions: t.actions.clone(),
-            style: t.style.clone(),
-            x: window_size.width as f32 * t.x,
-            y: window_size.height as f32 * t.y,
-            top_left_offset: [scale * t.top_left_offset[0], scale * t.top_left_offset[1]],
-            bottom_left_offset: [
-                scale * t.bottom_left_offset[0],
-                scale * t.bottom_left_offset[1],
-            ],
-            top_right_offset: [scale * t.top_right_offset[0], scale * t.top_right_offset[1]],
-            bottom_right_offset: [
-                scale * t.bottom_right_offset[0],
-                scale * t.bottom_right_offset[1],
-            ],
-            pt: t.pt,
-            original_pt: t.pt,
-            color: t.color,
-            text: t.text.clone(),
-            template: t.text,
+            id: e.id,
+            actions: e.actions.clone(),
+            style: e.style.clone(),
+            x,
+            y,
+            pt: e.pt,
+            original_pt: e.pt,
+            color: e.color,
+            text: e.text.clone(),
+            template: e.text,
             misc: MiscButtonSettings {
-                active: t.misc.active,
+                active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: t.misc.pressable,
-                editable: Editability::from_bool(t.misc.editable),
+                pressable: e.misc.pressable,
+                editable: Editability::from_bool(e.misc.editable),
             },
             width: 50.0,
             height: 20.0,
@@ -1870,8 +1923,9 @@ impl UiButtonText {
             has_selection: false,
             glyph_bounds: vec![],
             char_spans: vec![],
-            input_box: t.input_box,
-            anchor: t.anchor,
+            input_box: e.input_box,
+            anchor: e.anchor,
+            yaml_element,
         }
     }
 
@@ -1884,23 +1938,6 @@ impl UiButtonText {
 
             x: self.x / window_size.width as f32,
             y: self.y / window_size.height as f32,
-
-            top_left_offset: [
-                self.top_left_offset[0] / scale,
-                self.top_left_offset[1] / scale,
-            ],
-            bottom_left_offset: [
-                self.bottom_left_offset[0] / scale,
-                self.bottom_left_offset[1] / scale,
-            ],
-            top_right_offset: [
-                self.top_right_offset[0] / scale,
-                self.top_right_offset[1] / scale,
-            ],
-            bottom_right_offset: [
-                self.bottom_right_offset[0] / scale,
-                self.bottom_right_offset[1] / scale,
-            ],
 
             pt: self.pt,
             color: self.color,
@@ -1918,36 +1955,53 @@ impl UiButtonText {
 }
 
 impl UiButtonCircle {
-    pub fn from_yaml(c: UiButtonCircleYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(e: UiButtonCircleYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        let radius = scale * c.radius;
+        let radius = scale * e.radius;
+        let x = if e.x < 2.0 {
+            window_size.width as f32 * e.x
+        } else {
+            e.x
+        };
+        let y = if e.y < 2.0 {
+            window_size.height as f32 * e.y
+        } else {
+            e.y
+        };
+        let radius = if e.radius < 2.0 {
+            scale * e.radius
+        } else {
+            e.radius
+        };
+        let yaml_element = Some(e.clone());
         UiButtonCircle {
-            id: c.id,
-            actions: c.actions,
-            style: c.style,
-            x: window_size.width as f32 * c.x,
-            y: window_size.height as f32 * c.y,
+            id: e.id,
+            actions: e.actions,
+            style: e.style,
+            x,
+            y,
             radius,
             original_radius: radius,
-            inside_border_thickness_percentage: c.inside_border_thickness_percentage,
-            border_thickness_percentage: c.border_thickness_percentage,
-            fade: c.fade,
-            fill_color: c.fill_color,
-            inside_border_color: c.inside_border_color,
-            border_color: c.border_color,
-            glow_color: c.glow_color,
+            inside_border_thickness_percentage: e.inside_border_thickness_percentage,
+            border_thickness_percentage: e.border_thickness_percentage,
+            fade: e.fade,
+            fill_color: e.fill_color,
+            inside_border_color: e.inside_border_color,
+            border_color: e.border_color,
+            glow_color: e.glow_color,
             glow_misc: GlowMisc {
-                glow_size: c.glow_misc.glow_size,
-                glow_speed: c.glow_misc.glow_speed,
-                glow_intensity: c.glow_misc.glow_intensity,
+                glow_size: e.glow_misc.glow_size,
+                glow_speed: e.glow_misc.glow_speed,
+                glow_intensity: e.glow_misc.glow_intensity,
             },
             misc: MiscButtonSettings {
-                active: c.misc.active,
+                active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: c.misc.pressable,
-                editable: Editability::from_bool(c.misc.editable),
+                pressable: e.misc.pressable,
+                editable: Editability::from_bool(e.misc.editable),
             },
+            yaml_element,
         }
     }
 
@@ -1982,25 +2036,42 @@ impl UiButtonCircle {
 }
 
 impl UiButtonHandle {
-    pub(crate) fn from_yaml(h: UiButtonHandleYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(e: UiButtonHandleYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x = if e.x < 2.0 {
+            window_size.width as f32 * e.x
+        } else {
+            e.x
+        };
+        let y = if e.y < 2.0 {
+            window_size.height as f32 * e.y
+        } else {
+            e.y
+        };
+        let radius = if e.radius < 2.0 {
+            scale * e.radius
+        } else {
+            e.radius
+        };
+        let yaml_element = Some(e.clone());
         UiButtonHandle {
-            id: h.id,
-            x: window_size.width as f32 * h.x,
-            y: window_size.height as f32 * h.y,
-            radius: scale * h.radius,
-            handle_color: h.handle_color,
-            handle_misc: h.handle_misc,
-            sub_handle_color: h.sub_handle_color,
-            sub_handle_misc: h.sub_handle_misc,
-            parent: h.parent,
+            id: e.id,
+            x,
+            y,
+            radius,
+            handle_color: e.handle_color,
+            handle_misc: e.handle_misc,
+            sub_handle_color: e.sub_handle_color,
+            sub_handle_misc: e.sub_handle_misc,
+            parent: e.parent,
             misc: MiscButtonSettings {
-                active: h.misc.active,
+                active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: h.misc.pressable,
-                editable: Editability::from_bool(h.misc.editable),
+                pressable: e.misc.pressable,
+                editable: Editability::from_bool(e.misc.editable),
             },
+            yaml_element,
         }
     }
 
@@ -2030,26 +2101,28 @@ impl UiButtonHandle {
 }
 
 impl UiButtonOutline {
-    pub fn from_yaml(o: UiButtonOutlineYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(e: UiButtonOutlineYaml, window_size: PhysicalSize<u32>) -> Self {
         let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let yaml_element = Some(e.clone());
         UiButtonOutline {
-            id: o.id,
-            parent: o.parent,
-            mode: o.mode,
+            id: e.id,
+            parent: e.parent,
+            mode: e.mode,
             vertex_offset: 0,
             vertex_count: 0,
-            shape_data: o.shape_data.scale_from_normalized(window_size, scale),
-            dash_color: o.dash_color,
-            dash_misc: o.dash_misc,
-            sub_dash_color: o.sub_dash_color,
-            sub_dash_misc: o.sub_dash_misc,
+            shape_data: e.shape_data.scale_from_normalized(window_size, scale),
+            dash_color: e.dash_color,
+            dash_misc: e.dash_misc,
+            sub_dash_color: e.sub_dash_color,
+            sub_dash_misc: e.sub_dash_misc,
             misc: MiscButtonSettings {
-                active: o.misc.active,
+                active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: o.misc.pressable,
-                editable: Editability::from_bool(o.misc.editable),
+                pressable: e.misc.pressable,
+                editable: Editability::from_bool(e.misc.editable),
             },
+            yaml_element,
         }
     }
 
@@ -2078,9 +2151,10 @@ impl UiButtonOutline {
 }
 
 impl UiButtonPolygon {
-    pub fn from_yaml(p: UiButtonPolygonYaml, window_size: PhysicalSize<u32>) -> Self {
+    pub fn from_yaml(e: UiButtonPolygonYaml, window_size: PhysicalSize<u32>) -> Self {
         let mut id_gen = 1;
-        let mut verts: Vec<UiVertex> = p
+        let yaml_element = Some(e.clone());
+        let mut verts: Vec<UiVertex> = e
             .vertices
             .into_iter()
             .map(|vj| {
@@ -2092,23 +2166,24 @@ impl UiButtonPolygon {
         ensure_ccw(&mut verts);
 
         let mut polygon = UiButtonPolygon {
-            id: p.id,
-            x: p.x,
-            y: p.y,
-            scale: p.scale,
+            id: e.id,
+            x: e.x,
+            y: e.y,
+            scale: e.scale,
             cache_valid: false,
-            actions: p.actions,
-            style: p.style,
+            actions: e.actions,
+            style: e.style,
             cached_scaled_vertices: vec![],
             unscaled_vertices: verts.clone(),
             misc: MiscButtonSettings {
-                active: p.misc.active,
+                active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: p.misc.pressable,
-                editable: Editability::from_bool(p.misc.editable),
+                pressable: e.misc.pressable,
+                editable: Editability::from_bool(e.misc.editable),
             },
             tri_count: 0,
+            yaml_element,
         };
         polygon.update_scaled_vertices();
         polygon
@@ -2206,10 +2281,6 @@ impl Default for UiButtonText {
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
-            top_left_offset: [0.0; 2],
-            bottom_left_offset: [0.0; 2],
-            top_right_offset: [0.0; 2],
-            bottom_right_offset: [0.0; 2],
             pt: 14.0,
             original_pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
@@ -2229,6 +2300,7 @@ impl Default for UiButtonText {
             char_spans: vec![],
             input_box: false,
             anchor: None,
+            yaml_element: None,
         }
     }
 }
@@ -2278,6 +2350,7 @@ impl Default for UiButtonPolygon {
             cached_scaled_vertices: verts,
             misc: MiscButtonSettings::default(),
             tri_count: 0,
+            yaml_element: None,
         }
     }
 }
@@ -2301,6 +2374,7 @@ impl Default for UiButtonCircle {
             glow_color: [1.0, 1.0, 1.0, 0.0],
             glow_misc: GlowMisc::default(),
             misc: MiscButtonSettings::default(),
+            yaml_element: None,
         }
     }
 }
@@ -2319,6 +2393,7 @@ impl Default for UiButtonOutline {
             sub_dash_color: [1.0, 1.0, 1.0, 1.0],
             sub_dash_misc: DashMisc::default(),
             misc: MiscButtonSettings::default(),
+            yaml_element: None,
         }
     }
 }
@@ -2336,6 +2411,7 @@ impl Default for UiButtonHandle {
             sub_handle_misc: HandleMisc::default(),
             misc: MiscButtonSettings::default(),
             parent: None,
+            yaml_element: None,
         }
     }
 }
@@ -2356,9 +2432,11 @@ impl Default for UiButtonRect {
             roundness: 0.0,
             border_thickness_percentage: 0.0,
             fade: 0.0,
+            blur: 0.2,
             glow_color: [0.2, 0.0, 0.8, 0.98],
             glow_misc: GlowMisc::default(),
             misc: MiscButtonSettings::default(),
+            yaml_element: None,
         }
     }
 }
@@ -2445,15 +2523,6 @@ pub struct UiButtonTextYaml {
     pub x: f32,
     pub y: f32,
 
-    #[serde(skip_serializing_if = "is_zero_vec2")]
-    pub top_left_offset: [f32; 2],
-    #[serde(skip_serializing_if = "is_zero_vec2")]
-    pub bottom_left_offset: [f32; 2],
-    #[serde(skip_serializing_if = "is_zero_vec2")]
-    pub top_right_offset: [f32; 2],
-    #[serde(skip_serializing_if = "is_zero_vec2")]
-    pub bottom_right_offset: [f32; 2],
-
     #[serde(skip_serializing_if = "is_default")]
     pub pt: f32,
 
@@ -2480,10 +2549,6 @@ impl Default for UiButtonTextYaml {
             style: "None".to_string(),
             x: 0.0,
             y: 0.0,
-            top_left_offset: [0.0; 2],
-            bottom_left_offset: [0.0; 2],
-            top_right_offset: [0.0; 2],
-            bottom_right_offset: [0.0; 2],
             pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
             text: String::new(),

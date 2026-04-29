@@ -89,7 +89,13 @@ impl Renderer {
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let mut render_manager = RenderManager::new(device, queue, texture_dir());
-        let gizmo = Gizmo::new(device, camera.chunk_size);
+        let gizmo = Gizmo::new(
+            device,
+            camera.chunk_size,
+            config,
+            &ui_renderer.font,
+            settings.msaa_samples,
+        );
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
@@ -274,7 +280,7 @@ impl Renderer {
             time,
             ui_loader,
             terrain,
-            &world_core.road,
+            &world_core.roads,
             &world_core.cars,
             astronomy,
             &mut world_core.buildings,
@@ -905,21 +911,27 @@ impl Renderer {
         input_state: &Input,
         settings: &Settings,
     ) {
-        let color_attachment = create_color_attachment_load(
-            &self.pipelines.msaa.hdr,
-            &self.pipelines.resolved.hdr,
-            self.msaa_samples,
-        );
-        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Main Pass (UI)"),
-            color_attachments: &[Some(color_attachment)],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+        let screen_uniform = ScreenUniform {
+            size: [self.config.width as f32, self.config.height as f32],
+            time: time.total_time as f32,
+            enable_dither: 1,
+            mouse: input_state.mouse.pos.to_array(),
+        };
 
-        self.render_ui(&mut pass, ui_loader, time, input_state, settings);
+        self.queue.write_buffer(
+            &self.ui_renderer.pipelines.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&screen_uniform),
+        );
+
+        self.ui_renderer.render(
+            &mut self.render_manager,
+            encoder,
+            &self.queue,
+            ui_loader,
+            &self.pipelines,
+            settings,
+        );
     }
 
     fn execute_debug_preview_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
@@ -1127,10 +1139,11 @@ impl Renderer {
                 })],
             },
             shadow: None,
+            sampler: Default::default(),
         };
 
         self.render_manager.render_with_textures(
-            &[&self.pipelines.resolved.hdr], // Sample FROM non-msaa hdr
+            &[&self.pipelines.resolved.hdr, &self.pipelines.resolved.ui], // Sample FROM non-msaa hdr and FROM non-msaa UI
             shader_dir().join("tonemap.wgsl").as_path(),
             &options,
             &[&self.pipelines.buffers.tonemapping],
@@ -1140,38 +1153,7 @@ impl Renderer {
         pass.draw(0..3, 0..1);
     }
 
-    fn render_ui<'a>(
-        &'a mut self,
-        pass: &mut RenderPass<'a>,
-        ui_loader: &mut Ui,
-        time: &Time,
-        input_state: &Input,
-        settings: &Settings,
-    ) {
-        let screen_uniform = ScreenUniform {
-            size: [self.config.width as f32, self.config.height as f32],
-            time: time.total_time as f32,
-            enable_dither: 1,
-            mouse: input_state.mouse.pos.to_array(),
-        };
-
-        self.queue.write_buffer(
-            &self.ui_renderer.pipelines.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&screen_uniform),
-        );
-
-        self.ui_renderer.render(
-            &mut self.render_manager,
-            pass,
-            &self.queue,
-            ui_loader,
-            &self.pipelines,
-            settings,
-        );
-    }
-
-    pub(crate) fn cycle_msaa(&mut self, settings: &mut Settings) {
+    pub fn cycle_msaa(&mut self, settings: &mut Settings) {
         let supported = get_supported_msaa_levels(&self.adapter, self.config.format);
         let current_idx = supported
             .iter()
@@ -1182,13 +1164,15 @@ impl Renderer {
 
         println!("MSAA changed to {}x", self.msaa_samples);
 
+        self.update_msaa(settings);
+    }
+    pub fn update_msaa(&mut self, settings: &mut Settings) {
         self.render_manager
             .update_define("MSAA".to_string(), self.msaa_samples > 1);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
         self.render_manager.invalidate_bind_groups();
     }
-
     fn reload_all_shaders(&mut self, changed: &[PathBuf]) -> anyhow::Result<()> {
         self.render_manager.reload_render_shaders(changed);
         self.render_manager.compute_system().invalidate_cache();
@@ -1232,9 +1216,9 @@ impl Renderer {
     }
 }
 
-pub(crate) fn create_surface_and_adapter(
-    window: Arc<Window>,
-    event_loop: &ActiveEventLoop,
+pub fn create_surface_and_adapter(
+    window: Arc<Box<dyn Window>>,
+    event_loop: &dyn ActiveEventLoop,
 ) -> (Surface<'static>, Adapter, PhysicalSize<u32>) {
     let display_handle = event_loop.owned_display_handle();
 
@@ -1243,10 +1227,10 @@ pub(crate) fn create_surface_and_adapter(
         flags: Default::default(),
         memory_budget_thresholds: Default::default(),
         backend_options: Default::default(),
-        display: Some(Box::new(display_handle)),
+        display: None,
     });
 
-    let size = window.inner_size();
+    let size = window.surface_size();
     let surface = instance
         .create_surface(window)
         .expect("Surface creation failed");
@@ -1460,5 +1444,17 @@ pub fn create_color_attachment_load<'a>(
                 store: StoreOp::Store,
             },
         }
+    }
+}
+
+pub fn create_color_attachment_clear(resolved_view: &TextureView) -> RenderPassColorAttachment<'_> {
+    RenderPassColorAttachment {
+        view: resolved_view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: Operations {
+            load: LoadOp::Clear(Color::TRANSPARENT),
+            store: StoreOp::Store,
+        },
     }
 }

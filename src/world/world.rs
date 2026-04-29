@@ -17,7 +17,7 @@ pub struct World {
     pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub simulation: Simulation,
     pub terrain: Terrain,
-    pub road: Roads,
+    pub roads: Roads,
     pub cars: Cars,
     pub buildings: Buildings,
     //pub job_pool: JobPool,         // persistent worker threads + channels
@@ -34,7 +34,7 @@ impl World {
             input: Input::new(),
             simulation: Simulation::new(),
             terrain,
-            road: Roads::new(),
+            roads: Roads::new(),
             cars: Cars::new(),
             buildings: Buildings::new(),
             events: CommandBuffer::new(),

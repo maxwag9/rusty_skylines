@@ -107,6 +107,18 @@ pub fn create_gtao_upsample_apply_buffer(device: &Device, settings: &Settings) -
     buffer
 }
 
+// pub fn create_ui_texture_buffer(device: &Device, ui_texture: &TextureView) -> Buffer {
+//     let buffer = device.create_buffer(&BufferDescriptor {
+//         label: Some("Pick Uniform Buffer"),
+//         contents: ,
+//         usage: BufferUsages::COPY_DST,
+//         size: ,
+//         mapped_at_creation: false,
+//     });
+//
+//     buffer
+// }
+
 pub fn create_water_buffer(device: &Device) -> Buffer {
     let wu = WaterUniform {
         sea_level: 0.0,

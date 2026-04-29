@@ -1008,14 +1008,12 @@ fn emit_tri_for_top(indices: &mut Vec<u32>, vertices: &Vec<RoadVertex>, i0: u32,
     }
 }
 
-// ============================================================================
-// Road Mesh Manager (Refactored)
-// ============================================================================
+pub type RoadEdgeStorage = HashMap<SegmentId, RoadEdges>;
 
 pub struct RoadMeshManager {
     chunk_cache: HashMap<ChunkId, ChunkMesh>,
     pub config: MeshConfig,
-    pub road_edges: HashMap<SegmentId, RoadEdges>,
+    pub road_edge_storage: RoadEdgeStorage,
 }
 
 impl RoadMeshManager {
@@ -1023,7 +1021,7 @@ impl RoadMeshManager {
         Self {
             chunk_cache: HashMap::new(),
             config,
-            road_edges: HashMap::new(),
+            road_edge_storage: RoadEdgeStorage::new(),
         }
     }
 
@@ -1184,7 +1182,7 @@ impl RoadMeshManager {
             //     gizmo.polyline(&lane.right_points, [0.8, 0.5, 0.0, 1.0], 8.0, 0.0, 0.0);
             //     gizmo.polyline(&lane.left_points, [0.0, 0.5, 0.8, 1.0], 8.0, 0.0, 0.0);
             // }
-            self.road_edges.insert(seg_id, road_edges);
+            self.road_edge_storage.insert(seg_id, road_edges);
         }
 
         ChunkMesh {

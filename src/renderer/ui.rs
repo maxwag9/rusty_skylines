@@ -1,7 +1,8 @@
 use crate::data::Settings;
 use crate::helpers::paths::{data_dir, shader_dir};
 use crate::renderer::pipelines::{COLOR_FORMAT, Pipelines};
-use crate::renderer::render_passes::color_target;
+use crate::renderer::render_core::{create_color_attachment_clear, create_color_attachment_load};
+use crate::renderer::render_passes::{color_target, color_target_ui};
 use crate::renderer::ui_pipelines::{Background, UiPipelines, multisample_state};
 use crate::renderer::ui_text_rendering::Anchor;
 use crate::renderer::ui_upload::*;
@@ -195,6 +196,7 @@ impl Default for TextParams {
 
 pub struct UiRenderer {
     pub pipelines: UiPipelines,
+    pub font: FontArc,
     pub brush: TextBrush<FontArc>,
     pub device: Device,
 }
@@ -217,12 +219,13 @@ impl UiRenderer {
 
         let font_ttf = fs::read(&font_path)?;
         let font = FontArc::try_from_vec(font_ttf)?;
-        let brush = BrushBuilder::using_font(font)
+        let brush = BrushBuilder::using_font(font.clone())
             .initial_cache_size((8192, 8192))
-            .with_multisample(multisample_state(msaa_samples))
+            .with_multisample(multisample_state(1))
             .build(device, config.width, config.height, COLOR_FORMAT);
         Ok(Self {
             pipelines,
+            font,
             brush,
             device: device.clone(),
         })
@@ -286,7 +289,7 @@ impl UiRenderer {
     pub fn render<'a>(
         &mut self,
         render_manager: &mut RenderManager,
-        pass: &mut RenderPass<'a>,
+        encoder: &mut CommandEncoder,
         queue: &Queue,
         ui: &mut Ui,
         pipelines: &Pipelines,
@@ -295,7 +298,21 @@ impl UiRenderer {
         if !ui.touch_manager.options.show_gui {
             return;
         }
+
         if settings.editor_mode {
+            let color_attachment = create_color_attachment_load(
+                &pipelines.msaa.hdr,
+                &pipelines.resolved.hdr,
+                settings.msaa_samples,
+            );
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Main Pass (UI Editor Background)"),
+                color_attachments: &[Some(color_attachment)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
             let background_shader = &shader_dir().join("ui_background.wgsl");
             let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
             let options = &PipelineOptions {
@@ -305,7 +322,7 @@ impl UiRenderer {
                 vertex_layouts: vec![],
                 cull_mode: None,
                 fragment: FragmentOption::Default { targets },
-                shadow: None,
+                ..Default::default()
             };
             render_manager.render(
                 &[],
@@ -315,10 +332,20 @@ impl UiRenderer {
                     &self.pipelines.uniform_buffer,
                     &self.pipelines.background_buffer,
                 ],
-                pass,
+                &mut pass,
             );
             pass.draw(0..3, 0..1);
+            pass.forget_lifetime();
         }
+        let color_attachment = create_color_attachment_clear(&pipelines.resolved.ui);
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Main Pass (UI Elements)"),
+            color_attachments: &[Some(color_attachment)],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
         ui.update_dynamic_texts(settings);
 
         let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();
@@ -329,9 +356,6 @@ impl UiRenderer {
             }
         }
         layers_to_render.sort_by_key(|l| l.order);
-
-        let depth_stencil = None;
-        let msaa = self.pipelines.msaa_samples;
 
         let mut text_sections: Vec<Section> = Vec::new();
         for layer in layers_to_render {
@@ -441,11 +465,11 @@ impl UiRenderer {
                         if let Some(bg1) = circle_bg.as_ref() {
                             // Glow
                             let targets =
-                                color_target(pipelines, Some(self.pipelines.additive_blend));
+                                color_target_ui(pipelines, Some(self.pipelines.additive_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
@@ -459,16 +483,17 @@ impl UiRenderer {
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, circle_idx..circle_idx + 1);
                             // Circle
-                            let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+                            let targets =
+                                color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
@@ -482,7 +507,7 @@ impl UiRenderer {
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, circle_idx..circle_idx + 1);
@@ -492,11 +517,11 @@ impl UiRenderer {
 
                     UiElement::Handle(_) => {
                         if let Some(bg1) = handle_bg.as_ref() {
-                            let targets = color_target(pipelines, self.pipelines.good_blend);
+                            let targets = color_target_ui(pipelines, self.pipelines.good_blend);
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
@@ -510,7 +535,7 @@ impl UiRenderer {
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.handle_quad_buffer.slice(..));
                             pass.draw(0..4, handle_idx..handle_idx + 1);
@@ -520,12 +545,12 @@ impl UiRenderer {
 
                     UiElement::Polygon(poly) => {
                         let count = poly.tri_count.saturating_mul(3);
-                        let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+                        let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
                         if let (Some(bg1), Some(vbo)) = (poly_bg.as_ref(), &layer.gpu.poly_vbo) {
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
@@ -539,7 +564,7 @@ impl UiRenderer {
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut &mut pass,
                             );
                             pass.set_vertex_buffer(0, vbo.slice(..));
                             pass.draw(poly_vtx_offset..poly_vtx_offset + count, 0..1);
@@ -549,11 +574,11 @@ impl UiRenderer {
 
                     UiElement::Outline(_) => {
                         if let Some(bg1) = outline_bg.as_ref() {
-                            let targets = color_target(pipelines, self.pipelines.good_blend);
+                            let targets = color_target_ui(pipelines, self.pipelines.good_blend);
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
@@ -567,7 +592,7 @@ impl UiRenderer {
                                 ],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, outline_idx..outline_idx + 1);
@@ -580,30 +605,54 @@ impl UiRenderer {
                         if let Some(bg1) = rect_bg.as_ref() {
                             // Glow
                             let targets =
-                                color_target(pipelines, Some(self.pipelines.additive_blend));
+                                color_target_ui(pipelines, Some(self.pipelines.additive_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
-                            // UI Glow
                             render_manager.render_with_layouts(
                                 &shader_dir().join("ui_rect_glow.wgsl"),
                                 &[&self.pipelines.uniform_layout, &self.pipelines.rect_layout],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, rect_idx..rect_idx + 1);
-                            let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+
+                            // Blur
+                            let targets =
+                                color_target_ui(pipelines, Some(self.pipelines.additive_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: msaa,
-                                depth_stencil: depth_stencil.clone(),
+                                msaa_samples: 1,
+                                depth_stencil: None,
+                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                fragment: FragmentOption::Default { targets },
+                                ..Default::default()
+                            };
+                            render_manager.render_with_layouts_and_textures(
+                                &[&pipelines.resolved.hdr],
+                                &shader_dir().join("ui_rect_blur.wgsl"),
+                                &[&self.pipelines.rect_layout],
+                                &[bg1],
+                                options,
+                                &[&self.pipelines.uniform_buffer],
+                                &mut pass,
+                            );
+                            pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
+                            pass.draw(0..4, rect_idx..rect_idx + 1);
+
+                            let targets =
+                                color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
+                            let options = &PipelineOptions {
+                                topology: PrimitiveTopology::TriangleStrip,
+                                msaa_samples: 1,
+                                depth_stencil: None,
                                 vertex_layouts: vec![UiVertexPoly::desc()],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
@@ -615,7 +664,7 @@ impl UiRenderer {
                                 &[&self.pipelines.uniform_layout, &self.pipelines.rect_layout],
                                 &[&self.pipelines.uniform_bind_group, bg1],
                                 options,
-                                pass,
+                                &mut pass,
                             );
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, rect_idx..rect_idx + 1);
@@ -627,11 +676,11 @@ impl UiRenderer {
             }
 
             if let Some(text_vbo) = &layer.gpu.text_misc_vbo {
-                let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
+                let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
                 let options = &PipelineOptions {
                     topology: TriangleList,
-                    msaa_samples: msaa,
-                    depth_stencil: depth_stencil.clone(),
+                    msaa_samples: 1,
+                    depth_stencil: None,
                     vertex_layouts: vec![UiVertexText::desc()],
                     fragment: FragmentOption::Default { targets },
                     ..Default::default()
@@ -642,7 +691,7 @@ impl UiRenderer {
                     &shader_dir().join("ui_triangles.wgsl"),
                     options,
                     &[&self.pipelines.uniform_buffer],
-                    pass,
+                    &mut pass,
                 );
 
                 pass.set_vertex_buffer(0, text_vbo.slice(..));
@@ -659,7 +708,7 @@ impl UiRenderer {
                 println!("{}", e)
             }
         }
-        self.brush.draw(pass);
+        self.brush.draw(&mut pass);
     }
 
     pub fn write_storage_buffer(

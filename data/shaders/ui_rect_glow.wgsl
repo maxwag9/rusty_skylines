@@ -24,10 +24,13 @@ struct RectGpu {
     border_thickness: f32,
     rotation: f32,
     fade: f32,
+
     glow_color: vec4<f32>,
     // (glow_size, glow_speed, glow_intensity, pad)
     glow_misc: vec4<f32>,
     misc: vec4<f32>, // active, touched_time, is_down, hash
+    blur: f32,
+    //_pad0: vec3<f32>
 };
 
 fn hash(p: vec2<f32>) -> f32 {

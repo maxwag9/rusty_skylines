@@ -9,7 +9,7 @@ pub fn run_ticked(resources: &mut Resources) {
     let (time, terrain, roads, cars, input) = (
         &mut world.time,
         &mut world.terrain,
-        &mut world.road,
+        &mut world.roads,
         &mut world.cars,
         &mut world.input,
     );
@@ -29,27 +29,21 @@ pub fn run_ticked(resources: &mut Resources) {
 }
 pub fn run_sim(resources: &mut Resources) {
     let world = &mut resources.world;
-    let renderer = &mut resources.render_core;
-    let camera = &mut world.world_state.camera;
-    let cam_controller = &mut world.world_state.cam_controller;
     world.simulation.update(
-        &mut world.terrain,
-        &mut world.road,
+        &mut world.world_state,
         &mut world.cars,
-        &resources.settings,
-        &world.time,
+        &world.roads,
+        &world.terrain,
         &mut world.input,
-        &mut resources.ui.variables,
-        camera,
-        cam_controller,
-        &renderer.device,
-        &renderer.queue,
-        &renderer.config,
-        &mut renderer.gizmo,
+        &world.time,
+        &mut world.buildings,
+        &mut resources.render_core,
+        &mut resources.ui,
+        &resources.settings,
     );
 }
 
-pub fn run_ui(resources: &mut Resources, event_loop: &ActiveEventLoop) {
+pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
     let input = &mut resources.world.input;
     let time = &resources.world.time;
     let dt = time.target_frametime;
@@ -61,8 +55,8 @@ pub fn run_ui(resources: &mut Resources, event_loop: &ActiveEventLoop) {
         &mut resources.world.terrain,
         &mut resources.render_core.props,
         &mut resources.world.buildings,
-        resources.window.inner_size(),
-        &mut resources.world.road,
+        resources.window.surface_size(),
+        &mut resources.world.roads,
         &mut resources.command_queues,
         &mut resources.settings,
         &mut resources.world.world_state.camera,

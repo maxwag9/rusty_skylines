@@ -8,6 +8,7 @@ use crate::resources::{Time, Uniforms};
 use crate::world::camera::Camera;
 use glam::{Mat4, Vec3};
 use serde::{Deserialize, Serialize};
+use strum_macros::{Display, EnumString};
 use wgpu::TextureFormat::{R32Float, Rgba8Unorm, Rgba16Float};
 use wgpu::*;
 use wgpu_render_manager::renderer::RenderManager;
@@ -40,10 +41,16 @@ pub struct FogUniforms {
     pub _pad2: f32,
 }
 
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, Display, EnumString,
+)]
 pub enum ToneMappingState {
     #[default]
-    Cinematic,
+    SunnyDay,
+    GoldenHour,
+    Overcast,
+    Night,
+    Cinematic, // original, kept for reference
     Off,
 }
 #[repr(C)]
@@ -66,22 +73,80 @@ impl Default for ToneMappingUniforms {
         }
     }
 }
+
 impl ToneMappingUniforms {
-    pub fn from_state(tonemapping_state: &ToneMappingState) -> Self {
-        match tonemapping_state {
+    pub fn from_state(state: &ToneMappingState) -> Self {
+        match state {
+            ToneMappingState::SunnyDay => Self::sunny_day(),
+            ToneMappingState::GoldenHour => Self::golden_hour(),
+            ToneMappingState::Overcast => Self::overcast(),
+            ToneMappingState::Night => Self::night(),
             ToneMappingState::Cinematic => Self::cinematic(),
             ToneMappingState::Off => Self::off(),
         }
     }
+
+    /// Crisp midday sun — clean ACES with gently lifted shadows and a slightly
+    /// earlier shoulder so blown-out rooftops don't go paper-white.
+    fn sunny_day() -> Self {
+        Self {
+            a: 2.51,
+            b: 0.040,
+            c: 2.43,
+            d: 0.54,
+            e: 0.150,
+        }
+    }
+
+    /// Late afternoon / dusk — deep blacks (low b/e ratio), a pushed shoulder
+    /// that rolls highlights into amber without clipping, high contrast.
+    fn golden_hour() -> Self {
+        Self {
+            a: 2.80,
+            b: 0.012,
+            c: 2.43,
+            d: 0.73,
+            e: 0.100,
+        }
+    }
+
+    /// Flat, even, grey-sky light — lifted shadows keep building detail visible,
+    /// compressed highlights prevent sky from blowing out. Helps readability
+    /// for fine city-layout work.
+    fn overcast() -> Self {
+        Self {
+            a: 1.80,
+            b: 0.100,
+            c: 1.80,
+            d: 0.36,
+            e: 0.220,
+        }
+    }
+
+    /// Night-time — near-black shadows, gentle midtone preservation so lit
+    /// windows and streetlamps pop without washing the rest of the scene.
+    fn night() -> Self {
+        Self {
+            a: 2.51,
+            b: 0.005,
+            c: 2.43,
+            d: 0.59,
+            e: 0.075,
+        }
+    }
+
+    /// Original preset — kept for A/B comparison.
     fn cinematic() -> Self {
         Self {
             a: 2.55,
-            b: 0.02,
+            b: 0.020,
             c: 2.43,
             d: 0.59,
-            e: 0.14,
+            e: 0.140,
         }
     }
+
+    /// Disabled — linear passthrough, useful for debugging HDR values.
     fn off() -> Self {
         Self {
             a: 0.0,
@@ -114,6 +179,8 @@ pub struct ResolvedTextures {
     pub hdr: TextureView,
     pub normal: TextureView,
     pub tonemapped: TextureView,
+    pub ui: TextureView,
+    pub atlas: TextureView,
 }
 
 pub struct PostFxTextures {
@@ -141,6 +208,7 @@ pub struct UniformBuffers {
     pub gtao: Buffer,
     pub gtao_blur: Buffer,
     pub gtao_upsample_apply: Buffer,
+    //pub ui_texture: Buffer
 }
 
 pub struct SceneResources {
@@ -200,6 +268,7 @@ impl Pipelines {
             gtao: create_gtao_buffer(device, settings),
             gtao_blur: create_gtao_blur_buffer(device, settings),
             gtao_upsample_apply: create_gtao_upsample_apply_buffer(device, settings),
+            //ui_texture: create_ui_texture_buffer(device, &resolved.ui),
         };
 
         Ok(Self {
@@ -240,12 +309,14 @@ impl Pipelines {
         device: &Device,
         config: &SurfaceConfiguration,
     ) -> ResolvedTextures {
-        let (hdr, normal, tonemapped) = create_resolved_targets(device, config);
-
+        let (hdr, normal, tonemapped, ui) = create_resolved_targets(device, config);
+        let atlas = create_atlas(device, config);
         ResolvedTextures {
             hdr,
             normal,
             tonemapped,
+            ui,
+            atlas,
         }
     }
 
@@ -382,7 +453,7 @@ const NORMAL_FORMAT: TextureFormat = Rgba8Unorm;
 pub fn create_resolved_targets(
     device: &Device,
     config: &SurfaceConfiguration,
-) -> (TextureView, TextureView, TextureView) {
+) -> (TextureView, TextureView, TextureView, TextureView) {
     let create_hdr = |label: &str| {
         let tex = device.create_texture(&TextureDescriptor {
             label: Some(label),
@@ -440,7 +511,8 @@ pub fn create_resolved_targets(
     });
 
     let tonemapped = tonemap_texture.create_view(&Default::default());
-    (resolved_hdr, normal_view, tonemapped)
+    let ui = create_hdr("Resolved UI Texture");
+    (resolved_hdr, normal_view, tonemapped, ui)
 }
 pub fn create_resolved_hdr(
     device: &Device,
@@ -493,7 +565,24 @@ pub fn create_normals_texture(
 
     tex.create_view(&Default::default())
 }
-
+pub fn create_atlas(device: &Device, config: &SurfaceConfiguration) -> TextureView {
+    let atlas = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("3D text atlas"),
+        size: wgpu::Extent3d {
+            width: 2048,
+            height: 2048,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+    atlas_view
+}
 pub const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32FloatStencil8;
 
 fn create_depth_texture(
