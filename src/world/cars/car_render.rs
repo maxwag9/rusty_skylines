@@ -1,5 +1,5 @@
 //! cars_render.rs
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::WorldPos;
 use crate::resources::Time;
 use crate::world::cars::car_player::conform_car_to_terrain;
 use crate::world::cars::car_structs::{Car, CarId};
@@ -88,7 +88,7 @@ enum CarChange {
     Snap(WorldPos, Quat, Vec3),
 }
 
-fn interpolate_car(time: &Time, car: &Car, chunk_size: ChunkSize) -> Vec<CarChange> {
+fn interpolate_car(time: &Time, car: &Car) -> Vec<CarChange> {
     const INTERP_BACKTIME: f64 = 0.12;
     const MAX_EXTRAP: f64 = 0.60;
 
@@ -110,11 +110,11 @@ fn interpolate_car(time: &Time, car: &Car, chunk_size: ChunkSize) -> Vec<CarChan
     let last = traj.points.last().unwrap();
 
     if now <= first.time {
-        let world_pos = traj.origin.add_vec3(first.pos, chunk_size);
+        let world_pos = traj.origin.add_vec3(first.pos);
         let rot = first.quat;
         let vel = first.velocity;
 
-        let delta = car.pos.delta_to(world_pos, chunk_size);
+        let delta = car.pos.delta_to(world_pos);
         if delta.length_squared() > 100.0 * 100.0 {
             changes.push(CarChange::Snap(world_pos, rot, vel));
             return changes;
@@ -129,12 +129,12 @@ fn interpolate_car(time: &Time, car: &Car, chunk_size: ChunkSize) -> Vec<CarChan
     if now >= last.time {
         let dt_ex = (now - last.time).clamp(0.0, MAX_EXTRAP) as f32;
 
-        let last_world = traj.origin.add_vec3(last.pos, chunk_size);
-        let world_pos = last_world.add_vec3(last.velocity * dt_ex, chunk_size);
+        let last_world = traj.origin.add_vec3(last.pos);
+        let world_pos = last_world.add_vec3(last.velocity * dt_ex);
         let rot = last.quat;
         let vel = last.velocity;
 
-        let delta = car.pos.delta_to(world_pos, chunk_size);
+        let delta = car.pos.delta_to(world_pos);
         if delta.length_squared() > 100.0 * 100.0 {
             changes.push(CarChange::Snap(world_pos, rot, vel));
             return changes;
@@ -169,12 +169,12 @@ fn interpolate_car(time: &Time, car: &Car, chunk_size: ChunkSize) -> Vec<CarChan
     };
 
     let pos_rel = Vec3::lerp(p0.pos, p1.pos, t);
-    let world_pos = traj.origin.add_vec3(pos_rel, chunk_size);
+    let world_pos = traj.origin.add_vec3(pos_rel);
 
     let rot = Quat::slerp(p0.quat, p1.quat, t);
     let vel = Vec3::lerp(p0.velocity, p1.velocity, t);
 
-    let delta = car.pos.delta_to(world_pos, chunk_size);
+    let delta = car.pos.delta_to(world_pos);
     if delta.length_squared() > 100.0 * 100.0 {
         changes.push(CarChange::Snap(world_pos, rot, vel));
         return changes;
@@ -225,7 +225,7 @@ pub fn interpolate_cars(world_core: &mut World, settings: &Settings) {
                         if id == 1 && settings.drive_car {
                             Vec::new()
                         } else {
-                            interpolate_car(&world_core.time, car, world_core.terrain.chunk_size)
+                            interpolate_car(&world_core.time, car)
                         },
                     )
                 })

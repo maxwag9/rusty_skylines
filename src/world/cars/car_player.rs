@@ -1,4 +1,5 @@
 use crate::data::Settings;
+use crate::helpers::positions::chunk_size;
 use crate::ui::input::Input;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::car_structs::Car;
@@ -91,7 +92,6 @@ fn quat_from_yaw_and_up(yaw: f32, ground_normal: Vec3) -> Quat {
 }
 
 fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &Terrain) -> (f32, Vec3) {
-    let chunk_size = terrain.chunk_size;
     let planar_fwd = planar_forward_from_yaw(yaw);
     let planar_right = planar_right_from_forward(planar_fwd);
 
@@ -100,16 +100,16 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &Terrain) -> (f32, Vec3) {
 
     let fl = car
         .pos
-        .add_vec3(planar_fwd * half_len - planar_right * half_wid, chunk_size);
+        .add_vec3(planar_fwd * half_len - planar_right * half_wid);
     let fr = car
         .pos
-        .add_vec3(planar_fwd * half_len + planar_right * half_wid, chunk_size);
+        .add_vec3(planar_fwd * half_len + planar_right * half_wid);
     let rl = car
         .pos
-        .add_vec3(-planar_fwd * half_len - planar_right * half_wid, chunk_size);
+        .add_vec3(-planar_fwd * half_len - planar_right * half_wid);
     let rr = car
         .pos
-        .add_vec3(-planar_fwd * half_len + planar_right * half_wid, chunk_size);
+        .add_vec3(-planar_fwd * half_len + planar_right * half_wid);
 
     let h_fl = terrain.get_height_at(fl.into(), true);
     let h_fr = terrain.get_height_at(fr.into(), true);
@@ -118,10 +118,10 @@ fn sample_terrain_plane(car: &Car, yaw: f32, terrain: &Terrain) -> (f32, Vec3) {
 
     let avg_y = 0.25 * (h_fl + h_fr + h_rl + h_rr);
 
-    let d_fl = car.pos.direction_to(fl, chunk_size);
-    let d_fr = car.pos.direction_to(fr, chunk_size);
-    let d_rl = car.pos.direction_to(rl, chunk_size);
-    let d_rr = car.pos.direction_to(rr, chunk_size);
+    let d_fl = car.pos.direction_to(fl);
+    let d_fr = car.pos.direction_to(fr);
+    let d_rl = car.pos.direction_to(rl);
+    let d_rr = car.pos.direction_to(rr);
 
     let p_fl = Vec3::new(d_fl.x, h_fl - avg_y, d_fl.z);
     let p_fr = Vec3::new(d_fr.x, h_fr - avg_y, d_fr.z);
@@ -212,8 +212,6 @@ pub fn drive_car(
     const MIN_SPEED_FOR_SLIP: f32 = 0.4;
     const MAX_SPEED: f32 = 90.0;
     const MAX_YAW_RATE: f32 = 4.0;
-
-    let chunk_size = terrain.chunk_size;
 
     let throttle = if input.gameplay_down("Fly Camera Forward") {
         1.0_f32
@@ -376,7 +374,7 @@ pub fn drive_car(
 
             let local_velocity = Vec3::new(-v, 0.0, u);
             car.current_velocity = car.quat * local_velocity;
-            car.pos = car.pos.add_vec3(car.current_velocity * h, chunk_size);
+            car.pos = car.pos.add_vec3(car.current_velocity * h);
         }
 
         car.yaw_rate = r;
@@ -433,12 +431,10 @@ pub fn drive_ai_cars(car_subsystem: &mut Cars, terrain: &Terrain, dt: f32) {
     const MAX_SPEED: f32 = 50.0;
     const MAX_YAW_RATE: f32 = 3.5;
 
-    let chunk_size = terrain.chunk_size;
     let player_car_id = car_subsystem.player_car_id();
-    let cs = chunk_size as f64;
 
     let car_storage = car_subsystem.car_storage_mut();
-
+    let cs = chunk_size() as f64;
     let moves: Vec<_> = car_storage
         .par_iter_mut_cars()
         .filter_map(|car| {
@@ -537,7 +533,7 @@ pub fn drive_ai_cars(car_subsystem: &mut Cars, terrain: &Terrain, dt: f32) {
 
                 let local_velocity = Vec3::new(-v, 0.0, u);
                 car.current_velocity = car.quat * local_velocity;
-                car.pos = car.pos.add_vec3(car.current_velocity * h, chunk_size);
+                car.pos = car.pos.add_vec3(car.current_velocity * h);
             }
 
             car.yaw_rate = r;

@@ -1,5 +1,5 @@
 use crate::helpers::hsv::{HSV, hsv_to_rgb, lerp_hsv};
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::{WorldPos, chunk_size};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use std::f32::consts::PI;
 
@@ -66,9 +66,10 @@ fn ridged(n: f32) -> f32 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[inline]
-fn world_xz_f64(p: &WorldPos, chunk_size: ChunkSize) -> (f64, f64) {
-    let wx = p.chunk.x as f64 * chunk_size as f64 + p.local.x as f64;
-    let wz = p.chunk.z as f64 * chunk_size as f64 + p.local.z as f64;
+fn world_xz_f64(p: &WorldPos) -> (f64, f64) {
+    let cs = chunk_size() as f64;
+    let wx = p.chunk.x as f64 * cs + p.local.x as f64;
+    let wz = p.chunk.z as f64 * cs + p.local.z as f64;
     (wx, wz)
 }
 
@@ -428,15 +429,15 @@ impl TerrainGenerator {
 
     /// Returns scaled world coordinates in f64 precision
     #[inline]
-    fn scaled_coords_f64(&self, p: &WorldPos, chunk_size: ChunkSize) -> (f64, f64) {
-        let (wx, wz) = world_xz_f64(p, chunk_size);
+    fn scaled_coords_f64(&self, p: &WorldPos) -> (f64, f64) {
+        let (wx, wz) = world_xz_f64(p);
         let s = self.p.world_scale as f64;
         (wx * s, wz * s)
     }
 
     /// Returns warped coordinates in f64 precision
-    fn warped_coords_f64(&self, p: &WorldPos, chunk_size: ChunkSize) -> (f64, f64) {
-        let (sx, sz) = self.scaled_coords_f64(p, chunk_size);
+    fn warped_coords_f64(&self, p: &WorldPos) -> (f64, f64) {
+        let (sx, sz) = self.scaled_coords_f64(p);
 
         // Warp noise has baked-in frequency, so we pass scaled coords directly
         let w1x = noise2_f64_raw(&self.warp_large, sx, sz);
@@ -453,8 +454,8 @@ impl TerrainGenerator {
         (sx + dx, sz + dz)
     }
 
-    fn continental_mask(&self, p: &WorldPos, chunk_size: ChunkSize) -> f32 {
-        let (sx, sz) = self.scaled_coords_f64(p, chunk_size);
+    fn continental_mask(&self, p: &WorldPos) -> f32 {
+        let (sx, sz) = self.scaled_coords_f64(p);
 
         let mut best = 0.0f32;
         for &(cx, cz) in &self.continent_centers {
@@ -484,12 +485,12 @@ impl TerrainGenerator {
     }
 
     #[inline]
-    fn apply_origin_land_override(&self, p: &WorldPos, h: f32, chunk_size: ChunkSize) -> f32 {
+    fn apply_origin_land_override(&self, p: &WorldPos, h: f32) -> f32 {
         if !self.p.force_land_at_origin {
             return h;
         }
 
-        let (wx, wz) = world_xz_f64(p, chunk_size);
+        let (wx, wz) = world_xz_f64(p);
         let r = self.p.origin_island_radius.max(1.0) as f64;
         let d2 = wx * wx + wz * wz;
 
@@ -505,8 +506,8 @@ impl TerrainGenerator {
         lerp(h, min_land, s)
     }
 
-    fn latitude_factor(&self, p: &WorldPos, chunk_size: ChunkSize) -> f32 {
-        let (_, sz) = self.scaled_coords_f64(p, chunk_size);
+    fn latitude_factor(&self, p: &WorldPos) -> f32 {
+        let (_, sz) = self.scaled_coords_f64(p);
         let lat_ext = self.p.lat_extent as f64 * self.p.world_scale as f64;
         ((sz / lat_ext).abs() as f32).min(1.0)
     }
@@ -531,9 +532,9 @@ impl TerrainGenerator {
     }
 
     #[inline]
-    fn base_sample(&self, p: &WorldPos, chunk_size: ChunkSize) -> BaseSample {
-        let cont = self.continental_mask(p, chunk_size);
-        let (wx2, wz2) = self.warped_coords_f64(p, chunk_size);
+    fn base_sample(&self, p: &WorldPos) -> BaseSample {
+        let cont = self.continental_mask(p);
+        let (wx2, wz2) = self.warped_coords_f64(p);
 
         // Basin/macro sampling in f64
         let basin_raw = noise2_f64(&self.macro_elev, wx2 + 9000.0, wz2 - 4000.0, 0.12);
@@ -663,28 +664,28 @@ impl TerrainGenerator {
         s.rel - carve
     }
 
-    pub fn height(&self, p: &WorldPos, chunk_size: ChunkSize) -> f32 {
-        let s = self.base_sample(p, chunk_size);
+    pub fn height(&self, p: &WorldPos) -> f32 {
+        let s = self.base_sample(p);
         let mut rel = self.apply_rivers_fast(&s);
 
         rel = micro_flatten(rel, self.p.micro_flatten);
 
         let mut h = rel * self.p.height_scale + self.p.sea_level;
 
-        h = self.apply_origin_land_override(p, h, chunk_size);
+        h = self.apply_origin_land_override(p, h);
 
         h
     }
 
-    pub fn moisture(&self, p: &WorldPos, h: f32, chunk_size: ChunkSize) -> f32 {
+    pub fn moisture(&self, p: &WorldPos, h: f32) -> f32 {
         let h_rel = (h - self.p.sea_level) / self.p.height_scale;
 
-        let (wx2, wz2) = self.warped_coords_f64(p, chunk_size);
+        let (wx2, wz2) = self.warped_coords_f64(p);
         let n = noise2_f64_raw(&self.moisture_noise, wx2, wz2);
         let mut m = (n + 1.0) * 0.5;
 
-        let cont = self.continental_mask(p, chunk_size);
-        let lat = self.latitude_factor(p, chunk_size);
+        let cont = self.continental_mask(p);
+        let lat = self.latitude_factor(p);
 
         let mut zonal = 1.0 - ((lat - 0.18) * 1.55).abs();
         zonal = zonal.max(0.0).min(1.0);
@@ -711,13 +712,13 @@ impl TerrainGenerator {
         m.clamp(0.0, 1.0)
     }
 
-    pub fn color(&self, p: &WorldPos, h: f32, moisture: f32, chunk_size: ChunkSize) -> [f32; 3] {
+    pub fn color(&self, p: &WorldPos, h: f32, moisture: f32) -> [f32; 3] {
         let hs = self.p.height_scale;
         let h_rel = h - self.p.sea_level;
         let h_norm = (h_rel / hs).clamp(-1.2, 1.8);
 
-        let lat = self.latitude_factor(p, chunk_size).clamp(0.0, 1.0);
-        let s = self.base_sample(p, chunk_size);
+        let lat = self.latitude_factor(p).clamp(0.0, 1.0);
+        let s = self.base_sample(p);
 
         let mut temp = (1.0 - lat).powf(1.6);
         let t_noise = noise2_f64(&self.macro_elev, s.wx2, s.wz2, 0.020);

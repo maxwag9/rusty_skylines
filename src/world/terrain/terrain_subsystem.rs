@@ -39,7 +39,6 @@ pub struct PickedPoint {
 
 #[derive(Clone, Copy)]
 struct FrameState {
-    cs: ChunkSize,
     cam_pos: WorldPos,
     planes: [Plane; 6],
     r2_render: i32,
@@ -265,7 +264,6 @@ impl TerrainRenderSubsystem {
         let view_proj = camera.view_proj();
         let planes = extract_frustum_planes(view_proj);
 
-        let cs = terrain.chunk_size;
         let target_pos = camera.target;
         let target_cx = target_pos.chunk.x;
         let target_cz = target_pos.chunk.z;
@@ -290,8 +288,7 @@ impl TerrainRenderSubsystem {
                 continue;
             }
 
-            let (min, max) =
-                chunk_aabb_render(chunk_coord.x, chunk_coord.z, cs, camera.eye_world());
+            let (min, max) = chunk_aabb_render(chunk_coord.x, chunk_coord.z, camera.eye_world());
             if !aabb_in_frustum(&planes, min, max) {
                 continue;
             }
@@ -362,7 +359,6 @@ pub struct Terrain {
     pub chunks: HashMap<ChunkCoord, ChunkMeshLod>,
     pub terrain_editor: TerrainEditor,
 
-    pub chunk_size: ChunkSize,
     pub view_radius_generate: usize,
     pub view_radius_render: usize,
 
@@ -382,9 +378,9 @@ pub struct Terrain {
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
     pub fn new(device: &Device, settings: &Settings, save_state: &mut SaveState) -> Self {
-        let chunk_size: ChunkSize = save_state.chunk_size;
-        let view_radius_render = (64f32 * (64f32 / chunk_size as f32)) as usize;
-        let view_radius_generate = (32f32 * (64f32 / chunk_size as f32)) as usize;
+        let cs = chunk_size() as f32;
+        let view_radius_render = (64f32 * (64f32 / cs)) as usize;
+        let view_radius_generate = (32f32 * (64f32 / cs)) as usize;
 
         let arena = TerrainMeshArena::new(
             device,
@@ -416,7 +412,7 @@ impl Terrain {
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
 
-        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone(), chunk_size);
+        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone());
         Self {
             tick: Ticker::new(60.0),
             cursor: Cursor::new(),
@@ -424,7 +420,6 @@ impl Terrain {
             chunks: HashMap::new(),
             terrain_editor,
 
-            chunk_size,
             view_radius_generate,
             view_radius_render,
 
@@ -537,7 +532,6 @@ impl Terrain {
             pos,
             self.pick_radius_m,
             strength,
-            self.chunk_size,
             &self.chunks,
         );
 
@@ -558,8 +552,6 @@ impl Terrain {
     }
 
     fn frame_state(&self, settings: &Settings, camera: &Camera, _aspect: f32) -> FrameState {
-        let cs = self.chunk_size;
-
         let cam_pos = match settings.lod_center {
             LodCenterType::Eye => camera.eye_world(),
             LodCenterType::Target => camera.target,
@@ -572,7 +564,6 @@ impl Terrain {
         let r_gen = self.view_radius_generate as i32;
 
         FrameState {
-            cs,
             cam_pos,
             planes,
             r2_render: r_render * r_render,
@@ -652,7 +643,6 @@ impl Terrain {
                 &mut indices,
                 &height_grid,
                 coord,
-                self.chunk_size,
             );
 
             let handle = self.arena.alloc_and_upload(
@@ -698,7 +688,7 @@ impl Terrain {
             let cx = frame.cam_pos.chunk.x + dx;
             let cz = frame.cam_pos.chunk.z + dz;
 
-            let (min, max) = chunk_aabb_render(cx, cz, frame.cs, camera.eye_world());
+            let (min, max) = chunk_aabb_render(cx, cz, camera.eye_world());
             if aabb_in_frustum(&frame.planes, min, max) {
                 visible.push(VisibleChunk {
                     coords: ChunkCoords {
@@ -723,7 +713,7 @@ impl Terrain {
         }
 
         // Precompute the step for chunks beyond generation radius
-        let beyond_step = lod_step_for_distance(r2_gen + 1, self.chunk_size);
+        let beyond_step = lod_step_for_distance(r2_gen + 1);
 
         // Build coord → index map once
         let mut coord_to_index: HashMap<ChunkCoord, usize> = HashMap::with_capacity(num_visible);
@@ -735,7 +725,7 @@ impl Terrain {
             let step = if dist2 > r2_gen {
                 beyond_step
             } else {
-                lod_step_for_distance(dist2, self.chunk_size)
+                lod_step_for_distance(dist2)
             };
 
             let idx = steps.len();
@@ -811,9 +801,8 @@ impl Terrain {
     /// Pick a terrain point by casting a ray through loaded chunks.
     /// Uses WorldRay for maximum precision at any distance.
     pub fn pick_terrain_point(&mut self, ray: WorldRay) -> Option<WorldPos> {
-        let cs = self.chunk_size;
-        let cs_f32 = cs as f32;
-        let eps = 1e-6 * cs_f32;
+        let cs = chunk_size() as f32;
+        let eps = 1e-6 * cs;
 
         // Start DDA from ray origin's chunk (exact, no precision loss)
         let mut cx = ray.origin.chunk.x;
@@ -826,29 +815,28 @@ impl Terrain {
         let first_boundary_x = if step_x > 0 { cx + 1 } else { cx };
         let first_boundary_z = if step_z > 0 { cz + 1 } else { cz };
 
-        let mut t_max_x = ray.t_to_chunk_x_boundary(first_boundary_x, cs);
-        let mut t_max_z = ray.t_to_chunk_z_boundary(first_boundary_z, cs);
+        let mut t_max_x = ray.t_to_chunk_x_boundary(first_boundary_x);
+        let mut t_max_z = ray.t_to_chunk_z_boundary(first_boundary_z);
 
         // Handle ray starting exactly on boundary moving negative
         if t_max_x <= 0.0 && step_x < 0 {
             cx -= 1;
-            t_max_x = ray.t_to_chunk_x_boundary(cx, cs);
+            t_max_x = ray.t_to_chunk_x_boundary(cx);
         }
         if t_max_z <= 0.0 && step_z < 0 {
             cz -= 1;
-            t_max_z = ray.t_to_chunk_z_boundary(cz, cs);
+            t_max_z = ray.t_to_chunk_z_boundary(cz);
         }
-
         let t_delta_x = if ray.dir.x.abs() < 1e-12 {
             f32::INFINITY
         } else {
-            cs_f32 / ray.dir.x.abs()
+            cs / ray.dir.x.abs()
         };
 
         let t_delta_z = if ray.dir.z.abs() < 1e-12 {
             f32::INFINITY
         } else {
-            cs_f32 / ray.dir.z.abs()
+            cs / ray.dir.z.abs()
         };
 
         let mut t = 0.0f32;
@@ -900,10 +888,7 @@ impl Terrain {
     pub fn make_pick_uniforms(&self, queue: &Queue, pick_uniform_buffer: &Buffer, camera: &Camera) {
         let u = if let Some(p) = &self.last_picked {
             PickUniform {
-                pos: p
-                    .pos
-                    .to_render_pos(camera.eye_world(), self.chunk_size)
-                    .to_array(),
+                pos: p.pos.to_render_pos(camera.eye_world()).to_array(),
                 radius: self.pick_radius_m,
                 underwater: 1,
                 _pad0: [0, 0, 0],
@@ -926,10 +911,10 @@ impl Terrain {
     pub fn get_height_at(&self, pos: WorldPos, high_res: bool) -> f32 {
         let chunk = match self.chunks.get(&pos.chunk) {
             Some(c) => c,
-            None => return self.terrain_gen.height(&pos, self.chunk_size),
+            None => return self.terrain_gen.height(&pos),
         };
         if high_res && chunk.step != 1 {
-            return self.terrain_gen.height(&pos, self.chunk_size);
+            return self.terrain_gen.height(&pos);
         }
         height_bilinear_world(&chunk.height_grid, pos)
     }
@@ -946,8 +931,8 @@ impl Terrain {
                     grid.chunk_coord,
                     LocalPos::new(gx as f32 * cell, h, gz as f32 * cell),
                 );
-                let m = self.terrain_gen.moisture(&pos, h, grid.chunk_size);
-                colors.push(self.terrain_gen.color(&pos, h, m, grid.chunk_size));
+                let m = self.terrain_gen.moisture(&pos, h);
+                colors.push(self.terrain_gen.color(&pos, h, m));
             }
         }
         colors
@@ -1047,12 +1032,13 @@ pub fn aabb_in_frustum(planes: &[Plane; 6], min: Vec3, max: Vec3) -> bool {
 }
 
 #[inline]
-fn chunk_aabb_render(cx: i32, cz: i32, cs: ChunkSize, eye: WorldPos) -> (Vec3, Vec3) {
+fn chunk_aabb_render(cx: i32, cz: i32, eye: WorldPos) -> (Vec3, Vec3) {
+    let cs = chunk_size() as f32;
     let origin =
-        WorldPos::new(ChunkCoord::new(cx, cz), LocalPos::new(0.0, 0.0, 0.0)).to_render_pos(eye, cs);
+        WorldPos::new(ChunkCoord::new(cx, cz), LocalPos::new(0.0, 0.0, 0.0)).to_render_pos(eye);
 
     let min = origin + Vec3::new(0.0, CHUNK_MIN_Y, 0.0);
-    let max = origin + Vec3::new(cs as f32, CHUNK_MAX_Y, cs as f32);
+    let max = origin + Vec3::new(cs, CHUNK_MAX_Y, cs);
 
     (min, max)
 }
@@ -1074,7 +1060,6 @@ const SKIRT_DEPTH: f32 = 8.0;
 fn make_vertex(
     terrain_generator: &TerrainGenerator,
     chunk_coord: ChunkCoord,
-    chunk_size: ChunkSize,
     pos: [f32; 3],
     normal: [f32; 3],
     uv: [f32; 2],
@@ -1082,8 +1067,8 @@ fn make_vertex(
 ) -> Vertex {
     let world_pos = WorldPos::new(chunk_coord, LocalPos::new(pos[0], pos[1], pos[2]));
     let h = pos[1];
-    let moisture = terrain_generator.moisture(&world_pos, h, chunk_size);
-    let color = terrain_generator.color(&world_pos, h, moisture, chunk_size);
+    let moisture = terrain_generator.moisture(&world_pos, h);
+    let color = terrain_generator.color(&world_pos, h, moisture);
     Vertex {
         local_position: pos,
         normal,
@@ -1101,7 +1086,6 @@ pub fn append_edge_skirts(
     indices: &mut Vec<u32>,
     height_grid: &ChunkHeightGrid,
     chunk_coord: ChunkCoord,
-    chunk_size: ChunkSize,
 ) {
     let nx = height_grid.nx;
     let nz = height_grid.nz;
@@ -1121,7 +1105,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x, h0, z0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0],
@@ -1130,7 +1113,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x, h1, z1],
             [0.0, 1.0, 0.0],
             [1.0, 0.0],
@@ -1139,7 +1121,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x, h0 - SKIRT_DEPTH, z0],
             [0.0, 1.0, 0.0],
             [0.0, 1.0],
@@ -1148,7 +1129,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x, h1 - SKIRT_DEPTH, z1],
             [0.0, 1.0, 0.0],
             [1.0, 1.0],
@@ -1171,7 +1151,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x0, h0, z],
             [0.0, 1.0, 0.0],
             [0.0, 0.0],
@@ -1180,7 +1159,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x1, h1, z],
             [0.0, 1.0, 0.0],
             [1.0, 0.0],
@@ -1189,7 +1167,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x0, h0 - SKIRT_DEPTH, z],
             [0.0, 1.0, 0.0],
             [0.0, 1.0],
@@ -1198,7 +1175,6 @@ pub fn append_edge_skirts(
         vertices.push(make_vertex(
             terrain_generator,
             chunk_coord,
-            chunk_size,
             [x1, h1 - SKIRT_DEPTH, z],
             [0.0, 1.0, 0.0],
             [1.0, 1.0],

@@ -92,11 +92,9 @@ impl RoadRenderSubsystem {
         for v in &terrain.visible {
             let chunk_id = v.id;
 
-            let needs_rebuild = self.mesh_manager.chunk_needs_update(
-                chunk_id,
-                &road_subsystem.road_manager.roads,
-                terrain.chunk_size,
-            );
+            let needs_rebuild = self
+                .mesh_manager
+                .chunk_needs_update(chunk_id, &road_subsystem.road_manager.roads);
 
             let mesh = if needs_rebuild {
                 self.mesh_manager.update_chunk_mesh(
@@ -198,8 +196,7 @@ impl Roads {
                 &self.road_commands,
             );
         }
-        self.partition_manager
-            .rebuild_all(&self.road_manager.roads, terrain.chunk_size);
+        self.partition_manager.rebuild_all(&self.road_manager.roads);
     }
 }
 pub const _WGSL_SDF_TEXT_OVERLAY: &str = r#"

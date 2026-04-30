@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
 use crate::world::roads::intersections::IntersectionBuildParams;
@@ -82,13 +82,7 @@ impl RoadEditor {
 
         match self.style.state().clone() {
             EditorState::Idle => {
-                self.handle_idle(
-                    storage,
-                    &snap,
-                    place_pressed,
-                    &mut output,
-                    terrain.chunk_size,
-                );
+                self.handle_idle(storage, &snap, place_pressed, &mut output);
             }
             EditorState::StraightPickEnd { start } => {
                 self.handle_straight_pick_end(
@@ -109,7 +103,6 @@ impl RoadEditor {
                     &snap,
                     place_pressed,
                     &mut output,
-                    terrain.chunk_size,
                 );
             }
             EditorState::CurvePickEnd { start, control } => {
@@ -136,9 +129,8 @@ impl RoadEditor {
         snap: &SnapResult,
         place_pressed: bool,
         output: &mut Vec<RoadEditorCommand>,
-        chunk_size: ChunkSize,
     ) {
-        let node_preview = self.build_node_preview_from_snap(storage, snap, chunk_size);
+        let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         if place_pressed {
@@ -182,10 +174,9 @@ impl RoadEditor {
         let end_pos = snap.world_pos;
         let polyline =
             make_straight_centerline(terrain_renderer, start_pos, end_pos, road_type.structure);
-        let estimated_length = end_pos.length_to(start_pos, terrain_renderer.chunk_size);
+        let estimated_length = end_pos.length_to(start_pos);
 
-        let (is_valid, reason) =
-            self.validate_placement(storage, start, &end_anchor, terrain_renderer.chunk_size);
+        let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
         // Find crossings for preview
         let crossings = self.find_all_crossings(
@@ -218,8 +209,7 @@ impl RoadEditor {
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
 
-        let node_preview =
-            self.build_node_preview_from_snap(storage, snap, terrain_renderer.chunk_size);
+        let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         // Preview crossing points
@@ -257,7 +247,6 @@ impl RoadEditor {
         snap: &SnapResult,
         place_pressed: bool,
         output: &mut Vec<RoadEditorCommand>,
-        chunk_size: ChunkSize,
     ) {
         let Some(start_pos) = start.planned_node.position(&road_manager.roads) else {
             output.push(RoadEditorCommand::PreviewError(
@@ -269,7 +258,7 @@ impl RoadEditor {
 
         let control_pos = snap.world_pos;
         let polyline = vec![start_pos, control_pos];
-        let estimated_length = control_pos.length_to(start_pos, chunk_size);
+        let estimated_length = control_pos.length_to(start_pos);
 
         let seg_preview = SegmentPreview {
             road_type_id: self.style.road_type_id(),
@@ -320,7 +309,6 @@ impl RoadEditor {
         let Some(road_type) = self.style.road_type(&road_manager.road_types) else {
             return;
         };
-        let chunk_size = terrain_renderer.chunk_size;
         let end_anchor = self.build_anchor_from_snap(snap);
         let end_pos = snap.world_pos;
 
@@ -341,7 +329,7 @@ impl RoadEditor {
             segment_count,
         );
 
-        let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor, chunk_size);
+        let (is_valid, reason) = self.validate_placement(storage, start, &end_anchor);
 
         // Find crossings for preview
         let crossings = self.find_all_crossings(
@@ -374,7 +362,7 @@ impl RoadEditor {
         };
         output.push(RoadEditorCommand::PreviewSegment(seg_preview.clone()));
 
-        let node_preview = self.build_node_preview_from_snap(storage, snap, chunk_size);
+        let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
         // Preview crossing points
@@ -419,7 +407,6 @@ impl RoadEditor {
         end_anchor: &Anchor,
         _gizmo: &mut Gizmo,
     ) -> Vec<CrossingPoint> {
-        let chunk_size = terrain_renderer.chunk_size;
         let mut crossings = Vec::new();
         let mut crossed_segments: HashSet<SegmentId> = HashSet::new();
 
@@ -491,8 +478,8 @@ impl RoadEditor {
                 let end_node = storage.node(segment.end).unwrap();
                 let end_node_pos = end_node.position();
 
-                let dist_to_start = crossing.world_pos.length_to(start_node_pos, chunk_size);
-                let dist_to_end = crossing.world_pos.length_to(end_node_pos, chunk_size);
+                let dist_to_start = crossing.world_pos.length_to(start_node_pos);
+                let dist_to_end = crossing.world_pos.length_to(end_node_pos);
 
                 if dist_to_start < CROSSING_SNAP_TO_NODE_RADIUS
                     || dist_to_end < CROSSING_SNAP_TO_NODE_RADIUS
@@ -503,13 +490,9 @@ impl RoadEditor {
                         (segment.end, end_node_pos)
                     };
 
-                    if let Some((new_t, _proj_dist)) = self.project_point_to_path(
-                        start_pos,
-                        end_pos,
-                        control,
-                        closest_pos,
-                        chunk_size,
-                    ) {
+                    if let Some((new_t, _proj_dist)) =
+                        self.project_point_to_path(start_pos, end_pos, control, closest_pos)
+                    {
                         if new_t > ENDPOINT_T_EPS && new_t < 1.0 - ENDPOINT_T_EPS {
                             crossings.push(CrossingPoint {
                                 t: new_t,
@@ -538,7 +521,7 @@ impl RoadEditor {
 
             let node_pos = node.position();
             if let Some((t, dist)) =
-                self.project_point_to_path(start_pos, end_pos, control, node_pos, chunk_size)
+                self.project_point_to_path(start_pos, end_pos, control, node_pos)
             {
                 if dist < NODE_SNAP_RADIUS && t > ENDPOINT_T_EPS && t < 1.0 - ENDPOINT_T_EPS {
                     crossings.push(CrossingPoint {
@@ -712,13 +695,13 @@ impl RoadEditor {
             let p2 = test_polyline[i + 1];
             let origin = p1;
             let a1 = Vec2::ZERO;
-            let a2 = origin.delta_to(p2, terrain_renderer.chunk_size).xz();
+            let a2 = origin.delta_to(p2).xz();
             // Check against each segment of the lane
             for j in 0..lane_points.len() - 1 {
                 let q1 = lane_points[j];
                 let q2 = lane_points[j + 1];
-                let b1 = origin.delta_to(q1, terrain_renderer.chunk_size).xz();
-                let b2 = origin.delta_to(q2, terrain_renderer.chunk_size).xz();
+                let b1 = origin.delta_to(q1).xz();
+                let b2 = origin.delta_to(q2).xz();
                 if let Some((our_seg_t, lane_seg_t)) =
                     line_segment_intersection_2d(a1.x, a1.y, a2.x, a2.y, b1.x, b1.y, b2.x, b2.y)
                 {
@@ -765,12 +748,11 @@ impl RoadEditor {
         end: WorldPos,
         control: Option<WorldPos>,
         point: WorldPos,
-        chunk_size: ChunkSize,
     ) -> Option<(f64, f64)> {
         // Use start as local origin
-        let b = start.delta_to(end, chunk_size);
-        let p = start.delta_to(point, chunk_size);
-        let c = control.map(|c| start.delta_to(c, chunk_size));
+        let b = start.delta_to(end);
+        let p = start.delta_to(point);
+        let c = control.map(|c| start.delta_to(c));
 
         match c {
             None => {
@@ -824,22 +806,21 @@ impl RoadEditor {
         control: Option<WorldPos>,
         t: f64,
     ) -> WorldPos {
-        let chunk_size = terrain_renderer.chunk_size;
         let mut pos = match control {
             Some(c) => {
                 // Quadratic bezier: compute relative to start for precision
-                let v_control = c.to_render_pos(start, chunk_size);
-                let v_end = end.to_render_pos(start, chunk_size);
+                let v_control = c.to_render_pos(start);
+                let v_end = end.to_render_pos(start);
 
                 let omt = 1.0 - t as f32;
                 // B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
                 // P0 is at origin in relative space
                 let blend = v_control * (2.0 * omt * t as f32) + v_end * (t * t) as f32;
-                start.add_vec3(blend, chunk_size)
+                start.add_vec3(blend)
             }
             None => {
                 // Linear interpolation
-                start.lerp(end, t, chunk_size)
+                start.lerp(end, t)
             }
         };
 
@@ -910,13 +891,9 @@ impl RoadEditor {
         let mut waypoints: Vec<ResolvedWaypoint> = Vec::new();
 
         // Resolve start anchor
-        let Some((start_node_id, start_node_pos)) = self.resolve_anchor(
-            storage,
-            start,
-            chunk_id,
-            &mut cmds,
-            terrain_renderer.chunk_size,
-        ) else {
+        let Some((start_node_id, start_node_pos)) =
+            self.resolve_anchor(storage, start, chunk_id, &mut cmds)
+        else {
             return Vec::new();
         };
 
@@ -931,13 +908,9 @@ impl RoadEditor {
             let node_id = match crossing.kind {
                 CrossingKind::ExistingNode(id) => id,
                 CrossingKind::LaneCrossing { lane_id, .. } => {
-                    let Some((split_cmds, new_node_id)) = self.plan_split(
-                        storage,
-                        lane_id,
-                        crossing.world_pos,
-                        chunk_id,
-                        terrain_renderer.chunk_size,
-                    ) else {
+                    let Some((split_cmds, new_node_id)) =
+                        self.plan_split(storage, lane_id, crossing.world_pos, chunk_id)
+                    else {
                         continue;
                     };
                     cmds.extend(split_cmds);
@@ -953,13 +926,9 @@ impl RoadEditor {
         }
 
         // Resolve end anchor
-        let Some((end_node_id, end_node_pos)) = self.resolve_anchor(
-            storage,
-            end,
-            chunk_id,
-            &mut cmds,
-            terrain_renderer.chunk_size,
-        ) else {
+        let Some((end_node_id, end_node_pos)) =
+            self.resolve_anchor(storage, end, chunk_id, &mut cmds)
+        else {
             return cmds;
         };
 
@@ -1044,14 +1013,8 @@ impl RoadEditor {
             }
             Some(c) => {
                 // Extract subsection of Bézier curve
-                let (sub_start, sub_control, sub_end) = subdivide_quadratic_bezier(
-                    original_start,
-                    c,
-                    original_end,
-                    from_t,
-                    to_t,
-                    terrain_renderer.chunk_size,
-                );
+                let (sub_start, sub_control, sub_end) =
+                    subdivide_quadratic_bezier(original_start, c, original_end, from_t, to_t);
 
                 let est_len = estimate_bezier_arc_length(
                     terrain_renderer,
@@ -1080,9 +1043,7 @@ impl RoadEditor {
         pos: WorldPos,
         gizmo: &mut Gizmo,
     ) -> SnapResult {
-        if let Some((node_id, node_pos, dist)) =
-            self.find_nearest_node(storage, pos, terrain_renderer.chunk_size)
-        {
+        if let Some((node_id, node_pos, dist)) = self.find_nearest_node(storage, pos) {
             return SnapResult {
                 world_pos: node_pos,
                 kind: SnapKind::Node { id: node_id },
@@ -1111,13 +1072,12 @@ impl RoadEditor {
         &self,
         storage: &RoadStorage,
         pos: WorldPos,
-        chunk_size: ChunkSize,
     ) -> Option<(NodeId, WorldPos, f64)> {
         let mut best: Option<(NodeId, WorldPos, f64)> = None;
 
         for (id, node) in storage.iter_enabled_nodes() {
             let node_pos = node.position();
-            let dist = pos.distance_to(node_pos, chunk_size);
+            let dist = pos.distance_to(node_pos);
 
             if dist < NODE_SNAP_RADIUS {
                 if best.is_none() || dist < best.unwrap().2 {
@@ -1136,13 +1096,12 @@ impl RoadEditor {
         pos: WorldPos,
         _gizmo: &mut Gizmo,
     ) -> Option<(LaneId, f64, WorldPos, f64)> {
-        let nearest_lane_id = nearest_lane_to_point(storage, pos, terrain_renderer.chunk_size)?;
+        let nearest_lane_id = nearest_lane_to_point(storage, pos)?;
         let nearest_lane = storage.lane(&nearest_lane_id);
         let segment_id = nearest_lane.segment();
         let segment = storage.segment(segment_id);
 
-        let (raw_t, _) =
-            project_point_to_lane_xz(nearest_lane, pos, storage, terrain_renderer.chunk_size)?;
+        let (raw_t, _) = project_point_to_lane_xz(nearest_lane, pos, storage)?;
 
         let nearest_is_forward = nearest_lane.from_node() == segment.start;
         let segment_t = if nearest_is_forward {
@@ -1191,8 +1150,8 @@ impl RoadEditor {
                     1.0 - segment_t
                 };
 
-                let p1 = sample_lane_position(l1, t1, storage, terrain_renderer.chunk_size)?;
-                let p2 = sample_lane_position(l2, t2, storage, terrain_renderer.chunk_size)?;
+                let p1 = sample_lane_position(l1, t1, storage)?;
+                let p2 = sample_lane_position(l2, t2, storage)?;
 
                 let center = WorldPos {
                     chunk: p1.chunk,
@@ -1210,7 +1169,7 @@ impl RoadEditor {
                 } else {
                     1.0 - segment_t
                 };
-                let p = sample_lane_position(lane, lane_t, storage, terrain_renderer.chunk_size)?;
+                let p = sample_lane_position(lane, lane_t, storage)?;
                 (id, p, lane_t)
             } else {
                 return None;
@@ -1219,7 +1178,7 @@ impl RoadEditor {
         let mut final_pos = center_pos;
         final_pos.local.y = terrain_renderer.get_height_at(final_pos, true) + CLEARANCE;
 
-        let dist = pos.distance_to(final_pos, terrain_renderer.chunk_size);
+        let dist = pos.distance_to(final_pos);
 
         if dist >= LANE_SNAP_RADIUS {
             return None;
@@ -1273,7 +1232,6 @@ impl RoadEditor {
         &self,
         storage: &RoadStorage,
         snap: &SnapResult,
-        chunk_size: ChunkSize,
     ) -> NodePreview {
         let (result, incoming_lanes, outgoing_lanes) = match snap.kind {
             SnapKind::Node { id } => {
@@ -1284,13 +1242,13 @@ impl RoadEditor {
 
                 for lane_id in node.incoming_lanes() {
                     let lane = storage.lane(lane_id);
-                    let dir = lane_direction_at_node(lane, id, chunk_size);
+                    let dir = lane_direction_at_node(lane, id);
                     in_lanes.push((lane_id.clone(), dir));
                 }
 
                 for lane_id in node.outgoing_lanes() {
                     let lane = storage.lane(lane_id);
-                    let dir = lane_direction_at_node(lane, id, chunk_size);
+                    let dir = lane_direction_at_node(lane, id);
                     out_lanes.push((lane_id.clone(), dir));
                 }
 
@@ -1306,7 +1264,7 @@ impl RoadEditor {
                     (NodePreviewResult::NewNode, Vec::new(), Vec::new())
                 } else {
                     let lane = storage.lane(&lane_id);
-                    let dir = lane.polyline()[0].delta_to(lane.polyline()[1], chunk_size);
+                    let dir = lane.polyline()[0].delta_to(lane.polyline()[1]);
 
                     (
                         NodePreviewResult::SplitIntersection,
@@ -1336,13 +1294,13 @@ impl RoadEditor {
         t: f64,
     ) -> Option<LanePreview> {
         let lane = storage.lane(&lane_id);
-        let mut p = sample_lane_position(lane, t, storage, terrain_renderer.chunk_size)?;
+        let mut p = sample_lane_position(lane, t, storage)?;
 
         let sample_count = 11;
         let mut sample_points = Vec::with_capacity(sample_count);
         for i in 0..sample_count {
             let sample_t = i as f64 / (sample_count - 1) as f64;
-            let mut s = sample_lane_position(lane, sample_t, storage, terrain_renderer.chunk_size)?;
+            let mut s = sample_lane_position(lane, sample_t, storage)?;
             s.local.y = terrain_renderer.get_height_at(s, false) + CLEARANCE;
             sample_points.push(s);
         }
@@ -1360,7 +1318,6 @@ impl RoadEditor {
         storage: &RoadStorage,
         start: &Anchor,
         end: &Anchor,
-        chunk_size: ChunkSize,
     ) -> (bool, Option<PreviewError>) {
         let Some(start_pos) = start.planned_node.position(storage) else {
             return (false, Some(PreviewError::MissingNodeData));
@@ -1378,7 +1335,7 @@ impl RoadEditor {
             }
         }
 
-        let delta = start_pos.delta_to(end_pos, chunk_size);
+        let delta = start_pos.delta_to(end_pos);
         let length_xz = delta.xz().length() as f64;
 
         if length_xz < MIN_SEGMENT_LENGTH {
@@ -1394,7 +1351,6 @@ impl RoadEditor {
         anchor: &Anchor,
         chunk_id: ChunkId,
         cmds: &mut Vec<RoadCommand>,
-        chunk_size: ChunkSize,
     ) -> Option<(NodeId, WorldPos)> {
         match &anchor.planned_node {
             PlannedNode::Existing(id) => {
@@ -1407,7 +1363,7 @@ impl RoadEditor {
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
-                let result = self.plan_split(storage, *lane_id, *pos, chunk_id, chunk_size)?;
+                let result = self.plan_split(storage, *lane_id, *pos, chunk_id)?;
                 cmds.extend(result.0);
                 Some((result.1, *pos))
             }
@@ -1420,7 +1376,6 @@ impl RoadEditor {
         lane_id: LaneId,
         split_pos: WorldPos,
         chunk_id: ChunkId,
-        chunk_size: ChunkSize,
     ) -> Option<(Vec<RoadCommand>, NodeId)> {
         let lane = storage.lane(&lane_id);
         let old_segment_id = lane.segment();
@@ -1461,7 +1416,7 @@ impl RoadEditor {
         for old_lane_id in old_segment.lanes() {
             let old_lane = storage.lane(old_lane_id);
 
-            let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos, chunk_size);
+            let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
 
             let total_len = old_lane.geometry().total_len.max(0.001);
             let cost1 = old_lane.base_cost() as f64 * (geom1.total_len / total_len);
@@ -1552,7 +1507,7 @@ impl RoadEditor {
                 lane_width,
                 road_type.structure,
             );
-            let geom = LaneGeometry::from_polyline(poly, terrain.chunk_size);
+            let geom = LaneGeometry::from_polyline(poly);
             let base_cost = geom.total_len.max(0.1) as f32;
             cmds.push(RoadCommand::AddLane {
                 from: start,
@@ -1579,7 +1534,7 @@ impl RoadEditor {
                 road_type.structure(),
             );
             poly.reverse();
-            let geom = LaneGeometry::from_polyline(poly, terrain.chunk_size);
+            let geom = LaneGeometry::from_polyline(poly);
             let base_cost = geom.total_len.max(0.1) as f32;
             cmds.push(RoadCommand::AddLane {
                 from: end,
@@ -1603,13 +1558,13 @@ fn make_straight_centerline(
     end_pos: WorldPos,
     structure_type: StructureType,
 ) -> Vec<WorldPos> {
-    let length = end_pos.length_to(start_pos, terrain_renderer.chunk_size);
+    let length = end_pos.length_to(start_pos);
     let samples = (length / METERS_PER_LANE_POLYLINE_STEP).max(1.0) as usize;
 
     (0..=samples)
         .map(|i| {
             let t = i as f64 / samples as f64;
-            let mut p = start_pos.lerp(end_pos, t, terrain_renderer.chunk_size);
+            let mut p = start_pos.lerp(end_pos, t);
             set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, false);
             p
         })
@@ -1620,11 +1575,7 @@ fn make_straight_centerline(
 // Helpers
 // ============================================================================
 
-fn split_lane_geometry(
-    geom: &LaneGeometry,
-    split_pos: WorldPos,
-    chunk_size: ChunkSize,
-) -> (LaneGeometry, LaneGeometry) {
+fn split_lane_geometry(geom: &LaneGeometry, split_pos: WorldPos) -> (LaneGeometry, LaneGeometry) {
     let mut best_i = 0;
     let mut best_t = 0.0;
     let mut best_dist = f64::MAX;
@@ -1634,10 +1585,10 @@ fn split_lane_geometry(
         let b = geom.points[i + 1];
 
         // Vector from a -> b
-        let ab = a.delta_to(b, chunk_size);
+        let ab = a.delta_to(b);
 
         // Vector from a -> split_pos
-        let ap = a.delta_to(split_pos, chunk_size);
+        let ap = a.delta_to(split_pos);
 
         let ab_len2 = ab.length_squared();
         if ab_len2 <= 1e-6 {
@@ -1647,9 +1598,9 @@ fn split_lane_geometry(
         let t = (ap.dot(ab) / ab_len2).clamp(0.0, 1.0);
 
         // p = a + ab * t
-        let p = a.add_vec3(ab * t, chunk_size);
+        let p = a.add_vec3(ab * t);
 
-        let d = p.distance_to(split_pos, chunk_size);
+        let d = p.distance_to(split_pos);
         if d < best_dist {
             best_dist = d;
             best_i = i;
@@ -1660,8 +1611,8 @@ fn split_lane_geometry(
     let a = geom.points[best_i];
     let b = geom.points[best_i + 1];
 
-    let ab = a.delta_to(b, chunk_size);
-    let split_point = a.add_vec3(ab * best_t, chunk_size);
+    let ab = a.delta_to(b);
+    let split_point = a.add_vec3(ab * best_t);
 
     let mut pts1 = Vec::new();
     let mut pts2 = Vec::new();
@@ -1673,12 +1624,12 @@ fn split_lane_geometry(
     pts2.extend_from_slice(&geom.points[best_i + 1..]);
 
     (
-        LaneGeometry::from_polyline(pts1, chunk_size),
-        LaneGeometry::from_polyline(pts2, chunk_size),
+        LaneGeometry::from_polyline(pts1),
+        LaneGeometry::from_polyline(pts2),
     )
 }
 
-fn lane_direction_at_node(lane: &Lane, node: NodeId, chunk_size: ChunkSize) -> Vec3 {
+fn lane_direction_at_node(lane: &Lane, node: NodeId) -> Vec3 {
     let pts = &lane.geometry().points;
     if pts.len() < 2 {
         return Vec3::ZERO;
@@ -1686,13 +1637,11 @@ fn lane_direction_at_node(lane: &Lane, node: NodeId, chunk_size: ChunkSize) -> V
 
     if lane.from_node() == node {
         // travel direction leaving FROM node
-        pts[0].delta_to(pts[1], chunk_size).normalize_or_zero()
+        pts[0].delta_to(pts[1]).normalize_or_zero()
     } else {
         // travel direction arriving at TO node (still along lane direction)
         let n = pts.len();
-        pts[n - 2]
-            .delta_to(pts[n - 1], chunk_size)
-            .normalize_or_zero()
+        pts[n - 2].delta_to(pts[n - 1]).normalize_or_zero()
     }
 }
 
@@ -1714,11 +1663,11 @@ pub fn sample_quadratic_bezier(
 
         // Quadratic Bézier: B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
         // Compute relative to P0 for precision
-        let v1 = p1.to_render_pos(p0, terrain_renderer.chunk_size);
-        let v2 = p2.to_render_pos(p0, terrain_renderer.chunk_size);
+        let v1 = p1.to_render_pos(p0);
+        let v2 = p2.to_render_pos(p0);
 
         let blend = v1 * (2.0 * one_minus_t * t) + v2 * (t * t);
-        let mut p = p0.add_vec3(blend, terrain_renderer.chunk_size);
+        let mut p = p0.add_vec3(blend);
 
         set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, true);
         points.push(p);
@@ -1733,7 +1682,7 @@ fn estimate_bezier_arc_length(
     p2: WorldPos,
 ) -> f64 {
     let samples = sample_quadratic_bezier(terrain_renderer, structure_type, p0, p1, p2, 16);
-    polyline_length(&samples, terrain_renderer.chunk_size)
+    polyline_length(&samples)
 }
 
 fn compute_curve_segment_count(arc_length: f64) -> usize {
@@ -1759,14 +1708,14 @@ pub fn offset_polyline(
         .enumerate()
         .map(|(i, &pt)| {
             let dir = if i + 1 < center.len() {
-                center[i + 1].to_render_pos(pt, terrain_renderer.chunk_size)
+                center[i + 1].to_render_pos(pt)
             } else {
-                pt.to_render_pos(center[i - 1], terrain_renderer.chunk_size)
+                pt.to_render_pos(center[i - 1])
             };
 
             let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
             let right = Vec3::new(-dir_xz.z, 0.0, dir_xz.x);
-            let mut p = pt.add_vec3(right * offset, terrain_renderer.chunk_size);
+            let mut p = pt.add_vec3(right * offset);
             set_point_height_with_structure_type(terrain_renderer, structure_type, &mut p, true);
             p
         })
@@ -1774,30 +1723,22 @@ pub fn offset_polyline(
 }
 
 /// Compute total length of a polyline.
-pub fn polyline_length(points: &[WorldPos], chunk_size: ChunkSize) -> f64 {
-    points
-        .windows(2)
-        .map(|w| w[0].distance_to(w[1], chunk_size))
-        .sum()
+pub fn polyline_length(points: &[WorldPos]) -> f64 {
+    points.windows(2).map(|w| w[0].distance_to(w[1])).sum()
 }
 
 /// Compute cumulative lengths along polyline.
-pub fn polyline_cumulative_lengths(points: &[WorldPos], chunk_size: ChunkSize) -> Vec<f64> {
+pub fn polyline_cumulative_lengths(points: &[WorldPos]) -> Vec<f64> {
     let mut lengths = Vec::with_capacity(points.len());
     lengths.push(0.0);
     for w in points.windows(2) {
-        lengths.push(lengths.last().unwrap() + w[0].distance_to(w[1], chunk_size));
+        lengths.push(lengths.last().unwrap() + w[0].distance_to(w[1]));
     }
     lengths
 }
 
 /// Sample position and direction at distance t along polyline.
-pub fn sample_polyline_at(
-    points: &[WorldPos],
-    lengths: &[f64],
-    t: f64,
-    chunk_size: ChunkSize,
-) -> (WorldPos, Vec3) {
+pub fn sample_polyline_at(points: &[WorldPos], lengths: &[f64], t: f64) -> (WorldPos, Vec3) {
     let mut i = 1;
     while i < lengths.len() && lengths[i] < t {
         i += 1;
@@ -1812,10 +1753,8 @@ pub fn sample_polyline_at(
         0.0
     };
 
-    let pos = points[i0].lerp(points[i1], seg_t, chunk_size);
-    let dir = points[i1]
-        .to_render_pos(points[i0], chunk_size)
-        .normalize_or_zero();
+    let pos = points[i0].lerp(points[i1], seg_t);
+    let dir = points[i1].to_render_pos(points[i0]).normalize_or_zero();
     (pos, dir)
 }
 

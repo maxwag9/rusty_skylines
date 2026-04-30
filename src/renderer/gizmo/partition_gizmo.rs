@@ -1,5 +1,5 @@
 use crate::helpers::hsv::depth_to_color;
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::cars::partitions::{PartitionId, PartitionManager, PartitionStorage};
 use crate::world::roads::roads::RoadStorage;
@@ -34,12 +34,11 @@ impl PartitionGizmo {
         &self,
         id: PartitionId,
         config: &PartitionVisualizationConfig,
-        chunk_size: ChunkSize,
     ) -> Option<WorldPos> {
         let base = self.cached_base_centroids.get(&id)?;
         let depth = self.cached_depths.get(&id).copied().unwrap_or(0);
         let height = self.max_depth.saturating_sub(depth) as f32 * config.height_per_level;
-        Some(base.add_vec3(Vec3::new(0.0, height, 0.0), chunk_size))
+        Some(base.add_vec3(Vec3::new(0.0, height, 0.0)))
     }
 
     pub fn visualize(
@@ -49,7 +48,7 @@ impl PartitionGizmo {
         road_storage: &RoadStorage,
         config: PartitionVisualizationConfig,
     ) {
-        self.rebuild_cache_if_needed(manager, road_storage, gizmo.chunk_size);
+        self.rebuild_cache_if_needed(manager, road_storage);
 
         if config.show_hierarchy_arrows {
             self.draw_hierarchy_arrows(gizmo, &manager.storage, &config);
@@ -91,13 +90,11 @@ impl PartitionGizmo {
         storage: &PartitionStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             let Some(partition) = storage.get(id) else {
                 continue;
             };
-            let Some(parent_pos) = self.display_position(id, config, cs) else {
+            let Some(parent_pos) = self.display_position(id, config) else {
                 continue;
             };
 
@@ -105,7 +102,7 @@ impl PartitionGizmo {
             let color = depth_to_color(depth, self.max_depth);
 
             for &child_id in &partition.children {
-                let Some(child_pos) = self.display_position(child_id, config, cs) else {
+                let Some(child_pos) = self.display_position(child_id, config) else {
                     continue;
                 };
                 gizmo.arrow(
@@ -126,22 +123,19 @@ impl PartitionGizmo {
         storage: &PartitionStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             if storage.get(id).is_none() {
                 continue;
             }
 
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
             let depth = self.cached_depths.get(&id).copied().unwrap_or(0);
             let color = depth_to_color(depth, self.max_depth);
 
             let scale = config.id_scale_base / (1.0 + depth as f32 * config.id_scale_depth_factor);
-            let label_pos =
-                pos.add_vec3(Vec3::new(config.id_offset_x, config.id_offset_y, 0.0), cs);
+            let label_pos = pos.add_vec3(Vec3::new(config.id_offset_x, config.id_offset_y, 0.0));
 
             gizmo.text(
                 id.to_string(),
@@ -149,6 +143,7 @@ impl PartitionGizmo {
                 scale,
                 color,
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
@@ -161,8 +156,6 @@ impl PartitionGizmo {
         storage: &PartitionStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             let Some(partition) = storage.get(id) else {
                 continue;
@@ -171,15 +164,16 @@ impl PartitionGizmo {
                 continue;
             }
 
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
             let child_count = partition.children.len();
 
-            let label_pos = pos.add_vec3(
-                Vec3::new(-config.id_offset_x * 2.0, config.id_offset_y * 0.5, 0.0),
-                cs,
-            );
+            let label_pos = pos.add_vec3(Vec3::new(
+                -config.id_offset_x * 2.0,
+                config.id_offset_y * 0.5,
+                0.0,
+            ));
 
             gizmo.text(
                 child_count.to_string(),
@@ -187,6 +181,7 @@ impl PartitionGizmo {
                 config.id_scale_base * 0.6,
                 [0.8, 0.8, 0.8, 1.0],
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
@@ -199,13 +194,11 @@ impl PartitionGizmo {
         storage: &PartitionStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             let Some(partition) = storage.get(id) else {
                 continue;
             };
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
 
@@ -241,8 +234,6 @@ impl PartitionGizmo {
         storage: &PartitionStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             let depth = self.cached_depths.get(&id).copied().unwrap_or(0);
             if depth != 0 {
@@ -252,7 +243,7 @@ impl PartitionGizmo {
                 continue;
             }
 
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
 
@@ -273,7 +264,7 @@ impl PartitionGizmo {
 
             let crown_offset = Vec3::new(0.0, config.root_marker_size * 0.5, 0.0);
             gizmo.circle(
-                pos.add_vec3(crown_offset, cs),
+                pos.add_vec3(crown_offset),
                 config.root_marker_size * 0.4,
                 config.root_color,
                 config.thickness,
@@ -288,8 +279,6 @@ impl PartitionGizmo {
         storage: &PartitionStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             let Some(partition) = storage.get(id) else {
                 continue;
@@ -298,7 +287,7 @@ impl PartitionGizmo {
                 continue;
             }
 
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
             let depth = self.cached_depths.get(&id).copied().unwrap_or(0);
@@ -326,13 +315,11 @@ impl PartitionGizmo {
         road_storage: &RoadStorage,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (node_id, &partition_id) in &manager.node_to_leaf {
             let Some(node) = road_storage.node(*node_id) else {
                 continue;
             };
-            let Some(partition_pos) = self.display_position(partition_id, config, cs) else {
+            let Some(partition_pos) = self.display_position(partition_id, config) else {
                 continue;
             };
 
@@ -361,8 +348,6 @@ impl PartitionGizmo {
         partition_id: PartitionId,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         let mut path = Vec::new();
         let mut current = Some(partition_id);
 
@@ -375,10 +360,10 @@ impl PartitionGizmo {
 
         for window in path.windows(2) {
             let (parent_id, child_id) = (window[0], window[1]);
-            let Some(p1) = self.display_position(parent_id, config, cs) else {
+            let Some(p1) = self.display_position(parent_id, config) else {
                 continue;
             };
-            let Some(p2) = self.display_position(child_id, config, cs) else {
+            let Some(p2) = self.display_position(child_id, config) else {
                 continue;
             };
 
@@ -393,7 +378,7 @@ impl PartitionGizmo {
         }
 
         for (i, &id) in path.iter().enumerate() {
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
 
@@ -409,10 +394,11 @@ impl PartitionGizmo {
             gizmo.sphere(pos, radius, color, config.thickness, config.duration);
             gizmo.text(
                 id.to_string(),
-                pos.add_vec3(Vec3::new(radius * 1.5, 0.0, 0.0), cs),
+                pos.add_vec3(Vec3::new(radius * 1.5, 0.0, 0.0)),
                 config.id_scale_base,
                 color,
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
@@ -425,14 +411,12 @@ impl PartitionGizmo {
         address: &[PartitionId],
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for window in address.windows(2) {
             let (parent, child) = (window[0], window[1]);
-            let Some(p1) = self.display_position(parent, config, cs) else {
+            let Some(p1) = self.display_position(parent, config) else {
                 continue;
             };
-            let Some(p2) = self.display_position(child, config, cs) else {
+            let Some(p2) = self.display_position(child, config) else {
                 continue;
             };
 
@@ -447,7 +431,7 @@ impl PartitionGizmo {
         }
 
         for (i, &id) in address.iter().enumerate() {
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
             let radius = config.address_marker_radius * (1.0 - i as f32 * 0.1).max(0.5);
@@ -461,10 +445,11 @@ impl PartitionGizmo {
             );
             gizmo.text(
                 (i + 1).to_string(),
-                pos.add_vec3(Vec3::new(0.0, radius * 2.0, 0.0), cs),
+                pos.add_vec3(Vec3::new(0.0, radius * 2.0, 0.0)),
                 config.id_scale_base * 0.8,
                 config.address_color,
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
@@ -478,8 +463,6 @@ impl PartitionGizmo {
         target_depth: u32,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         for (&id, _) in &self.cached_base_centroids {
             let depth = self.cached_depths.get(&id).copied().unwrap_or(0);
             if depth != target_depth {
@@ -489,7 +472,7 @@ impl PartitionGizmo {
                 continue;
             }
 
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
             let color = depth_to_color(depth, self.max_depth);
@@ -503,10 +486,11 @@ impl PartitionGizmo {
             );
             gizmo.text(
                 id.to_string(),
-                pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0), cs),
+                pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0)),
                 config.id_scale_base,
                 color,
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
@@ -520,14 +504,13 @@ impl PartitionGizmo {
         root_id: PartitionId,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
         let mut stack = vec![(root_id, 0u32)];
 
         while let Some((id, local_depth)) = stack.pop() {
             let Some(partition) = storage.get(id) else {
                 continue;
             };
-            let Some(pos) = self.display_position(id, config, cs) else {
+            let Some(pos) = self.display_position(id, config) else {
                 continue;
             };
 
@@ -538,16 +521,17 @@ impl PartitionGizmo {
             gizmo.sphere(pos, radius, color, config.thickness, config.duration);
             gizmo.text(
                 id.to_string(),
-                pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0), cs),
+                pos.add_vec3(Vec3::new(0.0, config.id_offset_y, 0.0)),
                 config.id_scale_base / (1.0 + local_depth as f32 * 0.15),
                 color,
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
 
             for &child_id in &partition.children {
-                let Some(child_pos) = self.display_position(child_id, config, cs) else {
+                let Some(child_pos) = self.display_position(child_id, config) else {
                     continue;
                 };
                 gizmo.arrow(
@@ -570,8 +554,6 @@ impl PartitionGizmo {
         anchor: WorldPos,
         config: &PartitionVisualizationConfig,
     ) {
-        let cs = gizmo.chunk_size;
-
         let total_partitions = self.cached_base_centroids.len();
         let leaf_count = self
             .cached_base_centroids
@@ -594,25 +576,21 @@ impl PartitionGizmo {
         ];
 
         for (i, (value, color)) in stats.iter().enumerate() {
-            let pos = anchor.add_vec3(Vec3::new(0.0, 0.0, i as f32 * line_height), cs);
+            let pos = anchor.add_vec3(Vec3::new(0.0, 0.0, i as f32 * line_height));
             gizmo.text(
                 value.to_string(),
                 pos,
                 config.id_scale_base,
                 *color,
                 None,
+                false,
                 config.thickness,
                 config.duration,
             );
         }
     }
 
-    fn rebuild_cache_if_needed(
-        &mut self,
-        manager: &PartitionManager,
-        road_storage: &RoadStorage,
-        chunk_size: ChunkSize,
-    ) {
+    fn rebuild_cache_if_needed(&mut self, manager: &PartitionManager, road_storage: &RoadStorage) {
         let partition_count = manager.storage.partition_count();
         if self.cached_base_centroids.len() == partition_count && partition_count > 0 {
             return;
@@ -637,18 +615,18 @@ impl PartitionGizmo {
             if positions.is_empty() {
                 continue;
             }
-            let centroid = Self::compute_centroid(positions, chunk_size);
+            let centroid = Self::compute_centroid(positions);
             self.cached_base_centroids.insert(partition_id, centroid);
         }
 
-        self.compute_internal_centroids(&manager.storage, chunk_size);
+        self.compute_internal_centroids(&manager.storage);
         self.compute_depths(&manager.storage);
         self.compute_child_counts(&manager.storage);
 
         self.max_depth = self.cached_depths.values().copied().max().unwrap_or(0);
     }
 
-    fn compute_internal_centroids(&mut self, storage: &PartitionStorage, chunk_size: ChunkSize) {
+    fn compute_internal_centroids(&mut self, storage: &PartitionStorage) {
         let mut changed = true;
         while changed {
             changed = false;
@@ -672,7 +650,7 @@ impl PartitionGizmo {
                     .collect();
 
                 if child_positions.len() == partition.children.len() {
-                    let centroid = Self::compute_centroid(&child_positions, chunk_size);
+                    let centroid = Self::compute_centroid(&child_positions);
                     self.cached_base_centroids.insert(id, centroid);
                     changed = true;
                 }
@@ -702,7 +680,7 @@ impl PartitionGizmo {
         }
     }
 
-    fn compute_centroid(positions: &[WorldPos], chunk_size: ChunkSize) -> WorldPos {
+    fn compute_centroid(positions: &[WorldPos]) -> WorldPos {
         if positions.is_empty() {
             return WorldPos::default();
         }
@@ -711,11 +689,11 @@ impl PartitionGizmo {
         let mut sum = Vec3::ZERO;
 
         for pos in positions {
-            sum += pos.to_render_pos(reference, chunk_size);
+            sum += pos.to_render_pos(reference);
         }
 
         let avg = sum / positions.len() as f32;
-        reference.add_vec3(avg, chunk_size)
+        reference.add_vec3(avg)
     }
 
     pub fn partition_count(&self) -> usize {
@@ -730,9 +708,8 @@ impl PartitionGizmo {
         &self,
         id: PartitionId,
         config: &PartitionVisualizationConfig,
-        chunk_size: ChunkSize,
     ) -> Option<WorldPos> {
-        self.display_position(id, config, chunk_size)
+        self.display_position(id, config)
     }
 
     pub fn get_depth(&self, id: PartitionId) -> Option<u32> {

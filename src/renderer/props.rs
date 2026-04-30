@@ -1,6 +1,6 @@
 use crate::data::Settings;
 use crate::helpers::paths::shader_dir;
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::render_passes::{
     color_and_normals_and_instance_targets, depth_stencil, make_shadow_option,
@@ -315,12 +315,10 @@ impl Props {
 
                     for (i, inst) in instances.iter().enumerate() {
                         // Convert to render-space position relative to camera
-                        let render_pos = inst
-                            .pos
-                            .to_render_pos(camera.eye_world(), camera.chunk_size);
+                        let render_pos = inst.pos.to_render_pos(camera.eye_world());
                         let model = Mat4::from_scale_rotation_translation(
                             Vec3::splat(inst.scale),
-                            glam::Quat::from_rotation_y(inst.rotation_y_rad),
+                            Quat::from_rotation_y(inst.rotation_y_rad),
                             render_pos,
                         );
 
@@ -424,7 +422,6 @@ impl Props {
     ) {
         let eye = camera.eye_world();
         let terrain_height = terrain.get_height_at(eye, true);
-        let chunk_size = camera.chunk_size;
 
         let shader_path = shader_dir().join("props.wgsl");
         let shadow = make_shadow_option(settings, pipelines);
@@ -451,11 +448,11 @@ impl Props {
             };
 
             let instance_terrain_height = terrain.get_height_at(eye, true);
-            let dist = eye.distance_to(
-                WorldPos::new(coord, LocalPos::new(0.0, instance_terrain_height, 0.0)),
-                chunk_size,
-            );
-            let lod_level = select_lod(dist, chunk_size);
+            let dist = eye.distance_to(WorldPos::new(
+                coord,
+                LocalPos::new(0.0, instance_terrain_height, 0.0),
+            ));
+            let lod_level = select_lod(dist);
 
             for (archetype, instances) in &chunk.archetype_instances {
                 if instances.is_empty() {
@@ -500,7 +497,6 @@ impl Props {
         cascade_idx: usize,
     ) {
         let eye = camera.eye_world();
-        let chunk_size = camera.chunk_size;
 
         let bias = shadow_bias_for_cascade(
             cascade_idx,
@@ -525,11 +521,11 @@ impl Props {
             };
 
             let instance_terrain_height = terrain.get_height_at(eye, true);
-            let dist = eye.distance_to(
-                WorldPos::new(coord, LocalPos::new(0.0, instance_terrain_height, 0.0)),
-                chunk_size,
-            );
-            let lod_level = select_lod(dist, chunk_size);
+            let dist = eye.distance_to(WorldPos::new(
+                coord,
+                LocalPos::new(0.0, instance_terrain_height, 0.0),
+            ));
+            let lod_level = select_lod(dist);
 
             for (archetype, instances) in &chunk.archetype_instances {
                 if instances.is_empty() {
@@ -605,7 +601,7 @@ const LOD0_MAX_DIST: f64 = 250.0; // Full detail
 const LOD1_MAX_DIST: f64 = 700.0; // Medium detail
 const LOD2_MAX_DIST: f64 = 1700.0; // Low detail
 
-fn select_lod(dist: f64, chunk_size: ChunkSize) -> u32 {
+fn select_lod(dist: f64) -> u32 {
     if dist < LOD0_MAX_DIST {
         0
     } else if dist < LOD1_MAX_DIST {
@@ -1201,7 +1197,7 @@ fn calculate_bounds(vertices: &[PropVertex]) -> (Vec3, f32) {
 }
 
 fn create_mesh(device: &Device, vertices: &[PropVertex], indices: &[u32]) -> Mesh {
-    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
         label: Some("Tree Vertex Buffer"),
         contents: bytemuck::cast_slice(vertices),
         usage: wgpu::BufferUsages::VERTEX,

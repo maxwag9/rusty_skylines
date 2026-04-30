@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LodStep};
+use crate::helpers::positions::{ChunkCoord, LodStep};
 use crate::world::terrain::chunk_builder::{ChunkBuilder, CpuChunkMesh};
 use crate::world::terrain::terrain::TerrainGenerator;
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -31,7 +31,7 @@ pub struct ChunkWorkerPool {
 }
 
 impl ChunkWorkerPool {
-    pub fn new(worker_count: usize, terrain_gen: TerrainGenerator, chunk_size: ChunkSize) -> Self {
+    pub fn new(worker_count: usize, terrain_gen: TerrainGenerator) -> Self {
         let (job_tx, job_rx) = unbounded::<ChunkJob>();
         let (result_tx, result_rx) = unbounded::<CpuChunkMesh>();
 
@@ -65,7 +65,6 @@ impl ChunkWorkerPool {
 
                                 if let Some(cpu) = ChunkBuilder::build_chunk_cpu(
                                     chunk_coord,
-                                    chunk_size,
                                     self_step,
                                     nx_neg,
                                     nx_pos,

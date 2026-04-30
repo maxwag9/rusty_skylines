@@ -351,7 +351,7 @@ pub fn make_render_space_transform(
     camera: &Camera,
 ) -> Mat4 {
     let eye = camera.eye_world();
-    let t_render: Vec3 = world_pos.to_render_pos(eye, camera.chunk_size);
+    let t_render: Vec3 = world_pos.to_render_pos(eye);
     Mat4::from_scale_rotation_translation(scale, rot, t_render)
 }
 

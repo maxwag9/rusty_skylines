@@ -1,7 +1,7 @@
 use crate::resources::Time;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ZoningDemand {
     pub residential: f32,
     pub commercial: f32,

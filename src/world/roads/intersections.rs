@@ -1,6 +1,6 @@
 // intersections.rs - Fixed Clipper2 API usage
 
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::{DEBUG_DRAW_DURATION, Gizmo, ROAD_GIZMO_THICKNESS};
 use crate::world::roads::road_editor::{polyline_cumulative_lengths, sample_polyline_at};
 use crate::world::roads::road_helpers::*;
@@ -36,23 +36,17 @@ const CLIPPER_PRECISION: i32 = 2; // Decimal Points
 pub struct IntersectionPolygon {
     pub ring: Vec<WorldPos>,
     pub origin: WorldPos,
-    pub chunk_size: ChunkSize,
 }
 
 impl IntersectionPolygon {
-    pub fn new(ring: Vec<WorldPos>, origin: WorldPos, chunk_size: ChunkSize) -> Self {
-        Self {
-            ring,
-            origin,
-            chunk_size,
-        }
+    pub fn new(ring: Vec<WorldPos>, origin: WorldPos) -> Self {
+        Self { ring, origin }
     }
 
-    pub fn empty(chunk_size: ChunkSize) -> Self {
+    pub fn empty() -> Self {
         Self {
             ring: Vec::new(),
             origin: WorldPos::zero(),
-            chunk_size,
         }
     }
 
@@ -61,13 +55,12 @@ impl IntersectionPolygon {
     }
 
     fn world_pos_to_local_2d(&self, p: WorldPos) -> Vec2 {
-        let rel = p.to_render_pos(self.origin, self.chunk_size);
+        let rel = p.to_render_pos(self.origin);
         Vec2::new(rel.x, rel.z)
     }
 
     fn world_pos_from_local_2d(&self, v: Vec2, y: f32) -> WorldPos {
-        self.origin
-            .add_vec3(Vec3::new(v.x, y, v.y), self.chunk_size)
+        self.origin.add_vec3(Vec3::new(v.x, y, v.y))
     }
 
     /// Point-in-polygon using winding number.
@@ -150,7 +143,7 @@ impl IntersectionPolygon {
         for i in 0..polyline.len() - 1 {
             let seg_start = polyline[i];
             let seg_end = polyline[i + 1];
-            let seg_len = seg_start.distance_to(seg_end, self.chunk_size) as f32;
+            let seg_len = seg_start.distance_to(seg_end) as f32;
 
             if seg_len < 1e-6 {
                 continue;
@@ -259,7 +252,7 @@ fn normalize_angle_positive(angle: f32) -> f32 {
     a
 }
 
-fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage, chunk_size: ChunkSize) -> f32 {
+fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage) -> f32 {
     const SAFETY_MARGIN: f32 = 0.5;
 
     let all_lanes: Vec<LaneId> = arm
@@ -285,16 +278,16 @@ fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage, chunk_size: Ch
 
         let mut total_len = 0.0f32;
         for i in 0..pts.len() - 1 {
-            total_len += pts[i].distance_to(pts[i + 1], chunk_size) as f32;
+            total_len += pts[i].distance_to(pts[i + 1]) as f32;
         }
 
         let is_incoming = arm.incoming_lanes().contains(&lane_id);
 
         let preserve_len = if is_incoming {
-            pts[0].distance_to(pts[1], chunk_size) as f32
+            pts[0].distance_to(pts[1]) as f32
         } else {
             let n = pts.len();
-            pts[n - 2].distance_to(pts[n - 1], chunk_size) as f32
+            pts[n - 2].distance_to(pts[n - 1]) as f32
         };
 
         let available = (total_len - preserve_len - SAFETY_MARGIN).max(0.0);
@@ -304,18 +297,13 @@ fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage, chunk_size: Ch
     min_available
 }
 
-fn compute_corridor_lengths(
-    arms: &[Arm],
-    sidewalk_width: f32,
-    storage: &RoadStorage,
-    chunk_size: ChunkSize,
-) -> Vec<f32> {
+fn compute_corridor_lengths(arms: &[Arm], sidewalk_width: f32, storage: &RoadStorage) -> Vec<f32> {
     let n = arms.len();
     if n == 0 {
         return vec![];
     }
     if n == 1 {
-        let max_from_lanes = compute_max_corridor_for_arm(&arms[0], storage, chunk_size);
+        let max_from_lanes = compute_max_corridor_for_arm(&arms[0], storage);
         return vec![DEFAULT_CORRIDOR_LENGTH.min(max_from_lanes)];
     }
 
@@ -346,7 +334,7 @@ fn compute_corridor_lengths(
                 sidewalk_width,
             );
 
-            let max_from_lanes = compute_max_corridor_for_arm(arm, storage, chunk_size);
+            let max_from_lanes = compute_max_corridor_for_arm(arm, storage);
             corridor_len.min(max_from_lanes)
         })
         .collect()
@@ -601,18 +589,17 @@ pub fn build_intersection_at_node(
     recalc_clearance: bool,
     gizmo: &mut Gizmo,
 ) -> HashSet<ChunkCoord> {
-    let chunk_size = terrain.chunk_size;
     let mut affected_chunks = HashSet::new();
     if recalc_clearance {
         if let Some(geom) =
-            compute_intersection_geometry(storage, node_id, params, road_type, chunk_size, gizmo)
+            compute_intersection_geometry(storage, node_id, params, road_type, gizmo)
         {
             debug_draw_polygon(&geom.polygon, [0.0, 0.8, 0.2, 1.0], gizmo);
             if let Some(ref sw) = geom.sidewalk_polygon {
                 debug_draw_polygon(sw, [0.5, 0.5, 0.5, 1.0], gizmo);
             }
 
-            carve_lanes_with_polygon(storage, node_id, &geom, chunk_size, gizmo);
+            carve_lanes_with_polygon(storage, node_id, &geom, gizmo);
 
             let flattening_polygon = if let Some(ref sw_poly) = geom.sidewalk_polygon {
                 &sw_poly.ring
@@ -621,12 +608,8 @@ pub fn build_intersection_at_node(
             };
 
             if flattening_polygon.len() >= 3 {
-                let center_height = compute_intersection_center_height(
-                    terrain,
-                    &geom.center,
-                    flattening_polygon,
-                    chunk_size,
-                );
+                let center_height =
+                    compute_intersection_center_height(terrain, &geom.center, flattening_polygon);
 
                 affected_chunks = terrain
                     .terrain_editor
@@ -637,7 +620,6 @@ pub fn build_intersection_at_node(
                         -road_type.lane_height - 0.25,
                         road_type.sidewalk_width * 2.0
                             + road_type.lane_width * road_type.total_lanes() as f32,
-                        chunk_size,
                         &terrain.chunks,
                     );
             }
@@ -646,9 +628,8 @@ pub fn build_intersection_at_node(
 
     storage.node_mut(node_id).clear_node_lanes();
 
-    let node_lanes = build_node_lanes_for_intersection(
-        terrain, storage, road_types, node_id, params, chunk_size, gizmo,
-    );
+    let node_lanes =
+        build_node_lanes_for_intersection(terrain, storage, road_types, node_id, params, gizmo);
     storage.node_mut(node_id).add_node_lanes(node_lanes);
 
     affected_chunks
@@ -665,7 +646,6 @@ fn compute_intersection_center_height(
     terrain: &Terrain,
     center: &WorldPos,
     polygon: &[WorldPos],
-    _chunk_size: ChunkSize,
 ) -> f32 {
     if polygon.is_empty() {
         return terrain.get_height_at(*center, true);
@@ -964,7 +944,6 @@ fn carve_lanes_with_polygon(
     storage: &mut RoadStorage,
     node_id: NodeId,
     geom: &IntersectionGeometry,
-    chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) {
     let mut edits: Vec<(LaneId, LaneGeometry)> = Vec::new();
@@ -989,7 +968,7 @@ fn carve_lanes_with_polygon(
             }
 
             let node_pos = storage.node(node_id).unwrap().position();
-            let Some(node_idx) = endpoint_index_near_node(pts, node_pos, chunk_size) else {
+            let Some(node_idx) = endpoint_index_near_node(pts, node_pos) else {
                 continue;
             };
 
@@ -1010,13 +989,13 @@ fn carve_lanes_with_polygon(
             //gizmo.cross(hit, 0.2, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
 
             let new_pts = if node_idx == 0 {
-                modify_polyline_start(pts, dist_to_boundary - 0.1, chunk_size)
+                modify_polyline_start(pts, dist_to_boundary - 0.1)
             } else {
-                modify_polyline_end(pts, dist_to_boundary - 0.1, chunk_size)
+                modify_polyline_end(pts, dist_to_boundary - 0.1)
             };
 
             if let Some(new_pts) = new_pts {
-                edits.push((lane_id, LaneGeometry::from_polyline(new_pts, chunk_size)));
+                edits.push((lane_id, LaneGeometry::from_polyline(new_pts)));
             }
         }
     }
@@ -1074,7 +1053,6 @@ fn build_polygon_curbs_filtered(
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
-    let chunk_size = terrain.chunk_size;
     let height_diff = top_height - bottom_height;
 
     if height_diff.abs() < 0.001 || ring.len() < 3 {
@@ -1103,8 +1081,8 @@ fn build_polygon_curbs_filtered(
         let normal_2d = if face_inward { -right_perp } else { right_perp };
         let normal = Vec3::new(normal_2d.x, 0.0, normal_2d.y);
 
-        let mut pos_a = center.add_vec3(Vec3::new(a.x, 0.0, a.y), chunk_size);
-        let mut pos_b = center.add_vec3(Vec3::new(b.x, 0.0, b.y), chunk_size);
+        let mut pos_a = center.add_vec3(Vec3::new(a.x, 0.0, a.y));
+        let mut pos_b = center.add_vec3(Vec3::new(b.x, 0.0, b.y));
 
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_a, true);
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos_b, true);
@@ -1185,7 +1163,6 @@ pub fn build_intersection_mesh(
     gizmo: &mut Gizmo,
 ) -> IntersectionMeshResult {
     let center = node.position();
-    let chunk_size = terrain.chunk_size;
 
     let params = IntersectionBuildParams::from_style(style);
 
@@ -1194,8 +1171,7 @@ pub fn build_intersection_mesh(
         return IntersectionMeshResult::default();
     }
 
-    let corridor_lengths =
-        compute_corridor_lengths(&arms, road_type.sidewalk_width, storage, chunk_size);
+    let corridor_lengths = compute_corridor_lengths(&arms, road_type.sidewalk_width, storage);
 
     let asphalt_hw: Vec<f32> = arms
         .iter()
@@ -1249,7 +1225,7 @@ pub fn build_intersection_mesh(
     let asphalt_base = vertices.len() as u32;
 
     for p2d in &asphalt_simplified.points {
-        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
+        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y));
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos, true);
         pos.local.y += road_type.lane_height;
         let local = *p2d - asphalt_centroid;
@@ -1413,11 +1389,11 @@ pub fn build_intersection_mesh(
     let ring: Vec<WorldPos> = asphalt_simplified
         .points
         .iter()
-        .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
+        .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y)))
         .collect();
 
     IntersectionMeshResult {
-        polygon: IntersectionPolygon::new(ring, center, chunk_size),
+        polygon: IntersectionPolygon::new(ring, center),
     }
 }
 
@@ -1426,7 +1402,6 @@ fn compute_intersection_geometry(
     node_id: NodeId,
     params: &IntersectionBuildParams,
     road_type: &RoadType,
-    chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) -> Option<IntersectionGeometry> {
     let node = storage.node(node_id)?;
@@ -1438,8 +1413,7 @@ fn compute_intersection_geometry(
         return None;
     }
 
-    let corridor_lengths =
-        compute_corridor_lengths(&arms, road_type.sidewalk_width, storage, chunk_size);
+    let corridor_lengths = compute_corridor_lengths(&arms, road_type.sidewalk_width, storage);
 
     let full_hw: Vec<f32> = arms.iter().map(|a| a.half_width()).collect();
 
@@ -1484,10 +1458,10 @@ fn compute_intersection_geometry(
     let ring: Vec<WorldPos> = simplified
         .points
         .iter()
-        .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
+        .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y)))
         .collect();
 
-    let polygon = IntersectionPolygon::new(ring, center, chunk_size);
+    let polygon = IntersectionPolygon::new(ring, center);
 
     let sidewalk_polygon = if road_type.sidewalk_width > 0.01 {
         let asphalt_hw: Vec<f32> = arms
@@ -1532,9 +1506,9 @@ fn compute_intersection_geometry(
                 let ring: Vec<WorldPos> = p
                     .points
                     .iter()
-                    .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y), chunk_size))
+                    .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y)))
                     .collect();
-                IntersectionPolygon::new(ring, center, chunk_size)
+                IntersectionPolygon::new(ring, center)
             })
     } else {
         None
@@ -1616,7 +1590,7 @@ fn build_sidewalk_mesh(
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
-    let chunk_size = terrain.chunk_size;
+    let cs = chunk_size() as f32;
 
     if ring.len() < 3 {
         return;
@@ -1627,7 +1601,7 @@ fn build_sidewalk_mesh(
     let base = vertices.len() as u32;
 
     for p2d in ring {
-        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y), chunk_size);
+        let mut pos = center.add_vec3(Vec3::new(p2d.x, 0.0, p2d.y));
         set_point_height_with_structure_type(terrain, road_type.structure(), &mut pos, true);
         pos.local.y += road_type.sidewalk_height;
 
@@ -1651,7 +1625,6 @@ pub fn gather_arms(
     road_types: &RoadTypes,
     node_id: NodeId,
     intersection_build_params: &IntersectionBuildParams,
-    chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) -> Vec<Arm> {
     let segment_ids = storage.enabled_segments_connected_to_node(node_id);
@@ -1682,8 +1655,7 @@ pub fn gather_arms(
                 return None;
             }
 
-            let direction =
-                segment_direction_at_node(segment, node_id, storage, chunk_size, gizmo)?;
+            let direction = segment_direction_at_node(segment, node_id, storage, gizmo)?;
 
             let mut bearing = direction.z.atan2(direction.x);
             if bearing < 0.0 {
@@ -1739,7 +1711,6 @@ fn build_node_lanes_for_intersection(
     road_types: &RoadTypes,
     node_id: NodeId,
     params: &IntersectionBuildParams,
-    chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) -> Vec<NodeLane> {
     let Some(node) = storage.node(node_id) else {
@@ -1771,7 +1742,7 @@ fn build_node_lanes_for_intersection(
             }
 
             // Find which endpoint is actually at the node (geometrically)
-            let Some(node_idx) = endpoint_index_near_node(pts, node_pos, chunk_size) else {
+            let Some(node_idx) = endpoint_index_near_node(pts, node_pos) else {
                 continue;
             };
 
@@ -1802,8 +1773,7 @@ fn build_node_lanes_for_intersection(
             };
 
             // Compute direction based on actual geometry
-            let (direction, endpoint) =
-                compute_lane_tangent_at_node(pts, node_idx, is_incoming, chunk_size);
+            let (direction, endpoint) = compute_lane_tangent_at_node(pts, node_idx, is_incoming);
 
             let Some(direction) = direction else {
                 continue;
@@ -1894,7 +1864,7 @@ fn build_node_lanes_for_intersection(
             }
 
             // Compute turn geometry
-            let chord = in_pt.distance_to(*out_pt, chunk_size);
+            let chord = in_pt.distance_to(*out_pt);
             let tightness = compute_turn_tightness(chord, dot, road_type);
 
             let geom = generate_turn_geometry(
@@ -1905,7 +1875,6 @@ fn build_node_lanes_for_intersection(
                 *out_dir,
                 params.turn_samples,
                 tightness,
-                chunk_size,
             );
 
             // Debug: draw the turn curve
@@ -1979,12 +1948,11 @@ pub fn generate_turn_geometry(
     end_dir: Vec3, // Direction OUT OF intersection (outgoing traffic direction)
     samples: usize,
     tightness: f32,
-    chunk_size: ChunkSize,
 ) -> LaneGeometry {
-    let dist = start.distance_to(end, chunk_size) as f32;
+    let dist = start.distance_to(end) as f32;
 
     if dist < 0.001 {
-        return LaneGeometry::from_polyline(vec![start, end], chunk_size);
+        return LaneGeometry::from_polyline(vec![start, end]);
     }
 
     // Control point distance scales with chord length and tightness
@@ -1993,44 +1961,40 @@ pub fn generate_turn_geometry(
 
     // ctrl1: Extend from start in the direction traffic is going (INTO intersection)
     //        This is start_dir itself
-    let ctrl1 = start.add_vec3(start_dir * control_len, chunk_size);
+    let ctrl1 = start.add_vec3(start_dir * control_len);
 
     // ctrl2: Extend from end BACKWARD against traffic flow
     //        Traffic goes OUT in end_dir direction, so backward is -end_dir
-    let ctrl2 = end.add_vec3(-end_dir * control_len, chunk_size);
+    let ctrl2 = end.add_vec3(-end_dir * control_len);
 
     let n = samples.clamp(4, 64);
     let points: Vec<WorldPos> = (0..=n) // Note: 0..=n for n+1 points
         .map(|i| {
             let t = i as f32 / n as f32;
-            let mut p = WorldPos::cubic_bezier_xz(start, ctrl1, ctrl2, end, t, chunk_size);
+            let mut p = WorldPos::cubic_bezier_xz(start, ctrl1, ctrl2, end, t);
             p.local.y = terrain.get_height_at(p, true);
             p
         })
         .collect();
 
-    LaneGeometry::from_polyline(points, chunk_size)
+    LaneGeometry::from_polyline(points)
 }
 
 // Polyline Modification
 
-pub fn modify_polyline_start(
-    points: &[WorldPos],
-    amount: f32,
-    chunk_size: ChunkSize,
-) -> Option<Vec<WorldPos>> {
+pub fn modify_polyline_start(points: &[WorldPos], amount: f32) -> Option<Vec<WorldPos>> {
     if points.len() < 2 || amount <= 0.0 {
         return Some(points.to_vec());
     }
 
-    let lengths = polyline_cumulative_lengths(points, chunk_size);
+    let lengths = polyline_cumulative_lengths(points);
     let total = *lengths.last().unwrap();
 
     if amount as f64 >= total - 0.01 {
         return None;
     }
 
-    let (new_start, _) = sample_polyline_at(points, &lengths, amount as f64, chunk_size);
+    let (new_start, _) = sample_polyline_at(points, &lengths, amount as f64);
 
     let mut keep_from = 1;
     while keep_from < lengths.len() && lengths[keep_from] <= amount as f64 {
@@ -2044,16 +2008,12 @@ pub fn modify_polyline_start(
     if out.len() >= 2 { Some(out) } else { None }
 }
 
-pub fn modify_polyline_end(
-    points: &[WorldPos],
-    amount: f32,
-    chunk_size: ChunkSize,
-) -> Option<Vec<WorldPos>> {
+pub fn modify_polyline_end(points: &[WorldPos], amount: f32) -> Option<Vec<WorldPos>> {
     if points.len() < 2 || amount <= 0.0 {
         return Some(points.to_vec());
     }
 
-    let lengths = polyline_cumulative_lengths(points, chunk_size);
+    let lengths = polyline_cumulative_lengths(points);
     let total = *lengths.last().unwrap();
 
     if amount as f64 >= total - 0.01 {
@@ -2061,7 +2021,7 @@ pub fn modify_polyline_end(
     }
 
     let target_len = total - amount as f64;
-    let (new_end, _) = sample_polyline_at(points, &lengths, target_len, chunk_size);
+    let (new_end, _) = sample_polyline_at(points, &lengths, target_len);
 
     let mut keep_to = lengths.len() - 1;
     while keep_to > 0 && lengths[keep_to] >= target_len {
@@ -2075,16 +2035,12 @@ pub fn modify_polyline_end(
     if out.len() >= 2 { Some(out) } else { None }
 }
 
-fn endpoint_index_near_node(
-    pts: &[WorldPos],
-    node_pos: WorldPos,
-    chunk: ChunkSize,
-) -> Option<usize> {
+fn endpoint_index_near_node(pts: &[WorldPos], node_pos: WorldPos) -> Option<usize> {
     if pts.len() < 2 {
         return None;
     }
-    let d0 = pts[0].distance_to(node_pos, chunk);
-    let d1 = pts[pts.len() - 1].distance_to(node_pos, chunk);
+    let d0 = pts[0].distance_to(node_pos);
+    let d1 = pts[pts.len() - 1].distance_to(node_pos);
     Some(if d0 <= d1 { 0 } else { pts.len() - 1 })
 }
 
@@ -2092,7 +2048,6 @@ fn segment_direction_at_node(
     segment: &Segment,
     node_id: NodeId,
     storage: &RoadStorage,
-    chunk_size: ChunkSize,
     gizmo: &mut Gizmo,
 ) -> Option<Vec3> {
     let lane_id = *segment.lanes().first()?;
@@ -2110,7 +2065,7 @@ fn segment_direction_at_node(
     };
     // gizmo.cross(a, 0.5, [1.0, 0.0, 0.0], DEBUG_DRAW_DURATION);
     // gizmo.cross(b, 0.6, [0.0, 1.0, 0.0], DEBUG_DRAW_DURATION);
-    let d = a.delta_to(b, chunk_size);
+    let d = a.delta_to(b);
 
     let v = Vec3::new(d.x, 0.0, d.z).normalize_or_zero();
 
@@ -2127,7 +2082,6 @@ fn compute_lane_tangent_at_node(
     pts: &[WorldPos],
     node_idx: usize,
     is_incoming: bool,
-    chunk_size: ChunkSize,
 ) -> (Option<Vec3>, WorldPos) {
     if pts.len() < 2 {
         return (None, pts.get(0).copied().unwrap_or(WorldPos::zero()));
@@ -2144,22 +2098,22 @@ fn compute_lane_tangent_at_node(
         if is_incoming {
             // Traffic arrives at index 0 from index 1
             // Direction = from pts[1] toward pts[0]
-            pts[1].delta_to(pts[0], chunk_size)
+            pts[1].delta_to(pts[0])
         } else {
             // Traffic leaves from index 0 toward index 1
             // Direction = from pts[0] toward pts[1]
-            pts[0].delta_to(pts[1], chunk_size)
+            pts[0].delta_to(pts[1])
         }
     } else {
         let n = pts.len();
         if is_incoming {
             // Traffic arrives at index n-1 from index n-2
             // Direction = from pts[n-2] toward pts[n-1]
-            pts[n - 2].delta_to(pts[n - 1], chunk_size)
+            pts[n - 2].delta_to(pts[n - 1])
         } else {
             // Traffic leaves from index n-1 toward index n-2
             // Direction = from pts[n-1] toward pts[n-2]
-            pts[n - 1].delta_to(pts[n - 2], chunk_size)
+            pts[n - 1].delta_to(pts[n - 2])
         }
     };
 

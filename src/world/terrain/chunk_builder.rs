@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
+use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
 use crate::ui::vertex::Vertex;
 use crate::world::terrain::terrain::TerrainGenerator;
 use crate::world::terrain::terrain_editing::EditedChunk;
@@ -11,7 +11,6 @@ use std::sync::atomic::AtomicU64;
 #[derive(Clone)]
 pub struct ChunkHeightGrid {
     pub chunk_coord: ChunkCoord,
-    pub chunk_size: ChunkSize,
     pub cell_size: LodStep,
     pub nx: usize,
     pub nz: usize,
@@ -23,11 +22,6 @@ impl ChunkHeightGrid {
     #[inline]
     pub fn cell_f32(&self) -> f32 {
         self.cell_size as f32
-    }
-
-    #[inline]
-    pub fn chunk_size_f32(&self) -> f32 {
-        self.chunk_size as f32
     }
 
     /// Grid extent in local X direction
@@ -45,17 +39,16 @@ impl ChunkHeightGrid {
     /// Returns (local_x, local_z) which may be outside [0, chunk_size] if pos is in a different chunk.
     #[inline]
     pub fn _world_to_local(&self, pos: &WorldPos) -> (f32, f32) {
-        let chunk_size = self.chunk_size_f32();
-        let chunk_offset_x = (pos.chunk.x - self.chunk_coord.x) as f32 * chunk_size;
-        let chunk_offset_z = (pos.chunk.z - self.chunk_coord.z) as f32 * chunk_size;
+        let cs = chunk_size() as f32;
+        let chunk_offset_x = (pos.chunk.x - self.chunk_coord.x) as f32 * cs;
+        let chunk_offset_z = (pos.chunk.z - self.chunk_coord.z) as f32 * cs;
         (chunk_offset_x + pos.local.x, chunk_offset_z + pos.local.z)
     }
 
     /// Convert local coordinates to a WorldPos (normalizing if needed).
     #[inline]
     pub fn _local_to_world(&self, local_x: f32, local_y: f32, local_z: f32) -> WorldPos {
-        WorldPos::new(self.chunk_coord, LocalPos::new(local_x, local_y, local_z))
-            .normalize(self.chunk_size)
+        WorldPos::new(self.chunk_coord, LocalPos::new(local_x, local_y, local_z)).normalize()
     }
 
     /// Check if a WorldPos falls within this chunk's boundaries.
@@ -110,7 +103,7 @@ pub fn gather_neighbor_edge_heights(
     let own_nx = own_grid.nx;
     let own_nz = own_grid.nz;
     let own_cell = own_grid.cell_f32();
-    let chunk_size = own_grid.chunk_size_f32();
+    let cs = chunk_size() as f32;
 
     /// Sample height from neighbor grid at a local position within that neighbor's chunk,
     /// including pending deltas (accumulated deltas are already baked into heights).
@@ -188,7 +181,7 @@ pub fn gather_neighbor_edge_heights(
     // In -X neighbor's local space: -own_cell + chunk_size = chunk_size - own_cell
     let neg_x_coord = coord.offset(-1, 0);
     if let Some(chunk) = chunks.get(&neg_x_coord) {
-        let neighbor_local_x = chunk_size - own_cell;
+        let neighbor_local_x = cs - own_cell;
         let mut edge = Vec::with_capacity(own_nz);
         for gz in 0..own_nz {
             let our_local_z = gz as f32 * own_cell;
@@ -224,7 +217,7 @@ pub fn gather_neighbor_edge_heights(
     // -Z neighbor: sample one step before our -Z edge
     let neg_z_coord = coord.offset(0, -1);
     if let Some(chunk) = chunks.get(&neg_z_coord) {
-        let neighbor_local_z = chunk_size - own_cell;
+        let neighbor_local_z = cs - own_cell;
         let mut edge = Vec::with_capacity(own_nx);
         for gx in 0..own_nx {
             let our_local_x = gx as f32 * own_cell;
@@ -255,7 +248,6 @@ pub fn regenerate_vertices_from_height_grid(
     let verts_z = height_grid.nz;
     let cell = height_grid.cell_f32();
     let chunk = height_grid.chunk_coord;
-    let chunk_size = height_grid.chunk_size;
 
     // sanity check
     if vertices.len() != verts_x * verts_z {
@@ -289,8 +281,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gz).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x - cell, 0.0, local_z))
-                            .normalize(chunk_size);
-                        terrain_gen.height(&pos, chunk_size)
+                            .normalize();
+                        terrain_gen.height(&pos)
                     })
             };
 
@@ -302,8 +294,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gz).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x + cell, 0.0, local_z))
-                            .normalize(chunk_size);
-                        terrain_gen.height(&pos, chunk_size)
+                            .normalize();
+                        terrain_gen.height(&pos)
                     })
             };
 
@@ -316,8 +308,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gx).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z - cell))
-                            .normalize(chunk_size);
-                        terrain_gen.height(&pos, chunk_size)
+                            .normalize();
+                        terrain_gen.height(&pos)
                     })
             };
 
@@ -329,8 +321,8 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|edge| edge.get(gx).copied())
                     .unwrap_or_else(|| {
                         let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z + cell))
-                            .normalize(chunk_size);
-                        terrain_gen.height(&pos, chunk_size)
+                            .normalize();
+                        terrain_gen.height(&pos)
                     })
             };
 
@@ -346,8 +338,8 @@ pub fn regenerate_vertices_from_height_grid(
                 let v_pos = vertices[idx].local_position;
                 let pos = WorldPos::new(chunk, LocalPos::new(v_pos[0], v_pos[1], v_pos[2]));
                 let h = v_pos[1];
-                let m = terrain_gen.moisture(&pos, h, chunk_size);
-                vertices[idx].color = terrain_gen.color(&pos, h, m, chunk_size);
+                let m = terrain_gen.moisture(&pos, h);
+                vertices[idx].color = terrain_gen.color(&pos, h, m);
             }
         }
     }
@@ -401,7 +393,6 @@ impl ChunkBuilder {
 
     pub fn build_chunk_cpu(
         chunk_coord: ChunkCoord,
-        chunk_size: ChunkSize,
         step: LodStep,
         _ns_x_neg: LodStep,
         _ns_x_pos: LodStep,
@@ -415,22 +406,17 @@ impl ChunkBuilder {
         let stepf = step as f32;
         let step_usize = step as usize;
         let inv_step = 1.0 / stepf;
+        let cs = chunk_size();
 
-        let verts_x = (chunk_size / step + 1) as usize;
-        let verts_z = (chunk_size / step + 1) as usize;
+        let verts_x = (cs / step + 1) as usize;
+        let verts_z = (cs / step + 1) as usize;
         let cells_x = verts_x - 1;
         let cells_z = verts_z - 1;
         let _total_verts = verts_x * verts_z;
         let total_cells = cells_x * cells_z;
 
-        let (heights, colors) = Self::sample_terrain_batch(
-            chunk_coord,
-            chunk_size,
-            step,
-            verts_x,
-            verts_z,
-            terrain_gen,
-        );
+        let (heights, colors) =
+            Self::sample_terrain_batch(chunk_coord, step, verts_x, verts_z, terrain_gen);
 
         if !ChunkWorkerPool::still_current(version_atomic, version) {
             return None;
@@ -438,7 +424,6 @@ impl ChunkBuilder {
 
         let normals = Self::compute_normals_batch(
             chunk_coord,
-            chunk_size,
             step,
             stepf,
             inv_step,
@@ -488,12 +473,7 @@ impl ChunkBuilder {
             version,
             vertices,
             indices,
-            height_grid: Arc::new(Self::build_height_grid(
-                chunk_coord,
-                chunk_size,
-                step,
-                terrain_gen,
-            )),
+            height_grid: Arc::new(Self::build_height_grid(chunk_coord, step, terrain_gen)),
         })
     }
 
@@ -661,7 +641,6 @@ impl ChunkBuilder {
     #[inline]
     fn sample_terrain_batch(
         chunk_coord: ChunkCoord,
-        chunk_size: ChunkSize,
         step: LodStep,
         verts_x: usize,
         verts_z: usize,
@@ -680,9 +659,9 @@ impl ChunkBuilder {
                 let local_z = (gz * step_usize) as f32;
                 let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
 
-                let h = terrain_gen.height(&world_pos, chunk_size);
-                let m = terrain_gen.moisture(&world_pos, h, chunk_size);
-                let c = terrain_gen.color(&world_pos, h, m, chunk_size);
+                let h = terrain_gen.height(&world_pos);
+                let m = terrain_gen.moisture(&world_pos, h);
+                let c = terrain_gen.color(&world_pos, h, m);
 
                 heights.push(h);
                 colors.push(c);
@@ -698,7 +677,6 @@ impl ChunkBuilder {
 
     fn compute_normals_batch(
         chunk_coord: ChunkCoord,
-        chunk_size: ChunkSize,
         step: LodStep,
         stepf: f32,
         inv_step: f32,
@@ -722,49 +700,25 @@ impl ChunkBuilder {
                 let h_left = if gx > 0 {
                     heights[(gx - 1) * verts_z + gz]
                 } else {
-                    Self::sample_neighbor_height(
-                        chunk_coord,
-                        chunk_size,
-                        terrain_gen,
-                        local_x - stepf,
-                        local_z,
-                    )
+                    Self::sample_neighbor_height(chunk_coord, terrain_gen, local_x - stepf, local_z)
                 };
 
                 let h_right = if gx < verts_x - 1 {
                     heights[(gx + 1) * verts_z + gz]
                 } else {
-                    Self::sample_neighbor_height(
-                        chunk_coord,
-                        chunk_size,
-                        terrain_gen,
-                        local_x + stepf,
-                        local_z,
-                    )
+                    Self::sample_neighbor_height(chunk_coord, terrain_gen, local_x + stepf, local_z)
                 };
 
                 let h_back = if gz > 0 {
                     heights[gx * verts_z + (gz - 1)]
                 } else {
-                    Self::sample_neighbor_height(
-                        chunk_coord,
-                        chunk_size,
-                        terrain_gen,
-                        local_x,
-                        local_z - stepf,
-                    )
+                    Self::sample_neighbor_height(chunk_coord, terrain_gen, local_x, local_z - stepf)
                 };
 
                 let h_front = if gz < verts_z - 1 {
                     heights[gx * verts_z + (gz + 1)]
                 } else {
-                    Self::sample_neighbor_height(
-                        chunk_coord,
-                        chunk_size,
-                        terrain_gen,
-                        local_x,
-                        local_z + stepf,
-                    )
+                    Self::sample_neighbor_height(chunk_coord, terrain_gen, local_x, local_z + stepf)
                 };
 
                 // Central difference
@@ -782,14 +736,12 @@ impl ChunkBuilder {
     #[inline]
     fn sample_neighbor_height(
         chunk_coord: ChunkCoord,
-        chunk_size: ChunkSize,
         terrain_gen: &TerrainGenerator,
         local_x: f32,
         local_z: f32,
     ) -> f32 {
-        let pos =
-            WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z)).normalize(chunk_size);
-        terrain_gen.height(&pos, chunk_size)
+        let pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z)).normalize();
+        terrain_gen.height(&pos)
     }
 
     fn build_cell_data(
@@ -1026,13 +978,13 @@ impl ChunkBuilder {
 
     pub fn build_height_grid(
         chunk_coord: ChunkCoord,
-        chunk_size: ChunkSize,
         cell_size: LodStep,
         terrain_gen: &TerrainGenerator,
     ) -> ChunkHeightGrid {
+        let cs = chunk_size();
         let cell_size_f = cell_size as f32;
-        let nx = (chunk_size / cell_size + 1) as usize;
-        let nz = (chunk_size / cell_size + 1) as usize;
+        let nx = (cs / cell_size + 1) as usize;
+        let nz = (cs / cell_size + 1) as usize;
 
         let mut heights = vec![0.0f32; nx * nz];
 
@@ -1041,7 +993,7 @@ impl ChunkBuilder {
             for z in 0..nz {
                 let local_z = z as f32 * cell_size_f;
                 let pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
-                heights[x * nz + z] = terrain_gen.height(&pos, chunk_size);
+                heights[x * nz + z] = terrain_gen.height(&pos);
             }
         }
 
@@ -1075,7 +1027,6 @@ impl ChunkBuilder {
 
         ChunkHeightGrid {
             chunk_coord,
-            chunk_size,
             cell_size,
             nx,
             nz,
@@ -1085,7 +1036,7 @@ impl ChunkBuilder {
     }
 }
 
-pub fn lod_step_for_distance(dist2_chunks: i32, chunk_size: ChunkSize) -> LodStep {
+pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
     if dist2_chunks <= 0 {
         return 1;
     }
@@ -1093,7 +1044,7 @@ pub fn lod_step_for_distance(dist2_chunks: i32, chunk_size: ChunkSize) -> LodSte
     // Scale thresholds to maintain consistent world-space LOD boundaries.
     // Reference size is 128; smaller chunks get proportionally larger thresholds.
     // For chunk_size > 128, minimum thresholds ensure at least 9 chunks at LOD 1.
-    let cs = chunk_size as i32;
+    let cs = chunk_size() as i32;
     let scale = (128 / cs).max(1);
     let scale2 = scale * scale;
 

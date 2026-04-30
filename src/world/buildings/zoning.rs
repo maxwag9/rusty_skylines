@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::simulation::Ticker;
@@ -22,12 +22,12 @@ use std::slice::IterMut;
 const SNAP_RADIUS: f64 = 10.0;
 const EPS: f64 = 0.0001;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum DistrictType {
     AutomaticallyMade,
     PlayerMade,
 }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct District {
     pub id: DistrictId,
     pub name: String,
@@ -37,14 +37,10 @@ pub struct District {
     pub lot_ids: Vec<LotId>,
     pub zoning_demand: ZoningDemand,
 }
+
 impl District {
-    pub fn new(
-        name: String,
-        points: Vec<WorldPos>,
-        district_type: DistrictType,
-        chunk_size: ChunkSize,
-    ) -> District {
-        let center = WorldPos::centroid(&points, chunk_size);
+    pub fn new(name: String, points: Vec<WorldPos>, district_type: DistrictType) -> District {
+        let center = WorldPos::centroid(&points);
         Self {
             id: 3346243577,
             name,
@@ -56,13 +52,29 @@ impl District {
         }
     }
     #[inline]
-    pub fn add_point(&mut self, point: WorldPos, chunk_size: ChunkSize) {
+    pub fn add_point(&mut self, point: WorldPos) {
         self.points.push(point);
-        self.center = WorldPos::centroid(&self.points, chunk_size);
+        self.center = WorldPos::centroid(&self.points);
+    }
+    #[inline]
+    pub fn add_points(&mut self, mut points: Vec<WorldPos>) {
+        self.points.append(&mut points);
+        self.points = WorldPos::convex_hull(&self.points);
+        self.center = WorldPos::centroid(&self.points);
+    }
+    #[inline]
+    pub fn replace_points(&mut self, points: Vec<WorldPos>) {
+        self.points = WorldPos::convex_hull(&points);
+        self.center = WorldPos::centroid(&self.points);
+    }
+    #[inline]
+    pub fn remove_points(&mut self, points: &Vec<WorldPos>) {
+        self.points.retain(|p| !points.contains(p)); // TODO, RISKY!!
+        self.points = WorldPos::convex_hull(&self.points);
+        self.center = WorldPos::centroid(&self.points);
     }
     pub fn update(
         time: &Time,
-        chunk_size: ChunkSize,
         zoning_storage: &mut ZoningStorage,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
@@ -71,23 +83,28 @@ impl District {
             return None;
         };
         district.zoning_demand.update_demands(time);
-        if !matches!(district.district_type, DistrictType::PlayerMade)
-            && district.should_split(chunk_size)
-        {
-            return Self::split(zoning_storage, district_id, road_edge_storage, chunk_size);
+        if !matches!(district.district_type, DistrictType::PlayerMade) && district.should_split() {
+            let split_result = Self::split(zoning_storage, district_id, road_edge_storage);
+            //println!("{:?}", split_result);
+            match split_result {
+                DistrictSplitResult::Alright(new_other_district) => {
+                    return Some(new_other_district);
+                }
+                _ => return None,
+            }
         }
         None
     }
-    fn should_split(&self, chunk_size: ChunkSize) -> bool {
+    fn should_split(&self) -> bool {
         if self.points.len() < 3 {
             return false;
         }
         if self.lot_ids.len() > 500 {
             return true;
         }
-        let area = WorldPos::area(self.points.as_slice(), chunk_size);
+        let area = WorldPos::area(self.points.as_slice());
         //println!("Area: {}", area);
-        if area > 500_000.0 {
+        if area > 5_000_000.0 {
             return true;
         }
         false
@@ -97,30 +114,186 @@ impl District {
     ///
     /// Strategy:
     ///   1. Among all road segments referenced by our lots, find the one whose
-    ///      right-sidewalk edge actually bisects the district (crosses the boundary
-    ///      ≥ 2 times) and whose midpoint is closest to our centroid.
+    ///      right-sidewalk edge actually bisects the district and whose midpoint
+    ///      is closest to our centroid.
     ///   2. Find the first and last boundary crossings of that edge polyline.
     ///   3. Cut the district polygon at those two crossing points, keeping the
     ///      road-edge vertices in between as the seam.
     ///   4. Assign each lot to whichever half its centroid falls in.
     ///   5. Mutate `self` to be the first half; return the second half.
     ///
+    /// Fallback:
+    ///   If no road-edge split works, split the polygon in two using a simple
+    ///   axis-aligned line through the centroid.
+    ///
     /// Everything stays in WorldPos — dx/dz for geometry, delta_to for offsets.
     pub fn split(
         zoning_storage: &mut ZoningStorage,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
-        chunk_size: ChunkSize,
-    ) -> Option<District> {
-        let district = zoning_storage.get_district(district_id)?;
+    ) -> DistrictSplitResult {
+        let Some(district) = zoning_storage.get_district(district_id) else {
+            return DistrictSplitResult::DistrictDoesntExist;
+        };
+
         if district.points.len() < 6 {
-            return None;
+            return DistrictSplitResult::NotEnoughPoints;
         }
 
-        // ── 1. Find the best bisecting road edge ───────────────────────────
-        let centroid = WorldPos::centroid(&district.points, chunk_size);
+        #[derive(Clone, Copy)]
+        struct Crossing {
+            boundary_edge: usize,
+            t_boundary: f32,
+            split_pos: f32,
+            point: WorldPos,
+        }
 
+        const EPS: f64 = 1e-9;
+        const POINT_EPS: f64 = 0.001;
+
+        fn push_unique(poly: &mut Vec<WorldPos>, p: WorldPos) {
+            if poly
+                .last()
+                .map_or(true, |last| last.distance_to(p) > POINT_EPS)
+            {
+                poly.push(p);
+            }
+        }
+
+        fn side_of(p: WorldPos, centroid: WorldPos, split_on_x: bool) -> f64 {
+            if split_on_x {
+                p.dx(centroid)
+            } else {
+                p.dz(centroid)
+            }
+        }
+
+        fn clip_halfspace(
+            poly: &[WorldPos],
+            centroid: WorldPos,
+            split_on_x: bool,
+            keep_positive: bool,
+        ) -> Vec<WorldPos> {
+            let mut out = Vec::<WorldPos>::new();
+            if poly.len() < 3 {
+                return out;
+            }
+
+            let inside = |s: f64| {
+                if keep_positive { s >= -EPS } else { s <= EPS }
+            };
+
+            let mut prev = poly[poly.len() - 1];
+            let mut prev_s = side_of(prev, centroid, split_on_x);
+            let mut prev_in = inside(prev_s);
+
+            for &curr in poly {
+                let curr_s = side_of(curr, centroid, split_on_x);
+                let curr_in = inside(curr_s);
+
+                if prev_in != curr_in {
+                    let denom = prev_s - curr_s;
+                    if denom.abs() > EPS {
+                        let t = (prev_s / (prev_s - curr_s)) as f32;
+                        let p = lerp_on_segment(prev, curr, t);
+                        push_unique(&mut out, p);
+                    }
+                }
+
+                if curr_in {
+                    push_unique(&mut out, curr);
+                }
+
+                prev = curr;
+                prev_s = curr_s;
+                prev_in = curr_in;
+            }
+
+            if out.len() >= 2 && out[0].distance_to(*out.last().unwrap()) <= POINT_EPS {
+                out.pop();
+            }
+
+            out
+        }
+
+        fn collect_crossings(split_line: &[WorldPos], boundary: &[WorldPos]) -> Vec<Crossing> {
+            let mut crossings = Vec::<Crossing>::new();
+            let n = boundary.len();
+
+            if split_line.len() < 2 || n < 3 {
+                return crossings;
+            }
+
+            for si in 0..(split_line.len() - 1) {
+                let s0 = split_line[si];
+                let s1 = split_line[si + 1];
+
+                for bi in 0..n {
+                    let b0 = boundary[bi];
+                    let b1 = boundary[(bi + 1) % n];
+
+                    if let Some((t_b, t_s)) = segment_xz_intersect(b0, b1, s0, s1, 0.0) {
+                        crossings.push(Crossing {
+                            boundary_edge: bi,
+                            t_boundary: t_b as f32,
+                            split_pos: si as f32 + t_s as f32,
+                            point: lerp_on_segment(b0, b1, t_b as f32),
+                        });
+                    }
+                }
+            }
+
+            crossings.sort_by(|a, b| {
+                a.split_pos
+                    .partial_cmp(&b.split_pos)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let mut deduped = Vec::<Crossing>::with_capacity(crossings.len());
+            for c in crossings {
+                let keep = deduped
+                    .last()
+                    .map_or(true, |prev| prev.point.distance_to(c.point) > POINT_EPS);
+                if keep {
+                    deduped.push(c);
+                }
+            }
+
+            deduped
+        }
+
+        fn build_half(
+            boundary: &[WorldPos],
+            start_bi: usize,
+            end_bi: usize,
+            start_pt: WorldPos,
+            end_pt: WorldPos,
+        ) -> Vec<WorldPos> {
+            let n = boundary.len();
+            let mut poly = Vec::<WorldPos>::new();
+
+            poly.push(start_pt);
+
+            let mut i = (start_bi + 1) % n;
+            let stop = (end_bi + 1) % n;
+            let mut steps = 0usize;
+
+            while i != stop && steps < n {
+                poly.push(boundary[i]);
+                i = (i + 1) % n;
+                steps += 1;
+            }
+
+            poly.push(end_pt);
+            poly
+        }
+
+        let centroid = district.center;
+        let boundary = &district.points;
+
+        // ── 1. Find the best bisecting road edge ────────────────────────────────
         let mut best_line: Option<Vec<WorldPos>> = None;
+        let mut best_crossing_count: usize = usize::MAX;
         let mut best_dist = f64::MAX;
         let mut seen_segments = std::collections::HashSet::new();
 
@@ -128,177 +301,188 @@ impl District {
             let Some(lot) = zoning_storage.get_lot(lot_id) else {
                 continue;
             };
+
             if !seen_segments.insert(lot.segment_id) {
                 continue;
             }
+
             let Some(road_edges) = road_edge_storage.get(&lot.segment_id) else {
                 continue;
             };
 
-            // "Right is the outside" — use the outer sidewalk edge as the cut line.
-            // It runs parallel to (and outside) the road, making it a clean seam.
             let candidate = &road_edges.right_sidewalk_edge.right_points;
             if candidate.len() < 2 {
                 continue;
             }
 
-            // Require the candidate to actually cross our boundary at least twice,
-            // otherwise it doesn't bisect us and is useless as a split line.
-            if boundary_crossing_count(candidate, &district.points, chunk_size) < 2 {
+            let crossings = collect_crossings(candidate, boundary);
+            if crossings.len() < 2 {
                 continue;
             }
 
-            // Among valid candidates, prefer the one closest to our centroid.
             let mid = candidate[candidate.len() / 2];
-            let dist = centroid.distance_to(mid, chunk_size);
-            if dist < best_dist {
+            let dist = centroid.distance_to(mid);
+
+            let crossing_count = crossings.len();
+            let better = match best_line {
+                None => true,
+                Some(_) => {
+                    crossing_count < best_crossing_count
+                        || (crossing_count == best_crossing_count && dist < best_dist)
+                }
+            };
+
+            if better {
+                best_crossing_count = crossing_count;
                 best_dist = dist;
                 best_line = Some(candidate.clone());
             }
         }
 
-        let split_line = best_line?;
+        // ── 2. Try road-edge split first ────────────────────────────────────────
+        let mut poly_a: Option<Vec<WorldPos>> = None;
+        let mut poly_b: Option<Vec<WorldPos>> = None;
 
-        // ── 2. Collect all crossings of split_line with our boundary ────────
-        let boundary = &district.points;
-        let n = boundary.len();
+        if let Some(split_line) = best_line {
+            let mut crossings = collect_crossings(&split_line, boundary);
 
-        struct Crossing {
-            boundary_edge: usize, // which edge of the district polygon
-            t_boundary: f32,      // parameter [0,1] on that boundary edge
-            split_pos: f32,       // si + t_split: ordering key along split_line
-            point: WorldPos,      // the exact crossing point
-        }
+            if crossings.len() >= 2 {
+                let entry = crossings.first().copied().unwrap();
+                let exit = crossings.last().copied().unwrap();
 
-        let mut crossings: Vec<Crossing> = Vec::new();
+                let mut cut: Vec<WorldPos> = Vec::new();
+                cut.push(entry.point);
 
-        for si in 0..split_line.len() - 1 {
-            let s0 = split_line[si];
-            let s1 = split_line[si + 1];
-            for bi in 0..n {
-                let b0 = boundary[bi];
-                let b1 = boundary[(bi + 1) % n];
-                if let Some((t_b, t_s)) = segment_xz_intersect(b0, b1, s0, s1, chunk_size) {
-                    crossings.push(Crossing {
-                        boundary_edge: bi,
-                        t_boundary: t_b,
-                        split_pos: si as f32 + t_s,
-                        point: lerp_on_segment(b0, b1, t_b, chunk_size),
-                    });
+                let first_vi = entry.split_pos.ceil() as usize;
+                let last_vi = exit.split_pos.floor() as usize;
+                for vi in first_vi..=last_vi {
+                    if vi < split_line.len() {
+                        cut.push(split_line[vi]);
+                    }
+                }
+
+                cut.push(exit.point);
+
+                let mut a = build_half(
+                    boundary,
+                    entry.boundary_edge,
+                    exit.boundary_edge,
+                    entry.point,
+                    exit.point,
+                );
+
+                if cut.len() > 2 {
+                    for p in cut[1..cut.len() - 1].iter().rev() {
+                        a.push(*p);
+                    }
+                }
+
+                let mut b = build_half(
+                    boundary,
+                    exit.boundary_edge,
+                    entry.boundary_edge,
+                    exit.point,
+                    entry.point,
+                );
+
+                if cut.len() > 2 {
+                    for p in cut[1..cut.len() - 1].iter() {
+                        b.push(*p);
+                    }
+                }
+
+                if a.len() >= 3 && b.len() >= 3 {
+                    poly_a = Some(a);
+                    poly_b = Some(b);
                 }
             }
         }
 
-        if crossings.len() < 2 {
-            return None;
+        // ── 3. Fallback: simple centroid split in two ──────────────────────────
+        if poly_a.is_none() || poly_b.is_none() {
+            let mut min_dx = 0.0f64;
+            let mut max_dx = 0.0f64;
+            let mut min_dz = 0.0f64;
+            let mut max_dz = 0.0f64;
+
+            for &p in boundary.iter().skip(1) {
+                let dx = boundary[0].dx(p) as f64;
+                let dz = boundary[0].dz(p) as f64;
+
+                min_dx = min_dx.min(dx);
+                max_dx = max_dx.max(dx);
+                min_dz = min_dz.min(dz);
+                max_dz = max_dz.max(dz);
+            }
+
+            let x_extent = max_dx - min_dx;
+            let z_extent = max_dz - min_dz;
+
+            let split_on_x = x_extent >= z_extent;
+
+            let mut a = clip_halfspace(boundary, centroid, split_on_x, true);
+            let mut b = clip_halfspace(boundary, centroid, split_on_x, false);
+
+            if a.len() < 3 || b.len() < 3 {
+                let mut a2 = clip_halfspace(boundary, centroid, !split_on_x, true);
+                let mut b2 = clip_halfspace(boundary, centroid, !split_on_x, false);
+
+                if a2.len() >= 3 && b2.len() >= 3 {
+                    a = a2;
+                    b = b2;
+                }
+            }
+
+            if a.len() < 3 || b.len() < 3 {
+                return DistrictSplitResult::DegeneratePolygon;
+            }
+
+            poly_a = Some(a);
+            poly_b = Some(b);
         }
 
-        // Order by position along the split_line so entry comes before exit.
-        crossings.sort_by(|a, b| {
-            a.split_pos
-                .partial_cmp(&b.split_pos)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let entry = &crossings[0];
-        let exit = &crossings[crossings.len() - 1];
-
-        // ── 3. Build the seam (road-edge vertices between the two crossings) ─
-        //
-        //  cut = [entry.point, split_line[⌈entry.split_pos⌉ .. ⌊exit.split_pos⌋], exit.point]
-        //
-        let mut cut: Vec<WorldPos> = Vec::new();
-        cut.push(entry.point);
-        let first_vi = entry.split_pos.ceil() as usize;
-        let last_vi = exit.split_pos.floor() as usize;
-        for vi in first_vi..=last_vi {
-            if vi < split_line.len() {
-                cut.push(split_line[vi]);
-            }
-        }
-        cut.push(exit.point);
-
-        let entry_bi = entry.boundary_edge;
-        let exit_bi = exit.boundary_edge;
-
-        // ── 4. Build the two sub-polygons ────────────────────────────────────
-        //
-        //  poly_a  entry.point
-        //          → boundary vertices going FORWARD from entry_bi+1 to exit_bi
-        //          → exit.point
-        //          → cut interior REVERSED back to entry.point      (seam)
-        //
-        //  poly_b  exit.point
-        //          → boundary vertices going FORWARD from exit_bi+1 to entry_bi
-        //          → entry.point
-        //          → cut interior FORWARD back to exit.point        (seam)
-        //
-        let build_half = |start_bi: usize, end_bi: usize, start_pt: WorldPos, end_pt: WorldPos| {
-            let mut poly = Vec::<WorldPos>::new();
-            poly.push(start_pt);
-            let mut i = (start_bi + 1) % n;
-            let stop = (end_bi + 1) % n;
-            let mut steps = 0;
-            while i != stop && steps < n {
-                poly.push(boundary[i]);
-                i = (i + 1) % n;
-                steps += 1;
-            }
-            poly.push(end_pt);
-            poly
-        };
-
-        let mut poly_a = build_half(entry_bi, exit_bi, entry.point, exit.point);
-        // Seal poly_a: walk the cut seam backwards (skipping duplicated endpoints)
-        if cut.len() > 2 {
-            for p in cut[1..cut.len() - 1].iter().rev() {
-                poly_a.push(*p);
-            }
-        }
-
-        let mut poly_b = build_half(exit_bi, entry_bi, exit.point, entry.point);
-        // Seal poly_b: walk the cut seam forwards
-        if cut.len() > 2 {
-            for p in cut[1..cut.len() - 1].iter() {
-                poly_b.push(*p);
-            }
-        }
+        let poly_a = poly_a.unwrap();
+        let poly_b = poly_b.unwrap();
 
         if poly_a.len() < 3 || poly_b.len() < 3 {
-            return None;
+            return DistrictSplitResult::DegeneratePolygon;
         }
 
-        // ── 5. Assign lots: centroid-in-polygon test ─────────────────────────
+        // ── 4. Assign lots: centroid-in-polygon test ────────────────────────────
         let mut lots_a: Vec<LotId> = Vec::new();
         let mut lots_b: Vec<LotId> = Vec::new();
 
         for &lot_id in &district.lot_ids {
             let Some(lot) = zoning_storage.get_lot(lot_id) else {
-                lots_b.push(lot_id); // keep unresolved lots in the new district
+                lots_b.push(lot_id);
                 continue;
             };
-            let lot_centroid = WorldPos::centroid(&lot.bounds, chunk_size);
-            if point_in_polygon_xz(lot_centroid, &poly_a, chunk_size) {
+
+            let lot_centroid = WorldPos::centroid(&lot.bounds);
+            if point_in_polygon_xz(lot_centroid, &poly_a) {
                 lots_a.push(lot_id);
             } else {
                 lots_b.push(lot_id);
             }
         }
 
-        // build and return the new district
-        let district = zoning_storage.get_mut_district(district_id)?;
-        district.points = poly_a;
+        // ── 5. Mutate original district and return the new one ──────────────────
+        let Some(district) = zoning_storage.get_mut_district(district_id) else {
+            return DistrictSplitResult::DistrictDoesntExist;
+        };
+
+        district.replace_points(poly_a);
         district.lot_ids = lots_a;
         district.district_type = DistrictType::AutomaticallyMade;
 
         let mut rng = ThreadRng::default();
         let name = generate_district_name(&mut rng);
-        let mut new_district =
-            District::new(name, poly_b, DistrictType::AutomaticallyMade, chunk_size);
+
+        let mut new_district = District::new(name, poly_b, DistrictType::AutomaticallyMade);
         new_district.lot_ids = lots_b;
         new_district.zoning_demand = ZoningDemand::new();
 
-        Some(new_district)
+        DistrictSplitResult::Alright(new_district)
     }
 }
 
@@ -414,8 +598,7 @@ impl Zoning {
         gizmo: &mut Gizmo,
         variables: &Variables,
     ) {
-        self.zoning_storage
-            .update_target_and_chunk_size(camera.target.chunk, terrain.chunk_size);
+        self.zoning_storage.update_target(camera.target.chunk);
         if terrain.cursor.mode != CursorMode::Area && terrain.cursor.mode != CursorMode::Zoning {
             return;
         };
@@ -423,30 +606,31 @@ impl Zoning {
         let active_district_id = self.zoning_state.as_ref().map(|state| state.district_id);
         for district in self.zoning_storage.iter_districts() {
             if Some(district.id) != active_district_id {
-                draw_district_area(
+                draw_area(
                     district.points.as_slice(),
                     &ZoningType::None,
                     variables,
                     gizmo,
-                    None,
+                    Some([1.0, 1.0, 1.0, 0.5]),
                     None,
                 );
             }
 
             gizmo.polyline(
                 district.points.as_slice(),
-                [0.07, 0.28, 0.5, 1.0],
+                [0.14, 0.21, 0.5, 1.0],
                 0.0,
-                0.2,
+                0.1,
                 0.0,
             );
 
             gizmo.text(
                 district.name.clone(),
                 district.center,
-                3.0,
-                [0.05, 0.05, 0.05, 1.0],
+                12.0,
+                [0.05, 0.05, 0.05, 0.5],
                 None,
+                true,
                 0.0,
                 0.0,
             )
@@ -461,7 +645,6 @@ impl Zoning {
         let Some(picked) = terrain.last_picked.as_ref() else {
             return;
         };
-        let chunk_size = terrain.chunk_size;
 
         let mut closest_point: Option<LotPoint> = None;
         let mut closest_distance = 100.0;
@@ -469,7 +652,7 @@ impl Zoning {
         for segment_id in roads
             .road_manager
             .roads
-            .segment_ids_touching_chunk(picked.chunk.coords.chunk_coord, terrain.chunk_size)
+            .segment_ids_touching_chunk(picked.chunk.coords.chunk_coord)
         {
             let Some(road_edges) = road_mesh_manager.road_edge_storage.get(&segment_id) else {
                 continue;
@@ -494,7 +677,6 @@ impl Zoning {
                     &mut closest_distance,
                     &mut closest_point,
                     segment_id,
-                    chunk_size,
                 );
             }
 
@@ -507,7 +689,6 @@ impl Zoning {
                     &mut closest_distance,
                     &mut closest_point,
                     segment_id,
-                    chunk_size,
                 );
             } else {
                 // No sidewalks, use lane edges manually
@@ -527,7 +708,6 @@ impl Zoning {
                         &mut closest_distance,
                         &mut closest_point,
                         segment_id,
-                        chunk_size,
                     )
                 }
             }
@@ -589,24 +769,20 @@ impl Zoning {
             _ => {}
         }
     }
-    pub fn update_districts(
-        &mut self,
-        time: &Time,
-        chunk_size: ChunkSize,
-        road_edge_storage: &RoadEdgeStorage,
-    ) {
+    pub fn update_districts(&mut self, time: &Time, road_edge_storage: &RoadEdgeStorage) {
         if !self.ticker.tick(time.target_sim_dt) {
             return;
         }
         println!("updating district");
         for district_id in self.zoning_storage.district_ids() {
-            District::update(
+            if let Some(district) = District::update(
                 time,
-                chunk_size,
                 &mut self.zoning_storage,
                 district_id,
                 road_edge_storage,
-            );
+            ) {
+                self.zoning_storage.spawn_district(district);
+            }
         }
     }
     fn can_place_zoning_point(
@@ -614,7 +790,6 @@ impl Zoning {
         gizmo: &mut Gizmo,
         place_pos: PlacePos,
         active_district_id: Option<DistrictId>,
-        chunk_size: ChunkSize,
     ) -> bool {
         let Some(district_id) = active_district_id else {
             return true;
@@ -627,12 +802,7 @@ impl Zoning {
             return false;
         };
         gizmo.line(last, place_pos.pos(), [0.0, 1.0, 0.0, 1.0], 0.5, 0.0);
-        if self.segment_intersects_any_district(
-            place_pos.pos(),
-            last,
-            active_district_id,
-            chunk_size,
-        ) {
+        if self.segment_intersects_any_district(place_pos.pos(), last, active_district_id) {
             return false;
         };
         //println!("{:?}", place_pos);
@@ -647,9 +817,10 @@ impl Zoning {
                     .iter_districts()
                     .filter(|other_district| other_district.id != district.id)
                     .any(|other_district| {
-                        other_district.points.iter().any(|point| {
-                            point_in_polygon_xz(*point, &district.points, gizmo.chunk_size)
-                        })
+                        other_district
+                            .points
+                            .iter()
+                            .any(|point| point_in_polygon_xz(*point, &district.points))
                     });
 
                 point_amount_requirement && !enclosing_another_area
@@ -665,7 +836,6 @@ impl Zoning {
         a: WorldPos,
         b: WorldPos,
         active_district_id: Option<DistrictId>,
-        chunk_size: ChunkSize,
     ) -> bool {
         const CLEARANCE: f64 = 0.0; // 1 meter clearance
 
@@ -679,7 +849,7 @@ impl Zoning {
                 let c = edge[0];
                 let d = edge[1];
 
-                if segment_intersection_xz(a, b, c, d, chunk_size, CLEARANCE).is_some() {
+                if segment_xz_intersect(a, b, c, d, CLEARANCE).is_some() {
                     //println!("first one, {}", a.local.x);
                     return true;
                 }
@@ -689,7 +859,7 @@ impl Zoning {
                 let c = *points.last().unwrap();
                 let d = points[0];
 
-                if segment_intersection_xz(a, b, c, d, chunk_size, CLEARANCE).is_some() {
+                if segment_xz_intersect(a, b, c, d, CLEARANCE).is_some() {
                     //println!("second one");
                     return true;
                 }
@@ -700,10 +870,10 @@ impl Zoning {
     }
     fn lot_intersects_any_road(
         &self,
+        gizmo: &mut Gizmo,
         roads: &Roads,
         road_mesh_manager: &RoadMeshManager,
         lot_points: &[WorldPos],
-        chunk_size: ChunkSize,
     ) -> bool {
         // If the lot has fewer than 3 points, it's degenerate → no intersection possible
         if lot_points.len() < 3 {
@@ -715,7 +885,7 @@ impl Zoning {
                 roads
                     .road_manager
                     .roads
-                    .segment_ids_touching_chunk(point.chunk, chunk_size)
+                    .segment_ids_touching_chunk(point.chunk)
             })
             .flatten()
             .collect::<Vec<SegmentId>>();
@@ -725,19 +895,15 @@ impl Zoning {
             };
             let road_points = collect_road_points(edges);
             for point in road_points {
-                if point_in_polygon_xz(*point, lot_points, chunk_size) {
+                if point_in_polygon_xz(*point, lot_points) {
+                    //gizmo.cross(*point, 20.0, [1.0, 0.2, 0.6, 1.0], 0.5, 0.0);
                     return true;
                 }
             }
         }
         false
     }
-    fn lot_intersects_any_lot(
-        &self,
-        points: &[WorldPos],
-        ignore_lot_id: Option<LotId>,
-        chunk_size: ChunkSize,
-    ) -> bool {
+    fn lot_intersects_any_lot(&self, points: &[WorldPos], ignore_lot_id: Option<LotId>) -> bool {
         // If the lot has fewer than 3 points, it's degenerate → no intersection possible
         if points.len() < 3 {
             return false;
@@ -758,7 +924,7 @@ impl Zoning {
             // }
 
             // Check if any edge of the new lot intersects any edge of the existing lot
-            match self.lot_intersects_lot(points, existing_lot.bounds.as_slice(), chunk_size) {
+            match self.lot_intersects_lot(points, existing_lot.bounds.as_slice()) {
                 None => continue,
                 Some(intersection_type) => {
                     //println!("{:?}", intersection_type);
@@ -772,7 +938,6 @@ impl Zoning {
         &self,
         points_a: &[WorldPos],
         points_b: &[WorldPos],
-        chunk_size: ChunkSize,
     ) -> Option<SegmentIntersectionType> {
         if points_a.len() < 3 || points_b.len() < 3 {
             return None;
@@ -789,14 +954,14 @@ impl Zoning {
                 let c = edge_b[0];
                 let d = edge_b[1];
 
-                if segment_intersection_xz(a, b, c, d, chunk_size, CLEARANCE).is_some() {
+                if segment_xz_intersect(a, b, c, d, CLEARANCE).is_some() {
                     return Some(SegmentIntersectionType::OtherEdges);
                 }
             }
 
             // Check against the closing edge of lot_b
             if let (Some(&first), Some(&last)) = (points_b.first(), points_b.last()) {
-                if segment_intersection_xz(a, b, last, first, chunk_size, CLEARANCE).is_some() {
+                if segment_xz_intersect(a, b, last, first, CLEARANCE).is_some() {
                     return Some(SegmentIntersectionType::ClosingEdgeOfB);
                 }
             }
@@ -808,7 +973,7 @@ impl Zoning {
                 let c = edge_b[0];
                 let d = edge_b[1];
 
-                if segment_intersection_xz(last_a, first_a, c, d, chunk_size, CLEARANCE).is_some() {
+                if segment_xz_intersect(last_a, first_a, c, d, CLEARANCE).is_some() {
                     return Some(SegmentIntersectionType::ClosingEdgeOfA);
                 }
             }
@@ -816,7 +981,7 @@ impl Zoning {
 
         // 3. Optional: Check if one lot is completely inside the other
         //     (important for preventing nested lots or one lot swallowing another)      BUGGY!!!!!! Stays collided forever
-        // if point_inside_polygon(points_a[0], points_b, chunk_size, true) || point_inside_polygon(points_a[0], points_a, chunk_size, true) {
+        // if point_inside_polygon(points_a[0], points_b, true) || point_inside_polygon(points_a[0], points_a, true) {
         //     return Some(SegmentIntersectionType::PointInsidePolygon)
         // }
 
@@ -837,10 +1002,9 @@ impl Zoning {
     ) {
         let lot_width = variables.get_f64("lot_width").unwrap_or(15.0) as f32;
         let lot_length = variables.get_f64("lot_length").unwrap_or(20.0) as f32;
-        let chunk_size = terrain.chunk_size;
         let mut inside_lot_id: Option<LotId> = None;
         for lot in self.zoning_storage.iter_lots() {
-            if point_in_polygon_xz(picked.pos, lot.bounds.as_slice(), chunk_size) {
+            if point_in_polygon_xz(picked.pos, lot.bounds.as_slice()) {
                 inside_lot_id = Some(lot.id);
                 break;
             }
@@ -851,29 +1015,25 @@ impl Zoning {
             gizmo.circle(snap_point.pos, 0.3, [0.1, 0.3, 0.8, 1.0], 0.1, 0.0);
 
             let half_width = lot_width * 0.5;
-            let origin = snap_point
-                .pos
-                .add_vec3(snap_point.lateral * 0.5, chunk_size);
+            let origin = snap_point.pos.add_vec3(snap_point.lateral * 0.5);
             // Road edge corners
-            let front_left = origin.sub_vec3(snap_point.tangent * half_width, chunk_size);
+            let front_left = origin.sub_vec3(snap_point.tangent * half_width);
 
-            let front_right = origin.add_vec3(snap_point.tangent * half_width, chunk_size);
+            let front_right = origin.add_vec3(snap_point.tangent * half_width);
             // Back corners away from road
-            let back_left = front_left.add_vec3(snap_point.lateral * lot_length, chunk_size);
+            let back_left = front_left.add_vec3(snap_point.lateral * lot_length);
 
-            let back_right = front_right.add_vec3(snap_point.lateral * lot_length, chunk_size);
+            let back_right = front_right.add_vec3(snap_point.lateral * lot_length);
 
             let mut preview = vec![front_left, front_right, back_right, back_left, front_left];
             for point in preview.iter_mut() {
                 point.local.y = terrain.get_height_at(*point, true);
             }
-            let invalid = self.lot_intersects_any_lot(preview.as_slice(), None, chunk_size)
-                || self.lot_intersects_any_road(
-                    roads,
-                    road_mesh_manager,
-                    preview.as_slice(),
-                    chunk_size,
-                );
+            let intersects_lot = self.lot_intersects_any_lot(preview.as_slice(), None);
+            let intersects_roads =
+                self.lot_intersects_any_road(gizmo, roads, road_mesh_manager, preview.as_slice());
+            //println!("{} {}", intersects_lot, intersects_roads);
+            let invalid = intersects_lot || intersects_roads;
 
             match invalid {
                 true => {
@@ -904,7 +1064,7 @@ impl Zoning {
         for lot in self.zoning_storage.iter_mut_lots() {
             if inside_lot_id == Some(lot.id) {
                 if removing_lot {
-                    draw_district_area(
+                    draw_area(
                         lot.bounds.as_slice(),
                         &lot.zoning_type,
                         variables,
@@ -913,7 +1073,7 @@ impl Zoning {
                         Some(new_zoning_type),
                     );
                 } else {
-                    draw_district_area(
+                    draw_area(
                         lot.bounds.as_slice(),
                         &lot.zoning_type,
                         variables,
@@ -926,7 +1086,7 @@ impl Zoning {
                     }
                 }
             } else {
-                draw_district_area(
+                draw_area(
                     lot.bounds.as_slice(),
                     &lot.zoning_type,
                     variables,
@@ -960,7 +1120,6 @@ impl Zoning {
         new_district_type: &ZoningType,
         gizmo: &mut Gizmo,
     ) {
-        let chunk_size = terrain.chunk_size;
         let mut best_place: PlacePos = PlacePos::Free(picked.pos, 0.0);
 
         let mut consider = |candidate: PlacePos| {
@@ -999,7 +1158,7 @@ impl Zoning {
         if let Some((pos, dist, _)) = roads
             .road_manager
             .roads
-            .closest_point_to(&picked.pos, terrain.chunk_size)
+            .closest_point_to(&picked.pos)
             .filter(|(_, dist, _)| *dist <= SNAP_RADIUS)
         {
             consider(PlacePos::RoadSnap(pos, dist));
@@ -1010,7 +1169,7 @@ impl Zoning {
                 let len = district.points.len();
 
                 for (i, point) in district.points.iter().copied().enumerate() {
-                    let dist = point.distance_to(picked.pos, terrain.chunk_size);
+                    let dist = point.distance_to(picked.pos);
 
                     if dist > SNAP_RADIUS {
                         continue;
@@ -1035,7 +1194,7 @@ impl Zoning {
             }
 
             for point in district.points.iter().copied() {
-                let dist = point.distance_to(picked.pos, terrain.chunk_size);
+                let dist = point.distance_to(picked.pos);
 
                 if dist <= SNAP_RADIUS {
                     consider(PlacePos::OtherDistrictPoint(point, dist));
@@ -1043,8 +1202,7 @@ impl Zoning {
             }
         }
 
-        let can_place =
-            self.can_place_zoning_point(gizmo, best_place, active_district_id, terrain.chunk_size);
+        let can_place = self.can_place_zoning_point(gizmo, best_place, active_district_id);
 
         let preview_color = if can_place {
             [0.1, 0.3, 0.7, 1.0]
@@ -1058,7 +1216,7 @@ impl Zoning {
                 if Some(district.id) == active_district_id {
                     continue;
                 }
-                if point_in_polygon_xz(best_place.pos(), &district.points, gizmo.chunk_size) {
+                if point_in_polygon_xz(best_place.pos(), &district.points) {
                     // best_pos is inside this district
                     inside_district_id.replace(district.id);
                     // for lot in district
@@ -1100,7 +1258,7 @@ impl Zoning {
                 }
             }
             if let Some(district) = self.zoning_storage.get_district(id) {
-                draw_district_area(
+                draw_area(
                     district.points.as_slice(),
                     &ZoningType::None,
                     variables,
@@ -1168,7 +1326,7 @@ impl Zoning {
                             if let Some(district) =
                                 self.zoning_storage.get_mut_district(district_id)
                             {
-                                district.add_point(pos, chunk_size);
+                                district.add_point(pos);
                             }
                         }
                         PlacePos::CurrentDistrictFirstPoint(pos, _) => {
@@ -1176,7 +1334,7 @@ impl Zoning {
                                 self.zoning_storage.get_mut_district(district_id)
                             {
                                 if district.points.len() >= 3 {
-                                    district.add_point(pos, chunk_size);
+                                    district.add_point(pos);
                                     println!("Closed zoning loop");
                                     self.zoning_state = None;
                                 }
@@ -1191,7 +1349,7 @@ impl Zoning {
                             if let Some(district) =
                                 self.zoning_storage.get_mut_district(district_id)
                             {
-                                district.add_point(pos, chunk_size);
+                                district.add_point(pos);
                             }
                         }
 
@@ -1201,7 +1359,7 @@ impl Zoning {
                             if let Some(district) =
                                 self.zoning_storage.get_mut_district(district_id)
                             {
-                                district.add_point(pos, chunk_size);
+                                district.add_point(pos);
                             }
                         }
                     }
@@ -1212,7 +1370,6 @@ impl Zoning {
                         name,
                         vec![best_place.pos()],
                         DistrictType::PlayerMade,
-                        chunk_size,
                     ));
                     self.zoning_state = Some(ZoningState { district_id });
                 }
@@ -1266,7 +1423,6 @@ fn collect_lot_point(
     closest_distance: &mut f64,
     closest_point: &mut Option<LotPoint>,
     segment_id: SegmentId,
-    chunk_size: ChunkSize,
 ) {
     //println!("points: {:?} tangents: {:?} laterals: {:?}", edges.right_points.len(), edges.right_tangents.len(), edges.right_laterals.len());
     for (idx, ((point, tangent), lateral)) in edges
@@ -1276,7 +1432,7 @@ fn collect_lot_point(
         .zip(edges.right_laterals.iter())
         .enumerate()
     {
-        let dist = picked.pos.distance_to(*point, chunk_size);
+        let dist = picked.pos.distance_to(*point);
         //println!("{}", dist);
         if dist < *closest_distance {
             *closest_distance = dist;
@@ -1286,9 +1442,7 @@ fn collect_lot_point(
                     edges.right_points[idx - 1],
                     edges.right_tangents[idx - 1],
                     edges.right_laterals[idx - 1],
-                    picked
-                        .pos
-                        .distance_to(edges.right_points[idx - 1], chunk_size),
+                    picked.pos.distance_to(edges.right_points[idx - 1]),
                 ))
             } else {
                 None
@@ -1299,9 +1453,7 @@ fn collect_lot_point(
                     edges.right_points[idx + 1],
                     edges.right_tangents[idx + 1],
                     edges.right_laterals[idx + 1],
-                    picked
-                        .pos
-                        .distance_to(edges.right_points[idx + 1], chunk_size),
+                    picked.pos.distance_to(edges.right_points[idx + 1]),
                 ))
             } else {
                 None
@@ -1337,18 +1489,12 @@ pub struct ZoningStorage {
     lots: Vec<Option<Lot>>,
     district_free_list: Vec<DistrictId>,
     lot_free_list: Vec<LotId>,
-    chunk_size: ChunkSize,
     center_chunk: ChunkCoord,
 }
 
 impl ZoningStorage {
-    pub fn update_target_and_chunk_size(
-        &mut self,
-        target_chunk: ChunkCoord,
-        chunk_size: ChunkSize,
-    ) {
+    pub fn update_target(&mut self, target_chunk: ChunkCoord) {
         self.center_chunk = target_chunk;
-        self.chunk_size = chunk_size;
     }
     pub fn district_ids(&self) -> Vec<DistrictId> {
         self.districts
@@ -1380,11 +1526,10 @@ impl ZoningStorage {
         let mut lots: Vec<Option<Lot>> = Vec::new();
         lots.push(None); // reserve index 0 — for no reason
         Self {
-            districts: districts,
+            districts,
             lots,
             district_free_list: Vec::new(),
             lot_free_list: Vec::new(),
-            chunk_size: 128,
             center_chunk: ChunkCoord::zero(),
         }
     }
@@ -1460,18 +1605,44 @@ impl ZoningStorage {
         // Clone bounds out — breaks the borrow conflict with iter_districts()
         let bounds: Vec<WorldPos> = self.lots[lot_id as usize].as_ref().unwrap().bounds.clone();
 
-        let mut best: Option<(DistrictId, u32)> = None;
+        let mut best_with_points: Option<(DistrictId, u32)> = None;
+        let mut best_no_points: Option<(DistrictId, f64)> = None;
 
         for district in self.iter_districts() {
             let count = bounds
                 .iter()
-                .filter(|&&pt| point_in_polygon_xz(pt, &district.points, self.chunk_size))
+                .filter(|&&pt| point_in_polygon_xz(pt, &district.points))
                 .count() as u32;
 
-            if count > 0 && best.map_or(true, |(_, best_count)| count > best_count) {
-                best = Some((district.id, count));
+            let mut dist: f64 = f64::INFINITY;
+
+            for p1 in &district.points {
+                for p2 in &bounds {
+                    dist = dist.min(p1.distance_to(*p2));
+                }
+            }
+            if dist > 100.0 {
+                // At most 100.0 meters away
+                continue; // skip this district entirely
+            }
+            if count > 0 {
+                match best_with_points {
+                    Some((_, best_count)) if count <= best_count => {}
+                    _ => best_with_points = Some((district.id, count)),
+                }
+            } else {
+                match best_no_points {
+                    Some((_, best_dist)) if dist >= best_dist => {}
+                    _ => best_no_points = Some((district.id, dist)),
+                }
             }
         }
+        let best = if let Some((id, count)) = best_with_points {
+            Some((id, count))
+        } else {
+            // None of the lot bound points are inside any district, so take the closest district at least!
+            best_no_points.map(|(id, _)| (id, 0))
+        };
 
         if let Some((district_id, _)) = best {
             if let Some(lot) = self.lots[lot_id as usize].as_mut() {
@@ -1479,16 +1650,12 @@ impl ZoningStorage {
             }
             if let Some(district) = self.get_mut_district(district_id) {
                 district.lot_ids.push(lot_id);
+                district.add_points(bounds);
             }
         } else {
             let mut rng = ThreadRng::default();
             let name = generate_district_name(&mut rng);
-            let mut district = District::new(
-                name,
-                bounds,
-                DistrictType::AutomaticallyMade,
-                self.chunk_size,
-            );
+            let mut district = District::new(name, bounds, DistrictType::AutomaticallyMade);
             district.lot_ids.push(lot_id);
             let district_id = self.spawn_district(district);
             if let Some(lot) = self.lots[lot_id as usize].as_mut() {
@@ -1515,6 +1682,7 @@ impl ZoningStorage {
                     if let Some(district) = self.districts.get_mut(lot.district_id as usize) {
                         if let Some(district) = district {
                             district.lot_ids.retain(|id| id != &lot.id);
+                            district.remove_points(&lot.bounds);
                         }
                     }
                 }
@@ -1542,16 +1710,11 @@ impl ZoningStorage {
 
 /// Calculates the minimum distance from a point `p` to the line segment defined by `a` and `b`.
 /// Returns the distance in world units (squared distance for performance).
-pub fn point_to_segment_distance_sq(
-    p: WorldPos,
-    a: WorldPos,
-    b: WorldPos,
-    chunk_size: ChunkSize,
-) -> f32 {
+pub fn point_to_segment_distance_sq(p: WorldPos, a: WorldPos, b: WorldPos) -> f32 {
     // 1. Convert relevant points to render coordinates (f32)
-    let p_render = p.to_render_pos(p, chunk_size);
-    let a_render = a.to_render_pos(a, chunk_size);
-    let b_render = b.to_render_pos(b, chunk_size);
+    let p_render = p.to_render_pos(p);
+    let a_render = a.to_render_pos(a);
+    let b_render = b.to_render_pos(b);
 
     // 2. Vector from A to B
     let ab_x = b_render.x - a_render.x;
@@ -1589,79 +1752,11 @@ pub fn point_to_segment_distance_sq(
 }
 
 /// Wrapper to return the actual distance (not squared).
-pub fn point_to_segment_distance(
-    p: WorldPos,
-    a: WorldPos,
-    b: WorldPos,
-    chunk_size: ChunkSize,
-) -> f32 {
-    point_to_segment_distance_sq(p, a, b, chunk_size).sqrt()
-}
-/// Find intersection point of two segments (XZ plane).
-/// Returns the intersection point in WorldPos, or None if parallel/non-intersecting.
-///
-/// `tolerance`: If provided, segments must intersect with at least this much
-/// clearance from their endpoints (in world units). Use this to allow segments
-/// to get close without triggering an intersection.
-pub fn segment_intersection_xz(
-    a1: WorldPos,
-    a2: WorldPos,
-    b1: WorldPos,
-    b2: WorldPos,
-    chunk_size: ChunkSize,
-    tolerance: f64,
-) -> Option<WorldPos> {
-    let d1 = a2.sub_world_pos(a1, chunk_size);
-    let d2 = b2.sub_world_pos(b1, chunk_size);
-    let d12 = b1.sub_world_pos(a1, chunk_size);
-
-    // ✅ Convert to full world coordinates
-    let d1_x = d1.chunk.x as f64 * chunk_size as f64 + d1.local.x as f64;
-    let d1_z = d1.chunk.z as f64 * chunk_size as f64 + d1.local.z as f64;
-    let d2_x = d2.chunk.x as f64 * chunk_size as f64 + d2.local.x as f64;
-    let d2_z = d2.chunk.z as f64 * chunk_size as f64 + d2.local.z as f64;
-    let d12_x = d12.chunk.x as f64 * chunk_size as f64 + d12.local.x as f64;
-    let d12_z = d12.chunk.z as f64 * chunk_size as f64 + d12.local.z as f64;
-
-    let cross = d1_x * d2_z - d1_z * d2_x;
-
-    if cross.abs() < 1e-10 {
-        return None;
-    }
-
-    let t = (d12_x * d2_z - d12_z * d2_x) / cross;
-    let u = (d12_x * d1_z - d12_z * d1_x) / cross;
-
-    // Convert tolerance directly to parametric epsilon
-    let eps = if tolerance == 0.0 {
-        0.0 // Actually respect zero tolerance!
-    } else {
-        let len_a = (d1_x * d1_x + d1_z * d1_z).sqrt();
-        let len_b = (d2_x * d2_x + d2_z * d2_z).sqrt();
-        // Use MINIMUM or average, not MAXIMUM!
-        let eps_a = tolerance / len_a.max(1e-6);
-        let eps_b = tolerance / len_b.max(1e-6);
-        eps_a.min(eps_b) // Most conservative
-    };
-
-    if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
-        let intersection = WorldPos {
-            chunk: ChunkCoord::new(a1.chunk.x + d1.chunk.x, a1.chunk.z + d1.chunk.z),
-            local: LocalPos::new(
-                a1.local.x + t as f32 * d1.local.x,
-                a1.local.y + t as f32 * d1.local.y,
-                a1.local.z + t as f32 * d1.local.z,
-            ),
-        }
-        .normalize(chunk_size);
-
-        Some(intersection)
-    } else {
-        None
-    }
+pub fn point_to_segment_distance(p: WorldPos, a: WorldPos, b: WorldPos) -> f32 {
+    point_to_segment_distance_sq(p, a, b).sqrt()
 }
 
-fn draw_district_area(
+fn draw_area(
     points: &[WorldPos],
     district_type: &ZoningType,
     variables: &Variables,
@@ -1689,32 +1784,6 @@ fn draw_district_area(
     }
 }
 
-/// Flatten a WorldPos to absolute world coordinates (f64 for precision).
-#[inline]
-fn world_pos_to_world_f64(pos: WorldPos, chunk_size: ChunkSize) -> (f64, f64, f64) {
-    let wx = pos.chunk.x as f64 * chunk_size as f64 + pos.local.x as f64;
-    let wz = pos.chunk.z as f64 * chunk_size as f64 + pos.local.z as f64;
-    (wx, pos.local.y as f64, wz)
-}
-
-/// Reconstruct a normalised WorldPos from absolute world coordinates.
-#[inline]
-fn world_f64_to_world_pos(wx: f64, y: f64, wz: f64, chunk_size: ChunkSize) -> WorldPos {
-    // floor-divide so negative values are handled correctly
-    let cx = (wx / chunk_size as f64).floor() as i32;
-    let cz = (wz / chunk_size as f64).floor() as i32;
-    let lx = (wx - cx as f64 * chunk_size as f64) as f32;
-    let lz = (wz - cz as f64 * chunk_size as f64) as f32;
-    WorldPos {
-        chunk: ChunkCoord { x: cx, z: cz },
-        local: LocalPos {
-            x: lx,
-            y: y as f32,
-            z: lz,
-        },
-    }
-}
-
 #[derive(Debug)]
 enum SegmentIntersectionType {
     OtherEdges,
@@ -1726,62 +1795,136 @@ enum SegmentIntersectionType {
 /// Parametric XZ intersection of segment a→b with segment c→d.
 /// Returns (t along a→b, u along c→d), both ∈ [0, 1].
 /// Uses only WorldPos::dx / dz — no raw world coordinates.
+/// `tolerance`: minimum distance from endpoints in world units.
 fn segment_xz_intersect(
     a: WorldPos,
     b: WorldPos,
     c: WorldPos,
     d: WorldPos,
-    chunk_size: ChunkSize,
-) -> Option<(f32, f32)> {
-    let r_x = a.dx(b, chunk_size);
-    let r_z = a.dz(b, chunk_size);
-    let s_x = c.dx(d, chunk_size);
-    let s_z = c.dz(d, chunk_size);
+    tolerance: f64,
+) -> Option<(f64, f64)> {
+    let r_x = a.dx(b);
+    let r_z = a.dz(b);
+    let s_x = c.dx(d);
+    let s_z = c.dz(d);
 
-    // 2-D cross product r × s
     let denom = r_x * s_z - r_z * s_x;
     if denom.abs() < 1e-5 {
-        return None; // parallel / collinear
+        return None;
     }
 
-    let ac_x = a.dx(c, chunk_size);
-    let ac_z = a.dz(c, chunk_size);
+    let ac_x = a.dx(c);
+    let ac_z = a.dz(c);
 
-    // Standard parametric intersection formulas
     let t = (ac_x * s_z - ac_z * s_x) / denom;
     let u = (ac_x * r_z - ac_z * r_x) / denom;
 
-    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+    // --- convert world tolerance → parametric epsilon ---
+    let eps = if tolerance == 0.0 {
+        0.0
+    } else {
+        let len_r = (r_x * r_x + r_z * r_z).sqrt().max(1e-6);
+        let len_s = (s_x * s_x + s_z * s_z).sqrt().max(1e-6);
+
+        let eps_r = tolerance / len_r;
+        let eps_s = tolerance / len_s;
+
+        eps_r.min(eps_s) // conservative, like your second function
+    };
+
+    if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
         Some((t, u))
     } else {
         None
     }
 }
 
+// /// Find intersection point of two segments (XZ plane).
+// /// Returns the intersection point in WorldPos, or None if parallel/non-intersecting.
+// ///
+// /// `tolerance`: If provided, segments must intersect with at least this much
+// /// clearance from their endpoints (in world units). Use this to allow segments
+// /// to get close without triggering an intersection.
+// pub fn segment_intersection_xz(
+//     a1: WorldPos,
+//     a2: WorldPos,
+//     b1: WorldPos,
+//     b2: WorldPos,
+//     tolerance: f64
+// ) -> Option<WorldPos> {
+//     let d1 = a2.sub_world_pos(a1);
+//     let d2 = b2.sub_world_pos(b1);
+//     let d12 = b1.sub_world_pos(a1);
+//
+//     // ✅ Convert to full world coordinates
+//     let d1_x = d1.chunk.x as f64 * chunk_size as f64 + d1.local.x as f64;
+//     let d1_z = d1.chunk.z as f64 * chunk_size as f64 + d1.local.z as f64;
+//     let d2_x = d2.chunk.x as f64 * chunk_size as f64 + d2.local.x as f64;
+//     let d2_z = d2.chunk.z as f64 * chunk_size as f64 + d2.local.z as f64;
+//     let d12_x = d12.chunk.x as f64 * chunk_size as f64 + d12.local.x as f64;
+//     let d12_z = d12.chunk.z as f64 * chunk_size as f64 + d12.local.z as f64;
+//
+//     let cross = d1_x * d2_z - d1_z * d2_x;
+//
+//     if cross.abs() < 1e-10 {
+//         return None;
+//     }
+//
+//     let t = (d12_x * d2_z - d12_z * d2_x) / cross;
+//     let u = (d12_x * d1_z - d12_z * d1_x) / cross;
+//
+//     // Convert tolerance directly to parametric epsilon
+//     let eps = if tolerance == 0.0 {
+//         0.0 // Actually respect zero tolerance!
+//     } else {
+//         let len_a = (d1_x * d1_x + d1_z * d1_z).sqrt();
+//         let len_b = (d2_x * d2_x + d2_z * d2_z).sqrt();
+//         // Use MINIMUM or average, not MAXIMUM!
+//         let eps_a = tolerance / len_a.max(1e-6);
+//         let eps_b = tolerance / len_b.max(1e-6);
+//         eps_a.min(eps_b) // Most conservative
+//     };
+//
+//     if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
+//         let intersection = WorldPos {
+//             chunk: ChunkCoord::new(a1.chunk.x + d1.chunk.x, a1.chunk.z + d1.chunk.z),
+//             local: LocalPos::new(
+//                 a1.local.x + t as f32 * d1.local.x,
+//                 a1.local.y + t as f32 * d1.local.y,
+//                 a1.local.z + t as f32 * d1.local.z,
+//             ),
+//         }
+//         .normalize();
+//
+//         Some(intersection)
+//     } else {
+//         None
+//     }
+// }
+
 /// Point at parameter `t` ∈ [0, 1] along segment a→b.
 #[inline]
-fn lerp_on_segment(a: WorldPos, b: WorldPos, t: f32, chunk_size: ChunkSize) -> WorldPos {
-    a.add_vec3(a.delta_to(b, chunk_size) * t, chunk_size)
+fn lerp_on_segment(a: WorldPos, b: WorldPos, t: f32) -> WorldPos {
+    a.add_vec3(a.delta_to(b) * t)
 }
 
 /// Ray-casting point-in-polygon test, XZ plane only.
 /// Ray direction is +X from `point`; uses only dx/dz offsets.
 /// WorldPos Native!!!
-pub fn point_in_polygon_xz(point: WorldPos, polygon: &[WorldPos], chunk_size: ChunkSize) -> bool {
+pub fn point_in_polygon_xz(point: WorldPos, polygon: &[WorldPos]) -> bool {
     let n = polygon.len();
     if n < 3 {
         return false;
     }
-
     let mut inside = false;
     let mut j = n - 1;
 
     for i in 0..n {
         // Vertex positions relative to `point` — dx/dz keep everything WorldPos-native
-        let xi = point.dx(polygon[i], chunk_size);
-        let zi = point.dz(polygon[i], chunk_size);
-        let xj = point.dx(polygon[j], chunk_size);
-        let zj = point.dz(polygon[j], chunk_size);
+        let xi = point.dx(polygon[i]);
+        let zi = point.dz(polygon[i]);
+        let xj = point.dx(polygon[j]);
+        let zj = point.dz(polygon[j]);
 
         // Does edge j→i cross z = 0 to the right of the origin?
         if (zi > 0.0) != (zj > 0.0) {
@@ -1797,11 +1940,7 @@ pub fn point_in_polygon_xz(point: WorldPos, polygon: &[WorldPos], chunk_size: Ch
 
 /// How many times does a polyline cross a closed polygon boundary?
 /// Used to score candidate split lines before committing.
-fn boundary_crossing_count(
-    polyline: &[WorldPos],
-    boundary: &[WorldPos],
-    chunk_size: ChunkSize,
-) -> usize {
+fn boundary_crossing_count(polyline: &[WorldPos], boundary: &[WorldPos]) -> usize {
     let n = boundary.len();
     let mut count = 0;
     for si in 0..polyline.len().saturating_sub(1) {
@@ -1811,7 +1950,7 @@ fn boundary_crossing_count(
                 boundary[(bi + 1) % n],
                 polyline[si],
                 polyline[si + 1],
-                chunk_size,
+                0.0,
             )
             .is_some()
             {
@@ -1845,4 +1984,15 @@ fn generate_district_name(rng: &mut impl rand::Rng) -> String {
         Some(p) => format!("{} {} {}", p, core, suffix),
         None => format!("{} {}", core, suffix),
     }
+}
+
+#[derive(Debug)]
+enum DistrictSplitResult {
+    Alright(District),
+    NotEnoughPoints,
+
+    NoBestLine,
+    NotEnoughCrossings,
+    DegeneratePolygon,
+    DistrictDoesntExist,
 }

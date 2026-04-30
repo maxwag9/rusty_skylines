@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, LodStep, WorldPos};
+use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::ui::vertex::Vertex;
 use crate::world::roads::road_structs::{NodeId, SegmentId};
@@ -53,21 +53,17 @@ impl BrushOp for Raise {
     }
 }
 
-pub fn affected_chunks(
-    center: WorldPos,
-    radius: f32,
-    chunk_size: ChunkSize,
-) -> (i32, i32, i32, i32) {
-    let chunk_size_f64 = chunk_size as f64;
+pub fn affected_chunks(center: WorldPos, radius: f32) -> (i32, i32, i32, i32) {
+    let cs = chunk_size() as f64;
     let radius_f64 = radius as f64;
 
-    let wx = center.chunk.x as f64 * chunk_size_f64 + center.local.x as f64;
-    let wz = center.chunk.z as f64 * chunk_size_f64 + center.local.z as f64;
+    let wx = center.chunk.x as f64 * cs + center.local.x as f64;
+    let wz = center.chunk.z as f64 * cs + center.local.z as f64;
 
-    let min_x = ((wx - radius_f64) / chunk_size_f64).floor() as i32;
-    let max_x = ((wx + radius_f64) / chunk_size_f64).floor() as i32;
-    let min_z = ((wz - radius_f64) / chunk_size_f64).floor() as i32;
-    let max_z = ((wz + radius_f64) / chunk_size_f64).floor() as i32;
+    let min_x = ((wx - radius_f64) / cs).floor() as i32;
+    let max_x = ((wx + radius_f64) / cs).floor() as i32;
+    let min_z = ((wz - radius_f64) / cs).floor() as i32;
+    let max_z = ((wz + radius_f64) / cs).floor() as i32;
 
     (min_x, max_x, min_z, max_z)
 }
@@ -251,7 +247,6 @@ impl TerrainEditor {
         half_width: f32,
         terrain_offset: f32,
         falloff_distance: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) -> HashSet<ChunkCoord> {
         self.apply_polyline_flattening(
@@ -261,7 +256,6 @@ impl TerrainEditor {
             half_width,
             terrain_offset,
             falloff_distance,
-            chunk_size,
             chunks,
         )
     }
@@ -274,7 +268,6 @@ impl TerrainEditor {
         radius: f32,
         terrain_offset: f32,
         falloff_distance: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) -> HashSet<ChunkCoord> {
         self.apply_circular_flattening(
@@ -284,7 +277,6 @@ impl TerrainEditor {
             radius,
             terrain_offset,
             falloff_distance,
-            chunk_size,
             chunks,
         )
     }
@@ -296,7 +288,6 @@ impl TerrainEditor {
         center_height: f32,
         terrain_offset: f32,
         falloff_distance: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) -> HashSet<ChunkCoord> {
         self.apply_polygon_flattening(
@@ -305,7 +296,6 @@ impl TerrainEditor {
             center_height,
             terrain_offset,
             falloff_distance,
-            chunk_size,
             chunks,
         )
     }
@@ -339,7 +329,6 @@ impl TerrainEditor {
         half_width: f32,
         terrain_offset: f32,
         falloff_distance: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) -> HashSet<ChunkCoord> {
         let mut affected = HashSet::new();
@@ -352,7 +341,7 @@ impl TerrainEditor {
 
         let mut affected_chunk_coords: HashSet<ChunkCoord> = HashSet::new();
         for pos in centerline {
-            let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(*pos, total_width, chunk_size);
+            let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(*pos, total_width);
             for cx in min_cx..=max_cx {
                 for cz in min_cz..=max_cz {
                     affected_chunk_coords.insert(ChunkCoord::new(cx, cz));
@@ -381,12 +370,8 @@ impl TerrainEditor {
 
                     let grid_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
 
-                    let (dist, road_height) = closest_point_on_polyline_xz(
-                        &grid_pos,
-                        centerline,
-                        road_heights,
-                        chunk_size,
-                    );
+                    let (dist, road_height) =
+                        closest_point_on_polyline_xz(&grid_pos, centerline, road_heights);
 
                     if dist > total_width {
                         continue;
@@ -433,16 +418,15 @@ impl TerrainEditor {
         radius: f32,
         terrain_offset: f32,
         falloff_distance: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) -> HashSet<ChunkCoord> {
         let mut affected = HashSet::new();
 
         let total_radius = radius + falloff_distance;
-        let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, total_radius, chunk_size);
-
-        let center_wx = center.chunk.x as f64 * chunk_size as f64 + center.local.x as f64;
-        let center_wz = center.chunk.z as f64 * chunk_size as f64 + center.local.z as f64;
+        let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, total_radius);
+        let cs = chunk_size() as f64;
+        let center_wx = center.chunk.x as f64 * cs + center.local.x as f64;
+        let center_wz = center.chunk.z as f64 * cs + center.local.z as f64;
 
         for cx in min_cx..=max_cx {
             for cz in min_cz..=max_cz {
@@ -458,8 +442,8 @@ impl TerrainEditor {
                 let base_nx = (grid.nx - 1) * step + 1;
                 let base_nz = (grid.nz - 1) * step + 1;
 
-                let chunk_wx_base = cx as f64 * chunk_size as f64;
-                let chunk_wz_base = cz as f64 * chunk_size as f64;
+                let chunk_wx_base = cx as f64 * cs;
+                let chunk_wz_base = cz as f64 * cs;
 
                 let mut element_deltas: HashMap<(u16, u16), f32> = HashMap::new();
 
@@ -520,7 +504,6 @@ impl TerrainEditor {
         center_height: f32,
         terrain_offset: f32,
         falloff_distance: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) -> HashSet<ChunkCoord> {
         let mut affected = HashSet::new();
@@ -528,7 +511,7 @@ impl TerrainEditor {
         if polygon.len() < 3 {
             return affected;
         }
-
+        let cs = chunk_size() as f64;
         let mut min_wx = f64::MAX;
         let mut max_wx = f64::MIN;
         let mut min_wz = f64::MAX;
@@ -537,8 +520,8 @@ impl TerrainEditor {
         let poly_world: Vec<(f64, f64)> = polygon
             .iter()
             .map(|p| {
-                let wx = p.chunk.x as f64 * chunk_size as f64 + p.local.x as f64;
-                let wz = p.chunk.z as f64 * chunk_size as f64 + p.local.z as f64;
+                let wx = p.chunk.x as f64 * cs + p.local.x as f64;
+                let wz = p.chunk.z as f64 * cs + p.local.z as f64;
                 min_wx = min_wx.min(wx);
                 max_wx = max_wx.max(wx);
                 min_wz = min_wz.min(wz);
@@ -553,10 +536,10 @@ impl TerrainEditor {
         min_wz -= falloff_f64;
         max_wz += falloff_f64;
 
-        let min_cx = (min_wx / chunk_size as f64).floor() as i32;
-        let max_cx = (max_wx / chunk_size as f64).floor() as i32;
-        let min_cz = (min_wz / chunk_size as f64).floor() as i32;
-        let max_cz = (max_wz / chunk_size as f64).floor() as i32;
+        let min_cx = (min_wx / cs).floor() as i32;
+        let max_cx = (max_wx / cs).floor() as i32;
+        let min_cz = (min_wz / cs).floor() as i32;
+        let max_cz = (max_wz / cs).floor() as i32;
 
         for cx in min_cx..=max_cx {
             for cz in min_cz..=max_cz {
@@ -572,8 +555,8 @@ impl TerrainEditor {
                 let base_nx = (grid.nx - 1) * step + 1;
                 let base_nz = (grid.nz - 1) * step + 1;
 
-                let chunk_wx_base = cx as f64 * chunk_size as f64;
-                let chunk_wz_base = cz as f64 * chunk_size as f64;
+                let chunk_wx_base = cx as f64 * cs;
+                let chunk_wz_base = cz as f64 * cs;
 
                 let mut element_deltas: HashMap<(u16, u16), f32> = HashMap::new();
 
@@ -630,10 +613,9 @@ impl TerrainEditor {
         center: WorldPos,
         radius: f32,
         strength: f32,
-        chunk_size: ChunkSize,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
     ) {
-        let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, radius, chunk_size);
+        let (min_cx, max_cx, min_cz, max_cz) = affected_chunks(center, radius);
         let r2 = radius * radius;
 
         let target_coords: Vec<ChunkCoord> = (min_cx..=max_cx)
@@ -665,15 +647,15 @@ impl TerrainEditor {
 
         let hg = &*chunk.height_grid;
         let step = chunk.step as usize;
-        let chunk_size = hg.chunk_size as f64;
+        let cs = chunk_size() as f64;
 
         let base_cell = hg.cell_f32() / step as f32;
         let base_cell_f64 = base_cell as f64;
         let base_nx = (hg.nx - 1) * step + 1;
         let base_nz = (hg.nz - 1) * step + 1;
 
-        let chunk_offset_x = (coord.x - center.chunk.x) as f64 * chunk_size;
-        let chunk_offset_z = (coord.z - center.chunk.z) as f64 * chunk_size;
+        let chunk_offset_x = (coord.x - center.chunk.x) as f64 * cs;
+        let chunk_offset_z = (coord.z - center.chunk.z) as f64 * cs;
         let center_local_x = center.local.x as f64;
         let center_local_z = center.local.z as f64;
 
@@ -902,22 +884,22 @@ fn closest_point_on_polyline_xz(
     point: &WorldPos,
     polyline: &[WorldPos],
     heights: &[f32],
-    chunk_size: ChunkSize,
 ) -> (f32, f32) {
+    let cs = chunk_size() as f64;
     let mut best_dist = f32::MAX;
     let mut best_height = 0.0;
 
-    let px = point.chunk.x as f64 * chunk_size as f64 + point.local.x as f64;
-    let pz = point.chunk.z as f64 * chunk_size as f64 + point.local.z as f64;
+    let px = point.chunk.x as f64 * cs + point.local.x as f64;
+    let pz = point.chunk.z as f64 * cs + point.local.z as f64;
 
     for i in 0..polyline.len().saturating_sub(1) {
         let a = &polyline[i];
         let b = &polyline[i + 1];
 
-        let ax = a.chunk.x as f64 * chunk_size as f64 + a.local.x as f64;
-        let az = a.chunk.z as f64 * chunk_size as f64 + a.local.z as f64;
-        let bx = b.chunk.x as f64 * chunk_size as f64 + b.local.x as f64;
-        let bz = b.chunk.z as f64 * chunk_size as f64 + b.local.z as f64;
+        let ax = a.chunk.x as f64 * cs + a.local.x as f64;
+        let az = a.chunk.z as f64 * cs + a.local.z as f64;
+        let bx = b.chunk.x as f64 * cs + b.local.x as f64;
+        let bz = b.chunk.z as f64 * cs + b.local.z as f64;
 
         let dx = bx - ax;
         let dz = bz - az;
@@ -942,8 +924,8 @@ fn closest_point_on_polyline_xz(
 
     if polyline.len() == 1 {
         let a = &polyline[0];
-        let ax = a.chunk.x as f64 * chunk_size as f64 + a.local.x as f64;
-        let az = a.chunk.z as f64 * chunk_size as f64 + a.local.z as f64;
+        let ax = a.chunk.x as f64 * cs + a.local.x as f64;
+        let az = a.chunk.z as f64 * cs + a.local.z as f64;
         best_dist = (((px - ax).powi(2) + (pz - az).powi(2)) as f32).sqrt();
         best_height = heights[0];
     }
@@ -1160,7 +1142,6 @@ pub fn build_simple_grid_mesh(
     let nz = grid.nz;
     let cell = grid.cell_f32();
     let step = grid.cell_size as usize;
-    let chunk_size = grid.chunk_size;
     let inv = 1.0 / cell;
 
     let mut vertices = Vec::with_capacity(nx * nz);
@@ -1198,8 +1179,8 @@ pub fn build_simple_grid_mesh(
             let n = glam::Vec3::new(-dhdx, 1.0, -dhdz).normalize();
 
             let pos = WorldPos::new(coord, LocalPos::new(local_x, h, local_z));
-            let m = terrain_gen.moisture(&pos, h, chunk_size);
-            let c = terrain_gen.color(&pos, h, m, chunk_size);
+            let m = terrain_gen.moisture(&pos, h);
+            let c = terrain_gen.color(&pos, h, m);
 
             vertices.push(Vertex {
                 local_position: [local_x, h, local_z],

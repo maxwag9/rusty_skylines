@@ -15,7 +15,7 @@
 // ID Newtypes
 // ============================================================================
 
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::roads::intersections::{
@@ -216,20 +216,15 @@ impl Arm {
     }
 
     /// Get the position of the right edge at a given distance from center
-    pub fn right_edge_at(
-        &self,
-        center: WorldPos,
-        distance: f32,
-        chunk_size: ChunkSize,
-    ) -> WorldPos {
+    pub fn right_edge_at(&self, center: WorldPos, distance: f32) -> WorldPos {
         let offset = self.direction * distance + self.right_perpendicular() * self.half_width;
-        center.add_vec3(offset, chunk_size)
+        center.add_vec3(offset)
     }
 
     /// Get the position of the left edge at a given distance from center
-    pub fn left_edge_at(&self, center: WorldPos, distance: f32, chunk_size: ChunkSize) -> WorldPos {
+    pub fn left_edge_at(&self, center: WorldPos, distance: f32) -> WorldPos {
         let offset = self.direction * distance + self.left_perpendicular() * self.half_width;
-        center.add_vec3(offset, chunk_size)
+        center.add_vec3(offset)
     }
 }
 /// Intersection anchor point in 3D space.
@@ -686,7 +681,7 @@ pub struct LaneGeometry {
 }
 
 impl LaneGeometry {
-    pub fn from_polyline(points: Vec<WorldPos>, chunk_size: ChunkSize) -> Self {
+    pub fn from_polyline(points: Vec<WorldPos>) -> Self {
         debug_assert!(points.len() >= 2);
 
         let mut lengths = Vec::with_capacity(points.len());
@@ -695,7 +690,7 @@ impl LaneGeometry {
         lengths.push(0.0);
 
         for i in 1..points.len() {
-            total_len += points[i].distance_to(points[i - 1], chunk_size);
+            total_len += points[i].distance_to(points[i - 1]);
             lengths.push(total_len);
         }
 
@@ -706,7 +701,7 @@ impl LaneGeometry {
         }
     }
 
-    pub fn closest_point_to(&self, pos: &WorldPos, chunk_size: ChunkSize) -> (WorldPos, f64, Vec3) {
+    pub fn closest_point_to(&self, pos: &WorldPos) -> (WorldPos, f64, Vec3) {
         debug_assert!(self.points.len() >= 2);
 
         let mut best_point = self.points[0];
@@ -714,14 +709,14 @@ impl LaneGeometry {
         let mut best_idx = 0;
 
         for (i, point) in self.points.iter().enumerate() {
-            let dist = point.distance_to(*pos, chunk_size);
+            let dist = point.distance_to(*pos);
             if dist <= best_dist {
                 best_dist = dist;
                 best_point = *point;
                 best_idx = i;
             }
         }
-        let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx, chunk_size);
+        let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx);
         (best_point, best_dist, tangent)
     }
 }
@@ -1063,11 +1058,7 @@ impl RoadStorage {
         self.segments.len()
     }
 
-    pub fn segment_ids_touching_chunk(
-        &self,
-        chunk_coord: ChunkCoord,
-        chunk_size: ChunkSize,
-    ) -> Vec<SegmentId> {
+    pub fn segment_ids_touching_chunk(&self, chunk_coord: ChunkCoord) -> Vec<SegmentId> {
         self.segments
             .iter()
             .enumerate()
@@ -1082,7 +1073,7 @@ impl RoadStorage {
                 let start_pos = start.position();
                 let end_pos = end.position();
 
-                if segment_touches_chunk_precise(start_pos, end_pos, chunk_coord, chunk_size) {
+                if segment_touches_chunk_precise(start_pos, end_pos, chunk_coord) {
                     Some(SegmentId::new(idx as u32))
                 } else {
                     None
@@ -1267,13 +1258,9 @@ impl RoadStorage {
     }
 
     /// Expensive!
-    pub fn closest_point_to(
-        &self,
-        pos: &WorldPos,
-        chunk_size: ChunkSize,
-    ) -> Option<(WorldPos, f64, Vec3)> {
+    pub fn closest_point_to(&self, pos: &WorldPos) -> Option<(WorldPos, f64, Vec3)> {
         let mut best: Option<(WorldPos, f64, Vec3)> = None;
-        for segment_id in self.segment_ids_touching_chunk(pos.chunk, chunk_size) {
+        for segment_id in self.segment_ids_touching_chunk(pos.chunk) {
             let segment = self.segment(segment_id);
             for lane_id in segment.lanes() {
                 let lane = self.lane(lane_id);
@@ -1281,7 +1268,7 @@ impl RoadStorage {
                     continue;
                 }
 
-                let (lane_pos, dist, tangent) = lane.geometry.closest_point_to(pos, chunk_size);
+                let (lane_pos, dist, tangent) = lane.geometry.closest_point_to(pos);
                 if let Some(best) = best.as_mut() {
                     if dist < best.1 {
                         *best = (lane_pos, dist, tangent);
@@ -1361,19 +1348,14 @@ impl Default for RoadManager {
 /// Sample position along a lane at parameter t in [0,1].
 /// Returns the WorldPos on the lane.
 #[inline]
-pub fn sample_lane_position(
-    lane: &Lane,
-    t: f64,
-    storage: &RoadStorage,
-    chunk_size: ChunkSize,
-) -> Option<WorldPos> {
+pub fn sample_lane_position(lane: &Lane, t: f64, storage: &RoadStorage) -> Option<WorldPos> {
     let from = storage.node(lane.from_node())?;
     let to = storage.node(lane.to_node())?;
 
     let from_pos = from.position();
     let to_pos = to.position();
 
-    Some(from_pos.lerp(to_pos, t, chunk_size))
+    Some(from_pos.lerp(to_pos, t))
 }
 
 /// Project a WorldPos onto a lane and returns (t, distance_squared).
@@ -1383,7 +1365,6 @@ pub fn project_point_to_lane_xz(
     lane: &Lane,
     point: WorldPos,
     storage: &RoadStorage,
-    chunk_size: ChunkSize,
 ) -> Option<(f64, f64)> {
     let from = storage.node(lane.from_node())?;
     let to = storage.node(lane.to_node())?;
@@ -1391,9 +1372,7 @@ pub fn project_point_to_lane_xz(
     let from_pos = from.position();
     let to_pos = to.position();
 
-    Some(project_point_to_segment_xz(
-        point, from_pos, to_pos, chunk_size,
-    ))
+    Some(project_point_to_segment_xz(point, from_pos, to_pos))
 }
 
 /// Project a point onto a line segment (XZ plane).
@@ -1403,11 +1382,10 @@ pub fn project_point_to_segment_xz(
     point: WorldPos,
     seg_start: WorldPos,
     seg_end: WorldPos,
-    chunk_size: ChunkSize,
 ) -> (f64, f64) {
     // Compute everything relative to seg_start for precision
-    let d = seg_end.to_render_pos(seg_start, chunk_size);
-    let p = point.to_render_pos(seg_start, chunk_size);
+    let d = seg_end.to_render_pos(seg_start);
+    let p = point.to_render_pos(seg_start);
 
     let dx = d.x as f64;
     let dz = d.z as f64;
@@ -1436,11 +1414,7 @@ pub fn project_point_to_segment_xz(
 ///
 /// Note: For production use, build chunk-local spatial indexes.
 /// This function is O(n) in the number of lanes.
-pub fn nearest_lane_to_point(
-    storage: &RoadStorage,
-    point: WorldPos,
-    chunk_size: ChunkSize,
-) -> Option<LaneId> {
+pub fn nearest_lane_to_point(storage: &RoadStorage, point: WorldPos) -> Option<LaneId> {
     let mut best_id: Option<LaneId> = None;
     let mut best_dist_sq = f64::MAX;
 
@@ -1449,7 +1423,7 @@ pub fn nearest_lane_to_point(
             continue;
         }
 
-        let (_, dist_sq) = project_point_to_lane_xz(lane, point, storage, chunk_size)?;
+        let (_, dist_sq) = project_point_to_lane_xz(lane, point, storage)?;
         if dist_sq < best_dist_sq {
             best_dist_sq = dist_sq;
             best_id = Some(id);
@@ -2093,14 +2067,7 @@ pub fn apply_command_world(
                 return CommandResult::InvalidReference;
             }
 
-            let arms = gather_arms(
-                storage,
-                road_types,
-                *node_id,
-                params,
-                gizmo.chunk_size,
-                gizmo,
-            );
+            let arms = gather_arms(storage, road_types, *node_id, params, gizmo);
 
             storage.node_mut(*node_id).arms = arms;
 
@@ -2175,7 +2142,6 @@ pub fn apply_command(
                         road_types,
                         id,
                         &IntersectionBuildParams::from_style(road_style_params),
-                        terrain.chunk_size,
                         gizmo,
                     );
                     if !is_preview {
@@ -2364,14 +2330,7 @@ pub fn apply_command(
                     let Some(road_type) = road_types.get_road_type(params.road_type_id) else {
                         return CommandResult::InvalidReference;
                     };
-                    let arms = gather_arms(
-                        storage,
-                        road_types,
-                        node_id,
-                        &params,
-                        gizmo.chunk_size,
-                        gizmo,
-                    );
+                    let arms = gather_arms(storage, road_types, node_id, &params, gizmo);
 
                     storage.node_mut(node_id).arms = arms;
                     build_intersection_at_node(
@@ -2829,7 +2788,7 @@ fn compute_lane_geometries(
             lane_width,
             road_type.structure,
         );
-        let geometry = LaneGeometry::from_polyline(polyline, terrain_renderer.chunk_size);
+        let geometry = LaneGeometry::from_polyline(polyline);
         let base_cost = geometry.total_len.max(0.1) as f32;
 
         lanes.push(LaneDefinition {
@@ -2851,7 +2810,7 @@ fn compute_lane_geometries(
             road_type.structure,
         );
         polyline.reverse();
-        let geometry = LaneGeometry::from_polyline(polyline, terrain_renderer.chunk_size);
+        let geometry = LaneGeometry::from_polyline(polyline);
         let base_cost = geometry.total_len.max(0.1) as f32;
 
         lanes.push(LaneDefinition {
@@ -2866,21 +2825,16 @@ fn compute_lane_geometries(
 }
 
 /// More precise segment-chunk intersection test.
-fn segment_touches_chunk_precise(
-    start: WorldPos,
-    end: WorldPos,
-    chunk: ChunkCoord,
-    chunk_size: ChunkSize,
-) -> bool {
-    let cs = chunk_size as f32;
+fn segment_touches_chunk_precise(start: WorldPos, end: WorldPos, chunk: ChunkCoord) -> bool {
+    let cs = chunk_size() as f32;
 
     // Chunk bounds as WorldPos
     let chunk_min = WorldPos::new(chunk, LocalPos::new(0.0, 0.0, 0.0));
     let chunk_max = WorldPos::new(chunk, LocalPos::new(cs, 0.0, cs));
 
     // Convert segment to chunk-local coordinates
-    let a = start.to_render_pos(chunk_min, chunk_size);
-    let b = end.to_render_pos(chunk_min, chunk_size);
+    let a = start.to_render_pos(chunk_min);
+    let b = end.to_render_pos(chunk_min);
 
     // 2D line-box intersection in XZ plane
     line_intersects_box_2d(

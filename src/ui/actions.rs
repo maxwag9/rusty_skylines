@@ -1620,7 +1620,7 @@ pub fn load_save(
         ),
         LoadResult::FileNonExistent(e) => {
             eprintln!("Failed to load World: {:#?}", e);
-            let mut save_state = SaveState::new(camera.chunk_size);
+            let mut save_state = SaveState::new();
             save_state.name = save_name.to_string();
             game_state.current_save = save_state;
             game_state.save(camera, roads, terrain, props, buildings);

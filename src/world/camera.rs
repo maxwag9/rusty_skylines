@@ -13,7 +13,6 @@ pub struct Camera {
     pub near: f32,
     pub far: f32,
     pub fov: f32,
-    pub chunk_size: ChunkSize,
     pub prev_view_proj: Mat4,
     view: Mat4,
     proj: Mat4,
@@ -31,7 +30,6 @@ impl Camera {
             near: 2.5,
             far: 10_000.0,
             fov: 55.0,
-            chunk_size: 128,
             prev_view_proj: Default::default(),
             view: Default::default(),
             proj: Default::default(),
@@ -90,8 +88,7 @@ impl Camera {
     }
     #[inline]
     pub fn eye_world(&self) -> WorldPos {
-        self.target
-            .add_render_offset(self.orbit_offset(), self.chunk_size)
+        self.target.add_render_offset(self.orbit_offset())
     }
     #[inline]
     pub fn prev_eye_world(&self) -> WorldPos {
@@ -100,13 +97,12 @@ impl Camera {
     #[inline]
     pub fn _world_to_render(&self, pos: WorldPos) -> Vec3 {
         let eye = self.eye_world();
-        pos.to_render_pos(eye, self.chunk_size) // subtract eye, not target
+        pos.to_render_pos(eye) // subtract eye, not target
     }
 
     #[inline]
     pub fn _render_to_world(&self, render_pos: Vec3) -> WorldPos {
-        self.eye_world()
-            .add_render_offset(render_pos, self.chunk_size)
+        self.eye_world().add_render_offset(render_pos)
     }
 }
 
@@ -225,7 +221,7 @@ pub fn resolve_pitch_by_search(
 
     for i in 0..=samples {
         let t = i as f32 / samples as f32;
-        let sample_pos: WorldPos = target.add_vec3(offset * t, world_renderer.chunk_size); // uses WorldPos + Vec3
+        let sample_pos: WorldPos = target.add_vec3(offset * t); // uses WorldPos + Vec3
 
         let terrain_y = world_renderer.get_height_at(sample_pos, true);
         max_terrain_y = max_terrain_y.max(terrain_y);

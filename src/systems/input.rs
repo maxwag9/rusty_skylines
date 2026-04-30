@@ -17,10 +17,9 @@ pub fn run_inputs(resources: &mut Resources) {
     let time = &world.time;
 
     let chunk_size = world.world_state.game_state.current_save.chunk_size;
-    camera.chunk_size = chunk_size;
     let noclip = resources.settings.noclip;
     let eye = camera.eye_world();
-    let mut fwd3d = eye.direction_to(camera.target, chunk_size);
+    let mut fwd3d = eye.direction_to(camera.target);
     if fwd3d.length_squared() > 0.0 {
         fwd3d = fwd3d.normalize();
     }
@@ -164,7 +163,7 @@ pub fn run_inputs(resources: &mut Resources) {
         cam_ctrl.target_pitch += cam_ctrl.pitch_velocity;
     }
     if !resources.settings.drive_car {
-        camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt, chunk_size);
+        camera.target = camera.target.add_vec3(cam_ctrl.velocity * dt);
         if !noclip {
             ground_camera_target(camera, cam_ctrl, terrain_subsystem, 0.1);
         }

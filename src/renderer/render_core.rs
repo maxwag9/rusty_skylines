@@ -89,13 +89,7 @@ impl Renderer {
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
         let mut render_manager = RenderManager::new(device, queue, texture_dir());
-        let gizmo = Gizmo::new(
-            device,
-            camera.chunk_size,
-            config,
-            &ui_renderer.font,
-            settings.msaa_samples,
-        );
+        let gizmo = Gizmo::new(device, config, &ui_renderer.font, settings.msaa_samples);
         let profiler = GpuProfiler::new(&device, 3);
         let pipelines = Pipelines::new(
             &mut render_manager,
@@ -328,7 +322,7 @@ impl Renderer {
         buildings: &mut Buildings,
     ) {
         let eye = camera.target;
-        let target_pos_render = eye.to_render_pos(WorldPos::zero(), camera.chunk_size);
+        let target_pos_render = eye.to_render_pos(WorldPos::zero());
         ui.variables.set_i64("target_pos_cx", camera.target.chunk.x);
         ui.variables.set_i64("target_pos_cz", camera.target.chunk.z);
         ui.variables

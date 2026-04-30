@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::partitions::HierarchicalAddress;
@@ -253,7 +253,7 @@ pub enum ChunkDistance {
 
 impl ChunkDistance {
     #[inline]
-    pub fn from_dist2(dist2: u64, chunk_size: ChunkSize) -> Self {
+    pub fn from_dist2(dist2: u64) -> Self {
         const BASE_CHUNK_SIZE: f64 = 128.0;
         const CLOSE_CHUNKS: f64 = 10.0;
         const MEDIUM_CHUNKS: f64 = 100.0;
@@ -261,7 +261,7 @@ impl ChunkDistance {
         const CLOSE_DIST2_BASE: f64 = CLOSE_CHUNKS * CLOSE_CHUNKS;
         const MEDIUM_DIST2_BASE: f64 = MEDIUM_CHUNKS * MEDIUM_CHUNKS;
 
-        let cs = chunk_size as f64;
+        let cs = chunk_size() as f64;
         let scale = BASE_CHUNK_SIZE / cs;
         let close_thresh = CLOSE_DIST2_BASE * scale.powi(2);
         let medium_thresh = MEDIUM_DIST2_BASE * scale.powi(2);
@@ -276,13 +276,9 @@ impl ChunkDistance {
         }
     }
     #[inline]
-    pub fn from_chunk_positions(
-        center_chunk: ChunkCoord,
-        other: ChunkCoord,
-        chunk_size: ChunkSize,
-    ) -> Self {
+    pub fn from_chunk_positions(center_chunk: ChunkCoord, other: ChunkCoord) -> Self {
         let dist2 = center_chunk.dist2(&other);
-        ChunkDistance::from_dist2(dist2, chunk_size)
+        ChunkDistance::from_dist2(dist2)
     }
 }
 #[derive(Clone, Debug)]
@@ -315,35 +311,23 @@ pub struct CarStorage {
     free_list: Vec<CarId>,
     // Reverse mapping so I can remove from chunks in O(1) when despawning/moving
     car_locations: HashMap<CarId, ChunkCoord>,
-    chunk_size: ChunkSize,
     center_chunk: ChunkCoord,
 }
 
 impl CarStorage {
-    pub(crate) fn update_target_and_chunk_size(
-        &mut self,
-        target_chunk: ChunkCoord,
-        chunk_size: ChunkSize,
-    ) {
+    pub fn update_target(&mut self, target_chunk: ChunkCoord) {
         self.center_chunk = target_chunk;
-        self.chunk_size = chunk_size;
     }
-    pub(crate) fn move_car_between_chunks(
-        &mut self,
-        from: ChunkCoord,
-        to: ChunkCoord,
-        car_id: CarId,
-    ) {
+    pub fn move_car_between_chunks(&mut self, from: ChunkCoord, to: ChunkCoord, car_id: CarId) {
         self.car_chunk_storage.remove_car(from, car_id);
-        let car_chunk_distance =
-            ChunkDistance::from_chunk_positions(self.center_chunk, to, self.chunk_size);
+        let car_chunk_distance = ChunkDistance::from_chunk_positions(self.center_chunk, to);
         self.car_chunk_storage
             .add_car(to, car_chunk_distance, car_id);
     }
-    pub(crate) fn iter_cars(&self) -> Iter<'_, Option<Car>> {
+    pub fn iter_cars(&self) -> Iter<'_, Option<Car>> {
         self.cars.iter()
     }
-    pub(crate) fn iter_mut_cars(&mut self) -> IterMut<'_, Option<Car>> {
+    pub fn iter_mut_cars(&mut self) -> IterMut<'_, Option<Car>> {
         self.cars.iter_mut()
     }
     /// Returns a parallel mutable iterator over car slots.
@@ -354,20 +338,16 @@ impl CarStorage {
 }
 
 impl CarStorage {
-    pub(crate) fn update_carchunk_distances(
-        &mut self,
-        target_pos: WorldPos,
-        chunk_size: ChunkSize,
-    ) {
+    pub fn update_carchunk_distances(&mut self, target_pos: WorldPos) {
         let (moved, removed) = self
             .car_chunk_storage
-            .update_all_distances(target_pos.chunk, chunk_size);
+            .update_all_distances(target_pos.chunk);
 
         if !removed.is_empty() {
-            println!("Removed {} empty car chunks", removed.len());
+            //println!("Removed {} empty car chunks", removed.len());
         }
         if moved > 0 {
-            println!("Moved {} chunks between distance tiers", moved);
+            //println!("Moved {} chunks between distance tiers", moved);
         }
     }
 }
@@ -389,7 +369,6 @@ impl CarStorage {
             cars,
             free_list: Vec::new(),
             car_locations: HashMap::new(),
-            chunk_size: 128,
             center_chunk: ChunkCoord::zero(),
         }
     }
@@ -770,11 +749,7 @@ impl CarChunkStorage {
     }
 
     /// Bulk update all chunk distances. Returns number of chunks moved.
-    pub fn update_all_distances(
-        &mut self,
-        center_chunk: ChunkCoord,
-        chunk_size: ChunkSize,
-    ) -> (usize, Vec<ChunkCoord>) {
+    pub fn update_all_distances(&mut self, center_chunk: ChunkCoord) -> (usize, Vec<ChunkCoord>) {
         let mut moved = 0;
         let mut to_remove: Vec<ChunkCoord> = Vec::new();
 
@@ -784,7 +759,7 @@ impl CarChunkStorage {
             .map(|(coord, chunk)| {
                 let is_empty = chunk.car_ids.is_empty();
                 let dist2 = center_chunk.dist2(coord);
-                let new_dist = ChunkDistance::from_dist2(dist2, chunk_size);
+                let new_dist = ChunkDistance::from_dist2(dist2);
                 (*coord, new_dist, is_empty)
             })
             .collect();

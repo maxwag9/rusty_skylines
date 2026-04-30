@@ -1,4 +1,4 @@
-use crate::helpers::positions::ChunkSize;
+use crate::helpers::positions::chunk_size;
 use crate::world::roads::road_structs::{LaneId, NodeId, SegmentId};
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
 use serde::{Deserialize, Serialize};
@@ -295,11 +295,11 @@ impl PartitionManager {
     }
 
     /// Rebuilds all partition trees, creating a separate tree for each disconnected road region.
-    pub fn rebuild_all(&mut self, road_storage: &RoadStorage, chunk_size: ChunkSize) {
+    pub fn rebuild_all(&mut self, road_storage: &RoadStorage) {
         self.storage.clear_all();
         self.node_to_leaf.clear();
         self.region_roots.clear();
-
+        let cs = chunk_size() as f64;
         // Build a separate partition tree for each active (non-empty) road region
         for (region_id, region) in road_storage.iter_active_regions() {
             let node_positions: Vec<(NodeId, f64, f64)> = region
@@ -312,8 +312,8 @@ impl PartitionManager {
                         return None;
                     }
                     let pos = node.position();
-                    let x = pos.chunk.x as f64 * chunk_size as f64 + pos.local.x as f64;
-                    let z = pos.chunk.z as f64 * chunk_size as f64 + pos.local.z as f64;
+                    let x = pos.chunk.x as f64 * cs + pos.local.x as f64;
+                    let z = pos.chunk.z as f64 * cs + pos.local.z as f64;
                     Some((node_id, x, z))
                 })
                 .collect();

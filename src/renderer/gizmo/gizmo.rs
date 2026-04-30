@@ -2,7 +2,7 @@
 
 use crate::data::Settings;
 use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualizationConfig};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
@@ -40,6 +40,7 @@ pub struct PendingGizmoTextRender {
     pub color: [f32; 4],
     pub vertices: Vec<TextVertex3D>,
     pub facing: Option<Vec3>,
+    pub scale_with_cam: bool,
 }
 pub struct Gizmo {
     partition_gizmo: PartitionGizmo,
@@ -48,7 +49,6 @@ pub struct Gizmo {
     pub thick_buffer: Buffer,
     pub text_buffer: Buffer,
     total_game_time: f64,
-    pub chunk_size: ChunkSize,
     pub brush: GlyphBrush<(), Extra>,
     pub text_raster_factor: f32, // good start: 48.0
     pub text_raster_min: f32,    // good start: 8.0
@@ -63,7 +63,6 @@ pub struct GizmoBatches {
 impl Gizmo {
     pub fn new(
         device: &Device,
-        chunk_size: ChunkSize,
         config: &SurfaceConfiguration,
         font_arc: &FontArc,
         msaa_samples: u32,
@@ -96,9 +95,8 @@ impl Gizmo {
             thick_buffer,
             text_buffer,
             total_game_time: 0.0,
-            chunk_size,
             brush,
-            text_raster_factor: 1512.0,
+            text_raster_factor: 2048.0,
             text_raster_min: 8.0,
             text_raster_max: 128.0,
         }
@@ -198,7 +196,7 @@ impl Gizmo {
     /// - A number label showing the region ID at the region centroid
     /// - A small white circle marking the centroid position
     pub fn visualize_regions(&mut self, road_storage: &RoadStorage, thickness: f32, duration: f32) {
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
 
         for (region_id, region) in road_storage.iter_active_regions() {
             let hue = (region_id as f32 * 0.618033988749895) % 1.0;
@@ -246,19 +244,20 @@ impl Gizmo {
             } else {
                 let mut offset_sum = Vec3::ZERO;
                 for pos in &positions {
-                    offset_sum += pos.to_render_pos(first_pos, cs);
+                    offset_sum += pos.to_render_pos(first_pos);
                 }
                 offset_sum /= positions.len() as f32;
-                first_pos.add_vec3(offset_sum, cs)
+                first_pos.add_vec3(offset_sum)
             };
 
-            let label_pos = centroid.add_vec3(Vec3::new(0.0, 5.0, 0.0), cs);
+            let label_pos = centroid.add_vec3(Vec3::new(0.0, 5.0, 0.0));
             self.text(
                 region_id.to_string().as_str(),
                 label_pos,
                 4.0,
                 color,
                 None,
+                false,
                 thickness,
                 duration,
             );
@@ -317,7 +316,7 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
 
         let mut verts = Vec::with_capacity(CIRCLE_SEGMENT_COUNT * 2);
 
@@ -325,8 +324,8 @@ impl Gizmo {
             let a0 = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
             let a1 = ((i + 1) as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
 
-            let p0 = center.add_vec3(Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), cs);
-            let p1 = center.add_vec3(Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), cs);
+            let p0 = center.add_vec3(Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()));
+            let p1 = center.add_vec3(Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()));
 
             verts.push(LineVtxWorld::new(p0, color));
             verts.push(LineVtxWorld::new(p1, color));
@@ -343,7 +342,7 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let mut verts = Vec::new();
         let rings = CIRCLE_SEGMENT_COUNT;
         for j in 1..rings {
@@ -354,11 +353,11 @@ impl Gizmo {
                 let a0 = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
                 let a1 = ((i + 1) as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
                 verts.push(LineVtxWorld::new(
-                    center.add_vec3(Vec3::new(r * a0.cos(), y, r * a0.sin()), cs),
+                    center.add_vec3(Vec3::new(r * a0.cos(), y, r * a0.sin())),
                     color,
                 ));
                 verts.push(LineVtxWorld::new(
-                    center.add_vec3(Vec3::new(r * a1.cos(), y, r * a1.sin()), cs),
+                    center.add_vec3(Vec3::new(r * a1.cos(), y, r * a1.sin())),
                     color,
                 ));
             }
@@ -370,25 +369,19 @@ impl Gizmo {
                 let phi0 = (i as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
                 let phi1 = ((i + 1) as f32 / CIRCLE_SEGMENT_COUNT as f32) * TAU;
                 verts.push(LineVtxWorld::new(
-                    center.add_vec3(
-                        Vec3::new(
-                            radius * phi0.sin() * ct,
-                            radius * phi0.cos(),
-                            radius * phi0.sin() * st,
-                        ),
-                        cs,
-                    ),
+                    center.add_vec3(Vec3::new(
+                        radius * phi0.sin() * ct,
+                        radius * phi0.cos(),
+                        radius * phi0.sin() * st,
+                    )),
                     color,
                 ));
                 verts.push(LineVtxWorld::new(
-                    center.add_vec3(
-                        Vec3::new(
-                            radius * phi1.sin() * ct,
-                            radius * phi1.cos(),
-                            radius * phi1.sin() * st,
-                        ),
-                        cs,
-                    ),
+                    center.add_vec3(Vec3::new(
+                        radius * phi1.sin() * ct,
+                        radius * phi1.cos(),
+                        radius * phi1.sin() * st,
+                    )),
                     color,
                 ));
             }
@@ -404,12 +397,12 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let corners = [
-            center.add_vec3(Vec3::new(-half_size, 0.0, -half_size), cs),
-            center.add_vec3(Vec3::new(half_size, 0.0, -half_size), cs),
-            center.add_vec3(Vec3::new(half_size, 0.0, half_size), cs),
-            center.add_vec3(Vec3::new(-half_size, 0.0, half_size), cs),
+            center.add_vec3(Vec3::new(-half_size, 0.0, -half_size)),
+            center.add_vec3(Vec3::new(half_size, 0.0, -half_size)),
+            center.add_vec3(Vec3::new(half_size, 0.0, half_size)),
+            center.add_vec3(Vec3::new(-half_size, 0.0, half_size)),
         ];
         for i in 0..4 {
             self.line(corners[i], corners[(i + 1) % 4], color, thickness, duration);
@@ -426,7 +419,7 @@ impl Gizmo {
     ) {
         self.arrow(
             center,
-            center.add_vec3(direction, self.chunk_size),
+            center.add_vec3(direction),
             color,
             false,
             thickness,
@@ -434,12 +427,9 @@ impl Gizmo {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
     // Axes gizmo
-    // ─────────────────────────────────────────────────────────────────────────
-
     pub fn axes(&mut self, origin: WorldPos, scale: f32, thickness: f32, duration: f32) {
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let axes = [
             (Vec3::X, [1.0, 0.2, 0.2, 1.0]),
             (Vec3::Y, [0.2, 1.0, 0.2, 1.0]),
@@ -448,7 +438,7 @@ impl Gizmo {
         for (dir, color) in axes {
             self.line(
                 origin,
-                origin.add_vec3(dir * scale, cs),
+                origin.add_vec3(dir * scale),
                 color,
                 thickness,
                 duration,
@@ -466,8 +456,8 @@ impl Gizmo {
         duration: f32,
     ) {
         self.axes(origin, scale, thickness, duration);
-        let cs = self.chunk_size;
-        let sun_end = origin.add_vec3(sun_dir.normalize_or_zero() * scale, cs);
+        let cs = chunk_size() as f32;
+        let sun_end = origin.add_vec3(sun_dir.normalize_or_zero() * scale);
         self.arrow(
             origin,
             sun_end,
@@ -476,7 +466,7 @@ impl Gizmo {
             thickness,
             duration,
         );
-        let moon_end = origin.add_vec3(moon_dir.normalize_or_zero() * scale, cs);
+        let moon_end = origin.add_vec3(moon_dir.normalize_or_zero() * scale);
         self.arrow(
             origin,
             moon_end,
@@ -500,8 +490,8 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = self.chunk_size;
-        let delta = end.to_render_pos(start, cs);
+        let cs = chunk_size() as f32;
+        let delta = end.to_render_pos(start);
         let len = delta.length();
         if len < 0.0001 {
             return;
@@ -533,8 +523,8 @@ impl Gizmo {
             }
 
             let t0 = (t_head - dash_len).max(0.0);
-            let p0 = start.add_vec3(dir * t0, cs);
-            let p1 = start.add_vec3(dir * t_head, cs);
+            let p0 = start.add_vec3(dir * t0);
+            let p1 = start.add_vec3(dir * t_head);
 
             // Shaft segment
             verts.push(LineVtxWorld::new(p0, color));
@@ -543,15 +533,12 @@ impl Gizmo {
             // Arrow head
             let angle = time * spin_speed + (i as f32 * 12.9898).sin() * PI;
             let rot = rotate_frame(side, up_perp, angle);
-            let back = p1.add_vec3(-dir * head_len, cs);
+            let back = p1.add_vec3(-dir * head_len);
 
             verts.push(LineVtxWorld::new(p1, flap));
-            verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width, cs), flap));
+            verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width), flap));
             verts.push(LineVtxWorld::new(p1, flap));
-            verts.push(LineVtxWorld::new(
-                back.add_vec3(-rot * head_width, cs),
-                flap,
-            ));
+            verts.push(LineVtxWorld::new(back.add_vec3(-rot * head_width), flap));
         }
 
         self.push(verts, thickness, duration, false);
@@ -571,7 +558,7 @@ impl Gizmo {
             return;
         }
 
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let flap = flap_color(color);
         let mut verts = Vec::new();
 
@@ -584,7 +571,7 @@ impl Gizmo {
         // Compute cumulative lengths
         let mut lengths = vec![0.0f32];
         for w in points.windows(2) {
-            let d = w[1].to_render_pos(w[0], cs).length();
+            let d = w[1].to_render_pos(w[0]).length();
             lengths.push(lengths.last().unwrap() + d);
         }
         let total_len = *lengths.last().unwrap();
@@ -607,8 +594,8 @@ impl Gizmo {
                 0.0
             };
 
-            let pos = points[i0].lerp(points[i1], seg_t as f64, cs);
-            let dir = points[i1].to_render_pos(points[i0], cs).normalize_or_zero();
+            let pos = points[i0].lerp(points[i1], seg_t as f64);
+            let dir = points[i1].to_render_pos(points[i0]).normalize_or_zero();
             (pos, dir)
         };
 
@@ -635,15 +622,12 @@ impl Gizmo {
             let (side, up_perp) = build_frame(dir);
             let angle = time * spin_speed + idx as f32 * 1.7;
             let rot = rotate_frame(side, up_perp, angle);
-            let back = pos.add_vec3(-dir * head_len, cs);
+            let back = pos.add_vec3(-dir * head_len);
 
             verts.push(LineVtxWorld::new(pos, flap));
-            verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width, cs), flap));
+            verts.push(LineVtxWorld::new(back.add_vec3(rot * head_width), flap));
             verts.push(LineVtxWorld::new(pos, flap));
-            verts.push(LineVtxWorld::new(
-                back.add_vec3(-rot * head_width, cs),
-                flap,
-            ));
+            verts.push(LineVtxWorld::new(back.add_vec3(-rot * head_width), flap));
 
             idx += 1;
             t += arrow_spacing;
@@ -663,8 +647,8 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = self.chunk_size;
-        let points: Vec<_> = offsets.iter().map(|&o| anchor.add_vec3(o, cs)).collect();
+        let cs = chunk_size() as f32;
+        let points: Vec<_> = offsets.iter().map(|&o| anchor.add_vec3(o)).collect();
         self.polyline(&points, color, arrow_spacing, thickness, duration);
     }
 
@@ -679,7 +663,7 @@ impl Gizmo {
             .map(|&p| LineVtxWorld::new(p, color))
             .collect();
 
-        self.push(verts, duration, 0.0, true);
+        self.push(verts, 0.0, duration, true);
     }
 
     pub fn area_textured(&mut self, points: &[WorldPos], color: [f32; 4], duration: f32) {
@@ -695,14 +679,11 @@ impl Gizmo {
             color[2] * 1.1,
             color[3] * 1.1,
         ];
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let origin = points[0];
 
         // Precompute render positions ONCE
-        let renders: Vec<Vec3> = points
-            .iter()
-            .map(|&p| p.to_render_pos(origin, cs))
-            .collect();
+        let renders: Vec<Vec3> = points.iter().map(|&p| p.to_render_pos(origin)).collect();
 
         // AABB in render space
         let mut min_x = f32::INFINITY;
@@ -717,7 +698,7 @@ impl Gizmo {
             max_z = max_z.max(rp.z);
         }
 
-        let spacing = cs as f32 * 0.025;
+        let spacing = cs * 0.025;
 
         // height sampling via triangle fan
         let sample_y = |x: f32, z: f32| -> f32 {
@@ -746,9 +727,9 @@ impl Gizmo {
 
             while x <= max_x {
                 let y = sample_y(x, z);
-                let p = origin.add_vec3(Vec3::new(x, y, z), cs);
+                let p = origin.add_vec3(Vec3::new(x, y, z));
 
-                if point_in_polygon_xz(p, points, cs) {
+                if point_in_polygon_xz(p, points) {
                     self.cross(p, spacing * 0.1, color, 0.0, duration);
                 }
 
@@ -767,6 +748,7 @@ impl Gizmo {
         scale: f32,
         color: [f32; 4],
         facing: Option<Vec3>,
+        scale_with_cam: bool,
         thickness: f32,
         duration: f32,
     ) where
@@ -783,6 +765,7 @@ impl Gizmo {
             scale,
             color,
             facing,
+            scale_with_cam,
             vertices: vec![],
         };
         self.push_text(text, thickness, duration);
@@ -800,7 +783,6 @@ impl Gizmo {
         camera: &Camera,
     ) {
         self.total_game_time = total_game_time;
-        self.chunk_size = camera.chunk_size;
         let target = camera.target;
 
         if settings.render_partitions_gizmo {
@@ -824,17 +806,14 @@ impl Gizmo {
         }
         if settings.render_chunk_bounds {
             if terrain_subsystem.chunks.contains_key(&target.chunk) {
-                let chunk_size_f = self.chunk_size as f32;
+                let cs = chunk_size() as f32;
                 let corner = WorldPos::new(
                     target.chunk,
                     LocalPos::new(0.0, terrain_subsystem.get_height_at(target, false), 0.0),
                 );
                 self.box_xz(
-                    corner.add_vec3(
-                        Vec3::new(chunk_size_f * 0.5, 0.0, chunk_size_f * 0.5),
-                        self.chunk_size,
-                    ),
-                    chunk_size_f * 0.5,
+                    corner.add_vec3(Vec3::new(cs * 0.5, 0.0, cs * 0.5)),
+                    cs * 0.5,
                     [0.2, 0.8, 0.6, 0.9],
                     0.0,
                     0.0,
@@ -926,18 +905,18 @@ impl Gizmo {
         thickness: f32,
         duration: f32,
     ) {
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let half = size * 0.5;
         self.line(
-            pos.add_vec3(Vec3::new(-half, 0.0, 0.0), cs),
-            pos.add_vec3(Vec3::new(half, 0.0, 0.0), cs),
+            pos.add_vec3(Vec3::new(-half, 0.0, 0.0)),
+            pos.add_vec3(Vec3::new(half, 0.0, 0.0)),
             color,
             thickness,
             duration,
         );
         self.line(
-            pos.add_vec3(Vec3::new(0.0, 0.0, -half), cs),
-            pos.add_vec3(Vec3::new(0.0, 0.0, half), cs),
+            pos.add_vec3(Vec3::new(0.0, 0.0, -half)),
+            pos.add_vec3(Vec3::new(0.0, 0.0, half)),
             color,
             thickness,
             duration,
@@ -975,20 +954,20 @@ impl Gizmo {
             return;
         }
 
-        let cs = self.chunk_size;
+        let cs = chunk_size() as f32;
         let min = Vec3::new(aabb.min[0], aabb.min[1], aabb.min[2]);
         let max = Vec3::new(aabb.max[0], aabb.max[1], aabb.max[2]);
 
         // 8 corners of the box
         let c = [
-            reference.add_vec3(Vec3::new(min.x, min.y, min.z), cs),
-            reference.add_vec3(Vec3::new(max.x, min.y, min.z), cs),
-            reference.add_vec3(Vec3::new(max.x, max.y, min.z), cs),
-            reference.add_vec3(Vec3::new(min.x, max.y, min.z), cs),
-            reference.add_vec3(Vec3::new(min.x, min.y, max.z), cs),
-            reference.add_vec3(Vec3::new(max.x, min.y, max.z), cs),
-            reference.add_vec3(Vec3::new(max.x, max.y, max.z), cs),
-            reference.add_vec3(Vec3::new(min.x, max.y, max.z), cs),
+            reference.add_vec3(Vec3::new(min.x, min.y, min.z)),
+            reference.add_vec3(Vec3::new(max.x, min.y, min.z)),
+            reference.add_vec3(Vec3::new(max.x, max.y, min.z)),
+            reference.add_vec3(Vec3::new(min.x, max.y, min.z)),
+            reference.add_vec3(Vec3::new(min.x, min.y, max.z)),
+            reference.add_vec3(Vec3::new(max.x, min.y, max.z)),
+            reference.add_vec3(Vec3::new(max.x, max.y, max.z)),
+            reference.add_vec3(Vec3::new(min.x, max.y, max.z)),
         ];
 
         // 12 edges of the box
@@ -1213,8 +1192,7 @@ impl Gizmo {
         current_time: f64,
         thickness: f32,
     ) {
-        let cs = self.chunk_size;
-        let chunk_size_f = cs as f32;
+        let cs = chunk_size() as f32;
         let duration = 2.0; // Visible for 2 seconds (matches tick interval)
 
         for &chunk_coord in updated_chunks.iter() {
@@ -1230,35 +1208,23 @@ impl Gizmo {
             });
             let color = [color[0], color[1], color[2], 1.0];
             // Chunk center at y=0
-            let center = WorldPos::new(
-                chunk_coord,
-                LocalPos::new(chunk_size_f * 0.5, 0.0, chunk_size_f * 0.5),
-            );
+            let center = WorldPos::new(chunk_coord, LocalPos::new(cs * 0.5, 0.0, cs * 0.5));
 
             // Draw box outline
-            self.box_xz(center, chunk_size_f * 0.48, color, thickness, duration);
+            self.box_xz(center, cs * 0.48, color, thickness, duration);
 
             // Draw an X across the chunk for extra visibility
             let corners = [
-                center.add_vec3(
-                    Vec3::new(-chunk_size_f * 0.45, 0.0, -chunk_size_f * 0.45),
-                    cs,
-                ),
-                center.add_vec3(Vec3::new(chunk_size_f * 0.45, 0.0, chunk_size_f * 0.45), cs),
-                center.add_vec3(
-                    Vec3::new(-chunk_size_f * 0.45, 0.0, chunk_size_f * 0.45),
-                    cs,
-                ),
-                center.add_vec3(
-                    Vec3::new(chunk_size_f * 0.45, 0.0, -chunk_size_f * 0.45),
-                    cs,
-                ),
+                center.add_vec3(Vec3::new(cs * 0.45, 0.0, cs * 0.45)),
+                center.add_vec3(Vec3::new(cs * 0.45, 0.0, cs * 0.45)),
+                center.add_vec3(Vec3::new(cs * 0.45, 0.0, cs * 0.45)),
+                center.add_vec3(Vec3::new(cs * 0.45, 0.0, cs * 0.45)),
             ];
             self.line(corners[0], corners[1], color, thickness, duration);
             self.line(corners[2], corners[3], color, thickness, duration);
 
             // Small circle in center
-            self.circle(center, chunk_size_f * 0.15, color, thickness, duration);
+            self.circle(center, cs * 0.15, color, thickness, duration);
         }
     }
 
@@ -1269,8 +1235,7 @@ impl Gizmo {
         current_time: f64,
         thickness: f32,
     ) {
-        let cs = self.chunk_size;
-        let chunk_size_f = cs as f32;
+        let cs = chunk_size() as f32;
         let duration = 1.5;
 
         for (i, &chunk_coord) in updated_chunks.iter().enumerate() {
@@ -1283,22 +1248,20 @@ impl Gizmo {
             });
             let color = [color[0], color[1], color[2], 1.0];
 
-            let center = WorldPos::new(
-                chunk_coord,
-                LocalPos::new(chunk_size_f * 0.5, 1.0, chunk_size_f * 0.5),
-            );
+            let center = WorldPos::new(chunk_coord, LocalPos::new(cs * 0.5, 1.0, cs * 0.5));
 
             // Box outline
-            self.box_xz(center, chunk_size_f * 0.49, color, thickness, duration);
+            self.box_xz(center, cs * 0.49, color, thickness, duration);
 
             // Show update order number
-            let label_pos = center.add_vec3(Vec3::new(0.0, 0.0, 0.0), cs);
+            let label_pos = center.add_vec3(Vec3::new(0.0, 0.0, 0.0));
             self.text(
                 i.to_string(),
                 label_pos,
-                chunk_size_f * 0.15,
+                cs * 0.15,
                 color,
                 None,
+                false,
                 thickness,
                 duration,
             );
@@ -1313,15 +1276,13 @@ impl Gizmo {
     ) -> GizmoBatches {
         let mut batches = GizmoBatches::default();
         let eye = camera.eye_world();
-        let mut text_idx = 0;
+        let text_idx = 0;
         for render in self.pending_renders.iter_mut() {
             if render.filled {
                 // Triangulate filled area
-                batches.thick_vertices.extend(Self::triangulate_filled(
-                    &render.vertices,
-                    eye,
-                    self.chunk_size,
-                ));
+                batches
+                    .thick_vertices
+                    .extend(Self::triangulate_filled(&render.vertices, eye));
             } else if render.thickness > 0.0 {
                 // Generate thick line quads
 
@@ -1329,17 +1290,16 @@ impl Gizmo {
                     &render.vertices,
                     render.thickness,
                     eye,
-                    camera,
-                    self.chunk_size,
                 ));
             } else {
                 let verts = RefCell::new(Vec::<TextVertex3D>::new());
                 if let Some(text) = &mut render.text {
-                    let world_scale = text.scale;
-
-                    let distance = (camera.eye_world().distance_to(text.center, self.chunk_size)
-                        as f32)
-                        .max(0.001);
+                    let distance = (camera.eye_world().distance_to(text.center) as f32).max(0.001);
+                    let world_scale = if text.scale_with_cam {
+                        text.scale * distance * camera.fov.to_radians().tan() * 0.001
+                    } else {
+                        text.scale
+                    };
                     // Bigger factor = higher glyph resolution overall.
                     // More distance = lower raster scale.
                     // Bigger world text = higher raster scale.
@@ -1348,16 +1308,16 @@ impl Gizmo {
                     let step = 2.0;
                     let raster_scale = ((raw / step).round() * step)
                         .clamp(self.text_raster_min, self.text_raster_max);
-                    if text_idx == 0 {
-                        println!(
-                            "Raw: {}, FOV: {}, FOV.tan(): {}, Final Res: {}",
-                            raw,
-                            camera.fov,
-                            camera.fov.to_radians().tan(),
-                            raster_scale
-                        );
-                    }
-                    text_idx += 1;
+                    // if text_idx == 0 {
+                    //     println!(
+                    //         "Raw: {}, FOV: {}, FOV.tan(): {}, Final Res: {}",
+                    //         raw,
+                    //         camera.fov,
+                    //         camera.fov.to_radians().tan(),
+                    //         raster_scale
+                    //     );
+                    // }
+                    // text_idx += 1;
                     for t in text.section.text.iter_mut() {
                         t.scale = PxScale::from(raster_scale);
                     }
@@ -1429,9 +1389,7 @@ impl Gizmo {
                     let forward = if let Some(dir) = facing {
                         dir.normalize()
                     } else {
-                        text.center
-                            .direction_to(camera.eye_world(), self.chunk_size)
-                            .normalize()
+                        text.center.direction_to(camera.eye_world()).normalize()
                     };
 
                     let world_up = if forward.dot(Vec3::Y).abs() > 0.99 {
@@ -1453,10 +1411,10 @@ impl Gizmo {
                         let x1 = (px.max.x - center_x) * world_to_geom;
                         let y1 = (px.max.y - center_y) * world_to_geom;
 
-                        let p0 = text.center.add_vec3(right * x0 + up * y0, self.chunk_size);
-                        let p1 = text.center.add_vec3(right * x1 + up * y0, self.chunk_size);
-                        let p2 = text.center.add_vec3(right * x1 + up * y1, self.chunk_size);
-                        let p3 = text.center.add_vec3(right * x0 + up * y1, self.chunk_size);
+                        let p0 = text.center.add_vec3(right * x0 + up * y0);
+                        let p1 = text.center.add_vec3(right * x1 + up * y0);
+                        let p2 = text.center.add_vec3(right * x1 + up * y1);
+                        let p3 = text.center.add_vec3(right * x0 + up * y1);
 
                         let uv0 = [uv.min.x, uv.min.y];
                         let uv1 = [uv.max.x, uv.min.y];
@@ -1475,19 +1433,14 @@ impl Gizmo {
 
                     text.vertices = verts.into_inner();
 
-                    batches.text_vertices.extend(
-                        text.vertices
-                            .iter()
-                            .map(|v| v.to_render(eye, self.chunk_size)),
-                    );
+                    batches
+                        .text_vertices
+                        .extend(text.vertices.iter().map(|v| v.to_render(eye)));
                 }
 
-                batches.thin_vertices.extend(
-                    render
-                        .vertices
-                        .iter()
-                        .map(|v| v.to_render(eye, self.chunk_size)),
-                );
+                batches
+                    .thin_vertices
+                    .extend(render.vertices.iter().map(|v| v.to_render(eye)));
             }
         }
         batches
@@ -1497,23 +1450,21 @@ impl Gizmo {
         vertices: &[LineVtxWorld],
         thickness: f32,
         eye: WorldPos,
-        _camera: &Camera,
-        chunk_size: ChunkSize,
     ) -> Vec<LineVtxRender> {
         let mut result = Vec::new();
         let half_thick = thickness * 0.5;
 
         // Process pairs of vertices (line segments)
         for pair in vertices.chunks_exact(2) {
-            let v0 = pair[0].to_render(eye, chunk_size);
-            let v1 = pair[1].to_render(eye, chunk_size);
+            let v0 = pair[0].to_render(eye);
+            let v1 = pair[1].to_render(eye);
 
             // Calculate perpendicular offset in screen space (we'll do this in shader for better performance)
             // For now, generate a quad with metadata
             // We'll use a modified shader approach - pass thickness as a vertex attribute
 
             // Generate quad (2 triangles = 6 vertices)
-            let quad = Self::line_to_quad(v0, v1, half_thick, eye, chunk_size);
+            let quad = Self::line_to_quad(v0, v1, half_thick, eye);
             result.extend_from_slice(&quad);
         }
 
@@ -1525,7 +1476,6 @@ impl Gizmo {
         v1: LineVtxRender,
         half_thickness: f32,
         eye: WorldPos,
-        chunk_size: ChunkSize,
     ) -> [LineVtxRender; 6] {
         let dx = v1.pos[0] - v0.pos[0];
         let dy = v1.pos[1] - v0.pos[1];
@@ -1543,7 +1493,7 @@ impl Gizmo {
         let my = (v0.pos[1] + v1.pos[1]) * 0.5;
         let mz = (v0.pos[2] + v1.pos[2]) * 0.5;
 
-        let camera_pos = eye.to_render_pos(eye, chunk_size);
+        let camera_pos = eye.to_render_pos(eye);
 
         // view direction
         let mut vx = camera_pos[0] - mx;
@@ -1592,15 +1542,11 @@ impl Gizmo {
         [p0, p1, p2, p1, p3, p2]
     }
 
-    fn triangulate_filled(
-        vertices: &[LineVtxWorld],
-        camera: WorldPos,
-        chunk_size: ChunkSize,
-    ) -> Vec<LineVtxRender> {
+    fn triangulate_filled(vertices: &[LineVtxWorld], camera: WorldPos) -> Vec<LineVtxRender> {
         if vertices.len() < 3 {
             return Vec::new();
         }
-        let result = triangulate_ear_clipping(vertices, camera, chunk_size);
+        let result = triangulate_ear_clipping(vertices, camera);
 
         result
     }
@@ -1637,8 +1583,8 @@ impl LineVtxWorld {
     }
 
     #[inline]
-    pub fn to_render(&self, camera_pos: WorldPos, chunk_size: ChunkSize) -> LineVtxRender {
-        let rp = self.pos.to_render_pos(camera_pos, chunk_size);
+    pub fn to_render(&self, camera_pos: WorldPos) -> LineVtxRender {
+        let rp = self.pos.to_render_pos(camera_pos);
         LineVtxRender {
             pos: rp.to_array(),
             color: self.color,
@@ -1690,11 +1636,7 @@ fn point_in_triangle(a: P, b: P, c: P, p: P) -> bool {
     (c1 < 0.0) && (c2 < 0.0) && (c3 < 0.0)
 }
 
-pub fn triangulate_ear_clipping(
-    vertices: &[LineVtxWorld],
-    camera: WorldPos,
-    chunk_size: ChunkSize,
-) -> Vec<LineVtxRender> {
+pub fn triangulate_ear_clipping(vertices: &[LineVtxWorld], camera: WorldPos) -> Vec<LineVtxRender> {
     let n = vertices.len();
     if n < 3 {
         return vec![];
@@ -1703,7 +1645,7 @@ pub fn triangulate_ear_clipping(
     let poly: Vec<P> = vertices
         .iter()
         .map(|v| {
-            let r = v.to_render(camera, chunk_size);
+            let r = v.to_render(camera);
             P {
                 x: r.pos[0],
                 z: r.pos[2],
@@ -1767,9 +1709,9 @@ pub fn triangulate_ear_clipping(
             }
 
             // ear found
-            let v_a = vertices[prev_i].to_render(camera, chunk_size);
-            let v_b = vertices[curr_i].to_render(camera, chunk_size);
-            let v_c = vertices[next_i].to_render(camera, chunk_size);
+            let v_a = vertices[prev_i].to_render(camera);
+            let v_b = vertices[curr_i].to_render(camera);
+            let v_c = vertices[next_i].to_render(camera);
 
             result.push(v_a);
             result.push(v_b);
@@ -1788,9 +1730,9 @@ pub fn triangulate_ear_clipping(
     }
 
     if indices.len() == 3 {
-        let a = vertices[indices[0]].to_render(camera, chunk_size);
-        let b = vertices[indices[1]].to_render(camera, chunk_size);
-        let c = vertices[indices[2]].to_render(camera, chunk_size);
+        let a = vertices[indices[0]].to_render(camera);
+        let b = vertices[indices[1]].to_render(camera);
+        let c = vertices[indices[2]].to_render(camera);
 
         result.push(a);
         result.push(b);
@@ -1810,8 +1752,8 @@ impl TextVertex3D {
         Self { pos, uv, color }
     }
     #[inline]
-    pub fn to_render(&self, camera_pos: WorldPos, chunk_size: ChunkSize) -> TextVtxRender {
-        let rp = self.pos.to_render_pos(camera_pos, chunk_size);
+    pub fn to_render(&self, camera_pos: WorldPos) -> TextVtxRender {
+        let rp = self.pos.to_render_pos(camera_pos);
         TextVtxRender {
             pos: rp.to_array(),
             uv: self.uv,

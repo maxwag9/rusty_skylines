@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_player::sanitize_quat;
 use crate::world::cars::car_structs::{CarChunkStorage, CarId, CarStorage, SimTime};
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -119,7 +119,6 @@ impl CarSimSystem {
         terrain: &Terrain,
         current_time: SimTime,
         rng: &mut impl Rng,
-        chunk_size: ChunkSize,
     ) -> Vec<ChunkCoord> {
         let jobs = self.collect_due_chunks(&car_storage.car_chunk_storage, current_time, rng);
 
@@ -130,7 +129,7 @@ impl CarSimSystem {
         // Collect which chunks are being updated
         let updated_chunks: Vec<ChunkCoord> = jobs.iter().map(|j| j.chunk_coord).collect();
 
-        let results = self.dispatch_batched(&jobs, car_storage, terrain, current_time, chunk_size);
+        let results = self.dispatch_batched(&jobs, car_storage, terrain, current_time);
         self.apply_results(results, car_storage, rng, current_time);
 
         updated_chunks
@@ -165,7 +164,7 @@ impl CarSimSystem {
             return;
         }
 
-        let results = self.dispatch_batched(&jobs, car_storage, terrain, current_time, chunk_size);
+        let results = self.dispatch_batched(&jobs, car_storage, terrain, current_time);
         self.apply_results(results, car_storage, rng, current_time);
     }
 
@@ -217,14 +216,13 @@ impl CarSimSystem {
         car_storage: &CarStorage,
         terrain: &Terrain,
         current_time: SimTime,
-        chunk_size: ChunkSize,
     ) -> Vec<CarChunkJobResult> {
         // Parallel processing with rayon
         jobs.par_chunks(self.batch_size)
             .flat_map_iter(|batch| {
                 batch
                     .iter()
-                    .map(|job| self.process_chunk_job(job, car_storage, current_time, chunk_size))
+                    .map(|job| self.process_chunk_job(job, car_storage, current_time))
             })
             .collect()
     }
@@ -234,7 +232,6 @@ impl CarSimSystem {
         job: &CarChunkJob,
         car_storage: &CarStorage,
         current_time: SimTime,
-        chunk_size: ChunkSize,
     ) -> CarChunkJobResult {
         let mut result = CarChunkJobResult::empty(job.chunk_coord, current_time);
 
@@ -260,7 +257,7 @@ impl CarSimSystem {
         const MAX_SPEED: f32 = 50.0;
         const MAX_YAW_RATE: f32 = 3.5;
 
-        let cs = chunk_size as f64;
+        let cs = chunk_size() as f64;
         let total_steps = (TOTAL_DURATION / PHYSICS_STEP) as u32;
         let num_samples = total_steps / SAMPLE_EVERY + 2;
 
@@ -279,7 +276,7 @@ impl CarSimSystem {
                 start_time,
             ) = if let Some(traj) = &car.trajectory {
                 if let Some(last) = traj.points.last() {
-                    let end_pos = traj.origin.add_vec3(last.pos, chunk_size);
+                    let end_pos = traj.origin.add_vec3(last.pos);
                     (
                         end_pos,
                         traj.end_quat,
@@ -336,7 +333,7 @@ impl CarSimSystem {
 
             points.push(CarTrajectoryPoint {
                 time: start_time,
-                pos: ref_origin.delta_to(sim_pos, chunk_size),
+                pos: ref_origin.delta_to(sim_pos),
                 quat: sim_quat,
                 velocity: sim_vel,
             });
@@ -461,12 +458,12 @@ impl CarSimSystem {
                 let local_velocity = Vec3::new(-v_lat, 0.0, u);
                 let world_vel = sim_quat * local_velocity;
                 sim_vel = world_vel;
-                sim_pos = sim_pos.add_vec3(world_vel * h, chunk_size);
+                sim_pos = sim_pos.add_vec3(world_vel * h);
 
                 if step_counter % SAMPLE_EVERY == 0 {
                     points.push(CarTrajectoryPoint {
                         time: sim_time,
-                        pos: ref_origin.delta_to(sim_pos, chunk_size),
+                        pos: ref_origin.delta_to(sim_pos),
                         quat: sim_quat,
                         velocity: world_vel,
                     });
@@ -478,7 +475,7 @@ impl CarSimSystem {
             if points.last().map(|p| p.time).unwrap_or(0.0) < sim_time {
                 points.push(CarTrajectoryPoint {
                     time: sim_time,
-                    pos: ref_origin.delta_to(sim_pos, chunk_size),
+                    pos: ref_origin.delta_to(sim_pos),
                     quat: sim_quat,
                     velocity: sim_vel,
                 });

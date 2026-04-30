@@ -1,9 +1,19 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 pub type LodStep = u16;
 pub type ChunkSize = u16;
+static CHUNK_SIZE: AtomicU16 = AtomicU16::new(128);
+
+pub fn chunk_size() -> ChunkSize {
+    CHUNK_SIZE.load(Ordering::Relaxed)
+}
+
+pub fn set_chunk_size(cs: ChunkSize) {
+    CHUNK_SIZE.store(cs, Ordering::Relaxed);
+}
 pub const CHUNK_MIN_Y: f32 = -512.0;
 pub const CHUNK_MAX_Y: f32 = 4096.0;
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq, Default)]
@@ -84,8 +94,8 @@ impl WorldPos {
     }
 
     #[inline]
-    pub fn from_world_f32(fpos: Vec3, chunk_size: ChunkSize) -> Self {
-        let chunk_size = chunk_size as f32;
+    pub fn from_world_f32(fpos: Vec3) -> Self {
+        let chunk_size = chunk_size() as f32;
         let cx = (fpos.x / chunk_size).floor() as i32;
         let cz = (fpos.z / chunk_size).floor() as i32;
 
@@ -100,8 +110,8 @@ impl WorldPos {
     }
 
     #[inline]
-    pub fn to_render_pos(&self, cam: WorldPos, chunk_size: ChunkSize) -> Vec3 {
-        let cs = chunk_size as f64;
+    pub fn to_render_pos(&self, cam: WorldPos) -> Vec3 {
+        let cs = chunk_size() as f64;
 
         // 1. Calculate delta in INTEGERS first (lossless)
         let dcx = self.chunk.x as i64 - cam.chunk.x as i64;
@@ -120,47 +130,48 @@ impl WorldPos {
         // Since this result is relative to the camera, it is small and fits in f32.
         Vec3::new(dx as f32, dy as f32, dz as f32)
     }
-    pub fn normalize(mut self, chunk_size: ChunkSize) -> Self {
+    pub fn normalize(mut self) -> Self {
+        let cs = chunk_size() as f32;
         // push local.x into [0, chunk_size)
-        let dx = (self.local.x / chunk_size as f32).floor() as i32;
+        let dx = (self.local.x / cs).floor() as i32;
         self.chunk.x += dx;
-        self.local.x -= dx as f32 * chunk_size as f32;
+        self.local.x -= dx as f32 * cs;
 
-        let dz = (self.local.z / chunk_size as f32).floor() as i32;
+        let dz = (self.local.z / cs).floor() as i32;
         self.chunk.z += dz;
-        self.local.z -= dz as f32 * chunk_size as f32;
+        self.local.z -= dz as f32 * cs;
 
         // handle negative edge cases (if local becomes -eps due to float error)
         if self.local.x < 0.0 {
             self.chunk.x -= 1;
-            self.local.x += chunk_size as f32;
+            self.local.x += cs;
         }
         if self.local.z < 0.0 {
             self.chunk.z -= 1;
-            self.local.z += chunk_size as f32;
+            self.local.z += cs;
         }
 
         self
     }
 
-    pub fn add_render_offset(self, v: Vec3, chunk_size: ChunkSize) -> Self {
-        self.add_vec3(v, chunk_size)
+    pub fn add_render_offset(self, v: Vec3) -> Self {
+        self.add_vec3(v)
     }
 
     #[inline]
-    fn add_assign_vec3(&mut self, rhs: Vec3, chunk_size: ChunkSize) {
-        *self = self.add_vec3(rhs, chunk_size);
+    fn add_assign_vec3(&mut self, rhs: Vec3) {
+        *self = self.add_vec3(rhs);
     }
 
     #[inline]
-    pub(crate) fn sub_vec3(self, rhs: Vec3, chunk_size: ChunkSize) -> WorldPos {
-        self.add_vec3(-rhs, chunk_size)
+    pub fn sub_vec3(self, rhs: Vec3) -> WorldPos {
+        self.add_vec3(-rhs)
     }
 
     /// Vector (delta meters) from `self` to `rhs`  (rhs - self)
     #[inline]
-    pub(crate) fn delta_to(self, rhs: Self, chunk_size: ChunkSize) -> Vec3 {
-        let cs = chunk_size as f32;
+    pub fn delta_to(self, rhs: Self) -> Vec3 {
+        let cs = chunk_size() as f32;
 
         let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
         let dcz = rhs.chunk.z as i64 - self.chunk.z as i64;
@@ -173,16 +184,16 @@ impl WorldPos {
     }
     /// This is the SAME as delta_to(), wraps it, made for clarity!
     #[inline]
-    pub(crate) fn direction_to(self, rhs: Self, chunk_size: ChunkSize) -> Vec3 {
-        self.delta_to(rhs, chunk_size)
+    pub fn direction_to(self, rhs: Self) -> Vec3 {
+        self.delta_to(rhs)
     }
     #[inline]
-    fn sub_assign_vec3(&mut self, rhs: Vec3, chunk_size: ChunkSize) {
-        *self = self.add_vec3(rhs, chunk_size);
+    fn sub_assign_vec3(&mut self, rhs: Vec3) {
+        *self = self.add_vec3(rhs);
     }
     /// WorldPos + Vec3 = moved WorldPos (meters)
     #[inline]
-    pub fn add_vec3(self, rhs: Vec3, chunk_size: ChunkSize) -> WorldPos {
+    pub fn add_vec3(self, rhs: Vec3) -> WorldPos {
         WorldPos {
             chunk: self.chunk,
             local: LocalPos {
@@ -191,14 +202,14 @@ impl WorldPos {
                 z: self.local.z + rhs.z,
             },
         }
-        .normalize(chunk_size)
+        .normalize()
     }
 
     /// WorldPos + WorldPos = WorldPos
     /// Treats `rhs` as a displacement from world origin and adds it to `self`.
     /// Uses integer arithmetic for chunk components to maintain precision.
     #[inline]
-    pub fn add_world_pos(self, rhs: WorldPos, chunk_size: ChunkSize) -> WorldPos {
+    pub fn add_world_pos(self, rhs: WorldPos) -> WorldPos {
         WorldPos {
             chunk: ChunkCoord {
                 x: self.chunk.x + rhs.chunk.x,
@@ -210,13 +221,13 @@ impl WorldPos {
                 z: self.local.z + rhs.local.z,
             },
         }
-        .normalize(chunk_size)
+        .normalize()
     }
 
     /// WorldPos - WorldPos = WorldPos (as displacement)
     /// Returns the displacement from `rhs` to `self` as a WorldPos.
     #[inline]
-    pub fn sub_world_pos(self, rhs: WorldPos, chunk_size: ChunkSize) -> WorldPos {
+    pub fn sub_world_pos(self, rhs: WorldPos) -> WorldPos {
         WorldPos {
             chunk: ChunkCoord {
                 x: self.chunk.x - rhs.chunk.x,
@@ -228,13 +239,13 @@ impl WorldPos {
                 z: self.local.z - rhs.local.z,
             },
         }
-        .normalize(chunk_size)
+        .normalize()
     }
 
     /// Scale the position (as displacement from origin) by a scalar.
     #[inline]
-    pub fn scale(self, factor: f32, chunk_size: ChunkSize) -> WorldPos {
-        let cs = chunk_size as f64;
+    pub fn scale(self, factor: f32) -> WorldPos {
+        let cs = chunk_size() as f64;
 
         // Convert to world coordinates in f64
         let world_x = self.chunk.x as f64 * cs + self.local.x as f64;
@@ -261,8 +272,8 @@ impl WorldPos {
 
     /// Lerp between two WorldPos with maximum precision.
     #[inline]
-    pub fn lerp(self, other: WorldPos, t: f64, chunk_size: ChunkSize) -> WorldPos {
-        let cs = chunk_size as f64;
+    pub fn lerp(self, other: WorldPos, t: f64) -> WorldPos {
+        let cs = chunk_size() as f64;
         let t64 = t;
 
         // Convert both to f64 world coords
@@ -295,8 +306,8 @@ impl WorldPos {
 
     /// Distance between two WorldPos in meters (computed in WorldPos space).
     #[inline]
-    pub fn distance_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
-        let cs = chunk_size as f64;
+    pub fn distance_to(self, rhs: WorldPos) -> f64 {
+        let cs = chunk_size() as f64;
 
         // lossless chunk delta
         let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
@@ -312,14 +323,14 @@ impl WorldPos {
 
     /// Same as distance_to
     #[inline]
-    pub fn length_to(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
-        self.distance_to(rhs, chunk_size)
+    pub fn length_to(self, rhs: WorldPos) -> f64 {
+        self.distance_to(rhs)
     }
 
     /// Often useful to avoid sqrt.
     #[inline]
-    pub fn distance_squared(self, rhs: WorldPos, chunk_size: ChunkSize) -> f64 {
-        let cs = chunk_size as f64;
+    pub fn distance_squared(self, rhs: WorldPos) -> f64 {
+        let cs = chunk_size() as f64;
 
         let dcx = rhs.chunk.x as i64 - self.chunk.x as i64;
         let dcz = rhs.chunk.z as i64 - self.chunk.z as i64;
@@ -333,29 +344,23 @@ impl WorldPos {
 
     /// Normalize as direction from origin (for displacement vectors).
     #[inline]
-    pub fn normalize_direction(self, chunk_size: ChunkSize) -> Vec3 {
+    pub fn normalize_direction(self) -> Vec3 {
         let origin = WorldPos::zero();
-        self.to_render_pos(origin, chunk_size).normalize_or_zero()
+        self.to_render_pos(origin).normalize_or_zero()
     }
 
     /// Dot product treating both as displacement vectors.
     #[inline]
-    pub fn dot(self, rhs: WorldPos, chunk_size: ChunkSize) -> f32 {
+    pub fn dot(self, rhs: WorldPos) -> f32 {
         let origin = WorldPos::zero();
-        let a = self.to_render_pos(origin, chunk_size);
-        let b = rhs.to_render_pos(origin, chunk_size);
+        let a = self.to_render_pos(origin);
+        let b = rhs.to_render_pos(origin);
         a.dot(b)
     }
 
     #[inline]
-    pub fn quadratic_bezier_xz(
-        p0: WorldPos,
-        p1: WorldPos,
-        p2: WorldPos,
-        t: f32,
-        chunk_size: ChunkSize,
-    ) -> WorldPos {
-        let cs = chunk_size as f64;
+    pub fn quadratic_bezier_xz(p0: WorldPos, p1: WorldPos, p2: WorldPos, t: f32) -> WorldPos {
+        let cs = chunk_size() as f64;
         let t64 = t as f64;
         let omt = 1.0 - t64;
 
@@ -395,9 +400,8 @@ impl WorldPos {
         p2: WorldPos,
         p3: WorldPos,
         t: f32,
-        chunk_size: ChunkSize,
     ) -> WorldPos {
-        let cs = chunk_size as f64;
+        let cs = chunk_size() as f64;
         let t64 = t as f64;
         let omt = 1.0 - t64;
 
@@ -437,16 +441,18 @@ impl WorldPos {
     /// Signed XZ offset from `self` to `other`, in world units.
     /// (chunk delta × chunk_size) + local delta
     #[inline]
-    pub fn dx(self, other: WorldPos, chunk_size: ChunkSize) -> f32 {
-        (other.chunk.x - self.chunk.x) as f32 * chunk_size as f32 + (other.local.x - self.local.x)
+    pub fn dx(self, other: WorldPos) -> f64 {
+        let cs = chunk_size() as f64;
+        (other.chunk.x - self.chunk.x) as f64 * cs + (other.local.x as f64 - self.local.x as f64)
     }
     /// Signed XZ offset from `self` to `other`, in world units.
     /// (chunk delta × chunk_size) + local delta
     #[inline]
-    pub fn dz(self, other: WorldPos, chunk_size: ChunkSize) -> f32 {
-        (other.chunk.z - self.chunk.z) as f32 * chunk_size as f32 + (other.local.z - self.local.z)
+    pub fn dz(self, other: WorldPos) -> f64 {
+        let cs = chunk_size() as f64;
+        (other.chunk.z - self.chunk.z) as f64 * cs + (other.local.z as f64 - self.local.z as f64)
     }
-    pub fn area(points: &[WorldPos], chunk_size: ChunkSize) -> f64 {
+    pub fn area(points: &[WorldPos]) -> f64 {
         let n = points.len();
         if n < 3 {
             return 0.0;
@@ -459,11 +465,11 @@ impl WorldPos {
             let a = points[i];
             let b = points[i + 1];
 
-            let ax = origin.dx(a, chunk_size) as f64;
-            let az = origin.dz(a, chunk_size) as f64;
+            let ax = origin.dx(a) as f64;
+            let az = origin.dz(a) as f64;
 
-            let bx = origin.dx(b, chunk_size) as f64;
-            let bz = origin.dz(b, chunk_size) as f64;
+            let bx = origin.dx(b) as f64;
+            let bz = origin.dz(b) as f64;
 
             sum += ax * bz - az * bx;
         }
@@ -471,7 +477,7 @@ impl WorldPos {
         sum.abs() * 0.5
     }
     /// Returns the area-weighted centroid of the polygon (true geometric center, may lie outside for concave shapes).
-    pub fn centroid(points: &[WorldPos], chunk_size: ChunkSize) -> WorldPos {
+    pub fn centroid(points: &[WorldPos]) -> WorldPos {
         let n = points.len();
         if n == 0 {
             return WorldPos::zero();
@@ -480,7 +486,7 @@ impl WorldPos {
             return points[0];
         }
         if n == 2 {
-            return points[0].lerp(points[1], 0.5, chunk_size);
+            return points[0].lerp(points[1], 0.5);
         }
 
         let origin = points[0];
@@ -494,11 +500,11 @@ impl WorldPos {
             let b = points[i + 1];
 
             // Work in origin-relative space (stable, no precision loss)
-            let ax = origin.dx(a, chunk_size) as f64;
-            let az = origin.dz(a, chunk_size) as f64;
+            let ax = origin.dx(a) as f64;
+            let az = origin.dz(a) as f64;
 
-            let bx = origin.dx(b, chunk_size) as f64;
-            let bz = origin.dz(b, chunk_size) as f64;
+            let bx = origin.dx(b) as f64;
+            let bz = origin.dz(b) as f64;
 
             // Triangle area (signed *2)
             let cross = ax * bz - az * bx;
@@ -516,10 +522,10 @@ impl WorldPos {
             // fallback: average (degenerate polygon) Because you are an insane, degenerate piece of filth, and you deserve to die!!
             let mut sum = Vec3::ZERO;
             for p in points {
-                sum += origin.direction_to(*p, chunk_size);
+                sum += origin.direction_to(*p);
             }
             let avg = sum / points.len() as f32;
-            return origin.add_vec3(avg, chunk_size);
+            return origin.add_vec3(avg);
         }
 
         let inv = 1.0 / area_acc;
@@ -527,12 +533,12 @@ impl WorldPos {
         let cx = cx_acc * inv;
         let cz = cz_acc * inv;
 
-        origin.add_vec3(Vec3::new(cx as f32, 0.0, cz as f32), chunk_size)
+        origin.add_vec3(Vec3::new(cx as f32, 0.0, cz as f32))
     }
 
     /// Returns the average of all input points (fast barycenter, biased by vertex distribution).
     /// Centroid of a WorldPos slice, fully WorldPos-native (dx/dz offsets from points[0]).
-    pub fn barycenter(points: &[WorldPos], chunk_size: ChunkSize) -> WorldPos {
+    pub fn barycenter(points: &[WorldPos]) -> WorldPos {
         if points.is_empty() {
             return WorldPos::zero();
         }
@@ -540,11 +546,75 @@ impl WorldPos {
         let n = points.len() as f32;
         let mut sum = Vec3::ZERO;
         for p in points {
-            sum.x += origin.dx(*p, chunk_size);
+            sum.x += origin.dx(*p) as f32;
             sum.y += p.local.y - origin.local.y;
-            sum.z += origin.dz(*p, chunk_size);
+            sum.z += origin.dz(*p) as f32;
         }
-        origin.add_vec3(sum / n, chunk_size)
+        origin.add_vec3(sum / n)
+    }
+
+    /// Andrew's monotone-chain convex hull over XZ, working in
+    /// full-precision f64 via WorldPos::dx / dz.
+    /// Computes the outermost points I guess
+    pub fn convex_hull(points: &[WorldPos]) -> Vec<WorldPos> {
+        if points.len() < 3 {
+            return points.to_vec();
+        }
+
+        // Tag each point with its index so we can recover WorldPos after sorting.
+        let origin = points[0];
+        let mut tagged: Vec<(f64, f64, usize)> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (origin.dx(*p), origin.dz(*p), i))
+            .collect();
+
+        // Lexicographic sort: primary X, secondary Z.
+        tagged.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap()
+                .then(a.1.partial_cmp(&b.1).unwrap())
+        });
+
+        // 2-D cross product of vectors O→A and O→B.
+        let cross = |o: &(f64, f64, usize), a: &(f64, f64, usize), b: &(f64, f64, usize)| -> f64 {
+            (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        };
+
+        let mut lower: Vec<usize> = Vec::new();
+        for i in 0..tagged.len() {
+            while lower.len() >= 2
+                && cross(
+                    &tagged[lower[lower.len() - 2]],
+                    &tagged[lower[lower.len() - 1]],
+                    &tagged[i],
+                ) <= 0.0
+            {
+                lower.pop();
+            }
+            lower.push(i);
+        }
+
+        let mut upper: Vec<usize> = Vec::new();
+        for i in (0..tagged.len()).rev() {
+            while upper.len() >= 2
+                && cross(
+                    &tagged[upper[upper.len() - 2]],
+                    &tagged[upper[upper.len() - 1]],
+                    &tagged[i],
+                ) <= 0.0
+            {
+                upper.pop();
+            }
+            upper.push(i);
+        }
+
+        // Last point of each half duplicates the first point of the other.
+        lower.pop();
+        upper.pop();
+        lower.extend(upper);
+
+        lower.iter().map(|&i| points[tagged[i].2]).collect()
     }
 }
 impl Default for WorldPos {

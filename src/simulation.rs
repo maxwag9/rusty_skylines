@@ -101,11 +101,9 @@ impl Simulation {
             time.target_sim_dt,
         );
 
-        buildings.zoning.update_districts(
-            time,
-            terrain.chunk_size,
-            &renderer.road_renderer.mesh_manager.road_edge_storage,
-        );
+        buildings
+            .zoning
+            .update_districts(time, &renderer.road_renderer.mesh_manager.road_edge_storage);
     }
 }
 
@@ -124,7 +122,6 @@ pub fn update_picked_pos(
         view,
         proj,
         camera.eye_world(),
-        camera.chunk_size,
     );
     terrain_subsystem.pick_terrain_point(ray);
 }

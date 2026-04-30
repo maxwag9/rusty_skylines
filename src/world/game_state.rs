@@ -1,5 +1,5 @@
 use crate::helpers::paths::saves_dir;
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavePropChunk};
 use crate::world::buildings::buildings::{BuildingStorage, Buildings};
 use crate::world::buildings::zoning::ZoningStorage;
@@ -272,7 +272,7 @@ impl GameState {
 impl Default for GameState {
     fn default() -> Self {
         let mut save = Self::new();
-        save.current_save = SaveState::new(128);
+        save.current_save = SaveState::new();
         save
     }
 }
@@ -460,9 +460,9 @@ pub struct SaveState {
     pub buildings: BuildingStorage,
 }
 impl SaveState {
-    pub fn new(chunk_size: ChunkSize) -> Self {
+    pub fn new() -> Self {
         Self {
-            chunk_size,
+            chunk_size: chunk_size(),
             ..Default::default()
         }
     }
@@ -479,7 +479,7 @@ impl SaveState {
             self.chunk_size = default_chunk_size();
         }
 
-        camera.chunk_size = self.chunk_size;
+        set_chunk_size(self.chunk_size);
         camera.target = self.player_pos;
         camera.yaw = self.player_yaw;
         camera.pitch = self.player_pitch;
@@ -508,10 +508,10 @@ impl SaveState {
         props: &Props,
         buildings: &Buildings,
     ) {
-        self.chunk_size = if camera.chunk_size == 0 {
+        self.chunk_size = if chunk_size() == 0 {
             default_chunk_size()
         } else {
-            camera.chunk_size
+            chunk_size()
         };
         self.version = SaveVersion::current();
         self.timestamp_unix = SystemTime::now()

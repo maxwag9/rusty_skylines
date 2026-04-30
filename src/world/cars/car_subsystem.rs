@@ -132,7 +132,7 @@ impl CarRenderSubsystem {
 
         for &car_id in &close_ids {
             if let Some(car) = car_storage.get(car_id) {
-                let render_pos = car.pos.to_render_pos(camera.eye_world(), camera.chunk_size);
+                let render_pos = car.pos.to_render_pos(camera.eye_world());
 
                 let quat = car.quat.normalize();
 
@@ -248,8 +248,7 @@ impl Cars {
         target_pos: WorldPos,
     ) {
         variables.set_i64("car_count", self.car_storage.car_count() as i32);
-        self.car_storage
-            .update_target_and_chunk_size(target_pos.chunk, terrain.chunk_size);
+        self.car_storage.update_target(target_pos.chunk);
         self.spawn_cars(road_manager, terrain, target_pos, time);
 
         match terrain.cursor.mode {
@@ -267,8 +266,7 @@ impl Cars {
         }
         if self.timing.carchunk_update_last.elapsed() >= Duration::from_secs(1) {
             self.timing.carchunk_update_last = Instant::now();
-            self.car_storage
-                .update_carchunk_distances(target_pos, terrain.chunk_size);
+            self.car_storage.update_carchunk_distances(target_pos);
 
             self.car_simulation
                 .cleanup_stale_jitter(&self.car_storage.car_chunk_storage);
@@ -281,7 +279,6 @@ impl Cars {
             terrain,
             current_sim_time,
             &mut rng,
-            terrain.chunk_size,
         );
 
         // live visualization
@@ -352,11 +349,8 @@ impl Cars {
                 let lane = road_manager.roads.lane(&lane_id);
                 let polyline = lane.polyline();
                 let first_point = polyline.first().unwrap();
-                let car_chunk_distance = ChunkDistance::from_chunk_positions(
-                    target_pos.chunk,
-                    first_point.chunk,
-                    terrain_renderer.chunk_size,
-                );
+                let car_chunk_distance =
+                    ChunkDistance::from_chunk_positions(target_pos.chunk, first_point.chunk);
                 self.car_storage.spawn(
                     first_point.chunk,
                     car_chunk_distance,

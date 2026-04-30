@@ -30,7 +30,7 @@ pub fn collect_car_audio(
             break;
         }
 
-        let distance = car.pos.distance_to(camera.eye_world(), terrain.chunk_size);
+        let distance = car.pos.distance_to(camera.eye_world());
 
         if distance > MAX_DISTANCE {
             continue;

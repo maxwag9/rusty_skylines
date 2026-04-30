@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos};
+use crate::helpers::positions::{ChunkCoord, ChunkSize, LocalPos, WorldPos, chunk_size};
 use crate::world::terrain::chunk_builder::ChunkHeightGrid;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 #[repr(C)]
@@ -36,7 +36,7 @@ impl WorldRay {
     /// `render_ray` has origin relative to camera (typically Vec3::ZERO for mouse picking).
     #[inline]
     pub fn from_render_ray(render_ray: &Ray, camera: &WorldPos, chunk_size: ChunkSize) -> Self {
-        let origin = camera.add_render_offset(render_ray.origin, chunk_size);
+        let origin = camera.add_render_offset(render_ray.origin);
         Self {
             origin,
             dir: render_ray.dir,
@@ -132,7 +132,6 @@ impl WorldRay {
         view: Mat4,
         proj: Mat4,
         camera: WorldPos,
-        chunk_size: ChunkSize,
     ) -> Self {
         let ndc_x = (mouse_px.x / screen_width) * 2.0 - 1.0;
         let ndc_y = 1.0 - (mouse_px.y / screen_height) * 2.0;
@@ -148,7 +147,7 @@ impl WorldRay {
         let dir = (p_far - p_near).normalize();
 
         // p_near is the offset from camera in render space
-        let origin = camera.add_render_offset(p_near, chunk_size);
+        let origin = camera.add_render_offset(p_near);
 
         Self { origin, dir }
     }
@@ -157,41 +156,41 @@ impl WorldRay {
     /// Boundary is at `boundary_chunk_x * chunk_size` in world X.
     /// Uses integer chunk arithmetic for precision.
     #[inline]
-    pub fn t_to_chunk_x_boundary(&self, boundary_chunk_x: i32, chunk_size: ChunkSize) -> f32 {
+    pub fn t_to_chunk_x_boundary(&self, boundary_chunk_x: i32) -> f32 {
         if self.dir.x.abs() < 1e-12 {
             return f32::INFINITY;
         }
         // Distance = (boundary_chunk - origin.chunk) * cs - origin.local.x
         // chunk_diff is exact integer, multiplication by cs is precise for reasonable cs
         let chunk_diff = boundary_chunk_x - self.origin.chunk.x;
-        let cs = chunk_size as f32;
+        let cs = chunk_size() as f32;
         let distance = chunk_diff as f32 * cs - self.origin.local.x;
         distance / self.dir.x
     }
 
     /// Compute t to reach a chunk Z boundary.
     #[inline]
-    pub fn t_to_chunk_z_boundary(&self, boundary_chunk_z: i32, chunk_size: ChunkSize) -> f32 {
+    pub fn t_to_chunk_z_boundary(&self, boundary_chunk_z: i32) -> f32 {
         if self.dir.z.abs() < 1e-12 {
             return f32::INFINITY;
         }
         let chunk_diff = boundary_chunk_z - self.origin.chunk.z;
-        let cs = chunk_size as f32;
+        let cs = chunk_size() as f32;
         let distance = chunk_diff as f32 * cs - self.origin.local.z;
         distance / self.dir.z
     }
 
     /// Get point along ray at parameter t as WorldPos.
     #[inline]
-    pub fn at(&self, t: f32, chunk_size: ChunkSize) -> WorldPos {
-        self.origin.add_render_offset(self.dir * t, chunk_size)
+    pub fn at(&self, t: f32) -> WorldPos {
+        self.origin.add_render_offset(self.dir * t)
     }
 
     /// Compute a WorldPos relative to ray origin as Vec3.
     /// The result is small and precise when `point` is near `origin`.
     #[inline]
-    pub fn relative_position(&self, point: &WorldPos, chunk_size: ChunkSize) -> Vec3 {
-        point.to_render_pos(self.origin, chunk_size)
+    pub fn relative_position(&self, point: &WorldPos) -> Vec3 {
+        point.to_render_pos(self.origin)
     }
 
     /// Compute a grid vertex position relative to ray origin.
@@ -204,9 +203,8 @@ impl WorldRay {
         local_x: f32,
         local_y: f32,
         local_z: f32,
-        chunk_size: ChunkSize,
     ) -> Vec3 {
-        let cs = chunk_size as f32;
+        let cs = chunk_size() as f32;
         // Compute using chunk differences (small integers) for precision
         let chunk_diff_x = grid_chunk.x - self.origin.chunk.x;
         let chunk_diff_z = grid_chunk.z - self.origin.chunk.z;
@@ -228,8 +226,6 @@ pub fn raycast_chunk_heightgrid(
     t_min: f32,
     t_max: f32,
 ) -> Option<(f32, WorldPos)> {
-    let chunk_size = grid.chunk_size;
-    let cs = chunk_size as f32;
     let cell = grid.cell_f32();
     let eps = 1e-6 * cell;
 
@@ -239,6 +235,7 @@ pub fn raycast_chunk_heightgrid(
     // Compute ray origin relative to grid chunk using chunk differences
     let chunk_diff_x = ray.origin.chunk.x - grid.chunk_coord.x;
     let chunk_diff_z = ray.origin.chunk.z - grid.chunk_coord.z;
+    let cs = chunk_size() as f32;
     let ox = chunk_diff_x as f32 * cs + ray.origin.local.x;
     let oz = chunk_diff_z as f32 * cs + ray.origin.local.z;
 
@@ -319,7 +316,7 @@ pub fn raycast_chunk_heightgrid(
 
         if let Some(hit_t) = ray_hit_cell(ray, grid, ix as usize, iz as usize, prev_t, seg_end) {
             // Compute hit position as WorldPos using ray.at()
-            let hit_pos = ray.at(hit_t, chunk_size);
+            let hit_pos = ray.at(hit_t);
 
             // Refine Y using bilinear height sampling
             let hit_y = height_bilinear_world(grid, hit_pos);
@@ -360,7 +357,6 @@ fn ray_hit_cell(
     t_max: f32,
 ) -> Option<f32> {
     let cell = grid.cell_f32();
-    let chunk_size = grid.chunk_size;
 
     // Cell corner local positions within the grid's chunk
     let x0 = ix as f32 * cell;
@@ -377,10 +373,10 @@ fn ray_hit_cell(
 
     // Compute vertices RELATIVE to ray origin using WorldPos arithmetic
     // This keeps all values small and precise regardless of world position
-    let v00 = ray.grid_vertex_relative(grid.chunk_coord, x0, h00, z0, chunk_size);
-    let v10 = ray.grid_vertex_relative(grid.chunk_coord, x1, h10, z0, chunk_size);
-    let v01 = ray.grid_vertex_relative(grid.chunk_coord, x0, h01, z1, chunk_size);
-    let v11 = ray.grid_vertex_relative(grid.chunk_coord, x1, h11, z1, chunk_size);
+    let v00 = ray.grid_vertex_relative(grid.chunk_coord, x0, h00, z0);
+    let v10 = ray.grid_vertex_relative(grid.chunk_coord, x1, h10, z0);
+    let v01 = ray.grid_vertex_relative(grid.chunk_coord, x0, h01, z1);
+    let v11 = ray.grid_vertex_relative(grid.chunk_coord, x1, h11, z1);
 
     // Ray origin is at Vec3::ZERO in this relative coordinate system
     let mut best: Option<f32> = None;

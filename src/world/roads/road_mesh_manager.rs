@@ -4,7 +4,7 @@
 //! Produces deterministic, chunked CPU mesh buffers from immutable road topology.
 //! Refactored to be Lane-First: Geometry is derived directly from Lane centerlines.
 
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{
     IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh, road_vertex,
@@ -480,8 +480,6 @@ fn draw_node_geometry(
     vertices: &mut Vec<RoadVertex>,
     indices: &mut Vec<u32>,
 ) {
-    let chunk_size = terrain_renderer.chunk_size;
-
     let mut max_radius = 2.0_f32;
     for (idx, width) in connected_lanes_info {
         max_radius = max_radius.max(idx.abs() as f32 * width + road_type.sidewalk_width);
@@ -510,10 +508,10 @@ fn draw_node_geometry(
             let angle = start_angle + i as f32 * step;
             let (sin_a, cos_a) = angle.sin_cos();
             let offset = Vec3::new(cos_a * radius, 0.0, sin_a * radius);
-            points.push(node_pos.add_vec3(offset, chunk_size));
+            points.push(node_pos.add_vec3(offset));
         }
 
-        LaneGeometry::from_polyline(points, chunk_size)
+        LaneGeometry::from_polyline(points)
     };
 
     let up_normal = [0.0_f32, 1.0, 0.0];
@@ -691,15 +689,15 @@ fn make_ribbon_edges(
     end_clip: Option<&IntersectionPolygon>,
 ) -> Edges {
     let mut edges: Edges = Edges::with_capacity(lane_geom.points.len());
-    let chunk_size = gizmo.chunk_size;
+    let cs = chunk_size() as f64;
     let half_width = width * 0.5;
     for i in 0..lane_geom.points.len() {
         let p = lane_geom.points[i];
-        let (tangent, lateral) = tangent_and_lateral_right(&lane_geom.points, i, chunk_size);
+        let (tangent, lateral) = tangent_and_lateral_right(&lane_geom.points, i);
         //gizmo.direction(p, lateral, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
-        let center_pos = p.add_vec3(lateral * offset_from_center, chunk_size);
-        let right_pos = center_pos.add_vec3(lateral * half_width, chunk_size);
-        let left_pos = center_pos.sub_vec3(lateral * half_width, chunk_size);
+        let center_pos = p.add_vec3(lateral * offset_from_center);
+        let right_pos = center_pos.add_vec3(lateral * half_width);
+        let left_pos = center_pos.sub_vec3(lateral * half_width);
 
         edges.push(left_pos, right_pos, tangent, lateral);
     }
@@ -864,7 +862,6 @@ pub fn build_vertical_face(
         return;
     }
     let high_res_height = chunk_filter.is_some();
-    let chunk_size = terrain_renderer.chunk_size;
     let base_vertex = vertices.len() as u32;
     let mut included_indices = Vec::new();
     let last_idx = ref_geom.points.len() - 1;
@@ -911,12 +908,12 @@ pub fn build_vertical_face(
         };
 
         let (face_pos, normal) = if let Some(ovr) = override_pos {
-            let (_, lateral) = tangent_and_lateral_right(&ref_geom.points, i, chunk_size);
+            let (_, lateral) = tangent_and_lateral_right(&ref_geom.points, i);
             (ovr, lateral * normal_sign)
         } else {
-            let (_, lateral) = tangent_and_lateral_right(&ref_geom.points, i, chunk_size);
+            let (_, lateral) = tangent_and_lateral_right(&ref_geom.points, i);
             //gizmo.direction(p, lateral, [1.0, 0.0, 1.0], 0.0);
-            let raw = p.add_vec3(lateral * offset_lateral, chunk_size);
+            let raw = p.add_vec3(lateral * offset_lateral);
             (raw, lateral * normal_sign)
         };
 
@@ -1037,15 +1034,10 @@ impl RoadMeshManager {
         self.chunk_cache.clear();
     }
 
-    pub fn chunk_needs_update(
-        &self,
-        chunk_id: ChunkId,
-        storage: &RoadStorage,
-        chunk_size: ChunkSize,
-    ) -> bool {
+    pub fn chunk_needs_update(&self, chunk_id: ChunkId, storage: &RoadStorage) -> bool {
         match self.chunk_cache.get(&chunk_id) {
             None => true,
-            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage, chunk_size),
+            Some(mesh) => mesh.topo_version != compute_topo_version(chunk_id, storage),
         }
     }
 
@@ -1114,8 +1106,7 @@ impl RoadMeshManager {
                     continue;
                 }
 
-                let cap_direction =
-                    compute_cap_direction(gizmo, *node_id, node, storage, terrain.chunk_size);
+                let cap_direction = compute_cap_direction(gizmo, *node_id, node, storage);
 
                 draw_node_geometry(
                     terrain,
@@ -1134,8 +1125,7 @@ impl RoadMeshManager {
         // === PASS 2: Build segment meshes using intersection boundary data ===
         let segment_ids: Vec<SegmentId> = match chunk_id {
             Some(cid) => {
-                let mut ids =
-                    storage.segment_ids_touching_chunk(chunk_id_to_coord(cid), terrain.chunk_size);
+                let mut ids = storage.segment_ids_touching_chunk(chunk_id_to_coord(cid));
                 ids.sort_unstable();
                 ids
             }
@@ -1189,7 +1179,7 @@ impl RoadMeshManager {
             vertices,
             indices,
             topo_version: chunk_id
-                .map(|cid| compute_topo_version(cid, storage, terrain.chunk_size))
+                .map(|cid| compute_topo_version(cid, storage))
                 .unwrap_or(0),
         }
     }
@@ -1237,7 +1227,6 @@ fn compute_cap_direction(
     node_id: NodeId,
     node: &Node,
     storage: &RoadStorage,
-    chunk_size: ChunkSize,
 ) -> Option<Vec3> {
     let mut sum_dir = Vec3::ZERO;
     let mut lane_count = 0u32;
@@ -1251,9 +1240,9 @@ fn compute_cap_direction(
         let pts = &lane.geometry().points;
 
         let dir = if lane.from_node() == node_id {
-            pts[1].direction_to(pts[0], chunk_size)
+            pts[1].direction_to(pts[0])
         } else {
-            pts[pts.len() - 2].direction_to(pts[pts.len() - 1], chunk_size)
+            pts[pts.len() - 2].direction_to(pts[pts.len() - 1])
         };
 
         let normalized = dir.normalize_or_zero();
@@ -1283,13 +1272,9 @@ fn compute_cap_direction(
 const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
 const FNV_PRIME: u64 = 1099511628211;
 
-pub(crate) fn compute_topo_version(
-    chunk_id: ChunkId,
-    storage: &RoadStorage,
-    chunk_size: ChunkSize,
-) -> u64 {
+pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
     let mut hash = FNV_OFFSET_BASIS;
-    let mut segs = storage.segment_ids_touching_chunk(chunk_id_to_coord(chunk_id), chunk_size);
+    let mut segs = storage.segment_ids_touching_chunk(chunk_id_to_coord(chunk_id));
     segs.sort_unstable();
     for seg_id in segs {
         hash ^= seg_id.0 as u64;

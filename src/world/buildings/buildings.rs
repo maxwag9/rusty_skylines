@@ -152,8 +152,7 @@ impl BuildingStorage {
     ) {
         self.building_chunk_storage
             .remove_building(from, building_id);
-        let building_chunk_distance =
-            ChunkDistance::from_chunk_positions(self.center_chunk, to, self.chunk_size);
+        let building_chunk_distance = ChunkDistance::from_chunk_positions(self.center_chunk, to);
         self.building_chunk_storage
             .add_building(to, building_chunk_distance, building_id);
     }
@@ -606,7 +605,7 @@ impl BuildingChunkStorage {
             .map(|(coord, chunk)| {
                 let is_empty = chunk.building_ids.is_empty();
                 let dist2 = center_chunk.dist2(coord);
-                let new_dist = ChunkDistance::from_dist2(dist2, chunk_size);
+                let new_dist = ChunkDistance::from_dist2(dist2);
                 (*coord, new_dist, is_empty)
             })
             .collect();

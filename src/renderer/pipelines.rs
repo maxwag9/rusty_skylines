@@ -1,4 +1,5 @@
 use crate::data::{Settings, ShadowType};
+use crate::helpers::positions::chunk_size;
 use crate::renderer::pipelines_outsource::*;
 use crate::renderer::render_core::SURFACE_FORMAT;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
@@ -530,7 +531,7 @@ pub fn create_resolved_hdr(
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba16Float,
+            format: Rgba16Float,
             usage: TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::STORAGE_BINDING, // Added for compute
@@ -566,21 +567,21 @@ pub fn create_normals_texture(
     tex.create_view(&Default::default())
 }
 pub fn create_atlas(device: &Device, config: &SurfaceConfiguration) -> TextureView {
-    let atlas = device.create_texture(&wgpu::TextureDescriptor {
+    let atlas = device.create_texture(&TextureDescriptor {
         label: Some("3D text atlas"),
-        size: wgpu::Extent3d {
+        size: Extent3d {
             width: 2048,
             height: 2048,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::R8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let atlas_view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+    let atlas_view = atlas.create_view(&TextureViewDescriptor::default());
     atlas_view
 }
 pub const DEPTH_FORMAT: TextureFormat = TextureFormat::Depth32FloatStencil8;
@@ -836,7 +837,7 @@ pub fn make_new_camera_uniforms(
         orbit_radius: camera.orbit_radius,
 
         camera_local: [eye.local.x, eye.local.y, eye.local.z],
-        chunk_size: camera.chunk_size as f32,
+        chunk_size: chunk_size() as f32,
         camera_chunk: [eye.chunk.x, eye.chunk.z],
         _pad_cam: [0, 0],
 

@@ -1,4 +1,4 @@
-use crate::helpers::positions::{ChunkSize, WorldPos};
+use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{IntersectionBuildParams, IntersectionPolygon};
 use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId, Edges};
@@ -10,7 +10,7 @@ use glam::Vec3;
 /// Offset an entire polyline by a fixed distance.
 /// Positive offset = right side of travel direction.
 /// Negative offset = left side of travel direction.
-pub fn offset_polyline_f32(poly: &[WorldPos], offset: f32, chunk_size: ChunkSize) -> Vec<WorldPos> {
+pub fn offset_polyline_f32(poly: &[WorldPos], offset: f32) -> Vec<WorldPos> {
     if poly.len() < 2 {
         return poly.to_vec();
     }
@@ -18,9 +18,9 @@ pub fn offset_polyline_f32(poly: &[WorldPos], offset: f32, chunk_size: ChunkSize
     poly.iter()
         .enumerate()
         .map(|(i, &pt)| {
-            let dir = polyline_direction_at(poly, i, chunk_size);
+            let dir = polyline_direction_at(poly, i);
             let normal = dir.cross(Vec3::Y).normalize_or_zero();
-            pt.add_vec3(normal * offset, chunk_size)
+            pt.add_vec3(normal * offset)
         })
         .collect()
 }
@@ -28,16 +28,14 @@ pub fn offset_polyline_f32(poly: &[WorldPos], offset: f32, chunk_size: ChunkSize
 /// Calculate a right turn score for a polyline.
 /// Positive = right turn, negative = left turn.
 /// Magnitude indicates turn sharpness.
-pub fn right_turn_score(poly: &[WorldPos], chunk_size: ChunkSize) -> f32 {
+pub fn right_turn_score(poly: &[WorldPos]) -> f32 {
     if poly.len() < 3 {
         return 0.0;
     }
 
-    let dir_start = poly[1]
-        .to_render_pos(poly[0], chunk_size)
-        .normalize_or_zero();
+    let dir_start = poly[1].to_render_pos(poly[0]).normalize_or_zero();
     let dir_end = poly[poly.len() - 1]
-        .to_render_pos(poly[poly.len() - 2], chunk_size)
+        .to_render_pos(poly[poly.len() - 2])
         .normalize_or_zero();
 
     // Signed turn around Y axis
@@ -93,29 +91,28 @@ pub fn subdivide_quadratic_bezier(
     p2: WorldPos,
     t0: f32,
     t1: f32,
-    chunk_size: ChunkSize,
 ) -> (WorldPos, WorldPos, WorldPos) {
     /// Evaluate quadratic bezier at parameter t.
-    fn eval_bezier(p0: WorldPos, p1: WorldPos, p2: WorldPos, t: f32, cs: ChunkSize) -> WorldPos {
-        let v1 = p1.to_render_pos(p0, cs);
-        let v2 = p2.to_render_pos(p0, cs);
+    fn eval_bezier(p0: WorldPos, p1: WorldPos, p2: WorldPos, t: f32) -> WorldPos {
+        let v1 = p1.to_render_pos(p0);
+        let v2 = p2.to_render_pos(p0);
 
         let omt = 1.0 - t;
         // B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
         let blend = v1 * (2.0 * omt * t) + v2 * (t * t);
-        p0.add_vec3(blend, cs)
+        p0.add_vec3(blend)
     }
 
-    let new_p0 = eval_bezier(p0, p1, p2, t0, chunk_size);
-    let new_p2 = eval_bezier(p0, p1, p2, t1, chunk_size);
+    let new_p0 = eval_bezier(p0, p1, p2, t0);
+    let new_p2 = eval_bezier(p0, p1, p2, t1);
 
     // Compute new control point to preserve curve shape
     // Derivative: B'(t) = 2(1-t)(P1-P0) + 2t(P2-P1)
     let dt = t1 - t0;
-    let v01 = p1.to_render_pos(p0, chunk_size);
-    let v12 = p2.to_render_pos(p1, chunk_size);
+    let v01 = p1.to_render_pos(p0);
+    let v12 = p2.to_render_pos(p1);
     let tangent_at_t0 = v01 * (1.0 - t0) + v12 * t0;
-    let new_p1 = new_p0.add_vec3(tangent_at_t0 * dt, chunk_size);
+    let new_p1 = new_p0.add_vec3(tangent_at_t0 * dt);
 
     (new_p0, new_p1, new_p2)
 }
@@ -184,7 +181,7 @@ pub fn ray_to_polygon(
     }
 
     // Direction from 'from' to 'through'
-    let dir = through.to_render_pos(*from, gizmo.chunk_size);
+    let dir = through.to_render_pos(*from);
     let len_sq = dir.x * dir.x + dir.z * dir.z;
 
     if len_sq < 1e-6 {
@@ -205,10 +202,10 @@ pub fn ray_to_polygon(
         let b = poly.ring[(i + 1) % n];
 
         // Edge vector relative to 'a'
-        let edge = b.to_render_pos(a, gizmo.chunk_size);
+        let edge = b.to_render_pos(a);
 
         // Vector from 'from' to edge start
-        let to_seg = a.to_render_pos(*from, gizmo.chunk_size);
+        let to_seg = a.to_render_pos(*from);
 
         let cross = ray_dir.x * edge.z - ray_dir.z * edge.x;
         if cross.abs() < 1e-10 {
@@ -223,7 +220,7 @@ pub fn ray_to_polygon(
         if t > 0.0 && t < max_dist && u >= 0.0 && u <= 1.0 && t < best_t {
             best_t = t;
             let offset = Vec3::new(ray_dir.x * t, through.local.y - from.local.y, ray_dir.z * t);
-            best_hit = Some(from.add_vec3(offset, gizmo.chunk_size));
+            best_hit = Some(from.add_vec3(offset));
         }
     }
 
@@ -240,11 +237,10 @@ pub fn _segment_intersection_xz(
     a2: WorldPos,
     b1: WorldPos,
     b2: WorldPos,
-    chunk_size: ChunkSize,
 ) -> Option<(f32, f32)> {
-    let d1 = a2.to_render_pos(a1, chunk_size);
-    let d2 = b2.to_render_pos(b1, chunk_size);
-    let d12 = b1.to_render_pos(a1, chunk_size);
+    let d1 = a2.to_render_pos(a1);
+    let d2 = b2.to_render_pos(b1);
+    let d12 = b1.to_render_pos(a1);
 
     let cross = d1.x * d2.z - d1.z * d2.x;
     if cross.abs() < 1e-10 {
@@ -281,33 +277,25 @@ pub fn set_point_height_with_structure_type(
 }
 
 /// Get direction at a specific index along a polyline.
-pub fn polyline_direction_at(poly: &[WorldPos], index: usize, chunk_size: ChunkSize) -> Vec3 {
+pub fn polyline_direction_at(poly: &[WorldPos], index: usize) -> Vec3 {
     if poly.len() < 2 {
         return Vec3::ZERO;
     }
 
     let dir = if index + 1 < poly.len() {
-        poly[index].delta_to(poly[index + 1], chunk_size)
+        poly[index].delta_to(poly[index + 1])
     } else {
-        poly[index - 1].delta_to(poly[index], chunk_size)
+        poly[index - 1].delta_to(poly[index])
     };
 
     dir.normalize_or_zero()
 }
 
-pub fn tangent_and_lateral_right(
-    points: &[WorldPos],
-    i: usize,
-    chunk_size: ChunkSize,
-) -> (Vec3, Vec3) {
+pub fn tangent_and_lateral_right(points: &[WorldPos], i: usize) -> (Vec3, Vec3) {
     let tangent = if i + 1 < points.len() {
-        points[i]
-            .delta_to(points[i + 1], chunk_size)
-            .normalize_or_zero()
+        points[i].delta_to(points[i + 1]).normalize_or_zero()
     } else if i > 0 {
-        points[i - 1]
-            .delta_to(points[i], chunk_size)
-            .normalize_or_zero()
+        points[i - 1].delta_to(points[i]).normalize_or_zero()
     } else {
         Vec3::X
     };

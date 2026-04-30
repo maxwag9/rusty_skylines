@@ -27,13 +27,12 @@ pub fn run_sounds(resources: &mut Resources) {
     let current_eye = camera.eye_world();
     let prev_eye = camera.prev_eye_world();
 
-    let vel = current_eye.delta_to(prev_eye, terrain.chunk_size);
+    let vel = current_eye.delta_to(prev_eye);
 
     state.listener_pos = current_eye;
     state.listener_velocity = vel;
     state.listener_yaw = camera.yaw;
     state.listener_pitch = camera.pitch;
-    state.chunk_size = camera.chunk_size;
     state.cars.clear();
 
     collect_car_audio(&mut state, camera, terrain, car_storage);
@@ -1151,7 +1150,7 @@ impl Sounds {
             let chunk_size = state.chunk_size;
 
             for car in &mut state.cars {
-                let to_car = car.position.delta_to(listener_pos, chunk_size);
+                let to_car = car.position.delta_to(listener_pos);
                 let distance = to_car.length().max(0.01);
                 let dir = to_car.normalize();
 
