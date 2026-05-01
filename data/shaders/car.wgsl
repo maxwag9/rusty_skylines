@@ -34,9 +34,9 @@ struct VertexOutput {
 
 
 @group(0) @binding(0) var car_sampler: sampler;
-@group(0) @binding(1) var tex0: texture_2d<f32>;
-@group(0) @binding(2) var s_shadow: sampler_comparison;
-@group(0) @binding(3) var t_shadow: texture_depth_2d_array;
+@group(0) @binding(2) var tex0: texture_2d<f32>;
+@group(0) @binding(3) var s_shadow: sampler_comparison;
+@group(0) @binding(4) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 

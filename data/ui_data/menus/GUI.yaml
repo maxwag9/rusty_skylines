@@ -278,4 +278,109 @@ layers:
           active: true
           pressable: true
           editable: true
+      - !Rect
+        id: set_cursor_to_road
+        actions:
+          - on:r set(cursor_mode, Roads)
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
+        x: 0.05796875
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.02
+          - 0.02
+          - 0.05
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.003
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: add_road_lane
+        actions:
+          - on:r inc(lanes, 1)
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
+        x: 0.09796875
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.42
+          - 0.82
+          - 0.45
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.003
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: less_road_lane
+        actions:
+          - on:r dec(lanes, 1)
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
+        x: 0.02796875
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.82
+          - 0.42
+          - 0.45
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.003
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
     editing_tool: false

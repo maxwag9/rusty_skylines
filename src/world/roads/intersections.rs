@@ -1050,7 +1050,7 @@ fn build_polygon_curbs_filtered(
     top_height: f32,
     face_inward: bool,
     config: &MeshConfig,
-    vertices: &mut Vec<RoadVertex>,
+    vertices: &mut Vec<AdvancedVertex>,
     indices: &mut Vec<u32>,
 ) {
     let height_diff = top_height - bottom_height;
@@ -1158,7 +1158,7 @@ pub fn build_intersection_mesh(
     style: &RoadStyleParams,
     road_type: &RoadType,
     config: &MeshConfig,
-    vertices: &mut Vec<RoadVertex>,
+    vertices: &mut Vec<AdvancedVertex>,
     indices: &mut Vec<u32>,
     gizmo: &mut Gizmo,
 ) -> IntersectionMeshResult {
@@ -1587,7 +1587,7 @@ fn build_sidewalk_mesh(
     ring: &[Vec2],
     road_type: &RoadType,
     config: &MeshConfig,
-    vertices: &mut Vec<RoadVertex>,
+    vertices: &mut Vec<AdvancedVertex>,
     indices: &mut Vec<u32>,
 ) {
     let cs = chunk_size() as f32;
@@ -1691,8 +1691,14 @@ pub fn gather_arms(
     arms
 }
 
-pub fn road_vertex(world_pos: WorldPos, normal: [f32; 3], mat: u32, u: f32, v: f32) -> RoadVertex {
-    RoadVertex {
+pub fn road_vertex(
+    world_pos: WorldPos,
+    normal: [f32; 3],
+    mat: u32,
+    u: f32,
+    v: f32,
+) -> AdvancedVertex {
+    AdvancedVertex {
         local_position: [world_pos.local.x, world_pos.local.y, world_pos.local.z],
         normal,
         uv: [u, v],

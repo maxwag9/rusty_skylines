@@ -159,7 +159,14 @@ impl Value {
         }
     }
     pub fn as_i64(&self) -> Option<i64> {
-        self.as_f64().map(|n| n as i64)
+        match self {
+            Value::F64(n) => Some(*n as i64),
+            Value::I64(n) => Some(*n),
+            Value::String(s) => s.parse().ok(),
+            Value::Bool(b) => Some(if *b { 1 } else { 0 }),
+            Value::Array(arr) => Some(arr.len() as i64),
+            Value::Null => Some(0),
+        }
     }
 
     pub fn is_string(&self) -> Option<Value> {

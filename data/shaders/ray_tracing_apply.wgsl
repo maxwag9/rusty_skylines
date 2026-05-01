@@ -3,7 +3,7 @@
 // Blend state: src=Zero, dst=Src → result = hdr * shadow_factor
 
 @group(0) @binding(0) var samp : sampler;
-@group(0) @binding(1) var rt_visibility_full : texture_2d<f32>;
+@group(0) @binding(2) var rt_visibility_full : texture_2d<f32>;
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 
 struct VSOut {

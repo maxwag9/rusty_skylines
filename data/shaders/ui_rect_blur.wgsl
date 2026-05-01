@@ -6,7 +6,7 @@ struct ScreenUniform {
 };
 
 @group(0) @binding(0) var hdr_sampler: sampler;
-@group(0) @binding(1) var hdr_tex: texture_2d<f32>;
+@group(0) @binding(2) var hdr_tex: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> screen: ScreenUniform;
 @group(2) @binding(0) var<storage, read> rects: array<RectGpu>;
 

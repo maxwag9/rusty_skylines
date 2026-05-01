@@ -2,14 +2,15 @@ use crate::data::Settings;
 use crate::helpers::paths::shader_dir;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
-use crate::renderer::render_passes::draw_visible_roads;
+use crate::renderer::render_passes::{draw_visible_buildings, draw_visible_roads};
 use crate::ui::vertex::Vertex;
+use crate::world::buildings::buildings::{BuildingRenderer, BuildingVertex, Buildings};
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::CarRenderSubsystem;
-use crate::world::roads::road_mesh_manager::RoadVertex;
+use crate::world::roads::road_mesh_manager::AdvancedVertex;
 use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use glam::{Mat4, Vec3, Vec4};
@@ -425,7 +426,7 @@ pub fn render_roads_shadows(
     let opts = shadow_pipeline_options(
         settings,
         bias,
-        vec![RoadVertex::layout()],
+        vec![AdvancedVertex::layout()],
         Face::Back,
         FragmentOption::None,
     );
@@ -450,7 +451,7 @@ pub fn render_roads_shadows(
         let opts2 = shadow_pipeline_options(
             settings,
             preview_bias,
-            vec![RoadVertex::layout()],
+            vec![AdvancedVertex::layout()],
             Face::Back,
             FragmentOption::None,
         );
@@ -467,6 +468,43 @@ pub fn render_roads_shadows(
         pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
         pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
     }
+}
+pub fn render_buildings_shadows(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    terrain: &Terrain,
+    buildings: &Buildings,
+    building_renderer: &BuildingRenderer,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    shadow_mat_buffer: &Buffer,
+    cascade_idx: usize,
+) {
+    let bias = shadow_bias_for_cascade(
+        cascade_idx,
+        pipelines.resources.csm_shadows.texels[cascade_idx],
+        settings.reversed_depth_z,
+    );
+
+    let shader = shader_dir().join("shadows.wgsl");
+    let opts = shadow_pipeline_options(
+        settings,
+        bias,
+        vec![BuildingVertex::layout()],
+        Face::Back,
+        FragmentOption::None,
+    );
+
+    // Buildings
+    render_manager.render(
+        &[],
+        shader.as_path(),
+        &opts,
+        &[&pipelines.buffers.camera, shadow_mat_buffer],
+        pass,
+    );
+
+    draw_visible_buildings(pass, terrain, building_renderer);
 }
 pub fn render_terrain_shadows(
     pass: &mut RenderPass,

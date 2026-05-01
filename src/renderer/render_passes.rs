@@ -8,12 +8,13 @@ use crate::renderer::props::Props;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
 use crate::ui::vertex::{LineVtxRender, TextVtxRender, Vertex};
+use crate::world::buildings::buildings::{BuildingRenderer, BuildingVertex, Buildings};
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::CarRenderSubsystem;
-use crate::world::roads::road_mesh_manager::RoadVertex;
+use crate::world::roads::road_mesh_manager::AdvancedVertex;
 use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
@@ -469,7 +470,7 @@ pub fn render_roads(
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
             msaa_samples,
-            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            vertex_layouts: Vec::from([AdvancedVertex::layout()]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
                 targets: targets.clone(),
@@ -493,7 +494,7 @@ pub fn render_roads(
     else {
         return;
     };
-    // Roads
+    // Preview Roads
     render_manager.render(
         keys.as_slice(),
         shader_path.as_path(),
@@ -501,7 +502,7 @@ pub fn render_roads(
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(preview_bias, settings)),
             msaa_samples,
-            vertex_layouts: Vec::from([RoadVertex::layout()]),
+            vertex_layouts: Vec::from([AdvancedVertex::layout()]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default { targets },
             shadow,
@@ -517,6 +518,54 @@ pub fn render_roads(
     pass.set_vertex_buffer(0, vb.slice(..));
     pass.set_index_buffer(ib.slice(..), IndexFormat::Uint32);
     pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
+}
+
+pub fn render_buildings(
+    pass: &mut RenderPass,
+    render_manager: &mut RenderManager,
+    terrain: &Terrain,
+    buildings: &Buildings,
+    building_renderer: &mut BuildingRenderer,
+    pipelines: &Pipelines,
+    settings: &Settings,
+    msaa_samples: u32,
+) {
+    let shader_path = shader_dir().join("buildings.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+
+    fn building_bias(settings: &Settings, constant: i32, slope: f32) -> DepthBiasState {
+        let sign_i = if settings.reversed_depth_z { 1 } else { -1 };
+        let sign_f = sign_i as f32;
+
+        DepthBiasState {
+            constant: sign_i * constant.abs(),
+            slope_scale: sign_f * slope.abs(),
+            clamp: 0.0,
+        }
+    }
+    let base_bias = building_bias(settings, 3, 2.0);
+    let targets = color_and_normals_and_motion_targets(pipelines);
+    // Buildings
+    render_manager.render(
+        &[],
+        shader_path.as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: Some(depth_stencil(base_bias, settings)),
+            msaa_samples,
+            vertex_layouts: Vec::from([BuildingVertex::layout()]),
+            cull_mode: Some(Face::Back),
+            fragment: FragmentOption::Default {
+                targets: targets.clone(),
+            },
+            shadow,
+            ..Default::default()
+        },
+        &[&pipelines.buffers.camera],
+        pass,
+    );
+
+    draw_visible_buildings(pass, terrain, building_renderer);
 }
 
 pub fn render_gizmo(
@@ -791,6 +840,19 @@ pub(crate) fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthS
 pub fn draw_visible_roads(pass: &mut RenderPass, road_renderer: &RoadRenderSubsystem) {
     for chunk_id in &road_renderer.visible_draw_list {
         if let Some(gpu) = road_renderer.chunk_gpu.get(chunk_id) {
+            pass.set_vertex_buffer(0, gpu.vertex.slice(..));
+            pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        }
+    }
+}
+pub fn draw_visible_buildings(
+    pass: &mut RenderPass,
+    terrain: &Terrain,
+    building_renderer: &BuildingRenderer,
+) {
+    for chunk_id in terrain.visible.iter().map(|v| v.id) {
+        if let Some(gpu) = building_renderer.chunk_gpu.get(&chunk_id) {
             pass.set_vertex_buffer(0, gpu.vertex.slice(..));
             pass.set_index_buffer(gpu.index.slice(..), IndexFormat::Uint32);
             pass.draw_indexed(0..gpu.index_count, 0, 0..1);

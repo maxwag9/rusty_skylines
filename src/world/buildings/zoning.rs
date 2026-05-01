@@ -5,8 +5,14 @@ use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
+use crate::world::buildings::buildings::{
+    Building, BuildingId, BuildingParams, BuildingParamsLevels, Buildings,
+};
 use crate::world::camera::Camera;
-use crate::world::roads::road_mesh_manager::{Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager};
+use crate::world::cars::car_structs::ChunkDistance;
+use crate::world::roads::road_mesh_manager::{
+    ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, world_pos_chunk_to_id,
+};
 use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::statisticals::demands::ZoningDemand;
@@ -75,16 +81,55 @@ impl District {
     }
     pub fn update(
         time: &Time,
-        zoning_storage: &mut ZoningStorage,
+        buildings: &mut Buildings,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
     ) -> Option<District> {
-        let Some(district) = zoning_storage.get_mut_district(district_id) else {
+        let Some(district) = buildings
+            .zoning
+            .zoning_storage
+            .districts
+            .get(district_id as usize)
+            .and_then(|d| d.as_ref())
+        else {
+            return None;
+        };
+        for lot_id in &district.lot_ids {
+            let Some(lot) = buildings
+                .zoning
+                .zoning_storage
+                .lots
+                .get_mut(*lot_id as usize)
+                .and_then(|lot| lot.as_mut())
+            else {
+                continue;
+            };
+            if buildings.storage.get(lot.building_id).is_some() {
+                continue;
+            }
+            let building = generate_building(lot);
+            lot.building_id = buildings.storage.spawn(
+                lot.center.chunk,
+                lot.zoning_type,
+                ChunkDistance::Close,
+                building,
+            );
+        }
+        let Some(district) = buildings
+            .zoning
+            .zoning_storage
+            .get_mut_district(district_id)
+        else {
             return None;
         };
         district.zoning_demand.update_demands(time);
+
         if !matches!(district.district_type, DistrictType::PlayerMade) && district.should_split() {
-            let split_result = Self::split(zoning_storage, district_id, road_edge_storage);
+            let split_result = Self::split(
+                &mut buildings.zoning.zoning_storage,
+                district_id,
+                road_edge_storage,
+            );
             //println!("{:?}", split_result);
             match split_result {
                 DistrictSplitResult::Alright(new_other_district) => {
@@ -424,8 +469,8 @@ impl District {
             let mut b = clip_halfspace(boundary, centroid, split_on_x, false);
 
             if a.len() < 3 || b.len() < 3 {
-                let mut a2 = clip_halfspace(boundary, centroid, !split_on_x, true);
-                let mut b2 = clip_halfspace(boundary, centroid, !split_on_x, false);
+                let a2 = clip_halfspace(boundary, centroid, !split_on_x, true);
+                let b2 = clip_halfspace(boundary, centroid, !split_on_x, false);
 
                 if a2.len() >= 3 && b2.len() >= 3 {
                     a = a2;
@@ -483,6 +528,34 @@ impl District {
         new_district.zoning_demand = ZoningDemand::new();
 
         DistrictSplitResult::Alright(new_district)
+    }
+}
+
+fn generate_building(lot: &Lot) -> Building {
+    let level0 = BuildingParams {
+        roof: Default::default(),
+        roof_material: Default::default(),
+        wall_material: Default::default(),
+        height: 20.0,
+        basement: Default::default(),
+        garden: Default::default(),
+        miscellaneous: Default::default(),
+    };
+    let building_params = BuildingParamsLevels {
+        level0,
+        level1: Default::default(),
+        level2: Default::default(),
+        level3: Default::default(),
+        level4: Default::default(),
+        level5: Default::default(),
+    };
+
+    Building {
+        id: 631864891,
+        position: lot.center,
+        segment_id: lot.segment_id,
+        lot_id: lot.id,
+        building_params,
     }
 }
 
@@ -583,7 +656,7 @@ pub struct Zoning {
 impl Zoning {
     pub fn new() -> Self {
         Self {
-            ticker: Ticker::new(0.01),
+            ticker: Ticker::new(1.0),
             zoning_state: None,
             zoning_storage: ZoningStorage::new(),
         }
@@ -769,19 +842,20 @@ impl Zoning {
             _ => {}
         }
     }
-    pub fn update_districts(&mut self, time: &Time, road_edge_storage: &RoadEdgeStorage) {
-        if !self.ticker.tick(time.target_sim_dt) {
+    pub fn update_districts(
+        buildings: &mut Buildings,
+        time: &Time,
+        road_edge_storage: &RoadEdgeStorage,
+    ) {
+        if !buildings.zoning.ticker.tick(time.target_sim_dt) {
             return;
         }
-        println!("updating district");
-        for district_id in self.zoning_storage.district_ids() {
-            if let Some(district) = District::update(
-                time,
-                &mut self.zoning_storage,
-                district_id,
-                road_edge_storage,
-            ) {
-                self.zoning_storage.spawn_district(district);
+        //println!("updating districts");
+        for district_id in buildings.zoning.zoning_storage.district_ids() {
+            if let Some(district) =
+                District::update(time, buildings, district_id, road_edge_storage)
+            {
+                buildings.zoning.zoning_storage.spawn_district(district);
             }
         }
     }
@@ -1049,9 +1123,11 @@ impl Zoning {
                         let lot = Lot {
                             id: 6945220,
                             bounds: preview,
+                            center: Default::default(),
                             zoning_type: new_zoning_type.clone(),
                             segment_id: snap_point.segment_id,
                             district_id: 6378186,
+                            building_id: 543818852,
                         };
 
                         self.zoning_storage.spawn_lot(lot);
@@ -1479,9 +1555,17 @@ pub type LotId = u32;
 pub struct Lot {
     pub id: LotId,
     pub bounds: Vec<WorldPos>,
+    pub center: WorldPos,
     pub zoning_type: ZoningType,
     pub segment_id: SegmentId,
     pub district_id: DistrictId,
+    pub building_id: BuildingId,
+}
+impl Lot {
+    #[inline]
+    pub fn chunk_id(&self) -> ChunkId {
+        world_pos_chunk_to_id(&self.center)
+    }
 }
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct ZoningStorage {
@@ -1490,6 +1574,15 @@ pub struct ZoningStorage {
     district_free_list: Vec<DistrictId>,
     lot_free_list: Vec<LotId>,
     center_chunk: ChunkCoord,
+}
+
+impl ZoningStorage {
+    pub fn lots_in_chunk(&self, chunk_id: ChunkId) -> Vec<LotId> {
+        self.iter_lots()
+            .filter(|l| l.chunk_id() == chunk_id)
+            .map(|lot| lot.id)
+            .collect()
+    }
 }
 
 impl ZoningStorage {
@@ -1591,6 +1684,7 @@ impl ZoningStorage {
     }
 
     pub fn spawn_lot(&mut self, mut lot: Lot) -> LotId {
+        lot.center = WorldPos::centroid(&lot.bounds);
         let lot_id = if let Some(reused_id) = self.lot_free_list.pop() {
             lot.id = reused_id;
             self.lots[reused_id as usize] = Some(lot);

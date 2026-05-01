@@ -26,6 +26,7 @@ use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::ZoningType;
 use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::{GameState, LoadResult, SaveResult, SaveState};
+use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec2;
@@ -1256,6 +1257,7 @@ impl CommandQueue {
                     ctx.terrain,
                     ctx.props,
                     ctx.buildings,
+                    &mut ctx.ui.variables,
                     save_name.as_str(),
                 );
                 CommandResult::Ok
@@ -1600,6 +1602,7 @@ pub fn load_save(
     terrain: &mut Terrain,
     props: &mut Props,
     buildings: &mut Buildings,
+    variables: &mut Variables,
     save_name: &str,
 ) {
     match game_state.load(
@@ -1610,6 +1613,7 @@ pub fn load_save(
         terrain,
         props,
         buildings,
+        variables,
     ) {
         LoadResult::Success(version) => println!(
             "World '{}', Version {} loaded, {} Terrain Edited Chunks, {} Road Nodes",
@@ -1632,6 +1636,7 @@ pub fn load_save(
                 terrain,
                 props,
                 buildings,
+                variables,
                 save_name,
             );
         }
@@ -1655,6 +1660,36 @@ pub fn set_element_property(
             if let Some(y) = new_val.as_f64() {
                 ctx.camera.target.local.y = y as f32;
                 ctx.ui.variables.set_f64(name, y);
+            }
+        }
+        "cursor_mode" => {
+            let mode = new_val.to_string_value();
+            ctx.terrain.cursor.mode = mode.clone().into();
+            ctx.ui.variables.set_string(name, mode);
+        }
+        "lanes" => {
+            if let Some(lanes) = new_val.as_i64() {
+                if let Some(road_type) = &mut ctx.terrain.cursor.road_type {
+                    road_type.lanes_each_direction =
+                        (lanes as LeftLaneCount, lanes as RightLaneCount);
+                }
+                ctx.ui.variables.set_i64(name, lanes);
+            }
+        }
+        "left_lanes" => {
+            if let Some(lanes) = new_val.as_i64() {
+                if let Some(road_type) = &mut ctx.terrain.cursor.road_type {
+                    road_type.lanes_each_direction.0 = lanes as LeftLaneCount;
+                }
+                ctx.ui.variables.set_i64(name, lanes);
+            }
+        }
+        "right_lanes" => {
+            if let Some(lanes) = new_val.as_i64() {
+                if let Some(road_type) = &mut ctx.terrain.cursor.road_type {
+                    road_type.lanes_each_direction.1 = lanes as RightLaneCount;
+                }
+                ctx.ui.variables.set_i64(name, lanes);
             }
         }
         _ => {}

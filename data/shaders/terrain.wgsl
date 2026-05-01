@@ -8,11 +8,11 @@ struct PickUniform {
     color: vec3<f32>,
 }
 @group(0) @binding(0) var material_sampler: sampler;
-@group(0) @binding(1) var grass_tex: texture_2d<f32>;
-@group(0) @binding(2) var grass_tex2: texture_2d<f32>;
+@group(0) @binding(2) var grass_tex: texture_2d<f32>;
+@group(0) @binding(3) var grass_tex2: texture_2d<f32>;
 
-@group(0) @binding(3) var s_shadow: sampler_comparison;
-@group(0) @binding(4) var t_shadow: texture_depth_2d_array;
+@group(0) @binding(4) var s_shadow: sampler_comparison;
+@group(0) @binding(5) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(1) var<uniform> pick: PickUniform;

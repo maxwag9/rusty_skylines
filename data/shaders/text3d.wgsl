@@ -10,7 +10,7 @@ struct PickUniform {
 }
 @group(0) @binding(0)
 var atlas_sampler: sampler;
-@group(0) @binding(1)
+@group(0) @binding(2)
 var atlas_texture: texture_2d<f32>;
 
 //@group(2) @binding(0)

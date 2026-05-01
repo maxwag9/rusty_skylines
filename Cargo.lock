@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Rusty_Skylines"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3414,9 +3414,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu_render_manager"
-version = "0.2.10"
+version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5013c27e038242101d49baab6cf59d0b04da4033653986bdfda17b61c470f26f"
+checksum = "dec125939347f3298fcfbf4c9aa14a549dae3b8afc56c7e64d1cd22ba2e67548"
 dependencies = [
  "bytemuck",
  "serde",

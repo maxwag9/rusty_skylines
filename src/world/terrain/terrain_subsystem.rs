@@ -54,7 +54,20 @@ pub enum CursorMode {
     Cars,
     Area,
 }
-
+impl From<String> for CursorMode {
+    fn from(string: String) -> Self {
+        match string.to_lowercase().as_str() {
+            "none" => CursorMode::None,
+            "roads" => CursorMode::Roads,
+            "zoning" => CursorMode::Zoning,
+            "props" => CursorMode::Props,
+            "terrain_editing" => CursorMode::TerrainEditing,
+            "cars" => CursorMode::Cars,
+            "area" => CursorMode::Area,
+            _ => CursorMode::None,
+        }
+    }
+}
 impl CursorMode {
     fn order() -> [CursorMode; 7] {
         [

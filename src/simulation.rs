@@ -6,6 +6,7 @@ use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::buildings::buildings::Buildings;
+use crate::world::buildings::zoning::Zoning;
 use crate::world::camera::Camera;
 use crate::world::cars::car_player::drive_car;
 use crate::world::cars::car_subsystem::Cars;
@@ -100,10 +101,12 @@ impl Simulation {
             camera,
             time.target_sim_dt,
         );
-
-        buildings
-            .zoning
-            .update_districts(time, &renderer.road_renderer.mesh_manager.road_edge_storage);
+        buildings.storage.update(camera.target.chunk);
+        Zoning::update_districts(
+            buildings,
+            time,
+            &renderer.road_renderer.mesh_manager.road_edge_storage,
+        );
     }
 }
 

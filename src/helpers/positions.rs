@@ -1,6 +1,7 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU16, Ordering};
 
 pub type LodStep = u16;
@@ -28,7 +29,7 @@ pub struct LocalPos {
     pub y: f32,
     pub z: f32,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Hash)]
 pub struct WorldPos {
     pub chunk: ChunkCoord,
     pub local: LocalPos,
@@ -637,5 +638,12 @@ impl fmt::Display for LocalPos {
 impl fmt::Display for WorldPos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} + {}", self.chunk, self.local)
+    }
+}
+impl Hash for LocalPos {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.x.to_bits().hash(state);
+        self.y.to_bits().hash(state);
+        self.z.to_bits().hash(state);
     }
 }

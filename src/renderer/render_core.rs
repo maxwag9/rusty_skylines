@@ -13,8 +13,8 @@ use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
 use crate::renderer::shadows::{
-    CSM_CASCADES, ShadowMatUniform, render_cars_shadows, render_roads_shadows,
-    render_terrain_shadows,
+    CSM_CASCADES, ShadowMatUniform, render_buildings_shadows, render_cars_shadows,
+    render_roads_shadows, render_terrain_shadows,
 };
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
 use crate::renderer::uniform_updates::UniformUpdater;
@@ -22,7 +22,7 @@ use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
-use crate::world::buildings::buildings::Buildings;
+use crate::world::buildings::buildings::{BuildingRenderer, Buildings};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
@@ -65,6 +65,7 @@ pub struct Renderer {
     pub terrain_renderer: TerrainRenderSubsystem,
     pub road_renderer: RoadRenderSubsystem,
     pub car_renderer: CarRenderSubsystem,
+    pub building_renderer: BuildingRenderer,
     pub gizmo: Gizmo,
     pub partition_gizmo: PartitionGizmo,
     pub props: Props,
@@ -88,6 +89,7 @@ impl Renderer {
         let terrain_renderer = TerrainRenderSubsystem::new();
         let road_renderer = RoadRenderSubsystem::new(device);
         let car_renderer = CarRenderSubsystem::new(device, queue, &mut rt_subsystem);
+        let building_renderer = BuildingRenderer::new(device);
         let mut render_manager = RenderManager::new(device, queue, texture_dir());
         let gizmo = Gizmo::new(device, config, &ui_renderer.font, settings.msaa_samples);
         let profiler = GpuProfiler::new(&device, 3);
@@ -119,6 +121,7 @@ impl Renderer {
             rt_subsystem,
             partition_gizmo: PartitionGizmo::new(),
             props: Props::new(device),
+            building_renderer,
         }
     }
 
@@ -161,14 +164,14 @@ impl Renderer {
         &mut self,
         surface: &Surface,
         world: &mut World,
-        ui_loader: &mut Ui,
+        ui: &mut Ui,
         settings: &Settings,
     ) {
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         //let t = Instant::now();
-        self.update_render(world, ui_loader, settings, aspect, screen_size);
+        self.update_render(world, ui, settings, aspect, screen_size);
 
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
             return;
@@ -177,6 +180,7 @@ impl Renderer {
         let camera = &world.world_state.camera;
         let astronomy = &world.world_state.astronomy;
         let terrain = &mut world.terrain;
+        let buildings = &world.buildings;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         let mut encoder = self
@@ -195,6 +199,7 @@ impl Renderer {
                     time,
                     settings,
                     terrain,
+                    buildings,
                 );
             });
             self.execute_main_pass(
@@ -205,8 +210,9 @@ impl Renderer {
                 aspect,
                 time,
                 &world.input,
-                ui_loader,
+                ui,
                 terrain,
+                &world.buildings,
                 &world.cars.car_storage(),
                 settings,
                 astronomy,
@@ -216,13 +222,12 @@ impl Renderer {
         //println!("World CPU Time: {:?}", t.elapsed());
         self.profiler.resolve(&mut encoder);
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
-        ui_loader
-            .variables
+        ui.variables
             .set_f64("total_cpu_render_time", total_cpu_render_time);
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         self.profiler
-            .end_frame(&self.device, &self.queue, &mut ui_loader.variables);
+            .end_frame(&self.device, &self.queue, &mut ui.variables);
     }
 
     pub fn update_render(
@@ -353,7 +358,15 @@ impl Renderer {
             camera,
             &mut self.gizmo,
         );
-
+        self.building_renderer.update(
+            &mut self.render_manager,
+            terrain,
+            buildings,
+            &self.device,
+            &self.queue,
+            camera,
+            &mut self.gizmo,
+        );
         self.gizmo.update(
             terrain,
             &self.rt_subsystem,
@@ -386,6 +399,7 @@ impl Renderer {
         _time: &Time,
         settings: &Settings,
         terrain: &Terrain,
+        buildings: &Buildings,
     ) {
         for cascade_idx in 0..CSM_CASCADES {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -435,6 +449,17 @@ impl Renderer {
                 shadow_buf,
                 cascade_idx,
             );
+            render_buildings_shadows(
+                &mut pass,
+                &mut self.render_manager,
+                terrain,
+                buildings,
+                &self.building_renderer,
+                &self.pipelines,
+                settings,
+                shadow_buf,
+                cascade_idx,
+            );
             render_cars_shadows(
                 &mut pass,
                 &mut self.render_manager,
@@ -469,8 +494,9 @@ impl Renderer {
         aspect: f32,
         time: &Time,
         input_state: &Input,
-        ui_loader: &mut Ui,
-        terrain_subsystem: &Terrain,
+        ui: &mut Ui,
+        terrain: &Terrain,
+        buildings: &Buildings,
         car_storage: &CarStorage,
         settings: &Settings,
         astronomy: &Astronomy,
@@ -479,7 +505,8 @@ impl Renderer {
             encoder,
             config,
             camera,
-            terrain_subsystem,
+            terrain,
+            buildings,
             car_storage,
             settings,
             aspect,
@@ -506,7 +533,7 @@ impl Renderer {
         self.execute_fog_pass(encoder, settings);
 
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
-            self.execute_ui_pass(encoder, ui_loader, time, input_state, settings);
+            self.execute_ui_pass(encoder, ui, time, input_state, settings);
         });
 
         self.execute_debug_preview_pass(encoder, settings);
@@ -541,6 +568,7 @@ impl Renderer {
         config: &RenderPassConfig,
         camera: &Camera,
         terrain: &Terrain,
+        buildings: &Buildings,
         car_storage: &CarStorage,
         settings: &Settings,
         aspect: f32,
@@ -598,8 +626,20 @@ impl Renderer {
                 self.msaa_samples,
             );
         });
-
-        // 5
+        // 5. Buildings
+        gpu_timestamp!(pass, &mut self.profiler, "Buildings", {
+            render_buildings(
+                &mut pass,
+                &mut self.render_manager,
+                terrain,
+                buildings,
+                &mut self.building_renderer,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
+            );
+        });
+        // 6
         gpu_timestamp!(pass, &mut self.profiler, "Gizmo", {
             render_gizmo(
                 &mut pass,
@@ -615,7 +655,7 @@ impl Renderer {
         });
         pass.forget_lifetime();
         let mut pass = create_instanced_pass(encoder, &self.pipelines, config, self.msaa_samples);
-        // 6
+        // 7
         gpu_timestamp!(pass, &mut self.profiler, "Cars", {
             render_cars(
                 &mut pass,
@@ -628,7 +668,7 @@ impl Renderer {
                 camera,
             );
         });
-        // 7
+        // 8
         gpu_timestamp!(pass, &mut self.profiler, "Props", {
             render_props(
                 &mut pass,

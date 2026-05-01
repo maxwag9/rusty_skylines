@@ -19,11 +19,11 @@ struct FogUniforms {
 // ── Bindings ──
 
 @group(0) @binding(0) var trilinear_sampler: sampler;
-@group(0) @binding(1) var depth_half: texture_2d<f32>;   // linear depth at half-res
+@group(0) @binding(2) var depth_half: texture_2d<f32>;   // linear depth at half-res
 #ifdef MSAA
-@group(0) @binding(2) var depth_full_raw: texture_depth_multisampled_2d;
+@group(0) @binding(3) var depth_full_raw: texture_depth_multisampled_2d;
 #else
-@group(0) @binding(2) var depth_full_raw: texture_depth_2d;
+@group(0) @binding(3) var depth_full_raw: texture_depth_2d;
 #endif
 
 @group(1) @binding(0) var<uniform> camera: Uniforms;

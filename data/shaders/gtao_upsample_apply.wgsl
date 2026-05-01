@@ -17,15 +17,15 @@ struct UpsampleApplyParams {
 };
 
 @group(0) @binding(0) var trilinear_sampler: sampler;
-@group(0) @binding(1) var ao_half:      texture_2d<f32>;
-@group(0) @binding(2) var depth_half:   texture_2d<f32>;
-@group(0) @binding(3) var normals_half: texture_2d<f32>;
+@group(0) @binding(2) var ao_half:      texture_2d<f32>;
+@group(0) @binding(3) var depth_half:   texture_2d<f32>;
+@group(0) @binding(4) var normals_half: texture_2d<f32>;
 #ifdef MSAA
-@group(0) @binding(4) var depth_full_raw: texture_depth_multisampled_2d;
+@group(0) @binding(5) var depth_full_raw: texture_depth_multisampled_2d;
 #else
-@group(0) @binding(4) var depth_full_raw: texture_depth_2d;
+@group(0) @binding(5) var depth_full_raw: texture_depth_2d;
 #endif
-@group(0) @binding(5) var normals_full: texture_2d<f32>;
+@group(0) @binding(6) var normals_full: texture_2d<f32>;
 
 @group(1) @binding(0) var<uniform> camera: Uniforms;
 @group(1) @binding(1) var<uniform> params: UpsampleApplyParams;

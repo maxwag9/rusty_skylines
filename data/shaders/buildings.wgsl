@@ -1,26 +1,24 @@
 #include "includes/shadow.wgsl"
 #include "includes/uniforms.wgsl"
 
-struct RoadAppearance {
-    tint: vec4<f32>,
-}
-
 struct VertexInput {
     @location(0) chunk_xz: vec2<i32>,
     @location(1) position : vec3<f32>,
     @location(2) normal   : vec3<f32>,
     @location(3) uv       : vec2<f32>,
-    @location(4) material_id : u32,
+    @location(4) color   : vec4<f32>,
+    @location(5) material_id : u32,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) material_id: u32,
-    @location(2) world_normal: vec3<f32>,
-    @location(3) world_pos: vec3<f32>,
-    @location(4) curr_clip: vec4<f32>,
-    @location(5) prev_clip: vec4<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) @interpolate(flat) material_id: u32,
+    @location(3) world_normal: vec3<f32>,
+    @location(4) world_pos: vec3<f32>,
+    @location(5) curr_clip: vec4<f32>,
+    @location(6) prev_clip: vec4<f32>,
 };
 
 @vertex
@@ -49,6 +47,7 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     out.prev_clip = uniforms.prev_view_proj * vec4<f32>(prev_render_pos, 1.0);
 
     out.uv = input.uv;
+    out.color = input.color;
     out.material_id = input.material_id;
     out.world_normal = input.normal;
     out.world_pos = render_pos;
@@ -56,20 +55,12 @@ fn vs_main(input: VertexInput) -> VertexOutput {
     return out;
 }
 
-// ---- Bind group 0: road materials ----
-@group(0) @binding(0) var road_sampler : sampler;
-@group(0) @binding(2) var tex0 : texture_2d<f32>; // concrete
-@group(0) @binding(3) var tex1 : texture_2d<f32>; // goo (filler between new and old asphalt)
-@group(0) @binding(4) var tex2 : texture_2d<f32>; // asphalt (new, black)
-@group(0) @binding(5) var tex3 : texture_2d<f32>; // asphalt (brighter black, "new" but worn)
-@group(0) @binding(6) var tex4 : texture_2d<f32>; // asphalt (kinda orange old "new age" asphalt I see in germany)
-@group(0) @binding(7) var tex5 : texture_2d<f32>; // asphalt (old, gray, rough asphalt)
-// Keep these comments!
-@group(0) @binding(8) var s_shadow: sampler_comparison;
-@group(0) @binding(9) var t_shadow: texture_depth_2d_array;
+@group(0) @binding(0) var building_sampler : sampler;
+@group(0) @binding(1) var textures : texture_2d_array<f32>;
+@group(0) @binding(2) var s_shadow: sampler_comparison;
+@group(0) @binding(3) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms : Uniforms;
-@group(1) @binding(1) var<uniform> road_appearance: RoadAppearance;
 
 fn fresnel_schlick(cos_theta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (1.0 - F0) * pow(1.0 - cos_theta, 5.0);
@@ -104,21 +95,7 @@ fn fs_main(input : VertexOutput) -> FragmentOut {
     // --- sample material ---
     let uv = input.uv;
     var tex : vec4<f32>;
-    if (input.material_id == 0u) {
-        tex = textureSample(tex0, road_sampler, uv);
-    } else if (input.material_id == 1u) {
-        tex = textureSample(tex1, road_sampler, uv);
-    } else if (input.material_id == 2u) {
-        tex = textureSample(tex2, road_sampler, uv);
-    } else if (input.material_id == 3u) {
-        tex = textureSample(tex3, road_sampler, uv);
-    } else if (input.material_id == 4u) {
-        tex = textureSample(tex4, road_sampler, uv);
-    } else if (input.material_id == 5u) {
-        tex = textureSample(tex5, road_sampler, uv);
-    } else {
-        tex = vec4<f32>(1.0, 0.0, 1.0, 1.0);
-    }
+    tex = textureSample(textures, building_sampler, uv, input.material_id);
 
     let albedo = tex.rgb;
 
@@ -162,8 +139,8 @@ fn fs_main(input : VertexOutput) -> FragmentOut {
 
     let ambient = ambient_light * albedo;
 
-    let rgb = (direct + ambient) * road_appearance.tint.xyz;
-    let a   = road_appearance.tint.w;
+    let rgb = (direct + ambient) * input.color.rgb;
+    let a   = input.color.a;
 
     out.color = vec4<f32>(rgb, a);
     out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);

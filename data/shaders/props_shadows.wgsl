@@ -31,10 +31,10 @@ struct VSOut {
     @location(1) texture_id: u32,
 };
 @group(0) @binding(0) var texture_sampler: sampler;
-@group(0) @binding(1) var tex1: texture_2d<f32>;
-@group(0) @binding(2) var tex2: texture_2d<f32>;
-@group(0) @binding(3) var tex3: texture_2d<f32>;
-@group(0) @binding(4) var tex4: texture_2d<f32>;
+@group(0) @binding(2) var tex1: texture_2d<f32>;
+@group(0) @binding(3) var tex2: texture_2d<f32>;
+@group(0) @binding(4) var tex3: texture_2d<f32>;
+@group(0) @binding(5) var tex4: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(1) var<uniform> shadow_uniforms: ShadowUniform;
 

@@ -2,12 +2,12 @@
 #include "includes/uniforms.wgsl"
 
 @group(0) @binding(0) var texture_sampler: sampler;
-@group(0) @binding(1) var tex1: texture_2d<f32>;
-@group(0) @binding(2) var tex2: texture_2d<f32>;
-@group(0) @binding(3) var tex3: texture_2d<f32>;
-@group(0) @binding(4) var tex4: texture_2d<f32>;
-@group(0) @binding(5) var s_shadow: sampler_comparison;
-@group(0) @binding(6) var t_shadow: texture_depth_2d_array;
+@group(0) @binding(2) var tex1: texture_2d<f32>;
+@group(0) @binding(3) var tex2: texture_2d<f32>;
+@group(0) @binding(4) var tex3: texture_2d<f32>;
+@group(0) @binding(5) var tex4: texture_2d<f32>;
+@group(0) @binding(6) var s_shadow: sampler_comparison;
+@group(0) @binding(7) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -26,7 +26,7 @@ struct InstanceInput {
     @location(7)  model_col2: vec4<f32>,
     @location(8)  model_col3: vec4<f32>,
     @location(9)  prev_model_col0: vec4<f32>,
-    @location(10)  prev_model_col1: vec4<f32>,
+    @location(10) prev_model_col1: vec4<f32>,
     @location(11) prev_model_col2: vec4<f32>,
     @location(12) prev_model_col3: vec4<f32>,
     @location(13) color: vec4<f32>,

@@ -1,6 +1,7 @@
 use crate::helpers::paths::saves_dir;
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavePropChunk};
+use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{BuildingStorage, Buildings};
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::camera::{Camera, CameraController};
@@ -105,6 +106,7 @@ impl GameState {
         terrain: &mut Terrain,
         props: &mut Props,
         buildings: &mut Buildings,
+        variables: &mut Variables,
     ) -> LoadResult {
         let safe_name = sanitize(save_name);
         let path = saves_dir().join(format!("{}.rss", safe_name));
@@ -173,8 +175,15 @@ impl GameState {
             Err(e) => return LoadResult::PathError(e),
         }
 
-        self.current_save
-            .load(camera, camera_controller, roads, terrain, props, buildings);
+        self.current_save.load(
+            camera,
+            camera_controller,
+            roads,
+            terrain,
+            props,
+            buildings,
+            variables,
+        );
         LoadResult::Success(detected_version.unwrap_or(SaveVersion::current()))
     }
 
@@ -474,6 +483,7 @@ impl SaveState {
         terrain: &mut Terrain,
         props: &mut Props,
         buildings: &mut Buildings,
+        variables: &mut Variables,
     ) {
         if self.chunk_size == 0 {
             self.chunk_size = default_chunk_size();
@@ -499,6 +509,7 @@ impl SaveState {
         buildings.storage = mem::take(&mut self.buildings);
         roads.partition_manager = mem::take(&mut self.partitions);
         roads.road_manager.road_types = mem::take(&mut self.road_types);
+        //variables.set_i64("lanes_left", terrain.cursor.road_type.unwrap().lanes_each_direction().0 as i64);
     }
     pub fn save(
         &mut self,
