@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -34,7 +34,6 @@ pub struct WorldPos {
     pub chunk: ChunkCoord,
     pub local: LocalPos,
 }
-
 impl ChunkCoord {
     #[inline]
     pub fn new(x: i32, z: i32) -> Self {
@@ -205,7 +204,19 @@ impl WorldPos {
         }
         .normalize()
     }
-
+    /// WorldPos + Vec2 = moved WorldPos (meters) in XZ (Vec2.y is added to z of WorldPos)
+    #[inline]
+    pub fn add_vec2(self, rhs: Vec2) -> WorldPos {
+        WorldPos {
+            chunk: self.chunk,
+            local: LocalPos {
+                x: self.local.x + rhs.x,
+                y: self.local.y,
+                z: self.local.z + rhs.y,
+            },
+        }
+        .normalize()
+    }
     /// WorldPos + WorldPos = WorldPos
     /// Treats `rhs` as a displacement from world origin and adds it to `self`.
     /// Uses integer arithmetic for chunk components to maintain precision.
@@ -452,6 +463,24 @@ impl WorldPos {
     pub fn dz(self, other: WorldPos) -> f64 {
         let cs = chunk_size() as f64;
         (other.chunk.z - self.chunk.z) as f64 * cs + (other.local.z as f64 - self.local.z as f64)
+    }
+
+    // Where is point p in my rotated grid space?
+    // forward must be normalized
+    // right must be perpendicular
+    #[inline]
+    pub fn delta_xz(&self, other: WorldPos, right: Vec2, forward: Vec2) -> Vec2 {
+        // world-space offset
+        let dx = self.dx(other) as f32;
+        let dz = self.dz(other) as f32;
+
+        let d = Vec2::new(dx, dz);
+
+        // project onto rotated basis
+        Vec2::new(
+            d.dot(right),   // local X
+            d.dot(forward), // local Z
+        )
     }
     pub fn area(points: &[WorldPos]) -> f64 {
         let n = points.len();

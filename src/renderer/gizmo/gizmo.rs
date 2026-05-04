@@ -121,6 +121,9 @@ impl Gizmo {
             let byte_size = (batches.thin_vertices.len() * size_of::<LineVtxRender>()) as u64;
             if byte_size > self.gizmo_buffer.size() {
                 let new_size = (self.gizmo_buffer.size() * 2).max(byte_size);
+                if new_size > device.limits().max_buffer_size {
+                    return (0, 0, 0);
+                }
                 self.gizmo_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Thin Lines VB"),
                     size: new_size,
@@ -140,6 +143,9 @@ impl Gizmo {
             let byte_size = (batches.thick_vertices.len() * size_of::<LineVtxRender>()) as u64;
             if byte_size > self.thick_buffer.size() {
                 let new_size = (self.thick_buffer.size() * 2).max(byte_size);
+                if new_size > device.limits().max_buffer_size {
+                    return (0, 0, 0);
+                }
                 self.thick_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Thick Geometry VB"),
                     size: new_size,
@@ -159,6 +165,9 @@ impl Gizmo {
             let byte_size = (batches.text_vertices.len() * size_of::<TextVtxRender>()) as u64;
             if byte_size > self.text_buffer.size() {
                 let new_size = (self.text_buffer.size() * 2).max(byte_size);
+                if new_size > device.limits().max_buffer_size {
+                    return (0, 0, 0);
+                }
                 self.text_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Text Geometry VB"),
                     size: new_size,

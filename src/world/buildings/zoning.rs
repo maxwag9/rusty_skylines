@@ -6,10 +6,10 @@ use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{
-    Building, BuildingId, BuildingParams, BuildingParamsLevels, Buildings,
+    Building, BuildingId, BuildingParams, BuildingParamsLevels, Buildings, Color, RoofMaterial,
+    RoofType, WallMaterial,
 };
 use crate::world::camera::Camera;
-use crate::world::cars::car_structs::ChunkDistance;
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, world_pos_chunk_to_id,
 };
@@ -17,11 +17,12 @@ use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::statisticals::demands::ZoningDemand;
 use crate::world::terrain::terrain_subsystem::{CursorMode, PickedPoint, Terrain};
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use rand::RngExt;
 use rand::rngs::ThreadRng;
 use rayon::iter::IntoParallelRefMutIterator;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::slice::IterMut;
 
@@ -80,6 +81,8 @@ impl District {
         self.center = WorldPos::centroid(&self.points);
     }
     pub fn update(
+        gizmo: &mut Gizmo,
+        terrain: &Terrain,
         time: &Time,
         buildings: &mut Buildings,
         district_id: DistrictId,
@@ -107,13 +110,56 @@ impl District {
             if buildings.storage.get(lot.building_id).is_some() {
                 continue;
             }
-            let building = generate_building(lot);
-            lot.building_id = buildings.storage.spawn(
-                lot.center.chunk,
-                lot.zoning_type,
-                ChunkDistance::Close,
-                building,
-            );
+            let tiles = lot.get_tiles();
+            for ((x, z), tile) in tiles.iter() {
+                let direction = lot.entrance.1;
+
+                let forward = Vec2::new(direction.x, direction.z).normalize();
+                let right = Vec2::new(forward.y, -forward.x);
+                let mut tile_origin = lot
+                    .entrance
+                    .0
+                    .add_vec2(right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5));
+                tile_origin.local.y = terrain.get_height_at(tile_origin, true);
+                match tile {
+                    Tile::Square => {
+                        let corners_local =
+                            [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+
+                        let mut points: Vec<WorldPos> = corners_local
+                            .iter()
+                            .map(|(cx, cz)| {
+                                let mut corner = lot.entrance.0.add_vec2(
+                                    right * (*x as f32 + cx) + forward * (*z as f32 + cz),
+                                );
+                                corner.local.y = terrain.get_height_at(corner, true);
+                                corner
+                            })
+                            .collect();
+
+                        // Close the loop
+                        points.push(points[0]);
+
+                        gizmo.polyline(points.as_slice(), [0.0, 0.0, 0.0, 1.0], 0.0, 0.1, 100.0);
+                    }
+                    Tile::Polygon(points) => {
+                        // Draw the polygon outline
+                        for i in 0..points.len() {
+                            let a = points[i];
+                            let b = points[(i + 1) % points.len()];
+                            gizmo.line(a, b, [0.2, 1.0, 0.2, 1.0], 0.0, 10.0);
+                        }
+                    }
+                }
+            }
+            // if let Some(building) = generate_building(lot) {
+            //     lot.building_id = Some(buildings.storage.spawn(
+            //         lot.center.chunk,
+            //         lot.zoning_type,
+            //         ChunkDistance::Close,
+            //         building,
+            //     ));
+            // }
         }
         let Some(district) = buildings
             .zoning
@@ -389,7 +435,7 @@ impl District {
         let mut poly_b: Option<Vec<WorldPos>> = None;
 
         if let Some(split_line) = best_line {
-            let mut crossings = collect_crossings(&split_line, boundary);
+            let crossings = collect_crossings(&split_line, boundary);
 
             if crossings.len() >= 2 {
                 let entry = crossings.first().copied().unwrap();
@@ -531,12 +577,51 @@ impl District {
     }
 }
 
-fn generate_building(lot: &Lot) -> Building {
+fn generate_building(lot: &Lot) -> Option<Building> {
+    if matches!(lot.zoning_type, ZoningType::None) {
+        return None;
+    };
+    let roof = match lot.zoning_type {
+        ZoningType::None => RoofType::Flat,
+        ZoningType::Residential => RoofType::Triangle(30.0),
+        ZoningType::Commercial => RoofType::Flat,
+        ZoningType::Industrial => RoofType::Flat,
+        ZoningType::Office => RoofType::Flat,
+    };
+    let roof_material = match lot.zoning_type {
+        ZoningType::None => RoofMaterial::Metal,
+        ZoningType::Residential => RoofMaterial::Shingles,
+        ZoningType::Commercial => RoofMaterial::Metal,
+        ZoningType::Industrial => RoofMaterial::Metal,
+        ZoningType::Office => RoofMaterial::Shingles,
+    };
+    let wall_material = match lot.zoning_type {
+        ZoningType::None => WallMaterial::default(),
+        ZoningType::Residential => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
+        ZoningType::Commercial => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
+        ZoningType::Industrial => WallMaterial::Paint(Color([0.4f32, 0.4, 0.4, 1.0])),
+        ZoningType::Office => WallMaterial::Paint(Color([0.9f32, 0.9, 0.9, 1.0])),
+    };
+    let story_height = match lot.zoning_type {
+        ZoningType::None => 2.5,
+        ZoningType::Residential => 2.7,
+        ZoningType::Commercial => 3.0,
+        ZoningType::Industrial => 4.0,
+        ZoningType::Office => 3.0,
+    };
+    let num_stories = match lot.zoning_type {
+        ZoningType::None => 1,
+        ZoningType::Residential => 2,
+        ZoningType::Commercial => 1,
+        ZoningType::Industrial => 2,
+        ZoningType::Office => 3,
+    };
     let level0 = BuildingParams {
-        roof: Default::default(),
-        roof_material: Default::default(),
-        wall_material: Default::default(),
-        height: 20.0,
+        roof,
+        roof_material,
+        wall_material,
+        story_height,
+        num_stories,
         basement: Default::default(),
         garden: Default::default(),
         miscellaneous: Default::default(),
@@ -550,13 +635,14 @@ fn generate_building(lot: &Lot) -> Building {
         level5: Default::default(),
     };
 
-    Building {
+    Some(Building {
         id: 631864891,
         position: lot.center,
         segment_id: lot.segment_id,
         lot_id: lot.id,
+        level: Default::default(),
         building_params,
-    }
+    })
 }
 
 #[derive(Clone, Default)]
@@ -684,14 +770,14 @@ impl Zoning {
                     &ZoningType::None,
                     variables,
                     gizmo,
-                    Some([1.0, 1.0, 1.0, 0.5]),
+                    Some([1.0, 1.0, 1.0, 0.2]),
                     None,
                 );
             }
 
             gizmo.polyline(
                 district.points.as_slice(),
-                [0.14, 0.21, 0.5, 1.0],
+                [0.14, 0.21, 0.5, 0.5],
                 0.0,
                 0.1,
                 0.0,
@@ -843,6 +929,8 @@ impl Zoning {
         }
     }
     pub fn update_districts(
+        gizmo: &mut Gizmo,
+        terrain: &Terrain,
         buildings: &mut Buildings,
         time: &Time,
         road_edge_storage: &RoadEdgeStorage,
@@ -852,9 +940,14 @@ impl Zoning {
         }
         //println!("updating districts");
         for district_id in buildings.zoning.zoning_storage.district_ids() {
-            if let Some(district) =
-                District::update(time, buildings, district_id, road_edge_storage)
-            {
+            if let Some(district) = District::update(
+                gizmo,
+                terrain,
+                time,
+                buildings,
+                district_id,
+                road_edge_storage,
+            ) {
                 buildings.zoning.zoning_storage.spawn_district(district);
             }
         }
@@ -1124,10 +1217,11 @@ impl Zoning {
                             id: 6945220,
                             bounds: preview,
                             center: Default::default(),
+                            entrance: (snap_point.pos, snap_point.lateral),
                             zoning_type: new_zoning_type.clone(),
                             segment_id: snap_point.segment_id,
                             district_id: 6378186,
-                            building_id: 543818852,
+                            building_id: None,
                         };
 
                         self.zoning_storage.spawn_lot(lot);
@@ -1167,12 +1261,12 @@ impl Zoning {
                     &lot.zoning_type,
                     variables,
                     gizmo,
-                    None,
+                    Some([1.0, 1.0, 1.0, 0.3]),
                     None,
                 );
             }
 
-            gizmo.polyline(lot.bounds.as_slice(), [0.1, 0.3, 0.7, 1.0], 0.0, 0.15, 0.0);
+            gizmo.polyline(lot.bounds.as_slice(), [0.1, 0.3, 0.7, 0.8], 0.0, 0.10, 0.0);
         }
         if let Some(lot_id) = inside_lot_id
             && finished_removing_lot
@@ -1551,20 +1645,70 @@ fn collect_lot_point(
 
 pub type DistrictId = u32;
 pub type LotId = u32;
+
+pub enum Tile {
+    Square,
+    Polygon(Vec<WorldPos>),
+}
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Lot {
     pub id: LotId,
     pub bounds: Vec<WorldPos>,
     pub center: WorldPos,
+    pub entrance: (WorldPos, Vec3), // From this point into the lot
     pub zoning_type: ZoningType,
     pub segment_id: SegmentId,
+
     pub district_id: DistrictId,
-    pub building_id: BuildingId,
+    pub building_id: Option<BuildingId>,
 }
 impl Lot {
     #[inline]
     pub fn chunk_id(&self) -> ChunkId {
         world_pos_chunk_to_id(&self.center)
+    }
+
+    pub fn get_tiles(&self) -> HashMap<(i32, i32), Tile> {
+        let mut tiles = HashMap::new();
+
+        // Use lot center as stable origin
+        let origin = self.entrance.0;
+        let direction = self.entrance.1;
+
+        let forward = Vec2::new(direction.x, direction.z).normalize();
+        let right = Vec2::new(forward.y, -forward.x);
+
+        // --- 1. Compute bounds in local grid space ---
+        let mut min_x = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut min_z = i32::MAX;
+        let mut max_z = i32::MIN;
+
+        for p in &self.bounds {
+            let local = origin.delta_xz(*p, right, forward);
+            let gx = local.x.floor() as i32;
+            let gz = local.y.floor() as i32;
+            min_x = min_x.min(gx);
+            max_x = max_x.max(gx);
+            min_z = min_z.min(gz);
+            max_z = max_z.max(gz);
+        }
+
+        // --- 2. Iterate grid ---
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                // World position of tile corner
+                let tile_pos =
+                    origin.add_vec2(right * (x as f32 + 0.5) + forward * (z as f32 + 0.5));
+
+                // --- 3. Inside test (simple version) ---
+                if point_in_polygon_xz(tile_pos, &self.bounds) {
+                    tiles.insert((x, z), Tile::Square);
+                }
+            }
+        }
+
+        tiles
     }
 }
 #[derive(Serialize, Deserialize, Default, Clone)]

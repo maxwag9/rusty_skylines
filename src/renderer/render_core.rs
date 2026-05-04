@@ -626,20 +626,8 @@ impl Renderer {
                 self.msaa_samples,
             );
         });
-        // 5. Buildings
-        gpu_timestamp!(pass, &mut self.profiler, "Buildings", {
-            render_buildings(
-                &mut pass,
-                &mut self.render_manager,
-                terrain,
-                buildings,
-                &mut self.building_renderer,
-                &self.pipelines,
-                settings,
-                self.msaa_samples,
-            );
-        });
-        // 6
+
+        // 5. Gizmo
         gpu_timestamp!(pass, &mut self.profiler, "Gizmo", {
             render_gizmo(
                 &mut pass,
@@ -651,6 +639,19 @@ impl Renderer {
                 camera,
                 &self.device,
                 &self.queue,
+            );
+        });
+        // 6. Buildings
+        gpu_timestamp!(pass, &mut self.profiler, "Buildings", {
+            render_buildings(
+                &mut pass,
+                &mut self.render_manager,
+                terrain,
+                buildings,
+                &mut self.building_renderer,
+                &self.pipelines,
+                settings,
+                self.msaa_samples,
             );
         });
         pass.forget_lifetime();

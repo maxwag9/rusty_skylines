@@ -1,19 +1,19 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.7.5"
+version = "0.7.6"
 edition = "2024"
 
 [dependencies]
 winit = { version = "0.31.0-beta.2", features = ["serde"] }
 
-wgpu = "29.0.1"
+wgpu = "29.0.3"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 glam = { version = "0.32.1", features = ["serde"] }
 toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
 anyhow = "1.0.102"
-notify = "9.0.0-rc.3"
+notify = "9.0.0-rc.4"
 num_cpus = "1.17.0"
 crossbeam-channel = "0.5.15"
 fastnoise-lite = "1.1.1"

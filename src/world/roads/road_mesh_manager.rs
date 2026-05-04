@@ -346,6 +346,7 @@ fn mesh_segment_with_boundaries(
             indices,
         );
         road_edges.right_sidewalk_edge = edges;
+        //println!("Right sidewalk edges made, {}", road_edges.right_sidewalk_edge.len());
         let inner_offset = offset - road_type.sidewalk_width * 0.5;
         build_vertical_face(
             terrain_renderer,
@@ -1022,6 +1023,7 @@ impl RoadMeshManager {
         &mut self,
         terrain: &Terrain,
         chunk_id: Option<ChunkId>,
+        is_preview: bool,
         storage: &RoadStorage,
         road_types: &RoadTypes,
         style: &RoadStyleParams,
@@ -1148,7 +1150,9 @@ impl RoadMeshManager {
             //     gizmo.polyline(&lane.right_points, [0.8, 0.5, 0.0, 1.0], 8.0, 0.0, 0.0);
             //     gizmo.polyline(&lane.left_points, [0.0, 0.5, 0.8, 1.0], 8.0, 0.0, 0.0);
             // }
-            self.road_edge_storage.insert(seg_id, road_edges);
+            if !is_preview {
+                self.road_edge_storage.insert(seg_id, road_edges);
+            }
         }
 
         ChunkMesh {
@@ -1170,6 +1174,7 @@ impl RoadMeshManager {
         let mesh = self.build_mesh(
             terrain,
             Some(chunk_id),
+            false,
             &road_manager.roads,
             &road_manager.road_types,
             style,
@@ -1190,6 +1195,7 @@ impl RoadMeshManager {
         self.build_mesh(
             terrain,
             None,
+            true,
             &road_manager.preview_roads,
             &road_manager.road_types,
             style,

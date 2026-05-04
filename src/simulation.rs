@@ -103,6 +103,8 @@ impl Simulation {
         );
         buildings.storage.update(camera.target.chunk);
         Zoning::update_districts(
+            &mut renderer.gizmo,
+            terrain,
             buildings,
             time,
             &renderer.road_renderer.mesh_manager.road_edge_storage,

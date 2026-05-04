@@ -921,6 +921,7 @@ impl Terrain {
 
         queue.write_buffer(pick_uniform_buffer, 0, bytemuck::bytes_of(&u));
     }
+
     pub fn get_height_at(&self, pos: WorldPos, high_res: bool) -> f32 {
         let chunk = match self.chunks.get(&pos.chunk) {
             Some(c) => c,

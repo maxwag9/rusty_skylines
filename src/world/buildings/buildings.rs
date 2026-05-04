@@ -21,16 +21,16 @@ use wgpu_render_manager::generator::{TextureKey, TextureParams};
 use wgpu_render_manager::renderer::RenderManager;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub struct Color(pub [f32; 3]);
+pub struct Color(pub [f32; 4]);
 
 impl Color {
     fn white() -> Color {
-        Color([1.0, 1.0, 1.0])
+        Color([1.0, 1.0, 1.0, 1.0])
     }
 }
 
 impl Deref for Color {
-    type Target = [f32; 3];
+    type Target = [f32; 4];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -48,8 +48,8 @@ pub enum RoofType {
     /// Just a flat Roof
     #[default]
     Flat,
-    /// Roof with just one side inclined, deg
-    Angled(f32),
+    /// Roof with just one side inclined, rad
+    Angled { pitch: f32, direction_rad: f32 },
     /// Roof with two sides at an equal but opposite incline, deg
     Triangle(f32),
 }
@@ -59,9 +59,13 @@ impl Hash for RoofType {
             RoofType::Flat => {
                 0u8.hash(state);
             }
-            RoofType::Angled(v) => {
+            RoofType::Angled {
+                pitch,
+                direction_rad,
+            } => {
                 1u8.hash(state);
-                v.to_bits().hash(state);
+                pitch.to_bits().hash(state);
+                direction_rad.to_bits().hash(state);
             }
             RoofType::Triangle(v) => {
                 2u8.hash(state);
@@ -88,7 +92,6 @@ pub struct BasementParams {}
 #[derive(Serialize, Deserialize, Clone, Hash)]
 pub enum WallMaterial {
     Paint(Color),
-    Metal,
     Custom(TextureKey),
 }
 impl Default for WallMaterial {
@@ -118,7 +121,8 @@ pub struct BuildingParams {
     pub roof: RoofType,
     pub roof_material: RoofMaterial,
     pub wall_material: WallMaterial,
-    pub height: f32,
+    pub story_height: f32,
+    pub num_stories: u16,
     pub basement: BasementParams,
     pub garden: GardenParams,
     pub miscellaneous: MiscBuildingParams,
@@ -128,7 +132,7 @@ impl Hash for BuildingParams {
         self.roof.hash(state);
         self.roof_material.hash(state);
         self.wall_material.hash(state);
-        self.height.to_bits().hash(state); // <- important
+        self.story_height.to_bits().hash(state); // <- important
         self.basement.hash(state);
         self.garden.hash(state);
         self.miscellaneous.hash(state);
@@ -144,14 +148,36 @@ pub struct BuildingParamsLevels {
     pub level5: BuildingParams,
 }
 #[derive(Serialize, Deserialize, Clone, Default, Hash)]
+pub enum BuildingLevel {
+    #[default]
+    Level0,
+    Level1,
+    Level2,
+    Level3,
+    Level4,
+    Level5,
+}
+#[derive(Serialize, Deserialize, Clone, Default, Hash)]
 pub struct Building {
     pub id: BuildingId,
     pub position: WorldPos,
     pub segment_id: SegmentId,
     pub lot_id: LotId,
+    pub level: BuildingLevel,
     pub building_params: BuildingParamsLevels,
 }
-
+impl Building {
+    pub fn current_level_params(&self) -> &BuildingParams {
+        match self.level {
+            BuildingLevel::Level0 => &self.building_params.level0,
+            BuildingLevel::Level1 => &self.building_params.level1,
+            BuildingLevel::Level2 => &self.building_params.level2,
+            BuildingLevel::Level3 => &self.building_params.level3,
+            BuildingLevel::Level4 => &self.building_params.level4,
+            BuildingLevel::Level5 => &self.building_params.level5,
+        }
+    }
+}
 #[derive(Clone, Default)]
 pub struct Buildings {
     pub storage: BuildingStorage,
@@ -304,12 +330,20 @@ impl BuildingStorage {
     }
 
     #[inline]
-    pub fn get(&self, id: BuildingId) -> Option<&Building> {
+    pub fn get<I>(&self, id: I) -> Option<&Building>
+    where
+        I: Into<Option<BuildingId>>,
+    {
+        let id = id.into()?;
         self.buildings.get(id as usize)?.as_ref()
     }
 
     #[inline]
-    pub fn get_mut(&mut self, id: BuildingId) -> Option<&mut Building> {
+    pub fn get_mut<I>(&mut self, id: I) -> Option<&mut Building>
+    where
+        I: Into<Option<BuildingId>>,
+    {
+        let id = id.into()?;
         self.buildings.get_mut(id as usize)?.as_mut()
     }
 }
@@ -803,7 +837,6 @@ impl BuildingMeshManager {
     }
 
     /// Build mesh for a chunk
-    /// Build mesh for a chunk
     pub fn build_mesh_for_chunk(
         &mut self,
         render_manager: &mut RenderManager,
@@ -816,9 +849,6 @@ impl BuildingMeshManager {
         let mut indices = Vec::new();
 
         let lot_ids: Vec<LotId> = buildings.zoning.zoning_storage.lots_in_chunk(cid);
-        if !lot_ids.is_empty() {
-            println!("Building chunk mesh!");
-        }
 
         for lot in lot_ids
             .iter()
@@ -828,111 +858,54 @@ impl BuildingMeshManager {
                 continue;
             };
 
-            let wall_key = match &building.building_params.level0.wall_material {
-                WallMaterial::Paint(_) => TextureKey::new("goo", TextureParams::default(), 512),
-                WallMaterial::Metal => TextureKey::new("goo", TextureParams::default(), 512),
+            let level = building.current_level_params();
+            let story_height = level.story_height;
+            let num_stories = level.num_stories;
+            let wall_height = story_height * num_stories as f32;
+
+            let wall_key = match &level.wall_material {
+                WallMaterial::Paint(color) => TextureKey::new(
+                    "paint",
+                    TextureParams::default()
+                        .with_primary_color(**color)
+                        .with_secondary_color([0.0, 0.0, 0.0, 1.0]),
+                    512,
+                ),
+                WallMaterial::Custom(key) => key.clone(),
+            };
+            let roof_key = match &level.roof_material {
+                RoofMaterial::Shingles => TextureKey::new(
+                    "shingles",
+                    TextureParams::default().with_primary_color([0.4, 0.15, 0.05, 1.0]),
+                    512,
+                ),
+                RoofMaterial::Metal => TextureKey::new(
+                    "metal_roof",
+                    TextureParams::default().with_primary_color([0.2, 0.2, 0.2, 1.0]),
+                    512,
+                ),
+                RoofMaterial::Custom(key) => key.clone(),
+            };
+            let window_key = match &level.miscellaneous.window_material_accent {
+                WallMaterial::Paint(color) => TextureKey::new(
+                    "paint",
+                    TextureParams::default().with_primary_color(**color),
+                    512,
+                ),
                 WallMaterial::Custom(key) => key.clone(),
             };
 
-            let material_ids = render_manager.ensure_textures(&[wall_key]);
-            let material_id = material_ids[0];
+            let mat_ids = render_manager.ensure_textures(&[wall_key, roof_key, window_key]);
+            let wall_id = mat_ids[0];
+            let roof_id = mat_ids[1];
+            let window_id = mat_ids[2];
 
-            let points = &lot.bounds;
-            let n = points.len();
-            if n < 2 {
+            let border = &lot.bounds;
+            let n = border.len();
+            if n < 3 {
                 continue;
             }
-
-            let wall_height = 20.0;
-
-            // Build vertical walls around the perimeter.
-            // Works for any polygon size.
-            for i in 0..n {
-                let j = (i + 1) % n;
-
-                let p0 = &points[i];
-                let p1 = &points[j];
-
-                let base_index = vertices.len() as u32;
-
-                let a0 = [p0.local.x, p0.local.y, p0.local.z];
-                let b0 = [p1.local.x, p1.local.y, p1.local.z];
-                let b1 = [p1.local.x, p1.local.y + wall_height, p1.local.z];
-                let a1 = [p0.local.x, p0.local.y + wall_height, p0.local.z];
-
-                // Edge direction in XZ
-                let dx = p1.local.x - p0.local.x;
-                let dz = p1.local.z - p0.local.z;
-
-                // Outward-ish wall normal. If winding is reversed, this flips.
-                let len = (dx * dx + dz * dz).sqrt().max(0.0001);
-                let normal = [dz / len, 0.0, -dx / len];
-
-                vertices.push(BuildingVertex {
-                    chunk_xz: [p0.chunk.x, p0.chunk.z],
-                    local_position: a0,
-                    normal,
-                    uv: [0.0, 0.0],
-                    color: [70.2, 80.0, 70.2, 1.0],
-                    material_id,
-                });
-                vertices.push(BuildingVertex {
-                    chunk_xz: [p1.chunk.x, p1.chunk.z],
-                    local_position: b0,
-                    normal,
-                    uv: [1.0, 0.0],
-                    color: [70.2, 80.0, 70.2, 1.0],
-                    material_id,
-                });
-                vertices.push(BuildingVertex {
-                    chunk_xz: [p1.chunk.x, p1.chunk.z],
-                    local_position: b1,
-                    normal,
-                    uv: [1.0, 1.0],
-                    color: [70.2, 80.0, 70.2, 1.0],
-                    material_id,
-                });
-                vertices.push(BuildingVertex {
-                    chunk_xz: [p0.chunk.x, p0.chunk.z],
-                    local_position: a1,
-                    normal,
-                    uv: [0.0, 1.0],
-                    color: [70.2, 80.0, 70.2, 1.0],
-                    material_id,
-                });
-
-                // Two triangles per wall quad
-                indices.extend_from_slice(&[
-                    base_index,
-                    base_index + 2,
-                    base_index + 1,
-                    base_index,
-                    base_index + 3,
-                    base_index + 2,
-                ]);
-            }
-            let roof_base = vertices.len() as u32;
-
-            // push top vertices (already elevated)
-            for p in points {
-                vertices.push(BuildingVertex {
-                    chunk_xz: [p.chunk.x, p.chunk.z],
-                    local_position: [p.local.x, p.local.y + wall_height, p.local.z],
-                    normal: [0.0, 1.0, 0.0],
-                    uv: [p.local.x, p.local.z], // lazy planar mapping
-                    color: [70.2, 50.0, 70.2, 1.0],
-                    material_id,
-                });
-            }
-
-            // triangle fan
-            for i in 1..(n - 1) {
-                indices.extend_from_slice(&[
-                    roof_base,
-                    roof_base + (i as u32 + 1),
-                    roof_base + i as u32,
-                ]);
-            }
+            for tile in lot.get_tiles() {}
         }
 
         BuildingChunkMesh {
