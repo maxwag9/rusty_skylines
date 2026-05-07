@@ -23,6 +23,7 @@ use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::*;
 use crate::world::buildings::buildings::{BuildingRenderer, Buildings};
+use crate::world::buildings::zoning::Zoning;
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
@@ -283,6 +284,7 @@ impl Renderer {
             &world_core.cars,
             astronomy,
             &mut world_core.buildings,
+            &mut world_core.zoning,
         );
     }
 
@@ -325,6 +327,7 @@ impl Renderer {
         cars: &Cars,
         astronomy: &Astronomy,
         buildings: &mut Buildings,
+        zoning: &mut Zoning,
     ) {
         let eye = camera.target;
         let target_pos_render = eye.to_render_pos(WorldPos::zero());
@@ -333,6 +336,15 @@ impl Renderer {
         ui.variables
             .set_array("target_pos", target_pos_render.to_array());
         buildings.update(
+            camera,
+            terrain,
+            roads,
+            &self.road_renderer.mesh_manager,
+            input,
+            &mut self.gizmo,
+            &ui.variables,
+        );
+        zoning.update(
             camera,
             terrain,
             roads,
@@ -362,6 +374,7 @@ impl Renderer {
             &mut self.render_manager,
             terrain,
             buildings,
+            zoning,
             &self.device,
             &self.queue,
             camera,
@@ -573,32 +586,33 @@ impl Renderer {
         settings: &Settings,
         aspect: f32,
     ) {
-        let mut pass = create_world_pass(encoder, &self.pipelines, config, self.msaa_samples);
-
+        create_world_pass(encoder, &self.pipelines, config, self.msaa_samples, true); // Just Clear the frame
         if !settings.show_world {
             return;
         }
-        // 1. Sky
 
+        // 1. Sky
         // All frame time names must be lowercase, I decided. (Doesn't matter anyway, cuz I .lowercase() anyway.)
         render_sky(
-            &mut pass,
+            encoder,
             &mut self.render_manager,
             &mut self.profiler,
             &self.pipelines,
             settings,
+            config,
             self.msaa_samples,
         );
 
         // 2. Terrain
-        gpu_timestamp!(pass, &mut self.profiler, "Terrain", {
+        gpu_timestamp!(encoder, &mut self.profiler, "Terrain", {
             render_terrain(
-                &mut pass,
+                encoder,
                 &mut self.render_manager,
                 &self.terrain_renderer,
                 terrain,
                 &self.pipelines,
                 settings,
+                config,
                 self.msaa_samples,
                 camera,
                 aspect,
@@ -606,60 +620,48 @@ impl Renderer {
         });
 
         // 3. Water
-        gpu_timestamp!(pass, &mut self.profiler, "Water", {
+        gpu_timestamp!(encoder, &mut self.profiler, "Water", {
             render_water(
-                &mut pass,
+                encoder,
                 &mut self.render_manager,
                 &self.pipelines,
                 settings,
+                config,
                 self.msaa_samples,
             );
         });
         // 4. Roads
-        gpu_timestamp!(pass, &mut self.profiler, "Roads", {
+        gpu_timestamp!(encoder, &mut self.profiler, "Roads", {
             render_roads(
-                &mut pass,
+                encoder,
                 &mut self.render_manager,
                 &self.road_renderer,
                 &self.pipelines,
                 settings,
+                config,
                 self.msaa_samples,
             );
         });
 
-        // 5. Gizmo
-        gpu_timestamp!(pass, &mut self.profiler, "Gizmo", {
-            render_gizmo(
-                &mut pass,
-                &mut self.render_manager,
-                &self.pipelines,
-                settings,
-                self.msaa_samples,
-                &mut self.gizmo,
-                camera,
-                &self.device,
-                &self.queue,
-            );
-        });
-        // 6. Buildings
-        gpu_timestamp!(pass, &mut self.profiler, "Buildings", {
+        // 5. Buildings
+        gpu_timestamp!(encoder, &mut self.profiler, "Buildings", {
             render_buildings(
-                &mut pass,
+                encoder,
                 &mut self.render_manager,
                 terrain,
                 buildings,
                 &mut self.building_renderer,
                 &self.pipelines,
                 settings,
+                config,
                 self.msaa_samples,
             );
         });
-        pass.forget_lifetime();
-        let mut pass = create_instanced_pass(encoder, &self.pipelines, config, self.msaa_samples);
-        // 7
-        gpu_timestamp!(pass, &mut self.profiler, "Cars", {
+
+        // 6
+        gpu_timestamp!(encoder, &mut self.profiler, "Cars", {
             render_cars(
-                &mut pass,
+                encoder,
                 &mut self.render_manager,
                 &mut self.rt_subsystem,
                 &mut self.car_renderer,
@@ -667,18 +669,35 @@ impl Renderer {
                 &self.pipelines,
                 settings,
                 camera,
+                config,
             );
         });
-        // 8
-        gpu_timestamp!(pass, &mut self.profiler, "Props", {
+        // 7
+        gpu_timestamp!(encoder, &mut self.profiler, "Props", {
             render_props(
-                &mut pass,
+                encoder,
                 &mut self.render_manager,
                 &mut self.props,
                 &self.pipelines,
                 settings,
                 camera,
                 terrain,
+                &self.device,
+                &self.queue,
+                config,
+            );
+        });
+        // 8. Gizmo
+        gpu_timestamp!(encoder, &mut self.profiler, "Gizmo", {
+            render_gizmo(
+                encoder,
+                &mut self.render_manager,
+                &self.pipelines,
+                settings,
+                config,
+                self.msaa_samples,
+                &mut self.gizmo,
+                camera,
                 &self.device,
                 &self.queue,
             );
@@ -1324,15 +1343,16 @@ pub fn create_surface_config(
     (config, msaa_samples)
 }
 
-pub(crate) fn create_device(adapter: &Adapter) -> (Device, Queue) {
+pub fn create_device(adapter: &Adapter) -> (Device, Queue) {
+    let features = Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        | Features::TIMESTAMP_QUERY
+        | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+        | Features::DEPTH32FLOAT_STENCIL8;
+    let supported_features = adapter.features();
+    if supported_features.contains(features) {};
     pollster::block_on(adapter.request_device(&DeviceDescriptor {
-        label: Some("Device"),
-        required_features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-            | Features::TIMESTAMP_QUERY
-            | Features::TIMESTAMP_QUERY_INSIDE_PASSES
-            | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
-            | Features::DEPTH32FLOAT_STENCIL8
-            | Features::MULTIVIEW,
+        label: Some("Rusty Skylines GPU Device"),
+        required_features: features,
         required_limits: Limits::default(),
         experimental_features: ExperimentalFeatures::disabled(),
         memory_hints: MemoryHints::default(),

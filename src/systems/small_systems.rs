@@ -18,7 +18,9 @@ pub fn run_commands(resources: &mut Resources) {
 
     for event in world.events.drain() {
         // order is explicit and intentional
-        world.simulation.process_simulation_state_commands(&event);
+        resources
+            .simulation
+            .process_simulation_state_commands(&event);
         cursor_system(
             &mut world.terrain.cursor,
             &event,

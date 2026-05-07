@@ -558,13 +558,13 @@ fn update_time(resources: &mut Resources) {
         settings,
         ui,
         render_core,
+        simulation,
         ..
     } = resources;
     let World {
         world_state,
         time,
         input,
-        simulation,
         terrain,
         ..
     } = world;

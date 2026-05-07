@@ -4,9 +4,7 @@ pub mod drag_hue_point;
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
-use crate::resources::Time;
 use crate::ui::action_parser::{TouchEventKind, parse_action};
-use crate::ui::input::Input;
 use crate::ui::menu::Menu;
 use crate::ui::parser::{Value, eval_expr};
 use crate::ui::ui_edit_manager::{
@@ -22,13 +20,10 @@ use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
-use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::ZoningType;
-use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::{GameState, LoadResult, SaveResult, SaveState};
 use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
-use crate::world::roads::road_subsystem::Roads;
-use crate::world::terrain::terrain_subsystem::Terrain;
+use crate::world::world::World;
 use glam::Vec2;
 use std::cmp::PartialEq;
 use std::collections::{HashMap, VecDeque};
@@ -389,20 +384,14 @@ pub enum CommandResult {
 
 /// Context provided only during command execution (drain phase).
 pub struct CommandContext<'a> {
+    pub world: &'a mut World,
+    pub props: &'a mut Props,
     pub ui: &'a mut Ui,
-    pub input: &'a mut Input,
-    pub time: &'a Time,
-    pub terrain: &'a mut Terrain,
     pub hit: &'a Option<HitResult>,
     pub window_size: PhysicalSize<u32>,
     pub settings: &'a mut Settings,
-    pub camera: &'a mut Camera,
     pub event_loop: &'a dyn ActiveEventLoop,
     pub game_state: &'a mut GameState,
-    pub roads: &'a mut Roads,
-    pub props: &'a mut Props,
-    pub buildings: &'a mut Buildings,
-    pub camera_controller: &'a mut CameraController,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -484,7 +473,7 @@ impl CommandQueue {
                     if !remaining.is_empty() {
                         self.delayed.push(DelayedCommands {
                             commands: remaining,
-                            execute_at: ctx.time.total_time + seconds,
+                            execute_at: ctx.world.time.total_time + seconds,
                         });
                     }
                     break;
@@ -500,7 +489,7 @@ impl CommandQueue {
     }
 
     fn process_delayed(&mut self, ctx: &mut CommandContext) {
-        let current_time = ctx.time.total_time;
+        let current_time = ctx.world.time.total_time;
 
         let ready: Vec<DelayedCommands> = self
             .delayed
@@ -933,7 +922,7 @@ impl CommandQueue {
             }
             // ===== ACTION STATE COMMANDS =====
             UiCommand::StartAction { action_name } => {
-                let state = ActionState::with_time(&action_name, ctx.time.total_time);
+                let state = ActionState::with_time(&action_name, ctx.world.time.total_time);
                 ctx.ui
                     .touch_manager
                     .runtimes
@@ -1095,7 +1084,7 @@ impl CommandQueue {
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
                 CommandResult::Ok
             }
@@ -1137,7 +1126,7 @@ impl CommandQueue {
                     &to_element.menu,
                     &to_element.layer,
                     element,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
                 match result {
                     Ok(ok) => CommandResult::Ok,
@@ -1177,7 +1166,7 @@ impl CommandQueue {
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
                 CommandResult::Ok
             }
@@ -1220,19 +1209,12 @@ impl CommandQueue {
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
                 CommandResult::Ok
             }
             UiCommand::SaveGame => {
-                save_game(
-                    ctx.game_state,
-                    ctx.camera,
-                    ctx.roads,
-                    ctx.terrain,
-                    ctx.props,
-                    ctx.buildings,
-                );
+                save_game(ctx.game_state, ctx.world, ctx.props);
                 CommandResult::Ok
             }
             UiCommand::LoadSave {
@@ -1240,26 +1222,9 @@ impl CommandQueue {
                 without_saving,
             } => {
                 if !without_saving {
-                    save_game(
-                        ctx.game_state,
-                        ctx.camera,
-                        ctx.roads,
-                        ctx.terrain,
-                        ctx.props,
-                        ctx.buildings,
-                    );
+                    save_game(ctx.game_state, ctx.world, ctx.props);
                 }
-                load_save(
-                    ctx.game_state,
-                    ctx.camera,
-                    ctx.camera_controller,
-                    ctx.roads,
-                    ctx.terrain,
-                    ctx.props,
-                    ctx.buildings,
-                    &mut ctx.ui.variables,
-                    save_name.as_str(),
-                );
+                load_save(ctx.game_state, ctx.world, ctx.props, save_name.as_str());
                 CommandResult::Ok
             }
             UiCommand::ExitGame => {
@@ -1267,12 +1232,8 @@ impl CommandQueue {
                     ctx.game_state,
                     ctx.settings,
                     &mut ctx.ui.variables,
-                    ctx.time,
-                    ctx.camera,
-                    ctx.roads,
-                    ctx.terrain,
+                    ctx.world,
                     ctx.props,
-                    ctx.buildings,
                     ctx.event_loop,
                 );
                 CommandResult::Ok
@@ -1341,7 +1302,7 @@ impl CommandQueue {
                         &return_color,
                         ctx.ui,
                         ctx.settings,
-                        ctx.input,
+                        &mut ctx.world.input,
                         &event_kind,
                         &buttons,
                         &element_ref,
@@ -1350,7 +1311,7 @@ impl CommandQueue {
                         &hover_color,
                         ctx.ui,
                         ctx.settings,
-                        ctx.input,
+                        &mut ctx.world.input,
                         &event_kind,
                         &buttons,
                         &element_ref,
@@ -1359,7 +1320,7 @@ impl CommandQueue {
                         &press_color,
                         ctx.ui,
                         ctx.settings,
-                        ctx.input,
+                        &mut ctx.world.input,
                         &event_kind,
                         &buttons,
                         &element_ref,
@@ -1511,35 +1472,23 @@ pub fn style_to_u32(style: &str) -> u32 {
 pub fn process_commands(
     command_queue: &mut CommandQueue,
     ui: &mut Ui,
-    hit: &Option<HitResult>,
-    input: &mut Input,
-    time: &Time,
-    terrain: &mut Terrain,
+    world: &mut World,
     props: &mut Props,
-    buildings: &mut Buildings,
+    hit: &Option<HitResult>,
     window_size: PhysicalSize<u32>,
-    roads: &mut Roads,
     settings: &mut Settings,
-    camera: &mut Camera,
-    camera_controller: &mut CameraController,
     event_loop: &dyn ActiveEventLoop,
     game_state: &mut GameState,
 ) {
     let mut ctx = CommandContext {
+        world,
+        props,
         ui,
-        input,
-        time,
-        terrain,
         hit,
         window_size,
         settings,
-        camera,
-        camera_controller,
         event_loop,
         game_state,
-        roads,
-        props,
-        buildings,
     };
 
     command_queue.drain(&mut ctx);
@@ -1562,59 +1511,34 @@ pub fn exit_game(
     game_state: &mut GameState,
     settings: &mut Settings,
     variables: &mut Variables,
-    time: &Time,
-    camera: &Camera,
-    roads: &Roads,
-    terrain: &Terrain,
+    world: &World,
     props: &Props,
-    buildings: &Buildings,
     event_loop: &dyn ActiveEventLoop,
 ) {
-    settings.total_game_time = time.total_game_time;
+    settings.total_game_time = world.time.total_game_time;
     match settings.save(rusty_skylines_dir("settings.toml")) {
         Ok(_) => println!("Settings saved"),
         Err(e) => eprintln!("Failed to save Settings: {e}"),
     }
     save_colors(rusty_skylines_dir("colors.toml"), variables);
-    save_game(game_state, camera, roads, terrain, props, buildings);
+    save_game(game_state, world, props);
 
     event_loop.exit();
     //std::process::exit(69); // Die.
 }
-pub fn save_game(
-    game_state: &mut GameState,
-    camera: &Camera,
-    roads: &Roads,
-    terrain: &Terrain,
-    props: &Props,
-    buildings: &Buildings,
-) {
-    match game_state.save(camera, roads, terrain, props, buildings) {
+pub fn save_game(game_state: &mut GameState, world: &World, props: &Props) {
+    match game_state.save(world, props) {
         SaveResult::Success => println!("World saved"),
         e => eprintln!("Failed to save World: {:#?}", e),
     }
 }
 pub fn load_save(
     game_state: &mut GameState,
-    camera: &mut Camera,
-    camera_controller: &mut CameraController,
-    roads: &mut Roads,
-    terrain: &mut Terrain,
+    world: &mut World,
     props: &mut Props,
-    buildings: &mut Buildings,
-    variables: &mut Variables,
     save_name: &str,
 ) {
-    match game_state.load(
-        save_name,
-        camera,
-        camera_controller,
-        roads,
-        terrain,
-        props,
-        buildings,
-        variables,
-    ) {
+    match game_state.load(save_name, world, props) {
         LoadResult::Success(version) => println!(
             "World '{}', Version {} loaded, {} Terrain Edited Chunks, {} Road Nodes",
             game_state.current_save.name,
@@ -1627,18 +1551,8 @@ pub fn load_save(
             let mut save_state = SaveState::new();
             save_state.name = save_name.to_string();
             game_state.current_save = save_state;
-            game_state.save(camera, roads, terrain, props, buildings);
-            load_save(
-                game_state,
-                camera,
-                camera_controller,
-                roads,
-                terrain,
-                props,
-                buildings,
-                variables,
-                save_name,
-            );
+            game_state.save(world, props);
+            load_save(game_state, world, props, save_name);
         }
         e => eprintln!("Failed to load World: {:#?}", e),
     }
@@ -1653,23 +1567,23 @@ pub fn set_element_property(
     match name {
         "new_zone_type" => {
             let zoning_type = ZoningType::from_value(new_val);
-            ctx.terrain.cursor.zoning_type = zoning_type;
+            ctx.world.terrain.cursor.zoning_type = zoning_type;
             ctx.ui.variables.set_var(name, zoning_type.to_string());
         }
         "target_pos.y" => {
             if let Some(y) = new_val.as_f64() {
-                ctx.camera.target.local.y = y as f32;
+                ctx.world.world_state.camera.target.local.y = y as f32;
                 ctx.ui.variables.set_f64(name, y);
             }
         }
         "cursor_mode" => {
             let mode = new_val.to_string_value();
-            ctx.terrain.cursor.mode = mode.clone().into();
+            ctx.world.terrain.cursor.mode = mode.clone().into();
             ctx.ui.variables.set_string(name, mode);
         }
         "lanes" => {
             if let Some(lanes) = new_val.as_i64() {
-                if let Some(road_type) = &mut ctx.terrain.cursor.road_type {
+                if let Some(road_type) = &mut ctx.world.terrain.cursor.road_type {
                     road_type.lanes_each_direction =
                         (lanes as LeftLaneCount, lanes as RightLaneCount);
                 }
@@ -1678,7 +1592,7 @@ pub fn set_element_property(
         }
         "left_lanes" => {
             if let Some(lanes) = new_val.as_i64() {
-                if let Some(road_type) = &mut ctx.terrain.cursor.road_type {
+                if let Some(road_type) = &mut ctx.world.terrain.cursor.road_type {
                     road_type.lanes_each_direction.0 = lanes as LeftLaneCount;
                 }
                 ctx.ui.variables.set_i64(name, lanes);
@@ -1686,7 +1600,7 @@ pub fn set_element_property(
         }
         "right_lanes" => {
             if let Some(lanes) = new_val.as_i64() {
-                if let Some(road_type) = &mut ctx.terrain.cursor.road_type {
+                if let Some(road_type) = &mut ctx.world.terrain.cursor.road_type {
                     road_type.lanes_each_direction.1 = lanes as RightLaneCount;
                 }
                 ctx.ui.variables.set_i64(name, lanes);
@@ -1788,7 +1702,7 @@ pub fn set_element_property(
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
             }
 
@@ -1808,7 +1722,7 @@ pub fn set_element_property(
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
             }
 
@@ -1831,7 +1745,7 @@ pub fn set_element_property(
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.input.mouse,
+                    &ctx.world.input.mouse,
                 );
             }
 

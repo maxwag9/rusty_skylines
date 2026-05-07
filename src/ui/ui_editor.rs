@@ -29,11 +29,8 @@ use crate::ui::ui_touch_manager::{
 };
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
-use crate::world::buildings::buildings::Buildings;
-use crate::world::camera::{Camera, CameraController};
 use crate::world::game_state::GameState;
-use crate::world::roads::road_subsystem::Roads;
-use crate::world::terrain::terrain_subsystem::Terrain;
+use crate::world::world::World;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -222,24 +219,18 @@ impl Ui {
     pub fn handle_touches(
         &mut self,
         dt: f32,
-        input: &mut Input,
-        time: &Time,
-        terrain: &mut Terrain,
         props: &mut Props,
-        buildings: &mut Buildings,
+        world: &mut World,
         window_size: PhysicalSize<u32>,
-        roads: &mut Roads,
         command_queues: &mut CommandQueues,
         settings: &mut Settings,
-        camera: &mut Camera,
-        camera_controller: &mut CameraController,
         event_loop: &dyn ActiveEventLoop,
         game_state: &mut GameState,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
         }
-        self.touch_manager.config.snap_enabled = input.gameplay_down("UI Snap Modifier");
+        self.touch_manager.config.snap_enabled = world.input.gameplay_down("UI Snap Modifier");
 
         // Update undo manager timing
         self.ui_edit_manager.update(dt);
@@ -247,9 +238,9 @@ impl Ui {
             &mut self.touch_manager,
             &mut self.menus,
             &mut self.variables,
-            &input.mouse,
+            &world.input.mouse,
         );
-
+        let input = &mut world.input;
         self.sync_settings_and_ui(settings);
         self.handle_undo_redo_input(input, dt);
 
@@ -257,7 +248,7 @@ impl Ui {
         self.sync_selected_element_color();
 
         // Create input snapshot
-        let input_snapshot = self.create_input_snapshot(&input.mouse, input);
+        let input_snapshot = self.create_input_snapshot(input);
 
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus);
@@ -282,14 +273,14 @@ impl Ui {
 
         // Handle keyboard movement of elements
         if self.touch_manager.editor.enabled {
-            self.apply_ui_edit_movement(input, time);
+            self.apply_ui_edit_movement(input, &world.time);
         }
 
         // Execute actions
         let top_hit = self.get_current_hit_for_actions();
         if top_hit.is_some() {
             // || self.touch_manager.editor.enabled {
-            terrain.last_picked = None;
+            world.terrain.last_picked = None;
         }
 
         // let print = make_ui_command("print", vec!["hello".into()], &ElementRef::default());
@@ -297,17 +288,11 @@ impl Ui {
         process_commands(
             &mut command_queues.ui_command_queue,
             self,
-            &top_hit,
-            input,
-            time,
-            terrain,
+            world,
             props,
-            buildings,
+            &top_hit,
             window_size,
-            roads,
             settings,
-            camera,
-            camera_controller,
             event_loop,
             game_state,
         );
@@ -334,7 +319,8 @@ impl Ui {
     }
 
     /// Create input snapshot from mouse state
-    fn create_input_snapshot(&self, mouse: &Mouse, input: &Input) -> InputSnapshot {
+    fn create_input_snapshot(&self, input: &Input) -> InputSnapshot {
+        let mouse = &input.mouse;
         InputSnapshot {
             position: mouse.pos.to_array(),
 

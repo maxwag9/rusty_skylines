@@ -295,10 +295,6 @@ impl UiRenderer {
         pipelines: &Pipelines,
         settings: &Settings,
     ) {
-        if !ui.touch_manager.options.show_gui {
-            return;
-        }
-
         if settings.editor_mode {
             let color_attachment = create_color_attachment_load(
                 &pipelines.msaa.hdr,
@@ -346,6 +342,10 @@ impl UiRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        if !ui.touch_manager.options.show_gui {
+            return;
+        }
+
         ui.update_dynamic_texts(settings);
 
         let mut layers_to_render: Vec<&RuntimeLayer> = Vec::new();

@@ -1,15 +1,12 @@
 use crate::helpers::paths::saves_dir;
 use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavePropChunk};
-use crate::ui::variables::Variables;
-use crate::world::buildings::buildings::{BuildingStorage, Buildings};
+use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
-use crate::world::camera::{Camera, CameraController};
 use crate::world::cars::partitions::PartitionManager;
-use crate::world::roads::road_subsystem::Roads;
 use crate::world::roads::roads::{RoadStorage, RoadTypes};
 use crate::world::terrain::terrain_editing::PersistedChunk;
-use crate::world::terrain::terrain_subsystem::Terrain;
+use crate::world::world::World;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -97,17 +94,7 @@ impl GameState {
         }
     }
 
-    pub fn load(
-        &mut self,
-        save_name: &str,
-        camera: &mut Camera,
-        camera_controller: &mut CameraController,
-        roads: &mut Roads,
-        terrain: &mut Terrain,
-        props: &mut Props,
-        buildings: &mut Buildings,
-        variables: &mut Variables,
-    ) -> LoadResult {
+    pub fn load(&mut self, save_name: &str, world: &mut World, props: &mut Props) -> LoadResult {
         let safe_name = sanitize(save_name);
         let path = saves_dir().join(format!("{}.rss", safe_name));
         let detected_version: Option<SaveVersion>;
@@ -175,25 +162,14 @@ impl GameState {
             Err(e) => return LoadResult::PathError(e),
         }
 
-        self.current_save.load(
-            camera,
-            camera_controller,
-            roads,
-            terrain,
-            props,
-            buildings,
-            variables,
-        );
+        self.current_save.load(world, props);
         LoadResult::Success(detected_version.unwrap_or(SaveVersion::current()))
     }
 
     pub fn save_as_version(
         &mut self,
-        camera: &Camera,
-        roads: &Roads,
-        terrain: &Terrain,
+        world: &World,
         props: &Props,
-        buildings: &Buildings,
         target_version: Option<SaveVersion>,
     ) -> SaveResult {
         let safe_name = sanitize(&self.current_save.name);
@@ -216,8 +192,7 @@ impl GameState {
             );
         }
 
-        self.current_save
-            .save(camera, roads, terrain, props, buildings);
+        self.current_save.save(world, props);
 
         let serialized = match target_version {
             Some(ver) => match SaveStateVersioned::from_latest(self.current_save.clone(), ver) {
@@ -266,15 +241,8 @@ impl GameState {
         SaveResult::Success
     }
 
-    pub fn save(
-        &mut self,
-        camera: &Camera,
-        roads: &Roads,
-        terrain: &Terrain,
-        props: &Props,
-        buildings: &Buildings,
-    ) -> SaveResult {
-        self.save_as_version(camera, roads, terrain, props, buildings, None)
+    pub fn save(&mut self, world: &World, props: &Props) -> SaveResult {
+        self.save_as_version(world, props, None)
     }
 }
 
@@ -475,20 +443,16 @@ impl SaveState {
             ..Default::default()
         }
     }
-    pub fn load(
-        &mut self,
-        camera: &mut Camera,
-        camera_controller: &mut CameraController,
-        roads: &mut Roads,
-        terrain: &mut Terrain,
-        props: &mut Props,
-        buildings: &mut Buildings,
-        variables: &mut Variables,
-    ) {
+    pub fn load(&mut self, world: &mut World, props: &mut Props) {
         if self.chunk_size == 0 {
             self.chunk_size = default_chunk_size();
         }
-
+        let camera = &mut world.world_state.camera;
+        let camera_controller = &mut world.world_state.cam_controller;
+        let terrain = &mut world.terrain;
+        let roads = &mut world.roads;
+        let zoning = &mut world.zoning;
+        let buildings = &mut world.buildings;
         set_chunk_size(self.chunk_size);
         camera.target = self.player_pos;
         camera.yaw = self.player_yaw;
@@ -505,20 +469,13 @@ impl SaveState {
 
         props.load_props(mem::take(&mut self.props));
 
-        buildings.zoning.zoning_storage = mem::take(&mut self.zones);
+        zoning.zoning_storage = mem::take(&mut self.zones);
         buildings.storage = mem::take(&mut self.buildings);
         roads.partition_manager = mem::take(&mut self.partitions);
         roads.road_manager.road_types = mem::take(&mut self.road_types);
         //variables.set_i64("lanes_left", terrain.cursor.road_type.unwrap().lanes_each_direction().0 as i64);
     }
-    pub fn save(
-        &mut self,
-        camera: &Camera,
-        roads: &Roads,
-        terrain: &Terrain,
-        props: &Props,
-        buildings: &Buildings,
-    ) {
+    pub fn save(&mut self, world: &World, props: &Props) {
         self.chunk_size = if chunk_size() == 0 {
             default_chunk_size()
         } else {
@@ -529,7 +486,12 @@ impl SaveState {
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-
+        let camera = &world.world_state.camera;
+        let camera_controller = &world.world_state.cam_controller;
+        let terrain = &world.terrain;
+        let roads = &world.roads;
+        let zoning = &world.zoning;
+        let buildings = &world.buildings;
         self.player_pos = camera.target;
         self.player_yaw = camera.yaw;
         self.player_pitch = camera.pitch;
@@ -537,7 +499,7 @@ impl SaveState {
         self.terrain_edits = terrain.terrain_editor.get_edits();
         self.roads = roads.road_manager.roads.clone();
         self.props = props.get_props();
-        self.zones = buildings.zoning.zoning_storage.clone();
+        self.zones = zoning.zoning_storage.clone();
         self.buildings = buildings.storage.clone();
         self.partitions = roads.partition_manager.clone();
         self.road_types = roads.road_manager.road_types.clone();

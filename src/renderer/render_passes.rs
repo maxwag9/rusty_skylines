@@ -140,26 +140,31 @@ pub fn create_world_pass<'a>(
     pipelines: &'a Pipelines,
     config: &'a RenderPassConfig,
     msaa_samples: u32,
+    clear: bool,
 ) -> RenderPass<'a> {
     let color_attachment = make_color_attachment(
         &pipelines.msaa.hdr,
         &pipelines.resolved.hdr,
         msaa_samples,
-        Some(config.background_color),
+        if clear {
+            Some(config.background_color)
+        } else {
+            None
+        },
     );
 
     let normal_attachment = make_color_attachment(
         &pipelines.msaa.normal,
         &pipelines.resolved.normal,
         msaa_samples,
-        Some(Color::BLACK),
+        if clear { Some(Color::BLACK) } else { None },
     );
 
     let motion_attachment = make_instance_attachment(
         &pipelines.post_fx.dummy_motion, // dummy MSAA view (must match msaa_samples)
         &pipelines.post_fx.motion_full,  // resolved motion texture
         msaa_samples,
-        true,
+        clear,
     );
 
     encoder.begin_render_pass(&RenderPassDescriptor {
@@ -169,7 +174,7 @@ pub fn create_world_pass<'a>(
             Some(normal_attachment),
             Some(motion_attachment),
         ],
-        depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, true)),
+        depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, clear)),
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
@@ -231,12 +236,13 @@ pub fn create_instanced_pass<'a>(
 
 // RENDER PASSES
 
-pub fn render_sky(
-    pass: &mut RenderPass,
+pub fn render_sky<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     profiler: &mut GpuProfiler,
     pipelines: &Pipelines,
     settings: &Settings,
+    config: &RenderPassConfig,
     msaa_samples: u32,
 ) {
     let sky_depth_stencil = Some(DepthStencilState {
@@ -251,7 +257,8 @@ pub fn render_sky(
         bias: Default::default(),
     });
     let targets = color_and_normals_and_motion_targets(pipelines);
-    gpu_timestamp!(pass, profiler, "Stars", {
+    gpu_timestamp!(encoder, profiler, "Stars", {
+        let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
         // Stars
         render_manager.render(
             &[],
@@ -273,7 +280,8 @@ pub fn render_sky(
         pass.draw(0..4, 0..STAR_COUNT);
     });
 
-    gpu_timestamp!(pass, profiler, "Sky", {
+    gpu_timestamp!(encoder, profiler, "Sky", {
+        let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
         // Sky
         render_manager.render(
             &[],
@@ -292,17 +300,19 @@ pub fn render_sky(
         pass.draw(0..3, 0..1);
     });
 }
-pub fn render_terrain(
-    pass: &mut RenderPass,
+pub fn render_terrain<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     terrain_renderer: &TerrainRenderSubsystem,
     terrain_subsystem: &Terrain,
     pipelines: &Pipelines,
     settings: &Settings,
+    config: &RenderPassConfig,
     msaa_samples: u32,
     camera: &Camera,
     aspect: f32,
 ) {
+    let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let keys = terrain_material_keys();
     let shader_path = shader_dir().join("terrain.wgsl");
     let shadow = make_shadow_option(settings, pipelines);
@@ -379,13 +389,15 @@ pub fn render_terrain(
     );
     terrain_renderer.render(pass, terrain_subsystem, camera, aspect, settings, false);
 }
-pub fn render_water(
-    pass: &mut RenderPass,
+pub fn render_water<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
     _settings: &Settings,
+    config: &RenderPassConfig,
     msaa_samples: u32,
 ) {
+    let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let targets = color_and_normals_and_motion_targets(pipelines);
 
     // Water
@@ -437,14 +449,16 @@ pub fn render_water(
     );
     pass.draw_indexed(0..pipelines.resources.water_meshes.index_count, 0, 0..1);
 }
-pub fn render_roads(
-    pass: &mut RenderPass,
+pub fn render_roads<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     road_renderer: &RoadRenderSubsystem,
     pipelines: &Pipelines,
     settings: &Settings,
+    config: &RenderPassConfig,
     msaa_samples: u32,
 ) {
+    let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let keys = road_material_keys();
     let shader_path = shader_dir().join("road.wgsl");
     let shadow = make_shadow_option(settings, pipelines);
@@ -520,16 +534,18 @@ pub fn render_roads(
     pass.draw_indexed(0..road_renderer.preview_gpu.index_count, 0, 0..1);
 }
 
-pub fn render_buildings(
-    pass: &mut RenderPass,
+pub fn render_buildings<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     terrain: &Terrain,
     buildings: &Buildings,
     building_renderer: &mut BuildingRenderer,
     pipelines: &Pipelines,
     settings: &Settings,
+    config: &RenderPassConfig,
     msaa_samples: u32,
 ) {
+    let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let shader_path = shader_dir().join("buildings.wgsl");
     let shadow = make_shadow_option(settings, pipelines);
 
@@ -568,17 +584,19 @@ pub fn render_buildings(
     draw_visible_buildings(pass, terrain, building_renderer);
 }
 
-pub fn render_gizmo(
-    pass: &mut RenderPass,
+pub fn render_gizmo<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     pipelines: &Pipelines,
     _settings: &Settings,
+    config: &RenderPassConfig,
     msaa_samples: u32,
     gizmo: &mut Gizmo,
     camera: &Camera,
     device: &Device,
     queue: &Queue,
 ) {
+    let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let targets = color_and_normals_and_motion_targets(pipelines);
     let batches = gizmo.collect_batches(camera, pipelines, queue);
     let (thin_count, thick_count, text_count) = gizmo.update_buffers(device, queue, &batches);
@@ -678,8 +696,8 @@ pub fn render_gizmo(
     gizmo.clear();
 }
 
-pub fn render_cars(
-    pass: &mut RenderPass,
+pub fn render_cars<'a>(
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     rt_subsystem: &mut RTSubsystem,
     car_renderer: &mut CarRenderSubsystem,
@@ -687,7 +705,9 @@ pub fn render_cars(
     pipelines: &Pipelines,
     settings: &Settings,
     camera: &Camera,
+    config: &RenderPassConfig,
 ) {
+    let pass = &mut create_instanced_pass(encoder, pipelines, config, settings.msaa_samples);
     let keys = cars_material_keys();
     let shader_path = shader_dir().join("car.wgsl");
     let shadow = make_shadow_option(settings, pipelines);
@@ -715,7 +735,7 @@ pub fn render_cars(
 }
 
 pub fn render_props<'a>(
-    pass: &mut RenderPass<'a>,
+    encoder: &'a mut CommandEncoder,
     render_manager: &mut RenderManager,
     props: &'a mut Props,
     pipelines: &Pipelines,
@@ -724,7 +744,9 @@ pub fn render_props<'a>(
     terrain: &'a Terrain,
     device: &Device,
     queue: &Queue,
+    config: &RenderPassConfig,
 ) {
+    let pass = &mut create_instanced_pass(encoder, pipelines, config, settings.msaa_samples);
     // Draw all props
     props.render(render_manager, pass, camera, terrain, pipelines, settings);
 }

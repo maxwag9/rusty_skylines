@@ -2,17 +2,13 @@ use crate::commands::Command;
 use crate::data::Settings;
 use crate::helpers::mouse_ray::WorldRay;
 use crate::renderer::render_core::Renderer;
-use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::ui_editor::Ui;
-use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
 use crate::world::camera::Camera;
 use crate::world::cars::car_player::drive_car;
-use crate::world::cars::car_subsystem::Cars;
-use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::terrain_subsystem::Terrain;
-use crate::world::world_state::WorldState;
+use crate::world::world::World;
 use glam::Vec2;
 use std::time::Instant;
 use wgpu::SurfaceConfiguration;
@@ -61,13 +57,7 @@ impl Simulation {
     }
     pub fn update(
         &mut self,
-        world_state: &mut WorldState,
-        cars: &mut Cars,
-        roads: &Roads,
-        terrain: &Terrain,
-        input: &mut Input,
-        time: &Time,
-        buildings: &mut Buildings,
+        world: &mut World,
         renderer: &mut Renderer,
         ui: &mut Ui,
         settings: &Settings,
@@ -79,34 +69,35 @@ impl Simulation {
         self.tick += 1;
         self.last_update = Instant::now();
 
-        let camera = &mut world_state.camera;
-        let cam_controller = &mut world_state.cam_controller;
+        let camera = &mut world.world_state.camera;
+        let cam_controller = &mut world.world_state.cam_controller;
 
-        cars.update(
+        world.cars.update(
             &mut renderer.gizmo,
-            &roads.road_manager,
-            terrain,
-            input,
-            time,
+            &world.roads.road_manager,
+            &world.terrain,
+            &mut world.input,
+            &world.time,
             &mut ui.variables,
             camera.target,
         );
 
         drive_car(
-            cars,
-            terrain,
+            &mut world.cars,
+            &world.terrain,
             settings,
-            input,
+            &mut world.input,
             cam_controller,
             camera,
-            time.target_sim_dt,
+            world.time.target_sim_dt,
         );
-        buildings.storage.update(camera.target.chunk);
+        world.buildings.storage.update(camera.target.chunk);
         Zoning::update_districts(
             &mut renderer.gizmo,
-            terrain,
-            buildings,
-            time,
+            &world.terrain,
+            &mut world.buildings,
+            &mut world.zoning,
+            &world.time,
             &renderer.road_renderer.mesh_manager.road_edge_storage,
         );
     }

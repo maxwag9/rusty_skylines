@@ -6,10 +6,11 @@ use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{
-    Building, BuildingId, BuildingParams, BuildingParamsLevels, Buildings, Color, RoofMaterial,
-    RoofType, WallMaterial,
+    Building, BuildingId, BuildingParams, BuildingParamsLevels, BuildingStorage, BuildingUsage,
+    Buildings, Color, DrivewayMaterial, MiscBuildingParams, RoofMaterial, RoofType, WallMaterial,
 };
 use crate::world::camera::Camera;
+use crate::world::cars::car_structs::ChunkDistance;
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, world_pos_chunk_to_id,
 };
@@ -85,11 +86,11 @@ impl District {
         terrain: &Terrain,
         time: &Time,
         buildings: &mut Buildings,
+        zoning: &mut Zoning,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
     ) -> Option<District> {
-        let Some(district) = buildings
-            .zoning
+        let Some(district) = zoning
             .zoning_storage
             .districts
             .get(district_id as usize)
@@ -97,85 +98,55 @@ impl District {
         else {
             return None;
         };
-        for lot_id in &district.lot_ids {
-            let Some(lot) = buildings
-                .zoning
-                .zoning_storage
-                .lots
-                .get_mut(*lot_id as usize)
-                .and_then(|lot| lot.as_mut())
-            else {
+        for lot_id in district.lot_ids.clone() {
+            let (chunk, zoning_type, maybe_building) = {
+                let Some(lot) = zoning
+                    .zoning_storage
+                    .lots
+                    .get_mut(lot_id as usize)
+                    .and_then(|lot| lot.as_mut())
+                else {
+                    continue;
+                };
+
+                if buildings.storage.get(lot.building_id).is_some() {
+                    continue;
+                }
+
+                let building = generate_building(gizmo, terrain, lot);
+                (lot.center.chunk, lot.zoning_type, building)
+            };
+
+            let Some(building) = maybe_building else {
                 continue;
             };
-            if buildings.storage.get(lot.building_id).is_some() {
-                continue;
+
+            let building_id = BuildingStorage::spawn(
+                buildings,
+                zoning,
+                chunk,
+                zoning_type,
+                ChunkDistance::Close,
+                building,
+            );
+
+            if let Some(lot) = zoning
+                .zoning_storage
+                .lots
+                .get_mut(lot_id as usize)
+                .and_then(|lot| lot.as_mut())
+            {
+                lot.building_id = Some(building_id);
             }
-            let tiles = lot.get_tiles();
-            for ((x, z), tile) in tiles.iter() {
-                let direction = lot.entrance.1;
-
-                let forward = Vec2::new(direction.x, direction.z).normalize();
-                let right = Vec2::new(forward.y, -forward.x);
-                let mut tile_origin = lot
-                    .entrance
-                    .0
-                    .add_vec2(right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5));
-                tile_origin.local.y = terrain.get_height_at(tile_origin, true);
-                match tile {
-                    Tile::Square => {
-                        let corners_local =
-                            [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-
-                        let mut points: Vec<WorldPos> = corners_local
-                            .iter()
-                            .map(|(cx, cz)| {
-                                let mut corner = lot.entrance.0.add_vec2(
-                                    right * (*x as f32 + cx) + forward * (*z as f32 + cz),
-                                );
-                                corner.local.y = terrain.get_height_at(corner, true);
-                                corner
-                            })
-                            .collect();
-
-                        // Close the loop
-                        points.push(points[0]);
-
-                        gizmo.polyline(points.as_slice(), [0.0, 0.0, 0.0, 1.0], 0.0, 0.1, 100.0);
-                    }
-                    Tile::Polygon(points) => {
-                        // Draw the polygon outline
-                        for i in 0..points.len() {
-                            let a = points[i];
-                            let b = points[(i + 1) % points.len()];
-                            gizmo.line(a, b, [0.2, 1.0, 0.2, 1.0], 0.0, 10.0);
-                        }
-                    }
-                }
-            }
-            // if let Some(building) = generate_building(lot) {
-            //     lot.building_id = Some(buildings.storage.spawn(
-            //         lot.center.chunk,
-            //         lot.zoning_type,
-            //         ChunkDistance::Close,
-            //         building,
-            //     ));
-            // }
         }
-        let Some(district) = buildings
-            .zoning
-            .zoning_storage
-            .get_mut_district(district_id)
-        else {
+        let Some(district) = zoning.zoning_storage.get_mut_district(district_id) else {
             return None;
         };
         district.zoning_demand.update_demands(time);
 
         if !matches!(district.district_type, DistrictType::PlayerMade) && district.should_split() {
-            let split_result = Self::split(
-                &mut buildings.zoning.zoning_storage,
-                district_id,
-                road_edge_storage,
-            );
+            let split_result =
+                Self::split(&mut zoning.zoning_storage, district_id, road_edge_storage);
             //println!("{:?}", split_result);
             match split_result {
                 DistrictSplitResult::Alright(new_other_district) => {
@@ -577,10 +548,11 @@ impl District {
     }
 }
 
-fn generate_building(lot: &Lot) -> Option<Building> {
+fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<Building> {
     if matches!(lot.zoning_type, ZoningType::None) {
         return None;
     };
+
     let roof = match lot.zoning_type {
         ZoningType::None => RoofType::Flat,
         ZoningType::Residential => RoofType::Triangle(30.0),
@@ -616,10 +588,17 @@ fn generate_building(lot: &Lot) -> Option<Building> {
         ZoningType::Industrial => 2,
         ZoningType::Office => 3,
     };
+    let miscellaneous = MiscBuildingParams {
+        window_material_accent: Default::default(),
+        solar_modules: false,
+        antenna: false,
+        usage: BuildingUsage::from_zoning_type(&lot.zoning_type),
+    };
     let level0 = BuildingParams {
         roof,
         roof_material,
         wall_material,
+        driveway_material: DrivewayMaterial::Bricks,
         story_height,
         num_stories,
         basement: Default::default(),
@@ -932,23 +911,25 @@ impl Zoning {
         gizmo: &mut Gizmo,
         terrain: &Terrain,
         buildings: &mut Buildings,
+        zoning: &mut Zoning,
         time: &Time,
         road_edge_storage: &RoadEdgeStorage,
     ) {
-        if !buildings.zoning.ticker.tick(time.target_sim_dt) {
+        if !zoning.ticker.tick(time.target_sim_dt) {
             return;
         }
         //println!("updating districts");
-        for district_id in buildings.zoning.zoning_storage.district_ids() {
+        for district_id in zoning.zoning_storage.district_ids() {
             if let Some(district) = District::update(
                 gizmo,
                 terrain,
                 time,
                 buildings,
+                zoning,
                 district_id,
                 road_edge_storage,
             ) {
-                buildings.zoning.zoning_storage.spawn_district(district);
+                zoning.zoning_storage.spawn_district(district);
             }
         }
     }
@@ -1645,10 +1626,20 @@ fn collect_lot_point(
 
 pub type DistrictId = u32;
 pub type LotId = u32;
-
+pub enum TileType {
+    Grass,
+    Tree,
+    Garden,
+    House,
+    HouseBalcony,
+    HouseEntrance,
+    LotEntrance,
+    Garage,
+    Driveway,
+}
 pub enum Tile {
-    Square,
-    Polygon(Vec<WorldPos>),
+    Square(TileType),
+    Polygon(TileType, Vec<WorldPos>),
 }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Lot {
@@ -1671,14 +1662,14 @@ impl Lot {
     pub fn get_tiles(&self) -> HashMap<(i32, i32), Tile> {
         let mut tiles = HashMap::new();
 
-        // Use lot center as stable origin
+        // Stable local frame from the entrance
         let origin = self.entrance.0;
         let direction = self.entrance.1;
 
-        let forward = Vec2::new(direction.x, direction.z).normalize();
+        let forward = Vec2::new(direction.x, direction.z).normalize_or_zero();
         let right = Vec2::new(forward.y, -forward.x);
 
-        // --- 1. Compute bounds in local grid space ---
+        // Bounds in local grid space
         let mut min_x = i32::MAX;
         let mut max_x = i32::MIN;
         let mut min_z = i32::MAX;
@@ -1694,17 +1685,82 @@ impl Lot {
             max_z = max_z.max(gz);
         }
 
-        // --- 2. Iterate grid ---
+        let width = max_x - min_x + 1;
+        let depth = max_z - min_z + 1;
+
+        // Basic lot proportions
+        let house_w = ((width as f32) * 0.42).round() as i32;
+        let house_d = ((depth as f32) * 0.36).round() as i32;
+        let garage_w = if width >= 10 { 3 } else { 2 };
+        let garage_d = 3;
+        let driveway_w = if width >= 12 { 3 } else { 2 };
+
+        let house_w = house_w.clamp(4, (width - 2).max(4));
+        let house_d = house_d.clamp(4, (depth - 3).max(4));
+
+        let center_x = (min_x + max_x) / 2;
+
+        // House goes deeper into the lot, away from the entrance
+        let house_x0 = (center_x - house_w / 2).clamp(min_x + 1, max_x - house_w);
+        let house_x1 = house_x0 + house_w - 1;
+
+        let house_z1 = max_z - 1;
+        let house_z0 = (house_z1 - house_d + 1).clamp(min_z + 2, max_z - house_d);
+
+        // Garage is attached beside the driveway, usually on the right side of the house
+        let garage_on_right = house_x1 + 1 + garage_w <= max_x;
+        let garage_x0 = if garage_on_right {
+            house_x1 + 1
+        } else {
+            (house_x0 - 1 - garage_w).max(min_x)
+        };
+        let garage_x1 = garage_x0 + garage_w - 1;
+
+        let garage_z0 = house_z0 + 1;
+        let garage_z1 = (garage_z0 + garage_d - 1).min(house_z1);
+
+        // Driveway runs from the entrance toward the house and garage
+        let driveway_center_x = if garage_on_right {
+            garage_x0 + garage_w / 2
+        } else {
+            garage_x0 + garage_w / 2
+        };
+        let driveway_x0 = driveway_center_x - driveway_w / 2;
+        let driveway_x1 = driveway_x0 + driveway_w - 1;
+
+        // Optional balcony strip on the back side of the house
+        let balcony_z = house_z1;
+        let balcony_x0 = (house_x0 + 1).clamp(house_x0, house_x1);
+        let balcony_x1 = (house_x1 - 1).clamp(house_x0, house_x1);
+
         for x in min_x..=max_x {
             for z in min_z..=max_z {
-                // World position of tile corner
                 let tile_pos =
                     origin.add_vec2(right * (x as f32 + 0.5) + forward * (z as f32 + 0.5));
 
-                // --- 3. Inside test (simple version) ---
-                if point_in_polygon_xz(tile_pos, &self.bounds) {
-                    tiles.insert((x, z), Tile::Square);
+                if !point_in_polygon_xz(tile_pos, &self.bounds) {
+                    continue;
                 }
+
+                let tile = if z <= min_z + 1 && x >= driveway_x0 && x <= driveway_x1 {
+                    Tile::Square(TileType::LotEntrance)
+                } else if x >= garage_x0 && x <= garage_x1 && z >= garage_z0 && z <= garage_z1 {
+                    Tile::Square(TileType::Garage)
+                } else if x >= house_x0 && x <= house_x1 && z >= house_z0 && z <= house_z1 {
+                    if z == house_z1 && x >= balcony_x0 && x <= balcony_x1 && width >= 10 {
+                        Tile::Square(TileType::HouseBalcony)
+                    } else if z == house_z0 && x >= driveway_x0 && x <= driveway_x1 {
+                        Tile::Square(TileType::HouseEntrance)
+                    } else {
+                        Tile::Square(TileType::House)
+                    }
+                } else if x >= driveway_x0 && x <= driveway_x1 && z >= min_z + 1 && z <= house_z0 {
+                    Tile::Square(TileType::Driveway)
+                } else {
+                    Tile::Square(TileType::Garden)
+                };
+
+                tiles.insert((x, z), tile);
             }
         }
 

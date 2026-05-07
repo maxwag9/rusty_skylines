@@ -1,17 +1,21 @@
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
+use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
-use crate::world::buildings::zoning::{LotId, Zoning, ZoningType};
+use crate::world::buildings::zoning::{Lot, LotId, Tile, TileType, Zoning, ZoningType};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
 use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_to_coord};
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::{ChunkGpuMesh, Roads};
+use crate::world::statisticals::demands::ZoningDemand;
 use crate::world::terrain::terrain_subsystem::Terrain;
+use glam::Vec2;
 use rayon::iter::IntoParallelRefMutIterator;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 use std::slice::{Iter, IterMut};
@@ -19,6 +23,48 @@ use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue, VertexAttribute, VertexFormat};
 use wgpu_render_manager::generator::{TextureKey, TextureParams};
 use wgpu_render_manager::renderer::RenderManager;
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Default, Hash)]
+pub enum BuildingUsage {
+    #[default]
+    Residential,
+    Commercial,
+    Industrial,
+    Office,
+}
+impl BuildingUsage {
+    pub fn from_value(value: &Value) -> Self {
+        match value {
+            Value::String(s) => match s.to_lowercase().as_str() {
+                "residential" => BuildingUsage::Residential,
+                "commercial" => BuildingUsage::Commercial,
+                "industrial" => BuildingUsage::Industrial,
+                "office" => BuildingUsage::Office,
+                _ => BuildingUsage::Residential,
+            },
+            _ => BuildingUsage::Residential,
+        }
+    }
+    pub fn from_zoning_type(zoning_type: &ZoningType) -> Self {
+        match zoning_type {
+            ZoningType::Residential => BuildingUsage::Residential,
+            ZoningType::Commercial => BuildingUsage::Commercial,
+            ZoningType::Industrial => BuildingUsage::Industrial,
+            ZoningType::Office => BuildingUsage::Office,
+            _ => BuildingUsage::Residential,
+        }
+    }
+}
+impl Display for BuildingUsage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildingUsage::Residential => write!(f, "residential"),
+            BuildingUsage::Commercial => write!(f, "commercial"),
+            BuildingUsage::Industrial => write!(f, "industrial"),
+            BuildingUsage::Office => write!(f, "office"),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Color(pub [f32; 4]);
@@ -86,6 +132,7 @@ pub struct MiscBuildingParams {
     pub window_material_accent: WallMaterial,
     pub solar_modules: bool,
     pub antenna: bool,
+    pub usage: BuildingUsage,
 }
 #[derive(Serialize, Deserialize, Clone, Default, Hash)]
 pub struct BasementParams {}
@@ -97,6 +144,16 @@ pub enum WallMaterial {
 impl Default for WallMaterial {
     fn default() -> Self {
         WallMaterial::Paint(Color::white())
+    }
+}
+#[derive(Serialize, Deserialize, Clone, Hash)]
+pub enum DrivewayMaterial {
+    Bricks,
+    Custom(TextureKey),
+}
+impl Default for DrivewayMaterial {
+    fn default() -> Self {
+        Self::Bricks
     }
 }
 impl Hash for Color {
@@ -121,11 +178,26 @@ pub struct BuildingParams {
     pub roof: RoofType,
     pub roof_material: RoofMaterial,
     pub wall_material: WallMaterial,
+    pub driveway_material: DrivewayMaterial,
     pub story_height: f32,
     pub num_stories: u16,
     pub basement: BasementParams,
     pub garden: GardenParams,
     pub miscellaneous: MiscBuildingParams,
+}
+impl BuildingParams {
+    pub fn max_people(&self, one_story_area: f64) -> u32 {
+        let total_area = one_story_area * self.num_stories as f64;
+
+        let area_per_person = match self.miscellaneous.usage {
+            BuildingUsage::Residential => 40.0,
+            BuildingUsage::Commercial => 10.0,
+            BuildingUsage::Industrial => 10.0,
+            BuildingUsage::Office => 15.0,
+        };
+
+        (total_area / area_per_person) as u32
+    }
 }
 impl Hash for BuildingParams {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -181,14 +253,12 @@ impl Building {
 #[derive(Clone, Default)]
 pub struct Buildings {
     pub storage: BuildingStorage,
-    pub zoning: Zoning,
 }
 
 impl Buildings {
     pub fn new() -> Buildings {
         Self {
             storage: BuildingStorage::new(),
-            zoning: Zoning::new(),
         }
     }
     pub fn update(
@@ -201,15 +271,6 @@ impl Buildings {
         gizmo: &mut Gizmo,
         variables: &Variables,
     ) {
-        self.zoning.update(
-            camera,
-            terrain,
-            roads,
-            road_mesh_manager,
-            input,
-            gizmo,
-            variables,
-        );
     }
 }
 
@@ -277,51 +338,61 @@ impl BuildingStorage {
     }
 
     pub fn spawn(
-        &mut self,
+        buildings: &mut Buildings,
+        zoning: &mut Zoning,
         chunk_coord: ChunkCoord,
         zoning_type: ZoningType,
         building_chunk_distance: ChunkDistance,
         mut building: Building,
     ) -> BuildingId {
-        let building_id = if let Some(reused_id) = self.free_list.pop() {
+        let storage = &mut buildings.storage;
+        let building_id = if let Some(reused_id) = storage.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
             building.id = reused_id;
-            self.buildings[reused_id as usize] = Some(building);
+            storage.buildings[reused_id as usize] = Some(building);
             reused_id
         } else {
-            let new_id = self.buildings.len() as u32;
+            let new_id = storage.buildings.len() as u32;
             building.id = new_id;
-            self.buildings.push(Some(building));
+            storage.buildings.push(Some(building));
             new_id
         };
 
         // Add to chunk storage and record location
-        self.building_chunk_storage
-            .add_building(chunk_coord, building_chunk_distance, building_id);
-        self.building_locations.insert(building_id, chunk_coord);
+        storage.building_chunk_storage.add_building(
+            chunk_coord,
+            building_chunk_distance,
+            building_id,
+        );
+        storage.building_locations.insert(building_id, chunk_coord);
+        ZoningDemand::spawn_building(buildings, zoning, building_id);
         println!("Created building: {}", building_id);
         building_id
     }
 
-    pub fn despawn(&mut self, id: BuildingId) {
+    pub fn despawn(buildings: &mut Buildings, zoning: &mut Zoning, id: BuildingId) {
         if id == 0 {
             // index 0 is reserved, ignore attempts to despawn it
             return;
         }
-        if self
+        let storage = &mut buildings.storage;
+        if storage
             .buildings
             .get(id as usize)
             .and_then(|opt| opt.as_ref())
             .is_some()
         {
             // Remove from chunk first using reverse lookup
-            if let Some(chunk_coord) = self.building_locations.remove(&id) {
-                self.building_chunk_storage.remove_building(chunk_coord, id);
+            if let Some(chunk_coord) = storage.building_locations.remove(&id) {
+                storage
+                    .building_chunk_storage
+                    .remove_building(chunk_coord, id);
             }
 
             // Actually free the slot
-            self.buildings[id as usize] = None;
-            self.free_list.push(id);
+            storage.buildings[id as usize] = None;
+            storage.free_list.push(id);
+            ZoningDemand::despawn_building(buildings, zoning, id);
         }
     }
 
@@ -743,6 +814,7 @@ impl BuildingRenderer {
         render_manager: &mut RenderManager,
         terrain: &mut Terrain,
         buildings: &Buildings,
+        zoning: &mut Zoning,
         device: &Device,
         queue: &Queue,
         camera: &Camera,
@@ -758,6 +830,7 @@ impl BuildingRenderer {
                     terrain,
                     chunk_id,
                     buildings,
+                    zoning,
                     gizmo,
                 )
             } else {
@@ -843,16 +916,19 @@ impl BuildingMeshManager {
         terrain: &Terrain,
         cid: ChunkId,
         buildings: &Buildings,
+        zoning: &mut Zoning,
         gizmo: &mut Gizmo,
     ) -> BuildingChunkMesh {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        let mut mesh = BuildingMeshBuilder {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
 
-        let lot_ids: Vec<LotId> = buildings.zoning.zoning_storage.lots_in_chunk(cid);
+        let lot_ids: Vec<LotId> = zoning.zoning_storage.lots_in_chunk(cid);
 
         for lot in lot_ids
             .iter()
-            .flat_map(|id| buildings.zoning.zoning_storage.get_lot(*id))
+            .flat_map(|id| zoning.zoning_storage.get_lot(*id))
         {
             let Some(building) = buildings.storage.get(lot.building_id) else {
                 continue;
@@ -894,23 +970,111 @@ impl BuildingMeshManager {
                 ),
                 WallMaterial::Custom(key) => key.clone(),
             };
-
-            let mat_ids = render_manager.ensure_textures(&[wall_key, roof_key, window_key]);
+            let driveway_key = match &level.driveway_material {
+                DrivewayMaterial::Bricks => TextureKey::new(
+                    "driveway_bricks",
+                    TextureParams::default()
+                        .with_primary_color([0.18, 0.18, 0.22, 1.0])
+                        .with_secondary_color([0.01, 0.01, 0.01, 1.0])
+                        .with_roughness(0.0)
+                        .with_scale(5.0),
+                    512,
+                ),
+                DrivewayMaterial::Custom(key) => key.clone(),
+            };
+            let mat_ids =
+                render_manager.ensure_textures(&[wall_key, roof_key, window_key, driveway_key]);
             let wall_id = mat_ids[0];
             let roof_id = mat_ids[1];
             let window_id = mat_ids[2];
+            let driveway_id = mat_ids[3];
 
             let border = &lot.bounds;
             let n = border.len();
             if n < 3 {
                 continue;
             }
-            for tile in lot.get_tiles() {}
+            let tiles = lot.get_tiles();
+            for ((x, z), tile) in tiles.iter() {
+                let direction = lot.entrance.1;
+
+                let forward = Vec2::new(direction.x, direction.z).normalize();
+                let right = Vec2::new(forward.y, -forward.x);
+                let mut tile_origin = lot
+                    .entrance
+                    .0
+                    .add_vec2(right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5));
+                tile_origin.local.y = terrain.get_height_at(tile_origin, true);
+                match tile {
+                    Tile::Square(tile_type) => {
+                        let zero_height = lot.entrance.0.local.y;
+                        let corners_local =
+                            [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+
+                        let mut points: Vec<WorldPos> = corners_local
+                            .iter()
+                            .map(|(cx, cz)| {
+                                let mut corner = lot.entrance.0.add_vec2(
+                                    right * (*x as f32 + cx) + forward * (*z as f32 + cz),
+                                );
+                                corner.local.y = terrain.get_height_at(corner, true);
+                                corner
+                            })
+                            .collect();
+
+                        // Close the loop
+                        points.push(points[0]);
+
+                        //gizmo.polyline(points.as_slice(), [0.0, 0.0, 0.0, 1.0], 0.0, 0.1, 100.0);
+                        match tile_type {
+                            TileType::Grass => {}
+                            TileType::Tree => {}
+                            TileType::Garden => {}
+                            TileType::House => {
+                                let roof_y =
+                                    zero_height + level.num_stories as f32 * level.story_height;
+                                mesh.push_walled_square(
+                                    lot,
+                                    zero_height,
+                                    roof_y,
+                                    right,
+                                    forward,
+                                    (*x, *z),
+                                    wall_id,
+                                );
+                                mesh.push_square(lot, roof_y, right, forward, (*x, *z), roof_id);
+                            }
+                            TileType::HouseBalcony => {}
+                            TileType::HouseEntrance => {}
+                            TileType::LotEntrance => {}
+                            TileType::Garage => {}
+                            TileType::Driveway => {
+                                mesh.push_square(
+                                    lot,
+                                    zero_height,
+                                    right,
+                                    forward,
+                                    (*x, *z),
+                                    driveway_id,
+                                );
+                            }
+                        }
+                    }
+                    Tile::Polygon(tile_type, points) => {
+                        // Draw the polygon outline
+                        for i in 0..points.len() {
+                            let a = points[i];
+                            let b = points[(i + 1) % points.len()];
+                            gizmo.line(a, b, [0.2, 1.0, 0.2, 1.0], 0.0, 10.0);
+                        }
+                    }
+                }
+            }
         }
 
         BuildingChunkMesh {
-            vertices,
-            indices,
+            vertices: mesh.vertices,
+            indices: mesh.indices,
             topo_version: compute_building_chunk_topo_version(cid, buildings),
         }
     }
@@ -920,13 +1084,181 @@ impl BuildingMeshManager {
         terrain: &Terrain,
         chunk_id: ChunkId,
         buildings: &Buildings,
+        zoning: &mut Zoning,
         gizmo: &mut Gizmo,
     ) -> &BuildingChunkMesh {
-        let mesh = self.build_mesh_for_chunk(render_manager, terrain, chunk_id, buildings, gizmo);
+        let mesh =
+            self.build_mesh_for_chunk(render_manager, terrain, chunk_id, buildings, zoning, gizmo);
         self.chunk_cache.insert(chunk_id, mesh);
         self.chunk_cache.get(&chunk_id).unwrap()
     }
 }
+struct BuildingMeshBuilder {
+    vertices: Vec<BuildingVertex>,
+    indices: Vec<u32>,
+}
+impl BuildingMeshBuilder {
+    /// Heights are ABSOLUTE!!
+    fn push_square(
+        &mut self,
+        lot: &Lot,
+        height: f32,
+        right: Vec2,
+        forward: Vec2,
+        tile_pos: (i32, i32),
+        material_id: u32,
+    ) {
+        let corners_local = [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+
+        let points: Vec<WorldPos> = corners_local
+            .iter()
+            .map(|(cx, cz)| {
+                let mut corner = lot.entrance.0.add_vec2(
+                    right * (tile_pos.0 as f32 + cx) + forward * (tile_pos.1 as f32 + cz),
+                );
+
+                corner.local.y = height;
+                corner
+            })
+            .collect();
+
+        let base_index = self.vertices.len() as u32;
+
+        // 0
+        self.vertices.push(BuildingVertex {
+            chunk_xz: points[0].chunk.as_slice(),
+            local_position: points[0].local.as_slice(),
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            material_id,
+        });
+
+        // 1
+        self.vertices.push(BuildingVertex {
+            chunk_xz: points[1].chunk.as_slice(),
+            local_position: points[1].local.as_slice(),
+            normal: [0.0, 1.0, 0.0],
+            uv: [1.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            material_id,
+        });
+
+        // 2
+        self.vertices.push(BuildingVertex {
+            chunk_xz: points[2].chunk.as_slice(),
+            local_position: points[2].local.as_slice(),
+            normal: [0.0, 1.0, 0.0],
+            uv: [1.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            material_id,
+        });
+
+        // 3
+        self.vertices.push(BuildingVertex {
+            chunk_xz: points[3].chunk.as_slice(),
+            local_position: points[3].local.as_slice(),
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 1.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            material_id,
+        });
+
+        // CCW triangles, back-face culled
+        // top-right
+        self.indices
+            .extend_from_slice(&[base_index + 0, base_index + 3, base_index + 1]);
+
+        // bottom-left
+        self.indices
+            .extend_from_slice(&[base_index + 3, base_index + 2, base_index + 1]);
+    }
+
+    /// Heights are ABSOLUTE!!
+    fn push_walled_square(
+        &mut self,
+        lot: &Lot,
+        start_height: f32,
+        end_height: f32,
+        right: Vec2,
+        forward: Vec2,
+        tile_pos: (i32, i32),
+        material_id: u32,
+    ) {
+        let (bottom_y, top_y) = if start_height <= end_height {
+            (start_height, end_height)
+        } else {
+            (end_height, start_height)
+        };
+
+        let corner_world = |cx: f32, cz: f32, y: f32| -> WorldPos {
+            let mut corner = lot
+                .entrance
+                .0
+                .add_vec2(right * (tile_pos.0 as f32 + cx) + forward * (tile_pos.1 as f32 + cz));
+            corner.local.y = y;
+            corner
+        };
+
+        let p00b = corner_world(0.0, 0.0, bottom_y);
+        let p10b = corner_world(1.0, 0.0, bottom_y);
+        let p11b = corner_world(1.0, 1.0, bottom_y);
+        let p01b = corner_world(0.0, 1.0, bottom_y);
+
+        let p00t = corner_world(0.0, 0.0, top_y);
+        let p10t = corner_world(1.0, 0.0, top_y);
+        let p11t = corner_world(1.0, 1.0, top_y);
+        let p01t = corner_world(0.0, 1.0, top_y);
+
+        let n_south = [-forward.x, 0.0, -forward.y];
+        let n_east = [right.x, 0.0, right.y];
+        let n_north = [forward.x, 0.0, forward.y];
+        let n_west = [-right.x, 0.0, -right.y];
+
+        let mut push_quad =
+            |a: WorldPos, b: WorldPos, c: WorldPos, d: WorldPos, normal: [f32; 3]| {
+                let base = self.vertices.len() as u32;
+
+                let mut push_v = |p: WorldPos, uv: [f32; 2]| {
+                    self.vertices.push(BuildingVertex {
+                        chunk_xz: p.chunk.as_slice(),
+                        local_position: p.local.as_slice(),
+                        normal,
+                        uv,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        material_id,
+                    });
+                };
+
+                push_v(a, [0.0, 0.0]);
+                push_v(b, [0.0, 1.0]);
+                push_v(c, [1.0, 1.0]);
+                push_v(d, [1.0, 0.0]);
+
+                self.indices.extend_from_slice(&[
+                    base + 0,
+                    base + 1,
+                    base + 2,
+                    base + 2,
+                    base + 3,
+                    base + 0,
+                ]);
+            };
+
+        // Near / south side
+        push_quad(p00b, p00t, p10t, p10b, n_south);
+
+        // Right / east side
+        push_quad(p10b, p10t, p11t, p11b, n_east);
+
+        // Far / north side
+        push_quad(p01b, p11b, p11t, p01t, n_north);
+
+        // Left / west side
+        push_quad(p00b, p01b, p01t, p00t, n_west);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct BuildingVertex {

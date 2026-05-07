@@ -21,7 +21,7 @@ pub fn run_ticked(resources: &mut Resources) {
     );
     let aspect = renderer.config.width as f32 / renderer.config.height as f32;
 
-    if world.simulation.running {
+    if resources.simulation.running {
         terrain.update(device, queue, camera, aspect, settings, input, time);
     }
 
@@ -29,14 +29,8 @@ pub fn run_ticked(resources: &mut Resources) {
 }
 pub fn run_sim(resources: &mut Resources) {
     let world = &mut resources.world;
-    world.simulation.update(
-        &mut world.world_state,
-        &mut world.cars,
-        &world.roads,
-        &world.terrain,
-        &mut world.input,
-        &world.time,
-        &mut world.buildings,
+    resources.simulation.update(
+        world,
         &mut resources.render_core,
         &mut resources.ui,
         &resources.settings,
@@ -50,19 +44,13 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
     input.now = time.total_time;
     resources.ui.handle_touches(
         dt,
-        input,
-        time,
-        &mut resources.world.terrain,
         &mut resources.render_core.props,
-        &mut resources.world.buildings,
+        &mut resources.world,
         resources.window.surface_size(),
-        &mut resources.world.roads,
         &mut resources.command_queues,
         &mut resources.settings,
-        &mut resources.world.world_state.camera,
-        &mut resources.world.world_state.cam_controller,
         event_loop,
-        &mut resources.world.world_state.game_state,
+        &mut resources.game_state,
     );
 }
 

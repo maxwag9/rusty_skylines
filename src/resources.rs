@@ -4,9 +4,11 @@ use crate::renderer::render_core::{
     Renderer, create_device, create_surface_and_adapter, create_surface_config,
 };
 use crate::renderer::shadows::CSM_CASCADES;
+use crate::simulation::Simulation;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::Ui;
 use crate::ui::variables::load_colors;
+use crate::world::game_state::GameState;
 use crate::world::sound::Sounds;
 use crate::world::world::World;
 use std::sync::Arc;
@@ -32,7 +34,8 @@ pub struct Resources {
 
     // The simulation & world core:
     pub world: World,
-
+    pub simulation: Simulation,
+    pub game_state: GameState,
     // The GPU + render-only subsystems:
     pub render_core: Renderer,
 
@@ -51,8 +54,8 @@ impl Resources {
         let (device, queue) = &create_device(&adapter);
 
         surface.configure(device, &config);
-
-        let mut world_core = World::new(device, &settings);
+        let mut game_state = GameState::new();
+        let mut world_core = World::new(device, &settings, &mut game_state);
         let camera = &mut world_core.world_state.camera;
 
         let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera);
@@ -77,6 +80,8 @@ impl Resources {
             window,
             command_queues,
             world: world_core,
+            simulation: Simulation::new(),
+            game_state,
             render_core,
             sounds: Sounds::new(),
         }

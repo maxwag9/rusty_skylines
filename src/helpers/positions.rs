@@ -58,6 +58,10 @@ impl ChunkCoord {
         let dz = self.z as i64 - other.z as i64;
         (dx * dx + dz * dz) as u64
     }
+    #[inline]
+    pub fn as_slice(&self) -> [i32; 2] {
+        [self.x, self.z]
+    }
 }
 impl LocalPos {
     #[inline]
@@ -77,6 +81,11 @@ impl LocalPos {
     #[inline]
     pub fn as_vec3(&self) -> Vec3 {
         Vec3::new(self.x, self.y, self.z)
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> [f32; 3] {
+        [self.x, self.y, self.z]
     }
 }
 impl WorldPos {

@@ -1,3 +1,4 @@
+use crate::helpers::positions::chunk_size;
 use crate::resources::Resources;
 use crate::ui::helper::calc_move_speed;
 use crate::world::camera::{ground_camera_target, resolve_pitch_by_search};
@@ -16,7 +17,7 @@ pub fn run_inputs(resources: &mut Resources) {
     let input = &mut world.input;
     let time = &world.time;
 
-    let chunk_size = world.world_state.game_state.current_save.chunk_size;
+    let chunk_size = chunk_size();
     let noclip = resources.settings.noclip;
     let eye = camera.eye_world();
     let mut fwd3d = eye.direction_to(camera.target);
