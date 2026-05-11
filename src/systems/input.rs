@@ -90,16 +90,16 @@ pub fn run_inputs(resources: &mut Resources) {
         }
 
         if input.action_down("Orbit Left") {
-            cam_ctrl.target_yaw -= orbit_speed;
-        }
-        if input.action_down("Orbit Right") {
             cam_ctrl.target_yaw += orbit_speed;
         }
+        if input.action_down("Orbit Right") {
+            cam_ctrl.target_yaw -= orbit_speed;
+        }
         if input.action_down("Orbit Up") {
-            cam_ctrl.target_pitch -= orbit_speed;
+            cam_ctrl.target_pitch += orbit_speed;
         }
         if input.action_down("Orbit Down") {
-            cam_ctrl.target_pitch += orbit_speed;
+            cam_ctrl.target_pitch -= orbit_speed;
         }
     }
 

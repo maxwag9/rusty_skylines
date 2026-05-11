@@ -1,17 +1,19 @@
 use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
 use crate::ui::vertex::Vertex;
-use crate::world::terrain::terrain::TerrainGenerator;
-use crate::world::terrain::terrain_editing::EditedChunk;
-use crate::world::terrain::threads::ChunkWorkerPool;
+use crate::world::terrain::terrain_editing::{apply_edits_with_stitching, recompute_patch_minmax};
+use crate::world::terrain::terrain_gen::TerrainGenerator;
+use crate::world::terrain::terrain_subsystem::append_edge_skirts;
+use crate::world::terrain::terrain_threads::{
+    ChunkWorkerPool, LoadedChunksSnapshot, TerrainEditsSnapshot,
+};
 use glam::Vec3;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 #[derive(Clone)]
 pub struct ChunkHeightGrid {
     pub chunk_coord: ChunkCoord,
-    pub cell_size: LodStep,
+    pub step: LodStep,
     pub nx: usize,
     pub nz: usize,
     pub heights: Vec<f32>,             // indexed as x * nz + z
@@ -20,20 +22,20 @@ pub struct ChunkHeightGrid {
 
 impl ChunkHeightGrid {
     #[inline]
-    pub fn cell_f32(&self) -> f32 {
-        self.cell_size as f32
+    pub fn step_f32(&self) -> f32 {
+        self.step as f32
     }
 
     /// Grid extent in local X direction
     #[inline]
     pub fn extent_x(&self) -> f32 {
-        (self.nx - 1) as f32 * self.cell_f32()
+        (self.nx - 1) as f32 * self.step_f32()
     }
 
     /// Grid extent in local Z direction
     #[inline]
     pub fn extent_z(&self) -> f32 {
-        (self.nz - 1) as f32 * self.cell_f32()
+        (self.nz - 1) as f32 * self.step_f32()
     }
     /// Convert a WorldPos to local coordinates relative to this grid's chunk.
     /// Returns (local_x, local_z) which may be outside [0, chunk_size] if pos is in a different chunk.
@@ -57,9 +59,28 @@ impl ChunkHeightGrid {
         pos.chunk.x == self.chunk_coord.x && pos.chunk.z == self.chunk_coord.z
     }
 }
+#[derive(Clone)]
+pub struct ChunkState {
+    pub step: LodStep,
+
+    pub nx_neg: LodStep,
+    pub nx_pos: LodStep,
+    pub nz_neg: LodStep,
+    pub nz_pos: LodStep,
+}
+impl ChunkState {
+    #[inline]
+    pub fn same_as(&self, other: &ChunkState) -> bool {
+        self.step == other.step
+            && self.nx_neg == other.nx_neg
+            && self.nx_pos == other.nx_pos
+            && self.nz_neg == other.nz_neg
+            && self.nz_pos == other.nz_pos
+    }
+}
 
 pub struct ChunkMeshLod {
-    pub step: LodStep,
+    pub state: ChunkState,
     pub handle: GpuChunkHandle,
     pub cpu_vertices: Vec<Vertex>,
     pub cpu_indices: Vec<u32>,
@@ -89,152 +110,6 @@ impl NeighborEdgeHeights {
     }
 }
 
-/// Gather edge heights from neighboring chunks for proper normal calculation.
-/// Samples at positions one step past our edges (for central difference normals).
-/// Handles different LOD resolutions via bilinear interpolation.
-pub fn gather_neighbor_edge_heights(
-    coord: ChunkCoord,
-    own_grid: &ChunkHeightGrid,
-    chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
-    edited_chunks: &HashMap<ChunkCoord, EditedChunk>,
-) -> NeighborEdgeHeights {
-    let mut result = NeighborEdgeHeights::empty();
-
-    let own_nx = own_grid.nx;
-    let own_nz = own_grid.nz;
-    let own_cell = own_grid.cell_f32();
-    let cs = chunk_size() as f32;
-
-    /// Sample height from neighbor grid at a local position within that neighbor's chunk,
-    /// including pending deltas (accumulated deltas are already baked into heights).
-    fn sample_neighbor_with_pending(
-        neighbor_coord: ChunkCoord,
-        chunk: &ChunkMeshLod,
-        neighbor_local_x: f32,
-        neighbor_local_z: f32,
-        edited_chunks: &HashMap<ChunkCoord, EditedChunk>,
-    ) -> f32 {
-        let grid = chunk.height_grid.as_ref();
-        let cell = grid.cell_f32();
-
-        let gx_f = neighbor_local_x / cell;
-        let gz_f = neighbor_local_z / cell;
-
-        let gx0 = (gx_f.floor() as usize).min(grid.nx.saturating_sub(1));
-        let gz0 = (gz_f.floor() as usize).min(grid.nz.saturating_sub(1));
-        let gx1 = (gx0 + 1).min(grid.nx - 1);
-        let gz1 = (gz0 + 1).min(grid.nz - 1);
-
-        let tx = (gx_f - gx0 as f32).clamp(0.0, 1.0);
-        let tz = (gz_f - gz0 as f32).clamp(0.0, 1.0);
-
-        // Get pending delta for a grid position (only pending, not accumulated)
-        let get_pending = |gx: usize, gz: usize| -> f32 {
-            edited_chunks
-                .get(&neighbor_coord)
-                .map(|e| {
-                    e.pending_deltas
-                        .iter()
-                        .filter(|&&(px, pz, _)| px as usize == gx && pz as usize == gz)
-                        .map(|&(_, _, d)| d)
-                        .sum::<f32>()
-                })
-                .unwrap_or(0.0)
-        };
-
-        let h00 = grid.heights[gx0 * grid.nz + gz0] + get_pending(gx0, gz0);
-        let h10 = grid.heights[gx1 * grid.nz + gz0] + get_pending(gx1, gz0);
-        let h01 = grid.heights[gx0 * grid.nz + gz1] + get_pending(gx0, gz1);
-        let h11 = grid.heights[gx1 * grid.nz + gz1] + get_pending(gx1, gz1);
-
-        // Bilinear interpolation
-        let h0 = h00 + tx * (h10 - h00);
-        let h1 = h01 + tx * (h11 - h01);
-        h0 + tz * (h1 - h0)
-    }
-
-    // +X neighbor: sample one step past our +X edge
-    // Our +X edge is at local_x = chunk_size (last vertex)
-    // One step past: local_x = chunk_size + own_cell
-    // In neighbor's local space: (chunk_size + own_cell) - chunk_size = own_cell
-    let pos_x_coord = coord.offset(1, 0);
-    if let Some(chunk) = chunks.get(&pos_x_coord) {
-        let neighbor_local_x = own_cell;
-        let mut edge = Vec::with_capacity(own_nz);
-        for gz in 0..own_nz {
-            let our_local_z = gz as f32 * own_cell;
-            // Z coordinate is same in neighbor's space (no chunk boundary crossed in Z)
-            edge.push(sample_neighbor_with_pending(
-                pos_x_coord,
-                chunk,
-                neighbor_local_x,
-                our_local_z,
-                edited_chunks,
-            ));
-        }
-        result.pos_x = Some(edge);
-    }
-
-    // -X neighbor: sample one step before our -X edge
-    // Our -X edge is at local_x = 0
-    // One step before: local_x = -own_cell
-    // In -X neighbor's local space: -own_cell + chunk_size = chunk_size - own_cell
-    let neg_x_coord = coord.offset(-1, 0);
-    if let Some(chunk) = chunks.get(&neg_x_coord) {
-        let neighbor_local_x = cs - own_cell;
-        let mut edge = Vec::with_capacity(own_nz);
-        for gz in 0..own_nz {
-            let our_local_z = gz as f32 * own_cell;
-            edge.push(sample_neighbor_with_pending(
-                neg_x_coord,
-                chunk,
-                neighbor_local_x,
-                our_local_z,
-                edited_chunks,
-            ));
-        }
-        result.neg_x = Some(edge);
-    }
-
-    // +Z neighbor: sample one step past our +Z edge
-    let pos_z_coord = coord.offset(0, 1);
-    if let Some(chunk) = chunks.get(&pos_z_coord) {
-        let neighbor_local_z = own_cell;
-        let mut edge = Vec::with_capacity(own_nx);
-        for gx in 0..own_nx {
-            let our_local_x = gx as f32 * own_cell;
-            edge.push(sample_neighbor_with_pending(
-                pos_z_coord,
-                chunk,
-                our_local_x,
-                neighbor_local_z,
-                edited_chunks,
-            ));
-        }
-        result.pos_z = Some(edge);
-    }
-
-    // -Z neighbor: sample one step before our -Z edge
-    let neg_z_coord = coord.offset(0, -1);
-    if let Some(chunk) = chunks.get(&neg_z_coord) {
-        let neighbor_local_z = cs - own_cell;
-        let mut edge = Vec::with_capacity(own_nx);
-        for gx in 0..own_nx {
-            let our_local_x = gx as f32 * own_cell;
-            edge.push(sample_neighbor_with_pending(
-                neg_z_coord,
-                chunk,
-                our_local_x,
-                neighbor_local_z,
-                edited_chunks,
-            ));
-        }
-        result.neg_z = Some(edge);
-    }
-
-    result
-}
-
 /// Regenerate vertex positions (y), normals, and optionally colors from the height grid.
 /// Vertices are expected to have LOCAL positions (relative to chunk origin).
 pub fn regenerate_vertices_from_height_grid(
@@ -246,7 +121,7 @@ pub fn regenerate_vertices_from_height_grid(
 ) {
     let verts_x = height_grid.nx;
     let verts_z = height_grid.nz;
-    let cell = height_grid.cell_f32();
+    let cell = height_grid.step_f32();
     let chunk = height_grid.chunk_coord;
 
     // sanity check
@@ -393,16 +268,14 @@ impl ChunkBuilder {
 
     pub fn build_chunk_cpu(
         chunk_coord: ChunkCoord,
-        step: LodStep,
-        _ns_x_neg: LodStep,
-        _ns_x_pos: LodStep,
-        _ns_z_neg: LodStep,
-        _ns_z_pos: LodStep,
+        state: ChunkState,
         version: u64,
         version_atomic: &AtomicU64,
         terrain_gen: &TerrainGenerator,
-        has_edits: bool,
+        terrain_edits_snapshot: &TerrainEditsSnapshot,
+        loaded_chunks_snapshot: &LoadedChunksSnapshot,
     ) -> Option<CpuChunkMesh> {
+        let step = state.step;
         let stepf = step as f32;
         let step_usize = step as usize;
         let inv_step = 1.0 / stepf;
@@ -412,15 +285,29 @@ impl ChunkBuilder {
         let verts_z = (cs / step + 1) as usize;
         let cells_x = verts_x - 1;
         let cells_z = verts_z - 1;
-        let _total_verts = verts_x * verts_z;
         let total_cells = cells_x * cells_z;
 
-        let (heights, colors) =
-            Self::sample_terrain_batch(chunk_coord, step, verts_x, verts_z, terrain_gen);
+        let (mut heights, colors) = Self::sample_terrain_batch(chunk_coord, step, terrain_gen);
 
         if !ChunkWorkerPool::still_current(version_atomic, version) {
             return None;
         }
+
+        // Build initial height grid from sampled heights
+        let mut height_grid = build_height_grid_from_heights(chunk_coord, step, heights);
+
+        // Apply edits + stitching ON WORKER
+        height_grid = apply_edits_with_stitching(
+            &height_grid,
+            chunk_coord,
+            terrain_edits_snapshot,
+            loaded_chunks_snapshot,
+            step,
+        );
+
+        recompute_patch_minmax(&mut height_grid);
+
+        heights = height_grid.heights.clone();
 
         let normals = Self::compute_normals_batch(
             chunk_coord,
@@ -437,9 +324,9 @@ impl ChunkBuilder {
             return None;
         }
 
-        let (vertices, indices) = if has_edits {
-            // Simple grid layout: vertices[gx * verts_z + gz] = vertex at (gx, gz)
-            // This allows in-place updates via regenerate_vertices_from_height_grid
+        let has_edits = terrain_edits_snapshot.has_edits_on_chunk(chunk_coord);
+
+        let (mut vertices, mut indices) = if has_edits {
             Self::build_simple_grid(
                 chunk_coord,
                 step_usize,
@@ -450,7 +337,6 @@ impl ChunkBuilder {
                 &normals,
             )
         } else {
-            // Greedy meshing path for non-edited chunks
             Self::build_greedy_mesh(
                 chunk_coord,
                 step_usize,
@@ -467,13 +353,21 @@ impl ChunkBuilder {
             )?
         };
 
+        append_edge_skirts(
+            terrain_gen,
+            &mut vertices,
+            &mut indices,
+            &height_grid,
+            chunk_coord,
+        );
+
         Some(CpuChunkMesh {
             chunk_coord,
             step,
             version,
             vertices,
             indices,
-            height_grid: Arc::new(Self::build_height_grid(chunk_coord, step, terrain_gen)),
+            height_grid: Arc::new(height_grid),
         })
     }
 
@@ -642,11 +536,12 @@ impl ChunkBuilder {
     fn sample_terrain_batch(
         chunk_coord: ChunkCoord,
         step: LodStep,
-        verts_x: usize,
-        verts_z: usize,
         terrain_gen: &TerrainGenerator,
     ) -> (Vec<f32>, Vec<[f32; 3]>) {
+        let cs = chunk_size();
         let step_usize = step as usize;
+        let verts_x = (cs / step + 1) as usize;
+        let verts_z = (cs / step + 1) as usize;
         let total = verts_x * verts_z;
 
         let mut heights = Vec::with_capacity(total);
@@ -975,65 +870,6 @@ impl ChunkBuilder {
 
         indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
     }
-
-    pub fn build_height_grid(
-        chunk_coord: ChunkCoord,
-        cell_size: LodStep,
-        terrain_gen: &TerrainGenerator,
-    ) -> ChunkHeightGrid {
-        let cs = chunk_size();
-        let cell_size_f = cell_size as f32;
-        let nx = (cs / cell_size + 1) as usize;
-        let nz = (cs / cell_size + 1) as usize;
-
-        let mut heights = vec![0.0f32; nx * nz];
-
-        for x in 0..nx {
-            let local_x = x as f32 * cell_size_f;
-            for z in 0..nz {
-                let local_z = z as f32 * cell_size_f;
-                let pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
-                heights[x * nz + z] = terrain_gen.height(&pos);
-            }
-        }
-
-        // Build 8x8 patch min/max for fast culling
-        let patch_cells = 8usize;
-        let px = (nx - 1) / patch_cells;
-        let pz = (nz - 1) / patch_cells;
-
-        let mut patch_minmax = Vec::with_capacity(px * pz);
-
-        for px_i in 0..px {
-            for pz_i in 0..pz {
-                let mut min_y = f32::INFINITY;
-                let mut max_y = f32::NEG_INFINITY;
-
-                for lx in 0..=patch_cells {
-                    for lz in 0..=patch_cells {
-                        let gx = px_i * patch_cells + lx;
-                        let gz = pz_i * patch_cells + lz;
-                        if gx < nx && gz < nz {
-                            let h = heights[gx * nz + gz];
-                            min_y = min_y.min(h);
-                            max_y = max_y.max(h);
-                        }
-                    }
-                }
-
-                patch_minmax.push((min_y, max_y));
-            }
-        }
-
-        ChunkHeightGrid {
-            chunk_coord,
-            cell_size,
-            nx,
-            nz,
-            heights,
-            patch_minmax,
-        }
-    }
 }
 
 pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
@@ -1091,4 +927,79 @@ pub fn generate_spiral_offsets(radius: i32) -> Vec<ChunkCoord> {
     // sort by distance from center
     v.sort_by_key(|chunk_coord| chunk_coord.x * chunk_coord.x + chunk_coord.z * chunk_coord.z);
     v
+}
+pub fn generate_height_grid(
+    chunk_coord: ChunkCoord,
+    step: LodStep,
+    terrain_gen: &TerrainGenerator,
+) -> ChunkHeightGrid {
+    let cs = chunk_size();
+    let step_usize = step as usize;
+    let verts_x = (cs / step + 1) as usize;
+    let verts_z = (cs / step + 1) as usize;
+    let total = verts_x * verts_z;
+
+    let mut heights = Vec::with_capacity(total);
+
+    for gx in 0..verts_x {
+        let local_x = (gx * step_usize) as f32;
+
+        for gz in 0..verts_z {
+            let local_z = (gz * step_usize) as f32;
+            let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, 0.0, local_z));
+
+            let h = terrain_gen.height(&world_pos);
+
+            heights.push(h);
+        }
+    }
+
+    build_height_grid_from_heights(chunk_coord, step, heights)
+}
+
+fn build_height_grid_from_heights(
+    chunk_coord: ChunkCoord,
+    step: LodStep,
+    heights: Vec<f32>,
+) -> ChunkHeightGrid {
+    let cs = chunk_size();
+    let nx = (cs / step + 1) as usize;
+    let nz = (cs / step + 1) as usize;
+    const PATCH_CELLS: usize = 8;
+
+    let px = (nx - 1) / PATCH_CELLS;
+    let pz = (nz - 1) / PATCH_CELLS;
+
+    let mut patch_minmax = Vec::with_capacity(px * pz);
+
+    for px_i in 0..px {
+        for pz_i in 0..pz {
+            let mut min_y = f32::INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+
+            for lx in 0..=PATCH_CELLS {
+                for lz in 0..=PATCH_CELLS {
+                    let gx = px_i * PATCH_CELLS + lx;
+                    let gz = pz_i * PATCH_CELLS + lz;
+
+                    if gx < nx && gz < nz {
+                        let h = heights[gx * nz + gz];
+                        min_y = min_y.min(h);
+                        max_y = max_y.max(h);
+                    }
+                }
+            }
+
+            patch_minmax.push((min_y, max_y));
+        }
+    }
+
+    ChunkHeightGrid {
+        chunk_coord,
+        step,
+        nx,
+        nz,
+        heights,
+        patch_minmax,
+    }
 }

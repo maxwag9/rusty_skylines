@@ -21,6 +21,8 @@ use crate::world::terrain::terrain_subsystem::{CursorMode, PickedPoint, Terrain}
 use glam::{Vec2, Vec3};
 use rand::RngExt;
 use rand::rngs::ThreadRng;
+use rand_chacha::ChaCha8Rng;
+use rand_chacha::rand_core::SeedableRng;
 use rayon::iter::IntoParallelRefMutIterator;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -621,6 +623,7 @@ fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<
         lot_id: lot.id,
         level: Default::default(),
         building_params,
+        edit_id: None,
     })
 }
 
@@ -1173,7 +1176,7 @@ impl Zoning {
 
             let back_right = front_right.add_vec3(snap_point.lateral * lot_length);
 
-            let mut preview = vec![front_left, front_right, back_right, back_left, front_left];
+            let mut preview = vec![front_left, back_left, back_right, front_right, front_left];
             for point in preview.iter_mut() {
                 point.local.y = terrain.get_height_at(*point, true);
             }
@@ -1247,7 +1250,7 @@ impl Zoning {
                 );
             }
 
-            gizmo.polyline(lot.bounds.as_slice(), [0.1, 0.3, 0.7, 0.8], 0.0, 0.10, 0.0);
+            gizmo.polyline(lot.bounds.as_slice(), [0.1, 0.3, 0.7, 0.8], 10.0, 0.10, 0.0);
         }
         if let Some(lot_id) = inside_lot_id
             && finished_removing_lot
@@ -1662,6 +1665,8 @@ impl Lot {
     pub fn get_tiles(&self) -> HashMap<(i32, i32), Tile> {
         let mut tiles = HashMap::new();
 
+        let mut rng = ChaCha8Rng::seed_from_u64(self.id as u64);
+
         // Stable local frame from the entrance
         let origin = self.entrance.0;
         let direction = self.entrance.1;
@@ -1679,6 +1684,7 @@ impl Lot {
             let local = origin.delta_xz(*p, right, forward);
             let gx = local.x.floor() as i32;
             let gz = local.y.floor() as i32;
+
             min_x = min_x.min(gx);
             max_x = max_x.max(gx);
             min_z = min_z.min(gz);
@@ -1688,50 +1694,59 @@ impl Lot {
         let width = max_x - min_x + 1;
         let depth = max_z - min_z + 1;
 
-        // Basic lot proportions
-        let house_w = ((width as f32) * 0.42).round() as i32;
-        let house_d = ((depth as f32) * 0.36).round() as i32;
-        let garage_w = if width >= 10 { 3 } else { 2 };
-        let garage_d = 3;
-        let driveway_w = if width >= 12 { 3 } else { 2 };
+        // Randomized but deterministic proportions
+        let house_w = ((width as f32) * rng.random_range(0.38..0.52)).round() as i32;
+
+        let house_d = ((depth as f32) * rng.random_range(0.32..0.45)).round() as i32;
+
+        let garage_w = rng.random_range(2..=3);
+        let garage_d = rng.random_range(2..=4);
+
+        let driveway_w = rng.random_range(2..=3);
 
         let house_w = house_w.clamp(4, (width - 2).max(4));
         let house_d = house_d.clamp(4, (depth - 3).max(4));
 
         let center_x = (min_x + max_x) / 2;
 
-        // House goes deeper into the lot, away from the entrance
-        let house_x0 = (center_x - house_w / 2).clamp(min_x + 1, max_x - house_w);
+        let house_offset = rng.random_range(-1..=1);
+
+        let house_x0 = (center_x - house_w / 2 + house_offset).clamp(min_x + 1, max_x - house_w);
+
         let house_x1 = house_x0 + house_w - 1;
 
         let house_z1 = max_z - 1;
-        let house_z0 = (house_z1 - house_d + 1).clamp(min_z + 2, max_z - house_d);
 
-        // Garage is attached beside the driveway, usually on the right side of the house
-        let garage_on_right = house_x1 + 1 + garage_w <= max_x;
+        let front_setback = rng.random_range(0..=2);
+
+        let house_z0 = (house_z1 - house_d + 1 - front_setback).clamp(min_z + 2, max_z - house_d);
+
+        let garage_on_right = rng.random_bool(0.7) && house_x1 + 1 + garage_w <= max_x;
+
         let garage_x0 = if garage_on_right {
             house_x1 + 1
         } else {
             (house_x0 - 1 - garage_w).max(min_x)
         };
+
         let garage_x1 = garage_x0 + garage_w - 1;
 
-        let garage_z0 = house_z0 + 1;
+        let garage_z0 = house_z0 + rng.random_range(0..=1);
+
         let garage_z1 = (garage_z0 + garage_d - 1).min(house_z1);
 
-        // Driveway runs from the entrance toward the house and garage
-        let driveway_center_x = if garage_on_right {
-            garage_x0 + garage_w / 2
-        } else {
-            garage_x0 + garage_w / 2
-        };
+        let driveway_center_x = garage_x0 + garage_w / 2;
+
         let driveway_x0 = driveway_center_x - driveway_w / 2;
         let driveway_x1 = driveway_x0 + driveway_w - 1;
 
-        // Optional balcony strip on the back side of the house
+        let balcony_enabled = rng.random_bool(0.45);
+
         let balcony_z = house_z1;
-        let balcony_x0 = (house_x0 + 1).clamp(house_x0, house_x1);
-        let balcony_x1 = (house_x1 - 1).clamp(house_x0, house_x1);
+
+        let balcony_x0 = (house_x0 + rng.random_range(0..=1)).clamp(house_x0, house_x1);
+
+        let balcony_x1 = (house_x1 - rng.random_range(0..=1)).clamp(house_x0, house_x1);
 
         for x in min_x..=max_x {
             for z in min_z..=max_z {
@@ -1747,7 +1762,12 @@ impl Lot {
                 } else if x >= garage_x0 && x <= garage_x1 && z >= garage_z0 && z <= garage_z1 {
                     Tile::Square(TileType::Garage)
                 } else if x >= house_x0 && x <= house_x1 && z >= house_z0 && z <= house_z1 {
-                    if z == house_z1 && x >= balcony_x0 && x <= balcony_x1 && width >= 10 {
+                    if balcony_enabled
+                        && z == balcony_z
+                        && x >= balcony_x0
+                        && x <= balcony_x1
+                        && width >= 10
+                    {
                         Tile::Square(TileType::HouseBalcony)
                     } else if z == house_z0 && x >= driveway_x0 && x <= driveway_x1 {
                         Tile::Square(TileType::HouseEntrance)
@@ -1757,7 +1777,15 @@ impl Lot {
                 } else if x >= driveway_x0 && x <= driveway_x1 && z >= min_z + 1 && z <= house_z0 {
                     Tile::Square(TileType::Driveway)
                 } else {
-                    Tile::Square(TileType::Garden)
+                    let hash = (self.id as u64)
+                        ^ ((x as i64 as u64).wrapping_mul(0x9E3779B97F4A7C15))
+                        ^ ((z as i64 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F));
+
+                    if hash % 100 == 0 {
+                        Tile::Square(TileType::Tree)
+                    } else {
+                        Tile::Square(TileType::Garden)
+                    }
                 };
 
                 tiles.insert((x, z), tile);

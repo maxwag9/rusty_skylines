@@ -1,9 +1,9 @@
 use crate::commands::Command;
 use crate::data::{LodCenterType, Settings};
 use crate::helpers::mouse_ray::*;
-use crate::helpers::paths::rusty_skylines_dir;
 use crate::helpers::positions::*;
 use crate::renderer::benchmark::{Benchmark, ChunkJobConfig};
+use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::resources::Time;
 use crate::simulation::Ticker;
@@ -15,19 +15,25 @@ use crate::world::game_state::SaveState;
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use crate::world::roads::road_structs::RoadType;
 use crate::world::terrain::chunk_builder::*;
-use crate::world::terrain::terrain::{TerrainGenerator, TerrainParams};
 use crate::world::terrain::terrain_editing::*;
-use crate::world::terrain::threads::{ChunkJob, ChunkWorkerPool};
+use crate::world::terrain::terrain_gen::{TerrainGenerator, TerrainParams};
+use crate::world::terrain::terrain_threads::{
+    ChunkWorkerPool, LoadedChunkSnapshot, LoadedChunksSnapshot, PendingChunkRequest,
+    TerrainEditsSnapshot,
+};
 use glam::{Mat4, Vec3};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
 
+#[derive(Clone)]
 pub struct ChunkCoords {
     pub chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
     pub dist2: i32,
 }
+#[derive(Clone)]
 pub struct VisibleChunk {
     pub coords: ChunkCoords,
     pub id: ChunkId,
@@ -125,136 +131,112 @@ impl Cursor {
 
 pub struct TerrainJobs {
     pub workers: ChunkWorkerPool,
-    pub pending: HashMap<ChunkCoord, (u64, LodStep)>,
     pub job_config: ChunkJobConfig,
     pub max_close_jobs_per_frame: usize,
-    pub max_close_chunks_per_batch: usize,
-    pub max_far_chunks_per_batch: usize,
     pub max_far_jobs_per_frame: usize,
 }
 
 impl TerrainJobs {
     fn new(workers: ChunkWorkerPool) -> Self {
         Self {
-            pending: HashMap::new(),
             workers,
             job_config: ChunkJobConfig::default(),
-            max_close_jobs_per_frame: 1,
-            max_close_chunks_per_batch: 2,
-            max_far_chunks_per_batch: 100,
-            max_far_jobs_per_frame: 1,
+            max_close_jobs_per_frame: 4, // was 1
+            max_far_jobs_per_frame: 4,   // was 1
         }
     }
     fn dispatch_jobs_for_visible(
         &mut self,
         terrain_editor: &TerrainEditor,
         chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
+        pending: &VecDeque<CpuChunkMesh>,
         visible: &Vec<VisibleChunk>,
         lod_map: &HashMap<ChunkCoord, LodStep>,
     ) {
-        let mut close_batch = Vec::new();
-        let mut far_batch = Vec::new();
-
+        let pending_coords: HashSet<ChunkCoord> =
+            pending.iter().map(|cpu| cpu.chunk_coord).collect();
         let mut close_jobs_sent = 0usize;
-        let mut far_batches_sent = 0usize;
+        let mut far_jobs_sent = 0usize;
 
         for v in visible.iter() {
-            let cx = v.coords.chunk_coord.x;
-            let cz = v.coords.chunk_coord.z;
             if close_jobs_sent >= self.max_close_jobs_per_frame
-                && far_batches_sent >= self.max_far_jobs_per_frame
+                || far_jobs_sent >= self.max_far_jobs_per_frame
             {
                 break;
             }
 
             let coord = v.coords.chunk_coord;
-            let desired_step = *lod_map.get(&coord).unwrap_or(&1);
-
-            // Already good?
-            if let Some(ch) = chunks.get(&coord) {
-                if ch.step == desired_step {
-                    continue;
-                }
-            }
-            // Already pending same step?
-            if let Some((_ver, pending_step)) = self.pending.get(&coord).copied() {
-                if pending_step == desired_step {
-                    continue;
-                }
-            }
-            let has_edits = terrain_editor
-                .edited_chunks
-                .get(&coord)
-                .map_or(false, |e| !e.accumulated_deltas.is_empty());
-            // Neighbor LODs (fallback to step if neighbor not visible)
-            let step = desired_step;
-            let n_x_neg = *lod_map.get(&ChunkCoord::new(cx - 1, cz)).unwrap_or(&step);
-            let n_x_pos = *lod_map.get(&ChunkCoord::new(cx + 1, cz)).unwrap_or(&step);
-            let n_z_neg = *lod_map.get(&ChunkCoord::new(cx, cz - 1)).unwrap_or(&step);
-            let n_z_pos = *lod_map.get(&ChunkCoord::new(cx, cz + 1)).unwrap_or(&step);
-
-            if step <= 2 {
-                if close_jobs_sent < self.max_close_jobs_per_frame {
-                    let (version, version_atomic) = self.workers.new_version_for(coord);
-                    self.pending.insert(coord, (version, step));
-
-                    close_batch.push((
-                        coord,
-                        step,
-                        n_x_neg,
-                        n_x_pos,
-                        n_z_neg,
-                        n_z_pos,
-                        version,
-                        version_atomic,
-                        has_edits,
-                    ));
-
-                    if close_batch.len() >= self.max_close_chunks_per_batch {
-                        let job = ChunkJob {
-                            chunks: std::mem::take(&mut close_batch),
-                        };
-                        let _ = self.workers.job_tx.send(job);
-                        close_jobs_sent += 1;
-                    }
-                }
-            } else {
-                if far_batches_sent < self.max_far_jobs_per_frame {
-                    let (version, version_atomic) = self.workers.new_version_for(coord);
-                    self.pending.insert(coord, (version, step));
-
-                    far_batch.push((
-                        coord,
-                        step,
-                        n_x_neg,
-                        n_x_pos,
-                        n_z_neg,
-                        n_z_pos,
-                        version,
-                        version_atomic,
-                        has_edits,
-                    ));
-
-                    if far_batch.len() >= self.max_far_chunks_per_batch {
-                        let job = ChunkJob {
-                            chunks: std::mem::take(&mut far_batch),
-                        };
-                        let _ = self.workers.job_tx.send(job);
-                        far_batches_sent += 1;
-                    }
-                }
-            }
-        }
-        if !close_batch.is_empty() && close_jobs_sent < self.max_close_jobs_per_frame {
-            let job = ChunkJob {
-                chunks: close_batch,
+            let coord_x_neg = ChunkCoord::new(coord.x - 1, coord.z);
+            let coord_x_pos = ChunkCoord::new(coord.x + 1, coord.z);
+            let coord_z_neg = ChunkCoord::new(coord.x, coord.z - 1);
+            let coord_z_pos = ChunkCoord::new(coord.x, coord.z + 1);
+            let step = *lod_map.get(&coord).unwrap_or(&1);
+            let nx_neg = *lod_map.get(&coord_x_neg).unwrap_or(&step);
+            let nx_pos = *lod_map.get(&coord_x_pos).unwrap_or(&step);
+            let nz_neg = *lod_map.get(&coord_z_neg).unwrap_or(&step);
+            let nz_pos = *lod_map.get(&coord_z_pos).unwrap_or(&step);
+            let desired = ChunkState {
+                step,
+                nx_neg,
+                nx_pos,
+                nz_neg,
+                nz_pos,
             };
-            let _ = self.workers.job_tx.send(job);
-        }
 
-        if !far_batch.is_empty() && far_batches_sent < self.max_far_jobs_per_frame {
-            let job = ChunkJob { chunks: far_batch };
-            let _ = self.workers.job_tx.send(job);
+            if let Some(existing) = chunks.get(&coord) {
+                if existing.state.same_as(&desired) {
+                    continue;
+                }
+            }
+            // Check if already completed and waiting in pending_results
+            if pending_coords.contains(&coord) {
+                continue; // Don't re-submit!
+            }
+            if self.workers.has_request(coord, &desired) || self.workers.is_building(coord) {
+                continue;
+            }
+
+            let has_edits = terrain_editor.has_edits_on_chunk(coord);
+
+            let (version, version_atomic) = self.workers.new_version_for(coord);
+            let priority = (u64::MAX - v.coords.dist2 as u64) / 16;
+
+            let terrain_edits_snapshot = TerrainEditsSnapshot {
+                edits: Arc::new(terrain_editor.edits.clone()),
+                affected_chunks: Arc::new(terrain_editor.affected_chunks.clone()),
+            };
+
+            let mut loaded_snapshot: LoadedChunksSnapshot = HashMap::new();
+
+            for (&coord, chunk) in chunks.iter() {
+                loaded_snapshot.insert(
+                    coord,
+                    LoadedChunkSnapshot {
+                        step: chunk.state.step,
+                        height_grid: chunk.height_grid.clone(),
+                    },
+                );
+            }
+            self.workers.submit_request(PendingChunkRequest {
+                coord,
+                state: desired,
+
+                version,
+                version_atomic,
+
+                has_edits,
+
+                priority,
+                in_progress: Arc::new(AtomicBool::new(false)),
+                terrain_edits_snapshot,
+                loaded_snapshot: Arc::new(loaded_snapshot),
+            });
+
+            if close_jobs_sent < self.max_close_jobs_per_frame {
+                close_jobs_sent += 1;
+            } else if far_jobs_sent < self.max_far_jobs_per_frame {
+                far_jobs_sent += 1;
+            }
         }
     }
 }
@@ -387,6 +369,15 @@ pub struct Terrain {
     pub frame_timings: FrameTimings,
     pub visible: Vec<VisibleChunk>,
     pub terrain_gen: TerrainGenerator,
+
+    // Cache for LOD computation to avoid rebuilding every frame
+    lod_coord_to_index: HashMap<ChunkCoord, usize>,
+    lod_steps_buffer: Vec<LodStep>,
+
+    last_camera_chunk: ChunkCoord,
+    last_visible: Vec<VisibleChunk>,
+
+    pub pending_results: VecDeque<CpuChunkMesh>,
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
@@ -401,22 +392,7 @@ impl Terrain {
             128 * 1024 * 1024, // index bytes per page
         );
 
-        let terrain_editor: TerrainEditor;
-        if settings.show_world {
-            terrain_editor = match TerrainEditor::load_edits(rusty_skylines_dir("edited_chunks")) {
-                Ok(te) => {
-                    println!("Old World loaded");
-                    te
-                }
-                Err(e) => {
-                    //eprintln!("Failed to load Old World: {e}");
-                    TerrainEditor::default()
-                }
-            };
-            save_state.terrain_edits = terrain_editor.get_edits();
-        } else {
-            terrain_editor = TerrainEditor::default();
-        }
+        let terrain_editor = TerrainEditor::default();
 
         let mut terrain_params = TerrainParams::default();
         terrain_params.seed = 144;
@@ -448,11 +424,19 @@ impl Terrain {
             benchmark: Benchmark::default(),
             frame_timings: FrameTimings::default(),
             visible: vec![],
+
+            lod_coord_to_index: HashMap::new(),
+            lod_steps_buffer: vec![],
+            last_camera_chunk: ChunkCoord::new(9999999, 99984496),
+            last_visible: vec![],
+
+            pending_results: VecDeque::with_capacity(64),
         }
     }
 
     pub fn update(
         &mut self,
+        gizmo: &mut Gizmo,
         device: &Device,
         queue: &Queue,
         camera: &Camera,
@@ -467,7 +451,7 @@ impl Terrain {
             self.benchmark
                 .run(self.chunks.len(), &mut self.terrain_jobs.job_config, || {
                     self.chunks.clear();
-                    self.terrain_jobs.pending.clear();
+                    self.terrain_jobs.workers.clear();
                     self.lod_map.clear();
                 });
         }
@@ -479,7 +463,18 @@ impl Terrain {
         self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
+        let current_chunk = camera.target.chunk;
+        // if current_chunk != self.last_camera_chunk {
+        //     self.last_camera_chunk = current_chunk;
         self.visible = self.collect_visible(camera, &frame);
+        // } else {
+        //     // Just re-sort by distance
+        //     self.visible.sort_unstable_by_key(|v| {
+        //         let dx = v.coords.chunk_coord.x - current_chunk.x;
+        //         let dz = v.coords.chunk_coord.z - current_chunk.z;
+        //         dx*dx + dz*dz
+        //     });
+        // }
         self.frame_timings.collect_visible_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -494,6 +489,7 @@ impl Terrain {
         self.terrain_jobs.dispatch_jobs_for_visible(
             &self.terrain_editor,
             &self.chunks,
+            &self.pending_results,
             &self.visible,
             &self.lod_map,
         );
@@ -511,10 +507,25 @@ impl Terrain {
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
-        // println!("{:#?}", self.frame_timings);
+        println!("{:#?}", self.frame_timings);
+        // println!("Queue: {} pending, {} results backlog, {} chunks loaded",
+        //          self.terrain_jobs.workers.pending_count(),
+        //          self.pending_results.len(),
+        //          self.chunks.len()
+        // );
     }
 
     fn handle_terrain_editing(&mut self, device: &Device, queue: &Queue, input_state: &mut Input) {
+        let freed = self.terrain_editor.flush_dirty_chunks(
+            device,
+            queue,
+            &mut self.arena,
+            &mut self.chunks,
+            &self.terrain_gen,
+        );
+        for h in freed {
+            self.arena.free::<Vertex>(h);
+        }
         match self.cursor.mode {
             CursorMode::TerrainEditing => {} // just continue lol
             _ => {
@@ -541,27 +552,8 @@ impl Terrain {
             -1.0
         };
 
-        self.terrain_editor.apply_brush::<SmoothFalloff, Raise>(
-            pos,
-            self.pick_radius_m,
-            strength,
-            &self.chunks,
-        );
-
-        let mut scratch = GeometryScratch::default();
-        let freed_handles = self.terrain_editor.upload_dirty_chunks(
-            device,
-            queue,
-            &mut self.arena,
-            &mut self.chunks,
-            &self.terrain_gen,
-            &mut scratch,
-            released,
-        );
-
-        for handle in freed_handles {
-            self.arena.free::<Vertex>(handle);
-        }
+        self.terrain_editor
+            .apply_brush::<SmoothFalloff, Raise>(pos, self.pick_radius_m, strength);
     }
 
     fn frame_state(&self, settings: &Settings, camera: &Camera, _aspect: f32) -> FrameState {
@@ -585,7 +577,27 @@ impl Terrain {
     }
 
     pub fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
+        let mut recv_ms = 0.0;
+        let mut rebuild_ms = 0.0;
+        let mut gpu_ms = 0.0;
+        let mut insert_ms = 0.0;
+        let mut detail = DrainDetailTimings::default();
+
+        let t0 = Instant::now();
         while let Ok(cpu) = self.terrain_jobs.workers.result_rx.try_recv() {
+            self.pending_results.push_back(cpu);
+        }
+        recv_ms += t0.elapsed().as_secs_f32() * 1000.0;
+
+        let mut processed = 0;
+        let max_per_frame = 8;
+
+        while processed < max_per_frame {
+            let Some(cpu) = self.pending_results.pop_front() else {
+                break;
+            };
+            processed += 1;
+
             let coord = cpu.chunk_coord;
 
             if !self
@@ -596,67 +608,15 @@ impl Terrain {
                 continue;
             }
 
-            self.remove_chunk(coord);
+            let t0 = Instant::now();
 
-            let mut vertices = cpu.vertices;
-            let mut indices = cpu.indices;
-            let mut height_grid = (*cpu.height_grid).clone();
-            let step = cpu.step;
+            let (vertices, indices, height_grid) = (cpu.vertices, cpu.indices, cpu.height_grid);
 
-            let has_edits = self
-                .terrain_editor
-                .edited_chunks
-                .get(&coord)
-                .map_or(false, |e| !e.accumulated_deltas.is_empty());
+            rebuild_ms += t0.elapsed().as_secs_f32() * 1000.0;
 
-            if has_edits {
-                height_grid = apply_accumulated_deltas_with_stitching(
-                    &height_grid,
-                    coord,
-                    &self.terrain_editor.edited_chunks,
-                    &self.chunks,
-                    step,
-                );
+            let t0 = Instant::now();
 
-                recompute_patch_minmax(&mut height_grid);
-
-                let expected_verts = height_grid.nx * height_grid.nz;
-
-                if vertices.len() == expected_verts {
-                    let neighbor_edges = gather_neighbor_edge_heights(
-                        coord,
-                        &height_grid,
-                        &self.chunks,
-                        &self.terrain_editor.edited_chunks,
-                    );
-                    regenerate_vertices_from_height_grid(
-                        &mut vertices,
-                        &height_grid,
-                        &self.terrain_gen,
-                        Some(&neighbor_edges),
-                        false,
-                    );
-                } else {
-                    (vertices, indices) = ChunkBuilder::build_simple_grid(
-                        coord,
-                        step as usize,
-                        height_grid.nx,
-                        height_grid.nz,
-                        &height_grid.heights,
-                        &self.rebuild_colors(&height_grid),
-                        &self.rebuild_normals(&height_grid),
-                    );
-                }
-            }
-
-            // Append skirts to hide LOD seam gaps
-            append_edge_skirts(
-                &self.terrain_gen,
-                &mut vertices,
-                &mut indices,
-                &height_grid,
-                coord,
-            );
+            self.free_chunk_gpu(coord);
 
             let handle = self.arena.alloc_and_upload(
                 device,
@@ -666,125 +626,166 @@ impl Terrain {
                 &mut GeometryScratch::default(),
             );
 
+            gpu_ms += t0.elapsed().as_secs_f32() * 1000.0;
+
+            let t0 = Instant::now();
+
+            let coord_x_neg = ChunkCoord::new(coord.x - 1, coord.z);
+            let coord_x_pos = ChunkCoord::new(coord.x + 1, coord.z);
+            let coord_z_neg = ChunkCoord::new(coord.x, coord.z - 1);
+            let coord_z_pos = ChunkCoord::new(coord.x, coord.z + 1);
+
+            let step = *self.lod_map.get(&coord).unwrap_or(&1);
+
+            let nx_neg = *self.lod_map.get(&coord_x_neg).unwrap_or(&step);
+            let nx_pos = *self.lod_map.get(&coord_x_pos).unwrap_or(&step);
+            let nz_neg = *self.lod_map.get(&coord_z_neg).unwrap_or(&step);
+            let nz_pos = *self.lod_map.get(&coord_z_pos).unwrap_or(&step);
+
             self.chunks.insert(
                 coord,
                 ChunkMeshLod {
-                    step,
+                    state: ChunkState {
+                        step,
+                        nx_neg,
+                        nx_pos,
+                        nz_neg,
+                        nz_pos,
+                    },
                     handle,
                     cpu_vertices: vertices,
                     cpu_indices: indices,
-                    height_grid: Arc::new(height_grid),
+                    height_grid,
                 },
             );
+
+            insert_ms += t0.elapsed().as_secs_f32() * 1000.0;
         }
+
+        self.frame_timings.drain_recv_ms = recv_ms;
+        self.frame_timings.drain_cpu_rebuild_ms = rebuild_ms;
+        self.frame_timings.drain_detail = detail;
+        self.frame_timings.drain_gpu_upload_ms = gpu_ms;
+        self.frame_timings.drain_chunk_insert_ms = insert_ms;
     }
-    fn remove_chunk(&mut self, coord: ChunkCoord) {
-        // remove pending job
-        self.terrain_jobs.pending.remove(&coord);
-        // remove GPU chunk
+    fn free_chunk_gpu(&mut self, coord: ChunkCoord) {
         if let Some(old) = self.chunks.remove(&coord) {
             self.arena.free::<Vertex>(old.handle);
         }
-        // tell workers to forget it
+    }
+
+    fn unload_chunk(&mut self, coord: ChunkCoord) {
+        self.free_chunk_gpu(coord);
         self.terrain_jobs.workers.forget_chunk(coord);
     }
 
     fn collect_visible(&self, camera: &Camera, frame: &FrameState) -> Vec<VisibleChunk> {
-        let mut visible = Vec::new();
-        for &chunk_coord in &self.spiral {
-            let (dx, dz) = (chunk_coord.x, chunk_coord.z);
-            //let dy =
-            let dist3 = dx * dx + dz * dz;
-            if dist3 > frame.r2_render {
+        let mut visible = Vec::with_capacity(400);
+        let cam_chunk = frame.cam_pos.chunk;
+        let r2_render = frame.r2_render;
+
+        // Iterate using pre-computed spiral for perfect distance ordering
+        for offset in &self.spiral {
+            let dist2 = offset.x * offset.x + offset.z * offset.z;
+
+            if dist2 > r2_render {
                 continue;
             }
-            let cx = frame.cam_pos.chunk.x + dx;
-            let cz = frame.cam_pos.chunk.z + dz;
+            let coord = cam_chunk.offset(offset.x, offset.z);
 
-            let (min, max) = chunk_aabb_render(cx, cz, camera.eye_world());
+            let (min, max) = chunk_aabb_render(coord.x, coord.z, camera.eye_world());
+
             if aabb_in_frustum(&frame.planes, min, max) {
                 visible.push(VisibleChunk {
                     coords: ChunkCoords {
-                        chunk_coord: ChunkCoord::new(cx, cz),
-                        dist2: dist3,
+                        chunk_coord: coord,
+                        dist2,
                     },
-                    id: chunk_coord_to_id(cx, cz),
+                    id: chunk_coord_to_id(coord.x, coord.z),
                 });
             }
         }
+
         visible
     }
 
     fn compute_lod_for_visible(&mut self, r2_gen: i32) {
-        // Cache visible once
-        let visible: Vec<_> = self.visible.iter().collect();
-
-        let num_visible = visible.len();
-        if num_visible == 0 {
+        let n = self.visible.len();
+        if n == 0 {
             self.lod_map.clear();
             return;
         }
 
-        // Precompute the step for chunks beyond generation radius
-        let beyond_step = lod_step_for_distance(r2_gen + 1);
+        self.lod_coord_to_index.clear();
+        self.lod_steps_buffer.clear();
+        self.lod_steps_buffer.reserve(n);
 
-        // Build coord → index map once
-        let mut coord_to_index: HashMap<ChunkCoord, usize> = HashMap::with_capacity(num_visible);
-        let mut steps: Vec<LodStep> = Vec::with_capacity(num_visible);
+        let mut base_steps = Vec::with_capacity(n);
 
-        // Initial pass: assign distance-based LOD
-        for &v in &visible {
+        for (i, v) in self.visible.iter().enumerate() {
             let dist2 = v.coords.dist2;
+
             let step = if dist2 > r2_gen {
-                beyond_step
+                lod_step_for_distance(r2_gen + 1)
             } else {
                 lod_step_for_distance(dist2)
             };
 
-            let idx = steps.len();
-            steps.push(step);
-            coord_to_index.insert(v.coords.chunk_coord, idx);
+            base_steps.push(step);
+            self.lod_coord_to_index.insert(v.coords.chunk_coord, i);
         }
 
-        for _ in 2..4 {
-            let mut new_steps = Vec::with_capacity(num_visible);
+        self.lod_steps_buffer = base_steps.clone();
 
-            for i in 0..num_visible {
-                let v = visible[i];
-                let coord = v.coords.chunk_coord;
-                let s = steps[i];
+        // single stabilization pass only
+        for (i, v) in self.visible.iter().enumerate() {
+            let coord = v.coords.chunk_coord;
+            let s = base_steps[i];
 
-                // Start with s — missing neighbors default to self step
-                let mut max_neighbor = s;
+            let mut max_n = s;
 
-                // 4 axis-aligned neighbors only
-                for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                    let neigh_coord = ChunkCoord::new(coord.x + dx, coord.z + dz);
-                    if let Some(&j) = coord_to_index.get(&neigh_coord) {
-                        max_neighbor = max_neighbor.max(steps[j]);
-                    }
-                }
-
-                let min_allowed = (max_neighbor / 2).max(1);
-                new_steps.push(s.max(min_allowed));
+            if let Some(&j) = self
+                .lod_coord_to_index
+                .get(&ChunkCoord::new(coord.x - 1, coord.z))
+            {
+                max_n = max_n.max(base_steps[j]);
+            }
+            if let Some(&j) = self
+                .lod_coord_to_index
+                .get(&ChunkCoord::new(coord.x + 1, coord.z))
+            {
+                max_n = max_n.max(base_steps[j]);
+            }
+            if let Some(&j) = self
+                .lod_coord_to_index
+                .get(&ChunkCoord::new(coord.x, coord.z - 1))
+            {
+                max_n = max_n.max(base_steps[j]);
+            }
+            if let Some(&j) = self
+                .lod_coord_to_index
+                .get(&ChunkCoord::new(coord.x, coord.z + 1))
+            {
+                max_n = max_n.max(base_steps[j]);
             }
 
-            steps = new_steps;
+            let min_allowed = (max_n / 2).max(1);
+            self.lod_steps_buffer[i] = s.max(min_allowed);
         }
 
-        // Write final results back to the real lod_map
         self.lod_map.clear();
-        self.lod_map.reserve(num_visible);
-        for i in 0..num_visible {
-            let v = visible[i];
-            self.lod_map.insert(v.coords.chunk_coord, steps[i]);
+        self.lod_map.reserve(n);
+
+        for (i, v) in self.visible.iter().enumerate() {
+            self.lod_map
+                .insert(v.coords.chunk_coord, self.lod_steps_buffer[i]);
         }
     }
 
     fn unload_out_of_range(&mut self, frame: &FrameState) {
         // Avoid thrash: unload outside render radius + generous margin.
-        let margin = 4;
-        let r = self.view_radius_render as i32 + margin;
+        let margin = (self.view_radius_render / 2) as u64;
+        let r = self.view_radius_render as u64 + margin;
         let r2 = r * r;
 
         // Build a set of currently-visible coords so we never unload them.
@@ -798,16 +799,16 @@ impl Terrain {
             if visible_set.contains(&coord) {
                 continue;
             }
-            let dx = i64::from(chunk_coord.x) - i64::from(frame.cam_pos.chunk.x);
-            let dz = i64::from(chunk_coord.z) - i64::from(frame.cam_pos.chunk.z);
+            let dist2 = chunk_coord.dist2(&frame.cam_pos.chunk);
 
-            if dx * dx + dz * dz > r2 as i64 {
+            if dist2 > r2 {
                 to_remove.push(coord);
             }
         }
 
         for coord in to_remove {
-            self.remove_chunk(coord);
+            self.unload_chunk(coord);
+            self.terrain_editor.pristine_grids.remove(&coord);
         }
     }
 
@@ -927,7 +928,7 @@ impl Terrain {
             Some(c) => c,
             None => return self.terrain_gen.height(&pos),
         };
-        if high_res && chunk.step != 1 {
+        if high_res && chunk.state.step != 1 {
             return self.terrain_gen.height(&pos);
         }
         height_bilinear_world(&chunk.height_grid, pos)
@@ -935,7 +936,7 @@ impl Terrain {
 
     fn rebuild_colors(&self, grid: &ChunkHeightGrid) -> Vec<[f32; 3]> {
         let mut colors = Vec::with_capacity(grid.nx * grid.nz);
-        let cell = grid.cell_f32();
+        let cell = grid.step_f32();
 
         for gx in 0..grid.nx {
             for gz in 0..grid.nz {
@@ -955,7 +956,7 @@ impl Terrain {
     fn rebuild_normals(&self, grid: &ChunkHeightGrid) -> Vec<[f32; 3]> {
         let nx = grid.nx;
         let nz = grid.nz;
-        let cell = grid.cell_f32();
+        let cell = grid.step_f32();
         let inv = 1.0 / cell;
         let mut normals = vec![[0.0f32, 1.0, 0.0]; nx * nz];
 
@@ -991,6 +992,21 @@ impl Terrain {
             }
         }
         normals
+    }
+
+    fn chunk_needs_stitching(&self, coord: ChunkCoord, own_step: LodStep) -> bool {
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let nb = ChunkCoord::new(coord.x + dx, coord.z + dz);
+            if self.terrain_editor.has_edits_on_chunk(nb) {
+                continue;
+            }
+            if let Some(c) = self.chunks.get(&nb) {
+                if c.state.step > own_step {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -1056,10 +1072,25 @@ fn chunk_aabb_render(cx: i32, cz: i32, eye: WorldPos) -> (Vec3, Vec3) {
 
     (min, max)
 }
-
+#[derive(Default, Debug)]
+pub struct DrainDetailTimings {
+    pub edits_ms: f32,
+    pub patch_minmax_ms: f32,
+    pub neighbor_extract_ms: f32,
+    pub build_mesh_ms: f32,
+    pub regenerate_ms: f32,
+    pub skirts_ms: f32,
+}
 #[derive(Default, Debug)]
 pub struct FrameTimings {
     pub drain_ms: f32,
+
+    pub drain_recv_ms: f32,
+    pub drain_cpu_rebuild_ms: f32,
+    pub drain_detail: DrainDetailTimings,
+    pub drain_gpu_upload_ms: f32,
+    pub drain_chunk_insert_ms: f32,
+
     pub collect_visible_ms: f32,
     pub sort_visible_ms: f32,
     pub lod_ms: f32,
@@ -1103,7 +1134,7 @@ pub fn append_edge_skirts(
 ) {
     let nx = height_grid.nx;
     let nz = height_grid.nz;
-    let cell = height_grid.cell_f32();
+    let cell = height_grid.step_f32();
     let chunk_xz = [chunk_coord.x, chunk_coord.z];
 
     // +X edge skirt

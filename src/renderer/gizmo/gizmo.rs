@@ -398,7 +398,7 @@ impl Gizmo {
         self.push(verts, thickness, duration, false);
     }
 
-    pub fn box_xz(
+    pub fn square(
         &mut self,
         center: WorldPos,
         half_size: f32,
@@ -820,7 +820,7 @@ impl Gizmo {
                     target.chunk,
                     LocalPos::new(0.0, terrain_subsystem.get_height_at(target, false), 0.0),
                 );
-                self.box_xz(
+                self.square(
                     corner.add_vec3(Vec3::new(cs * 0.5, 0.0, cs * 0.5)),
                     cs * 0.5,
                     [0.2, 0.8, 0.6, 0.9],
@@ -1220,7 +1220,7 @@ impl Gizmo {
             let center = WorldPos::new(chunk_coord, LocalPos::new(cs * 0.5, 0.0, cs * 0.5));
 
             // Draw box outline
-            self.box_xz(center, cs * 0.48, color, thickness, duration);
+            self.square(center, cs * 0.48, color, thickness, duration);
 
             // Draw an X across the chunk for extra visibility
             let corners = [
@@ -1260,7 +1260,7 @@ impl Gizmo {
             let center = WorldPos::new(chunk_coord, LocalPos::new(cs * 0.5, 1.0, cs * 0.5));
 
             // Box outline
-            self.box_xz(center, cs * 0.49, color, thickness, duration);
+            self.square(center, cs * 0.49, color, thickness, duration);
 
             // Show update order number
             let label_pos = center.add_vec3(Vec3::new(0.0, 0.0, 0.0));

@@ -99,9 +99,12 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
             params: TextureParams {
                 seed: 1337,
                 scale: 40.0,
-                roughness: 0.78, // Heavily reduced dry influence
-                color_primary: [0.02, 0.34, 0.01, 1.0], // Deep muted olive green—no neon
-                color_secondary: [0.10, 0.60, 0.10, 1.0], // Dark neutral brown, zero yellow pop
+                roughness: 0.35,
+                color_primary: [0.07, 0.30, 0.04, 1.0], // medium muted green
+                color_secondary: [0.38, 0.30, 0.06, 1.0], // dry straw brown
+                octaves: 7.0,
+                persistence: 0.50,
+                lacunarity: 2.0, // must stay integer for seamless tiling
                 ..Default::default()
             },
             resolution: 1024,
@@ -110,10 +113,13 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
             shader_id: "grass".to_string(),
             params: TextureParams {
                 seed: 42,
-                scale: 80.0,
-                roughness: 0.65,                       // Way down—minimal dry yellow
-                color_primary: [0.0, 0.33, 0.00, 1.0], // Ultra-dark muted base
-                color_secondary: [0.02, 0.50, 0.00, 1.0], // Super dark brown shadow tone
+                scale: 64.0, // rounded to clean integer
+                roughness: 0.42,
+                color_primary: [0.04, 0.24, 0.02, 1.0], // deep dark green
+                color_secondary: [0.34, 0.26, 0.05, 1.0], // dark dry brown
+                octaves: 6.0,
+                persistence: 0.48,
+                lacunarity: 2.0,
                 ..Default::default()
             },
             resolution: 1024,

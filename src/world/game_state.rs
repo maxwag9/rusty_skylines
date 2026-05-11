@@ -1,15 +1,14 @@
 use crate::helpers::paths::saves_dir;
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos, chunk_size, set_chunk_size};
+use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
 use crate::renderer::props::{Props, SavePropChunk};
 use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::roads::{RoadStorage, RoadTypes};
-use crate::world::terrain::terrain_editing::PersistedChunk;
+use crate::world::terrain::terrain_editing::TerrainEdit;
 use crate::world::world::World;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Error, Write};
 use std::path::PathBuf;
@@ -388,7 +387,7 @@ pub struct SaveStateAlpha1_6_16a {
     pub player_pos: WorldPos,
     pub player_yaw: f32,
     pub player_pitch: f32,
-    pub terrain_edits: HashMap<ChunkCoord, PersistedChunk>,
+    pub terrain_edits: Vec<TerrainEdit>,
     pub roads: RoadStorage,
     pub props: Vec<SavePropChunk>,
 }
@@ -427,7 +426,7 @@ pub struct SaveState {
     pub player_pos: WorldPos,
     pub player_yaw: f32,
     pub player_pitch: f32,
-    pub terrain_edits: HashMap<ChunkCoord, PersistedChunk>,
+    pub terrain_edits: Vec<TerrainEdit>,
     pub roads: RoadStorage,
     pub road_types: RoadTypes,
     pub partitions: PartitionManager,
@@ -463,7 +462,7 @@ impl SaveState {
 
         terrain
             .terrain_editor
-            .load_edits_from_hashmap(mem::take(&mut self.terrain_edits));
+            .load_edits_from_vec(mem::take(&mut self.terrain_edits));
 
         roads.road_manager.roads = mem::take(&mut self.roads);
 
@@ -496,7 +495,7 @@ impl SaveState {
         self.player_yaw = camera.yaw;
         self.player_pitch = camera.pitch;
 
-        self.terrain_edits = terrain.terrain_editor.get_edits();
+        self.terrain_edits = terrain.terrain_editor.get_edits_for_save().to_vec();
         self.roads = roads.road_manager.roads.clone();
         self.props = props.get_props();
         self.zones = zoning.zoning_storage.clone();

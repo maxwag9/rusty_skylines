@@ -410,6 +410,17 @@ impl Props {
         }
     }
 
+    pub fn place_prop(&mut self, position: WorldPos, prop_name: &str, prop_instance: PropInstance) {
+        let key = &prop_name.to_lowercase();
+        if !self.is_registered(key) {
+            if let Some(prop) = make_prop(key, &self.device) {
+                self.register_prop(key.clone(), prop);
+            }
+        }
+
+        self.add_instance(position.chunk, key, prop_instance);
+    }
+
     /// Normal rendering pass
     pub fn render<'a>(
         &'a self,

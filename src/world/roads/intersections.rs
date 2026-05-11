@@ -616,11 +616,9 @@ pub fn build_intersection_at_node(
                     .apply_intersection_polygon_flattening(
                         node_id,
                         flattening_polygon,
-                        center_height,
                         -road_type.lane_height - 0.25,
                         road_type.sidewalk_width * 2.0
                             + road_type.lane_width * road_type.total_lanes() as f32,
-                        &terrain.chunks,
                     );
             }
         }

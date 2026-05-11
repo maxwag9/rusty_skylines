@@ -111,7 +111,7 @@ fn fs_main(input : VertexOutput) -> FragmentOut {
     let sun_color = mix(vec3<f32>(1.0, 0.55, 0.25), vec3<f32>(1.0, 1.0, 1.0), pow(elevation, 0.35));
     let sun_intensity = mix(0.25, 1.0, pow(elevation, 0.25));
 
-    let roughness = 0.85;
+    let roughness = 0.45;
     let alpha = roughness * roughness;
     let F0 = vec3<f32>(0.04);
 

@@ -226,7 +226,7 @@ pub fn raycast_chunk_heightgrid(
     t_min: f32,
     t_max: f32,
 ) -> Option<(f32, WorldPos)> {
-    let cell = grid.cell_f32();
+    let cell = grid.step_f32();
     let eps = 1e-6 * cell;
 
     let size_x = grid.extent_x();
@@ -356,7 +356,7 @@ fn ray_hit_cell(
     t_min: f32,
     t_max: f32,
 ) -> Option<f32> {
-    let cell = grid.cell_f32();
+    let cell = grid.step_f32();
 
     // Cell corner local positions within the grid's chunk
     let x0 = ix as f32 * cell;
@@ -458,7 +458,7 @@ pub fn dda_advance(
 /// `local_x` and `local_z` should be in range [0, chunk_size].
 #[inline(always)]
 pub fn height_bilinear(grid: &ChunkHeightGrid, local_x: f32, local_z: f32) -> f32 {
-    let cell = grid.cell_f32();
+    let cell = grid.step_f32();
     let eps = 1e-6 * cell;
 
     let max_x = grid.extent_x();

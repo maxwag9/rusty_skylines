@@ -21,8 +21,13 @@ pub fn run_ticked(resources: &mut Resources) {
     );
     let aspect = renderer.config.width as f32 / renderer.config.height as f32;
 
+    // for pending in terrain.terrain_jobs.workers.pending_chunks().iter() {
+    //     let half_chunk_size = chunk_size() as f32 * 0.5;
+    //     let center = WorldPos::new(*pending, LocalPos::new(half_chunk_size, camera.target.local.y, half_chunk_size));
+    //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
+    // }
     if resources.simulation.running {
-        terrain.update(device, queue, camera, aspect, settings, input, time);
+        terrain.update(gizmo, device, queue, camera, aspect, settings, input, time);
     }
 
     roads.update(terrain, cars, input, time, gizmo);

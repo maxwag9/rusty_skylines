@@ -373,6 +373,7 @@ impl Renderer {
         self.building_renderer.update(
             &mut self.render_manager,
             terrain,
+            &mut self.props,
             buildings,
             zoning,
             &self.device,

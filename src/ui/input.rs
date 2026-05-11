@@ -2,6 +2,7 @@
 use crate::helpers::paths::data_dir;
 use crate::ui::ui_touch_manager::MouseButtons;
 use arboard::Clipboard;
+use gilrs::{Axis, Button, Event, EventType, Gilrs};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -75,6 +76,9 @@ enum BindingKey {
     Logical(NamedKey),
     Mouse(MouseButton),
     Character(String),
+
+    Gamepad(GamepadButton),
+
     WheelUp,
     WheelDown,
     WheelLeft,
@@ -258,8 +262,14 @@ pub struct Input {
     logical_just_pressed: HashSet<NamedKey>,
     pub gameplay_last_down: HashMap<String, bool>,
     pub gameplay_repeat_timers: HashMap<String, RepeatTimer>,
+    pub gamepad_buttons: HashMap<GamepadButton, bool>,
+    pub left_stick: Vec2,
+    pub right_stick: Vec2,
+    pub left_trigger: f32,
+    pub right_trigger: f32,
     pub now: f64,
     pub clipboard: Clipboard,
+    pub gilrs: Gilrs,
 }
 
 impl Input {
@@ -289,8 +299,14 @@ impl Input {
             logical_just_pressed: HashSet::new(),
             gameplay_last_down: HashMap::new(),
             gameplay_repeat_timers: HashMap::new(),
+            gamepad_buttons: HashMap::new(),
+            left_stick: Vec2::ZERO,
+            right_stick: Vec2::ZERO,
+            left_trigger: 0.0,
+            right_trigger: 0.0,
             now: 0.0,
             clipboard,
+            gilrs: Gilrs::new().expect("Failed to initialize gilrs"),
         }
     }
 
@@ -365,6 +381,54 @@ impl Input {
         out
     }
 
+    pub fn handle_gamepads(&mut self) {
+        while let Some(Event { event, .. }) = self.gilrs.next_event() {
+            match event {
+                EventType::ButtonPressed(button, _) => {
+                    if let Some(btn) = map_gilrs_button(button) {
+                        self.set_gamepad_button(btn, true);
+                    }
+                }
+
+                EventType::ButtonReleased(button, _) => {
+                    if let Some(btn) = map_gilrs_button(button) {
+                        self.set_gamepad_button(btn, false);
+                    }
+                }
+
+                EventType::AxisChanged(axis, value, _) => match axis {
+                    Axis::LeftStickX => {
+                        self.left_stick.x = apply_deadzone(value);
+                    }
+
+                    Axis::LeftStickY => {
+                        self.left_stick.y = apply_deadzone(-value);
+                    }
+
+                    Axis::RightStickX => {
+                        self.right_stick.x = apply_deadzone(value);
+                    }
+
+                    Axis::RightStickY => {
+                        self.right_stick.y = apply_deadzone(-value);
+                    }
+
+                    Axis::LeftZ => {
+                        self.left_trigger = value;
+                    }
+
+                    Axis::RightZ => {
+                        self.right_trigger = value;
+                    }
+
+                    _ => {}
+                },
+
+                _ => {}
+            }
+        }
+    }
+
     pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
         self.physical.insert(key, down);
     }
@@ -405,6 +469,26 @@ impl Input {
         }
 
         state.pressed = down;
+    }
+
+    pub fn set_gamepad_button(&mut self, button: GamepadButton, down: bool) {
+        self.gamepad_buttons.insert(button, down);
+    }
+
+    pub fn set_left_stick(&mut self, v: Vec2) {
+        self.left_stick = v;
+    }
+
+    pub fn set_right_stick(&mut self, v: Vec2) {
+        self.right_stick = v;
+    }
+
+    pub fn set_left_trigger(&mut self, v: f32) {
+        self.left_trigger = v;
+    }
+
+    pub fn set_right_trigger(&mut self, v: f32) {
+        self.right_trigger = v;
     }
 
     pub fn add_scroll_delta(&mut self, delta: Vec2) {
@@ -527,6 +611,7 @@ impl Input {
             BindingKey::Physical(p) => self.physical.get(p).copied().unwrap_or(false),
             BindingKey::Logical(l) => self.logical.get(l).copied().unwrap_or(false),
             BindingKey::Character(c) => self.text_chars.contains(c.as_str()),
+            BindingKey::Gamepad(g) => self.gamepad_buttons.get(g).copied().unwrap_or(false),
             BindingKey::Mouse(m) => self.mouse.is_button_down(*m),
             BindingKey::WheelUp => self.scroll_up_hit,
             BindingKey::WheelDown => self.scroll_down_hit,
@@ -639,21 +724,6 @@ impl Input {
 }
 
 fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
-    // Character binding check first
-    if let Some(ch) = map_to_char(s) {
-        return Some(ParsedKeyCombo {
-            require_ctrl: false,
-            require_shift: false,
-            require_alt: false,
-            require_mouse_left: false,
-            require_mouse_right: false,
-            require_mouse_middle: false,
-            require_mouse_back: false,
-            require_mouse_forward: false,
-            key: BindingKey::Character(ch),
-        });
-    }
-
     let mut require_ctrl = false;
     let mut require_shift = false;
     let mut require_alt = false;
@@ -693,6 +763,8 @@ fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
             key_part = Some(BindingKey::Logical(n));
         } else if let Some(ch) = map_to_char(t) {
             key_part = Some(BindingKey::Character(ch));
+        } else if let Some(g) = map_to_gamepad(t) {
+            key_part = Some(BindingKey::Gamepad(g));
         } else if t.eq_ignore_ascii_case("WheelUp") {
             key_part = Some(BindingKey::WheelUp);
         } else if t.eq_ignore_ascii_case("WheelDown") {
@@ -822,7 +894,8 @@ fn map_to_keycode(token: &str) -> Option<KeyCode> {
         "Minus" => Some(KeyCode::Minus),
         "NumpadSubtract" => Some(KeyCode::NumpadSubtract),
         "ESC" => Some(KeyCode::Escape),
-
+        "Period" => Some(KeyCode::Period),
+        "Comma" => Some(KeyCode::Comma),
         _ => None,
     }
 }
@@ -835,6 +908,97 @@ fn map_to_named(token: &str) -> Option<NamedKey> {
         "ArrowDown" => Some(NamedKey::ArrowDown),
         "Enter" => Some(NamedKey::Enter),
         "Backspace" => Some(NamedKey::Backspace),
+
+        _ => None,
+    }
+}
+
+fn map_to_gamepad(token: &str) -> Option<GamepadButton> {
+    println!("{}", token);
+    match token {
+        "PadA" => Some(GamepadButton::ACross),
+        "PadB" => Some(GamepadButton::BCircle),
+        "PadX" => Some(GamepadButton::XSquare),
+        "PadY" => Some(GamepadButton::YTriangle),
+
+        "PadStart" => Some(GamepadButton::Start),
+        "Touchpad" => Some(GamepadButton::Touchpad),
+        "PadSelect" => Some(GamepadButton::Select),
+
+        "PadUp" => Some(GamepadButton::Up),
+        "PadDown" => Some(GamepadButton::Down),
+        "PadLeft" => Some(GamepadButton::Left),
+        "PadRight" => Some(GamepadButton::Right),
+
+        "L1" => Some(GamepadButton::L1),
+        "R1" => Some(GamepadButton::R1),
+
+        "L3" => Some(GamepadButton::L3),
+        "R3" => Some(GamepadButton::R3),
+
+        "L2" => Some(GamepadButton::L2),
+        "R2" => Some(GamepadButton::R2),
+
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GamepadButton {
+    ACross,
+    BCircle,
+    XSquare,
+    YTriangle,
+
+    Start,
+    Touchpad,
+    Select,
+
+    Up,
+    Down,
+    Left,
+    Right,
+
+    L1,
+    R1,
+
+    L3,
+    R3,
+
+    L2,
+    R2,
+}
+
+fn apply_deadzone(v: f32) -> f32 {
+    const DEADZONE: f32 = 0.15;
+
+    if v.abs() < DEADZONE { 0.0 } else { v }
+}
+
+fn map_gilrs_button(button: Button) -> Option<GamepadButton> {
+    println!("{:?}", button);
+    match button {
+        Button::South => Some(GamepadButton::ACross),
+        Button::East => Some(GamepadButton::BCircle),
+        Button::West => Some(GamepadButton::XSquare),
+        Button::North => Some(GamepadButton::YTriangle),
+
+        Button::Start => Some(GamepadButton::Start),
+        Button::Select => Some(GamepadButton::Select),
+
+        Button::DPadUp => Some(GamepadButton::Up),
+        Button::DPadDown => Some(GamepadButton::Down),
+        Button::DPadLeft => Some(GamepadButton::Left),
+        Button::DPadRight => Some(GamepadButton::Right),
+
+        Button::LeftTrigger => Some(GamepadButton::L1),
+        Button::RightTrigger => Some(GamepadButton::R1),
+
+        Button::LeftThumb => Some(GamepadButton::L3),
+        Button::RightThumb => Some(GamepadButton::R3),
+
+        Button::LeftTrigger2 => Some(GamepadButton::L2),
+        Button::RightTrigger2 => Some(GamepadButton::R2),
 
         _ => None,
     }

@@ -60,6 +60,7 @@ impl ApplicationHandler for App {
             let time = &world.time;
             input.mouse.delta = Vec2::ZERO;
             input.begin_frame(time.total_time);
+            input.handle_gamepads();
             let pos = input.mouse.pos;
             let delta = input.mouse.delta;
 

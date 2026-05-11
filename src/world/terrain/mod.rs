@@ -1,7 +1,7 @@
 pub mod sky;
 
-pub mod terrain;
-pub mod threads;
+pub mod terrain_gen;
+pub mod terrain_threads;
 
 pub mod chunk_builder;
 pub mod terrain_editing;

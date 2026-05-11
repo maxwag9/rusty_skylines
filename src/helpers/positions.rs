@@ -655,6 +655,33 @@ impl WorldPos {
 
         lower.iter().map(|&i| points[tagged[i].2]).collect()
     }
+
+    pub fn polygon_height_at_imprecise(polygon: &[WorldPos], wx: f64, wz: f64) -> f32 {
+        let mut weighted_sum = 0.0f64;
+        let mut total_weight = 0.0f64;
+
+        for p in polygon {
+            let px = p.chunk.x as f64 * chunk_size() as f64 + p.local.x as f64;
+            let pz = p.chunk.z as f64 * chunk_size() as f64 + p.local.z as f64;
+
+            let dx = px - wx;
+            let dz = pz - wz;
+
+            let dist2 = dx * dx + dz * dz;
+
+            // exact vertex hit
+            if dist2 < 1e-12 {
+                return p.local.y;
+            }
+
+            let weight = 1.0 / dist2;
+
+            weighted_sum += p.local.y as f64 * weight;
+            total_weight += weight;
+        }
+
+        (weighted_sum / total_weight) as f32
+    }
 }
 impl Default for WorldPos {
     fn default() -> Self {

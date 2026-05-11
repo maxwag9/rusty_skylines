@@ -283,7 +283,7 @@ layers:
         actions:
           - on:r set(cursor_mode, Roads)
           - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
-        x: 0.05796875
+        x: 0.057968747
         y: 0.96428573
         w: 0.02
         h: 0.02
