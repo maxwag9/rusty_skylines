@@ -671,7 +671,7 @@ impl UiRenderer {
                         }
                         rect_idx += 1;
                     }
-                    UiElement::Advanced(_) => continue,
+                    UiElement::Advanced(_) => {}
                 }
             }
 

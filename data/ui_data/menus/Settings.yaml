@@ -34,7 +34,7 @@ layers:
       - !Advanced
         name: checkbox_render_chunk_bounds
         ap_name: checkbox
-        setting: render_chunk_bounds
+        ap_var: render_chunk_bounds
         x: 0.1
         y: 0.3
         scale: 2.0
@@ -46,7 +46,7 @@ layers:
       - !Advanced
         name: checkbox_always_day
         ap_name: checkbox
-        setting: always_day
+        ap_var: always_day
         x: 0.1
         y: 0.4
         scale: 2.0
@@ -58,7 +58,7 @@ layers:
       - !Advanced
         name: cycle_tonemapping_state
         ap_name: cycle
-        setting: tonemapping_state
+        ap_var: tonemapping_state
         x: 0.1
         y: 0.6
         scale: 1.5

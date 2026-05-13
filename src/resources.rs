@@ -72,7 +72,7 @@ impl Resources {
         let mut command_queues = CommandQueues::new();
         ui_loader.set_starting_menu(&settings, &mut command_queues.ui_command_queue);
         world_core.time.total_game_time = settings.total_game_time;
-
+        world_core.time.update_hour();
         Self {
             surface,
             settings,
@@ -105,8 +105,10 @@ pub struct Time {
     achieved_speed_window_time: f32,
     achieved_speed_window_steps: u32,
 
-    pub total_time: f64,
-    pub total_game_time: f64,
+    pub total_time: f64,      // In seconds
+    pub total_game_time: f64, // In sim seconds
+    pub hour: f64,            // In hours
+    pub day_length: f64,      // In sim seconds
     pub frame_count: u64,
 
     pub max_frame_dt: f32,
@@ -144,6 +146,8 @@ impl Time {
 
             total_time: 0.0,
             total_game_time: 0.0,
+            hour: 0.0,
+            day_length: 960.0,
             frame_count: 0,
 
             max_frame_dt: 0.25,
@@ -238,6 +242,15 @@ impl Time {
         }
     }
 
+    pub fn update_hour(&mut self) {
+        let day_progress = (self.total_game_time % self.day_length) / self.day_length;
+        self.hour = day_progress * 24.0;
+    }
+    pub fn hour_minute(&self) -> (u32, u32) {
+        let hours = self.hour.floor() as u32;
+        let minutes = ((self.hour.fract()) * 60.0) as u32;
+        (hours, minutes)
+    }
     pub fn clear_sim_accumulator(&mut self) {
         self.sim_accumulator = 0.0;
     }
@@ -268,7 +281,8 @@ impl Time {
             self.total_game_time += dt;
         } else {
             self.total_game_time = (self.total_game_time - dt).max(0.0);
-        }
+        };
+        self.update_hour();
     }
 }
 

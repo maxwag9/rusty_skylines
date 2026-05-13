@@ -1,4 +1,4 @@
-use crate::data::{SettingKey, Settings};
+use crate::data::Settings;
 use crate::helpers::positions::WorldPos;
 use crate::renderer::ui::{CircleParams, HandleParams, OutlineParams, TextParams};
 use crate::renderer::ui_text_rendering::Anchor;
@@ -121,6 +121,7 @@ pub enum UiElementCache {
     Text(TextParams),
     Outline(OutlineParams),
     Rect(RectGpu),
+    Advanced, // Just a useless filler to simply and efficiently stop the cache from rebuilding each frame when APs are present... Because APs don't need to be cached, but still count toward the element amount in the layers' element list, and we are checking if the element count changed to grow or shrink the cache, and we are comparing against the cache element list length, and the AP is not inside, there is a mismatch every frame.
 }
 
 #[derive(Debug, Clone)]
@@ -355,7 +356,7 @@ pub struct AdvancedPrimitiveYaml {
     pub ap_name: String,
 
     #[serde(default)]
-    pub setting: Option<SettingKey>,
+    pub ap_var: String,
     pub x: f32,
     pub y: f32,
     #[serde(skip_serializing_if = "is_one")]
@@ -368,7 +369,7 @@ pub struct AdvancedPrimitiveYaml {
 pub struct AdvancedPrimitive {
     pub id: String,
     pub ap_name: String,
-    pub setting: Option<SettingKey>,
+    pub ap_var: String,
     pub x: f32,
     pub y: f32,
     pub scale: f32,
@@ -381,7 +382,7 @@ impl AdvancedPrimitive {
         Self {
             id: yaml.name.clone(),
             ap_name: yaml.ap_name.clone(),
-            setting: yaml.setting.clone(),
+            ap_var: yaml.ap_var.clone(),
             x: yaml.x,
             y: yaml.y,
             scale: yaml.scale,
@@ -399,7 +400,7 @@ impl AdvancedPrimitive {
         AdvancedPrimitiveYaml {
             name: self.id.clone(),
             ap_name: self.ap_name.clone(),
-            setting: self.setting.clone(),
+            ap_var: self.ap_var.clone(),
             x: self.x,
             y: self.y,
             scale: self.scale,
@@ -411,17 +412,15 @@ impl AdvancedPrimitive {
             editing_tool: self.editing_tool,
         }
     }
-    pub fn to_layers(
+    pub fn to_layer(
         self,
         settings: &Settings,
         advanced_primitives: &HashMap<String, UiLayerYaml>,
         order: u32,
         window_size: PhysicalSize<u32>,
-    ) -> Vec<RuntimeLayer> {
-        let mut layers: Vec<RuntimeLayer> = Vec::new();
-
-        for (name, av) in advanced_primitives {
-            let elements: Vec<UiElement> = av
+    ) -> RuntimeLayer {
+        let elements = if let Some(ap_template) = advanced_primitives.get(&self.ap_name) {
+            ap_template
                 .elements
                 .clone()
                 .unwrap_or_default()
@@ -431,28 +430,28 @@ impl AdvancedPrimitive {
                     el.scale_by(self.scale);
                     el.offset_pos_normalized(self.x, self.y, window_size);
                     el.set_editable(&self.misc.editable);
-                    el.set_ap_text(&self.setting);
+                    el.set_aps(&self.ap_var);
                     el
                 })
-                .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
 
-            layers.push(RuntimeLayer {
-                name: self.id.clone(),
-                ap_name: Some(name.clone()),
-                order,
-                elements,
-                active: self.ap_name == *name && self.misc.active,
-                setting: self.setting.clone(),
-                cache: Default::default(),
-                dirty: LayerDirty::all(),
-                gpu: Default::default(),
-                opaque: false,
-                saveable: false,
-                editing_tool: self.editing_tool,
-            });
+        RuntimeLayer {
+            name: self.id,
+            ap_name: Some(self.ap_name),
+            order,
+            elements,
+            active: self.misc.active,
+            ap_var: self.ap_var,
+            cache: Default::default(),
+            dirty: LayerDirty::all(),
+            gpu: Default::default(),
+            opaque: false,
+            saveable: false,
+            editing_tool: self.editing_tool,
         }
-
-        layers
     }
 
     pub fn set_pos(&mut self, position: [f32; 2]) {
@@ -653,6 +652,7 @@ impl UiElement {
                 Some(UiElement::Rect(UiButtonRect::from_yaml(e, window_size)))
             }
             UiElementYaml::Advanced(ap) => {
+                //None // TO/DO
                 Some(UiElement::Advanced(AdvancedPrimitive::from_yaml(&ap)))
             }
         }
@@ -1045,12 +1045,24 @@ impl UiElement {
         }
     }
 
-    pub fn set_ap_text(&mut self, setting_key: &Option<SettingKey>) {
-        if let Some(setting_key) = setting_key {
-            if let Some(text) = self.as_text_mut() {
-                let key = setting_key;
-                text.text = text.template.replace("{ap}", format!("{:?}", key).as_str())
+    pub fn set_aps(&mut self, ap_var: &str) {
+        match self {
+            UiElement::Circle(e) => Self::replace_actions(&mut e.actions, ap_var),
+            UiElement::Handle(e) => {}
+            UiElement::Polygon(e) => Self::replace_actions(&mut e.actions, ap_var),
+            UiElement::Text(e) => {
+                Self::replace_actions(&mut e.actions, ap_var);
+                e.text = e.template.replace("{ap}", ap_var)
             }
+            UiElement::Outline(e) => {}
+            UiElement::Rect(e) => Self::replace_actions(&mut e.actions, ap_var),
+            UiElement::Advanced(e) => {}
+        }
+    }
+
+    fn replace_actions(actions: &mut Vec<String>, ap_var: &str) {
+        for action in actions.iter_mut() {
+            *action = action.replace("{ap}", ap_var);
         }
     }
     pub fn set_editable(&mut self, editable: &Editability) {
@@ -1320,7 +1332,7 @@ pub struct RuntimeLayer {
     pub order: u32,
     pub elements: Vec<UiElement>,
     pub active: bool,
-    pub setting: Option<SettingKey>,
+    pub ap_var: String,
     // NEW: cached GPU data!!!
     pub cache: LayerCache,
 
@@ -2445,7 +2457,7 @@ impl Default for AdvancedPrimitive {
         Self {
             id: "default".to_string(),
             ap_name: "".to_string(),
-            setting: None,
+            ap_var: String::new(),
             x: 0.0,
             y: 0.0,
             scale: 1.0,

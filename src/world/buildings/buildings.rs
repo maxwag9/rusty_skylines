@@ -12,7 +12,7 @@ use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::{ChunkGpuMesh, Roads};
 use crate::world::statisticals::demands::ZoningDemand;
-use crate::world::terrain::terrain_editing::EditId;
+use crate::world::terrain::terrain_editing::{EditId, TerrainEditSource};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -954,7 +954,12 @@ impl BuildingMeshManager {
                 })
                 .collect();
 
-            building.edit_id = Some(terrain.terrain_editor.push_flat_polygon(bounds, -0.01, 4.0));
+            building.edit_id = Some(terrain.terrain_editor.push_flat_polygon(
+                bounds,
+                -0.01,
+                3.0,
+                TerrainEditSource::Building(building.id),
+            ));
             let level = building.current_level_params();
             let story_height = level.story_height;
             let num_stories = level.num_stories;

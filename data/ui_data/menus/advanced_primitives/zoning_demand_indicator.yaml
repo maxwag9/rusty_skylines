@@ -1,0 +1,50 @@
+name: zoning_demand_indicator
+elements:
+  # Soft outer border
+  - !Rect
+    id: Zoning Border
+    actions: [ ]
+    x: 0.0
+    y: 0.0
+    w: 0.0105
+    h: 0.011
+    color:
+      - 0.00
+      - 0.00
+      - 0.00
+      - 0.2
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.2
+    roundness: 0.05
+    border_thickness_percentage: 0.02
+  # inner indicator
+  - !Rect
+    id: Zoning Indicator
+    actions:
+      - on:a button:l set(self.size.y, 20.0*{ap})
+
+      #- on:release, ifvareq({ap}, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
+    x: 0.0
+    y: 0.0
+    w: 0.010
+    h: 0.010
+    color:
+      - 0.00
+      - 0.50
+      - 0.0
+      - 0.9
+    roundness: 0.1
+#  - !Text
+#    id: setting_text
+#    x: 0.02
+#    y: 0.04
+#    pt: 10.0
+#    color:
+#      - 1.0
+#      - 1.0
+#      - 1.0
+#      - 0.9
+#    text: '{ap}'

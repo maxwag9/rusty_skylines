@@ -458,7 +458,7 @@ pub fn init_cache_structure(layer: &mut RuntimeLayer) {
             UiElement::Outline(_) => UiElementCache::Outline(OutlineParams::default()),
             UiElement::Handle(_) => UiElementCache::Handle(HandleParams::default()),
             UiElement::Rect(_) => UiElementCache::Rect(RectGpu::zeroed()),
-            UiElement::Advanced(_) => continue,
+            UiElement::Advanced(_) => UiElementCache::Advanced,
         });
     }
 }

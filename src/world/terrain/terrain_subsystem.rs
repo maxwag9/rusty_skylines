@@ -288,7 +288,7 @@ impl TerrainRenderSubsystem {
                 continue;
             }
 
-            let p = chunk.handle.page as usize;
+            let p = chunk.handle.page;
             if p < per_page.len() {
                 per_page[p].push(chunk.handle);
             }
@@ -316,11 +316,21 @@ impl TerrainRenderSubsystem {
         let vertex_bytes = total_vertices * VERTEX_SIZE_BYTES;
         let _total_bytes = index_bytes + vertex_bytes;
 
+        let total_vertex_bytes = terrain.arena.pages.len() as u64 * terrain.arena.page_v_bytes;
+
+        let total_index_bytes = terrain.arena.pages.len() as u64 * terrain.arena.page_i_bytes;
+
+        let total_bytes = total_vertex_bytes + total_index_bytes;
+
         // println!(
-        //     "render: {} vertices, {} indices, {:.2} MB total",
+        //     "Terrain: {} pages, {:.2} MB VRAM ({:.2} MB vertex, {:.2} MB index) \n\
+        //                                         {} Vertices, {} Indices",
+        //     terrain.arena.pages.len(),
+        //     total_bytes as f64 / 1024.0 / 1024.0,
+        //     total_vertex_bytes as f64 / 1024.0 / 1024.0,
+        //     total_index_bytes as f64 / 1024.0 / 1024.0,
         //     total_vertices,
-        //     total_indices,
-        //     _total_bytes as f32 / 1024.0 / 1024.0
+        //     total_indices
         // );
 
         for (pi, handles) in per_page.iter().enumerate() {
@@ -388,8 +398,8 @@ impl Terrain {
 
         let arena = TerrainMeshArena::new(
             device,
-            256 * 1024 * 1024, // vertex bytes per page
-            128 * 1024 * 1024, // index bytes per page
+            64 * 1024 * 1024, // vertex bytes per page
+            32 * 1024 * 1024, // index bytes per page
         );
 
         let terrain_editor = TerrainEditor::default();
@@ -507,7 +517,7 @@ impl Terrain {
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         self.frame_timings.total_ms = t_frame.elapsed().as_secs_f32() * 1000.0;
-        println!("{:#?}", self.frame_timings);
+        //println!("{:#?}", self.frame_timings);
         // println!("Queue: {} pending, {} results backlog, {} chunks loaded",
         //          self.terrain_jobs.workers.pending_count(),
         //          self.pending_results.len(),
@@ -552,8 +562,12 @@ impl Terrain {
             -1.0
         };
 
-        self.terrain_editor
-            .apply_brush::<SmoothFalloff, Raise>(pos, self.pick_radius_m, strength);
+        self.terrain_editor.apply_brush::<SmoothFalloff, Raise>(
+            pos,
+            self.pick_radius_m,
+            strength,
+            TerrainEditSource::Player,
+        );
     }
 
     fn frame_state(&self, settings: &Settings, camera: &Camera, _aspect: f32) -> FrameState {
@@ -581,7 +595,7 @@ impl Terrain {
         let mut rebuild_ms = 0.0;
         let mut gpu_ms = 0.0;
         let mut insert_ms = 0.0;
-        let mut detail = DrainDetailTimings::default();
+        let detail = DrainDetailTimings::default();
 
         let t0 = Instant::now();
         while let Ok(cpu) = self.terrain_jobs.workers.result_rx.try_recv() {

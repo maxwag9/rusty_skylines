@@ -615,6 +615,24 @@ fn update_time(resources: &mut Resources) {
         ui.variables.set_f64("render_dt", time.render_dt);
         ui.variables.set_f64("sim_dt", time.target_sim_dt);
         ui.variables
-            .set_f64("total_game_time", time.total_game_time as f32);
+            .set_f64("total_game_time", time.total_game_time);
+        ui.variables.set_i64("hour", time.hour_minute().0);
+        ui.variables.set_i64("minute", time.hour_minute().1);
+        ui.variables
+            .set_f64("money", world.city_state.economy.money);
+        if let Some(district) = world
+            .zoning
+            .zoning_storage
+            .get_closest_district(world_state.camera.target)
+        {
+            ui.variables
+                .set_f64("residential_demand", district.zoning_demand.residential);
+            ui.variables
+                .set_f64("commercial_demand", district.zoning_demand.commercial);
+            ui.variables
+                .set_f64("industrial_demand", district.zoning_demand.industrial);
+            ui.variables
+                .set_f64("office_demand", district.zoning_demand.office);
+        }
     }
 }

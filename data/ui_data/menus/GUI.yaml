@@ -1,5 +1,9 @@
 name: GUI
 layers:
+  - name: gui2
+    order: 3
+    elements: [ ]
+    editing_tool: false
   - name: gui
     order: 2
     elements:
@@ -69,6 +73,32 @@ layers:
           active: true
           pressable: false
           editable: true
+      - !Text
+        id: time_text
+        actions: [ ]
+        x: 0.9
+        y: 0.96
+        pt: 18.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        text: '{hour}:{minute}'
+        anchor: TopLeft
+      - !Text
+        id: money_text
+        actions: [ ]
+        x: 0.87
+        y: 0.96
+        pt: 18.0
+        color:
+          - 0.27
+          - 0.7
+          - 0.3
+          - 1.0
+        text: '{money}€'
+        anchor: TopLeft
       - !Rect
         id: set_none_zone
         actions:
@@ -139,6 +169,18 @@ layers:
           active: true
           pressable: true
           editable: true
+      - !Advanced
+        name: residential_demand_indicator
+        ap_name: zoning_demand_indicator
+        ap_var: residential_demand
+        x: 0.1
+        y: 0.3
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
       - !Rect
         id: set_commercial_zone
         actions:

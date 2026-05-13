@@ -11,7 +11,7 @@ use crate::ui::ui_edit_manager::{
     ChangeColorCommand, ColorComponent, CreateElementCommand, DeleteElementCommand,
     DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
-use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_layer_settings};
+use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_element_size};
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, UiTouchManager};
@@ -633,55 +633,26 @@ impl CommandQueue {
                 name,
                 value,
             } => {
-                //println!("Value BEFORE: {} for {}", value, name);
+                //println!("Pre to-value: {}", value);
                 let value = string_to_value(ctx, &element_ref, value);
-                //println!("Value AFTER: {} for {}", value, name);
+                //println!("Post to-value: {}", value);
                 let (name, value) = initialize_value(name.as_str(), value);
-                let mut result: CommandResult = CommandResult::Error(
-                    "No settings nor vars found to set using UiCommand::SetVar".into(),
-                );
-                // Primary: Settings
-                if let Some(key) = SettingKey::from_str(&name) {
+                //println!("Post init-value: {}", value);
+                if let Some(key) = get_setting_key(&name) {
                     if let Some(setting_value) = key.parse_command_arg(&value) {
                         ctx.settings
                             .apply_setting(key, SettingOp::Set(setting_value));
-                        result = CommandResult::Ok
-                    } else {
-                        result = CommandResult::Error(format!(
-                            "Cannot convert {:?} for setting '{}'",
-                            value, name
-                        ))
+
+                        return CommandResult::Ok;
                     }
+
+                    return CommandResult::Error(format!(
+                        "Cannot convert {:?} for setting '{}'",
+                        value, name
+                    ));
                 }
 
-                // Secondary: AP (layer settings)
-                if name == "ap" && !matches!(result, CommandResult::Ok) {
-                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        if let Some(setting_value) = setting.parse_command_arg(&value) {
-                            ctx.settings
-                                .apply_setting(setting, SettingOp::Set(setting_value.clone()));
-                            result = CommandResult::Ok
-                        } else {
-                            result = CommandResult::Error(format!(
-                                "Cannot convert {:?} for setting '{}'",
-                                value, name
-                            ))
-                        }
-                    }
-                }
-
-                // Ternary: Variables
-                if !matches!(result, CommandResult::Ok) {
-                    //println!("In setVAR: {} {}({})", name, value.type_name(), value);
-                    match set_element_property(ctx, element_ref, name, &value) {
-                        CommandResult::Error(e) => return CommandResult::Error(e),
-                        _ => {}
-                    }
-                    ctx.ui.variables.set_var(&name, value);
-
-                    result = CommandResult::Ok
-                }
-                result
+                set_variable_or_property(ctx, element_ref, &name, value)
             }
 
             UiCommand::IncVar {
@@ -689,54 +660,29 @@ impl CommandQueue {
                 name,
                 amount,
             } => {
-                //println!("In INCVAR: {} {}", name, amount);
-                // Primary: Settings
-                if let Some(key) = SettingKey::from_str(&name) {
+                if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
-                    // Try numeric add first, fall back to cycle
+
                     if let Some(new_value) = current.add(amount) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     } else {
-                        let steps = amount.max(0f64) as usize;
+                        let steps = amount.max(0.0) as usize;
+
                         for _ in 0..steps {
                             ctx.settings.apply_setting(key, SettingOp::CycleNext);
                         }
                     }
+
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AP
-                if name == "ap" {
-                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting);
-                        //println!("In INCVAR ap: Inferred SettingKey: {:?}, Current Value: {:?}", setting, current);
-                        // Try numeric add first, fall back to cycle
-                        if let Some(new_value) = current.add(amount) {
-                            ctx.settings
-                                .apply_setting(setting, SettingOp::Set(new_value));
-                        } else {
-                            let steps = amount.max(0f64) as usize;
-                            for idx in 0..steps {
-                                //println!("Step {} in CycleNext loop in incvar", idx);
-                                ctx.settings.apply_setting(setting, SettingOp::CycleNext);
-                            }
-                        }
-                        return CommandResult::Ok;
-                    }
-                }
-
-                // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
                     Some(Value::F64(f)) => Value::F64(f + amount),
                     Some(Value::I64(i)) => Value::F64(*i as f64 + amount),
                     _ => Value::F64(amount),
                 };
-                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
-                    CommandResult::Error(e) => return CommandResult::Error(e),
-                    _ => {}
-                }
-                ctx.ui.variables.set_var(name, new_val);
-                CommandResult::Ok
+
+                set_variable_or_property(ctx, element_ref, &name, new_val)
             }
 
             UiCommand::DecVar {
@@ -744,51 +690,29 @@ impl CommandQueue {
                 name,
                 amount,
             } => {
-                // Primary: Settings
-                if let Some(key) = SettingKey::from_str(&name) {
+                if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
-                    // Try numeric add first, fall back to cycle
+
                     if let Some(new_value) = current.subtract(amount) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     } else {
-                        let steps = amount.max(0f64) as usize;
+                        let steps = amount.max(0.0) as usize;
+
                         for _ in 0..steps {
                             ctx.settings.apply_setting(key, SettingOp::CyclePrev);
                         }
                     }
+
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AP
-                if name == "ap" {
-                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting);
-                        // Try numeric add first, fall back to cycle
-                        if let Some(new_value) = current.subtract(amount) {
-                            ctx.settings
-                                .apply_setting(setting, SettingOp::Set(new_value));
-                        } else {
-                            let steps = amount.max(0f64) as usize;
-                            for _ in 0..steps {
-                                ctx.settings.apply_setting(setting, SettingOp::CyclePrev);
-                            }
-                        }
-                        return CommandResult::Ok;
-                    }
-                }
-
-                // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
                     Some(Value::F64(f)) => Value::F64(f - amount),
                     Some(Value::I64(i)) => Value::F64(*i as f64 - amount),
                     _ => Value::F64(-amount),
                 };
-                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
-                    CommandResult::Error(e) => return CommandResult::Error(e),
-                    _ => {}
-                }
-                ctx.ui.variables.set_var(name, new_val);
-                CommandResult::Ok
+
+                set_variable_or_property(ctx, element_ref, &name, new_val)
             }
 
             UiCommand::MulVar {
@@ -796,68 +720,38 @@ impl CommandQueue {
                 name,
                 factor,
             } => {
-                // Primary: Settings
-                if let Some(key) = SettingKey::from_str(&name) {
+                if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
+
                     if let Some(new_value) = current.multiply(factor) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     }
+
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AP
-                if name == "ap" {
-                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting);
-                        if let Some(new_value) = current.multiply(factor) {
-                            ctx.settings
-                                .apply_setting(setting, SettingOp::Set(new_value));
-                        }
-                        return CommandResult::Ok;
-                    }
-                }
-
-                // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
                     Some(Value::F64(f)) => Value::F64(f * factor),
                     Some(Value::I64(i)) => Value::F64(*i as f64 * factor),
                     _ => Value::F64(factor),
                 };
-                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
-                    CommandResult::Error(e) => return CommandResult::Error(e),
-                    _ => {}
-                }
-                ctx.ui.variables.set_var(name, new_val);
-                CommandResult::Ok
+
+                set_variable_or_property(ctx, element_ref, &name, new_val)
             }
 
             UiCommand::ToggleVar { element_ref, name } => {
-                // Primary: Settings
-                if let Some(key) = SettingKey::from_str(&name) {
+                if let Some(key) = get_setting_key(&name) {
                     ctx.settings.apply_setting(key, SettingOp::Toggle);
+
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AP
-                if name == "ap" {
-                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        ctx.settings.apply_setting(setting, SettingOp::Toggle);
-                        return CommandResult::Ok;
-                    }
-                }
-
-                // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
                     Some(Value::Bool(b)) => Value::Bool(!b),
-                    _ => Value::Bool(false),
+                    _ => Value::Bool(true),
                 };
-                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
-                    CommandResult::Error(e) => return CommandResult::Error(e),
-                    _ => {}
-                }
 
-                ctx.ui.variables.set_var(name, new_val);
-                CommandResult::Ok
+                set_variable_or_property(ctx, element_ref, &name, new_val)
             }
 
             UiCommand::Clamp {
@@ -866,60 +760,51 @@ impl CommandQueue {
                 min,
                 max,
             } => {
-                // Primary: Settings
-                if let Some(key) = SettingKey::from_str(&name) {
+                if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
+
                     if let Some(new_value) = current.clamp_range(min, max) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     }
+
                     return CommandResult::Ok;
                 }
 
-                // Secondary: AP
-                if name == "ap" {
-                    if let Some(setting) = get_layer_settings(&ctx.ui.menus, &element_ref) {
-                        let current = ctx.settings.read_setting(setting);
-                        if let Some(new_value) = current.clamp_range(min, max) {
-                            ctx.settings
-                                .apply_setting(setting, SettingOp::Set(new_value));
-                        }
-                        return CommandResult::Ok;
-                    }
-                }
-
-                // Ternary: Variables
                 let new_val = match ctx.ui.variables.get(&name) {
                     Some(Value::F64(f)) => Value::F64(f.clamp(min, max)),
                     Some(Value::I64(i)) => Value::F64((*i as f64).clamp(min, max)),
                     _ => Value::F64(min),
                 };
-                match set_element_property(ctx, element_ref, name.as_str(), &new_val) {
-                    CommandResult::Error(e) => return CommandResult::Error(e),
-                    _ => {}
-                }
-                ctx.ui.variables.set_var(name, new_val);
-                CommandResult::Ok
+
+                set_variable_or_property(ctx, element_ref, &name, new_val)
             }
 
             UiCommand::SetVarExpr {
                 element_ref,
                 name,
                 expr,
-            } => {
-                //println!("Evaluating: *{}*", expr);
-                match eval_expr(&expr, &ctx.ui.variables) {
-                    Some(value) => {
-                        //println!("Result: *{}* to *{}*", value, name);
-                        match set_element_property(ctx, element_ref, name.as_str(), &value) {
-                            CommandResult::Error(e) => return CommandResult::Error(e),
-                            _ => {}
+            } => match eval_expr(&expr, &ctx.ui.variables) {
+                Some(value) => {
+                    if let Some(key) = get_setting_key(&name) {
+                        if let Some(setting_value) = key.parse_command_arg(&value) {
+                            ctx.settings
+                                .apply_setting(key, SettingOp::Set(setting_value));
+
+                            return CommandResult::Ok;
                         }
-                        ctx.ui.variables.set_var(name, value);
-                        CommandResult::Ok
+
+                        return CommandResult::Error(format!(
+                            "Cannot convert {:?} for setting '{}'",
+                            value, name
+                        ));
                     }
-                    None => CommandResult::Error(format!("Failed to eval expr '{}'", expr)),
+
+                    set_variable_or_property(ctx, element_ref, &name, value)
                 }
-            }
+
+                None => CommandResult::Error(format!("Failed to eval expr '{}'", expr)),
+            },
+
             // ===== ACTION STATE COMMANDS =====
             UiCommand::StartAction { action_name } => {
                 let state = ActionState::with_time(&action_name, ctx.world.time.total_time);
@@ -990,9 +875,8 @@ impl CommandQueue {
                 then,
                 else_branch,
             } => {
-                let var_value = if var_name == "ap" {
-                    get_layer_settings(&ctx.ui.menus, &element_ref)
-                        .map(|setting| ctx.settings.read_setting(setting).to_value())
+                let var_value = if let Some(key) = get_setting_key(&var_name) {
+                    Some(ctx.settings.read_setting(key).to_value())
                 } else {
                     ctx.ui.variables.get(&var_name).cloned()
                 };
@@ -1560,7 +1444,7 @@ pub fn load_save(
 /// ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!
 pub fn set_element_property(
     ctx: &mut CommandContext,
-    element_ref: ElementRef,
+    element_ref: ElementRef, // Intentionally copied
     name: &str,
     new_val: &Value,
 ) -> CommandResult {
@@ -1698,6 +1582,88 @@ pub fn set_element_property(
                         affected_element: element_ref,
                         before: None,
                         after,
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.world.input.mouse,
+                );
+            }
+
+            "size" => {
+                let Some(before) = get_element_size(&ctx.ui.menus, &element_ref) else {
+                    return CommandResult::Error(
+                        format!(
+                            "get_element_size() failed in set_element_property for element {:?}",
+                            element_ref
+                        )
+                        .to_string(),
+                    );
+                };
+                let Some(before) = before.size2() else {
+                    return CommandResult::Error(
+                        format!("Size is not square in set_element_property for element {:?}, the element doesn't have a [f32; 2] size.", element_ref).to_string(),
+                    );
+                };
+                let after = match Variables::component_index(component) {
+                    // Setting full vector
+                    None => {
+                        let Some(arr) = new_val.as_array() else {
+                            return CommandResult::Error("set_element_property: size requires an array value when no component specified".to_string());
+                        };
+                        if arr.len() != 2 {
+                            return CommandResult::Error(format!(
+                                "set_element_property: size array must have exactly 2 elements, got {}",
+                                arr.len()
+                            ));
+                        }
+
+                        let Some(x) = arr[0].as_f64() else {
+                            return CommandResult::Error(
+                                "set_element_property: size array[0] is not a valid number"
+                                    .to_string(),
+                            );
+                        };
+                        let Some(y) = arr[1].as_f64() else {
+                            return CommandResult::Error(
+                                "set_element_property: size array[1] is not a valid number"
+                                    .to_string(),
+                            );
+                        };
+
+                        [x as f32, y as f32]
+                    }
+
+                    // Setting single component
+                    Some(idx) => {
+                        println!("Val: {}, idx: {}", new_val, idx);
+                        let Some(val) = new_val.as_f64() else {
+                            return CommandResult::Error(
+                                "set_element_property: size component value is not a valid number"
+                                    .to_string(),
+                            );
+                        };
+
+                        let mut after = before;
+                        match idx {
+                            0 => after[0] = val as f32,
+                            1 => after[1] = val as f32,
+                            _ => {
+                                return CommandResult::Error(format!(
+                                    "set_element_property: invalid size component index {}",
+                                    idx
+                                ));
+                            }
+                        }
+                        after
+                    }
+                };
+                //println!("Setting size to: {:?}, with {:?} and {:?}", after, name, new_val);
+                ctx.ui.ui_edit_manager.execute_command(
+                    ResizeElementCommand {
+                        affected_element: element_ref,
+                        before: None,
+                        after: SizeProperty::Rect(after),
                     },
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
@@ -1871,4 +1837,24 @@ pub fn send_element_properties_to_variables(
         }
     }
     //println!("{:?}", variables.get("self.layer"));
+}
+
+fn get_setting_key(name: &str) -> Option<SettingKey> {
+    SettingKey::from_str(name)
+}
+
+fn set_variable_or_property(
+    ctx: &mut CommandContext,
+    element_ref: ElementRef, // Intentionally copied
+    name: &str,
+    value: Value,
+) -> CommandResult {
+    match set_element_property(ctx, element_ref, name, &value) {
+        CommandResult::Error(e) => return CommandResult::Error(e),
+        _ => {}
+    }
+
+    ctx.ui.variables.set_var(name, value);
+
+    CommandResult::Ok
 }

@@ -5,6 +5,7 @@ use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::roads::{RoadStorage, RoadTypes};
+use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_editing::TerrainEdit;
 use crate::world::world::World;
 use sanitize_filename::sanitize;
@@ -351,7 +352,7 @@ define_migrations! {
                     player_pos, player_yaw, player_pitch,
                     terrain_edits, roads, props,
                 ],
-                default:   [zones: ZoningStorage, buildings: BuildingStorage, partitions: PartitionManager, road_types: RoadTypes],
+                default:   [zones: ZoningStorage, buildings: BuildingStorage, partitions: PartitionManager, road_types: RoadTypes, city_state: CityState],
                 transform: [version: |_v: &SaveStateAlpha1_6_16a| SaveVersion::current()],
             },
             downgrade: {
@@ -434,6 +435,7 @@ pub struct SaveState {
     #[serde(default)]
     pub zones: ZoningStorage,
     pub buildings: BuildingStorage,
+    pub city_state: CityState,
 }
 impl SaveState {
     pub fn new() -> Self {
@@ -472,6 +474,7 @@ impl SaveState {
         buildings.storage = mem::take(&mut self.buildings);
         roads.partition_manager = mem::take(&mut self.partitions);
         roads.road_manager.road_types = mem::take(&mut self.road_types);
+        world.city_state = mem::take(&mut self.city_state);
         //variables.set_i64("lanes_left", terrain.cursor.road_type.unwrap().lanes_each_direction().0 as i64);
     }
     pub fn save(&mut self, world: &World, props: &Props) {
@@ -502,6 +505,7 @@ impl SaveState {
         self.buildings = buildings.storage.clone();
         self.partitions = roads.partition_manager.clone();
         self.road_types = roads.road_manager.road_types.clone();
+        self.city_state = world.city_state.clone();
     }
 }
 

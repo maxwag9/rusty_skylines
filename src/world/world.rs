@@ -7,6 +7,7 @@ use crate::world::buildings::zoning::Zoning;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::game_state::GameState;
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world_state::WorldState;
 use wgpu::Device;
@@ -14,15 +15,14 @@ use wgpu::Device;
 pub struct World {
     pub world_state: WorldState,
     pub time: Time,
-    pub input: Input,          // main-thread owned
+    pub input: Input,
     pub events: CommandBuffer, // main-thread swap/flips, core consumes on sim tick
     pub terrain: Terrain,
     pub roads: Roads,
     pub cars: Cars,
     pub buildings: Buildings,
     pub zoning: Zoning,
-    //pub job_pool: JobPool,         // persistent worker threads + channels
-    // ... other sim-only subsystems (economy, citizens, etc)
+    pub city_state: CityState, // ... other sim-only subsystems (economy, citizens, etc.)
 }
 
 impl World {
@@ -39,6 +39,7 @@ impl World {
             buildings: Buildings::new(),
             zoning: Zoning::new(),
             events: CommandBuffer::new(),
+            city_state: CityState::new(),
         }
     }
 }

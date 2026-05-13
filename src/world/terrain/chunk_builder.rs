@@ -227,7 +227,7 @@ pub(crate) struct GpuChunkHandle {
     pub(crate) index_count_above: u32,
     pub(crate) first_index_under: u32,
     pub(crate) index_count_under: u32,
-    pub(crate) page: u8,
+    pub(crate) page: usize,
     pub(crate) vertex_count: u32,
 }
 
@@ -876,12 +876,12 @@ pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
     if dist2_chunks <= 0 {
         return 1;
     }
-
+    let dist2_chunks = dist2_chunks as f32;
     // Scale thresholds to maintain consistent world-space LOD boundaries.
     // Reference size is 128; smaller chunks get proportionally larger thresholds.
     // For chunk_size > 128, minimum thresholds ensure at least 9 chunks at LOD 1.
-    let cs = chunk_size() as i32;
-    let scale = (128 / cs).max(1);
+    let cs = chunk_size() as f32;
+    let scale = (128.0 / cs).max(0.01);
     let scale2 = scale * scale;
 
     // Each LOD level covers ~2x the world-space distance of the previous.
@@ -891,19 +891,19 @@ pub fn lod_step_for_distance(dist2_chunks: i32) -> LodStep {
     //   LOD 2: dist² ≤ 8  → ~362 world units (2x)
     //   LOD 4: dist² ≤ 32 → ~724 world units (2x)
     //   etc.
-    if dist2_chunks <= 2 * scale2 {
+    if dist2_chunks <= 2.0 {
         1
-    } else if dist2_chunks <= 8 * scale2 {
+    } else if dist2_chunks <= 8.0 * scale2 {
         2
-    } else if dist2_chunks <= 32 * scale2 {
+    } else if dist2_chunks <= 32.0 * scale2 {
         4
-    } else if dist2_chunks <= 128 * scale2 {
+    } else if dist2_chunks <= 128.0 * scale2 {
         8
-    } else if dist2_chunks <= 512 * scale2 {
+    } else if dist2_chunks <= 512.0 * scale2 {
         16
-    } else if dist2_chunks <= 2048 * scale2 {
+    } else if dist2_chunks <= 2048.0 * scale2 {
         32
-    } else if dist2_chunks <= 8192 * scale2 {
+    } else if dist2_chunks <= 8192.0 * scale2 {
         64
     } else {
         128

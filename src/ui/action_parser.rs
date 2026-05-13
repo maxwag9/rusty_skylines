@@ -1217,7 +1217,9 @@ fn filters_match(
     if !filters.events.is_empty() {
         let any_event_matches = filters.events.iter().any(|e| e == event_kind);
         if !any_event_matches {
-            return false;
+            if !filters.events.iter().any(|e| e == &TouchEventKind::Always) {
+                return false;
+            }
         }
     }
     // If in editor mode, require the action to explicitly allow editor_mode.

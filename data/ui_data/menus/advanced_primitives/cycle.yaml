@@ -4,7 +4,7 @@ elements:
   - !Rect
     id: Cycle Border
     actions:
-      - on:release, inc(ap, 1)
+      - on:release, inc({ap}, 1)
     x: 0.0
     y: 0.0
     w: 0.04
@@ -25,8 +25,8 @@ elements:
   - !Rect
     id: Cycle Indicator
     actions:
-      - on:release, inc(ap, 1)
-      #- on:release, ifvareq(ap, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
+      - on:release, inc({ap}, 1)
+      #- on:release, ifvareq({ap}, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
     y: 0.0
     w: 0.03

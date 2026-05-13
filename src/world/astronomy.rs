@@ -49,15 +49,14 @@ pub struct TimeScales {
 }
 
 impl TimeScales {
-    pub fn from_game_time(total_game_time: f64, always_day: bool) -> Self {
-        let day_length: f64 = 960.0;
-        let total_days = total_game_time / day_length as f64;
+    pub fn from_game_time(total_game_time: f64, day_length: f64, always_day: bool) -> Self {
+        let total_days = total_game_time / day_length;
         let jd = GAME_EPOCH_JD + total_days;
 
-        let base_day_phase = (total_days as f64) % 1.0;
+        let base_day_phase = (total_days) % 1.0;
 
         let day_phase = if always_day {
-            let t = (total_game_time as f64 / day_length) * TAU;
+            let t = (total_game_time / day_length) * TAU;
             let ping_pong = t.sin().abs();
             0.25 + 0.25 * ping_pong
         } else {
@@ -66,11 +65,11 @@ impl TimeScales {
 
         let day_angle = day_phase * TAU;
 
-        let year_phase = ((total_days / 365.2425) % 1.0) as f64;
+        let year_phase = (total_days / 365.2425) % 1.0;
         let year_angle = year_phase * TAU;
 
         let base_year = 2026.0;
-        let current_year = base_year + (total_days / 365.2425) as f64;
+        let current_year = base_year + (total_days / 365.2425);
 
         Self {
             day_length,

@@ -148,7 +148,7 @@ impl MeshPage {
         let index_under_offset = index_above_offset + request.index_bytes_above;
 
         GpuChunkHandle {
-            page: page_index as u8,
+            page: page_index,
             base_vertex: (offsets.vertex / request.vertex_align) as i32,
             first_index_above: (index_above_offset / 4) as u32,
             index_count_above: scratch.indices_above.len() as u32,

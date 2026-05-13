@@ -1805,15 +1805,6 @@ pub struct ZoningStorage {
 }
 
 impl ZoningStorage {
-    pub fn lots_in_chunk(&self, chunk_id: ChunkId) -> Vec<LotId> {
-        self.iter_lots()
-            .filter(|l| l.chunk_id() == chunk_id)
-            .map(|lot| lot.id)
-            .collect()
-    }
-}
-
-impl ZoningStorage {
     pub fn update_target(&mut self, target_chunk: ChunkCoord) {
         self.center_chunk = target_chunk;
     }
@@ -1823,6 +1814,21 @@ impl ZoningStorage {
             .flatten()
             .map(|d| d.id)
             .collect::<Vec<DistrictId>>()
+    }
+    pub fn lots_in_chunk(&self, chunk_id: ChunkId) -> Vec<LotId> {
+        self.iter_lots()
+            .filter(|l| l.chunk_id() == chunk_id)
+            .map(|lot| lot.id)
+            .collect()
+    }
+
+    pub fn get_closest_district(&self, position: WorldPos) -> Option<&District> {
+        self.iter_districts().min_by(|a, b| {
+            let da = a.center.distance_squared(position);
+            let db = b.center.distance_squared(position);
+
+            da.partial_cmp(&db).unwrap()
+        })
     }
     pub fn iter_districts(&self) -> impl Iterator<Item = &District> {
         self.districts.iter().filter_map(|z| z.as_ref())

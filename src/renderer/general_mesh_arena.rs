@@ -91,7 +91,7 @@ impl MeshPage {
         );
 
         Some(GpuChunkHandle {
-            page: page_index as u8,
+            page: page_index,
             base_vertex: (v_off / request.vertex_align) as i32,
             first_index_above: (i_off / 4) as u32,
             index_count_above: scratch.indices.len() as u32,

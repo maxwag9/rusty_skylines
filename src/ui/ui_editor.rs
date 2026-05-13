@@ -2,7 +2,7 @@
 //!
 //! Uses Command pattern for all undoable operations.
 
-use crate::data::{SettingKey, Settings};
+use crate::data::Settings;
 use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
@@ -161,7 +161,7 @@ impl Ui {
                     active: l.active,
                     opaque: l.opaque,
                     elements,
-                    setting: None,
+                    ap_var: String::new(),
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
@@ -186,10 +186,9 @@ impl Ui {
                 continue;
             };
             for (ap, order) in aps {
-                let mut layers =
-                    ap.to_layers(settings, &advanced_primitives, order + 1, window_size);
+                let layer = ap.to_layer(settings, &advanced_primitives, order + 1, window_size);
 
-                menu.layers.append(&mut layers);
+                menu.layers.push(layer);
             }
         }
 
@@ -2003,7 +2002,7 @@ impl Ui {
             ap_name: None,
             order: 900,
             active: true,
-            setting: None,
+            ap_var: String::new(),
             cache: LayerCache::default(),
             elements: vec![],
             dirty: LayerDirty::all(),
@@ -2018,7 +2017,7 @@ impl Ui {
             ap_name: None,
             order: 950,
             active: true,
-            setting: None,
+            ap_var: String::new(),
             cache: LayerCache::default(),
             elements: vec![],
             dirty: LayerDirty::all(),
@@ -2139,14 +2138,15 @@ pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<
 
     Some(layer)
 }
-pub fn get_layer_settings(
-    menus: &HashMap<String, Menu>,
-    element: &ElementRef,
-) -> Option<SettingKey> {
-    let menu = menus.get(&element.menu)?;
-    let layer = menu.layers.iter().find(|l| l.name == element.layer)?;
+pub fn get_layer_ap_var(menus: &HashMap<String, Menu>, element: &ElementRef) -> String {
+    let Some(menu) = menus.get(&element.menu) else {
+        return String::new();
+    };
+    let Some(layer) = menu.layers.iter().find(|l| l.name == element.layer) else {
+        return String::new();
+    };
 
-    layer.setting.clone()
+    layer.ap_var.clone()
 }
 pub fn is_layer_editor_tool(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<bool> {
     let menu = menus.get(&element.menu)?;
