@@ -517,7 +517,7 @@ impl ApplicationHandler for App {
                     let proj = camera.proj();
                     resources.world.world_state.update(
                         &mut resources.ui,
-                        &resources.world.time,
+                        &mut resources.world.time, // Updates astronomy and UI Variables
                         &resources.settings,
                         proj,
                     );
@@ -616,10 +616,12 @@ fn update_time(resources: &mut Resources) {
         ui.variables.set_f64("sim_dt", time.target_sim_dt);
         ui.variables
             .set_f64("total_game_time", time.total_game_time);
-        ui.variables.set_i64("hour", time.hour_minute().0);
-        ui.variables.set_i64("minute", time.hour_minute().1);
+        ui.variables.set_i64("hour", time.hour());
+        ui.variables.set_i64("minute", time.minute());
         ui.variables
             .set_f64("money", world.city_state.economy.money);
+        ui.variables
+            .set_i64("world_population", world.city_state.world_population as i64);
         if let Some(district) = world
             .zoning
             .zoning_storage

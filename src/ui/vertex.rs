@@ -1052,7 +1052,8 @@ impl UiElement {
             UiElement::Polygon(e) => Self::replace_actions(&mut e.actions, ap_var),
             UiElement::Text(e) => {
                 Self::replace_actions(&mut e.actions, ap_var);
-                e.text = e.template.replace("{ap}", ap_var)
+                e.text = e.template.replace("{ap}", ap_var);
+                e.template = e.text.clone();
             }
             UiElement::Outline(e) => {}
             UiElement::Rect(e) => Self::replace_actions(&mut e.actions, ap_var),

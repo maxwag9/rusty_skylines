@@ -1636,7 +1636,7 @@ pub fn set_element_property(
 
                     // Setting single component
                     Some(idx) => {
-                        println!("Val: {}, idx: {}", new_val, idx);
+                        //println!("Val: {}, idx: {}", new_val, idx);
                         let Some(val) = new_val.as_f64() else {
                             return CommandResult::Error(
                                 "set_element_property: size component value is not a valid number"

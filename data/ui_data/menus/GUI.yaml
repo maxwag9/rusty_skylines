@@ -16,7 +16,7 @@ layers:
         h: 0.03
         rotation: 0.0
         color:
-          - 0.05
+          - 0.025
           - 0.05
           - 0.11
           - 0.6
@@ -49,7 +49,7 @@ layers:
         h: 0.04
         rotation: 0.0
         color:
-          - 0.05
+          - 0.025
           - 0.05
           - 0.11
           - 0.7
@@ -98,6 +98,19 @@ layers:
           - 0.3
           - 1.0
         text: '{money}€'
+        anchor: TopLeft
+      - !Text
+        id: world_population_text
+        actions: [ ]
+        x: 0.87
+        y: 0.98
+        pt: 18.0
+        color:
+          - 0.027
+          - 0.05
+          - 0.03
+          - 1.0
+        text: 'World Population: {world_population}'
         anchor: TopLeft
       - !Rect
         id: set_none_zone

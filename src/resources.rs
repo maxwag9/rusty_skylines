@@ -8,8 +8,10 @@ use crate::simulation::Simulation;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::Ui;
 use crate::ui::variables::load_colors;
+use crate::world::astronomy::Astronomy;
 use crate::world::game_state::GameState;
 use crate::world::sound::Sounds;
+use crate::world::statisticals::demands::HOURS_PER_DAY;
 use crate::world::world::World;
 use std::sync::Arc;
 use std::time::Instant;
@@ -88,6 +90,9 @@ impl Resources {
     }
 }
 
+pub const DAYS_PER_YEAR: f64 = 20.0;
+const SCHOOL_YEAR_START_DAY: u32 = (DAYS_PER_YEAR * 0.75) as u32; // ~September 1
+
 pub struct Time {
     pub last_frame: Instant,
     pub start: Instant,
@@ -108,13 +113,17 @@ pub struct Time {
     pub total_time: f64,      // In seconds
     pub total_game_time: f64, // In sim seconds
     pub hour: f64,            // In hours
-    pub day_length: f64,      // In sim seconds
+    pub total_hours: f64,
+    pub total_days: f64,
+    pub day_length: f64, // In sim seconds
     pub frame_count: u64,
 
     pub max_frame_dt: f32,
 
     pub speed_just_changed: bool,
     pub current_time_speed: f32,
+
+    pub astronomy: Astronomy,
 }
 
 impl Time {
@@ -147,13 +156,16 @@ impl Time {
             total_time: 0.0,
             total_game_time: 0.0,
             hour: 0.0,
-            day_length: 960.0,
+            total_hours: 0.0,
+            total_days: 0.0,
+            day_length: 1800.0,
             frame_count: 0,
 
             max_frame_dt: 0.25,
 
             speed_just_changed: false,
             current_time_speed: 1.0,
+            astronomy: Astronomy::default(),
         }
     }
 
@@ -243,13 +255,36 @@ impl Time {
     }
 
     pub fn update_hour(&mut self) {
-        let day_progress = (self.total_game_time % self.day_length) / self.day_length;
+        self.total_days = self.total_game_time % self.day_length;
+        self.total_hours = self.total_days * 24.0;
+        let day_progress = self.total_days / self.day_length;
         self.hour = day_progress * 24.0;
     }
-    pub fn hour_minute(&self) -> (u32, u32) {
+    #[inline]
+    pub fn hour(&self) -> u32 {
         let hours = self.hour.floor() as u32;
+        hours
+    }
+    #[inline]
+    pub fn minute(&self) -> u32 {
         let minutes = ((self.hour.fract()) * 60.0) as u32;
-        (hours, minutes)
+        minutes
+    }
+    #[inline]
+    pub fn is_new_day(&self) -> bool {
+        (self.total_hours % HOURS_PER_DAY) as u64 == 0
+    }
+    #[inline]
+    pub fn year(&self) -> u32 {
+        let current_year = self.astronomy.current_year as u32;
+        current_year
+    }
+    #[inline]
+    pub fn school_year(&self) -> u32 {
+        let current_year = self.astronomy.current_year as u32;
+        let shifted_days = 365 - SCHOOL_YEAR_START_DAY;
+
+        current_year + (shifted_days / 365)
     }
     pub fn clear_sim_accumulator(&mut self) {
         self.sim_accumulator = 0.0;

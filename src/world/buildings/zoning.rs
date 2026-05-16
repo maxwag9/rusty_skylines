@@ -913,8 +913,8 @@ impl Zoning {
     pub fn update_districts(
         gizmo: &mut Gizmo,
         terrain: &Terrain,
-        buildings: &mut Buildings,
         zoning: &mut Zoning,
+        buildings: &mut Buildings,
         time: &Time,
         road_edge_storage: &RoadEdgeStorage,
     ) {

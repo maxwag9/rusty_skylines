@@ -1,13 +1,15 @@
 #![allow(dead_code)]
 
+use crate::resources::DAYS_PER_YEAR;
 use core::default::Default;
 use glam::{Mat3, Mat4, Vec3};
 use std::f64::consts::TAU;
 
-pub const MUNICH_LATITUDE: f64 = 48.1351;
-pub const MUNICH_LONGITUDE: f64 = 11.5820;
-pub const J2000: f64 = 2451545.0;
-pub const GAME_EPOCH_JD: f64 = 2461041.5; // 2026-01-01 00:00 UTC
+const MUNICH_LATITUDE: f64 = 48.1351;
+const MUNICH_LONGITUDE: f64 = 11.5820;
+const J2000: f64 = 2451545.0;
+const GAME_EPOCH_JD: f64 = 2461041.5; // 2026-01-01 00:00 UTC
+const SKY_OFFSET_HOURS: f64 = -2.5;
 
 pub struct Astronomy {
     pub star_rotation: Mat4,
@@ -47,11 +49,11 @@ pub struct TimeScales {
     pub base_year: f64,
     pub current_year: f64,
 }
-
 impl TimeScales {
     pub fn from_game_time(total_game_time: f64, day_length: f64, always_day: bool) -> Self {
         let total_days = total_game_time / day_length;
-        let jd = GAME_EPOCH_JD + total_days;
+
+        let jd = GAME_EPOCH_JD + total_days + SKY_OFFSET_HOURS / 24.0;
 
         let base_day_phase = (total_days) % 1.0;
 
@@ -65,11 +67,11 @@ impl TimeScales {
 
         let day_angle = day_phase * TAU;
 
-        let year_phase = (total_days / 365.2425) % 1.0;
+        let year_phase = (total_days / DAYS_PER_YEAR) % 1.0;
         let year_angle = year_phase * TAU;
 
         let base_year = 2026.0;
-        let current_year = base_year + (total_days / 365.2425);
+        let current_year = base_year + (total_days / DAYS_PER_YEAR);
 
         Self {
             day_length,
@@ -115,25 +117,24 @@ impl ObserverParams {
     }
 }
 pub fn equatorial_to_local(eq: Vec3, jd: f64) -> Vec3 {
-    let lat = MUNICH_LATITUDE.to_radians() as f64;
-    let lst = (compute_gmst(jd) + MUNICH_LONGITUDE.to_radians()) as f64;
+    let lat = MUNICH_LATITUDE.to_radians();
+    let lst = (compute_gmst(jd) + MUNICH_LONGITUDE.to_radians()).rem_euclid(TAU);
 
-    // derive RA/Dec from equatorial unit vector
-    let ra = eq.z.atan2(eq.x) as f64;
-    let dec = eq.y.asin() as f64;
+    let ra = (eq.y as f64).atan2(eq.x as f64);
+    let dec = (eq.z as f64).asin();
 
-    let h = lst - ra; // hour angle
+    let h = lst - ra;
 
     let sin_alt = dec.sin() * lat.sin() + dec.cos() * lat.cos() * h.cos();
     let alt = sin_alt.asin();
 
+    let x = -dec.cos() * h.sin(); // east
     let y = alt.sin(); // up
-
-    let x = -dec.cos() * h.sin(); // east-west
-    let z = dec.sin() * lat.cos() - dec.cos() * lat.sin() * h.cos(); // north-forward
+    let z = dec.sin() * lat.cos() - dec.cos() * lat.sin() * h.cos(); // north
 
     Vec3::new(x as f32, y as f32, z as f32).normalize()
 }
+
 pub fn compute_gmst(jd: f64) -> f64 {
     let t = (jd - J2000) / 36525.0;
     let gmst_0h = 24110.54841 + 8640184.812866 * t + 0.093104 * t * t - 6.2e-6 * t * t * t;
@@ -270,7 +271,7 @@ pub fn compute_sun_equatorial_direction(jd: f64) -> Vec3 {
 
 pub fn compute_sun_direction(observer: &ObserverParams, jd: f64) -> (Vec3, f64) {
     let sun_eq = compute_sun_equatorial_direction(jd);
-    let sun_declination = sun_eq.y.asin().to_degrees() as f64;
+    let sun_declination = sun_eq.z.asin().to_degrees() as f64;
     let sun_dir = equatorial_to_local(sun_eq, jd);
     (sun_dir, sun_declination)
 }

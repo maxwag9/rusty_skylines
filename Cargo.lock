@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Rusty_Skylines"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "anyhow",
  "arboard",
@@ -26,6 +26,7 @@ dependencies = [
  "postcard",
  "rand 0.10.1",
  "rand_chacha 0.10.0",
+ "rand_distr",
  "rayon",
  "sanitize-filename",
  "serde",
@@ -2378,6 +2379,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c8d0fd677905edcbeedbf2edb6494d676f0e98d54d5cf9bda0b061cb8fb8aba"
 
 [[package]]
+name = "rand_distr"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
+dependencies = [
+ "num-traits",
+ "rand 0.10.1",
+]
+
+[[package]]
 name = "range-alloc"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3526,9 +3537,9 @@ dependencies = [
 
 [[package]]
 name = "wgpu_text"
-version = "29.0.0"
+version = "29.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89a265848dc99ddef7571cbeb293a1ee1330e4cda77bca882022644cb5f065df"
+checksum = "27f3d887e3d58c4f0e4d10c831a1974d352df275abb50f555cb370c7a235face"
 dependencies = [
  "bytemuck",
  "glyph_brush",

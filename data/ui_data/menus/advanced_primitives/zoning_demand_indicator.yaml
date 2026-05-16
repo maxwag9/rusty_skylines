@@ -12,7 +12,7 @@ elements:
       - 0.00
       - 0.00
       - 0.00
-      - 0.2
+      - 0.4
     border_color:
       - 1.0
       - 1.0
@@ -24,7 +24,7 @@ elements:
   - !Rect
     id: Zoning Indicator
     actions:
-      - on:a button:l set(self.size.y, 20.0*{ap})
+      - on:a button:a set(f32:self.size.y, 20.0*{ap})
 
       #- on:release, ifvareq({ap}, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
@@ -37,14 +37,14 @@ elements:
       - 0.0
       - 0.9
     roundness: 0.1
-#  - !Text
-#    id: setting_text
-#    x: 0.02
-#    y: 0.04
-#    pt: 10.0
-#    color:
-#      - 1.0
-#      - 1.0
-#      - 1.0
-#      - 0.9
-#    text: '{ap}'
+  - !Text
+    id: zoning_text
+    x: 0.02
+    y: 0.04
+    pt: 10.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: '{{ap}}'

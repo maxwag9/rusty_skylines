@@ -179,7 +179,7 @@ impl Renderer {
         };
         let time = &world.time;
         let camera = &world.world_state.camera;
-        let astronomy = &world.world_state.astronomy;
+        let astronomy = &world.time.astronomy;
         let terrain = &mut world.terrain;
         let buildings = &world.buildings;
         let surface_view = frame.texture.create_view(&TextureViewDescriptor::default());
@@ -241,7 +241,7 @@ impl Renderer {
     ) {
         let time = &world_core.time;
         let camera = &world_core.world_state.camera;
-        let astronomy = &world_core.world_state.astronomy;
+        let astronomy = &world_core.time.astronomy;
         let terrain = &mut world_core.terrain;
         self.update_defines();
 

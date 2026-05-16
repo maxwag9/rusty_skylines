@@ -95,11 +95,12 @@ impl Simulation {
         Zoning::update_districts(
             &mut renderer.gizmo,
             &world.terrain,
-            &mut world.buildings,
             &mut world.zoning,
+            &mut world.buildings,
             &world.time,
             &renderer.road_renderer.mesh_manager.road_edge_storage,
         );
+        world.city_state.update(&mut world.zoning, &world.buildings);
     }
 }
 
