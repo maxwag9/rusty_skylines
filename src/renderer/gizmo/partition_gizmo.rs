@@ -338,6 +338,16 @@ impl PartitionGizmo {
                 config.thickness,
                 config.duration,
             );
+            gizmo.text(
+                partition_id.to_string(),
+                node_pos,
+                30.0,
+                config.node_link_color,
+                None,
+                true,
+                config.thickness,
+                config.duration,
+            );
         }
     }
 

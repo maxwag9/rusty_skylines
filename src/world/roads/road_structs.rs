@@ -1,10 +1,12 @@
 #![allow(dead_code)]
 
 use crate::helpers::positions::WorldPos;
+use crate::systems::systems::RoadDestroyType;
 use crate::world::roads::roads::{RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
-pub type RoadTypeId = u64;
+
+pub type RoadTypeId = u32;
 #[derive(Clone, Debug)]
 pub struct RoadStyleParams {
     state: EditorState,
@@ -475,6 +477,7 @@ pub enum RoadEditorCommand {
     PreviewSegment(SegmentPreview),
     PreviewError(PreviewError),
     PreviewCrossing(CrossingPoint),
+    PreviewDestruction(RoadDestroyType),
 }
 
 #[derive(Debug, Clone)]

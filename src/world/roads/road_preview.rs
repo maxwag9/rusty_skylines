@@ -41,6 +41,7 @@ impl RoadAppearanceUniform {
 pub struct RoadPreviewState {
     pub snap: Option<SnapPreview>,
     pub error: Option<PreviewError>,
+    pub destruction: bool,
 }
 
 impl RoadPreviewState {
@@ -55,12 +56,16 @@ impl RoadPreviewState {
                 RoadEditorCommand::PreviewClear => {
                     self.snap = None;
                     self.error = None;
+                    self.destruction = false;
                 }
                 RoadEditorCommand::PreviewSnap(snap) => {
                     self.snap = Some(snap.clone());
                 }
                 RoadEditorCommand::PreviewError(err) => {
                     self.error = Some(err.clone());
+                }
+                RoadEditorCommand::PreviewDestruction(_) => {
+                    self.destruction = true;
                 }
                 _ => {}
             }
@@ -144,7 +149,7 @@ impl RoadAppearanceGpu {
         orbit_radius: f32,
     ) {
         let mut new_preview: RoadAppearanceUniform;
-        if preview_state.error.is_some() {
+        if preview_state.error.is_some() || preview_state.destruction {
             new_preview = RoadAppearanceUniform::preview_error();
         } else {
             new_preview = RoadAppearanceUniform::preview();

@@ -2746,8 +2746,7 @@ fn format_slot(src: &str, vars: &Variables) -> String {
             None => return src.to_string(),
         };
     }
-
-    value_to_text(&value)
+    value.into_string_value()
 }
 
 fn value_to_text(v: &Value) -> String {

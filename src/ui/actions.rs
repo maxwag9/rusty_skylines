@@ -4,18 +4,18 @@ pub mod drag_hue_point;
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
-use crate::ui::action_parser::{TouchEventKind, parse_action};
+use crate::ui::action_parser::{parse_action, TouchEventKind};
 use crate::ui::menu::Menu;
-use crate::ui::parser::{Value, eval_expr};
+use crate::ui::parser::{eval_expr, Value};
 use crate::ui::ui_edit_manager::{
     ChangeColorCommand, ColorComponent, CreateElementCommand, DeleteElementCommand,
     DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
-use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_element_size};
-use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
+use crate::ui::ui_editor::{get_element, get_element_position, get_element_size, Ui};
+use crate::ui::ui_edits::{create_element, delete_element, SizeProperty};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, UiTouchManager};
-use crate::ui::variables::{Variables, initialize_value, save_colors};
+use crate::ui::variables::{initialize_value, save_colors, Variables};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
@@ -1412,8 +1412,11 @@ pub fn exit_game(
 }
 pub fn save_game(game_state: &mut GameState, world: &World, props: &Props) {
     match game_state.save(world, props) {
-        SaveResult::Success => println!("World saved"),
-        e => eprintln!("Failed to save World: {:#?}", e),
+        SaveResult::Success => println!("World '{}' saved", game_state.current_save.name),
+        e => eprintln!(
+            "Failed to save World '{}': {:#?}",
+            game_state.current_save.name, e
+        ),
     }
 }
 pub fn load_save(
@@ -1438,7 +1441,10 @@ pub fn load_save(
             game_state.save(world, props);
             load_save(game_state, world, props, save_name);
         }
-        e => eprintln!("Failed to load World: {:#?}", e),
+        e => eprintln!(
+            "Failed to load World '{}': {:#?}",
+            game_state.current_save.name, e
+        ),
     }
 }
 /// ONLY USE EXECUTE_COMMAND SO IT EXECUTES IMMEDIATELY!!

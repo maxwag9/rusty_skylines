@@ -19,7 +19,7 @@ layers:
           - 0.025
           - 0.05
           - 0.11
-          - 0.6
+          - 0.4
         border_color:
           - 1.0
           - 1.0
@@ -52,7 +52,7 @@ layers:
           - 0.025
           - 0.05
           - 0.11
-          - 0.7
+          - 0.5
         border_color:
           - 1.0
           - 1.0
@@ -106,12 +106,158 @@ layers:
         y: 0.98
         pt: 18.0
         color:
-          - 0.027
-          - 0.05
-          - 0.03
+          - 0.0027
+          - 0.005
+          - 0.003
           - 1.0
         text: 'World Population: {world_population}'
         anchor: TopLeft
+      - !Text
+        id: non_educated_population_text
+        x: 0.90
+        y: 0.86
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Non Educated Population: {non_educated_population}'
+      - !Text
+        id: low_educated_population_text
+        x: 0.90
+        y: 0.88
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Low Educated Population: {low_educated_population}'
+      - !Text
+        id: medium_educated_population_text
+        x: 0.90
+        y: 0.90
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Medium Educated Population: {medium_educated_population}'
+      - !Text
+        id: highly_educated_population_text
+        x: 0.90
+        y: 0.92
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Highly Educated Population: {highly_educated_population}'
+
+      - !Text
+        id: housing_capacity_text
+        x: 0.90
+        y: 0.77
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Housing Capacity: {housing_capacity}'
+      - !Text
+        id: commercial_capacity_text
+        x: 0.90
+        y: 0.79
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Commercial Capacity: {commercial_capacity}'
+      - !Text
+        id: industrial_capacity_text
+        x: 0.90
+        y: 0.81
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Industrial Capacity: {industrial_capacity}'
+      - !Text
+        id: office_capacity_text
+        x: 0.90
+        y: 0.83
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Office Capacity: {office_capacity}'
+
+      - !Text
+        id: prestige_text
+        x: 0.90
+        y: 0.65
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Prestige: {prestige}'
+      - !Text
+        id: residential_attractiveness_text
+        x: 0.90
+        y: 0.68
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Residential Attractiveness: {residential_attractiveness}'
+      - !Text
+        id: commercial_attractiveness_text
+        x: 0.90
+        y: 0.70
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Commercial Attractiveness: {commercial_attractiveness}'
+      - !Text
+        id: industrial_attractiveness_text
+        x: 0.90
+        y: 0.72
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Industrial Attractiveness: {industrial_attractiveness}'
+      - !Text
+        id: office_attractiveness_text
+        x: 0.90
+        y: 0.74
+        pt: 10.0
+        color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 0.9
+        text: 'Office Attractiveness: {office_attractiveness}'
+
       - !Rect
         id: set_none_zone
         actions:
@@ -186,8 +332,44 @@ layers:
         name: residential_demand_indicator
         ap_name: zoning_demand_indicator
         ap_var: residential_demand
-        x: 0.1
-        y: 0.3
+        x: 0.4
+        y: 0.95
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: commercial_demand_indicator
+        ap_name: zoning_demand_indicator
+        ap_var: commercial_demand
+        x: 0.42
+        y: 0.95
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: industrial_demand_indicator
+        ap_name: zoning_demand_indicator
+        ap_var: industrial_demand
+        x: 0.44
+        y: 0.95
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: office_demand_indicator
+        ap_name: zoning_demand_indicator
+        ap_var: office_demand
+        x: 0.47
+        y: 0.95
         scale: 2.0
         misc:
           active: true
@@ -329,6 +511,44 @@ layers:
           - 0.0
           - 0.0
         glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_cursor_to_destruction
+        actions:
+          - on:r set(cursor_mode, Destruction)
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
+        x: 0.657968747
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.72
+          - 0.02
+          - 0.05
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.1
+        border_thickness_percentage: 0.02
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.6
+          - 0.0
+          - 0.0
+          - 1.0
+        glow_misc:
+          glow_size: 10.0
+          glow_speed: 0.1
+          glow_intensity: 0.5
         misc:
           active: true
           pressable: true

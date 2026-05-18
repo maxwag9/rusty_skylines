@@ -17,6 +17,7 @@
 
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
+use crate::systems::systems::RoadDestroyType;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
@@ -33,7 +34,7 @@ use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use xxhash_rust::xxh3::xxh3_64;
 
 pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
@@ -55,11 +56,6 @@ pub struct Arm {
 
     incoming_lanes: Vec<LaneId>,
     outgoing_lanes: Vec<LaneId>,
-
-    // === Sign-based routing data ===
-    /// Static: partitions reachable by leaving through this arm's outgoing lanes.
-    /// Built once at map construction, rebuilt on topology change.
-    reachable_partitions: Vec<PartitionId>,
 
     /// Dynamic: learned travel times to partitions, updated by cars reporting back.
     travel_times: HashMap<PartitionId, ExponentialMovingAverage>,
@@ -83,8 +79,11 @@ impl Arm {
             points_to_node,
             incoming_lanes: Vec::new(),
             outgoing_lanes: Vec::new(),
-            reachable_partitions: Vec::new(),
             travel_times: HashMap::new(),
+            // 1: lowest partitions, ExpMovAvg
+            //
+            //
+            //
             congestion: 0.0,
         }
     }
@@ -123,10 +122,6 @@ impl Arm {
         self.congestion
     }
 
-    pub fn reachable_partitions(&self) -> &[PartitionId] {
-        &self.reachable_partitions
-    }
-
     // === Lane Management ===
 
     pub fn add_incoming_lane(&mut self, lane_id: LaneId) {
@@ -159,18 +154,6 @@ impl Arm {
             let idx_b = storage.lane(b).lane_index();
             idx_a.cmp(&idx_b) // Ascending (rightmost first for outgoing)
         });
-    }
-
-    // === Routing Data ===
-
-    pub fn set_reachable_partitions(&mut self, partitions: Vec<PartitionId>) {
-        self.reachable_partitions = partitions;
-    }
-
-    pub fn add_reachable_partition(&mut self, partition: PartitionId) {
-        if !self.reachable_partitions.contains(&partition) {
-            self.reachable_partitions.push(partition);
-        }
     }
 
     pub fn travel_time_to(&self, partition: PartitionId) -> Option<f32> {
@@ -229,7 +212,7 @@ impl Arm {
 }
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pos: WorldPos,
     enabled: bool,
@@ -255,7 +238,7 @@ impl Node {
             outgoing_lanes: Vec::new(),
             attached_controls: Vec::new(),
             next_control_id: 0,
-            car_spawning_rate: 3.0,
+            car_spawning_rate: 0.0,
         }
     }
 
@@ -359,11 +342,11 @@ impl Node {
     pub fn car_spawning_rate(&self) -> f32 {
         self.car_spawning_rate
     }
+    #[inline]
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
 }
-
-// ============================================================================
-// Segment
-// ============================================================================
 
 /// Road segment connecting two nodes, containing multiple lanes.
 /// Segments are grouping/metadata; lanes are the first-class graph edges.
@@ -375,10 +358,11 @@ pub struct Segment {
     pub lanes: Vec<LaneId>,
     pub structure: StructureType,
     pub version: u32,
+    pub road_type_id: RoadTypeId, // The ONLY place this is stored btw, intersections ask segments!
 }
 
 impl Segment {
-    fn new(start: NodeId, end: NodeId, structure: StructureType) -> Self {
+    fn new(start: NodeId, end: NodeId, structure: StructureType, road_type_id: RoadTypeId) -> Self {
         Self {
             start,
             end,
@@ -386,6 +370,7 @@ impl Segment {
             lanes: Vec::new(),
             structure,
             version: 0,
+            road_type_id,
         }
     }
 
@@ -434,10 +419,6 @@ impl Segment {
         (forward, backward)
     }
 }
-
-// ============================================================================
-// Lane
-// ============================================================================
 
 /// Directed lane edge connecting two nodes within a segment.
 /// Lanes are the primary graph edges for pathfinding and simulation.
@@ -568,7 +549,21 @@ pub enum LaneRef {
     Segment(LaneId, PolyIdx),
     NodeLane(NodeLaneId, PolyIdx),
 }
+impl LaneRef {
+    pub fn as_lane(&self) -> Option<(LaneId, PolyIdx)> {
+        match self {
+            LaneRef::Segment(lane_id, poly_idx) => Some((*lane_id, *poly_idx)),
+            LaneRef::NodeLane(_, _) => None,
+        }
+    }
+}
+impl Hash for NodeLane {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
 
+        self.enabled.hash(state);
+    }
+}
 /// Directed lane edge connecting two segments within a node.
 /// NodeLanes are the primary graph edges for pathfinding and simulation.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -811,9 +806,11 @@ impl RoadStorage {
         start: NodeId,
         end: NodeId,
         structure: StructureType,
+        road_type_id: RoadTypeId,
     ) -> SegmentId {
         let id = SegmentId::new(self.segments.len() as u32);
-        self.segments.push(Segment::new(start, end, structure));
+        self.segments
+            .push(Segment::new(start, end, structure, road_type_id));
 
         let region_a = self.node_to_region[start.index()];
         let region_b = self.node_to_region[end.index()];
@@ -912,9 +909,14 @@ impl RoadStorage {
         &mut self.nodes[id.0 as usize]
     }
 
-    #[inline]
-    pub fn disable_node(&mut self, id: NodeId) {
-        self.nodes[id.0 as usize].enabled = false;
+    /// Disables the node and all segments/lanes touching it
+    pub fn disable_node(&mut self, id: NodeId, road_types: &RoadTypes, gizmo: &mut Gizmo) {
+        let impact = self.impact_of_disabling_node(id);
+        self.apply_impact(&impact);
+        for node_id in impact.nodes_needing_regen {
+            let arms = gather_arms(self, road_types, node_id, gizmo);
+            self.nodes[node_id.0 as usize].arms = arms;
+        }
     }
 
     #[inline]
@@ -1024,14 +1026,13 @@ impl RoadStorage {
         &mut self.segments[id.0 as usize]
     }
 
-    pub fn disable_segment(&mut self, id: SegmentId) {
-        let segment = &mut self.segments[id.0 as usize];
-        segment.enabled = false;
-        segment.version += 1;
-
-        let lane_ids: Vec<LaneId> = segment.lanes.clone();
-        for lane_id in lane_ids {
-            self.lanes[lane_id.0 as usize].enabled = false;
+    /// Disables the segment and all its lanes
+    pub fn disable_segment(&mut self, id: SegmentId, road_types: &RoadTypes, gizmo: &mut Gizmo) {
+        let impact = self.impact_of_disabling_segment(id);
+        self.apply_impact(&impact);
+        for node_id in impact.nodes_needing_regen {
+            let arms = gather_arms(self, road_types, node_id, gizmo);
+            self.nodes[node_id.0 as usize].arms = arms;
         }
     }
 
@@ -1141,9 +1142,14 @@ impl RoadStorage {
         &mut self.lanes[id.0 as usize]
     }
 
-    #[inline]
-    pub fn disable_lane(&mut self, id: LaneId) {
-        self.lanes[id.0 as usize].enabled = false;
+    /// Disables a single lane, then cascades
+    pub fn disable_lane(&mut self, id: LaneId, road_types: &RoadTypes, gizmo: &mut Gizmo) {
+        let impact = self.impact_of_disabling_lane(id);
+        self.apply_impact(&impact);
+        for node_id in impact.nodes_needing_regen {
+            let arms = gather_arms(self, road_types, node_id, gizmo);
+            self.nodes[node_id.0 as usize].arms = arms;
+        }
     }
 
     #[inline]
@@ -1235,13 +1241,19 @@ impl RoadStorage {
         id
     }
 
-    pub fn upgrade_segment<F>(&mut self, old_segment: SegmentId, add_new: F) -> Vec<SegmentId>
+    pub fn upgrade_segment<F>(
+        &mut self,
+        old_segment: SegmentId,
+        add_new: F,
+        road_types: &RoadTypes,
+        gizmo: &mut Gizmo,
+    ) -> Vec<SegmentId>
     where
         F: FnOnce(&mut Self),
     {
         let segment_count_before = self.segments.len();
 
-        self.disable_segment(old_segment);
+        self.disable_segment(old_segment, road_types, gizmo);
 
         add_new(self);
 
@@ -1280,6 +1292,310 @@ impl RoadStorage {
         }
         best
     }
+
+    pub fn impact_of_disabling_node(&self, id: NodeId) -> DisableImpact {
+        let Some(node) = self.nodes.get(id.0 as usize) else {
+            return DisableImpact::default();
+        };
+        if !node.enabled {
+            return DisableImpact::default();
+        }
+
+        let mut disabled_nodes = vec![id];
+        let mut disabled_segments = Vec::new();
+        let mut disabled_lanes = Vec::new();
+        let mut nodes_needing_regen = Vec::new();
+
+        // Collect unique segments touching this node.
+        let mut seen_segs: Vec<SegmentId> = Vec::new();
+        for &lane_id in node.incoming_lanes().iter().chain(node.outgoing_lanes()) {
+            let seg_id = self.lanes[lane_id.0 as usize].segment;
+            if !seen_segs.contains(&seg_id) {
+                seen_segs.push(seg_id);
+            }
+        }
+
+        for seg_id in seen_segs {
+            disabled_segments.push(seg_id);
+
+            let seg = &self.segments[seg_id.0 as usize];
+            for &lane_id in &seg.lanes {
+                disabled_lanes.push(lane_id);
+            }
+
+            let other = if seg.start == id { seg.end } else { seg.start };
+
+            // Does `other` still have connections after removing the lanes we're disabling?
+            let other_still_connected = self.nodes[other.0 as usize]
+                .incoming_lanes()
+                .iter()
+                .chain(self.nodes[other.0 as usize].outgoing_lanes())
+                .any(|&lid| {
+                    self.lanes[lid.0 as usize].is_enabled() && !disabled_lanes.contains(&lid)
+                });
+
+            if other_still_connected {
+                if !nodes_needing_regen.contains(&other) {
+                    nodes_needing_regen.push(other);
+                }
+            } else if !disabled_nodes.contains(&other) {
+                disabled_nodes.push(other);
+            }
+        }
+
+        DisableImpact {
+            nodes: disabled_nodes,
+            segments: disabled_segments,
+            lanes: disabled_lanes,
+            nodes_needing_regen,
+        }
+    }
+
+    pub fn impact_of_disabling_segment(&self, id: SegmentId) -> DisableImpact {
+        let seg = &self.segments[id.0 as usize];
+        if !seg.enabled {
+            return DisableImpact::default();
+        }
+
+        let lane_ids: Vec<LaneId> = seg.lanes.clone();
+        let endpoints = [seg.start, seg.end];
+
+        let mut disabled_nodes = Vec::new();
+        let mut nodes_needing_regen = Vec::new();
+
+        for &node_id in &endpoints {
+            let still_connected = self.nodes[node_id.0 as usize]
+                .incoming_lanes()
+                .iter()
+                .chain(self.nodes[node_id.0 as usize].outgoing_lanes())
+                .any(|&lid| self.lanes[lid.0 as usize].is_enabled() && !lane_ids.contains(&lid));
+
+            if still_connected {
+                if !nodes_needing_regen.contains(&node_id) {
+                    nodes_needing_regen.push(node_id);
+                }
+            } else if !disabled_nodes.contains(&node_id) {
+                disabled_nodes.push(node_id);
+            }
+        }
+
+        DisableImpact {
+            nodes: disabled_nodes,
+            segments: vec![id],
+            lanes: lane_ids,
+            nodes_needing_regen,
+        }
+    }
+
+    pub fn impact_of_disabling_lane(&self, id: LaneId) -> DisableImpact {
+        let lane = &self.lanes[id.0 as usize];
+        if !lane.enabled {
+            return DisableImpact::default();
+        }
+
+        let from_id = lane.from;
+        let to_id = lane.to;
+        let seg_id = lane.segment;
+
+        // Segment dies if this is its last enabled lane.
+        let segment_also_dies = self.segments[seg_id.0 as usize]
+            .lanes
+            .iter()
+            .all(|&lid| lid == id || !self.lanes[lid.0 as usize].is_enabled());
+
+        let mut disabled_nodes = Vec::new();
+        let mut nodes_needing_regen = Vec::new();
+
+        for &node_id in &[from_id, to_id] {
+            let still_connected = self.nodes[node_id.0 as usize]
+                .incoming_lanes()
+                .iter()
+                .chain(self.nodes[node_id.0 as usize].outgoing_lanes())
+                .any(|&lid| lid != id && self.lanes[lid.0 as usize].is_enabled());
+
+            if still_connected {
+                if !nodes_needing_regen.contains(&node_id) {
+                    nodes_needing_regen.push(node_id);
+                }
+            } else if !disabled_nodes.contains(&node_id) {
+                disabled_nodes.push(node_id);
+            }
+        }
+
+        DisableImpact {
+            nodes: disabled_nodes,
+            segments: if segment_also_dies {
+                vec![seg_id]
+            } else {
+                vec![]
+            },
+            lanes: vec![id],
+            nodes_needing_regen,
+        }
+    }
+    fn apply_impact(&mut self, impact: &DisableImpact) {
+        for &node_id in &impact.nodes {
+            self.nodes[node_id.0 as usize].enabled = false;
+        }
+        for &seg_id in &impact.segments {
+            let seg = &mut self.segments[seg_id.0 as usize];
+            seg.enabled = false;
+            seg.version += 1;
+        }
+        for &lane_id in &impact.lanes {
+            self.lanes[lane_id.0 as usize].enabled = false;
+        }
+    }
+
+    // ONLY in preview!!
+    pub fn add_raw(
+        &mut self,
+        nodes: Vec<(NodeId, Node)>,
+        segments: Vec<(SegmentId, Segment)>,
+        lanes: Vec<(LaneId, Lane)>,
+    ) {
+        let node_base = self.nodes.len() as u32;
+        let seg_base = self.segments.len() as u32;
+        let lane_base = self.lanes.len() as u32;
+
+        // ── validated remap tables ────────────────────────────────────────────────
+        // Each table only contains IDs that will actually be inserted.
+        // Anything absent = dangling = will be dropped by filter_map later.
+
+        // Nodes: always valid, they are the roots.
+        let remap_node: HashMap<NodeId, NodeId> = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, (old, _))| (*old, NodeId::new(node_base + i as u32)))
+            .collect();
+
+        // Segments: valid only if both endpoints exist in the node batch.
+        let remap_seg: HashMap<SegmentId, SegmentId> = {
+            let mut map = HashMap::new();
+            let mut next = 0u32;
+            for (old_id, seg) in &segments {
+                if remap_node.contains_key(&seg.start) && remap_node.contains_key(&seg.end) {
+                    map.insert(*old_id, SegmentId::new(seg_base + next));
+                    next += 1;
+                }
+            }
+            map
+        };
+
+        // Lanes: valid only if from, to, AND parent segment are all in the batch.
+        let remap_lane: HashMap<LaneId, LaneId> = {
+            let mut map = HashMap::new();
+            let mut next = 0u32;
+            for (old_id, lane) in &lanes {
+                if remap_node.contains_key(&lane.from)
+                    && remap_node.contains_key(&lane.to)
+                    && remap_seg.contains_key(&lane.segment)
+                {
+                    map.insert(*old_id, LaneId::new(lane_base + next));
+                    next += 1;
+                }
+            }
+            map
+        };
+
+        // ── insert nodes ──────────────────────────────────────────────────────────
+        for (_, mut node) in nodes {
+            node.incoming_lanes = node
+                .incoming_lanes
+                .iter()
+                .filter_map(|id| remap_lane.get(id).copied())
+                .collect();
+            node.outgoing_lanes = node
+                .outgoing_lanes
+                .iter()
+                .filter_map(|id| remap_lane.get(id).copied())
+                .collect();
+
+            node.arms.retain(|arm| remap_seg.contains_key(&arm.segment));
+            for arm in &mut node.arms {
+                arm.segment = remap_seg[&arm.segment];
+                arm.incoming_lanes = arm
+                    .incoming_lanes
+                    .iter()
+                    .filter_map(|id| remap_lane.get(id).copied())
+                    .collect();
+                arm.outgoing_lanes = arm
+                    .outgoing_lanes
+                    .iter()
+                    .filter_map(|id| remap_lane.get(id).copied())
+                    .collect();
+            }
+
+            node.node_lanes.retain(|nl| {
+                let ref_ok = |lr: &LaneRef| match lr {
+                    LaneRef::Segment(lid, _) => remap_lane.contains_key(lid),
+                    LaneRef::NodeLane(_, _) => true,
+                };
+                nl.merging.iter().all(ref_ok) && nl.splitting.iter().all(ref_ok)
+            });
+            for nl in &mut node.node_lanes {
+                for lr in nl.merging.iter_mut().chain(nl.splitting.iter_mut()) {
+                    if let LaneRef::Segment(lid, _) = lr {
+                        if let Some(&new_id) = remap_lane.get(lid) {
+                            *lid = new_id;
+                        }
+                    }
+                }
+            }
+
+            let node_idx = self.nodes.len() as u32;
+            self.nodes.push(node);
+
+            let region_id = if let Some(reused) = self.free_regions.pop() {
+                self.regions[reused as usize].nodes.push(node_idx);
+                reused
+            } else {
+                let new_id = self.regions.len() as RoadRegionId;
+                let mut r = RoadRegion::new();
+                r.nodes.push(node_idx);
+                self.regions.push(r);
+                new_id
+            };
+            self.node_to_region.push(region_id);
+            self.active_region_count += 1;
+        }
+
+        // ── insert segments (skip any that failed validation) ─────────────────────
+        for (old_id, mut seg) in segments {
+            if !remap_seg.contains_key(&old_id) {
+                continue;
+            }
+
+            seg.start = remap_node[&seg.start];
+            seg.end = remap_node[&seg.end];
+            seg.lanes = seg
+                .lanes
+                .iter()
+                .filter_map(|id| remap_lane.get(id).copied())
+                .collect();
+
+            self.segments.push(seg);
+
+            let idx = self.segments.len() - 1;
+            let ra = self.node_to_region[self.segments[idx].start.index()];
+            let rb = self.node_to_region[self.segments[idx].end.index()];
+            if ra != rb {
+                self.merge_regions(ra, rb);
+            }
+        }
+
+        // ── insert lanes (skip any that failed validation) ────────────────────────
+        for (old_id, mut lane) in lanes {
+            if !remap_lane.contains_key(&old_id) {
+                continue;
+            }
+
+            lane.from = remap_node[&lane.from];
+            lane.to = remap_node[&lane.to];
+            lane.segment = remap_seg[&lane.segment];
+            self.lanes.push(lane);
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -1297,14 +1613,14 @@ impl RoadTypes {
     }
     pub fn change_road_type(&mut self, road_type: RoadType) -> RoadTypeId {
         let bytes = postcard::to_stdvec(&road_type).unwrap_or_default();
-        let key = xxh3_64(&bytes);
+        let key = xxh3_64(&bytes) as u32;
         self.road_types.insert(key, road_type);
         key
     }
 
     pub fn add_road_type(&mut self, road_type: &RoadType) -> RoadTypeId {
         let bytes = postcard::to_stdvec(road_type).unwrap_or_default();
-        let key = xxh3_64(&bytes);
+        let key = xxh3_64(&bytes) as u32;
         if !self.road_types.contains_key(&key) {
             self.road_types.insert(key, road_type.clone());
         }
@@ -1616,6 +1932,7 @@ pub enum RoadCommand {
         end: NodeId,
         structure: StructureType,
         chunk_id: ChunkId,
+        road_type_id: RoadTypeId,
     },
     /// Add a new lane to a segment.
     AddLane {
@@ -1642,6 +1959,11 @@ pub enum RoadCommand {
         base_cost: f32,
         dynamic_cost: f32,
         chunk_id: ChunkId,
+    },
+    AddRaw {
+        nodes: Vec<(NodeId, Node)>,
+        segments: Vec<(SegmentId, Segment)>,
+        lanes: Vec<(LaneId, Lane)>,
     },
     ClearNodeLanes {
         node_id: NodeId,
@@ -1722,6 +2044,7 @@ impl RoadCommand {
             RoadCommand::AddSegment { chunk_id, .. } => *chunk_id,
             RoadCommand::AddLane { chunk_id, .. } => *chunk_id,
             RoadCommand::AddNodeLane { chunk_id, .. } => *chunk_id,
+            RoadCommand::AddRaw { .. } => 0,
             RoadCommand::ClearNodeLanes { chunk_id, .. } => *chunk_id,
             RoadCommand::DisableNode { chunk_id, .. } => *chunk_id,
             RoadCommand::EnableNode { chunk_id, .. } => *chunk_id,
@@ -1760,7 +2083,7 @@ pub enum CommandResult {
 
 /// Applies only the world-state mutations from real (non-preview) commands.
 /// No mesh rebuilding — that's the render subsystem's job.
-pub fn apply_commands_world(
+pub fn apply_road_commands_real(
     terrain: &mut Terrain,
     road_manager: &mut RoadManager,
     car_subsystem: &mut Cars,
@@ -1769,7 +2092,7 @@ pub fn apply_commands_world(
 ) {
     for cmd in commands {
         if let RoadEditorCommand::Road(road_command) = cmd {
-            apply_command_world(
+            apply_road_command(
                 terrain,
                 road_manager,
                 car_subsystem,
@@ -1782,7 +2105,7 @@ pub fn apply_commands_world(
 }
 
 /// Applies world-state mutations for preview commands (populates preview_storage).
-pub fn apply_preview_commands_world(
+pub fn apply_road_commands_preview(
     terrain: &mut Terrain,
     roads: &mut Roads,
     car_subsystem: &mut Cars,
@@ -1793,7 +2116,7 @@ pub fn apply_preview_commands_world(
     // 1) Apply explicit Road commands to preview storage
     for cmd in &roads.road_commands {
         if let RoadEditorCommand::Road(road_command) = cmd {
-            apply_command_world(
+            apply_road_command(
                 terrain,
                 &mut roads.road_manager,
                 car_subsystem,
@@ -1808,17 +2131,19 @@ pub fn apply_preview_commands_world(
     let mut node_previews: Vec<&NodePreview> = Vec::new();
     let mut crossing_previews: Vec<&CrossingPoint> = Vec::new();
     let mut segment_preview: Option<&SegmentPreview> = None;
+    let mut destruction_preview: Option<&RoadDestroyType> = None;
 
     for cmd in &roads.road_commands {
         match cmd {
             RoadEditorCommand::PreviewNode(n) => node_previews.push(n),
             RoadEditorCommand::PreviewSegment(s) => segment_preview = Some(s),
             RoadEditorCommand::PreviewCrossing(c) => crossing_previews.push(c),
+            RoadEditorCommand::PreviewDestruction(d) => destruction_preview = Some(d),
             RoadEditorCommand::PreviewClear => return,
             _ => {}
         }
     }
-
+    println!("{:?}", destruction_preview);
     let mut allocator = PreviewIdAllocator::new();
     let mut road_commands: Vec<RoadCommand> = Vec::new();
 
@@ -1865,10 +2190,17 @@ pub fn apply_preview_commands_world(
             &node_previews,
         ));
     }
-
+    if let Some(road_destroy_type) = destruction_preview {
+        road_commands.extend(generate_destruction_preview(
+            terrain,
+            roads,
+            &mut allocator,
+            road_destroy_type,
+        ));
+    }
     // 6) Apply generated preview commands to preview storage (world-only)
     for cmd in road_commands {
-        apply_command_world(
+        apply_road_command(
             terrain,
             &mut roads.road_manager,
             car_subsystem,
@@ -1880,7 +2212,7 @@ pub fn apply_preview_commands_world(
 }
 
 /// Single command application — world state only, no mesh rebuild.
-pub fn apply_command_world(
+pub fn apply_road_command(
     terrain: &mut Terrain,
     road_manager: &mut RoadManager,
     car_subsystem: &mut Cars,
@@ -1908,13 +2240,14 @@ pub fn apply_command_world(
             end,
             structure,
             chunk_id,
+            road_type_id,
         } => {
             if start.raw() as usize >= storage.node_count()
                 || end.raw() as usize >= storage.node_count()
             {
                 return CommandResult::InvalidReference;
             }
-            let id = storage.add_segment(*start, *end, structure.clone());
+            let id = storage.add_segment(*start, *end, structure.clone(), *road_type_id);
             CommandResult::SegmentCreated(*chunk_id, id)
         }
         RoadCommand::AddLane {
@@ -1971,6 +2304,14 @@ pub fn apply_command_world(
             );
             CommandResult::NodeLaneCreated(*chunk_id, id)
         }
+        RoadCommand::AddRaw {
+            nodes,
+            segments,
+            lanes,
+        } => {
+            storage.add_raw(nodes.clone(), segments.clone(), lanes.clone());
+            CommandResult::Ok
+        }
         RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
             let node = storage.node_mut(*node_id);
             node.node_lanes.clear();
@@ -1980,7 +2321,7 @@ pub fn apply_command_world(
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
             }
-            storage.disable_node(*node_id);
+            storage.disable_node(*node_id, road_types, gizmo);
             CommandResult::Ok
         }
         RoadCommand::EnableNode { node_id, chunk_id } => {
@@ -1997,7 +2338,7 @@ pub fn apply_command_world(
             if segment_id.raw() as usize >= storage.segment_count() {
                 return CommandResult::InvalidReference;
             }
-            storage.disable_segment(*segment_id);
+            storage.disable_segment(*segment_id, road_types, gizmo);
             CommandResult::Ok
         }
         RoadCommand::EnableSegment {
@@ -2014,7 +2355,7 @@ pub fn apply_command_world(
             if lane_id.raw() as usize >= storage.lane_count() {
                 return CommandResult::InvalidReference;
             }
-            storage.disable_lane(*lane_id);
+            storage.disable_lane(*lane_id, road_types, gizmo);
             CommandResult::Ok
         }
         RoadCommand::EnableLane { lane_id, chunk_id } => {
@@ -2067,7 +2408,7 @@ pub fn apply_command_world(
                 return CommandResult::InvalidReference;
             }
 
-            let arms = gather_arms(storage, road_types, *node_id, params, gizmo);
+            let arms = gather_arms(storage, road_types, *node_id, gizmo);
 
             storage.node_mut(*node_id).arms = arms;
 
@@ -2086,7 +2427,7 @@ pub fn apply_command_world(
             if old_segment.raw() as usize >= storage.segment_count() {
                 return CommandResult::InvalidReference;
             }
-            storage.disable_segment(*old_segment);
+            storage.disable_segment(*old_segment, road_types, gizmo);
             CommandResult::Ok
         }
         RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => CommandResult::Ok,
@@ -2133,17 +2474,11 @@ pub fn apply_command(
     match command {
         RoadEditorCommand::Road(road_command) => {
             // store the chunk ID here if an operation succeeds
-            let affected_chunk: Option<ChunkId>;
+            let mut affected_chunk: Option<ChunkId> = None;
             let result = match road_command {
                 RoadCommand::AddNode { world_pos } => {
                     let id = storage.add_node(world_pos);
-                    gather_arms(
-                        storage,
-                        road_types,
-                        id,
-                        &IntersectionBuildParams::from_style(road_style_params),
-                        gizmo,
-                    );
+                    gather_arms(storage, road_types, id, gizmo);
                     if !is_preview {
                         car_subsystem.add_spawning_node(id);
                     }
@@ -2156,13 +2491,14 @@ pub fn apply_command(
                     end,
                     structure,
                     chunk_id,
+                    road_type_id,
                 } => {
                     if start.raw() as usize >= storage.node_count()
                         || end.raw() as usize >= storage.node_count()
                     {
                         return CommandResult::InvalidReference;
                     }
-                    let id = storage.add_segment(start, end, structure);
+                    let id = storage.add_segment(start, end, structure, road_type_id);
                     affected_chunk = Some(chunk_id);
                     CommandResult::SegmentCreated(chunk_id, id)
                 }
@@ -2222,6 +2558,14 @@ pub fn apply_command(
                     affected_chunk = Some(chunk_id);
                     CommandResult::NodeLaneCreated(chunk_id, id)
                 }
+                RoadCommand::AddRaw {
+                    nodes,
+                    segments,
+                    lanes,
+                } => {
+                    storage.add_raw(nodes, segments, lanes);
+                    CommandResult::Ok
+                }
                 RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
                     let node = storage.node_mut(node_id);
                     node.node_lanes.clear();
@@ -2232,7 +2576,7 @@ pub fn apply_command(
                     if node_id.raw() as usize >= storage.node_count() {
                         return CommandResult::InvalidReference;
                     }
-                    storage.disable_node(node_id);
+                    storage.disable_node(node_id, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
@@ -2251,7 +2595,7 @@ pub fn apply_command(
                     if segment_id.raw() as usize >= storage.segment_count() {
                         return CommandResult::InvalidReference;
                     }
-                    storage.disable_segment(segment_id);
+                    storage.disable_segment(segment_id, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
@@ -2270,7 +2614,7 @@ pub fn apply_command(
                     if lane_id.raw() as usize >= storage.lane_count() {
                         return CommandResult::InvalidReference;
                     }
-                    storage.disable_lane(lane_id);
+                    storage.disable_lane(lane_id, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
@@ -2330,7 +2674,7 @@ pub fn apply_command(
                     let Some(road_type) = road_types.get_road_type(params.road_type_id) else {
                         return CommandResult::InvalidReference;
                     };
-                    let arms = gather_arms(storage, road_types, node_id, &params, gizmo);
+                    let arms = gather_arms(storage, road_types, node_id, gizmo);
 
                     storage.node_mut(node_id).arms = arms;
                     build_intersection_at_node(
@@ -2347,7 +2691,7 @@ pub fn apply_command(
                     if old_segment.raw() as usize >= storage.segment_count() {
                         return CommandResult::InvalidReference;
                     }
-                    storage.disable_segment(old_segment);
+                    storage.disable_segment(old_segment, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
@@ -2594,6 +2938,51 @@ fn generate_hover_preview(
 
     commands
 }
+
+fn generate_destruction_preview(
+    terrain_renderer: &Terrain,
+    roads: &Roads,
+    allocator: &mut PreviewIdAllocator,
+    road_destroy_type: &RoadDestroyType,
+) -> Vec<RoadCommand> {
+    let mut commands = Vec::new();
+
+    let impact = match road_destroy_type {
+        RoadDestroyType::Segment(id) => roads.road_manager.roads.impact_of_disabling_segment(*id),
+        RoadDestroyType::Node(id) => roads.road_manager.roads.impact_of_disabling_node(*id),
+    };
+
+    commands.push(RoadCommand::AddRaw {
+        nodes: impact
+            .nodes
+            .into_iter()
+            .map(|node_id| {
+                (
+                    node_id,
+                    roads
+                        .road_manager
+                        .roads
+                        .node(node_id)
+                        .unwrap_or(&Node::default())
+                        .clone(),
+                )
+            })
+            .collect(),
+        segments: impact
+            .segments
+            .into_iter()
+            .map(|id| (id, roads.road_manager.roads.segment(id).clone()))
+            .collect(),
+        lanes: impact
+            .lanes
+            .into_iter()
+            .map(|id| (id, roads.road_manager.roads.lane(&id).clone()))
+            .collect(),
+    });
+    println!("{:?}", commands);
+    commands
+}
+
 /// Generate preview for invalid segment - shows both endpoints with stubs
 fn generate_invalid_segment_preview(
     terrain_renderer: &Terrain,
@@ -2669,6 +3058,7 @@ fn generate_segment_preview(
         end: end_node_id,
         structure: road_type.structure(),
         chunk_id: 0,
+        road_type_id: road_style_params.road_type_id(),
     });
 
     // ========================================
@@ -2730,6 +3120,7 @@ fn generate_node_with_stub(
         end: main_node_id,
         structure: road_type.structure(),
         chunk_id: 0,
+        road_type_id: road_style_params.road_type_id(),
     });
 
     // Compute and add lanes
@@ -2976,4 +3367,13 @@ impl ExponentialMovingAverage {
     pub fn is_reliable(&self, min_samples: u32) -> bool {
         self.count >= min_samples
     }
+}
+
+/// What WOULD be affected by a disable operation!!
+#[derive(Debug, Default)]
+pub struct DisableImpact {
+    pub nodes: Vec<NodeId>,               // fully isolated, will be disabled
+    pub segments: Vec<SegmentId>,         // will be disabled
+    pub lanes: Vec<LaneId>,               // will be disabled
+    pub nodes_needing_regen: Vec<NodeId>, // still have connections, arms must be rebuilt
 }

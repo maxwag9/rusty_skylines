@@ -1,3 +1,4 @@
+use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -61,6 +62,10 @@ impl ChunkCoord {
     #[inline]
     pub fn as_slice(&self) -> [i32; 2] {
         [self.x, self.z]
+    }
+    #[inline]
+    pub fn chunk_id(&self) -> ChunkId {
+        chunk_coord_to_id(self.x, self.z)
     }
 }
 impl LocalPos {

@@ -12,6 +12,7 @@ use crate::world::roads::roads::{
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
+use std::mem::take;
 
 const NODE_SNAP_RADIUS: f64 = 8.0;
 const LANE_SNAP_RADIUS: f64 = 8.0;
@@ -22,6 +23,7 @@ const CROSSING_SNAP_TO_NODE_RADIUS: f64 = 20.0;
 pub struct RoadEditor {
     allocator: IdAllocator,
     pub style: RoadStyleParams,
+    pub pending_outside_commands: Vec<RoadEditorCommand>,
 }
 
 impl RoadEditor {
@@ -29,6 +31,7 @@ impl RoadEditor {
         Self {
             allocator: IdAllocator::new(),
             style: RoadStyleParams::default(),
+            pending_outside_commands: Vec::new(),
         }
     }
 
@@ -43,7 +46,7 @@ impl RoadEditor {
             CursorMode::Roads => &terrain.cursor.road_type,
             _ => &None,
         }) else {
-            return Vec::new();
+            return take(&mut self.pending_outside_commands);
         };
         let road_type_id = road_manager.road_types.add_road_type(&road_type);
         self.style.set_road_type_id(road_type_id);
@@ -120,6 +123,7 @@ impl RoadEditor {
             }
         }
 
+        output.append(&mut self.pending_outside_commands);
         output
     }
 
@@ -972,6 +976,7 @@ impl RoadEditor {
                 end: to.node_id,
                 structure: road_type.structure(),
                 chunk_id,
+                road_type_id: self.style.road_type_id(),
             });
 
             self.emit_lanes_from_centerline(
@@ -1404,6 +1409,7 @@ impl RoadEditor {
             end: new_node_id,
             structure: old_segment.structure(),
             chunk_id,
+            road_type_id: old_segment.road_type_id,
         });
 
         cmds.push(RoadCommand::AddSegment {
@@ -1411,6 +1417,7 @@ impl RoadEditor {
             end: b_id,
             structure: old_segment.structure(),
             chunk_id,
+            road_type_id: old_segment.road_type_id,
         });
 
         for old_lane_id in old_segment.lanes() {

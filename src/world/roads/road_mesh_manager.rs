@@ -18,6 +18,7 @@ use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, TAU};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use wgpu::{VertexAttribute, VertexFormat};
 
 pub type ChunkId = u64;
@@ -174,7 +175,7 @@ impl Default for MeshConfig {
 // ============================================================================
 
 /// Mesh a segment, clipping endpoints against intersection polygons
-fn mesh_segment_with_boundaries(
+fn mesh_segment(
     terrain_renderer: &Terrain,
     gizmo: &mut Gizmo,
     _seg_id: SegmentId,
@@ -1127,7 +1128,7 @@ impl RoadMeshManager {
             // if let Some(end_boundary) = end_boundary {
             //     gizmo.polyline(&end_boundary.polygon.ring, [0.0, 0.0, 0.2], 2.0, 50.0);
             // }
-            let road_edges = mesh_segment_with_boundaries(
+            let road_edges = mesh_segment(
                 terrain,
                 gizmo,
                 seg_id,
@@ -1247,38 +1248,45 @@ fn compute_cap_direction(
         None
     }
 }
-// ============================================================================
-// Topo Version Hashing
-// ============================================================================
-
-const FNV_OFFSET_BASIS: u64 = 14695981039346656037;
-const FNV_PRIME: u64 = 1099511628211;
 
 pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
-    let mut hash = FNV_OFFSET_BASIS;
+    let mut hasher = DefaultHasher::new();
+
     let mut segs = storage.segment_ids_touching_chunk(chunk_id_to_coord(chunk_id));
     segs.sort_unstable();
+
     for seg_id in segs {
-        hash ^= seg_id.0 as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
+        seg_id.hash(&mut hasher);
+
         let seg = storage.segment(seg_id);
-        if seg.enabled {
-            hash ^= 1;
-        } else {
-            hash ^= 0;
-        }
-        hash = hash.wrapping_mul(FNV_PRIME);
+
+        seg.enabled.hash(&mut hasher);
+
         let (l, r) = storage.lane_counts_for_segment(seg);
-        hash ^= l as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-        hash ^= r as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
+
+        l.hash(&mut hasher);
+        r.hash(&mut hasher);
     }
+
     let mut nodes = storage.nodes_in_chunk(chunk_id);
     nodes.sort_unstable();
+
     for node_id in nodes {
-        hash ^= node_id.0 as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
+        node_id.hash(&mut hasher);
+
+        if let Some(node) = storage.node(node_id) {
+            let mut outgoing: Vec<_> = node.outgoing_lanes().iter().copied().collect();
+            let mut incoming: Vec<_> = node.incoming_lanes().iter().copied().collect();
+            let mut node_lanes: Vec<_> = node.node_lanes().iter().collect();
+
+            outgoing.sort_unstable();
+            incoming.sort_unstable();
+
+            outgoing.hash(&mut hasher);
+            incoming.hash(&mut hasher);
+            node_lanes.hash(&mut hasher);
+        }
     }
-    hash
+
+    hasher.finish()
 }

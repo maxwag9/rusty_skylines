@@ -12,7 +12,8 @@ use crate::world::buildings::buildings::{
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::ChunkDistance;
 use crate::world::roads::road_mesh_manager::{
-    ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, world_pos_chunk_to_id,
+    ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
+    world_pos_chunk_to_id,
 };
 use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
@@ -141,10 +142,13 @@ impl District {
                 lot.building_id = Some(building_id);
             }
         }
+        let average_land_value = zoning.average_land_value(district_id);
         let Some(district) = zoning.zoning_storage.get_mut_district(district_id) else {
             return None;
         };
-        district.zoning_demand.update_demands(time);
+        district
+            .zoning_demand
+            .update_demands(time, average_land_value);
 
         if !matches!(district.district_type, DistrictType::PlayerMade) && district.should_split() {
             let split_result =
@@ -700,19 +704,19 @@ impl PlacePos {
         }
     }
 }
-enum LotPointType {
+pub enum LotPointType {
     Sidewalk,
     Lane(LaneId),
 }
-struct LotPoint {
-    pos: WorldPos,
-    tangent: Vec3,
-    lateral: Vec3,
-    left_point: Option<(WorldPos, Vec3, Vec3, f64)>,
-    right_point: Option<(WorldPos, Vec3, Vec3, f64)>,
-    dist: f64,
-    segment_id: SegmentId,
-    point_type: LotPointType,
+pub struct LotPoint {
+    pub pos: WorldPos,
+    pub tangent: Vec3,
+    pub lateral: Vec3,
+    pub left_point: Option<(WorldPos, Vec3, Vec3, f64)>,
+    pub right_point: Option<(WorldPos, Vec3, Vec3, f64)>,
+    pub dist: f64,
+    pub segment_id: SegmentId,
+    pub point_type: LotPointType,
 }
 #[derive(Clone, Default)]
 pub struct Zoning {
@@ -908,6 +912,18 @@ impl Zoning {
                 );
             }
             _ => {}
+        }
+    }
+    pub fn average_land_value(&self, district_id: DistrictId) -> f32 {
+        if let Some(district) = self.zoning_storage.get_district(district_id) {
+            district
+                .lot_ids
+                .iter()
+                .flat_map(|lot_id| self.zoning_storage.get_lot(*lot_id))
+                .map(|lot| lot.land_value)
+                .sum()
+        } else {
+            0.0
         }
     }
     pub fn update_districts(
@@ -1197,6 +1213,7 @@ impl Zoning {
                     // Preview draw
                     gizmo.polyline(preview.as_slice(), [0.1, 0.8, 0.1, 1.0], 8.0, 0.2, 0.0);
                     if input.action_repeat("Place Zoning Point") {
+                        let lot_center = WorldPos::centroid(&preview);
                         let lot = Lot {
                             id: 6945220,
                             bounds: preview,
@@ -1206,6 +1223,7 @@ impl Zoning {
                             segment_id: snap_point.segment_id,
                             district_id: 6378186,
                             building_id: None,
+                            land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
                         };
 
                         self.zoning_storage.spawn_lot(lot);
@@ -1532,7 +1550,7 @@ impl Zoning {
     }
 }
 
-fn collect_road_points(edges: &RoadEdges) -> Vec<&WorldPos> {
+pub fn collect_road_points(edges: &RoadEdges) -> Vec<&WorldPos> {
     let points: Vec<&WorldPos> = match (
         edges.left_sidewalk_edge.is_empty(),
         edges.right_sidewalk_edge.is_empty(),
@@ -1571,7 +1589,7 @@ fn collect_road_points(edges: &RoadEdges) -> Vec<&WorldPos> {
     points
 }
 
-fn collect_lot_point(
+pub fn collect_lot_point(
     edges: &Edges,
     picked: &PickedPoint,
     closest_distance: &mut f64,
@@ -1655,6 +1673,8 @@ pub struct Lot {
 
     pub district_id: DistrictId,
     pub building_id: Option<BuildingId>,
+
+    pub land_value: f32, // Money €
 }
 impl Lot {
     #[inline]
@@ -1801,10 +1821,26 @@ pub struct ZoningStorage {
     lots: Vec<Option<Lot>>,
     district_free_list: Vec<DistrictId>,
     lot_free_list: Vec<LotId>,
+    lot_chunk_storage: HashMap<ChunkId, Vec<LotId>>,
     center_chunk: ChunkCoord,
 }
 
 impl ZoningStorage {
+    pub fn sample_land_value(&self, center: ChunkCoord) -> f32 {
+        let lot_ids = self.lots_in_chunk_plus(center.chunk_id());
+        if lot_ids.is_empty() {
+            return 0.0;
+        }
+
+        let sum: f32 = lot_ids
+            .iter()
+            .flat_map(|lot_id| self.get_lot(*lot_id))
+            .map(|lot| lot.land_value)
+            .sum();
+        let average = sum / lot_ids.len() as f32;
+
+        average
+    }
     pub fn update_target(&mut self, target_chunk: ChunkCoord) {
         self.center_chunk = target_chunk;
     }
@@ -1816,12 +1852,32 @@ impl ZoningStorage {
             .collect::<Vec<DistrictId>>()
     }
     pub fn lots_in_chunk(&self, chunk_id: ChunkId) -> Vec<LotId> {
-        self.iter_lots()
-            .filter(|l| l.chunk_id() == chunk_id)
-            .map(|lot| lot.id)
+        self.lot_chunk_storage
+            .get(&chunk_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+    pub fn lots_in_chunk_plus(&self, chunk_id: ChunkId) -> Vec<LotId> {
+        let c = chunk_id_to_coord(chunk_id);
+        let chunk_ids = [
+            c.chunk_id(),
+            c.offset(-1, 0).chunk_id(),
+            c.offset(1, 0).chunk_id(),
+            c.offset(0, 1).chunk_id(),
+            c.offset(0, -1).chunk_id(),
+        ];
+
+        chunk_ids
+            .iter()
+            .flat_map(|c_id| {
+                self.lot_chunk_storage
+                    .get(c_id)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+            })
             .collect()
     }
-
     pub fn get_closest_district(&self, position: WorldPos) -> Option<&District> {
         self.iter_districts().min_by(|a, b| {
             let da = a.center.distance_squared(position);
@@ -1830,6 +1886,14 @@ impl ZoningStorage {
             da.partial_cmp(&db).unwrap()
         })
     }
+    // pub fn get_closest_lots(&self, position: WorldPos) -> Option<&Lot> {
+    //     self.iter_lots().min_by(|a, b| {
+    //         let da = a.center.distance_squared(position);
+    //         let db = b.center.distance_squared(position);
+    //
+    //         da.partial_cmp(&db).unwrap()
+    //     })
+    // }
     pub fn iter_districts(&self) -> impl Iterator<Item = &District> {
         self.districts.iter().filter_map(|z| z.as_ref())
     }
@@ -1857,6 +1921,7 @@ impl ZoningStorage {
             lots,
             district_free_list: Vec::new(),
             lot_free_list: Vec::new(),
+            lot_chunk_storage: Default::default(),
             center_chunk: ChunkCoord::zero(),
         }
     }
@@ -1921,11 +1986,19 @@ impl ZoningStorage {
         lot.center = WorldPos::centroid(&lot.bounds);
         let lot_id = if let Some(reused_id) = self.lot_free_list.pop() {
             lot.id = reused_id;
+            self.lot_chunk_storage
+                .entry(lot.chunk_id())
+                .or_default()
+                .push(lot.id);
             self.lots[reused_id as usize] = Some(lot);
             reused_id
         } else {
             let new_id = self.lots.len() as u32;
             lot.id = new_id;
+            self.lot_chunk_storage
+                .entry(lot.chunk_id())
+                .or_default()
+                .push(lot.id);
             self.lots.push(Some(lot));
             new_id
         };
@@ -1999,23 +2072,26 @@ impl ZoningStorage {
             // index 0 is reserved, ignore attempts to despawn it
             return;
         }
-        if self
-            .lots
-            .get(id as usize)
-            .and_then(|opt| opt.as_ref())
-            .is_some()
-        {
-            if let Some(lot) = self.lots.get(id as usize) {
-                if let Some(lot) = lot {
-                    if let Some(district) = self.districts.get_mut(lot.district_id as usize) {
-                        if let Some(district) = district {
-                            district.lot_ids.retain(|id| id != &lot.id);
-                            district.remove_points(&lot.bounds);
-                        }
-                    }
+
+        if let Some(Some(lot)) = self.lots.get(id as usize) {
+            // Remove from district
+            if let Some(Some(district)) = self.districts.get_mut(lot.district_id as usize) {
+                district
+                    .lot_ids
+                    .retain(|district_lot_id| district_lot_id != &lot.id);
+                district.remove_points(&lot.bounds);
+            }
+
+            // Remove from chunk storage
+            if let Some(chunk_lots) = self.lot_chunk_storage.get_mut(&lot.chunk_id()) {
+                chunk_lots.retain(|lot_id| lot_id != &id);
+
+                if chunk_lots.is_empty() {
+                    self.lot_chunk_storage.remove(&lot.chunk_id());
                 }
             }
-            // Actually free the slot
+
+            // Free slot
             self.lots[id as usize] = None;
             self.lot_free_list.push(id);
         }
@@ -2084,7 +2160,7 @@ pub fn point_to_segment_distance(p: WorldPos, a: WorldPos, b: WorldPos) -> f32 {
     point_to_segment_distance_sq(p, a, b).sqrt()
 }
 
-fn draw_area(
+pub fn draw_area(
     points: &[WorldPos],
     district_type: &ZoningType,
     variables: &Variables,

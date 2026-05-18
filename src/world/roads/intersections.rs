@@ -1622,7 +1622,6 @@ pub fn gather_arms(
     storage: &RoadStorage,
     road_types: &RoadTypes,
     node_id: NodeId,
-    intersection_build_params: &IntersectionBuildParams,
     gizmo: &mut Gizmo,
 ) -> Vec<Arm> {
     let segment_ids = storage.enabled_segments_connected_to_node(node_id);
@@ -1630,7 +1629,11 @@ pub fn gather_arms(
     //     Some(n) => n,
     //     None => return Vec::new(),
     // };
-    let Some(road_type) = road_types.get_road_type(intersection_build_params.road_type_id) else {
+    let Some(id_seg) = segment_ids.get(0) else {
+        return Vec::new();
+    };
+    let Some(road_type) = road_types.get_road_type(storage.segment(*id_seg).road_type_id) else {
+        // TODO: Make intersections use all road types from all segments connected to it!
         return Vec::new();
     };
     let lane_width = road_type.lane_width;

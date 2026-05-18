@@ -47,4 +47,5 @@ elements:
       - 1.0
       - 1.0
       - 0.9
-    text: '{{ap}}'
+    text: '{{ap}:.1}'
+    anchor: Center

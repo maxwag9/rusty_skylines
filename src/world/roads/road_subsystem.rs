@@ -2,7 +2,7 @@
 use crate::world::roads::road_editor::RoadEditor;
 use crate::world::roads::road_mesh_manager::{ChunkId, MeshConfig, RoadMeshManager};
 use crate::world::roads::roads::{
-    RoadManager, apply_commands_world, apply_preview_commands_world, collect_affected_chunks,
+    RoadManager, apply_road_commands_preview, apply_road_commands_real, collect_affected_chunks,
 };
 use crate::world::terrain::terrain_subsystem::Terrain;
 
@@ -184,11 +184,11 @@ impl Roads {
             .update(&mut self.road_manager, terrain, input, gizmo);
 
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
-        apply_preview_commands_world(terrain, self, car_subsystem, gizmo);
+        apply_road_commands_preview(terrain, self, car_subsystem, gizmo);
 
         // Apply real commands to roads storage
         if !self.road_commands.is_empty() {
-            apply_commands_world(
+            apply_road_commands_real(
                 terrain,
                 &mut self.road_manager,
                 car_subsystem,

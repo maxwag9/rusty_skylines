@@ -370,11 +370,17 @@ impl BuildingStorage {
         );
         storage.building_locations.insert(building_id, chunk_coord);
         ZoningDemand::spawn_building(buildings, zoning, building_id);
-        println!("Created building: {}", building_id);
+        //println!("Created building: {}", building_id);
         building_id
     }
 
-    pub fn despawn(buildings: &mut Buildings, zoning: &mut Zoning, id: BuildingId) {
+    pub fn despawn<I>(buildings: &mut Buildings, zoning: &mut Zoning, id: I)
+    where
+        I: Into<Option<BuildingId>>,
+    {
+        let Some(id) = id.into() else {
+            return;
+        };
         if id == 0 {
             // index 0 is reserved, ignore attempts to despawn it
             return;

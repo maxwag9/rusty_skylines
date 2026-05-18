@@ -627,6 +627,10 @@ fn update_time(resources: &mut Resources) {
             .zoning_storage
             .get_closest_district(world_state.camera.target)
         {
+            //println!("{}", format!("RESIDENTIAL: {}", district.zoning_demand.residential:.1));
+            ui.variables
+                .set_f64("prestige", district.zoning_demand.prestige);
+
             ui.variables
                 .set_f64("residential_demand", district.zoning_demand.residential);
             ui.variables
@@ -635,6 +639,69 @@ fn update_time(resources: &mut Resources) {
                 .set_f64("industrial_demand", district.zoning_demand.industrial);
             ui.variables
                 .set_f64("office_demand", district.zoning_demand.office);
+
+            ui.variables
+                .set_f64("housing_capacity", district.zoning_demand.housing_capacity);
+            ui.variables.set_f64(
+                "commercial_capacity",
+                district.zoning_demand.commercial_capacity,
+            );
+            ui.variables.set_f64(
+                "industrial_capacity",
+                district.zoning_demand.industrial_capacity,
+            );
+            ui.variables
+                .set_f64("office_capacity", district.zoning_demand.office_capacity);
+
+            ui.variables.set_f64(
+                "residential_attractiveness",
+                district.zoning_demand.residential_attractiveness,
+            );
+            ui.variables.set_f64(
+                "commercial_attractiveness",
+                district.zoning_demand.commercial_attractiveness,
+            );
+            ui.variables.set_f64(
+                "industrial_attractiveness",
+                district.zoning_demand.industrial_attractiveness,
+            );
+            ui.variables.set_f64(
+                "office_attractiveness",
+                district.zoning_demand.office_attractiveness,
+            );
+
+            ui.variables.set_i64(
+                "non_educated_population",
+                district
+                    .zoning_demand
+                    .demography
+                    .education
+                    .non_educated_population(district.zoning_demand.demography.population),
+            );
+            ui.variables.set_i64(
+                "low_educated_population",
+                district
+                    .zoning_demand
+                    .demography
+                    .education
+                    .low_educated_population(district.zoning_demand.demography.population),
+            );
+            ui.variables.set_i64(
+                "medium_educated_population",
+                district
+                    .zoning_demand
+                    .demography
+                    .education
+                    .medium_educated_population(district.zoning_demand.demography.population),
+            );
+            ui.variables.set_i64(
+                "highly_educated_population",
+                district
+                    .zoning_demand
+                    .demography
+                    .education
+                    .highly_educated_population(district.zoning_demand.demography.population),
+            );
         }
     }
 }
