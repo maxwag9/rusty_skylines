@@ -661,6 +661,7 @@ define_settings! {
     GtaoEnabled => gtao_enabled: bool = true; Bool,
     ZoomSpeed => zoom_speed: f32 = 10.0; Val,
     RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
+    RenderIntersectionGizmo => render_intersection_gizmo: bool = false; Bool,
     RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
     TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Cycle,

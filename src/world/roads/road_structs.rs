@@ -5,6 +5,7 @@ use crate::systems::systems::RoadDestroyType;
 use crate::world::roads::roads::{RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 
 pub type RoadTypeId = u32;
 #[derive(Clone, Debug)]
@@ -369,9 +370,14 @@ impl RoadType {
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
+
+    #[inline]
+    pub fn half_width(&self) -> f32 {
+        self.sidewalk_width * 2.0 + self.lane_width * self.total_lanes() as f32
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuildMode {
     Straight,
     Curved,
@@ -383,7 +389,24 @@ pub enum SnapKind {
     Node { id: NodeId },
     Lane { lane_id: LaneId, t: f64 },
 }
-
+impl Hash for SnapKind {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            SnapKind::Free => {
+                0u8.hash(state);
+            }
+            SnapKind::Node { id } => {
+                1u8.hash(state);
+                id.hash(state);
+            }
+            SnapKind::Lane { lane_id, t } => {
+                2u8.hash(state);
+                lane_id.hash(state);
+                t.hash_bits(state);
+            }
+        }
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub struct SnapResult {
     pub world_pos: WorldPos,
@@ -391,7 +414,7 @@ pub struct SnapResult {
     pub distance: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum NodePreviewResult {
     NewNode,
     MergedIntoExisting(NodeId),
@@ -404,7 +427,13 @@ pub struct SnapPreview {
     pub kind: SnapKind,
     pub distance: f64,
 }
-
+impl Hash for SnapPreview {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.world_pos.hash(state);
+        self.kind.hash(state);
+        self.distance.to_bits().hash(state);
+    }
+}
 #[derive(Debug, Clone)]
 pub struct NodePreview {
     pub world_pos: WorldPos,
@@ -413,7 +442,21 @@ pub struct NodePreview {
     pub incoming_lanes: Vec<(LaneId, Vec3)>,
     pub outgoing_lanes: Vec<(LaneId, Vec3)>,
 }
-
+impl Hash for NodePreview {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.world_pos.hash(state);
+        self.result.hash(state);
+        self.is_valid.hash(state);
+        for (id, v) in &self.incoming_lanes {
+            id.hash(state);
+            hash_vec3(*v, state);
+        }
+        for (id, v) in &self.outgoing_lanes {
+            id.hash(state);
+            hash_vec3(*v, state);
+        }
+    }
+}
 impl NodePreview {
     pub(crate) fn lane_counts(&self) -> (usize, usize) {
         (self.incoming_lanes.len(), self.outgoing_lanes.len())
@@ -430,14 +473,27 @@ pub struct LanePreview {
     pub projected_point: WorldPos,
     pub sample_points: Vec<WorldPos>,
 }
-
+impl Hash for LanePreview {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.lane_id.hash(state);
+        self.projected_t.hash_bits(state);
+        self.projected_point.hash(state);
+        self.sample_points.hash(state);
+    }
+}
 #[derive(Debug, Clone)]
 pub struct SplitInfo {
     pub lane_id: LaneId,
     pub t: f64,
     pub split_pos: WorldPos,
 }
-
+impl Hash for SplitInfo {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.lane_id.hash(state);
+        self.t.hash_bits(state);
+        self.split_pos.hash(state);
+    }
+}
 #[derive(Debug, Clone)]
 pub struct SegmentPreview {
     pub road_type_id: RoadTypeId,
@@ -455,8 +511,25 @@ pub struct SegmentPreview {
     pub estimated_length: f64,
     pub crossing_count: usize,
 }
-
-#[derive(Debug, Clone, PartialEq)]
+impl Hash for SegmentPreview {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.road_type_id.hash(state);
+        self.mode.hash(state);
+        self.is_valid.hash(state);
+        self.reason_invalid.hash(state);
+        self.start.hash(state);
+        self.end.hash(state);
+        self.control.hash(state);
+        self.polyline.hash(state);
+        self.would_split_start.hash(state);
+        self.would_split_end.hash(state);
+        self.would_merge_start.hash(state);
+        self.would_merge_end.hash(state);
+        self.estimated_length.hash_bits(state);
+        self.crossing_count.hash(state);
+    }
+}
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum PreviewError {
     NoPickedPoint,
     TooShort,
@@ -578,13 +651,19 @@ impl IdAllocator {
 #[derive(Debug, Clone)]
 pub struct CrossingPoint {
     /// Position along the new road from 0.0 (start) to 1.0 (end)
-    pub(crate) t: f64,
+    pub t: f64,
     /// World position of the crossing
-    pub(crate) world_pos: WorldPos,
+    pub world_pos: WorldPos,
     /// What we're crossing
-    pub(crate) kind: CrossingKind,
+    pub kind: CrossingKind,
 }
-
+impl Hash for CrossingPoint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.t.hash_bits(state);
+        self.world_pos.hash(state);
+        self.kind.hash(state);
+    }
+}
 #[derive(Debug, Clone)]
 pub enum CrossingKind {
     /// Crossing through an existing node
@@ -592,7 +671,21 @@ pub enum CrossingKind {
     /// Crossing through an existing lane segment
     LaneCrossing { lane_id: LaneId, lane_t: f64 },
 }
-
+impl Hash for CrossingKind {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            CrossingKind::ExistingNode(id) => {
+                0u8.hash(state);
+                id.hash(state);
+            }
+            CrossingKind::LaneCrossing { lane_id, lane_t } => {
+                1u8.hash(state);
+                lane_id.hash(state);
+                lane_t.hash_bits(state);
+            }
+        }
+    }
+}
 #[derive(Clone)]
 pub struct ResolvedWaypoint {
     pub(crate) node_id: NodeId,
@@ -607,4 +700,26 @@ pub struct IntersectionArm {
     pub(crate) direction: Vec3,
     pub(crate) half_width: f32,
     pub(crate) lane_ids: Vec<LaneId>,
+}
+
+pub trait HashBits {
+    fn hash_bits<H: Hasher>(&self, state: &mut H);
+}
+
+impl HashBits for f64 {
+    fn hash_bits<H: Hasher>(&self, state: &mut H) {
+        self.to_bits().hash(state);
+    }
+}
+
+impl HashBits for f32 {
+    fn hash_bits<H: Hasher>(&self, state: &mut H) {
+        self.to_bits().hash(state);
+    }
+}
+
+pub fn hash_vec3<H: Hasher>(v: Vec3, state: &mut H) {
+    v.x.hash_bits(state);
+    v.y.hash_bits(state);
+    v.z.hash_bits(state);
 }

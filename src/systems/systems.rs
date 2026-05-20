@@ -43,7 +43,9 @@ pub fn run_ticked(resources: &mut Resources) {
     //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
     // }
     if resources.simulation.running {
-        terrain.update(gizmo, device, queue, camera, aspect, settings, input, time);
+        terrain.update(
+            gizmo, device, queue, camera, aspect, settings, input, time, roads,
+        );
     }
     handle_destruction(
         gizmo,
@@ -55,7 +57,7 @@ pub fn run_ticked(resources: &mut Resources) {
         roads,
         road_mesh_manager,
     );
-    roads.update(terrain, cars, input, time, gizmo);
+    roads.update(terrain, cars, input, time, settings, gizmo);
 }
 
 fn handle_destruction(
@@ -202,7 +204,7 @@ fn handle_destruction(
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub enum RoadDestroyType {
     Segment(SegmentId),
     Node(NodeId),

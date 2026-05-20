@@ -14,6 +14,7 @@ use crate::world::camera::Camera;
 use crate::world::game_state::SaveState;
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use crate::world::roads::road_structs::RoadType;
+use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::chunk_builder::*;
 use crate::world::terrain::terrain_editing::*;
 use crate::world::terrain::terrain_gen::{TerrainGenerator, TerrainParams};
@@ -457,7 +458,8 @@ impl Terrain {
         aspect: f32,
         settings: &Settings,
         input_state: &mut Input,
-        _time_system: &Time,
+        _time: &Time,
+        roads: &mut Roads,
     ) {
         let t_frame = Instant::now();
 
@@ -515,7 +517,7 @@ impl Terrain {
 
         let t0 = Instant::now();
         if settings.show_world {
-            self.handle_terrain_editing(device, queue, input_state);
+            self.handle_terrain_editing(device, queue, input_state, roads);
         }
 
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -529,13 +531,20 @@ impl Terrain {
         // );
     }
 
-    fn handle_terrain_editing(&mut self, device: &Device, queue: &Queue, input_state: &mut Input) {
+    fn handle_terrain_editing(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        input_state: &mut Input,
+        roads: &mut Roads,
+    ) {
         let freed = self.terrain_editor.flush_dirty_chunks(
             device,
             queue,
             &mut self.arena,
             &mut self.chunks,
             &self.terrain_gen,
+            roads,
         );
         for h in freed {
             self.arena.free::<Vertex>(h);
@@ -949,9 +958,23 @@ impl Terrain {
         if high_res && chunk.state.step != 1 {
             return self.terrain_gen.height(&pos);
         }
-        height_bilinear_world(&chunk.height_grid, pos)
+        height_bilinear_world(&chunk.height_grid, &pos)
     }
-
+    pub fn get_height_at_explicit(
+        chunks: &HashMap<ChunkCoord, ChunkMeshLod>,
+        terrain_gen: &TerrainGenerator,
+        pos: WorldPos,
+        high_res: bool,
+    ) -> f32 {
+        let chunk = match chunks.get(&pos.chunk) {
+            Some(c) => c,
+            None => return terrain_gen.height(&pos),
+        };
+        if high_res && chunk.state.step != 1 {
+            return terrain_gen.height(&pos);
+        }
+        height_bilinear_world(&chunk.height_grid, &pos)
+    }
     fn rebuild_colors(&self, grid: &ChunkHeightGrid) -> Vec<[f32; 3]> {
         let mut colors = Vec::with_capacity(grid.nx * grid.nz);
         let cell = grid.step_f32();

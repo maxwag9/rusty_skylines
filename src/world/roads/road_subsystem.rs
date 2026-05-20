@@ -6,6 +6,7 @@ use crate::world::roads::roads::{
 };
 use crate::world::terrain::terrain_subsystem::Terrain;
 
+use crate::data::Settings;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
 use crate::simulation::Ticker;
@@ -31,7 +32,6 @@ pub struct RoadRenderSubsystem {
     pub chunk_gpu: HashMap<ChunkId, ChunkGpuMesh>,
     pub visible_draw_list: Vec<ChunkId>,
 
-    pub preview_state: RoadPreviewState,
     pub preview_gpu: PreviewGpuMesh,
     pub road_appearance: RoadAppearanceGpu,
 }
@@ -41,7 +41,6 @@ impl RoadRenderSubsystem {
             mesh_manager: RoadMeshManager::new(MeshConfig::default()),
             chunk_gpu: Default::default(),
             visible_draw_list: vec![],
-            preview_state: RoadPreviewState::new(),
             preview_gpu: PreviewGpuMesh::new(),
             road_appearance: RoadAppearanceGpu::new(device),
         }
@@ -51,7 +50,7 @@ impl RoadRenderSubsystem {
     pub fn update(
         &mut self,
         terrain: &mut Terrain,
-        road_subsystem: &Roads,
+        roads: &mut Roads,
         device: &Device,
         queue: &Queue,
         camera: &Camera,
@@ -59,57 +58,102 @@ impl RoadRenderSubsystem {
     ) {
         // --- Preview mesh ---
         // Rebuild preview mesh from the (already-mutated) preview_roads
-        let preview_mesh = self.mesh_manager.build_preview_mesh(
-            terrain,
-            &road_subsystem.road_manager,
-            &road_subsystem.road_editor.style,
-            gizmo,
-        );
-        self.preview_gpu.upload(device, &preview_mesh);
+        if roads.preview_state.has_changed {
+            let preview_mesh = self.mesh_manager.build_preview_mesh(
+                terrain,
+                &roads.road_manager,
+                &roads.road_editor.style,
+                gizmo,
+            );
+            self.preview_gpu.upload(device, &preview_mesh);
+        }
 
         // Preview appearance state
-        self.preview_state
-            .ingest(road_subsystem.road_commands.as_slice());
-        self.road_appearance
-            .update_preview_buffer(queue, &self.preview_state, camera.orbit_radius);
+        self.road_appearance.update_preview_buffer(
+            queue,
+            &roads.preview_state,
+            camera.orbit_radius,
+        );
 
         // --- Chunk meshes for committed roads ---
         // Rebuild any dirty chunk meshes from commands
-        let affected_chunks = collect_affected_chunks(road_subsystem.road_commands.as_slice());
+        let affected_chunks = collect_affected_chunks(roads.road_commands.as_slice());
         for chunk_id in &affected_chunks {
             self.mesh_manager.update_chunk_mesh(
                 terrain,
                 *chunk_id,
-                &road_subsystem.road_manager,
-                &road_subsystem.road_editor.style,
+                &roads.road_manager,
+                &roads.road_editor.style,
                 gizmo,
             );
         }
 
         // --- Visible draw list ---
         self.visible_draw_list.clear();
+        let mut chunk_rebuild_ids = std::mem::take(&mut roads.road_editor.pending_chunk_rebuilds);
 
         for v in &terrain.visible {
             let chunk_id = v.id;
 
             let needs_rebuild = self
                 .mesh_manager
-                .chunk_needs_update(chunk_id, &road_subsystem.road_manager.roads);
-
-            let mesh = if needs_rebuild {
-                self.mesh_manager.update_chunk_mesh(
-                    terrain,
-                    chunk_id,
-                    &road_subsystem.road_manager,
-                    &road_subsystem.road_editor.style,
-                    gizmo,
-                )
+                .chunk_needs_update(chunk_id, &roads.road_manager.roads);
+            if needs_rebuild {
+                chunk_rebuild_ids.push(chunk_id)
             } else {
-                match self.mesh_manager.get_chunk_mesh(chunk_id) {
+                let mesh = match self.mesh_manager.get_chunk_mesh(chunk_id) {
                     Some(m) => m,
                     None => continue,
+                };
+
+                if mesh.indices.is_empty() || mesh.vertices.is_empty() {
+                    self.chunk_gpu.remove(&chunk_id);
+                    continue;
+                }
+
+                let needs_gpu_upload = match self.chunk_gpu.get(&chunk_id) {
+                    Some(gpu) => gpu.topo_version != mesh.topo_version,
+                    None => true,
+                };
+
+                if needs_gpu_upload {
+                    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Road Chunk VB"),
+                        contents: bytemuck::cast_slice(&mesh.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+
+                    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Road Chunk IB"),
+                        contents: bytemuck::cast_slice(&mesh.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    });
+
+                    self.chunk_gpu.insert(
+                        chunk_id,
+                        ChunkGpuMesh {
+                            vertex: vb,
+                            index: ib,
+                            index_count: mesh.indices.len() as u32,
+                            topo_version: mesh.topo_version,
+                        },
+                    );
+                }
+
+                if self.chunk_gpu.contains_key(&chunk_id) {
+                    self.visible_draw_list.push(chunk_id);
                 }
             };
+        }
+
+        for chunk_id in chunk_rebuild_ids {
+            let mesh = self.mesh_manager.update_chunk_mesh(
+                terrain,
+                chunk_id,
+                &roads.road_manager,
+                &roads.road_editor.style,
+                gizmo,
+            );
 
             if mesh.indices.is_empty() || mesh.vertices.is_empty() {
                 self.chunk_gpu.remove(&chunk_id);
@@ -158,6 +202,7 @@ pub struct Roads {
     pub partition_manager: PartitionManager,
     pub road_commands: Vec<RoadEditorCommand>,
     pub tick_20hz: Ticker,
+    pub preview_state: RoadPreviewState,
 }
 impl Roads {
     pub fn new() -> Self {
@@ -167,6 +212,7 @@ impl Roads {
             road_editor: RoadEditor::new(),
             partition_manager: PartitionManager::new(),
             road_commands: vec![],
+            preview_state: RoadPreviewState::new(),
         }
     }
     /// World-only update: runs the editor, applies commands to road storage and car subsystem.
@@ -174,24 +220,28 @@ impl Roads {
     pub fn update(
         &mut self,
         terrain: &mut Terrain,
-        car_subsystem: &mut Cars,
+        cars: &mut Cars,
         input: &mut Input,
         _time: &Time,
+        settings: &Settings,
         gizmo: &mut Gizmo,
     ) {
         self.road_commands = self
             .road_editor
             .update(&mut self.road_manager, terrain, input, gizmo);
-
+        self.preview_state.ingest(self.road_commands.as_slice());
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
-        apply_road_commands_preview(terrain, self, car_subsystem, gizmo);
+        if self.preview_state.has_changed {
+            apply_road_commands_preview(terrain, self, cars, settings, gizmo);
+        }
 
         // Apply real commands to roads storage
         if !self.road_commands.is_empty() {
             apply_road_commands_real(
                 terrain,
                 &mut self.road_manager,
-                car_subsystem,
+                cars,
+                settings,
                 gizmo,
                 &self.road_commands,
             );
@@ -199,33 +249,3 @@ impl Roads {
         self.partition_manager.rebuild_all(&self.road_manager.roads);
     }
 }
-pub const _WGSL_SDF_TEXT_OVERLAY: &str = r#"
-@group(1) @binding(0) var glyph_atlas: texture_2d_array<f32>;
-@group(1) @binding(1) var glyph_sampler: sampler;
-
-const SDF_EDGE_VALUE: f32 = 0.5;
-const SDF_SMOOTHING: f32 = 0.1;
-const TEXT_BLEND_FACTOR: f32 = 1.0;
-const TEXT_COLOR: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-
-fn sample_sdf_glyph(text_uv: vec2<f32>, glyph_layer: u32) -> f32 {
-    let distance = textureSample(glyph_atlas, glyph_sampler, text_uv, i32(glyph_layer)).r;
-    let alpha = smoothstep(SDF_EDGE_VALUE - SDF_SMOOTHING, SDF_EDGE_VALUE + SDF_SMOOTHING, distance);
-    return alpha;
-}
-
-fn blend_sdf_text_additive(
-    base_color: vec4<f32>,
-    text_uv: vec2<f32>,
-    glyph_layer: u32,
-    text_color: vec3<f32>
-) -> vec4<f32> {
-    let text_alpha = sample_sdf_glyph(text_uv, glyph_layer);
-    let text_contribution = text_color * text_alpha * TEXT_BLEND_FACTOR;
-    return vec4<f32>(base_color.rgb + text_contribution, base_color.a);
-}
-
-fn apply_text_overlay(base_color: vec4<f32>, text_uv: vec2<f32>, glyph_layer: u32) -> vec4<f32> {
-    return blend_sdf_text_additive(base_color, text_uv, glyph_layer, TEXT_COLOR);
-}
-"#;

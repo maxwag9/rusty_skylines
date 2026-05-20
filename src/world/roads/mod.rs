@@ -1,4 +1,4 @@
-mod intersections;
+pub mod intersections;
 mod road_editor;
 pub mod road_helpers;
 pub mod road_mesh_manager;

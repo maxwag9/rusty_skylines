@@ -1,7 +1,8 @@
 use crate::helpers::hsv::{HSV, hsv_to_rgb, lerp_hsv};
-use crate::helpers::positions::{WorldPos, chunk_size};
+use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use std::f32::consts::PI;
+use wgpu::Extent3d;
 
 const TAU: f32 = PI * 2.0;
 
@@ -73,19 +74,16 @@ fn world_xz_f64(p: &WorldPos) -> (f64, f64) {
     (wx, wz)
 }
 
-/// Sample noise at derived f64 coordinates with a scale factor
 #[inline]
 fn noise2_f64(n: &FastNoiseLite, x: f64, z: f64, scale: f64) -> f32 {
     n.get_noise_2d((x * scale) as f32, (z * scale) as f32)
 }
 
-/// Sample noise at derived f64 coordinates (scale = 1.0)
 #[inline]
 fn noise2_f64_raw(n: &FastNoiseLite, x: f64, z: f64) -> f32 {
     n.get_noise_2d(x as f32, z as f32)
 }
 
-/// Gradient via central difference in f64 space
 #[inline]
 fn grad2_f64(noise: &FastNoiseLite, x: f64, z: f64, eps: f64) -> (f32, f32) {
     let a = noise.get_noise_2d((x + eps) as f32, z as f32);
@@ -97,7 +95,7 @@ fn grad2_f64(noise: &FastNoiseLite, x: f64, z: f64, eps: f64) -> (f32, f32) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TerrainParams (unchanged)
+// TerrainParams
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug)]
@@ -188,25 +186,28 @@ impl Default for TerrainParams {
     fn default() -> Self {
         Self {
             seed: 0,
-            world_scale: 0.05,
+            world_scale: 0.04,
 
             height_scale: 1000.0,
             sea_level: 0.0,
 
             lat_extent: 140_000.0,
             continent_radius: 70_000.0,
-            ring_radius: 8_000.0,
+
+            ring_radius: 48_000.0,
+
             coast_noise_scale: 0.0035,
             coast_noise_amp: 0.45,
             island_threshold0: 0.74,
             island_threshold1: 0.92,
             island_amp: 0.55,
 
-            force_land_at_origin: false,
-            origin_island_radius: 12_000.0,
+            force_land_at_origin: true,
+            origin_island_radius: 10_000.0,
             origin_min_height: 50.0,
-            pull_one_continent_to_origin: true,
-            origin_pull_strength: 0.85,
+            pull_one_continent_to_origin: false,
+
+            origin_pull_strength: 0.0,
 
             warp_large_scale: 0.00042,
             warp_small_scale: 0.0040,
@@ -215,18 +216,21 @@ impl Default for TerrainParams {
             warp_mix_large: 0.65,
             warp_mix_small: 0.35,
 
-            macro_freq: 0.0006,
-            hills_freq: 0.0045,
-            mountains_freq: 0.0070,
+            macro_freq: 0.00028,
+
+            hills_freq: 0.0016,
+            mountains_freq: 0.0035,
             _belts_freq: 0.00162,
-            moisture_freq: 0.0012,
+            moisture_freq: 0.0008,
 
             macro_octaves: 5,
             macro_persistence: 0.50,
             hills_octaves: 6,
             hills_persistence: 0.52,
-            mountains_octaves: 0,
-            mountains_persistence: 0.0,
+
+            mountains_octaves: 5,
+            mountains_persistence: 0.58,
+
             continent_octaves: 4,
             continent_persistence: 0.85,
             moisture_octaves: 5,
@@ -239,9 +243,11 @@ impl Default for TerrainParams {
             ocean_floor: -1.10,
             inland_plateau: 0.88,
             macro_amp: 0.2,
-            hills_amp: 0.95,
-            mountains_amp: 0.1,
-            belt_amp: 0.5,
+            hills_amp: 1.05,
+
+            mountains_amp: 1.75,
+
+            belt_amp: 0.85,
 
             coast_soften_width: 0.22,
             coast_soften_strength: 0.1,
@@ -250,11 +256,13 @@ impl Default for TerrainParams {
             belt_lo: 0.50,
             belt_hi: 0.78,
 
-            flatten: 0.20,
+            flatten: 0.06,
             flatten_curve: 1.8,
             mountain_smooth: 0.55,
-            hills_detail: 0.18,
-            micro_flatten: 0.20,
+
+            hills_detail: 0.45,
+
+            micro_flatten: 0.05,
 
             plate_freq: 0.0022,
             plate_mountain_amp: 1.8,
@@ -282,10 +290,6 @@ fn make_fbm(seed: u32, freq: f32, oct: usize, gain: f32) -> FastNoiseLite {
     n
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BaseSample (unchanged)
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[derive(Clone, Copy)]
 struct BaseSample {
     cont: f32,
@@ -297,10 +301,6 @@ struct BaseSample {
     slope_proxy: f32,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TerrainGenerator
-// ─────────────────────────────────────────────────────────────────────────────
-
 pub struct TerrainGenerator {
     p: TerrainParams,
 
@@ -311,6 +311,11 @@ pub struct TerrainGenerator {
     rivers: FastNoiseLite,
 
     continent_noise: FastNoiseLite,
+
+    continent_large: FastNoiseLite,
+    continent_ridge: FastNoiseLite,
+    continent_warp: FastNoiseLite,
+
     moisture_noise: FastNoiseLite,
     warp_large: FastNoiseLite,
     warp_small: FastNoiseLite,
@@ -318,7 +323,7 @@ pub struct TerrainGenerator {
     detail: FastNoiseLite,
     rock: FastNoiseLite,
 
-    continent_centers: [(f64, f64); 6],
+    continent_shape_noise: FastNoiseLite,
 }
 
 impl Clone for TerrainGenerator {
@@ -358,6 +363,13 @@ impl TerrainGenerator {
             p.continent_octaves,
             p.continent_persistence,
         );
+        let continent_large = make_fbm(seed.wrapping_add(100), 0.000045, 3, 0.52);
+
+        let continent_ridge = make_fbm(seed.wrapping_add(101), 0.00012, 4, 0.58);
+
+        let continent_warp = make_fbm(seed.wrapping_add(102), 0.00009, 3, 0.55);
+        let continent_shape_noise = make_fbm(seed.wrapping_add(3), 0.0012, 5, 0.58);
+
         let moisture_noise = make_fbm(
             seed,
             p.moisture_freq,
@@ -381,35 +393,6 @@ impl TerrainGenerator {
         let detail = make_fbm(seed.wrapping_add(9001), 0.020, 4, 0.55);
         let rock = make_fbm(seed.wrapping_add(9002), 0.012, 3, 0.55);
 
-        let ws = p.world_scale as f64;
-        let mut centers = [(0.0f64, 0.0f64); 6];
-        for i in 0..6 {
-            let base_angle = (i as f64) / 6.0 * (TAU as f64);
-            let jitter = (hash01(seed.wrapping_add(i as u32)) as f64 - 0.5) * 0.6;
-            let angle = base_angle + jitter;
-
-            let radial_jitter = (hash01(seed.wrapping_add(100 + i as u32)) as f64 - 0.5) * 0.25;
-            let r = p.ring_radius as f64 * ws * (1.0 + radial_jitter);
-
-            let lat_band = if i < 2 {
-                let sign = if i == 0 { 1.0 } else { -1.0 };
-                let band_jitter = (hash01(seed.wrapping_add(200 + i as u32)) as f64 - 0.5) * 0.1;
-                sign * (0.85 + band_jitter)
-            } else {
-                let raw = hash01(seed.wrapping_add(200 + i as u32)) as f64;
-                (raw * 0.9) - 0.45
-            };
-            let lat_ext = p.lat_extent as f64 * ws;
-            centers[i] = (angle.cos() * r, lat_band * lat_ext);
-        }
-
-        if p.pull_one_continent_to_origin {
-            let idx = 2;
-            let (cx, cz) = centers[idx];
-            let pull = p.origin_pull_strength as f64;
-            centers[idx] = (cx * (1.0 - pull), cz * (1.0 - pull));
-        }
-
         Self {
             p,
             macro_elev,
@@ -418,16 +401,18 @@ impl TerrainGenerator {
             plates,
             rivers,
             continent_noise,
+            continent_large,
+            continent_ridge,
+            continent_warp,
+            continent_shape_noise,
             moisture_noise,
             warp_large,
             warp_small,
             detail,
             rock,
-            continent_centers: centers,
         }
     }
 
-    /// Returns scaled world coordinates in f64 precision
     #[inline]
     fn scaled_coords_f64(&self, p: &WorldPos) -> (f64, f64) {
         let (wx, wz) = world_xz_f64(p);
@@ -435,11 +420,9 @@ impl TerrainGenerator {
         (wx * s, wz * s)
     }
 
-    /// Returns warped coordinates in f64 precision
     fn warped_coords_f64(&self, p: &WorldPos) -> (f64, f64) {
         let (sx, sz) = self.scaled_coords_f64(p);
 
-        // Warp noise has baked-in frequency, so we pass scaled coords directly
         let w1x = noise2_f64_raw(&self.warp_large, sx, sz);
         let w1z = noise2_f64_raw(&self.warp_large, sx + 1234.0, sz - 5678.0);
 
@@ -456,54 +439,49 @@ impl TerrainGenerator {
 
     fn continental_mask(&self, p: &WorldPos) -> f32 {
         let (sx, sz) = self.scaled_coords_f64(p);
+        let warp_amp = 14000.0;
 
-        let mut best = 0.0f32;
-        for &(cx, cz) in &self.continent_centers {
-            let cr = self.p.continent_radius as f64 * self.p.world_scale as f64;
-            let dx = (sx - cx) / cr;
-            let dz = (sz - cz) / (cr * 0.6);
-            let dist = (dx * dx + dz * dz).sqrt() as f32;
-            let v = (1.0 - dist).clamp(0.0, 1.0);
-            let shaped = v * v * (3.0 - 2.0 * v);
-            if shaped > best {
-                best = shaped;
-            }
+        let warp_x = noise2_f64_raw(&self.continent_warp, sx * 0.7, sz * 0.7) as f64;
+
+        let warp_z =
+            noise2_f64_raw(&self.continent_warp, sx * 0.7 + 4000.0, sz * 0.7 - 2000.0) as f64;
+
+        let wx = sx + warp_x * warp_amp;
+        let wz = sz + warp_z * warp_amp;
+
+        let base = noise2_f64_raw(&self.continent_large, wx, wz);
+
+        let breakup = noise2_f64_raw(&self.continent_noise, wx * 1.8, wz * 1.8);
+
+        let ridge_raw = noise2_f64_raw(&self.continent_ridge, wx * 0.22, wz * 0.08);
+
+        let ridge = ridged(ridge_raw) * 0.65;
+
+        let shape = noise2_f64_raw(&self.continent_shape_noise, wx * 0.7, wz * 0.7);
+
+        let mut v = base * 1.00 + breakup * 0.32 + ridge * 0.55 + shape * 0.18;
+
+        // Normalize from [-1,1]-ish toward [0,1]
+        v = v * 0.5 + 0.5;
+
+        // Strong continent thresholding
+        let mut cont = smootherstep(0.42, 0.68, v);
+
+        // Coastline detail
+        let coast = noise2_f64_raw(&self.detail, wx * 0.0022, wz * 0.0022);
+
+        cont += coast * 0.045;
+
+        // Spawn continent bias
+        if self.p.force_land_at_origin {
+            let d = ((sx * sx + sz * sz).sqrt() / 24000.0) as f32;
+
+            let spawn = 1.0 - smootherstep(0.25, 1.0, d);
+
+            cont += spawn * 0.22;
         }
 
-        let coast_scale = self.p.coast_noise_scale as f64;
-        let nx = sx * coast_scale;
-        let nz = sz * coast_scale;
-        let noise = noise2_f64_raw(&self.continent_noise, nx, nz) * self.p.coast_noise_amp;
-
-        let mut c = (best + noise).clamp(0.0, 1.0);
-
-        let island_raw = noise2_f64(&self.continent_noise, nx, nz, 3.0);
-        let island_v = (island_raw + 1.0) * 0.5;
-        let island = smoothstep(self.p.island_threshold0, self.p.island_threshold1, island_v);
-        c += island * self.p.island_amp;
-        c
-    }
-
-    #[inline]
-    fn apply_origin_land_override(&self, p: &WorldPos, h: f32) -> f32 {
-        if !self.p.force_land_at_origin {
-            return h;
-        }
-
-        let (wx, wz) = world_xz_f64(p);
-        let r = self.p.origin_island_radius.max(1.0) as f64;
-        let d2 = wx * wx + wz * wz;
-
-        if d2 >= r * r {
-            return h;
-        }
-
-        let d = d2.sqrt();
-        let t = ((1.0 - d / r) as f32).clamp(0.0, 1.0);
-        let s = t * t * (3.0 - 2.0 * t);
-
-        let min_land = self.p.sea_level + self.p.origin_min_height;
-        lerp(h, min_land, s)
+        cont.clamp(0.0, 1.0)
     }
 
     fn latitude_factor(&self, p: &WorldPos) -> f32 {
@@ -536,12 +514,15 @@ impl TerrainGenerator {
         let cont = self.continental_mask(p);
         let (wx2, wz2) = self.warped_coords_f64(p);
 
-        // Basin/macro sampling in f64
         let basin_raw = noise2_f64(&self.macro_elev, wx2 + 9000.0, wz2 - 4000.0, 0.12);
         let basin = gain(((basin_raw + 1.0) * 0.5).clamp(0.0, 1.0), 0.62);
         let ocean_floor = lerp(self.p.ocean_floor, self.p.ocean_floor * 1.45, basin);
 
         let mut rel = ocean_floor + (self.p.inland_plateau - ocean_floor) * cont;
+
+        let shelf = smoothstep(0.18, 0.42, cont) * (1.0 - smoothstep(0.42, 0.58, cont));
+
+        rel = lerp(rel, -0.16, shelf * 0.75);
 
         let macro_raw = noise2_f64(&self.macro_elev, wx2, wz2, 0.60);
         let macro_e = macro_raw * self.p.macro_amp;
@@ -563,7 +544,13 @@ impl TerrainGenerator {
         let belt_mask = smootherstep(self.p.belt_lo, self.p.belt_hi, belt_n);
 
         let interior = smootherstep(self.p.interior_lo, self.p.interior_hi, cont);
-        let mountain_mask = belt_mask * interior;
+        let chain_noise = noise2_f64_raw(&self.plates, wx2 * 0.11, wz2 * 0.035);
+
+        let chains = ridged(chain_noise);
+
+        let chain_mask = smootherstep(0.18, 0.72, chains);
+
+        let mountain_mask = belt_mask * interior * chain_mask;
 
         let eps = 1.0;
         let (pgx, pgz) = grad2_f64(&self.plates, wx2 * 0.70, wz2 * 0.70, eps);
@@ -584,12 +571,15 @@ impl TerrainGenerator {
         let coast = (cont - 0.5).abs();
         let w = self.p.coast_soften_width.max(0.0001);
         let coast_t = ((w - coast) / w).clamp(0.0, 1.0);
-        rel *= 1.0 - self.p.coast_soften_strength * coast_t;
+        let coast_noise = noise2_f64_raw(&self.detail, wx2 * 0.0035, wz2 * 0.0035);
+
+        let coast_variation = 1.0 + coast_noise * 0.18;
+
+        rel *= 1.0 - self.p.coast_soften_strength * coast_t * coast_variation;
 
         let shelf = smootherstep(0.36, 0.62, cont) * smootherstep(-0.10, 0.06, rel);
         rel = lerp(rel, rel * 0.72, shelf * 0.55);
 
-        // Slope proxy via central difference in f64
         let eps = 0.65;
         let n1 = noise2_f64_raw(&self.hills, wx2 + eps, wz2);
         let n2 = noise2_f64_raw(&self.hills, wx2 - eps, wz2);
@@ -672,7 +662,7 @@ impl TerrainGenerator {
 
         let mut h = rel * self.p.height_scale + self.p.sea_level;
 
-        h = self.apply_origin_land_override(p, h);
+        //h = self.apply_origin_land_override(p, h);
 
         h
     }
@@ -687,9 +677,15 @@ impl TerrainGenerator {
         let cont = self.continental_mask(p);
         let lat = self.latitude_factor(p);
 
-        let mut zonal = 1.0 - ((lat - 0.18) * 1.55).abs();
-        zonal = zonal.max(0.0).min(1.0);
-        zonal = gain(zonal, 0.55);
+        let tropical = smoothstep(0.25, 0.0, lat); // wet near equator
+        let subtropical_dry = smoothstep(0.18, 0.38, lat) * smoothstep(0.58, 0.38, lat); // dry belt
+        let midlat_wet = smoothstep(0.38, 0.55, lat) * smoothstep(0.78, 0.62, lat); // westerlies
+        let polar_dry = smoothstep(0.70, 0.90, lat); // polar dry
+
+        let zonal = (tropical * 0.90 + midlat_wet * 0.70)
+            * (1.0 - subtropical_dry * 0.55)
+            * (1.0 - polar_dry * 0.75);
+        let zonal = gain(zonal.clamp(0.0, 1.0), 0.55);
 
         let eps = 0.90;
         let (gx, gz) = grad2_f64(&self.hills, wx2 * 0.8, wz2 * 0.8, eps);
@@ -701,14 +697,14 @@ impl TerrainGenerator {
         let o = dot.clamp(-0.02, 0.02);
         let orographic = (o * 25.0 * 0.5 + 0.5).clamp(0.0, 1.0);
 
-        m = m * 0.40 + zonal * 0.52 + orographic * 0.08;
+        m = m * 0.35 + zonal * 0.55 + orographic * 0.10;
 
         let height_dry = h_rel.clamp(0.0, 1.6);
-        m *= 1.0 - height_dry * 0.55;
+        m *= 1.0 - height_dry * 0.30;
 
         let interior = smoothstep(0.54, 0.92, cont);
-        m *= 1.0 - interior * 0.48;
-
+        m *= 1.0 - interior * 0.22;
+        m = 1.0;
         m.clamp(0.0, 1.0)
     }
 
@@ -730,7 +726,7 @@ impl TerrainGenerator {
         let eps = 0.8f64;
         let (gx, gz) = grad2_f64(&self.hills, s.wx2 * 0.9, s.wz2 * 0.9, eps);
         let slope = (gx * gx + gz * gz).sqrt();
-        let slope_n = smoothstep(0.08, 0.015, slope);
+        let slope_n = smoothstep(0.015, 0.08, slope);
 
         // Water path
         if h_rel < 0.1 {
@@ -777,8 +773,7 @@ impl TerrainGenerator {
         // Land path
         let beach = smoothstep(-0.01, 0.06, h_norm) * (1.0 - smoothstep(0.08, 0.22, h_norm));
         let beach = beach * (1.0 - smoothstep(0.20, 0.55, slope_n));
-
-        let cliff = smoothstep(0.35, 0.95, slope_n) * smoothstep(0.02, 0.60, h_norm);
+        let cliff = smoothstep(0.55, 0.92, slope_n);
         let rockiness = (cliff * 0.75 + smoothstep(0.85, 1.35, h_norm) * 0.55).clamp(0.0, 1.0);
 
         let low_cold_dry = HSV {
@@ -786,20 +781,10 @@ impl TerrainGenerator {
             s: 0.42,
             v: 0.55,
         };
-        let low_cold_wet = HSV {
-            h: 0.33,
-            s: 0.78,
-            v: 0.44,
-        };
         let low_hot_dry = HSV {
             h: 0.14,
             s: 0.78,
             v: 0.83,
-        };
-        let low_hot_wet = HSV {
-            h: 0.33,
-            s: 0.98,
-            v: 0.56,
         };
 
         let mid_cold_dry = HSV {
@@ -807,20 +792,10 @@ impl TerrainGenerator {
             s: 0.40,
             v: 0.60,
         };
-        let mid_cold_wet = HSV {
-            h: 0.30,
-            s: 0.62,
-            v: 0.50,
-        };
         let mid_hot_dry = HSV {
             h: 0.12,
             s: 0.66,
             v: 0.72,
-        };
-        let mid_hot_wet = HSV {
-            h: 0.30,
-            s: 0.88,
-            v: 0.56,
         };
 
         let high_cold = HSV {
@@ -832,6 +807,27 @@ impl TerrainGenerator {
             h: 0.06,
             s: 0.18,
             v: 0.68,
+        };
+
+        let low_cold_wet = HSV {
+            h: 0.34,
+            s: 0.65,
+            v: 0.48,
+        };
+        let low_hot_wet = HSV {
+            h: 0.38,
+            s: 0.82,
+            v: 0.68,
+        };
+        let mid_cold_wet = HSV {
+            h: 0.32,
+            s: 0.58,
+            v: 0.48,
+        };
+        let mid_hot_wet = HSV {
+            h: 0.36,
+            s: 0.78,
+            v: 0.65,
         };
 
         fn climate(temp: f32, wet: f32, cd: HSV, cw: HSV, hd: HSV, hw: HSV) -> HSV {
@@ -914,5 +910,283 @@ impl TerrainGenerator {
         col = lerp_hsv(col, snow_col, snow.clamp(0.0, 1.0));
 
         hsv_to_rgb(col)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tree placement
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Returns local (x, z) positions within the chunk where trees should be placed.
+    ///
+    /// Uses a jittered grid so trees aren't perfectly regular, but sampling is
+    /// O(chunk_cells) with no spatial data structures needed.
+    ///
+    /// `grid_spacing` controls how densely the chunk is sampled (e.g. 6 means
+    /// one candidate per 6×6 block). Lower = denser forest, higher = sparser.
+    /// A value of 4–8 works well for most use-cases.
+    pub fn tree_positions(&self, chunk_x: i32, chunk_z: i32, grid_spacing: u32) -> Vec<[f32; 2]> {
+        use crate::helpers::positions::{ChunkCoord, LocalPos};
+
+        let gs = grid_spacing.max(1);
+        let cs = chunk_size() as u32;
+        let cols = cs / gs;
+        let mut out = Vec::new();
+
+        for gz in 0..cols {
+            for gx in 0..cols {
+                // Stable, unique seed per cell — incorporates chunk position so
+                // identical cells in different chunks don't produce the same jitter.
+                let cell_seed = (chunk_x as u32)
+                    .wrapping_mul(0x9e3779b9)
+                    .wrapping_add((chunk_z as u32).wrapping_mul(0x517cc1b7))
+                    .wrapping_add(gz.wrapping_mul(0x45d9f3b))
+                    .wrapping_add(gx)
+                    .wrapping_add(self.p.seed.wrapping_mul(0xdeadbeef));
+
+                // Jitter within cell
+                let jx = hash01(cell_seed) * gs as f32;
+                let jz = hash01(cell_seed.wrapping_add(1)) * gs as f32;
+
+                let lx = gx as f32 * gs as f32 + jx;
+                let lz = gz as f32 * gs as f32 + jz;
+
+                // Clamp strictly inside chunk
+                if lx < 0.0 || lx >= cs as f32 || lz < 0.0 || lz >= cs as f32 {
+                    continue;
+                }
+
+                let wp = WorldPos {
+                    chunk: ChunkCoord {
+                        x: chunk_x,
+                        z: chunk_z,
+                    },
+                    local: LocalPos {
+                        x: lx,
+                        z: lz,
+                        y: 0.0,
+                    },
+                };
+
+                let h = self.height(&wp);
+                let h_norm = (h - self.p.sea_level) / self.p.height_scale;
+
+                // Below water or barely above — no trees
+                if h_norm < 0.015 {
+                    continue;
+                }
+
+                // Above treeline — bare rock/snow
+                if h_norm > 0.80 {
+                    continue;
+                }
+
+                let m = self.moisture(&wp, h);
+
+                // Too dry for any tree growth
+                if m < 0.22 {
+                    continue;
+                }
+
+                let lat = self.latitude_factor(&wp);
+
+                // Approximate temperature (no re-running full color pipeline)
+                let t_noise = noise2_f64(
+                    &self.macro_elev,
+                    (wp.chunk.x as f64 * cs as f64 + lx as f64) * self.p.world_scale as f64,
+                    (wp.chunk.z as f64 * cs as f64 + lz as f64) * self.p.world_scale as f64,
+                    0.020,
+                );
+                let temp = ((1.0 - lat).powf(1.6) + t_noise * 0.05).clamp(0.0, 1.0);
+
+                // Too cold (polar / high alpine)
+                if temp < 0.12 {
+                    continue;
+                }
+
+                // Slope check — trees don't grow on steep cliffs
+                let (gx_s, gz_s) = grad2_f64(
+                    &self.hills,
+                    (wp.chunk.x as f64 * cs as f64 + lx as f64) * self.p.world_scale as f64,
+                    (wp.chunk.z as f64 * cs as f64 + lz as f64) * self.p.world_scale as f64,
+                    0.8,
+                );
+                let slope = (gx_s * gx_s + gz_s * gz_s).sqrt();
+                if slope > 0.55 {
+                    continue;
+                }
+
+                // Density function: moist + warm + lowland = dense forest;
+                // marginal conditions = sparse. Roll against a hash to thin out.
+                let alt_penalty = smoothstep(0.55, 0.80, h_norm); // fewer trees near peaks
+                let density = (m - 0.22) / 0.78       // moisture drive (0..1)
+                    * (0.30 + 0.70 * temp)             // colder biomes are sparser
+                    * (1.0 - alt_penalty * 0.85)       // altitude thins canopy
+                    * (1.0 - slope / 0.55 * 0.40); // steeper = sparser
+
+                let roll = hash01(cell_seed.wrapping_add(2));
+                if roll < density {
+                    out.push([lx, lz]);
+                }
+            }
+        }
+
+        out
+    }
+
+    #[inline]
+    fn height_preview_rgb(&self, h: f32) -> [f32; 3] {
+        let h_rel = h - self.p.sea_level;
+        let h_norm = (h_rel / self.p.height_scale).clamp(-1.2, 1.8);
+
+        let t = ((h_norm + 1.2) / 3.0).clamp(0.0, 1.0);
+
+        let low = HSV {
+            h: 0.62,
+            s: 0.95,
+            v: 0.28,
+        };
+        let high = HSV {
+            h: 0.08,
+            s: 0.05,
+            v: 0.98,
+        };
+
+        hsv_to_rgb(lerp_hsv(low, high, t))
+    }
+
+    pub fn make_texture(
+        &self,
+        texture_size: Extent3d,
+        chunk_coord: ChunkCoord,
+        size: u32,
+    ) -> TerrainTextures {
+        let size = size.max(1);
+        let tex_w = texture_size.width as usize;
+        let tex_h = texture_size.height as usize;
+
+        let cs = chunk_size() as f64;
+        let start_wx = chunk_coord.x as f64 * cs;
+        let start_wz = chunk_coord.z as f64 * cs;
+        let world_span = cs * size as f64;
+
+        // ─────────────────────────────────────────────
+        // PASS 1: gather heights + find min/max
+        // ─────────────────────────────────────────────
+        let mut heights = vec![0.0f32; tex_w * tex_h];
+        let mut min_h = f32::MAX;
+        let mut max_h = f32::MIN;
+
+        for py in 0..tex_h {
+            let vz = (py as f64 + 0.5) / tex_h as f64;
+            let wz = start_wz + vz * world_span;
+
+            for px in 0..tex_w {
+                let vx = (px as f64 + 0.5) / tex_w as f64;
+                let wx = start_wx + vx * world_span;
+
+                let wp = world_pos_from_world_xz(wx, wz);
+                let h = self.height(&wp);
+
+                heights[py * tex_w + px] = h;
+
+                min_h = min_h.min(h);
+                max_h = max_h.max(h);
+            }
+        }
+
+        let inv_range = if max_h > min_h {
+            1.0 / (max_h - min_h)
+        } else {
+            1.0
+        };
+
+        // ─────────────────────────────────────────────
+        // PASS 2: encode grayscale
+        // ─────────────────────────────────────────────
+        let mut height_data = Vec::with_capacity(tex_w * tex_h * 4);
+        let mut color_data = Vec::with_capacity(tex_w * tex_h * 4);
+
+        for i in 0..heights.len() {
+            let h = heights[i];
+
+            let t = ((h - min_h) * inv_range).clamp(0.0, 1.0);
+
+            // pure grayscale debug ramp
+            let v = (t * 255.0 + 0.5) as u8;
+
+            height_data.push(v);
+            height_data.push(v);
+            height_data.push(v);
+            height_data.push(255);
+
+            // still your biome color
+            let wx = 0.0; // not used here anymore
+            let wz = 0.0;
+            let color_rgb = [t, t, t]; // optional fallback if you want speed debug
+            color_data.push((color_rgb[0] * 255.0) as u8);
+            color_data.push((color_rgb[1] * 255.0) as u8);
+            color_data.push((color_rgb[2] * 255.0) as u8);
+            color_data.push(255);
+        }
+
+        TerrainTextures {
+            height: TextureBuffer {
+                width: tex_w as u32,
+                height: tex_h as u32,
+                data: height_data,
+            },
+            color: TextureBuffer {
+                width: tex_w as u32,
+                height: tex_h as u32,
+                data: color_data,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TextureBuffer {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>, // RGBA8
+}
+
+#[derive(Clone, Debug)]
+pub struct TerrainTextures {
+    pub height: TextureBuffer,
+    pub color: TextureBuffer,
+}
+#[inline]
+fn f32_to_u8(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+#[inline]
+fn push_rgba(out: &mut Vec<u8>, rgb: [f32; 3]) {
+    out.push(f32_to_u8(rgb[0]));
+    out.push(f32_to_u8(rgb[1]));
+    out.push(f32_to_u8(rgb[2]));
+    out.push(255);
+}
+
+#[inline]
+fn world_pos_from_world_xz(wx: f64, wz: f64) -> WorldPos {
+    use crate::helpers::positions::LocalPos;
+
+    let cs = chunk_size() as f64;
+
+    let cx = (wx / cs).floor() as i32;
+    let cz = (wz / cs).floor() as i32;
+
+    let lx = (wx - cx as f64 * cs) as f32;
+    let lz = (wz - cz as f64 * cs) as f32;
+
+    WorldPos {
+        chunk: ChunkCoord { x: cx, z: cz },
+        local: LocalPos {
+            x: lx,
+            y: 0.0,
+            z: lz,
+        },
     }
 }

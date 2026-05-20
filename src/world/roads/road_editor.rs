@@ -1,7 +1,6 @@
 use crate::helpers::positions::{LocalPos, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::ui::input::Input;
-use crate::world::roads::intersections::IntersectionBuildParams;
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_mesh_manager::{CLEARANCE, ChunkId};
 use crate::world::roads::road_structs::*;
@@ -24,6 +23,7 @@ pub struct RoadEditor {
     allocator: IdAllocator,
     pub style: RoadStyleParams,
     pub pending_outside_commands: Vec<RoadEditorCommand>,
+    pub pending_chunk_rebuilds: Vec<ChunkId>,
 }
 
 impl RoadEditor {
@@ -32,6 +32,7 @@ impl RoadEditor {
             allocator: IdAllocator::new(),
             style: RoadStyleParams::default(),
             pending_outside_commands: Vec::new(),
+            pending_chunk_rebuilds: Vec::new(),
         }
     }
 
@@ -906,18 +907,22 @@ impl RoadEditor {
             pos: start_node_pos,
             t: 0.0,
         });
-
+        // Splitting a segment makes 2 nodes regenerate, so this is necessary. But actually not necessary, because  AH wait it is necessary! I was about to say that it wasn't necessary because the nodes would be non-intersection nodes (only 0 or 1 connections) anyway, but then I remembered that the nodes could connect to other segments too! Thanks for listening.
         // Process crossings in order
         for crossing in crossings {
             let node_id = match crossing.kind {
                 CrossingKind::ExistingNode(id) => id,
                 CrossingKind::LaneCrossing { lane_id, .. } => {
-                    let Some((split_cmds, new_node_id)) =
+                    let Some((split_cmds, new_node_id, endpoint_nodes)) =
                         self.plan_split(storage, lane_id, crossing.world_pos, chunk_id)
                     else {
                         continue;
                     };
                     cmds.extend(split_cmds);
+                    // Queue intersection rebuilds for the two nodes whose old lanes just got disabled
+                    for node_id in endpoint_nodes.to_vec() {
+                        push_intersection_for_node(&mut cmds, node_id, chunk_id);
+                    }
                     new_node_id
                 }
             };
@@ -993,9 +998,8 @@ impl RoadEditor {
 
         // Generate intersections for all waypoint nodes
         for waypoint in &waypoints {
-            push_intersection_for_node(&mut cmds, waypoint.node_id, &self.style, chunk_id);
+            push_intersection_for_node(&mut cmds, waypoint.node_id, chunk_id);
         }
-
         cmds
     }
 
@@ -1368,9 +1372,14 @@ impl RoadEditor {
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
-                let result = self.plan_split(storage, *lane_id, *pos, chunk_id)?;
-                cmds.extend(result.0);
-                Some((result.1, *pos))
+                let (split_cmds, new_node_id, endpoint_nodes) =
+                    self.plan_split(storage, *lane_id, *pos, chunk_id)?;
+                cmds.extend(split_cmds);
+                for node_id in endpoint_nodes.to_vec() {
+                    push_intersection_for_node(cmds, node_id, chunk_id);
+                }
+
+                Some((new_node_id, *pos))
             }
         }
     }
@@ -1381,21 +1390,70 @@ impl RoadEditor {
         lane_id: LaneId,
         split_pos: WorldPos,
         chunk_id: ChunkId,
-    ) -> Option<(Vec<RoadCommand>, NodeId)> {
+    ) -> Option<(Vec<RoadCommand>, NodeId, [NodeId; 2])> {
         let lane = storage.lane(&lane_id);
         let old_segment_id = lane.segment();
         let old_segment = storage.segment(old_segment_id);
 
         let a_id = old_segment.start();
+        let Some(mut old_a_node) = storage.node(a_id).cloned() else {
+            return None;
+        };
         let b_id = old_segment.end();
+        let Some(mut old_b_node) = storage.node(b_id).cloned() else {
+            return None;
+        };
+        fn remove_segment_lanes(lanes: &[LaneId], segment_lanes: &[LaneId]) -> Vec<LaneId> {
+            lanes
+                .iter()
+                .copied()
+                .filter(|id| !segment_lanes.contains(id))
+                .collect()
+        }
 
+        old_a_node.replace_incoming_lanes(remove_segment_lanes(
+            old_a_node.incoming_lanes(),
+            &old_segment.lanes,
+        ));
+        old_a_node.replace_outgoing_lanes(remove_segment_lanes(
+            old_a_node.outgoing_lanes(),
+            &old_segment.lanes,
+        ));
+        old_b_node.replace_incoming_lanes(remove_segment_lanes(
+            old_b_node.incoming_lanes(),
+            &old_segment.lanes,
+        ));
+        old_b_node.replace_outgoing_lanes(remove_segment_lanes(
+            old_b_node.outgoing_lanes(),
+            &old_segment.lanes,
+        ));
         let mut cmds = Vec::new();
+
+        // cmds.push(RoadCommand::ReplaceNode {
+        //     old_node_id: a_id,
+        //     new_node: old_a_node,
+        //     chunk_id,
+        // });
+        //
+        // cmds.push(RoadCommand::ReplaceNode {
+        //     old_node_id: b_id,
+        //     new_node: old_b_node,
+        //     chunk_id,
+        // });
 
         cmds.push(RoadCommand::DisableSegment {
             segment_id: old_segment_id,
             chunk_id,
         });
 
+        cmds.push(RoadCommand::EnableNode {
+            node_id: a_id,
+            chunk_id,
+        });
+        cmds.push(RoadCommand::EnableNode {
+            node_id: b_id,
+            chunk_id,
+        });
         let new_node_id = self.allocator.alloc_node();
         cmds.push(RoadCommand::AddNode {
             world_pos: split_pos,
@@ -1421,6 +1479,10 @@ impl RoadEditor {
         });
 
         for old_lane_id in old_segment.lanes() {
+            // cmds.push(RoadCommand::DisableLane {
+            //     lane_id: *old_lane_id,
+            //     chunk_id,
+            // });
             let old_lane = storage.lane(old_lane_id);
 
             let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
@@ -1484,7 +1546,7 @@ impl RoadEditor {
             }
         }
 
-        Some((cmds, new_node_id))
+        Some((cmds, new_node_id, [a_id, b_id]))
     }
 
     fn emit_lanes_from_centerline(
@@ -1763,21 +1825,4 @@ pub fn sample_polyline_at(points: &[WorldPos], lengths: &[f64], t: f64) -> (Worl
     let pos = points[i0].lerp(points[i1], seg_t);
     let dir = points[i1].to_render_pos(points[i0]).normalize_or_zero();
     (pos, dir)
-}
-
-fn _push_intersection(
-    cmds: &mut Vec<RoadCommand>,
-    node_id: NodeId,
-    planned: &PlannedNode,
-    road_style_params: &RoadStyleParams,
-    chunk_id: ChunkId,
-) {
-    let clear = !matches!(planned, PlannedNode::New { .. });
-
-    cmds.push(RoadCommand::MakeIntersection {
-        node_id,
-        params: IntersectionBuildParams::from_style(road_style_params),
-        chunk_id,
-        clear,
-    });
 }

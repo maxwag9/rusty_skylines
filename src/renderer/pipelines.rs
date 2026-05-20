@@ -182,6 +182,10 @@ pub struct ResolvedTextures {
     pub tonemapped: TextureView,
     pub ui: TextureView,
     pub atlas: TextureView,
+
+    // For the in-game Map
+    pub terrain_map_heights: TextureView,
+    pub terrain_map_colors: TextureView,
 }
 
 pub struct PostFxTextures {
@@ -312,12 +316,16 @@ impl Pipelines {
     ) -> ResolvedTextures {
         let (hdr, normal, tonemapped, ui) = create_resolved_targets(device, config);
         let atlas = create_atlas(device, config);
+        let terrain_map_heights = create_rgba8_texture(device, config, 0.1, "Terrain Map Heights");
+        let terrain_map_colors = create_rgba8_texture(device, config, 0.1, "Terrain Map Colors");
         ResolvedTextures {
             hdr,
             normal,
             tonemapped,
             ui,
             atlas,
+            terrain_map_heights,
+            terrain_map_colors,
         }
     }
 
@@ -328,7 +336,7 @@ impl Pipelines {
     ) -> PostFxTextures {
         let linear_depth_full = create_linear_depth_texture(device, config, 1.0);
         let linear_depth_half = create_linear_depth_texture(device, config, 0.5);
-        let normal_half = create_normals_texture(device, config, 0.5);
+        let normal_half = create_rgba8_texture(device, config, 0.5, "Normal Half");
 
         let (_, gtao_blurred_half) = create_gtao_textures(device, config, 0.5);
         let rt_raw_half = create_rt_texture(device, config, 0.5);
@@ -544,13 +552,14 @@ pub fn create_resolved_hdr(
 
     resolved_hdr
 }
-pub fn create_normals_texture(
+pub fn create_rgba8_texture(
     device: &Device,
     config: &SurfaceConfiguration,
     resolution_factor: f32,
+    label: &str,
 ) -> TextureView {
     let tex = device.create_texture(&TextureDescriptor {
-        label: Some("Normal Half"),
+        label: Some(label),
         size: Extent3d {
             width: (config.width as f32 * resolution_factor) as u32,
             height: (config.height as f32 * resolution_factor) as u32,
@@ -560,7 +569,9 @@ pub fn create_normals_texture(
         sample_count: 1,
         dimension: TextureDimension::D2,
         format: NORMAL_FORMAT,
-        usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+        usage: TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_DST,
         view_formats: &[],
     });
 

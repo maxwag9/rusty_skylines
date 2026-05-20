@@ -4,18 +4,18 @@ pub mod drag_hue_point;
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
-use crate::ui::action_parser::{parse_action, TouchEventKind};
+use crate::ui::action_parser::{TouchEventKind, parse_action};
 use crate::ui::menu::Menu;
-use crate::ui::parser::{eval_expr, Value};
+use crate::ui::parser::{Value, eval_expr};
 use crate::ui::ui_edit_manager::{
     ChangeColorCommand, ColorComponent, CreateElementCommand, DeleteElementCommand,
     DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
-use crate::ui::ui_editor::{get_element, get_element_position, get_element_size, Ui};
-use crate::ui::ui_edits::{create_element, delete_element, SizeProperty};
+use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_element_size};
+use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, UiTouchManager};
-use crate::ui::variables::{initialize_value, save_colors, Variables};
+use crate::ui::variables::{Variables, initialize_value, save_colors};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
@@ -1460,10 +1460,22 @@ pub fn set_element_property(
             ctx.world.terrain.cursor.zoning_type = zoning_type;
             ctx.ui.variables.set_var(name, zoning_type.to_string());
         }
+        "target_pos.x" => {
+            if let Some(x) = new_val.as_f64() {
+                ctx.world.world_state.camera.target.set_x(x);
+                ctx.ui.variables.set_f64(name, x);
+            }
+        }
         "target_pos.y" => {
             if let Some(y) = new_val.as_f64() {
-                ctx.world.world_state.camera.target.local.y = y as f32;
+                ctx.world.world_state.camera.target.set_y(y);
                 ctx.ui.variables.set_f64(name, y);
+            }
+        }
+        "target_pos.z" => {
+            if let Some(z) = new_val.as_f64() {
+                ctx.world.world_state.camera.target.set_z(z);
+                ctx.ui.variables.set_f64(name, z);
             }
         }
         "cursor_mode" => {

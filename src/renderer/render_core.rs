@@ -28,6 +28,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::car_subsystem::{CarRenderSubsystem, Cars};
 use crate::world::roads::road_subsystem::{RoadRenderSubsystem, Roads};
+use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world::World;
 use glam::UVec2;
@@ -233,16 +234,16 @@ impl Renderer {
 
     pub fn update_render(
         &mut self,
-        world_core: &mut World,
+        world: &mut World,
         ui_loader: &mut Ui,
         settings: &Settings,
         aspect: f32,
         screen_size: UVec2,
     ) {
-        let time = &world_core.time;
-        let camera = &world_core.world_state.camera;
-        let astronomy = &world_core.time.astronomy;
-        let terrain = &mut world_core.terrain;
+        let time = &world.time;
+        let camera = &world.world_state.camera;
+        let astronomy = &world.time.astronomy;
+        let terrain = &mut world.terrain;
         self.update_defines();
 
         self.check_shader_changes(ui_loader);
@@ -276,15 +277,15 @@ impl Renderer {
             camera,
             aspect,
             settings,
-            &mut world_core.input,
+            &mut world.input,
             time,
             ui_loader,
             terrain,
-            &world_core.roads,
-            &world_core.cars,
+            &mut world.roads,
+            &world.cars,
             astronomy,
-            &mut world_core.buildings,
-            &mut world_core.zoning,
+            &mut world.buildings,
+            &mut world.zoning,
         );
     }
 
@@ -323,7 +324,7 @@ impl Renderer {
         time: &Time,
         ui: &mut Ui,
         terrain: &mut Terrain,
-        roads: &Roads,
+        roads: &mut Roads,
         cars: &Cars,
         astronomy: &Astronomy,
         buildings: &mut Buildings,
@@ -550,7 +551,7 @@ impl Renderer {
             self.execute_ui_pass(encoder, ui, time, input_state, settings);
         });
 
-        self.execute_debug_preview_pass(encoder, settings);
+        self.execute_debug_preview_pass(encoder, settings, &terrain.terrain_gen);
 
         gpu_timestamp!(encoder, &mut self.profiler, "Tonemap", {
             self.execute_tonemap_pass(encoder);
@@ -989,12 +990,64 @@ impl Renderer {
         );
     }
 
-    fn execute_debug_preview_pass(&mut self, encoder: &mut CommandEncoder, settings: &Settings) {
+    fn execute_debug_preview_pass(
+        &mut self,
+        encoder: &mut CommandEncoder,
+        settings: &Settings,
+        terrain_gen: &TerrainGenerator,
+    ) {
         match settings.debug_view_state {
             DebugViewState::Off => {
                 return;
             }
             DebugViewState::Normals => {
+                // let textures = terrain_gen.make_texture(self.pipelines.resolved.terrain_map_heights.texture().size(), ChunkCoord::default(), 100);
+                // println!("Made Textures!");
+                // //let tex = &textures.color;
+                // // or:
+                // let tex = &textures.height;
+                //
+                // self.queue.write_texture(
+                //     wgpu::TexelCopyTextureInfo {
+                //         texture: &self.pipelines.resolved.terrain_map_heights.texture(),
+                //         mip_level: 0,
+                //         origin: wgpu::Origin3d::ZERO,
+                //         aspect: wgpu::TextureAspect::All,
+                //     },
+                //     &tex.data,
+                //     wgpu::TexelCopyBufferLayout {
+                //         offset: 0,
+                //         bytes_per_row: Some(4 * tex.width),
+                //         rows_per_image: Some(tex.height),
+                //     },
+                //     wgpu::Extent3d {
+                //         width: tex.width,
+                //         height: tex.height,
+                //         depth_or_array_layers: 1,
+                //     },
+                // );
+                // let color_attachment = create_color_attachment_load(
+                //     &self.pipelines.msaa.hdr,
+                //     &self.pipelines.resolved.hdr,
+                //     self.msaa_samples,
+                // );
+                //
+                // let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                //     label: Some("Debug Normals Fullscreen Preview Pass"),
+                //     color_attachments: &[Some(color_attachment)],
+                //     depth_stencil_attachment: None,
+                //     timestamp_writes: None,
+                //     occlusion_query_set: None,
+                //     multiview_mask: None,
+                // });
+                //
+                // self.render_manager.render_fullscreen_debug(
+                //     &self.pipelines.resolved.terrain_map_heights,
+                //     DebugVisualization::Color,
+                //     &self.pipelines.msaa.hdr,
+                //     &mut pass,
+                // );
+
                 let color_attachment = create_color_attachment_load(
                     &self.pipelines.msaa.hdr,
                     &self.pipelines.resolved.hdr,

@@ -7,7 +7,7 @@
 use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::world::roads::intersections::{
-    IntersectionMeshResult, IntersectionPolygon, build_intersection_mesh, road_vertex,
+    IntersectionMeshResult, IntersectionPolygon, mesh_intersection, road_vertex,
 };
 use crate::world::roads::road_helpers::*;
 use crate::world::roads::road_structs::*;
@@ -467,7 +467,7 @@ impl RoadEdges {
         }
     }
 }
-fn draw_node_geometry(
+fn mesh_node(
     terrain: &Terrain,
     gizmo: &mut Gizmo,
     road_type: &RoadType,
@@ -1043,24 +1043,19 @@ impl RoadMeshManager {
 
         // === PASS 1: Build intersection meshes and collect boundary data ===
         for node_id in &node_ids {
-            let node = match storage.node(*node_id) {
-                Some(n) => n,
-                None => continue,
+            let Some(node) = storage.node(*node_id) else {
+                continue;
             };
-
-            let segment_count = storage.enabled_segment_count_connected_to_node(*node_id);
 
             let Some(road_type) = style.road_type(road_types) else {
                 continue;
             };
-            if segment_count >= 2 {
-                let result = build_intersection_mesh(
+            if node.arms().len() >= 2 {
+                let result = mesh_intersection(
                     terrain,
-                    *node_id,
+                    road_types,
                     node,
                     storage,
-                    style,
-                    road_type,
                     &self.config,
                     &mut vertices,
                     &mut indices,
@@ -1082,12 +1077,13 @@ impl RoadMeshManager {
                 }
 
                 if connected_lanes_info.is_empty() {
+                    //println!("Shit!");
                     continue;
                 }
 
                 let cap_direction = compute_cap_direction(gizmo, *node_id, node, storage);
 
-                draw_node_geometry(
+                mesh_node(
                     terrain,
                     gizmo,
                     road_type,
@@ -1116,17 +1112,17 @@ impl RoadMeshManager {
             if !segment.enabled {
                 continue;
             }
-            let Some(road_type) = style.road_type(road_types) else {
+            let Some(road_type) = road_types.get_road_type(segment.road_type_id) else {
                 continue;
             };
             // Get boundary data from start and end nodes
             let start_boundary = intersection_results.get(&segment.start());
             let end_boundary = intersection_results.get(&segment.end());
             // if let Some(start_boundary) = start_boundary {
-            //     gizmo.polyline(&start_boundary.polygon.ring, [0.2, 0.0, 0.0], 2.0, 50.0);
+            //     gizmo.polyline(&start_boundary.polygon.ring, [0.2, 0.0, 0.0, 1.0], 2.0, 0.1, 50.0);
             // }
             // if let Some(end_boundary) = end_boundary {
-            //     gizmo.polyline(&end_boundary.polygon.ring, [0.0, 0.0, 0.2], 2.0, 50.0);
+            //     gizmo.polyline(&end_boundary.polygon.ring, [0.0, 0.0, 0.2, 1.0], 2.0, 0.0, 50.0);
             // }
             let road_edges = mesh_segment(
                 terrain,
@@ -1138,8 +1134,10 @@ impl RoadMeshManager {
                 style,
                 &self.config,
                 chunk_id,
-                start_boundary,
-                end_boundary,
+                None,
+                None,
+                // start_boundary,
+                // end_boundary,
                 &mut vertices,
                 &mut indices,
             );
@@ -1275,12 +1273,11 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
         node_id.hash(&mut hasher);
 
         if let Some(node) = storage.node(node_id) {
-            let mut outgoing: Vec<_> = node.outgoing_lanes().iter().copied().collect();
-            let mut incoming: Vec<_> = node.incoming_lanes().iter().copied().collect();
-            let mut node_lanes: Vec<_> = node.node_lanes().iter().collect();
+            let outgoing: Vec<_> = node.outgoing_lanes().iter().copied().collect();
+            let incoming: Vec<_> = node.incoming_lanes().iter().copied().collect();
+            let node_lanes: Vec<_> = node.node_lanes().iter().collect();
 
-            outgoing.sort_unstable();
-            incoming.sort_unstable();
+            // Maybe sort? But if they change, then topology changes, so sorting is kinda stupid...
 
             outgoing.hash(&mut hasher);
             incoming.hash(&mut hasher);

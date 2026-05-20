@@ -515,6 +515,7 @@ layers:
           active: true
           pressable: true
           editable: true
+
       - !Rect
         id: set_cursor_to_destruction
         actions:

@@ -96,7 +96,7 @@ impl LocalPos {
 impl WorldPos {
     #[inline]
     pub fn new(chunk: ChunkCoord, local: LocalPos) -> Self {
-        Self { chunk, local }
+        Self { chunk, local }.normalize()
     }
 
     #[inline]
@@ -144,25 +144,31 @@ impl WorldPos {
         // Since this result is relative to the camera, it is small and fits in f32.
         Vec3::new(dx as f32, dy as f32, dz as f32)
     }
+
+    #[inline]
     pub fn normalize(mut self) -> Self {
-        let cs = chunk_size() as f32;
-        // push local.x into [0, chunk_size)
-        let dx = (self.local.x / cs).floor() as i32;
+        let cs = chunk_size() as f64;
+
+        let lx = self.local.x as f64;
+        let lz = self.local.z as f64;
+
+        let dx = (lx / cs).floor() as i32;
+        let dz = (lz / cs).floor() as i32;
+
         self.chunk.x += dx;
-        self.local.x -= dx as f32 * cs;
-
-        let dz = (self.local.z / cs).floor() as i32;
         self.chunk.z += dz;
-        self.local.z -= dz as f32 * cs;
 
-        // handle negative edge cases (if local becomes -eps due to float error)
+        self.local.x = (lx - dx as f64 * cs) as f32;
+        self.local.z = (lz - dz as f64 * cs) as f32;
+
         if self.local.x < 0.0 {
             self.chunk.x -= 1;
-            self.local.x += cs;
+            self.local.x += cs as f32;
         }
+
         if self.local.z < 0.0 {
             self.chunk.z -= 1;
-            self.local.z += cs;
+            self.local.z += cs as f32;
         }
 
         self
@@ -686,6 +692,33 @@ impl WorldPos {
         }
 
         (weighted_sum / total_weight) as f32
+    }
+
+    #[inline]
+    pub fn set_x(&mut self, x: f64) {
+        let cs = chunk_size() as f64;
+
+        let chunk_x = (x / cs).floor() as i32;
+        let local_x = x - (chunk_x as f64 * cs);
+
+        self.chunk.x = chunk_x;
+        self.local.x = local_x as f32;
+    }
+
+    #[inline]
+    pub fn set_z(&mut self, z: f64) {
+        let cs = chunk_size() as f64;
+
+        let chunk_z = (z / cs).floor() as i32;
+        let local_z = z - (chunk_z as f64 * cs);
+
+        self.chunk.z = chunk_z;
+        self.local.z = local_z as f32;
+    }
+
+    #[inline]
+    pub fn set_y(&mut self, y: f64) {
+        self.local.y = y as f32;
     }
 }
 impl Default for WorldPos {

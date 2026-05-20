@@ -15,6 +15,7 @@
 // ID Newtypes
 // ============================================================================
 
+use crate::data::Settings;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
@@ -29,12 +30,15 @@ use crate::world::roads::road_mesh_manager::{
 };
 use crate::world::roads::road_structs::*;
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::terrain::chunk_builder::ChunkMeshLod;
+use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 use std::hash::{Hash, Hasher};
+use std::mem::replace;
 use xxhash_rust::xxh3::xxh3_64;
 
 pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
@@ -44,13 +48,15 @@ type PartitionId = u32;
 /// Arms are sorted by bearing angle (clockwise from north, or whatever convention).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Arm {
-    segment: SegmentId,
+    segment_id: SegmentId,
     /// Bearing angle in radians [0, 2π), CCW from +X axis
     bearing: f32,
     /// Direction vector pointing AWAY from node center (normalized)
     direction: Vec3,
     /// Half-width of the road at this arm (lanes + sidewalk)
     half_width: f32,
+    /// Length of this arm/corridor
+    pub corridor_length: f32,
     /// Whether the segment points toward this node (end == node_id)
     points_to_node: bool,
 
@@ -69,18 +75,20 @@ impl Arm {
         bearing: f32,
         direction: Vec3,
         half_width: f32,
+        corridor_length: f32,
         points_to_node: bool,
     ) -> Self {
         Self {
-            segment,
+            segment_id: segment,
             bearing,
             direction: direction.normalize_or_zero(),
             half_width,
+            corridor_length,
             points_to_node,
             incoming_lanes: Vec::new(),
             outgoing_lanes: Vec::new(),
             travel_times: HashMap::new(),
-            // 1: lowest partitions, ExpMovAvg
+            // 1: lowest partitions, ExpMovAvg  Nah idk
             //
             //
             //
@@ -89,9 +97,11 @@ impl Arm {
     }
 
     // === Getters ===
-
+    pub fn corridor_length(&self) -> f32 {
+        self.corridor_length
+    }
     pub fn segment(&self) -> SegmentId {
-        self.segment
+        self.segment_id
     }
 
     pub fn bearing(&self) -> f32 {
@@ -209,6 +219,19 @@ impl Arm {
         let offset = self.direction * distance + self.left_perpendicular() * self.half_width;
         center.add_vec3(offset)
     }
+
+    #[inline]
+    pub fn road_type<'a>(
+        &self,
+        storage: &RoadStorage,
+        road_types: &'a RoadTypes,
+    ) -> Option<&'a RoadType> {
+        let segment = storage.segment(self.segment_id);
+        let Some(road_type) = road_types.get_road_type(segment.road_type_id) else {
+            return None;
+        };
+        Some(road_type)
+    }
 }
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
@@ -312,7 +335,14 @@ impl Node {
     pub fn outgoing_lanes(&self) -> &[LaneId] {
         &self.outgoing_lanes
     }
-
+    #[inline]
+    pub fn replace_incoming_lanes(&mut self, lanes: Vec<LaneId>) {
+        self.incoming_lanes = lanes;
+    }
+    #[inline]
+    pub fn replace_outgoing_lanes(&mut self, lanes: Vec<LaneId>) {
+        self.outgoing_lanes = lanes;
+    }
     #[inline]
     pub fn lanes(&self) -> impl Iterator<Item = &LaneId> {
         self.incoming_lanes.iter().chain(self.outgoing_lanes.iter())
@@ -345,6 +375,16 @@ impl Node {
     #[inline]
     pub fn disable(&mut self) {
         self.enabled = false;
+    }
+    pub fn update_heights(
+        &mut self,
+        chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
+        terrain_gen: &TerrainGenerator,
+    ) {
+        for nodelane in self.node_lanes.iter_mut() {
+            nodelane.update_heights(chunks, terrain_gen);
+        }
+        self.pos.local.y = Terrain::get_height_at_explicit(chunks, terrain_gen, self.pos, true);
     }
 }
 
@@ -586,7 +626,7 @@ impl NodeLane {
         merging: Vec<LaneRef>,
         splitting: Vec<LaneRef>,
         geometry: LaneGeometry,
-        // Cached costs for pathfinding
+        // Cached costs for signfinding
         base_cost: f32,
         dynamic_cost: f32,
         speed_limit: f32,
@@ -667,6 +707,13 @@ impl NodeLane {
     pub fn allows_vehicle(&self, vehicle_type: u32) -> bool {
         (self.vehicle_mask & vehicle_type) != 0
     }
+    pub fn update_heights(
+        &mut self,
+        chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
+        terrain_gen: &TerrainGenerator,
+    ) {
+        self.geometry.update_heights(chunks, terrain_gen);
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LaneGeometry {
@@ -713,6 +760,16 @@ impl LaneGeometry {
         }
         let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx);
         (best_point, best_dist, tangent)
+    }
+    pub fn update_heights(
+        &mut self,
+        chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
+        terrain_gen: &TerrainGenerator,
+    ) {
+        for point in self.points.iter_mut() {
+            point.local.y = Terrain::get_height_at_explicit(chunks, terrain_gen, *point, true);
+        }
+        *self = Self::from_polyline(self.points.clone());
     }
 }
 
@@ -796,7 +853,7 @@ impl RoadStorage {
         };
 
         self.node_to_region.push(region_id);
-        self.active_region_count += 1;
+        self.active_region_count += 1; // TODO
 
         id
     }
@@ -1064,13 +1121,22 @@ impl RoadStorage {
             .iter()
             .enumerate()
             .filter_map(|(idx, seg)| {
-                if !seg.enabled {
+                if !seg.is_enabled() {
                     return None;
                 }
 
                 let start = self.nodes.get(seg.start.raw() as usize)?;
+                if !start.is_enabled() {
+                    println!(
+                        "Shit Error! In segment_ids_touchin_chunk(). Start node is DISABLED!?!"
+                    );
+                    return None;
+                };
                 let end = self.nodes.get(seg.end.raw() as usize)?;
-
+                if !end.is_enabled() {
+                    println!("Shit Error! In segment_ids_touchin_chunk(). End node is DISABLED!?!");
+                    return None;
+                };
                 let start_pos = start.position();
                 let end_pos = end.position();
 
@@ -1150,6 +1216,13 @@ impl RoadStorage {
             let arms = gather_arms(self, road_types, node_id, gizmo);
             self.nodes[node_id.0 as usize].arms = arms;
         }
+        let lane = &self.lanes[id.0 as usize];
+        self.nodes[lane.from.0 as usize]
+            .incoming_lanes
+            .retain(|lane_id| *lane_id != id);
+        self.nodes[lane.to.0 as usize]
+            .incoming_lanes
+            .retain(|lane_id| *lane_id != id);
     }
 
     #[inline]
@@ -1453,6 +1526,7 @@ impl RoadStorage {
         nodes: Vec<(NodeId, Node)>,
         segments: Vec<(SegmentId, Segment)>,
         lanes: Vec<(LaneId, Lane)>,
+        nodes_needing_regen: Vec<(NodeId, Node)>,
     ) {
         let node_base = self.nodes.len() as u32;
         let seg_base = self.segments.len() as u32;
@@ -1465,6 +1539,7 @@ impl RoadStorage {
         // Nodes: always valid, they are the roots.
         let remap_node: HashMap<NodeId, NodeId> = nodes
             .iter()
+            .chain(nodes_needing_regen.iter())
             .enumerate()
             .map(|(i, (old, _))| (*old, NodeId::new(node_base + i as u32)))
             .collect();
@@ -1499,7 +1574,8 @@ impl RoadStorage {
         };
 
         // ── insert nodes ──────────────────────────────────────────────────────────
-        for (_, mut node) in nodes {
+        for (_, mut node) in nodes.into_iter().chain(nodes_needing_regen.into_iter()) {
+            // OMG so stupid! I forgot to add it here!!
             node.incoming_lanes = node
                 .incoming_lanes
                 .iter()
@@ -1511,9 +1587,10 @@ impl RoadStorage {
                 .filter_map(|id| remap_lane.get(id).copied())
                 .collect();
 
-            node.arms.retain(|arm| remap_seg.contains_key(&arm.segment));
+            node.arms
+                .retain(|arm| remap_seg.contains_key(&arm.segment_id));
             for arm in &mut node.arms {
-                arm.segment = remap_seg[&arm.segment];
+                arm.segment_id = remap_seg[&arm.segment_id];
                 arm.incoming_lanes = arm
                     .incoming_lanes
                     .iter()
@@ -1594,6 +1671,26 @@ impl RoadStorage {
             lane.to = remap_node[&lane.to];
             lane.segment = remap_seg[&lane.segment];
             self.lanes.push(lane);
+        }
+    }
+
+    // When the terrain changes, so must the roads.
+    pub fn update_heights_in_chunk(
+        &mut self,
+        chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
+        terrain_gen: &TerrainGenerator,
+        coord: ChunkCoord,
+    ) {
+        let seg_ids: Vec<SegmentId> = self.segment_ids_touching_chunk(coord);
+
+        for seg_id in seg_ids {
+            let seg = &self.segments[seg_id.0 as usize];
+            for lane_id in &seg.lanes {
+                let lane = &mut self.lanes[lane_id.0 as usize];
+                lane.geometry.update_heights(chunks, terrain_gen);
+            }
+            let node = &mut self.nodes[seg.start.0 as usize];
+            node.update_heights(chunks, terrain_gen);
         }
     }
 }
@@ -1964,6 +2061,7 @@ pub enum RoadCommand {
         nodes: Vec<(NodeId, Node)>,
         segments: Vec<(SegmentId, Segment)>,
         lanes: Vec<(LaneId, Lane)>,
+        nodes_needing_regen: Vec<(NodeId, Node)>,
     },
     ClearNodeLanes {
         node_id: NodeId,
@@ -2020,9 +2118,9 @@ pub enum RoadCommand {
     /// Procedurally rebuild node lanes using *current* incoming/outgoing segment lanes.
     MakeIntersection {
         node_id: NodeId,
-        params: IntersectionBuildParams,
+        intersection_params: IntersectionBuildParams,
         chunk_id: ChunkId,
-        clear: bool,
+        recalc_clearance: bool,
     },
     /// Begin segment upgrade (disables old segment).
     UpgradeSegmentBegin {
@@ -2032,6 +2130,11 @@ pub enum RoadCommand {
     /// End segment upgrade (records new segment IDs for replay).
     UpgradeSegmentEnd {
         new_segments: Vec<SegmentId>,
+        chunk_id: ChunkId,
+    },
+    ReplaceNode {
+        old_node_id: NodeId,
+        new_node: Node,
         chunk_id: ChunkId,
     },
 }
@@ -2058,6 +2161,7 @@ impl RoadCommand {
             RoadCommand::MakeIntersection { chunk_id, .. } => *chunk_id,
             RoadCommand::UpgradeSegmentBegin { chunk_id, .. } => *chunk_id,
             RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => *chunk_id,
+            RoadCommand::ReplaceNode { chunk_id, .. } => *chunk_id,
         }
     }
 }
@@ -2087,6 +2191,7 @@ pub fn apply_road_commands_real(
     terrain: &mut Terrain,
     road_manager: &mut RoadManager,
     car_subsystem: &mut Cars,
+    settings: &Settings,
     gizmo: &mut Gizmo,
     commands: &[RoadEditorCommand],
 ) {
@@ -2096,6 +2201,7 @@ pub fn apply_road_commands_real(
                 terrain,
                 road_manager,
                 car_subsystem,
+                settings,
                 gizmo,
                 road_command,
                 false,
@@ -2109,6 +2215,7 @@ pub fn apply_road_commands_preview(
     terrain: &mut Terrain,
     roads: &mut Roads,
     car_subsystem: &mut Cars,
+    settings: &Settings,
     gizmo: &mut Gizmo,
 ) {
     roads.road_manager.preview_roads.clear();
@@ -2120,6 +2227,7 @@ pub fn apply_road_commands_preview(
                 terrain,
                 &mut roads.road_manager,
                 car_subsystem,
+                settings,
                 gizmo,
                 road_command,
                 true,
@@ -2143,7 +2251,6 @@ pub fn apply_road_commands_preview(
             _ => {}
         }
     }
-    println!("{:?}", destruction_preview);
     let mut allocator = PreviewIdAllocator::new();
     let mut road_commands: Vec<RoadCommand> = Vec::new();
 
@@ -2204,6 +2311,7 @@ pub fn apply_road_commands_preview(
             terrain,
             &mut roads.road_manager,
             car_subsystem,
+            settings,
             gizmo,
             &cmd,
             true,
@@ -2216,6 +2324,7 @@ pub fn apply_road_command(
     terrain: &mut Terrain,
     road_manager: &mut RoadManager,
     car_subsystem: &mut Cars,
+    settings: &Settings,
     gizmo: &mut Gizmo,
     road_command: &RoadCommand,
     is_preview: bool,
@@ -2308,8 +2417,14 @@ pub fn apply_road_command(
             nodes,
             segments,
             lanes,
+            nodes_needing_regen,
         } => {
-            storage.add_raw(nodes.clone(), segments.clone(), lanes.clone());
+            storage.add_raw(
+                nodes.clone(),
+                segments.clone(),
+                lanes.clone(),
+                nodes_needing_regen.clone(),
+            );
             CommandResult::Ok
         }
         RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
@@ -2322,6 +2437,9 @@ pub fn apply_road_command(
                 return CommandResult::InvalidReference;
             }
             storage.disable_node(*node_id, road_types, gizmo);
+            if !is_preview {
+                //car_subsystem.remove_spawning_node(); // TODO
+            }
             CommandResult::Ok
         }
         RoadCommand::EnableNode { node_id, chunk_id } => {
@@ -2400,9 +2518,9 @@ pub fn apply_road_command(
         }
         RoadCommand::MakeIntersection {
             node_id,
-            params,
+            intersection_params,
             chunk_id,
-            clear,
+            recalc_clearance: clear,
         } => {
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
@@ -2412,11 +2530,15 @@ pub fn apply_road_command(
 
             storage.node_mut(*node_id).arms = arms;
 
-            let Some(road_type) = road_types.get_road_type(params.road_type_id) else {
-                return CommandResult::InvalidReference;
-            };
             build_intersection_at_node(
-                terrain, storage, road_types, *node_id, params, road_type, *clear, gizmo,
+                terrain,
+                storage,
+                road_types,
+                *node_id,
+                intersection_params,
+                *clear,
+                settings,
+                gizmo,
             );
             CommandResult::Ok
         }
@@ -2431,6 +2553,15 @@ pub fn apply_road_command(
             CommandResult::Ok
         }
         RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => CommandResult::Ok,
+        RoadCommand::ReplaceNode {
+            chunk_id,
+            old_node_id,
+            new_node,
+        } => {
+            let node = storage.node_mut(*old_node_id);
+            let _ = replace(node, new_node.clone());
+            CommandResult::Ok
+        }
     }
 }
 
@@ -2463,6 +2594,7 @@ pub fn apply_command(
     road_style_params: &RoadStyleParams,
     command: RoadEditorCommand,
     is_preview: bool,
+    settings: &Settings,
     gizmo: &mut Gizmo,
 ) -> CommandResult {
     let storage = if is_preview {
@@ -2562,8 +2694,9 @@ pub fn apply_command(
                     nodes,
                     segments,
                     lanes,
+                    nodes_needing_regen,
                 } => {
-                    storage.add_raw(nodes, segments, lanes);
+                    storage.add_raw(nodes, segments, lanes, nodes_needing_regen);
                     CommandResult::Ok
                 }
                 RoadCommand::ClearNodeLanes { node_id, chunk_id } => {
@@ -2664,21 +2797,18 @@ pub fn apply_command(
                 }
                 RoadCommand::MakeIntersection {
                     node_id,
-                    params,
+                    intersection_params: params,
                     chunk_id,
-                    clear,
+                    recalc_clearance: clear,
                 } => {
                     if node_id.raw() as usize >= storage.node_count() {
                         return CommandResult::InvalidReference;
                     }
-                    let Some(road_type) = road_types.get_road_type(params.road_type_id) else {
-                        return CommandResult::InvalidReference;
-                    };
                     let arms = gather_arms(storage, road_types, node_id, gizmo);
 
                     storage.node_mut(node_id).arms = arms;
                     build_intersection_at_node(
-                        terrain, storage, road_types, node_id, &params, road_type, clear, gizmo,
+                        terrain, storage, road_types, node_id, &params, clear, settings, gizmo,
                     );
 
                     affected_chunk = Some(chunk_id);
@@ -2696,6 +2826,16 @@ pub fn apply_command(
                     CommandResult::Ok
                 }
                 RoadCommand::UpgradeSegmentEnd { chunk_id, .. } => {
+                    affected_chunk = Some(chunk_id);
+                    CommandResult::Ok
+                }
+                RoadCommand::ReplaceNode {
+                    chunk_id,
+                    old_node_id,
+                    new_node,
+                } => {
+                    let node = storage.node_mut(old_node_id);
+                    let _ = replace(node, new_node);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
@@ -2720,139 +2860,6 @@ pub fn apply_command(
     }
 }
 
-/// Applies a batch of commands in order, ensuring deterministic execution.
-pub fn apply_commands(
-    terrain: &mut Terrain,
-    road_mesh_manager: &mut RoadMeshManager,
-    road_manager: &mut RoadManager,
-    car_subsystem: &mut Cars,
-    road_style_params: &RoadStyleParams,
-    is_preview: bool,
-    gizmo: &mut Gizmo,
-    commands: Vec<RoadEditorCommand>,
-) -> Vec<CommandResult> {
-    commands
-        .into_iter()
-        .map(|cmd| {
-            apply_command(
-                terrain,
-                road_mesh_manager,
-                car_subsystem,
-                road_manager,
-                road_style_params,
-                cmd,
-                is_preview,
-                gizmo,
-            )
-        })
-        .collect()
-}
-
-/// Processes preview commands and generates preview road geometry.
-/// Called every frame after RoadEditor::update().
-pub fn apply_preview_commands(
-    terrain: &mut Terrain,
-    road_mesh_manager: &mut RoadMeshManager,
-    roads: &mut Roads,
-    car_subsystem: &mut Cars,
-    road_style_params: &RoadStyleParams,
-    gizmo: &mut Gizmo,
-) {
-    roads.road_manager.preview_roads.clear();
-
-    // 1) Apply explicit Road commands immediately
-    for cmd in &roads.road_commands {
-        if let RoadEditorCommand::Road(_) = cmd {
-            apply_command(
-                terrain,
-                road_mesh_manager,
-                car_subsystem,
-                &mut roads.road_manager,
-                road_style_params,
-                cmd.clone(),
-                true,
-                gizmo,
-            );
-        }
-    }
-
-    // 2) Collect preview inputs
-    let mut node_previews: Vec<&NodePreview> = Vec::new();
-    let mut crossing_previews: Vec<&CrossingPoint> = Vec::new();
-    let mut segment_preview: Option<&SegmentPreview> = None;
-
-    for cmd in &roads.road_commands {
-        match cmd {
-            RoadEditorCommand::PreviewNode(n) => node_previews.push(n),
-            RoadEditorCommand::PreviewSegment(s) => segment_preview = Some(s),
-            RoadEditorCommand::PreviewCrossing(c) => crossing_previews.push(c),
-            RoadEditorCommand::PreviewClear => return,
-            _ => {}
-        }
-    }
-
-    let mut allocator = PreviewIdAllocator::new();
-    let mut road_commands: Vec<RoadCommand> = Vec::new();
-
-    // 3) Crossing preview (independent)
-    if !crossing_previews.is_empty() {
-        road_commands.extend(generate_intersection_preview(
-            terrain,
-            &mut roads.road_manager.preview_roads,
-            &roads.road_manager.roads,
-            &mut allocator,
-            road_style_params,
-            &crossing_previews,
-        ));
-    }
-
-    // 4) Segment preview (independent)
-    if let Some(seg) = segment_preview {
-        if seg.is_valid {
-            road_commands.extend(generate_segment_preview(
-                terrain,
-                roads,
-                &mut allocator,
-                road_style_params,
-                seg,
-            ));
-        } else {
-            road_commands.extend(generate_invalid_segment_preview(
-                terrain,
-                roads,
-                &mut allocator,
-                road_style_params,
-                seg,
-            ));
-        }
-    }
-
-    // 5) Hover nodes (independent, lower priority visually)
-    if segment_preview.is_none() && !node_previews.is_empty() {
-        road_commands.extend(generate_hover_preview(
-            terrain,
-            roads,
-            &mut allocator,
-            road_style_params,
-            &node_previews,
-        ));
-    }
-
-    // 6) Apply all generated preview commands
-    for cmd in road_commands {
-        apply_command(
-            terrain,
-            road_mesh_manager,
-            car_subsystem,
-            &mut roads.road_manager,
-            road_style_params,
-            RoadEditorCommand::Road(cmd),
-            true,
-            gizmo,
-        );
-    }
-}
-
 fn generate_intersection_preview(
     terrain_renderer: &Terrain,
     preview_storage: &mut RoadStorage,
@@ -2866,7 +2873,6 @@ fn generate_intersection_preview(
         match crossing.kind {
             CrossingKind::ExistingNode(n) => {
                 // copy_real_node_to_preview(n, preview_storage, real_storage);
-                // println!("hi");
                 // commands.push(RoadCommand::MakeIntersection {
                 //     node_id: n,
                 //     chunk_id: 0,
@@ -2978,8 +2984,22 @@ fn generate_destruction_preview(
             .into_iter()
             .map(|id| (id, roads.road_manager.roads.lane(&id).clone()))
             .collect(),
+        nodes_needing_regen: impact
+            .nodes_needing_regen
+            .into_iter()
+            .map(|node_id| {
+                (
+                    node_id,
+                    roads
+                        .road_manager
+                        .roads
+                        .node(node_id)
+                        .unwrap_or(&Node::default())
+                        .clone(),
+                )
+            })
+            .collect(),
     });
-    println!("{:?}", commands);
     commands
 }
 

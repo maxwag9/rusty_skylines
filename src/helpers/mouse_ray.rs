@@ -319,7 +319,7 @@ pub fn raycast_chunk_heightgrid(
             let hit_pos = ray.at(hit_t);
 
             // Refine Y using bilinear height sampling
-            let hit_y = height_bilinear_world(grid, hit_pos);
+            let hit_y = height_bilinear_world(grid, &hit_pos);
             let refined_pos = WorldPos::new(
                 hit_pos.chunk,
                 LocalPos::new(hit_pos.local.x, hit_y, hit_pos.local.z),
@@ -499,7 +499,7 @@ pub fn height_bilinear(grid: &ChunkHeightGrid, local_x: f32, local_z: f32) -> f3
 /// Sample height at a WorldPos by converting to local coords for the grid's chunk.
 /// Returns None if the position is outside this chunk.
 #[inline]
-pub fn height_bilinear_world(grid: &ChunkHeightGrid, pos: WorldPos) -> f32 {
+pub fn height_bilinear_world(grid: &ChunkHeightGrid, pos: &WorldPos) -> f32 {
     height_bilinear(grid, pos.local.x, pos.local.z)
 }
 

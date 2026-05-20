@@ -3,8 +3,10 @@
 //! Uses *exactly* the same geometry generation code as normal roads for perfect vertex-for-vertex compatibility.
 //! Node preview for isolated nodes is a closed circular road loop (separate ring generation, same meshing).
 //! Multiple preview segments are supported (e.g. for showing connected existing roads during placement).
+
 use crate::world::roads::road_mesh_manager::ChunkMesh;
 use crate::world::roads::road_structs::*;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
 
@@ -42,6 +44,8 @@ pub struct RoadPreviewState {
     pub snap: Option<SnapPreview>,
     pub error: Option<PreviewError>,
     pub destruction: bool,
+    prev_hash: u64,
+    pub has_changed: bool,
 }
 
 impl RoadPreviewState {
@@ -49,6 +53,14 @@ impl RoadPreviewState {
         Self::default()
     }
     pub fn ingest(&mut self, cmds: &[RoadEditorCommand]) {
+        let new_hash = Self::hash_preview_cmds(cmds);
+        self.has_changed = new_hash != self.prev_hash;
+
+        if !self.has_changed {
+            return; // Stable — nothing to rebuild
+        }
+
+        self.prev_hash = new_hash;
         self.snap = None;
         self.error = None;
         for cmd in cmds {
@@ -70,6 +82,49 @@ impl RoadPreviewState {
                 _ => {}
             }
         }
+    }
+    fn hash_preview_cmds(cmds: &[RoadEditorCommand]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for cmd in cmds {
+            match cmd {
+                // Assign a unique discriminant per variant so
+                // e.g. hash(PreviewClear) != hash(PreviewSnap(default))
+                RoadEditorCommand::PreviewClear => {
+                    0u8.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewSnap(snap) => {
+                    1u8.hash(&mut hasher);
+                    snap.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewNode(n) => {
+                    2u8.hash(&mut hasher);
+                    n.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewLane(l) => {
+                    3u8.hash(&mut hasher);
+                    l.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewSegment(s) => {
+                    4u8.hash(&mut hasher);
+                    s.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewError(e) => {
+                    5u8.hash(&mut hasher);
+                    e.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewCrossing(c) => {
+                    6u8.hash(&mut hasher);
+                    c.hash(&mut hasher);
+                }
+                RoadEditorCommand::PreviewDestruction(d) => {
+                    7u8.hash(&mut hasher);
+                    d.hash(&mut hasher);
+                }
+                // Road(_) deliberately skipped — only preview commands matter
+                _ => {}
+            }
+        }
+        hasher.finish()
     }
 }
 

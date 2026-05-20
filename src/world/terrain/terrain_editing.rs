@@ -4,17 +4,19 @@ use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::buildings::BuildingId;
 use crate::world::roads::road_structs::{NodeId, SegmentId};
+use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, NeighborEdgeHeights, generate_height_grid,
     regenerate_vertices_from_height_grid,
 };
 use crate::world::terrain::terrain_gen::TerrainGenerator;
+use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::terrain::terrain_threads::{LoadedChunksSnapshot, TerrainEditsSnapshot};
+use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use wgpu::{Device, Queue};
-// ── Public types ──────────────────────────────────────────────────────────────
 
 pub type EditId = u64;
 
@@ -25,8 +27,6 @@ pub enum TerrainEditSource {
     Segment(SegmentId),
     Intersection(NodeId),
 }
-
-// ── TerrainEdit ───────────────────────────────────────────────────────────────
 
 /// A single terrain editing operation. This is the canonical, persistent
 /// representation of all terrain changes. On load the list is replayed from
@@ -160,8 +160,6 @@ impl TerrainEdit {
     }
 }
 
-// ── Brush traits (kept for apply_brush generic API) ───────────────────────────
-
 pub trait Falloff {
     fn weight(d2: f32, r2: f32) -> f32;
 }
@@ -192,8 +190,6 @@ impl BrushOp for Lower {
     }
 }
 
-// ── Save format ───────────────────────────────────────────────────────────────
-
 #[derive(Serialize, Deserialize, Default)]
 struct SaveFile {
     version: String,
@@ -201,8 +197,6 @@ struct SaveFile {
     /// The complete ordered list of terrain edit operations.
     edits: Vec<TerrainEdit>,
 }
-
-// ── TerrainEditor ─────────────────────────────────────────────────────────────
 
 /// Manages terrain modifications as an ordered list of operations.
 ///
@@ -522,13 +516,22 @@ impl TerrainEditor {
         arena: &mut TerrainMeshArena,
         chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
+        roads: &mut Roads,
     ) -> Vec<GpuChunkHandle> {
         if self.dirty_chunks.is_empty() {
             return Vec::new();
         }
 
         let mut scratch = GeometryScratch::default();
-        self.upload_dirty_chunks(device, queue, arena, chunks, terrain_gen, &mut scratch)
+        self.upload_dirty_chunks(
+            device,
+            queue,
+            arena,
+            chunks,
+            terrain_gen,
+            &mut scratch,
+            roads,
+        )
     }
 
     // ── GPU upload ────────────────────────────────────────────────────────────
@@ -541,19 +544,31 @@ impl TerrainEditor {
         chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
         scratch: &mut GeometryScratch<Vertex>,
+        roads: &mut Roads,
     ) -> Vec<GpuChunkHandle> {
         // Drain here so we don't hold a borrow on self during the loop.
         let dirty: Vec<ChunkCoord> = self.dirty_chunks.drain().collect();
         let mut freed = Vec::new();
 
-        for coord in dirty {
+        for coord in dirty.iter() {
             if let Some(old) =
-                self.upload_single_chunk(coord, device, queue, arena, chunks, terrain_gen, scratch)
+                self.upload_single_chunk(*coord, device, queue, arena, chunks, terrain_gen, scratch)
             {
                 freed.push(old);
             }
         }
-
+        // for coord in dirty {
+        //     roads.road_manager.roads.update_heights_in_chunk(chunks, terrain_gen, coord);
+        //     roads.road_editor.pending_chunk_rebuilds.push(coord.chunk_id());
+        //     for node_id in roads.road_manager.roads.nodes_in_chunk(coord.chunk_id()) {
+        //         // roads.road_editor.pending_outside_commands.push(RoadEditorCommand::Road(MakeIntersection {
+        //         //     node_id,
+        //         //     intersection_params: IntersectionBuildParams::default(),
+        //         //     chunk_id: coord.chunk_id(),
+        //         //     recalc_clearance: true
+        //         // }))
+        //     }
+        // };
         freed
     }
 
@@ -1217,4 +1232,31 @@ pub fn extract_neighbor_edges(
     }
 
     edges
+}
+
+pub fn compute_best_fit_height_for_polygon(terrain: &Terrain, polygon: &[WorldPos]) -> f32 {
+    let centroid = WorldPos::centroid(polygon);
+
+    // Sample terrain at centroid and a few offset points to estimate slope
+    let base = terrain.get_height_at(centroid, true);
+
+    // Small cross pattern to estimate local slope
+    let offset = 4.0f32;
+    let samples = [
+        centroid.add_vec2(Vec2::new(offset, 0.0)),
+        centroid.add_vec2(Vec2::new(-offset, 0.0)),
+        centroid.add_vec2(Vec2::new(0.0, offset)),
+        centroid.add_vec2(Vec2::new(0.0, -offset)),
+    ];
+
+    let mut sum = base;
+    let mut count = 1;
+
+    for p in samples {
+        let h = terrain.get_height_at(p, true);
+        sum += h;
+        count += 1;
+    }
+
+    sum / count as f32
 }

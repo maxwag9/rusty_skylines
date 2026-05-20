@@ -19,6 +19,7 @@ use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::sky::{STAR_COUNT, STARS_VERTEX_LAYOUT};
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::terrain::water::SimpleVertex;
+use wgpu::CompareFunction::Always;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, ShadowOptions};
@@ -476,6 +477,7 @@ pub fn render_roads<'a>(
     let base_bias = road_bias(settings, 3, 2.0);
     let preview_bias = road_bias(settings, 4, 2.0);
     let targets = color_and_normals_and_motion_targets(pipelines);
+
     // Roads
     render_manager.render(
         keys.as_slice(),
@@ -508,13 +510,20 @@ pub fn render_roads<'a>(
     else {
         return;
     };
+
     // Preview Roads
     render_manager.render(
         keys.as_slice(),
         shader_path.as_path(),
         &PipelineOptions {
             topology: TriangleList,
-            depth_stencil: Some(depth_stencil(preview_bias, settings)),
+            depth_stencil: Some(DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(Always),
+                stencil: Default::default(),
+                bias: preview_bias,
+            }),
             msaa_samples,
             vertex_layouts: Vec::from([AdvancedVertex::layout()]),
             cull_mode: Some(Face::Back),
@@ -846,7 +855,7 @@ pub fn color_target_ui(
         write_mask: ColorWrites::ALL,
     })]
 }
-pub(crate) fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
+pub fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthStencilState {
     DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: Some(true),
@@ -856,6 +865,23 @@ pub(crate) fn depth_stencil(bias: DepthBiasState, settings: &Settings) -> DepthS
             Some(CompareFunction::LessEqual)
         },
         stencil: Default::default(),
+        bias,
+    }
+}
+pub fn depth_stencil_with_stencil(
+    bias: DepthBiasState,
+    stencil: StencilState,
+    settings: &Settings,
+) -> DepthStencilState {
+    DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(true),
+        depth_compare: if settings.reversed_depth_z {
+            Some(CompareFunction::GreaterEqual)
+        } else {
+            Some(CompareFunction::LessEqual)
+        },
+        stencil,
         bias,
     }
 }
