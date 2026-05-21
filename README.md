@@ -10,9 +10,9 @@ A Cities: Skylines inspired game featuring better features and way better perfor
 
 ---
 ## Priorities:
-- **Small game size** (under 50 MB TOTAL, currently 7MB)  🥵 Compared to Cities Skylines 2 at 60000MB  
+- **Small game size** (under 50 MB TOTAL, currently 9MB)  🥵 Compared to Cities Skylines 2 at 60000MB  
 
-- Procedural textures and models  
+- Procedural textures and models, no big assets  
 
 - Extremely performant and realistic traffic Sim (very smart cars)
 
@@ -24,16 +24,16 @@ A Cities: Skylines inspired game featuring better features and way better perfor
 
 - Overall, multithreaded highly parallel simulation for nearly everything, with deferred, long tick rates per chunk  
 
-- Modding in the future with lua for low-performance and wasm for higher complexity/performance  
+- Modding in the **future** with lua for low-performance and wasm for higher complexity/performance  
 
 ---
 ## It currently features:  
 
-A 3D scene with orbiting mechanics and movement of the camera.  
+A 3D scene with orbiting mechanics and movement of the camera. Duh  
 
 The 3D scene has:  
 
-- **Infinite, chunked, procedural Terrain**  
+- **Infinite, chunked, procedural, multithreaded, async Terrain**  
 
 - Sun and moon with moon phases and correct orbiting, both dependent on the sun.  
 
@@ -44,6 +44,12 @@ The 3D scene has:
 - Water rendered with Moon and Sun reflections  
 
 - Roads and cars.
+  
+- Props and trees
+
+- Fully procedural buildings
+
+- Lots and districts system
 
 ---
 ## More features:
@@ -55,10 +61,10 @@ The 3D scene has:
 
 **Cascaded Shadows (4 Cascades)**  
 
-Driving one car with WASD.
+Driving a car with WASD.
 
 A WIP GUI Editor with the ability to edit any GUI in-game and save it,
-allowing expressions and logic and animations to be available through modding. 
+allowing expressions and logic and animations to be available through modding (WIP!!) 
 
 Hot-reloadable shaders (and by extension texture shaders!)
 
@@ -66,7 +72,7 @@ I won't hard-code any GUI, I'll just use the same thing I provide as modding,
 therefore creating great modding support. Win-Win!
 
 All graphics are MSAA anti-aliased. 
-(I didn't see a performance hit yet, but we'll see about that!)
+(I didn't see a performance hit yet, but we'll see about that!) (Now I do see a performance hit when tons of vertices exist, but fine.)
 
 ## Terrain
 
