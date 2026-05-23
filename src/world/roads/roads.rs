@@ -1797,8 +1797,8 @@ pub fn project_point_to_segment_xz(
     seg_end: WorldPos,
 ) -> (f64, f64) {
     // Compute everything relative to seg_start for precision
-    let d = seg_end.to_render_pos(seg_start);
-    let p = point.to_render_pos(seg_start);
+    let d = seg_end.to_relative_pos(seg_start);
+    let p = point.to_relative_pos(seg_start);
 
     let dx = d.x as f64;
     let dz = d.z as f64;
@@ -3244,8 +3244,8 @@ fn segment_touches_chunk_precise(start: WorldPos, end: WorldPos, chunk: ChunkCoo
     let chunk_max = WorldPos::new(chunk, LocalPos::new(cs, 0.0, cs));
 
     // Convert segment to chunk-local coordinates
-    let a = start.to_render_pos(chunk_min);
-    let b = end.to_render_pos(chunk_min);
+    let a = start.to_relative_pos(chunk_min);
+    let b = end.to_relative_pos(chunk_min);
 
     // 2D line-box intersection in XZ plane
     line_intersects_box_2d(

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use glam::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
@@ -124,24 +125,24 @@ impl WorldPos {
     }
 
     #[inline]
-    pub fn to_render_pos(&self, cam: WorldPos) -> Vec3 {
+    pub fn to_relative_pos(&self, rel: WorldPos) -> Vec3 {
         let cs = chunk_size() as f64;
 
         // 1. Calculate delta in INTEGERS first (lossless)
-        let dcx = self.chunk.x as i64 - cam.chunk.x as i64;
-        let dcz = self.chunk.z as i64 - cam.chunk.z as i64;
+        let dcx = self.chunk.x as i64 - rel.chunk.x as i64;
+        let dcz = self.chunk.z as i64 - rel.chunk.z as i64;
 
-        // 2. Convert to f64 for the multiply (safe up to 9 quadrillion chunks)
+        // 2. Convert to f64 for the multiply (safe up to 9 quadrillion chunks) :O
         let dx_chunk = dcx as f64 * cs;
         let dz_chunk = dcz as f64 * cs;
 
         // 3. Add local offsets in f64
-        let dx = dx_chunk + (self.local.x as f64 - cam.local.x as f64);
-        let dy = self.local.y as f64 - cam.local.y as f64;
-        let dz = dz_chunk + (self.local.z as f64 - cam.local.z as f64);
+        let dx = dx_chunk + (self.local.x as f64 - rel.local.x as f64);
+        let dy = self.local.y as f64 - rel.local.y as f64;
+        let dz = dz_chunk + (self.local.z as f64 - rel.local.z as f64);
 
         // 4. Finally cast to f32.
-        // Since this result is relative to the camera, it is small and fits in f32.
+        // Since this result is relative, it is small and fits in f32.
         Vec3::new(dx as f32, dy as f32, dz as f32)
     }
 
@@ -378,15 +379,15 @@ impl WorldPos {
     #[inline]
     pub fn normalize_direction(self) -> Vec3 {
         let origin = WorldPos::zero();
-        self.to_render_pos(origin).normalize_or_zero()
+        self.to_relative_pos(origin).normalize_or_zero()
     }
 
     /// Dot product treating both as displacement vectors.
     #[inline]
     pub fn dot(self, rhs: WorldPos) -> f32 {
         let origin = WorldPos::zero();
-        let a = self.to_render_pos(origin);
-        let b = rhs.to_render_pos(origin);
+        let a = self.to_relative_pos(origin);
+        let b = rhs.to_relative_pos(origin);
         a.dot(b)
     }
 
@@ -719,6 +720,98 @@ impl WorldPos {
     #[inline]
     pub fn set_y(&mut self, y: f64) {
         self.local.y = y as f32;
+    }
+
+    pub fn polygon_direction(polygon: &[WorldPos]) -> Vec3 {
+        let n = polygon.len();
+        if n == 0 {
+            return Vec3::ZERO;
+        } else if n == 1 {
+            return Vec3::ZERO;
+        } else if n == 2 {
+            return polygon[1].direction_to(polygon[0]).normalize_or_zero();
+        }
+
+        // Use centroid as reference (very stable, high precision via dx/dz)
+        let origin = polygon[0];
+        let centroid = WorldPos::centroid(polygon);
+
+        // Accumulate covariance in f64 (only XZ matters for direction)
+        let mut cov_xx = 0.0f64;
+        let mut cov_xz = 0.0f64;
+        let mut cov_zz = 0.0f64;
+        let mut count = 0.0f64;
+
+        for &p in polygon {
+            let dx = origin.dx(p) - origin.dx(centroid);
+            let dz = origin.dz(p) - origin.dz(centroid);
+
+            cov_xx += dx * dx;
+            cov_xz += dx * dz;
+            cov_zz += dz * dz;
+            count += 1.0;
+        }
+
+        if count < 1.0 || (cov_xx + cov_zz).abs() < 1e-8 {
+            // Degenerate case - fall back to first-to-last
+            return polygon
+                .last()
+                .unwrap()
+                .direction_to(polygon[0])
+                .normalize_or_zero();
+        }
+
+        // Average covariance
+        let cov_xx = cov_xx / count;
+        let cov_xz = cov_xz / count;
+        let cov_zz = cov_zz / count;
+
+        // 2D PCA: principal direction via analytic formula
+        let trace = cov_xx + cov_zz;
+        let det = cov_xx * cov_zz - cov_xz * cov_xz;
+
+        // Largest eigenvalue direction
+        let mut dx = cov_xz;
+        let mut dz =
+            (cov_xx - cov_zz) * 0.5 + ((cov_xx - cov_zz) * 0.5).hypot(cov_xz).copysign(1.0);
+
+        // Alternative stable formulation using atan2
+        let theta = 0.5 * (2.0 * cov_xz).atan2(cov_xx - cov_zz);
+        dx = theta.cos();
+        dz = theta.sin();
+
+        // Make sure we have a valid vector
+        let len2 = dx * dx + dz * dz;
+        if len2 < 1e-12 {
+            // Fallback
+            return polygon
+                .last()
+                .unwrap()
+                .direction_to(polygon[0])
+                .normalize_or_zero();
+        }
+
+        let inv_len = 1.0 / len2.sqrt();
+        Vec3::new((dx * inv_len) as f32, 0.0, (dz * inv_len) as f32)
+    }
+
+    pub fn project_polygon_to_plane(
+        polygon: &[WorldPos],
+        plane_centroid: WorldPos,
+        plane_normal: Vec3,
+    ) -> Vec<WorldPos> {
+        let mut result = Vec::with_capacity(polygon.len());
+
+        for &p in polygon {
+            let to_point = p.delta_to(plane_centroid);
+            let dist = to_point.dot(plane_normal);
+
+            // Project point onto plane
+            let projected = p.sub_vec3(plane_normal * dist);
+            result.push(projected);
+        }
+
+        result
     }
 }
 impl Default for WorldPos {

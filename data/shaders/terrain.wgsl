@@ -10,9 +10,12 @@ struct PickUniform {
 @group(0) @binding(0) var material_sampler: sampler;
 @group(0) @binding(2) var grass_tex: texture_2d<f32>;
 @group(0) @binding(3) var grass_tex2: texture_2d<f32>;
+@group(0) @binding(4) var rocky_tex: texture_2d<f32>;
+@group(0) @binding(5) var rocky_tex2: texture_2d<f32>;
+@group(0) @binding(6) var dirt_tex: texture_2d<f32>;
 
-@group(0) @binding(4) var s_shadow: sampler_comparison;
-@group(0) @binding(5) var t_shadow: texture_depth_2d_array;
+@group(0) @binding(7) var s_shadow: sampler_comparison;
+@group(0) @binding(8) var t_shadow: texture_depth_2d_array;
 
 @group(1) @binding(0) var<uniform> uniforms: Uniforms;
 @group(1) @binding(1) var<uniform> pick: PickUniform;
@@ -22,7 +25,7 @@ struct VertexIn {
     @location(1) position: vec3<f32>,
     @location(2) normal: vec3<f32>,
     @location(3) color: vec4<f32>,
-    @location(4) quad_uv: vec2<f32>,  // NEW: 0-1 within each quad
+    @location(4) quad_uv: vec2<f32>
 };
 
 struct VertexOut {
@@ -33,7 +36,7 @@ struct VertexOut {
     @location(3) quad_uv: vec2<f32>,
     @location(4) chunk_xz: vec2<f32>,
     @location(5) curr_clip: vec4<f32>,
-    @location(6) prev_clip: vec4<f32>,
+    @location(6) prev_clip: vec4<f32>
 };
 
 @vertex
@@ -176,14 +179,9 @@ fn fs_main(in: VertexOut) -> FragmentOut {
     let moon_intensity: f32 = 0.22;
     let moon_color = vec3<f32>(0.35, 0.42, 0.60);
 
-    let moon_direct =
-        mix(moon_diffuse, moon_wrapped, grass_amount) *
-        (moon_visible * night_amount * moon_intensity);
+    let moon_direct = mix(moon_diffuse, moon_wrapped, grass_amount) * (moon_visible * night_amount * moon_intensity);
 
-    // -------------------------------------------------------------------------
-    // ============ GRASS TEXTURING (FIXED: NO SWIMMING UVs) ============
-    // -------------------------------------------------------------------------
-    // in.chunk_xz now contains stable world-space XZ (computed in the vertex shader)
+
     let stable_world_xz = in.chunk_xz;
 
     let grass_uv_scale1: f32 = 0.025;
@@ -208,11 +206,34 @@ fn fs_main(in: VertexOut) -> FragmentOut {
     let mix_noise = fbm(mix_p);
 
     let grass_color = mix(grass_a, grass_b, mix_noise);
-    let albedo = mix(in.color, grass_color, grass_amount);
 
-    // -------------------------------------------------------------------------
-    // Final lighting
-    // -------------------------------------------------------------------------
+    let rocky_uv_scale1: f32 = 0.030;
+    let rocky_uv_scale2: f32 = 0.014;
+
+    let rocky_uv1 = fract(stable_world_xz * rocky_uv_scale1);
+
+    let rocky_mix_scale: f32 = 0.33;
+    let rocky_mix_offset = vec2<f32>(11.0, 93.0);
+    let rocky_mix_p = stable_world_xz * rocky_mix_scale + rocky_mix_offset;
+    let rocky_mix_noise = fbm(rocky_mix_p);
+
+    let rocky_uv2_base = stable_world_xz * rocky_uv_scale2;
+    let rocky_uv2 = fract(rot * rocky_uv2_base + vec2<f32>(5.7, 31.9));
+
+    let rocky_a = textureSample(rocky_tex, material_sampler, rocky_uv1).rgb;
+    let rocky_b = textureSample(rocky_tex2, material_sampler, rocky_uv2).rgb;
+    let rocky_color = mix(rocky_a, rocky_b, rocky_mix_noise);
+
+    // Steeper surfaces become rocky
+    let slope = 1.0 - up_facing;
+    let rocky_amount = saturate((slope - 0.0) * 3.0) * saturate(1.0 - grass_amount * 1.5);
+
+    // Blend grass and rock, then blend with vertex color
+    let terrain_color = mix(grass_color, rocky_color, rocky_amount);
+    let terrain_amount = saturate(grass_amount + rocky_amount);
+    let albedo = mix(in.color, terrain_color, terrain_amount);
+
+
     let sun_color = vec3<f32>(1.0, 0.98, 0.92);
 
     var final_color =

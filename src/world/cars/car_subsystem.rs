@@ -132,7 +132,7 @@ impl CarRenderSubsystem {
 
         for &car_id in &close_ids {
             if let Some(car) = car_storage.get(car_id) {
-                let render_pos = car.pos.to_render_pos(camera.eye_world());
+                let render_pos = car.pos.to_relative_pos(camera.eye_world());
 
                 let quat = car.quat.normalize();
 

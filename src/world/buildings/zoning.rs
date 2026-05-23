@@ -7,7 +7,8 @@ use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{
     Building, BuildingId, BuildingParams, BuildingParamsLevels, BuildingStorage, BuildingUsage,
-    Buildings, Color, DrivewayMaterial, MiscBuildingParams, RoofMaterial, RoofType, WallMaterial,
+    Buildings, Color, DrivewayMaterial, GarageParams, MiscBuildingParams, RoofMaterial, RoofType,
+    WallMaterial,
 };
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::ChunkDistance;
@@ -594,6 +595,16 @@ fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<
         ZoningType::Industrial => 2,
         ZoningType::Office => 3,
     };
+    let garage = match lot.zoning_type {
+        ZoningType::None => None,
+        ZoningType::Residential => Some(GarageParams {
+            story_height,
+            num_stories: 1,
+        }),
+        ZoningType::Commercial => None,
+        ZoningType::Industrial => None,
+        ZoningType::Office => None,
+    };
     let miscellaneous = MiscBuildingParams {
         window_material_accent: Default::default(),
         solar_modules: false,
@@ -609,6 +620,7 @@ fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<
         num_stories,
         basement: Default::default(),
         garden: Default::default(),
+        garage,
         miscellaneous: Default::default(),
     };
     let building_params = BuildingParamsLevels {
@@ -2116,9 +2128,9 @@ impl ZoningStorage {
 /// Returns the distance in world units (squared distance for performance).
 pub fn point_to_segment_distance_sq(p: WorldPos, a: WorldPos, b: WorldPos) -> f32 {
     // 1. Convert relevant points to render coordinates (f32)
-    let p_render = p.to_render_pos(p);
-    let a_render = a.to_render_pos(a);
-    let b_render = b.to_render_pos(b);
+    let p_render = p.to_relative_pos(p);
+    let a_render = a.to_relative_pos(a);
+    let b_render = b.to_relative_pos(b);
 
     // 2. Vector from A to B
     let ab_x = b_render.x - a_render.x;

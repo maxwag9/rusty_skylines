@@ -814,8 +814,8 @@ impl RoadEditor {
         let mut pos = match control {
             Some(c) => {
                 // Quadratic bezier: compute relative to start for precision
-                let v_control = c.to_render_pos(start);
-                let v_end = end.to_render_pos(start);
+                let v_control = c.to_relative_pos(start);
+                let v_end = end.to_relative_pos(start);
 
                 let omt = 1.0 - t as f32;
                 // B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
@@ -1732,8 +1732,8 @@ pub fn sample_quadratic_bezier(
 
         // Quadratic Bézier: B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
         // Compute relative to P0 for precision
-        let v1 = p1.to_render_pos(p0);
-        let v2 = p2.to_render_pos(p0);
+        let v1 = p1.to_relative_pos(p0);
+        let v2 = p2.to_relative_pos(p0);
 
         let blend = v1 * (2.0 * one_minus_t * t) + v2 * (t * t);
         let mut p = p0.add_vec3(blend);
@@ -1777,9 +1777,9 @@ pub fn offset_polyline(
         .enumerate()
         .map(|(i, &pt)| {
             let dir = if i + 1 < center.len() {
-                center[i + 1].to_render_pos(pt)
+                center[i + 1].to_relative_pos(pt)
             } else {
-                pt.to_render_pos(center[i - 1])
+                pt.to_relative_pos(center[i - 1])
             };
 
             let dir_xz = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
@@ -1823,6 +1823,6 @@ pub fn sample_polyline_at(points: &[WorldPos], lengths: &[f64], t: f64) -> (Worl
     };
 
     let pos = points[i0].lerp(points[i1], seg_t);
-    let dir = points[i1].to_render_pos(points[i0]).normalize_or_zero();
+    let dir = points[i1].to_relative_pos(points[i0]).normalize_or_zero();
     (pos, dir)
 }

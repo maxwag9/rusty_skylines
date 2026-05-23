@@ -10,7 +10,7 @@ use crate::world::roads::road_subsystem::Roads;
 use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world_state::WorldState;
-use wgpu::Device;
+use wgpu::{Device, Queue};
 
 pub struct World {
     pub world_state: WorldState,
@@ -26,9 +26,14 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(device: &Device, settings: &Settings, game_state: &mut GameState) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        settings: &Settings,
+        game_state: &mut GameState,
+    ) -> Self {
         let world_state = WorldState::new();
-        let terrain = Terrain::new(device, settings, &mut game_state.current_save);
+        let terrain = Terrain::new(device, queue, settings, &mut game_state.current_save);
         Self {
             world_state,
             time: Time::new(),

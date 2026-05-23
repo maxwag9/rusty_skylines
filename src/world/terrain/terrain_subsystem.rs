@@ -393,10 +393,17 @@ pub struct Terrain {
     last_visible: Vec<VisibleChunk>,
 
     pub pending_results: VecDeque<CpuChunkMesh>,
+    device: Device,
+    queue: Queue,
 }
 const VERTEX_SIZE_BYTES: usize = size_of::<Vertex>();
 impl Terrain {
-    pub fn new(device: &Device, settings: &Settings, save_state: &mut SaveState) -> Self {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        settings: &Settings,
+        save_state: &mut SaveState,
+    ) -> Self {
         let cs = chunk_size() as f32;
         let view_radius_render = (64f32 * (64f32 / cs)) as usize;
         let view_radius_generate = (32f32 * (64f32 / cs)) as usize;
@@ -446,14 +453,14 @@ impl Terrain {
             last_visible: vec![],
 
             pending_results: VecDeque::with_capacity(64),
+            device: device.clone(),
+            queue: queue.clone(),
         }
     }
 
     pub fn update(
         &mut self,
         gizmo: &mut Gizmo,
-        device: &Device,
-        queue: &Queue,
         camera: &Camera,
         aspect: f32,
         settings: &Settings,
@@ -475,7 +482,7 @@ impl Terrain {
         let frame = self.frame_state(settings, camera, aspect);
 
         let t0 = Instant::now();
-        self.drain_finished_meshes(device, queue);
+        self.drain_finished_meshes();
         self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -517,7 +524,7 @@ impl Terrain {
 
         let t0 = Instant::now();
         if settings.show_world {
-            self.handle_terrain_editing(device, queue, input_state, roads);
+            self.handle_terrain_editing(input_state, roads);
         }
 
         self.frame_timings.edit_ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -530,25 +537,20 @@ impl Terrain {
         //          self.chunks.len()
         // );
     }
-
-    fn handle_terrain_editing(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        input_state: &mut Input,
-        roads: &mut Roads,
-    ) {
+    pub fn flush_dirty_chunks(&mut self) {
         let freed = self.terrain_editor.flush_dirty_chunks(
-            device,
-            queue,
+            &self.device,
+            &self.queue,
             &mut self.arena,
             &mut self.chunks,
             &self.terrain_gen,
-            roads,
         );
         for h in freed {
             self.arena.free::<Vertex>(h);
         }
+    }
+    fn handle_terrain_editing(&mut self, input_state: &mut Input, roads: &mut Roads) {
+        self.flush_dirty_chunks();
         match self.cursor.mode {
             CursorMode::TerrainEditing => {} // just continue lol
             _ => {
@@ -603,7 +605,7 @@ impl Terrain {
         }
     }
 
-    pub fn drain_finished_meshes(&mut self, device: &Device, queue: &Queue) {
+    pub fn drain_finished_meshes(&mut self) {
         let mut recv_ms = 0.0;
         let mut rebuild_ms = 0.0;
         let mut gpu_ms = 0.0;
@@ -646,8 +648,8 @@ impl Terrain {
             self.free_chunk_gpu(coord);
 
             let handle = self.arena.alloc_and_upload(
-                device,
-                queue,
+                &self.device,
+                &self.queue,
                 &vertices,
                 &indices,
                 &mut GeometryScratch::default(),
@@ -929,7 +931,7 @@ impl Terrain {
     pub fn make_pick_uniforms(&self, queue: &Queue, pick_uniform_buffer: &Buffer, camera: &Camera) {
         let u = if let Some(p) = &self.last_picked {
             PickUniform {
-                pos: p.pos.to_render_pos(camera.eye_world()).to_array(),
+                pos: p.pos.to_relative_pos(camera.eye_world()).to_array(),
                 radius: self.pick_radius_m,
                 underwater: 1,
                 _pad0: [0, 0, 0],
@@ -1106,7 +1108,7 @@ pub fn aabb_in_frustum(planes: &[Plane; 6], min: Vec3, max: Vec3) -> bool {
 fn chunk_aabb_render(cx: i32, cz: i32, eye: WorldPos) -> (Vec3, Vec3) {
     let cs = chunk_size() as f32;
     let origin =
-        WorldPos::new(ChunkCoord::new(cx, cz), LocalPos::new(0.0, 0.0, 0.0)).to_render_pos(eye);
+        WorldPos::new(ChunkCoord::new(cx, cz), LocalPos::new(0.0, 0.0, 0.0)).to_relative_pos(eye);
 
     let min = origin + Vec3::new(0.0, CHUNK_MIN_Y, 0.0);
     let max = origin + Vec3::new(cs, CHUNK_MAX_Y, cs);

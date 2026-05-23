@@ -253,7 +253,7 @@ impl Gizmo {
             } else {
                 let mut offset_sum = Vec3::ZERO;
                 for pos in &positions {
-                    offset_sum += pos.to_render_pos(first_pos);
+                    offset_sum += pos.to_relative_pos(first_pos);
                 }
                 offset_sum /= positions.len() as f32;
                 first_pos.add_vec3(offset_sum)
@@ -500,7 +500,7 @@ impl Gizmo {
         duration: f32,
     ) {
         let cs = chunk_size() as f32;
-        let delta = end.to_render_pos(start);
+        let delta = end.to_relative_pos(start);
         let len = delta.length();
         if len < 0.0001 {
             return;
@@ -580,7 +580,7 @@ impl Gizmo {
         // Compute cumulative lengths
         let mut lengths = vec![0.0f32];
         for w in points.windows(2) {
-            let d = w[1].to_render_pos(w[0]).length();
+            let d = w[1].to_relative_pos(w[0]).length();
             lengths.push(lengths.last().unwrap() + d);
         }
         let total_len = *lengths.last().unwrap();
@@ -604,7 +604,7 @@ impl Gizmo {
             };
 
             let pos = points[i0].lerp(points[i1], seg_t as f64);
-            let dir = points[i1].to_render_pos(points[i0]).normalize_or_zero();
+            let dir = points[i1].to_relative_pos(points[i0]).normalize_or_zero();
             (pos, dir)
         };
 
@@ -692,7 +692,7 @@ impl Gizmo {
         let origin = points[0];
 
         // Precompute render positions ONCE
-        let renders: Vec<Vec3> = points.iter().map(|&p| p.to_render_pos(origin)).collect();
+        let renders: Vec<Vec3> = points.iter().map(|&p| p.to_relative_pos(origin)).collect();
 
         // AABB in render space
         let mut min_x = f32::INFINITY;
@@ -798,7 +798,9 @@ impl Gizmo {
             self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
             self.visualize_regions(&road_manager.roads, 0.0, 0.0);
         }
-
+        if settings.render_node_ids_gizmo {
+            self.visualize_road_node_numbers(&road_manager.roads);
+        }
         // self.sphere(camera.eye_world(), 400.0, [1.0, 1.0, 1.0], 0.0);
         if settings.render_rt_gizmo {
             self.visualize_rt(
@@ -807,7 +809,7 @@ impl Gizmo {
                 false,              // show TLAS instances
                 true,               // show TLAS BVH
                 8,                  // TLAS BVH max depth to show
-                false,              // show BLAS (usually false - it's object-space)
+                false,              // show BLAS
                 8,                  // BLAS BVH max depth
                 0.0,
                 0.0, // duration (0 = single frame)
@@ -999,7 +1001,23 @@ impl Gizmo {
             self.line(c[i], c[j], color, thickness, duration);
         }
     }
-
+    pub fn visualize_road_node_numbers(&mut self, storage: &RoadStorage) {
+        for (id, node) in storage.nodes.iter().enumerate() {
+            if !node.is_enabled() {
+                continue;
+            };
+            self.text(
+                format!("Node ID: {}", id.to_string()),
+                node.position(),
+                2.0,
+                [1.0, 1.0, 1.0, 1.0],
+                None,
+                false,
+                0.0,
+                0.0,
+            );
+        }
+    }
     /// Visualize BVH nodes with depth-based coloring
     pub fn visualize_bvh_nodes(
         &mut self,
@@ -1502,7 +1520,7 @@ impl Gizmo {
         let my = (v0.pos[1] + v1.pos[1]) * 0.5;
         let mz = (v0.pos[2] + v1.pos[2]) * 0.5;
 
-        let camera_pos = eye.to_render_pos(eye);
+        let camera_pos = eye.to_relative_pos(eye);
 
         // view direction
         let mut vx = camera_pos[0] - mx;
@@ -1593,7 +1611,7 @@ impl LineVtxWorld {
 
     #[inline]
     pub fn to_render(&self, camera_pos: WorldPos) -> LineVtxRender {
-        let rp = self.pos.to_render_pos(camera_pos);
+        let rp = self.pos.to_relative_pos(camera_pos);
         LineVtxRender {
             pos: rp.to_array(),
             color: self.color,
@@ -1762,7 +1780,7 @@ impl TextVertex3D {
     }
     #[inline]
     pub fn to_render(&self, camera_pos: WorldPos) -> TextVtxRender {
-        let rp = self.pos.to_render_pos(camera_pos);
+        let rp = self.pos.to_relative_pos(camera_pos);
         TextVtxRender {
             pos: rp.to_array(),
             uv: self.uv,

@@ -4,7 +4,6 @@ use crate::renderer::mesh_arena::{GeometryScratch, TerrainMeshArena};
 use crate::ui::vertex::Vertex;
 use crate::world::buildings::buildings::BuildingId;
 use crate::world::roads::road_structs::{NodeId, SegmentId};
-use crate::world::roads::road_subsystem::Roads;
 use crate::world::terrain::chunk_builder::{
     ChunkHeightGrid, ChunkMeshLod, GpuChunkHandle, NeighborEdgeHeights, generate_height_grid,
     regenerate_vertices_from_height_grid,
@@ -437,6 +436,8 @@ impl TerrainEditor {
         height_offset: f32,
         falloff_distance: f32,
     ) -> HashSet<ChunkCoord> {
+        //let direction = WorldPos::polygon_direction(polygon);
+
         let edit_source = TerrainEditSource::Intersection(node_id);
         self.remove_edits_for_source(edit_source);
         let id = self.alloc_id();
@@ -451,7 +452,6 @@ impl TerrainEditor {
         self.add_edit(edit);
         affected
     }
-
     pub fn remove_segment_flattening(&mut self, segment_id: SegmentId) -> HashSet<ChunkCoord> {
         self.remove_edits_for_source(TerrainEditSource::Segment(segment_id))
     }
@@ -516,22 +516,13 @@ impl TerrainEditor {
         arena: &mut TerrainMeshArena,
         chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
-        roads: &mut Roads,
     ) -> Vec<GpuChunkHandle> {
         if self.dirty_chunks.is_empty() {
             return Vec::new();
         }
 
         let mut scratch = GeometryScratch::default();
-        self.upload_dirty_chunks(
-            device,
-            queue,
-            arena,
-            chunks,
-            terrain_gen,
-            &mut scratch,
-            roads,
-        )
+        self.upload_dirty_chunks(device, queue, arena, chunks, terrain_gen, &mut scratch)
     }
 
     // ── GPU upload ────────────────────────────────────────────────────────────
@@ -544,7 +535,6 @@ impl TerrainEditor {
         chunks: &mut HashMap<ChunkCoord, ChunkMeshLod>,
         terrain_gen: &TerrainGenerator,
         scratch: &mut GeometryScratch<Vertex>,
-        roads: &mut Roads,
     ) -> Vec<GpuChunkHandle> {
         // Drain here so we don't hold a borrow on self during the loop.
         let dirty: Vec<ChunkCoord> = self.dirty_chunks.drain().collect();

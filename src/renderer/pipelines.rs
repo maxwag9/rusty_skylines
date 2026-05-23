@@ -817,7 +817,7 @@ pub fn make_new_camera_uniforms(
     moon: Vec3,
     time_system: &Time,
     light_view_proj: [Mat4; CSM_CASCADES],
-    cascade_splits: [f32; 4],
+    cascade_splits: [f32; CSM_CASCADES],
     camera: &Camera,
     settings: &Settings,
     config: &SurfaceConfiguration,

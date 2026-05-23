@@ -16,7 +16,7 @@ use crate::world::roads::roads::{
 };
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use wgpu::{VertexAttribute, VertexFormat};
@@ -30,58 +30,33 @@ pub type ChunkId = u64;
 pub const CLEARANCE: f32 = 0.08;
 const NODE_ANGULAR_SEGMENTS: usize = 32;
 
-// ============================================================================
-// Chunking & ID Logic (Preserved)
-// ============================================================================
+#[inline(always)]
+pub fn pack_chunk_coords(cx: i32, cz: i32) -> u64 {
+    ((cx as u32 as u64) << 32) | (cz as u32 as u64)
+}
 
-#[inline]
-fn zigzag_i32(v: i32) -> u32 {
-    ((v << 1) ^ (v >> 31)) as u32
+#[inline(always)]
+pub fn unpack_chunk_coords(id: u64) -> (i32, i32) {
+    let cx = ((id >> 32) as u32) as i32;
+    let cz = (id as u32) as i32;
+    (cx, cz)
 }
-#[inline]
-fn part1by1(n: u32) -> u64 {
-    let mut x = n as u64;
-    x = (x | (x << 16)) & 0x0000FFFF0000FFFF;
-    x = (x | (x << 8)) & 0x00FF00FF00FF00FF;
-    x = (x | (x << 4)) & 0x0F0F0F0F0F0F0F0F;
-    x = (x | (x << 2)) & 0x3333333333333333;
-    x = (x | (x << 1)) & 0x5555555555555555;
-    x
-}
+
 #[inline(always)]
 pub fn chunk_coord_to_id(cx: i32, cz: i32) -> ChunkId {
-    part1by1(zigzag_i32(cx)) | (part1by1(zigzag_i32(cz)) << 1)
+    pack_chunk_coords(cx, cz)
 }
 
 #[inline(always)]
 pub fn world_pos_chunk_to_id(world_pos: &WorldPos) -> ChunkId {
-    part1by1(zigzag_i32(world_pos.chunk.x)) | (part1by1(zigzag_i32(world_pos.chunk.z)) << 1)
-}
-#[inline]
-fn unzigzag_u32(v: u32) -> i32 {
-    ((v >> 1) as i32) ^ -((v & 1) as i32)
-}
-#[inline]
-fn compact1by1(x: u64) -> u32 {
-    let mut x = x & 0x5555555555555555;
-    x = (x | (x >> 1)) & 0x3333333333333333;
-    x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F;
-    x = (x | (x >> 4)) & 0x00FF00FF00FF00FF;
-    x = (x | (x >> 8)) & 0x0000FFFF0000FFFF;
-    x = (x | (x >> 16)) & 0x00000000FFFFFFFF;
-    x as u32
-}
-#[inline]
-pub fn chunk_id_to_coord(id: ChunkId) -> ChunkCoord {
-    ChunkCoord::new(
-        unzigzag_u32(compact1by1(id)),
-        unzigzag_u32(compact1by1(id >> 1)),
-    )
+    pack_chunk_coords(world_pos.chunk.x, world_pos.chunk.z)
 }
 
-// ============================================================================
-// Vertex Format
-// ============================================================================
+#[inline(always)]
+pub fn chunk_id_to_coord(id: ChunkId) -> ChunkCoord {
+    let (cx, cz) = unpack_chunk_coords(id);
+    ChunkCoord::new(cx, cz)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -1098,15 +1073,20 @@ impl RoadMeshManager {
         }
 
         // === PASS 2: Build segment meshes using intersection boundary data ===
-        let segment_ids: Vec<SegmentId> = match chunk_id {
+        let mut segment_ids: HashSet<SegmentId> = match chunk_id {
             Some(cid) => {
-                let mut ids = storage.segment_ids_touching_chunk(chunk_id_to_coord(cid));
-                ids.sort_unstable();
-                ids
+                HashSet::from_iter(storage.segment_ids_touching_chunk(chunk_id_to_coord(cid)))
             }
-            None => storage.get_active_segment_ids(),
+            None => HashSet::from_iter(storage.get_active_segment_ids()),
         };
-
+        // This did NOT fix the 'Segment appears inside intersection' bug!
+        // for (node_id, _) in &intersection_results {
+        //     if let Some(node) = storage.node(*node_id) {
+        //         for arm in node.arms() {
+        //             segment_ids.insert(arm.segment());
+        //         }
+        //     }
+        // }
         for seg_id in segment_ids {
             let segment = storage.segment(seg_id);
             if !segment.enabled {

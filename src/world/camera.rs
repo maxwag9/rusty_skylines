@@ -97,7 +97,7 @@ impl Camera {
     #[inline]
     pub fn _world_to_render(&self, pos: WorldPos) -> Vec3 {
         let eye = self.eye_world();
-        pos.to_render_pos(eye) // subtract eye, not target
+        pos.to_relative_pos(eye) // subtract eye, not target
     }
 
     #[inline]

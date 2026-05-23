@@ -1131,7 +1131,7 @@ pub struct Vertex {
     pub local_position: [f32; 3],
     pub normal: [f32; 3],
     pub color: [f32; 3],
-    pub quad_uv: [f32; 2], // NEW: 0-1 coordinates within each quad
+    pub quad_uv: [f32; 2],
 }
 
 impl Vertex {
@@ -1170,7 +1170,12 @@ impl Vertex {
                     shader_location: 4,
                     offset: 44,
                     format: VertexFormat::Float32x2,
-                },
+                }, // // @location(5) texture_id
+                   // VertexAttribute {
+                   //     shader_location: 5,
+                   //     offset: 52,
+                   //     format: VertexFormat::Uint32,
+                   // },
             ],
         }
     }
@@ -1217,7 +1222,7 @@ impl VertexWithPosition for Vertex {
 
         // For chunk_xz, pick based on which vertex we're closer to
         let chunk_xz = if t <= 0.5 { a.chunk_xz } else { b.chunk_xz };
-
+        //let texture_id = if t <= 0.5 { a.texture_id } else { b.texture_id };
         Vertex {
             local_position: position,
             normal,

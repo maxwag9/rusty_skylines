@@ -12,7 +12,7 @@ use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::{ChunkGpuMesh, Roads};
 use crate::world::statisticals::demands::ZoningDemand;
-use crate::world::terrain::terrain_editing::{EditId, TerrainEditSource};
+use crate::world::terrain::terrain_editing::{EditId, TerrainEditSource, TerrainEditor};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -177,6 +177,17 @@ pub struct GardenParams {
     pub look: GardenLook,
 }
 #[derive(Serialize, Deserialize, Clone, Default)]
+pub struct GarageParams {
+    pub story_height: f32,
+    pub num_stories: u16,
+}
+impl Hash for GarageParams {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.story_height.to_bits().hash(state);
+        self.num_stories.hash(state);
+    }
+}
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BuildingParams {
     pub roof: RoofType,
     pub roof_material: RoofMaterial,
@@ -186,6 +197,7 @@ pub struct BuildingParams {
     pub num_stories: u16,
     pub basement: BasementParams,
     pub garden: GardenParams,
+    pub garage: Option<GarageParams>,
     pub miscellaneous: MiscBuildingParams,
 }
 impl BuildingParams {
@@ -207,9 +219,11 @@ impl Hash for BuildingParams {
         self.roof.hash(state);
         self.roof_material.hash(state);
         self.wall_material.hash(state);
+        self.driveway_material.hash(state);
         self.story_height.to_bits().hash(state); // <- important
         self.basement.hash(state);
         self.garden.hash(state);
+        self.garage.hash(state);
         self.miscellaneous.hash(state);
     }
 }
@@ -374,8 +388,12 @@ impl BuildingStorage {
         building_id
     }
 
-    pub fn despawn<I>(buildings: &mut Buildings, zoning: &mut Zoning, id: I)
-    where
+    pub fn despawn<I>(
+        buildings: &mut Buildings,
+        zoning: &mut Zoning,
+        terrain_editor: &mut TerrainEditor,
+        id: I,
+    ) where
         I: Into<Option<BuildingId>>,
     {
         let Some(id) = id.into() else {
@@ -386,11 +404,10 @@ impl BuildingStorage {
             return;
         }
         let storage = &mut buildings.storage;
-        if storage
+        if let Some(building) = storage
             .buildings
             .get(id as usize)
             .and_then(|opt| opt.as_ref())
-            .is_some()
         {
             // Remove from chunk first using reverse lookup
             if let Some(chunk_coord) = storage.building_locations.remove(&id) {
@@ -398,6 +415,9 @@ impl BuildingStorage {
                     .building_chunk_storage
                     .remove_building(chunk_coord, id);
             }
+            if let Some(edit_id) = building.edit_id {
+                terrain_editor.remove_edit(edit_id);
+            };
 
             // Actually free the slot
             storage.buildings[id as usize] = None;
@@ -1207,27 +1227,30 @@ impl BuildingMeshManager {
                                 );
                             }
                             TileType::Garage => {
-                                let roof_y = zero_height + level.story_height;
+                                if let Some(garage) = &level.garage {
+                                    let roof_y = zero_height
+                                        + garage.story_height * garage.num_stories as f32;
 
-                                mesh.push_walled_square(
-                                    lot,
-                                    zero_height,
-                                    roof_y,
-                                    right,
-                                    forward,
-                                    (*x, *z),
-                                    wall_id,
-                                    south_open,
-                                    east_open,
-                                    north_open,
-                                    west_open,
-                                );
+                                    mesh.push_walled_square(
+                                        lot,
+                                        zero_height,
+                                        roof_y,
+                                        right,
+                                        forward,
+                                        (*x, *z),
+                                        wall_id,
+                                        south_open,
+                                        east_open,
+                                        north_open,
+                                        west_open,
+                                    );
 
-                                roof_tiles.push(RoofTile {
-                                    x: *x,
-                                    z: *z,
-                                    base_y: roof_y,
-                                });
+                                    roof_tiles.push(RoofTile {
+                                        x: *x,
+                                        z: *z,
+                                        base_y: roof_y,
+                                    });
+                                }
                             }
                             TileType::Driveway => {
                                 mesh.push_square(

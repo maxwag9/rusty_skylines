@@ -699,7 +699,7 @@ impl PartitionGizmo {
         let mut sum = Vec3::ZERO;
 
         for pos in positions {
-            sum += pos.to_render_pos(reference);
+            sum += pos.to_relative_pos(reference);
         }
 
         let avg = sum / positions.len() as f32;

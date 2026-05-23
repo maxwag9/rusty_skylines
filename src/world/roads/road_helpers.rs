@@ -33,9 +33,9 @@ pub fn right_turn_score(poly: &[WorldPos]) -> f32 {
         return 0.0;
     }
 
-    let dir_start = poly[1].to_render_pos(poly[0]).normalize_or_zero();
+    let dir_start = poly[1].to_relative_pos(poly[0]).normalize_or_zero();
     let dir_end = poly[poly.len() - 1]
-        .to_render_pos(poly[poly.len() - 2])
+        .to_relative_pos(poly[poly.len() - 2])
         .normalize_or_zero();
 
     // Signed turn around Y axis
@@ -94,8 +94,8 @@ pub fn subdivide_quadratic_bezier(
 ) -> (WorldPos, WorldPos, WorldPos) {
     /// Evaluate quadratic bezier at parameter t.
     fn eval_bezier(p0: WorldPos, p1: WorldPos, p2: WorldPos, t: f32) -> WorldPos {
-        let v1 = p1.to_render_pos(p0);
-        let v2 = p2.to_render_pos(p0);
+        let v1 = p1.to_relative_pos(p0);
+        let v2 = p2.to_relative_pos(p0);
 
         let omt = 1.0 - t;
         // B(t) = (1-t)²P0 + 2(1-t)tP1 + t²P2
@@ -109,8 +109,8 @@ pub fn subdivide_quadratic_bezier(
     // Compute new control point to preserve curve shape
     // Derivative: B'(t) = 2(1-t)(P1-P0) + 2t(P2-P1)
     let dt = t1 - t0;
-    let v01 = p1.to_render_pos(p0);
-    let v12 = p2.to_render_pos(p1);
+    let v01 = p1.to_relative_pos(p0);
+    let v12 = p2.to_relative_pos(p1);
     let tangent_at_t0 = v01 * (1.0 - t0) + v12 * t0;
     let new_p1 = new_p0.add_vec3(tangent_at_t0 * dt);
 
@@ -176,7 +176,7 @@ pub fn ray_to_polygon(
     }
 
     // Direction from 'from' to 'through'
-    let dir = through.to_render_pos(*from);
+    let dir = through.to_relative_pos(*from);
     let len_sq = dir.x * dir.x + dir.z * dir.z;
 
     if len_sq < 1e-6 {
@@ -197,10 +197,10 @@ pub fn ray_to_polygon(
         let b = poly.ring[(i + 1) % n];
 
         // Edge vector relative to 'a'
-        let edge = b.to_render_pos(a);
+        let edge = b.to_relative_pos(a);
 
         // Vector from 'from' to edge start
-        let to_seg = a.to_render_pos(*from);
+        let to_seg = a.to_relative_pos(*from);
 
         let cross = ray_dir.x * edge.z - ray_dir.z * edge.x;
         if cross.abs() < 1e-10 {
@@ -233,9 +233,9 @@ pub fn _segment_intersection_xz(
     b1: WorldPos,
     b2: WorldPos,
 ) -> Option<(f32, f32)> {
-    let d1 = a2.to_render_pos(a1);
-    let d2 = b2.to_render_pos(b1);
-    let d12 = b1.to_render_pos(a1);
+    let d1 = a2.to_relative_pos(a1);
+    let d2 = b2.to_relative_pos(b1);
+    let d12 = b1.to_relative_pos(a1);
 
     let cross = d1.x * d2.z - d1.z * d2.x;
     if cross.abs() < 1e-10 {

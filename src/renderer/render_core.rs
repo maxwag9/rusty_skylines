@@ -331,7 +331,7 @@ impl Renderer {
         zoning: &mut Zoning,
     ) {
         let eye = camera.target;
-        let target_pos_render = eye.to_render_pos(WorldPos::zero());
+        let target_pos_render = eye.to_relative_pos(WorldPos::zero());
         ui.variables.set_i64("target_pos_cx", camera.target.chunk.x);
         ui.variables.set_i64("target_pos_cz", camera.target.chunk.z);
         ui.variables
@@ -411,11 +411,14 @@ impl Renderer {
         car_storage: &CarStorage,
         camera: &Camera,
         aspect: f32,
-        _time: &Time,
+        time: &Time,
         settings: &Settings,
         terrain: &Terrain,
         buildings: &Buildings,
     ) {
+        if time.astronomy.sun_dir.y < 0.0 {
+            return;
+        };
         for cascade_idx in 0..CSM_CASCADES {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("CSM Shadow Pass"),

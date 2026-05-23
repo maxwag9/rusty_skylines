@@ -315,7 +315,7 @@ impl Props {
 
                     for (i, inst) in instances.iter().enumerate() {
                         // Convert to render-space position relative to camera
-                        let render_pos = inst.pos.to_render_pos(camera.eye_world());
+                        let render_pos = inst.pos.to_relative_pos(camera.eye_world());
                         let model = Mat4::from_scale_rotation_translation(
                             Vec3::splat(inst.scale),
                             Quat::from_rotation_y(inst.rotation_y_rad),

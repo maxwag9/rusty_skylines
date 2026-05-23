@@ -190,7 +190,7 @@ impl WorldRay {
     /// The result is small and precise when `point` is near `origin`.
     #[inline]
     pub fn relative_position(&self, point: &WorldPos) -> Vec3 {
-        point.to_render_pos(self.origin)
+        point.to_relative_pos(self.origin)
     }
 
     /// Compute a grid vertex position relative to ray origin.

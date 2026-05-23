@@ -663,6 +663,7 @@ define_settings! {
     RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
     RenderIntersectionGizmo => render_intersection_gizmo: bool = false; Bool,
     RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
+    RenderNodeIdsGizmo => render_node_ids_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
     TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Cycle,
     DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle,

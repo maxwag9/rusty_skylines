@@ -56,7 +56,7 @@ impl IntersectionPolygon {
     }
 
     fn world_pos_to_local_2d(&self, p: WorldPos) -> Vec2 {
-        let rel = p.to_render_pos(self.origin);
+        let rel = p.to_relative_pos(self.origin);
         Vec2::new(rel.x, rel.z)
     }
 
@@ -330,7 +330,7 @@ fn compute_corridor_lengths(arms: &[Arm], half_widths: &[f32], storage: &RoadSto
                 &mut corridor_len,
                 angle_to_next,
                 half_widths[i],
-                half_widths[prev_idx],
+                half_widths[next_idx],
             );
 
             let max_from_lanes = compute_max_corridor_for_arm(arm, storage);
@@ -600,24 +600,42 @@ pub fn build_intersection_at_node(
 
             carve_lanes_with_polygon(storage, node_id, &geom, gizmo);
 
-            let flattening_polygon = if let Some(ref sw_poly) = geom.sidewalk_polygon {
-                &sw_poly.ring
+            let mut flattening_polygon = if let Some(sw_poly) = geom.sidewalk_polygon {
+                sw_poly.ring
             } else {
-                &geom.polygon.ring
+                geom.polygon.ring
             };
-
             if flattening_polygon.len() >= 3 {
-                // Compute a sloped target instead of forcing flat
-                //let target_height = compute_best_fit_height_for_polygon(terrain, flattening_polygon);
-
-                affected_chunks = terrain
-                    .terrain_editor
-                    .apply_intersection_polygon_flattening(
-                        node_id,
-                        flattening_polygon,
-                        -0.25, // keep your small offset
-                        3.0,
+                if let Some((plane_center, plane_normal)) =
+                    compute_best_fit_plane(terrain, &flattening_polygon)
+                {
+                    // Project polygon onto the sloped plane
+                    let sloped_polygon = WorldPos::project_polygon_to_plane(
+                        &flattening_polygon,
+                        plane_center,
+                        plane_normal,
                     );
+
+                    affected_chunks = terrain
+                        .terrain_editor
+                        .apply_intersection_polygon_flattening(
+                            node_id,
+                            &sloped_polygon,
+                            -0.15,
+                            5.0,
+                        );
+                } else {
+                    affected_chunks = terrain
+                        .terrain_editor
+                        .apply_intersection_polygon_flattening(
+                            node_id,
+                            &flattening_polygon,
+                            -0.15,
+                            5.0,
+                        );
+                }
+
+                terrain.flush_dirty_chunks();
             }
         }
     }
@@ -2222,4 +2240,63 @@ fn compute_lane_tangent_at_node(
     } else {
         (Some(dir), endpoint)
     }
+}
+
+/// Computes the best-fit plane for a polygon by sampling terrain heights at exact WorldPos.
+/// Returns (centroid, normal) of the best-fit plane.
+pub fn compute_best_fit_plane(terrain: &Terrain, points: &[WorldPos]) -> Option<(WorldPos, Vec3)> {
+    let n = points.len();
+    if n < 3 {
+        return None;
+    }
+
+    // 1. Get centroid (already have high-precision version)
+    let centroid = WorldPos::centroid(points);
+
+    // 2. Accumulate covariance in world space (f64)
+    let mut cov = glam::DMat3::ZERO;
+
+    for &p in points {
+        let terrain_y = terrain.get_height_at(p, true) as f64;
+
+        let delta = p.delta_to(centroid);
+        let dx = delta.x as f64;
+        let dy = terrain_y - centroid.local.y as f64;
+        let dz = delta.z as f64;
+
+        cov.x_axis.x += dx * dx;
+        cov.x_axis.y += dx * dy;
+        cov.x_axis.z += dx * dz;
+
+        cov.y_axis.x += dy * dx;
+        cov.y_axis.y += dy * dy;
+        cov.y_axis.z += dy * dz;
+
+        cov.z_axis.x += dz * dx;
+        cov.z_axis.y += dz * dy;
+        cov.z_axis.z += dz * dz;
+    }
+
+    let n64 = n as f64;
+    cov *= 1.0 / n64;
+
+    let normal = compute_plane_normal_from_cov(cov);
+
+    Some((centroid, normal.normalize()))
+}
+
+fn compute_plane_normal_from_cov(cov: glam::DMat3) -> Vec3 {
+    let xx = cov.x_axis.x;
+    let xz = cov.x_axis.z;
+    let zz = cov.z_axis.z;
+    let xy = cov.x_axis.y;
+    let yz = cov.y_axis.z;
+
+    // Normal = cross product of two vectors in the plane
+    // Best fit slope in X and Z
+    let nx = -xy;
+    let nz = -yz;
+    let ny = xx * zz - xz * xz; // approx from determinant
+
+    Vec3::new(nx as f32, ny as f32, nz as f32)
 }

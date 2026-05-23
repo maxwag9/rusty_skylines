@@ -28,11 +28,9 @@ pub fn run_ticked(resources: &mut Resources) {
         &mut world.cars,
         &mut world.input,
     );
-    let (settings, gizmo, device, queue, road_mesh_manager) = (
+    let (settings, gizmo, road_mesh_manager) = (
         &mut resources.settings,
         &mut renderer.gizmo,
-        &renderer.device,
-        &renderer.queue,
         &renderer.road_renderer.mesh_manager,
     );
     let aspect = renderer.config.width as f32 / renderer.config.height as f32;
@@ -43,15 +41,13 @@ pub fn run_ticked(resources: &mut Resources) {
     //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
     // }
     if resources.simulation.running {
-        terrain.update(
-            gizmo, device, queue, camera, aspect, settings, input, time, roads,
-        );
+        terrain.update(gizmo, camera, aspect, settings, input, time, roads);
     }
     handle_destruction(
         gizmo,
         variables,
         input,
-        &terrain,
+        terrain,
         zoning,
         buildings,
         roads,
@@ -64,7 +60,7 @@ fn handle_destruction(
     gizmo: &mut Gizmo,
     variables: &Variables,
     input: &mut Input,
-    terrain: &Terrain,
+    terrain: &mut Terrain,
     zoning: &mut Zoning,
     buildings: &mut Buildings,
     roads: &mut Roads,
@@ -117,7 +113,12 @@ fn handle_destruction(
             gizmo.polyline(lot.bounds.as_slice(), [0.8, 0.3, 0.7, 0.8], 10.0, 0.15, 0.0);
 
             if finished_removing_lot {
-                BuildingStorage::despawn(buildings, zoning, lot.building_id);
+                BuildingStorage::despawn(
+                    buildings,
+                    zoning,
+                    &mut terrain.terrain_editor,
+                    lot.building_id,
+                );
             }
         }
     } else {

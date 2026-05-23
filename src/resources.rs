@@ -57,7 +57,7 @@ impl Resources {
 
         surface.configure(device, &config);
         let mut game_state = GameState::new();
-        let mut world_core = World::new(device, &settings, &mut game_state);
+        let mut world_core = World::new(device, queue, &settings, &mut game_state);
         let camera = &mut world_core.world_state.camera;
 
         let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera);
@@ -337,7 +337,7 @@ pub struct Uniforms {
 
     // ── Shadow cascades ─────────────────────────────────────────
     pub lighting_view_proj: [[[f32; 4]; 4]; CSM_CASCADES],
-    pub cascade_splits: [f32; 4],
+    pub cascade_splits: [f32; CSM_CASCADES],
 
     // ── Lighting ────────────────────────────────────────────────
     pub sun_direction: [f32; 3],

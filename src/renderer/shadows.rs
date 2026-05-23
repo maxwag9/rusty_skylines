@@ -93,9 +93,9 @@ pub fn create_csm_shadow_texture(device: &Device, size: u32, label: &str) -> Cas
         array_view,
         layer_views,
         size,
-        light_mats: [Mat4::IDENTITY; 4],
-        splits: [1.0; 4],
-        texels: [1.0; 4],
+        light_mats: [Mat4::IDENTITY; CSM_CASCADES],
+        splits: [1.0; CSM_CASCADES],
+        texels: [1.0; CSM_CASCADES],
         shadow_mat_buffers: std::array::from_fn(|_| create_shadow_mat_uniform_buffer(device)),
     }
 }
