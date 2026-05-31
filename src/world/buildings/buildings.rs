@@ -8,7 +8,7 @@ use crate::ui::variables::Variables;
 use crate::world::buildings::zoning::{Lot, LotId, Tile, TileType, Zoning, ZoningType};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
-use crate::world::cars::partitions::{PartitionId, PartitionStorage};
+use crate::world::cars::partitions::{PartitionId, PartitionManager};
 use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_to_coord};
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::{ChunkGpuMesh, Roads};
@@ -272,12 +272,14 @@ impl Building {
 #[derive(Clone, Default)]
 pub struct Buildings {
     pub storage: BuildingStorage,
+    pub partitions: PartitionManager,
 }
 
 impl Buildings {
     pub fn new() -> Buildings {
         Self {
             storage: BuildingStorage::new(),
+            partitions: PartitionManager::new(),
         }
     }
     pub fn update(
@@ -301,7 +303,7 @@ pub struct BuildingStorage {
     // Reverse mapping so I can remove from chunks in O(1) when destroying
     building_locations: HashMap<BuildingId, ChunkCoord>,
     center_chunk: ChunkCoord,
-    building_to_partition: Vec<PartitionId>,
+    building_to_partition: Vec<Option<PartitionId>>,
 }
 
 impl BuildingStorage {
@@ -347,19 +349,18 @@ impl BuildingStorage {
     }
     pub fn new() -> Self {
         let mut buildings: Vec<Option<Building>> = Vec::new();
-        buildings.push(None); // reserve index 0 — never use it for a real building, because building 0 doesn't get RTX shadows.
+        buildings.push(None); // reserve index 0 — never use it for a real building, because building 0 doesn't get RT shadows.
         Self {
             building_chunk_storage: BuildingChunkStorage::new(),
             buildings,
             free_list: Vec::new(),
             building_locations: HashMap::new(),
             center_chunk: ChunkCoord::zero(),
-            building_to_partition: Vec::new(),
+            building_to_partition: vec![None],
         }
     }
 
     pub fn spawn(
-        //partitions: &mut Partitions,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
         chunk_coord: ChunkCoord,
@@ -368,6 +369,10 @@ impl BuildingStorage {
         mut building: Building,
     ) -> BuildingId {
         let storage = &mut buildings.storage;
+        let entrance_pos = zoning
+            .zoning_storage
+            .get_lot(building.lot_id)
+            .map_or(building.position, |l| l.entrance.0);
         let building_id = if let Some(reused_id) = storage.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
             building.id = reused_id;
@@ -386,8 +391,11 @@ impl BuildingStorage {
             building_chunk_distance,
             building_id,
         );
-        //partitions.add_building(building_id);
         storage.building_locations.insert(building_id, chunk_coord);
+        let partition_id = PartitionManager::add_building(buildings, building_id, entrance_pos);
+        let storage = &mut buildings.storage;
+        storage.set_partition_of_building(building_id, partition_id);
+
         ZoningDemand::spawn_building(buildings, zoning, building_id);
         //println!("Created building: {}", building_id);
         building_id
@@ -424,7 +432,9 @@ impl BuildingStorage {
                 terrain_editor.remove_edit(edit_id);
             };
 
+            PartitionManager::remove_building(buildings, id);
             // Actually free the slot
+            let storage = &mut buildings.storage;
             storage.buildings[id as usize] = None;
             storage.free_list.push(id);
             ZoningDemand::despawn_building(buildings, zoning, id);
@@ -454,10 +464,34 @@ impl BuildingStorage {
     }
 
     #[inline(always)]
-    pub fn get_partition_of_building(&self, building: BuildingId) -> PartitionId {
+    pub fn get_partition_of_building(&self, building: BuildingId) -> Option<PartitionId> {
         unsafe {
             *self.building_to_partition.get_unchecked(building as usize) // Hope-based unsafe usage, first ever unsafe usage.
             // Should have better performance because no bound checking is being done, good for car signfinding!
+        }
+    }
+
+    #[inline]
+    fn ensure_partition_slot(&mut self, building_id: BuildingId) {
+        let idx = building_id as usize;
+        if self.building_to_partition.len() <= idx {
+            self.building_to_partition.resize(idx + 1, None);
+        }
+    }
+
+    #[inline]
+    pub fn set_partition_of_building(
+        &mut self,
+        building_id: BuildingId,
+        partition_id: PartitionId,
+    ) {
+        self.ensure_partition_slot(building_id);
+        self.building_to_partition[building_id as usize] = Some(partition_id);
+    }
+    #[inline]
+    pub fn clear_partition_of_building(&mut self, building_id: BuildingId) {
+        if let Some(slot) = self.building_to_partition.get_mut(building_id as usize) {
+            *slot = None;
         }
     }
 }

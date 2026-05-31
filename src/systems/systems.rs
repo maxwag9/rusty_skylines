@@ -88,31 +88,18 @@ fn handle_destruction(
     }
     if let Some(lot_id) = inside_lot_id {
         let removing_lot = input.action_down("Destroy");
-        let finished_removing_lot = input.action_released("Destroy");
+        //let finished_removing_lot = input.action_released("Destroy");
         if let Some(lot) = zoning.zoning_storage.get_lot(lot_id) {
+            gizmo.polyline(lot.bounds.as_slice(), [0.8, 0.3, 0.7, 0.8], 10.0, 0.15, 0.0);
             if removing_lot {
                 draw_area(
                     lot.bounds.as_slice(),
-                    &lot.zoning_type,
+                    lot.zoning_type,
                     variables,
                     gizmo,
                     Some([3.0, 0.2, 0.2, 1.0]),
-                    Some(&ZoningType::None),
+                    Some(ZoningType::None),
                 );
-            } else {
-                draw_area(
-                    lot.bounds.as_slice(),
-                    &lot.zoning_type,
-                    variables,
-                    gizmo,
-                    Some([10.2, 1.2, 1.2, 1.0]),
-                    Some(&ZoningType::None),
-                );
-            }
-
-            gizmo.polyline(lot.bounds.as_slice(), [0.8, 0.3, 0.7, 0.8], 10.0, 0.15, 0.0);
-
-            if finished_removing_lot {
                 BuildingStorage::despawn(
                     buildings,
                     zoning,
@@ -205,6 +192,7 @@ fn handle_destruction(
         }
     }
 }
+
 #[derive(Clone, Debug, Hash)]
 pub enum RoadDestroyType {
     Segment(SegmentId),

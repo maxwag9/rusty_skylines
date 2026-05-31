@@ -39,6 +39,7 @@ pub struct VisibleChunk {
     pub coords: ChunkCoords,
     pub id: ChunkId,
 }
+#[derive(Clone)]
 pub struct PickedPoint {
     pub pos: WorldPos,
     pub chunk: VisibleChunk,
@@ -51,7 +52,7 @@ struct FrameState {
     r2_render: i32,
     r2_gen: i32,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum CursorMode {
     None,
     Roads,

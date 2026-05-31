@@ -365,6 +365,10 @@ impl Cars {
     pub fn add_spawning_node(&mut self, id: NodeId) {
         self.spawning_nodes.push(SpawningNode::new(id))
     }
+
+    pub fn remove_spawning_node(&mut self, id: NodeId) {
+        self.spawning_nodes.retain(|sn| sn.node_id != id)
+    }
 }
 pub fn make_random_car(position: WorldPos, mut rng: &mut ThreadRng) -> Car {
     let mut car = Car::default();

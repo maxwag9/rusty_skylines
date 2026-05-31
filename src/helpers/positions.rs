@@ -17,7 +17,7 @@ pub fn chunk_size() -> ChunkSize {
 pub fn set_chunk_size(cs: ChunkSize) {
     CHUNK_SIZE.store(cs, Ordering::Relaxed);
 }
-pub const CHUNK_MIN_Y: f32 = -512.0;
+pub const CHUNK_MIN_Y: f32 = -1024.0;
 pub const CHUNK_MAX_Y: f32 = 4096.0;
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq, Default)]
 pub struct ChunkCoord {
@@ -67,6 +67,30 @@ impl ChunkCoord {
     #[inline]
     pub fn chunk_id(&self) -> ChunkId {
         chunk_coord_to_id(self.x, self.z)
+    }
+    #[inline]
+    pub fn get_chunks_cross(&self) -> Vec<ChunkCoord> {
+        vec![
+            *self,
+            self.offset(0, 1),
+            self.offset(1, 0),
+            self.offset(0, -1),
+            self.offset(-1, 0),
+        ]
+    }
+    #[inline]
+    pub fn get_chunks_3x3(&self) -> Vec<ChunkCoord> {
+        vec![
+            *self,
+            self.offset(0, 1),
+            self.offset(1, 0),
+            self.offset(0, -1),
+            self.offset(-1, 0),
+            self.offset(1, 1),
+            self.offset(1, -1),
+            self.offset(-1, 1),
+            self.offset(-1, -1),
+        ]
     }
 }
 impl LocalPos {
@@ -551,11 +575,11 @@ impl WorldPos {
             let b = points[i + 1];
 
             // Work in origin-relative space (stable, no precision loss)
-            let ax = origin.dx(a) as f64;
-            let az = origin.dz(a) as f64;
+            let ax = origin.dx(a);
+            let az = origin.dz(a);
 
-            let bx = origin.dx(b) as f64;
-            let bz = origin.dz(b) as f64;
+            let bx = origin.dx(b);
+            let bz = origin.dz(b);
 
             // Triangle area (signed *2)
             let cross = ax * bz - az * bx;
@@ -707,6 +731,11 @@ impl WorldPos {
     }
 
     #[inline]
+    pub fn set_y(&mut self, y: f64) {
+        self.local.y = y as f32;
+    }
+
+    #[inline]
     pub fn set_z(&mut self, z: f64) {
         let cs = chunk_size() as f64;
 
@@ -715,11 +744,6 @@ impl WorldPos {
 
         self.chunk.z = chunk_z;
         self.local.z = local_z as f32;
-    }
-
-    #[inline]
-    pub fn set_y(&mut self, y: f64) {
-        self.local.y = y as f32;
     }
 
     pub fn polygon_direction(polygon: &[WorldPos]) -> Vec3 {
@@ -771,14 +795,13 @@ impl WorldPos {
         let det = cov_xx * cov_zz - cov_xz * cov_xz;
 
         // Largest eigenvalue direction
-        let mut dx = cov_xz;
-        let mut dz =
-            (cov_xx - cov_zz) * 0.5 + ((cov_xx - cov_zz) * 0.5).hypot(cov_xz).copysign(1.0);
+        // let mut dx = cov_xz;
+        // let mut dz = (cov_xx - cov_zz) * 0.5 + ((cov_xx - cov_zz) * 0.5).hypot(cov_xz).copysign(1.0);
 
         // Alternative stable formulation using atan2
         let theta = 0.5 * (2.0 * cov_xz).atan2(cov_xx - cov_zz);
-        dx = theta.cos();
-        dz = theta.sin();
+        let dx = theta.cos();
+        let dz = theta.sin();
 
         // Make sure we have a valid vector
         let len2 = dx * dx + dz * dz;

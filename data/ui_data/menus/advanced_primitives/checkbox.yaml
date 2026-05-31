@@ -41,7 +41,7 @@ elements:
     id: setting_text
     x: 0.02
     y: 0.04
-    pt: 10.0
+    pt: 8.0
     color:
       - 1.0
       - 1.0

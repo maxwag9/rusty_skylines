@@ -69,7 +69,6 @@ pub struct Renderer {
     pub car_renderer: CarRenderSubsystem,
     pub building_renderer: BuildingRenderer,
     pub gizmo: Gizmo,
-    //pub partition_gizmo: PartitionGizmo,
     pub props: Props,
 }
 
@@ -121,7 +120,6 @@ impl Renderer {
             gizmo,
             profiler,
             rt_subsystem,
-            //partition_gizmo: PartitionGizmo::new(),
             props: Props::new(device),
             building_renderer,
         }
@@ -348,6 +346,7 @@ impl Renderer {
         zoning.update(
             camera,
             terrain,
+            buildings,
             roads,
             &self.road_renderer.mesh_manager,
             input,
@@ -387,8 +386,7 @@ impl Renderer {
             &self.rt_subsystem,
             time.total_game_time,
             &roads.road_manager,
-            //&mut self.partition_gizmo,
-            &roads.partition_manager,
+            buildings,
             settings,
             camera,
         );

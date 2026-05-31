@@ -1,7 +1,7 @@
-use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
+use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::world::buildings::buildings::{BuildingId, Buildings};
 use crate::world::buildings::zoning::DistrictId;
-use crate::world::roads::road_structs::{LaneId, NodeId, SegmentId};
+use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,11 +23,11 @@ pub enum RouteStatus {
     Invalid,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DestinationType {
     // Node(NodeId),
     // Segment(LaneId, LaneT),
-    House(BuildingId),
+    Building(BuildingId),
 }
 
 #[derive(Debug)]
@@ -66,7 +66,7 @@ impl Partition {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PartitionStorage {
     pub partitions: Vec<Partition>,
-    alive: Vec<bool>,
+    pub(crate) alive: Vec<bool>,
     free_list: Vec<u32>,
     chunk_to_partitions: HashMap<ChunkCoord, Vec<PartitionId>>,
 }
@@ -97,22 +97,22 @@ impl PartitionStorage {
         self.chunk_to_partitions.clear();
     }
 
-    pub fn add(&mut self, partition: Partition, buildings: &Buildings) -> PartitionId {
+    pub fn add(buildings: &mut Buildings, partition: Partition) -> PartitionId {
         let chunk_coords = partition.chunk_coords(buildings);
-
-        let index = if let Some(index) = self.free_list.pop() {
+        let storage = &mut buildings.partitions.storage;
+        let index = if let Some(index) = storage.free_list.pop() {
             let idx = index as usize;
-            self.partitions[idx] = partition;
-            self.alive[idx] = true;
+            storage.partitions[idx] = partition;
+            storage.alive[idx] = true;
             index
         } else {
-            let index = self.partitions.len() as u32;
-            self.partitions.push(partition);
-            self.alive.push(true);
+            let index = storage.partitions.len() as u32;
+            storage.partitions.push(partition);
+            storage.alive.push(true);
             index
         };
         for chunk_coord in chunk_coords {
-            let ids = self.chunk_to_partitions.entry(chunk_coord).or_default();
+            let ids = storage.chunk_to_partitions.entry(chunk_coord).or_default();
 
             if !ids.contains(&index) {
                 ids.push(index);
@@ -197,6 +197,104 @@ impl PartitionStorage {
             .cloned()
             .unwrap_or_default()
     }
+    fn remove_partition_from_chunk_map(
+        &mut self,
+        partition_id: PartitionId,
+        chunks: &[ChunkCoord],
+    ) {
+        for chunk in chunks.iter().copied() {
+            if let Some(ids) = self.chunk_to_partitions.get_mut(&chunk) {
+                ids.retain(|&p| p != partition_id);
+                if ids.is_empty() {
+                    self.chunk_to_partitions.remove(&chunk);
+                }
+            }
+        }
+    }
+
+    fn add_partition_to_chunk_map(&mut self, partition_id: PartitionId, chunks: &[ChunkCoord]) {
+        for chunk in chunks.iter().copied() {
+            let ids = self.chunk_to_partitions.entry(chunk).or_default();
+            if !ids.contains(&partition_id) {
+                ids.push(partition_id);
+            }
+        }
+    }
+
+    fn reconcile_partition_chunks(
+        &mut self,
+        partition_id: PartitionId,
+        old_chunks: &[ChunkCoord],
+        new_chunks: &[ChunkCoord],
+    ) {
+        let old: std::collections::HashSet<_> = old_chunks.iter().copied().collect();
+        let new: std::collections::HashSet<_> = new_chunks.iter().copied().collect();
+
+        for chunk in old.difference(&new).copied() {
+            if let Some(ids) = self.chunk_to_partitions.get_mut(&chunk) {
+                ids.retain(|&p| p != partition_id);
+                if ids.is_empty() {
+                    self.chunk_to_partitions.remove(&chunk);
+                }
+            }
+        }
+
+        for chunk in new.difference(&old).copied() {
+            let ids = self.chunk_to_partitions.entry(chunk).or_default();
+            if !ids.contains(&partition_id) {
+                ids.push(partition_id);
+            }
+        }
+    }
+
+    pub fn remove_building_from_partition(
+        buildings: &mut Buildings,
+        partition_id: PartitionId,
+        building_id: BuildingId,
+    ) -> bool {
+        let Some(old_chunks) = buildings
+            .partitions
+            .storage
+            .get(partition_id)
+            .map(|p| p.chunk_coords(buildings))
+        else {
+            return false;
+        };
+
+        let became_empty: bool;
+
+        {
+            let Some(partition) = buildings.partitions.storage.get_mut(partition_id) else {
+                return false;
+            };
+
+            let Some(pos) = partition.buildings.iter().position(|&b| b == building_id) else {
+                return false;
+            };
+
+            partition.buildings.swap_remove(pos);
+            became_empty = partition.buildings.is_empty();
+        }
+
+        if became_empty {
+            buildings.partitions.storage.remove(partition_id);
+        } else {
+            let new_chunks = buildings
+                .partitions
+                .storage
+                .get(partition_id)
+                .map(|p| p.chunk_coords(buildings))
+                .unwrap_or_default();
+
+            buildings.partitions.storage.reconcile_partition_chunks(
+                partition_id,
+                &old_chunks,
+                &new_chunks,
+            );
+        }
+
+        true
+    }
 }
 
 impl Default for PartitionStorage {
@@ -220,23 +318,77 @@ impl PartitionManager {
     }
 
     pub fn rebuild_all(&mut self, road_storage: &RoadStorage) {
-        self.storage.clear_all();
-        self.regions.clear();
+        // self.storage.clear_all();
+        // self.regions.clear();
     }
-    pub fn add_building(&mut self, building_id: BuildingId, building_pos: WorldPos) {
-        let chunks = vec![
-            building_pos.chunk,
-            building_pos.chunk.offset(0, 1),
-            building_pos.chunk.offset(1, 0),
-            building_pos.chunk.offset(0, -1),
-            building_pos.chunk.offset(-1, 0),
-        ];
-
+    pub fn add_building(
+        buildings: &mut Buildings,
+        building_id: BuildingId,
+        building_pos: WorldPos,
+    ) -> PartitionId {
         const MAX_BUILDINGS_PER_PARTITION: usize = 20;
+        const MAX_DISTANCE: f64 = 200.0;
 
-        let partitions = self.storage.get_partitions_in_chunks(chunks);
+        let chunks = building_pos.chunk.get_chunks_cross();
+        let candidate_partitions = buildings
+            .partitions
+            .storage
+            .get_partitions_in_chunks(chunks);
+
+        let mut best_partition = None;
+        let mut best_distance = f64::MAX;
+
+        for partition_id in candidate_partitions {
+            let Some(partition) = buildings.partitions.storage.get(partition_id) else {
+                continue;
+            };
+
+            if partition.buildings.len() >= MAX_BUILDINGS_PER_PARTITION {
+                continue;
+            }
+
+            let closest_distance = partition
+                .buildings
+                .iter()
+                .filter_map(|id| buildings.storage.get(*id))
+                .map(|building| building.position.distance_to(building_pos))
+                .fold(f64::MAX, |acc, d| acc.min(d));
+
+            if closest_distance < best_distance {
+                best_distance = closest_distance;
+                best_partition = Some(partition_id);
+            }
+        }
+
+        if let Some(partition_id) = best_partition {
+            if best_distance <= MAX_DISTANCE {
+                if let Some(partition) = buildings.partitions.storage.get_mut(partition_id) {
+                    partition.buildings.push(building_id);
+                    return partition_id;
+                }
+            }
+        }
+
+        PartitionStorage::add(
+            buildings,
+            Partition {
+                buildings: vec![building_id],
+            },
+        )
     }
 
+    pub fn remove_building(buildings: &mut Buildings, building_id: BuildingId) {
+        let Some(partition_id) = buildings.storage.get_partition_of_building(building_id) else {
+            return;
+        };
+
+        let removed =
+            PartitionStorage::remove_building_from_partition(buildings, partition_id, building_id);
+
+        if removed {
+            buildings.storage.clear_partition_of_building(building_id);
+        }
+    }
     /// Returns the number of separate road regions (disconnected networks).
     #[inline]
     pub fn region_count(&self) -> usize {

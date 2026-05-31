@@ -13,7 +13,6 @@ use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::Cars;
-use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::world::roads::road_structs::RoadEditorCommand;
 use std::collections::HashMap;
@@ -199,7 +198,6 @@ impl RoadRenderSubsystem {
 pub struct Roads {
     pub road_manager: RoadManager,
     pub road_editor: RoadEditor,
-    pub partition_manager: PartitionManager,
     pub road_commands: Vec<RoadEditorCommand>,
     pub tick_20hz: Ticker,
     pub preview_state: RoadPreviewState,
@@ -210,7 +208,6 @@ impl Roads {
             tick_20hz: Ticker::new(20.0),
             road_manager: RoadManager::new(),
             road_editor: RoadEditor::new(),
-            partition_manager: PartitionManager::new(),
             road_commands: vec![],
             preview_state: RoadPreviewState::new(),
         }
@@ -246,6 +243,5 @@ impl Roads {
                 &self.road_commands,
             );
         }
-        self.partition_manager.rebuild_all(&self.road_manager.roads);
     }
 }

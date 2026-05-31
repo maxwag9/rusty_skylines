@@ -3,15 +3,15 @@
 use crate::data::Settings;
 use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
-//use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualizationConfig};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
 use crate::ui::ui_editor::Ui;
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld, TextVtxRender};
+use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::point_in_polygon_xz;
 use crate::world::camera::Camera;
-use crate::world::cars::partitions::PartitionManager;
+use crate::world::cars::partitions::PartitionId;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -43,7 +43,6 @@ pub struct PendingGizmoTextRender {
     pub scale_with_cam: bool,
 }
 pub struct Gizmo {
-    //partition_gizmo: PartitionGizmo,
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
     pub thick_buffer: Buffer,
@@ -89,7 +88,6 @@ impl Gizmo {
             .initial_cache_size((2048, 2048))
             .build();
         Self {
-            //partition_gizmo: PartitionGizmo::new(),
             pending_renders: Vec::new(),
             gizmo_buffer,
             thick_buffer,
@@ -185,16 +183,59 @@ impl Gizmo {
         (thin_count, thick_count, text_count)
     }
 
-    // pub fn visualize_partitions(
-    //     &mut self,
-    //     partition_gizmo: &mut PartitionGizmo,
-    //     manager: &PartitionManager,
-    //     road_storage: &RoadStorage,
-    // ) {
-    //     let config = PartitionVisualizationConfig::detailed();
-    //
-    //     partition_gizmo.visualize(self, manager, road_storage, config)
-    // }
+    pub fn visualize_partitions(&mut self, buildings: &Buildings) {
+        use crate::helpers::hsv::hsv_to_rgb;
+
+        let storage = &buildings.partitions.storage;
+
+        for (idx, partition) in storage.partitions.iter().enumerate() {
+            let id = idx as PartitionId;
+
+            if !storage.is_alive(id) {
+                continue;
+            }
+
+            // Pick a stable, distinct color per partition ID using golden-ratio hue spread
+            let hue = (id as f32 * 137.508) % 360.0; // golden angle
+            let [r, g, b] = hsv_to_rgb(HSV::new(hue, 0.75, 0.95));
+            let color: [f32; 4] = [r, g, b, 0.85];
+            let faint: [f32; 4] = [r, g, b, 0.15];
+
+            let positions = partition.positions(buildings);
+
+            if positions.is_empty() {
+                continue;
+            }
+
+            // Draw a cross at each building belonging to this partition
+            for &pos in &positions {
+                self.cross(pos, 5.0, color, 0.0, 0.0);
+            }
+
+            if positions.len() >= 3 {
+                let hull = WorldPos::convex_hull(&positions);
+                self.area(&hull, faint, 0.0);
+            }
+
+            // Draw a label at the centroid with the partition ID
+            let barycenter = WorldPos::barycenter(&positions);
+            self.text(
+                format!("P{}", id),
+                barycenter,
+                12.0,
+                color,
+                None,
+                true,
+                0.0,
+                0.0,
+            );
+
+            // draw lines from centroid to each building so it's clear what belongs to what
+            for &pos in &positions {
+                self.arrow(barycenter, pos, [r, g, b, 0.95], true, 0.1, 0.0);
+            }
+        }
+    }
 
     /// Visualizes all road regions with distinct colors and region ID numbers.
     ///
@@ -516,7 +557,7 @@ impl Gizmo {
         let target_spacing = 150.0;
         let steps = (len / target_spacing).ceil().max(1.0) as usize;
         let step_len = len / steps as f32;
-        let dash_ratio = if dashed { 0.8 } else { 1.0 };
+        let dash_ratio = if dashed { 0.5 } else { 1.0 };
         let dash_len = step_len * dash_ratio;
 
         let head_len = 0.15;
@@ -786,8 +827,7 @@ impl Gizmo {
         rt_subsystem: &RTSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,
-        //partition_gizmo: &mut PartitionGizmo,
-        partition_manager: &PartitionManager,
+        buildings: &Buildings,
         settings: &Settings,
         camera: &Camera,
     ) {
@@ -795,7 +835,7 @@ impl Gizmo {
         let target = camera.target;
 
         if settings.render_partitions_gizmo {
-            //self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
+            self.visualize_partitions(buildings);
             self.visualize_regions(&road_manager.roads, 0.0, 0.0);
         }
         if settings.render_node_ids_gizmo {

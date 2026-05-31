@@ -19,7 +19,9 @@ use crate::data::Settings;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
+use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
 use crate::world::cars::car_subsystem::Cars;
+use crate::world::cars::partitions::{Address, DestinationType, PartitionStorage};
 use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
 };
@@ -63,8 +65,8 @@ pub struct Arm {
     incoming_lanes: Vec<LaneId>,
     outgoing_lanes: Vec<LaneId>,
 
-    /// Dynamic: learned travel times to partitions, updated by cars reporting back.
-    travel_times: HashMap<PartitionId, ExponentialMovingAverage>,
+    /// Dynamic: learned travel times to buildings, updated by cars reporting back.
+    building_travel_times: HashMap<DestinationType, ExponentialMovingAverage>,
 
     /// Current congestion estimate (0.0 = free flow, 1.0 = gridlocked)
     congestion: f32,
@@ -87,7 +89,7 @@ impl Arm {
             points_to_node,
             incoming_lanes: Vec::new(),
             outgoing_lanes: Vec::new(),
-            travel_times: HashMap::new(),
+            building_travel_times: HashMap::new(),
             // 1: lowest partitions, ExpMovAvg  Nah idk
             //
             //
@@ -96,6 +98,83 @@ impl Arm {
         }
     }
 
+    #[inline]
+    pub fn travel_time_for_destination(
+        &self,
+        destination: &DestinationType,
+    ) -> Option<&ExponentialMovingAverage> {
+        self.building_travel_times.get(destination)
+    }
+    pub fn travel_time_for_partition(
+        &self,
+        partitions: &PartitionStorage,
+        partition_id: PartitionId,
+    ) -> Option<ExponentialMovingAverage> {
+        let partition = partitions.get(partition_id)?;
+        let emas = partition
+            .buildings
+            .iter()
+            .flat_map(|&building_id| {
+                self.travel_time_for_destination(&DestinationType::Building(building_id))
+            })
+            .collect::<Vec<&ExponentialMovingAverage>>();
+
+        travel_time_averaged_from_emas(emas)
+    }
+
+    pub fn travel_time_for_district(
+        &self,
+        storage: &ZoningStorage,
+        district_id: DistrictId,
+    ) -> Option<ExponentialMovingAverage> {
+        let district = storage.get_district(district_id)?;
+        let emas = district
+            .lot_ids
+            .iter()
+            .flat_map(|&lot_id| storage.get_lot(lot_id))
+            .flat_map(|lot| lot.building_id)
+            .flat_map(|building_id| {
+                self.travel_time_for_destination(&DestinationType::Building(building_id))
+            })
+            .collect::<Vec<&ExponentialMovingAverage>>();
+
+        travel_time_averaged_from_emas(emas)
+    }
+
+    pub fn travel_time_for_address(
+        &self,
+        partitions: &PartitionStorage,
+        zoning: &ZoningStorage,
+        address: &Address,
+    ) -> Option<ExponentialMovingAverage> {
+        if let Some(tt) = self.travel_time_for_destination(&address.destination) {
+            Some(tt.clone())
+        } else if let Some(tt) = self.travel_time_for_partition(partitions, address.partition) {
+            Some(tt)
+        } else if let Some(tt) = self.travel_time_for_district(zoning, address.district) {
+            Some(tt)
+        } else {
+            None
+        }
+    }
+    pub fn travel_time_for_address_f32(
+        &self,
+        partitions: &PartitionStorage,
+        zoning: &ZoningStorage,
+        address: &Address,
+    ) -> f32 {
+        self.travel_time_for_destination(&address.destination)
+            .map(|tt| tt.get())
+            .or_else(|| {
+                self.travel_time_for_partition(partitions, address.partition)
+                    .map(|tt| tt.get())
+            })
+            .or_else(|| {
+                self.travel_time_for_district(zoning, address.district)
+                    .map(|tt| tt.get())
+            })
+            .unwrap_or(f32::MAX)
+    }
     // === Getters ===
     pub fn corridor_length(&self) -> f32 {
         self.corridor_length
@@ -166,19 +245,15 @@ impl Arm {
         });
     }
 
-    pub fn travel_time_to(&self, partition: PartitionId) -> Option<f32> {
-        self.travel_times.get(&partition).map(|ema| ema.get())
-    }
-
-    pub fn update_travel_time(&mut self, partition: PartitionId, time: f32) {
-        self.travel_times
-            .entry(partition)
-            .or_insert_with(|| ExponentialMovingAverage::new(0.1))
-            .update(time);
+    pub fn update_travel_time(&mut self, destination_type: DestinationType, time: f32) {
+        self.building_travel_times
+            .entry(destination_type)
+            .or_insert_with(|| ExponentialMovingAverage::new(0.1, LaneId(0)))
+            .update(time); //TODO LANEID
     }
 
     pub fn clear_travel_times(&mut self) {
-        self.travel_times.clear();
+        self.building_travel_times.clear();
     }
 
     // === Congestion ===
@@ -233,6 +308,32 @@ impl Arm {
         Some(road_type)
     }
 }
+
+pub fn travel_time_averaged_from_emas(
+    emas: Vec<&ExponentialMovingAverage>,
+) -> Option<ExponentialMovingAverage> {
+    let mut total_weight = 0.0f32;
+    let mut weighted_sum = 0.0f32;
+
+    for ema in emas {
+        let w = ema.sample_count().max(1) as f32;
+        weighted_sum += ema.get() * w;
+        total_weight += w;
+    }
+
+    if total_weight == 0.0 {
+        return None;
+    }
+
+    let mean = weighted_sum / total_weight;
+
+    Some(ExponentialMovingAverage::with_state(
+        0.25, // I have to choose the smoothing so that it's good!!!!
+        mean,
+        total_weight as u32, // trust indicator
+        LaneId(0),           //TODO
+    ))
+}
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +366,27 @@ impl Node {
         }
     }
 
+    // TODO: No way found should activate compass mode (wait no... Not here, but whoever calls this function should do it!)
+    pub fn ranked_arms_for_address(
+        &self,
+        partitions: &PartitionStorage,
+        zoning: &ZoningStorage,
+        address: &Address,
+    ) -> Vec<(&Arm, f32)> {
+        let mut ranked: Vec<(&Arm, f32)> = self
+            .arms
+            .iter()
+            .map(|arm| {
+                (
+                    arm,
+                    arm.travel_time_for_address_f32(partitions, zoning, address),
+                )
+            })
+            .collect();
+
+        ranked.sort_by(|a, b| a.1.total_cmp(&b.1));
+        ranked
+    }
     pub fn _version(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
 
@@ -853,7 +975,7 @@ impl RoadStorage {
         };
 
         self.node_to_region.push(region_id);
-        self.active_region_count += 1; // TODO
+        self.active_region_count += 1;
 
         id
     }
@@ -1149,6 +1271,14 @@ impl RoadStorage {
             .collect()
     }
 
+    #[inline]
+    pub fn segment_ids_touching_chunks(&self, chunks: &Vec<ChunkCoord>) -> Vec<SegmentId> {
+        chunks
+            .iter()
+            .map(|chunk_coord| self.segment_ids_touching_chunk(*chunk_coord))
+            .flatten()
+            .collect()
+    }
     #[inline]
     pub fn node_lane_count_for_node(&self, id: NodeId) -> usize {
         self.nodes[id.raw() as usize].node_lanes.len()
@@ -2323,7 +2453,7 @@ pub fn apply_road_commands_preview(
 pub fn apply_road_command(
     terrain: &mut Terrain,
     road_manager: &mut RoadManager,
-    car_subsystem: &mut Cars,
+    cars: &mut Cars,
     settings: &Settings,
     gizmo: &mut Gizmo,
     road_command: &RoadCommand,
@@ -2339,7 +2469,7 @@ pub fn apply_road_command(
         RoadCommand::AddNode { world_pos } => {
             let id = storage.add_node(*world_pos);
             if !is_preview {
-                car_subsystem.add_spawning_node(id);
+                cars.add_spawning_node(id);
             }
             let chunk_id = world_pos_chunk_to_id(world_pos);
             CommandResult::NodeCreated(chunk_id, id)
@@ -2438,7 +2568,7 @@ pub fn apply_road_command(
             }
             storage.disable_node(*node_id, road_types, gizmo);
             if !is_preview {
-                //car_subsystem.remove_spawning_node(); // TODO
+                cars.remove_spawning_node(*node_id);
             }
             CommandResult::Ok
         }
@@ -2447,6 +2577,9 @@ pub fn apply_road_command(
                 return CommandResult::InvalidReference;
             }
             storage.enable_node(*node_id);
+            if !is_preview {
+                cars.add_spawning_node(*node_id);
+            }
             CommandResult::Ok
         }
         RoadCommand::DisableSegment {
@@ -3337,44 +3470,58 @@ fn turn_cost(turn: TurnType) -> f32 {
 /// Recent reports matter more than ancient ones.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExponentialMovingAverage {
-    value: f32,
+    duration: f32,
     alpha: f32, // smoothing factor: 0.0 = never update, 1.0 = only latest
     count: u32, // how many samples we've seen (useful for "is this trustworthy?")
+    /// Which Lane of this arm is it referring to?
+    lane_id: LaneId,
 }
 
 impl ExponentialMovingAverage {
-    pub fn new(alpha: f32) -> Self {
+    pub fn new(alpha: f32, lane_id: LaneId) -> Self {
         Self {
-            value: 0.0,
+            duration: 0.0,
             alpha,
             count: 0,
+            lane_id,
         }
     }
 
     /// Seed with an initial estimate (e.g., Euclidean distance / speed limit)
     /// so the first cars aren't completely blind.
-    pub fn with_initial(alpha: f32, initial: f32) -> Self {
+    pub fn with_initial(alpha: f32, initial_duration: f32, lane_id: LaneId) -> Self {
         Self {
-            value: initial,
+            duration: initial_duration,
             alpha,
             count: 1,
+            lane_id,
+        }
+    }
+
+    pub fn with_state(alpha: f32, value: f32, count: u32, lane_id: LaneId) -> Self {
+        Self {
+            duration: value,
+            alpha,
+            count,
+            lane_id,
         }
     }
 
     /// A car reports a new observed travel time.
     pub fn update(&mut self, sample: f32) {
+        // TODO: Update the EMAs! Fade out with time!
         if self.count == 0 {
             // First sample: just accept it wholesale
-            self.value = sample;
+            self.duration = sample;
         } else {
-            self.value = self.alpha * sample + (1.0 - self.alpha) * self.value;
+            self.duration = self.alpha * sample + (1.0 - self.alpha) * self.duration;
         }
         self.count = self.count.saturating_add(1);
     }
 
     /// Current best estimate of travel time.
     pub fn get(&self) -> f32 {
-        self.value
+        self.duration
     }
 
     /// How many reports this is based on.

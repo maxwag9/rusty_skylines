@@ -1,8 +1,14 @@
 #[derive(Copy, Clone)]
 pub struct HSV {
-    pub(crate) h: f32, // 0..1
-    pub(crate) s: f32, // 0..1
-    pub(crate) v: f32, // 0..1
+    pub h: f32, // 0..1
+    pub s: f32, // 0..1
+    pub v: f32, // 0..1
+}
+
+impl HSV {
+    pub fn new(h: f32, s: f32, v: f32) -> HSV {
+        HSV { h, s, v }
+    }
 }
 
 pub fn rgb_to_hsv([r, g, b, _a]: [f32; 4]) -> HSV {

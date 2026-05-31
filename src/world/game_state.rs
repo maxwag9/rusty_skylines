@@ -493,7 +493,7 @@ impl SaveState {
 
         zoning.zoning_storage = mem::take(&mut self.zones);
         buildings.storage = mem::take(&mut self.buildings);
-        roads.partition_manager = mem::take(&mut self.partitions);
+        buildings.partitions = mem::take(&mut self.partitions);
         roads.road_manager.road_types = mem::take(&mut self.road_types);
         world.city_state = mem::take(&mut self.city_state);
         //variables.set_i64("lanes_left", terrain.cursor.road_type.unwrap().lanes_each_direction().0 as i64);
@@ -524,7 +524,7 @@ impl SaveState {
         self.props = props.get_props();
         self.zones = zoning.zoning_storage.clone();
         self.buildings = buildings.storage.clone();
-        self.partitions = roads.partition_manager.clone();
+        self.partitions = buildings.partitions.clone();
         self.road_types = roads.road_manager.road_types.clone();
         self.city_state = world.city_state.clone();
     }

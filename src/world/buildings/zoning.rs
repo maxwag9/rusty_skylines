@@ -45,6 +45,10 @@ pub struct District {
     pub name: String,
     pub district_type: DistrictType,
     pub center: WorldPos,
+    // Raw points from all lots in the district
+    raw_points: Vec<WorldPos>,
+
+    // Cached convex hull of raw_points
     points: Vec<WorldPos>,
     pub lot_ids: Vec<LotId>,
     pub zoning_demand: ZoningDemand,
@@ -58,6 +62,7 @@ impl District {
             name,
             district_type,
             center,
+            raw_points: points.clone(),
             points,
             lot_ids: vec![],
             zoning_demand: ZoningDemand::new(),
@@ -545,7 +550,7 @@ impl District {
         let mut rng = ThreadRng::default();
         let name = generate_district_name(&mut rng);
 
-        let mut new_district = District::new(name, poly_b, DistrictType::AutomaticallyMade);
+        let mut new_district = District::new(name, poly_b, DistrictType::AutomaticallyMade); // TODO: poly_b MUST be all points, and NOT a convex hull!
         new_district.lot_ids = lots_b;
         new_district.zoning_demand = ZoningDemand::new();
 
@@ -746,7 +751,8 @@ impl Zoning {
     pub fn update(
         &mut self,
         camera: &Camera,
-        terrain: &Terrain,
+        terrain: &mut Terrain,
+        buildings: &mut Buildings,
         roads: &Roads,
         road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
@@ -757,13 +763,13 @@ impl Zoning {
         if terrain.cursor.mode != CursorMode::Area && terrain.cursor.mode != CursorMode::Zoning {
             return;
         };
-        let new_district_type = &terrain.cursor.zoning_type;
+        let new_district_type = terrain.cursor.zoning_type;
         let active_district_id = self.zoning_state.as_ref().map(|state| state.district_id);
         for district in self.zoning_storage.iter_districts() {
             if Some(district.id) != active_district_id {
                 draw_area(
                     district.points.as_slice(),
-                    &ZoningType::None,
+                    ZoningType::None,
                     variables,
                     gizmo,
                     Some([1.0, 1.0, 1.0, 0.2]),
@@ -797,7 +803,7 @@ impl Zoning {
             // }
         }
         // After this, if the mouse is over the sky or UI, stuff doesn't get rendered cuz there is no picked point ofc!
-        let Some(picked) = terrain.last_picked.as_ref() else {
+        let Some(picked) = terrain.last_picked.clone() else {
             return;
         };
 
@@ -807,7 +813,7 @@ impl Zoning {
         for segment_id in roads
             .road_manager
             .roads
-            .segment_ids_touching_chunk(picked.chunk.coords.chunk_coord)
+            .segment_ids_touching_chunks(&picked.chunk.coords.chunk_coord.get_chunks_3x3())
         {
             let Some(road_edges) = road_mesh_manager.road_edge_storage.get(&segment_id) else {
                 continue;
@@ -830,7 +836,7 @@ impl Zoning {
 
                 collect_lot_point(
                     edges,
-                    picked,
+                    &picked,
                     &mut closest_distance,
                     &mut closest_point,
                     segment_id,
@@ -842,7 +848,7 @@ impl Zoning {
 
                 collect_lot_point(
                     edges,
-                    picked,
+                    &picked,
                     &mut closest_distance,
                     &mut closest_point,
                     segment_id,
@@ -863,7 +869,7 @@ impl Zoning {
 
                     collect_lot_point(
                         lane_edges,
-                        picked,
+                        &picked,
                         &mut closest_distance,
                         &mut closest_point,
                         segment_id,
@@ -901,16 +907,17 @@ impl Zoning {
             None
         };
 
-        match terrain.cursor.mode {
+        match terrain.cursor.mode.clone() {
             CursorMode::Zoning => {
                 self.run_lot_zoning(
                     terrain,
+                    buildings,
                     roads,
                     road_mesh_manager,
                     input,
                     variables,
                     lot_snap_point,
-                    picked,
+                    &picked,
                     new_district_type,
                     gizmo,
                 );
@@ -921,7 +928,7 @@ impl Zoning {
                     roads,
                     input,
                     variables,
-                    picked,
+                    &picked,
                     active_district_id,
                     new_district_type,
                     gizmo,
@@ -1173,14 +1180,15 @@ impl Zoning {
 
     fn run_lot_zoning(
         &mut self,
-        terrain: &Terrain,
+        terrain: &mut Terrain,
+        buildings: &mut Buildings,
         roads: &Roads,
         road_mesh_manager: &RoadMeshManager,
         input: &mut Input,
         variables: &Variables,
         lot_snap_point: Option<LotPoint>,
         picked: &PickedPoint,
-        new_zoning_type: &ZoningType,
+        new_zoning_type: ZoningType,
         gizmo: &mut Gizmo,
     ) {
         let lot_width = variables.get_f64("lot_width").unwrap_or(15.0) as f32;
@@ -1254,7 +1262,7 @@ impl Zoning {
                 if removing_lot {
                     draw_area(
                         lot.bounds.as_slice(),
-                        &lot.zoning_type,
+                        lot.zoning_type,
                         variables,
                         gizmo,
                         Some([3.0, 0.2, 0.2, 1.0]),
@@ -1263,20 +1271,20 @@ impl Zoning {
                 } else {
                     draw_area(
                         lot.bounds.as_slice(),
-                        &lot.zoning_type,
+                        lot.zoning_type,
                         variables,
                         gizmo,
                         Some([1.2, 1.2, 1.2, 1.0]),
                         Some(new_zoning_type),
                     );
                     if input.action_pressed_once("Place Zoning Point") {
-                        lot.zoning_type = *new_zoning_type;
+                        lot.zoning_type = new_zoning_type;
                     }
                 }
             } else {
                 draw_area(
                     lot.bounds.as_slice(),
-                    &lot.zoning_type,
+                    lot.zoning_type,
                     variables,
                     gizmo,
                     Some([1.0, 1.0, 1.0, 0.3]),
@@ -1287,8 +1295,16 @@ impl Zoning {
             gizmo.polyline(lot.bounds.as_slice(), [0.1, 0.3, 0.7, 0.8], 10.0, 0.10, 0.0);
         }
         if let Some(lot_id) = inside_lot_id
-            && finished_removing_lot
+            && removing_lot
         {
+            if let Some(building_id) = self
+                .zoning_storage
+                .get_lot(lot_id)
+                .map(|lot| lot.building_id)
+            {
+                BuildingStorage::despawn(buildings, self, &mut terrain.terrain_editor, building_id);
+            }
+
             self.zoning_storage.despawn_lot(lot_id);
         }
 
@@ -1305,7 +1321,7 @@ impl Zoning {
         variables: &Variables,
         picked: &PickedPoint,
         active_district_id: Option<DistrictId>,
-        new_district_type: &ZoningType,
+        new_district_type: ZoningType,
         gizmo: &mut Gizmo,
     ) {
         let mut best_place: PlacePos = PlacePos::Free(picked.pos, 0.0);
@@ -1448,7 +1464,7 @@ impl Zoning {
             if let Some(district) = self.zoning_storage.get_district(id) {
                 draw_area(
                     district.points.as_slice(),
-                    &ZoningType::None,
+                    ZoningType::None,
                     variables,
                     gizmo,
                     Some([1.1, 1.1, 1.1, 1.0]),
@@ -2178,11 +2194,11 @@ pub fn point_to_segment_distance(p: WorldPos, a: WorldPos, b: WorldPos) -> f32 {
 
 pub fn draw_area(
     points: &[WorldPos],
-    district_type: &ZoningType,
+    district_type: ZoningType,
     variables: &Variables,
     gizmo: &mut Gizmo,
     color_multiplier: Option<[f32; 4]>,
-    predicted_district_type: Option<&ZoningType>,
+    predicted_district_type: Option<ZoningType>,
 ) {
     let district_type = predicted_district_type.unwrap_or(district_type);
 
