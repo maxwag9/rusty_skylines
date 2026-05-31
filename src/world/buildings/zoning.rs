@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::slice::IterMut;
 
-const SNAP_RADIUS: f64 = 10.0;
+const SNAP_RADIUS: f64 = 20.0;
 const EPS: f64 = 0.0001;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -155,12 +155,10 @@ impl District {
             let split_result =
                 Self::split(&mut zoning.zoning_storage, district_id, road_edge_storage);
             //println!("{:?}", split_result);
-            match split_result {
-                DistrictSplitResult::Alright(new_other_district) => {
-                    return Some(new_other_district);
-                }
-                _ => return None,
-            }
+            return match split_result {
+                DistrictSplitResult::Alright(new_other_district) => Some(new_other_district),
+                _ => None,
+            };
         }
         None
     }
@@ -475,8 +473,8 @@ impl District {
             let mut max_dz = 0.0f64;
 
             for &p in boundary.iter().skip(1) {
-                let dx = boundary[0].dx(p) as f64;
-                let dz = boundary[0].dz(p) as f64;
+                let dx = boundary[0].dx(p);
+                let dz = boundary[0].dz(p);
 
                 min_dx = min_dx.min(dx);
                 max_dx = max_dx.max(dx);
@@ -821,7 +819,9 @@ impl Zoning {
                 .iter()
                 .chain(road_edges.left_sidewalk_edge.right_points.iter())
             {
-                gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
+                if point.distance_squared(picked.pos) < SNAP_RADIUS * SNAP_RADIUS {
+                    gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
+                }
             }
 
             // Prefer sidewalks if they exist
@@ -856,7 +856,9 @@ impl Zoning {
                         continue;
                     };
                     for point in &lane_edges.right_points {
-                        gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
+                        if point.distance_squared(picked.pos) < SNAP_RADIUS * SNAP_RADIUS {
+                            gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
+                        }
                     }
 
                     collect_lot_point(
@@ -887,7 +889,9 @@ impl Zoning {
                         .chain(road_edges.right_sidewalk_edge.right_points.iter())
                         .chain(road_edges.left_sidewalk_edge.right_points.iter())
                     {
-                        gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
+                        if point.distance_squared(picked.pos) < SNAP_RADIUS * SNAP_RADIUS {
+                            gizmo.circle(*point, 0.4, [0.8, 0.3, 1.0, 1.0], 0.1, 0.0);
+                        }
                     }
                 }
 
@@ -1221,7 +1225,7 @@ impl Zoning {
                     gizmo.polyline(preview.as_slice(), [0.8, 0.1, 0.1, 1.0], 8.0, 0.25, 0.0);
                 }
                 false => {
-                    // DOESN'T INTERSCET LETS GO
+                    // DOESN'T INTERSECT LETS GO
                     // Preview draw
                     gizmo.polyline(preview.as_slice(), [0.1, 0.8, 0.1, 1.0], 8.0, 0.2, 0.0);
                     if input.action_repeat("Place Zoning Point") {

@@ -1,7 +1,7 @@
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
-use crate::world::cars::partitions::HierarchicalAddress;
+use crate::world::cars::partitions::Address;
 use crate::world::roads::road_structs::LaneId;
 use crate::world::roads::roads::{LaneRef, TurnType};
 use glam::{Quat, Vec3};
@@ -816,7 +816,7 @@ pub struct Car {
     pub committed_lane: Option<LaneRef>, // chosen outgoing lane
 
     // === Destination ===
-    pub destination_addr: Option<HierarchicalAddress>,
+    pub destination_addr: Option<Address>,
 
     // === Decision memory (very small) ===
     pub last_turn: Option<TurnType>,

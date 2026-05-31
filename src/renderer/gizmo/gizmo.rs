@@ -3,7 +3,7 @@
 use crate::data::Settings;
 use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
-use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualizationConfig};
+//use crate::renderer::gizmo::partition_gizmo::{PartitionGizmo, PartitionVisualizationConfig};
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
@@ -43,7 +43,7 @@ pub struct PendingGizmoTextRender {
     pub scale_with_cam: bool,
 }
 pub struct Gizmo {
-    partition_gizmo: PartitionGizmo,
+    //partition_gizmo: PartitionGizmo,
     pub pending_renders: Vec<PendingGizmoRender>,
     pub gizmo_buffer: Buffer,
     pub thick_buffer: Buffer,
@@ -89,7 +89,7 @@ impl Gizmo {
             .initial_cache_size((2048, 2048))
             .build();
         Self {
-            partition_gizmo: PartitionGizmo::new(),
+            //partition_gizmo: PartitionGizmo::new(),
             pending_renders: Vec::new(),
             gizmo_buffer,
             thick_buffer,
@@ -185,16 +185,16 @@ impl Gizmo {
         (thin_count, thick_count, text_count)
     }
 
-    pub fn visualize_partitions(
-        &mut self,
-        partition_gizmo: &mut PartitionGizmo,
-        manager: &PartitionManager,
-        road_storage: &RoadStorage,
-    ) {
-        let config = PartitionVisualizationConfig::detailed();
-
-        partition_gizmo.visualize(self, manager, road_storage, config)
-    }
+    // pub fn visualize_partitions(
+    //     &mut self,
+    //     partition_gizmo: &mut PartitionGizmo,
+    //     manager: &PartitionManager,
+    //     road_storage: &RoadStorage,
+    // ) {
+    //     let config = PartitionVisualizationConfig::detailed();
+    //
+    //     partition_gizmo.visualize(self, manager, road_storage, config)
+    // }
 
     /// Visualizes all road regions with distinct colors and region ID numbers.
     ///
@@ -786,7 +786,7 @@ impl Gizmo {
         rt_subsystem: &RTSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,
-        partition_gizmo: &mut PartitionGizmo,
+        //partition_gizmo: &mut PartitionGizmo,
         partition_manager: &PartitionManager,
         settings: &Settings,
         camera: &Camera,
@@ -795,7 +795,7 @@ impl Gizmo {
         let target = camera.target;
 
         if settings.render_partitions_gizmo {
-            self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
+            //self.visualize_partitions(partition_gizmo, partition_manager, &road_manager.roads);
             self.visualize_regions(&road_manager.roads, 0.0, 0.0);
         }
         if settings.render_node_ids_gizmo {

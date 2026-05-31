@@ -3,7 +3,7 @@ use crate::gpu_timestamp;
 use crate::helpers::paths::{compute_shader_dir, shader_dir, texture_dir};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::gizmo::partition_gizmo::PartitionGizmo;
+//use crate::renderer::gizmo::partition_gizmo::PartitionGizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::Pipelines;
@@ -69,7 +69,7 @@ pub struct Renderer {
     pub car_renderer: CarRenderSubsystem,
     pub building_renderer: BuildingRenderer,
     pub gizmo: Gizmo,
-    pub partition_gizmo: PartitionGizmo,
+    //pub partition_gizmo: PartitionGizmo,
     pub props: Props,
 }
 
@@ -121,7 +121,7 @@ impl Renderer {
             gizmo,
             profiler,
             rt_subsystem,
-            partition_gizmo: PartitionGizmo::new(),
+            //partition_gizmo: PartitionGizmo::new(),
             props: Props::new(device),
             building_renderer,
         }
@@ -387,7 +387,7 @@ impl Renderer {
             &self.rt_subsystem,
             time.total_game_time,
             &roads.road_manager,
-            &mut self.partition_gizmo,
+            //&mut self.partition_gizmo,
             &roads.partition_manager,
             settings,
             camera,

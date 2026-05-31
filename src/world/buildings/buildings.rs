@@ -8,6 +8,7 @@ use crate::ui::variables::Variables;
 use crate::world::buildings::zoning::{Lot, LotId, Tile, TileType, Zoning, ZoningType};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
+use crate::world::cars::partitions::{PartitionId, PartitionStorage};
 use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_to_coord};
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::{ChunkGpuMesh, Roads};
@@ -300,6 +301,7 @@ pub struct BuildingStorage {
     // Reverse mapping so I can remove from chunks in O(1) when destroying
     building_locations: HashMap<BuildingId, ChunkCoord>,
     center_chunk: ChunkCoord,
+    building_to_partition: Vec<PartitionId>,
 }
 
 impl BuildingStorage {
@@ -352,10 +354,12 @@ impl BuildingStorage {
             free_list: Vec::new(),
             building_locations: HashMap::new(),
             center_chunk: ChunkCoord::zero(),
+            building_to_partition: Vec::new(),
         }
     }
 
     pub fn spawn(
+        //partitions: &mut Partitions,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
         chunk_coord: ChunkCoord,
@@ -382,6 +386,7 @@ impl BuildingStorage {
             building_chunk_distance,
             building_id,
         );
+        //partitions.add_building(building_id);
         storage.building_locations.insert(building_id, chunk_coord);
         ZoningDemand::spawn_building(buildings, zoning, building_id);
         //println!("Created building: {}", building_id);
@@ -446,6 +451,14 @@ impl BuildingStorage {
     {
         let id = id.into()?;
         self.buildings.get_mut(id as usize)?.as_mut()
+    }
+
+    #[inline(always)]
+    pub fn get_partition_of_building(&self, building: BuildingId) -> PartitionId {
+        unsafe {
+            *self.building_to_partition.get_unchecked(building as usize) // Hope-based unsafe usage, first ever unsafe usage.
+            // Should have better performance because no bound checking is being done, good for car signfinding!
+        }
     }
 }
 

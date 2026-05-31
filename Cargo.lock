@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Rusty_Skylines"
-version = "0.7.13"
+version = "0.7.14"
 dependencies = [
  "anyhow",
  "arboard",
