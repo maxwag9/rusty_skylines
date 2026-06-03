@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 use crate::helpers::hsv::{HSV, hsv_to_rgb, lerp_hsv};
 use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
@@ -660,7 +661,7 @@ impl TerrainGenerator {
 
         rel = micro_flatten(rel, self.p.micro_flatten);
 
-        let mut h = rel * self.p.height_scale + self.p.sea_level;
+        let h = rel * self.p.height_scale + self.p.sea_level;
 
         //h = self.apply_origin_land_override(p, h);
 

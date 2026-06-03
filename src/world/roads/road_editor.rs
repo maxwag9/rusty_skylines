@@ -478,10 +478,10 @@ impl RoadEditor {
                 let segment = storage.segment(seg_id);
 
                 let start_node = storage.node(segment.start).unwrap();
-                let start_node_pos = start_node.position();
+                let start_node_pos = start_node.pos();
 
                 let end_node = storage.node(segment.end).unwrap();
-                let end_node_pos = end_node.position();
+                let end_node_pos = end_node.pos();
 
                 let dist_to_start = crossing.world_pos.length_to(start_node_pos);
                 let dist_to_end = crossing.world_pos.length_to(end_node_pos);
@@ -524,7 +524,7 @@ impl RoadEditor {
                 continue;
             }
 
-            let node_pos = node.position();
+            let node_pos = node.pos();
             if let Some((t, dist)) =
                 self.project_point_to_path(start_pos, end_pos, control, node_pos)
             {
@@ -1085,7 +1085,7 @@ impl RoadEditor {
         let mut best: Option<(NodeId, WorldPos, f64)> = None;
 
         for (id, node) in storage.iter_enabled_nodes() {
-            let node_pos = node.position();
+            let node_pos = node.pos();
             let dist = pos.distance_to(node_pos);
 
             if dist < NODE_SNAP_RADIUS {
@@ -1198,13 +1198,13 @@ impl RoadEditor {
         if rep_t < ENDPOINT_T_EPS {
             let node_id = rep_lane.from_node();
             let node = storage.node(node_id)?;
-            return Some((rep_lane_id, 0.0, node.position(), dist));
+            return Some((rep_lane_id, 0.0, node.pos(), dist));
         }
 
         if rep_t > 1.0 - ENDPOINT_T_EPS {
             let node_id = rep_lane.to_node();
             let node = storage.node(node_id)?;
-            return Some((rep_lane_id, 1.0, node.position(), dist));
+            return Some((rep_lane_id, 1.0, node.pos(), dist));
         }
         // gizmo.cross(final_pos, 1.0, [0.0, 1.0, 1.0], 10.0);
         Some((rep_lane_id, rep_t, final_pos, dist))
@@ -1364,7 +1364,7 @@ impl RoadEditor {
         match &anchor.planned_node {
             PlannedNode::Existing(id) => {
                 let node = storage.node(*id)?;
-                Some((*id, node.position()))
+                Some((*id, node.pos()))
             }
             PlannedNode::New { pos } => {
                 let node_id = self.allocator.alloc_node();
@@ -1487,10 +1487,6 @@ impl RoadEditor {
 
             let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
 
-            let total_len = old_lane.geometry().total_len.max(0.001);
-            let cost1 = old_lane.base_cost() as f64 * (geom1.total_len / total_len);
-            let cost2 = old_lane.base_cost() as f64 * (geom2.total_len / total_len);
-
             if old_lane.from_node() == a_id {
                 cmds.push(RoadCommand::AddLane {
                     from: a_id,
@@ -1501,7 +1497,6 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost1 as f32,
                     chunk_id,
                 });
 
@@ -1514,7 +1509,6 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost2 as f32,
                     chunk_id,
                 });
             } else {
@@ -1527,7 +1521,6 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost1 as f32,
                     chunk_id,
                 });
 
@@ -1540,7 +1533,6 @@ impl RoadEditor {
                     speed_limit: old_lane.speed_limit(),
                     capacity: old_lane.capacity(),
                     vehicle_mask: old_lane.vehicle_mask(),
-                    base_cost: cost2 as f32,
                     chunk_id,
                 });
             }
@@ -1577,7 +1569,6 @@ impl RoadEditor {
                 road_type.structure,
             );
             let geom = LaneGeometry::from_polyline(poly);
-            let base_cost = geom.total_len.max(0.1) as f32;
             cmds.push(RoadCommand::AddLane {
                 from: start,
                 to: end,
@@ -1587,7 +1578,6 @@ impl RoadEditor {
                 speed_limit: speed,
                 capacity,
                 vehicle_mask: mask,
-                base_cost,
                 chunk_id,
             });
         }
@@ -1604,7 +1594,6 @@ impl RoadEditor {
             );
             poly.reverse();
             let geom = LaneGeometry::from_polyline(poly);
-            let base_cost = geom.total_len.max(0.1) as f32;
             cmds.push(RoadCommand::AddLane {
                 from: end,
                 to: start,
@@ -1614,7 +1603,6 @@ impl RoadEditor {
                 speed_limit: speed,
                 capacity,
                 vehicle_mask: mask,
-                base_cost,
                 chunk_id,
             });
         }

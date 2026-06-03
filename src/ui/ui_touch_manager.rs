@@ -298,6 +298,16 @@ pub enum TouchEvent {
     NavigateDirection {
         direction: NavigationDirection,
     },
+    Activated {
+        element: ElementRef,
+        actions: Vec<String>,
+        buttons: MouseButtons,
+    },
+    Deactivated {
+        element: ElementRef,
+        actions: Vec<String>,
+        buttons: MouseButtons,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1241,6 +1251,7 @@ pub struct UiTouchManager {
     // Timing
     accumulated_time: f32,
     pub options: GuiOptions,
+    pub element_actives: HashMap<ElementRef, bool>,
 }
 
 impl UiTouchManager {
@@ -1261,6 +1272,7 @@ impl UiTouchManager {
                 override_mode: settings.override_mode,
                 show_gui: settings.show_gui,
             },
+            element_actives: HashMap::new(),
         }
     }
 
@@ -1310,6 +1322,7 @@ impl UiTouchManager {
                 actions: touchable_element.element.actions(),
             });
         }
+
         self.last_input = input;
     }
 

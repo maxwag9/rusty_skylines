@@ -1,5 +1,5 @@
 use crate::helpers::hsv::hsv_to_rgb;
-use crate::helpers::positions::{ChunkCoord, ChunkSize, WorldPos};
+use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_pass::update_rt_instances;
@@ -8,12 +8,13 @@ use crate::resources::Time;
 use crate::ui::input::Input;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::Vertex;
+use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::{create_procedural_car, sample_car_color};
 use crate::world::cars::car_render::CarInstance;
 use crate::world::cars::car_simulation::CarSimSystem;
-use crate::world::cars::car_structs::{Car, CarStorage, ChunkDistance, SimTime};
-use crate::world::cars::partitions::PartitionId;
+use crate::world::cars::car_structs::{Car, CarId, CarStorage};
+use crate::world::cars::partitions::PartitionManager;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::RoadManager;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
@@ -207,15 +208,15 @@ pub struct Cars {
     car_storage: CarStorage,
     spawning_nodes: Vec<SpawningNode>,
     timing: CarSubsystemTiming,
-    player_car_id: PartitionId,
+    player_car_id: CarId,
     car_simulation: CarSimSystem,
 }
 
 impl Cars {
-    pub(crate) fn player_car_id(&self) -> PartitionId {
+    pub fn player_car_id(&self) -> CarId {
         self.player_car_id
     }
-    pub(crate) fn get_player_car(&mut self) -> Option<&mut Car> {
+    pub fn get_player_car(&mut self) -> Option<&mut Car> {
         let id = self.player_car_id;
         self.car_storage_mut().get_mut(id)
     }
@@ -239,6 +240,8 @@ impl Cars {
     }
     pub fn update(
         &mut self,
+        partitions: &PartitionManager,
+        zoning: &ZoningStorage,
         gizmo: &mut Gizmo,
         road_manager: &RoadManager,
         terrain: &Terrain,
@@ -258,7 +261,7 @@ impl Cars {
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
                         self.car_storage
-                            .spawn(picked.pos.chunk, ChunkDistance::Close, car);
+                            .spawn(car, picked.pos.chunk, &road_manager.roads);
                     }
                 }
             }
@@ -267,43 +270,16 @@ impl Cars {
         if self.timing.carchunk_update_last.elapsed() >= Duration::from_secs(1) {
             self.timing.carchunk_update_last = Instant::now();
             self.car_storage.update_carchunk_distances(target_pos);
-
-            self.car_simulation
-                .cleanup_stale_jitter(&self.car_storage.car_chunk_storage);
         }
 
         let current_sim_time = time.total_game_time;
-        let mut rng = rng();
-        let updated_chunks = self.car_simulation.update_chunks(
-            &mut self.car_storage,
-            terrain,
-            current_sim_time,
-            &mut rng,
-        );
 
         // live visualization
         // if !updated_chunks.is_empty() {
         //     gizmo.visualize_chunk_updates_numbered(&updated_chunks, current_sim_time, 0.0);
         // }
     }
-    /// Manual batch simulation for specific chunks
-    pub fn simulate_chunks(
-        &mut self,
-        terrain: &Terrain,
-        chunk_ids: Vec<ChunkCoord>,
-        current_time: SimTime,
-        chunk_size: ChunkSize,
-    ) {
-        let mut rng = rng();
-        self.car_simulation.simulate_chunks(
-            chunk_ids,
-            &mut self.car_storage,
-            terrain,
-            current_time,
-            &mut rng,
-            chunk_size,
-        );
-    }
+
     fn spawn_cars(
         &mut self,
         road_manager: &RoadManager,
@@ -349,12 +325,10 @@ impl Cars {
                 let lane = road_manager.roads.lane(&lane_id);
                 let polyline = lane.polyline();
                 let first_point = polyline.first().unwrap();
-                let car_chunk_distance =
-                    ChunkDistance::from_chunk_positions(target_pos.chunk, first_point.chunk);
                 self.car_storage.spawn(
-                    first_point.chunk,
-                    car_chunk_distance,
                     make_random_car(*first_point, &mut rng),
+                    first_point.chunk,
+                    &road_manager.roads,
                 );
             }
         }

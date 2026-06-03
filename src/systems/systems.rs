@@ -123,7 +123,7 @@ fn handle_destruction(
             // Check nodes first
             for node_id in [segment.start, segment.end] {
                 if let Some(node) = roads.road_manager.roads.node(node_id) {
-                    let distance = node.position().distance_to(picked.pos);
+                    let distance = node.pos().distance_to(picked.pos);
 
                     if distance < closest_distance {
                         closest_distance = distance;
@@ -174,7 +174,7 @@ fn handle_destruction(
                 RoadDestroyType::Node(node_id) => {
                     if let Some(node) = roads.road_manager.roads.node(node_id) {
                         //let points: Vec<WorldPos> = collect_road_points(edges).into_iter().copied().collect();
-                        gizmo.circle(node.position(), 3.0, [0.5, 0.2, 0.0, 0.3], 0.6, 0.0);
+                        gizmo.circle(node.pos(), 3.0, [0.5, 0.2, 0.0, 0.3], 0.6, 0.0);
                         roads
                             .road_editor
                             .pending_outside_commands
@@ -226,7 +226,22 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
 }
 
 pub fn run_interpolation(resources: &mut Resources) {
-    interpolate_cars(&mut resources.world, &resources.settings);
+    interpolate_cars(
+        &mut resources.world,
+        &resources.ui.variables,
+        &resources.settings,
+    );
+    if resources.settings.render_signfinding_gizmo {
+        resources
+            .render_core
+            .gizmo
+            .visualize_signfinding_trajectories(
+                resources.world.cars.car_storage(),
+                &resources.world.terrain,
+                &resources.world.roads.road_manager.roads,
+                &resources.world.buildings,
+            )
+    }
 }
 
 pub fn run_render(resources: &mut Resources) {

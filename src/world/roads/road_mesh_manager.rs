@@ -1039,7 +1039,7 @@ impl RoadMeshManager {
                 intersection_results.insert(*node_id, result);
             } else {
                 // Dead end or single connection
-                let center = node.position();
+                let center = node.pos();
                 let mut connected_lanes_info = Vec::new();
 
                 for lane_id in node
@@ -1073,7 +1073,7 @@ impl RoadMeshManager {
         }
 
         // === PASS 2: Build segment meshes using intersection boundary data ===
-        let mut segment_ids: HashSet<SegmentId> = match chunk_id {
+        let segment_ids: HashSet<SegmentId> = match chunk_id {
             Some(cid) => {
                 HashSet::from_iter(storage.segment_ids_touching_chunk(chunk_id_to_coord(cid)))
             }

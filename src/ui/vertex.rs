@@ -1459,6 +1459,7 @@ impl RuntimeLayer {
         self.elements.iter().filter_map(UiElement::as_outline)
     }
 
+    #[inline]
     pub fn iter_all(&self) -> impl Iterator<Item = &UiElement> {
         self.elements.iter()
     }

@@ -73,6 +73,8 @@ impl Simulation {
         let cam_controller = &mut world.world_state.cam_controller;
 
         world.cars.update(
+            &world.buildings.partitions,
+            &world.zoning.zoning_storage,
             &mut renderer.gizmo,
             &world.roads.road_manager,
             &world.terrain,

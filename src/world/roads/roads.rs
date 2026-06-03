@@ -22,6 +22,7 @@ use crate::systems::systems::RoadDestroyType;
 use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::partitions::{Address, DestinationType, PartitionStorage};
+use crate::world::cars::signfinding::BreadCrumb;
 use crate::world::roads::intersections::{
     IntersectionBuildParams, build_intersection_at_node, gather_arms,
 };
@@ -46,7 +47,7 @@ use xxhash_rust::xxh3::xxh3_64;
 pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
 
 type PartitionId = u32;
-/// One physical "leg" of an intersection — a direction you can come from or go to.
+/// One physical "leg" of an intersection, a direction you can come from or go to.
 /// Arms are sorted by bearing angle (clockwise from north, or whatever convention).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Arm {
@@ -60,7 +61,7 @@ pub struct Arm {
     /// Length of this arm/corridor
     pub corridor_length: f32,
     /// Whether the segment points toward this node (end == node_id)
-    points_to_node: bool,
+    points_to_node: bool, // TO/DO: SUS!
 
     incoming_lanes: Vec<LaneId>,
     outgoing_lanes: Vec<LaneId>,
@@ -245,7 +246,12 @@ impl Arm {
         });
     }
 
-    pub fn update_travel_time(&mut self, destination_type: DestinationType, time: f32) {
+    pub fn update_travel_time(
+        &mut self,
+        destination_type: DestinationType,
+        breadcrumb: BreadCrumb,
+        time: f32,
+    ) {
         self.building_travel_times
             .entry(destination_type)
             .or_insert_with(|| ExponentialMovingAverage::new(0.1, LaneId(0)))
@@ -412,7 +418,7 @@ impl Node {
     }
 
     #[inline]
-    pub fn position(&self) -> WorldPos {
+    pub fn pos(&self) -> WorldPos {
         self.pos
     }
 
@@ -545,7 +551,20 @@ impl Segment {
     pub fn end(&self) -> NodeId {
         self.end
     }
-
+    #[inline]
+    pub fn nodes(&self) -> Vec<NodeId> {
+        vec![self.start, self.end]
+    }
+    #[inline]
+    pub fn other_node(&self, node_id: NodeId) -> Option<NodeId> {
+        if node_id == self.start {
+            Some(self.end)
+        } else if node_id == self.end {
+            Some(self.start)
+        } else {
+            None
+        }
+    }
     #[inline]
     pub fn is_enabled(&self) -> bool {
         self.enabled
@@ -594,13 +613,11 @@ pub struct Lane {
     speed_limit: f32,
     capacity: u32,
     vehicle_mask: u32,
-    base_cost: f32,
-    dynamic_cost: f32,
     geometry: LaneGeometry,
 }
 
 impl Lane {
-    pub(crate) fn new(
+    pub fn new(
         from: NodeId,
         to: NodeId,
         segment: SegmentId,
@@ -608,7 +625,6 @@ impl Lane {
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
-        base_cost: f32,
         geometry: LaneGeometry,
     ) -> Self {
         Self {
@@ -620,8 +636,6 @@ impl Lane {
             speed_limit,
             capacity,
             vehicle_mask,
-            base_cost,
-            dynamic_cost: 0.0,
             geometry,
         }
     }
@@ -668,21 +682,6 @@ impl Lane {
         self.vehicle_mask
     }
 
-    #[inline]
-    pub fn base_cost(&self) -> f32 {
-        self.base_cost
-    }
-
-    #[inline]
-    pub fn dynamic_cost(&self) -> f32 {
-        self.dynamic_cost
-    }
-
-    #[inline]
-    pub fn total_cost(&self) -> f32 {
-        self.base_cost + self.dynamic_cost
-    }
-
     /// Returns true if the lane allows the given vehicle type.
     #[inline]
     pub fn allows_vehicle(&self, vehicle_type: u32) -> bool {
@@ -697,10 +696,6 @@ impl Lane {
         &self.geometry.points
     }
     #[inline]
-    pub fn replace_base_cost(&mut self, base_cost: f32) {
-        self.base_cost = base_cost;
-    }
-    #[inline]
     pub fn replace_geometry(&mut self, geometry: LaneGeometry) {
         self.geometry = geometry;
     }
@@ -708,14 +703,14 @@ impl Lane {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LaneRef {
-    Segment(LaneId, PolyIdx),
-    NodeLane(NodeLaneId, PolyIdx),
+    Lane(LaneId, PolyIdx),
+    NodeLane(NodeId, NodeLaneId, PolyIdx),
 }
 impl LaneRef {
     pub fn as_lane(&self) -> Option<(LaneId, PolyIdx)> {
         match self {
-            LaneRef::Segment(lane_id, poly_idx) => Some((*lane_id, *poly_idx)),
-            LaneRef::NodeLane(_, _) => None,
+            LaneRef::Lane(lane_id, poly_idx) => Some((*lane_id, *poly_idx)),
+            LaneRef::NodeLane(_, _, _) => None,
         }
     }
 }
@@ -726,31 +721,25 @@ impl Hash for NodeLane {
         self.enabled.hash(state);
     }
 }
-/// Directed lane edge connecting two segments within a node.
-/// NodeLanes are the primary graph edges for pathfinding and simulation.
+/// Directed lane edge connecting two segments within a node or connecting NodeLanes with each other.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct NodeLane {
     id: NodeLaneId,
     merging: Vec<LaneRef>,
     splitting: Vec<LaneRef>,
     geometry: LaneGeometry,
-    // Cached costs for pathfinding
-    base_cost: f32,
-    dynamic_cost: f32,
+
     enabled: bool,
     speed_limit: f32,
     vehicle_mask: u32,
 }
 
 impl NodeLane {
-    pub(crate) fn new(
+    pub fn new(
         id: NodeLaneId,
         merging: Vec<LaneRef>,
         splitting: Vec<LaneRef>,
         geometry: LaneGeometry,
-        // Cached costs for signfinding
-        base_cost: f32,
-        dynamic_cost: f32,
         speed_limit: f32,
         vehicle_mask: u32,
     ) -> Self {
@@ -759,8 +748,6 @@ impl NodeLane {
             merging,
             splitting,
             geometry,
-            base_cost,
-            dynamic_cost,
             enabled: true,
             speed_limit,
             vehicle_mask,
@@ -809,21 +796,6 @@ impl NodeLane {
         self.speed_limit
     }
 
-    #[inline]
-    pub fn base_cost(&self) -> f32 {
-        self.base_cost
-    }
-
-    #[inline]
-    pub fn dynamic_cost(&self) -> f32 {
-        self.dynamic_cost
-    }
-
-    #[inline]
-    pub fn total_cost(&self) -> f32 {
-        self.base_cost + self.dynamic_cost
-    }
-
     /// Returns true if the lane allows the given vehicle type.
     #[inline]
     pub fn allows_vehicle(&self, vehicle_type: u32) -> bool {
@@ -865,23 +837,23 @@ impl LaneGeometry {
         }
     }
 
-    pub fn closest_point_to(&self, pos: &WorldPos) -> (WorldPos, f64, Vec3) {
+    pub fn closest_point_to(&self, pos: &WorldPos) -> (WorldPos, f64, Vec3, PolyIdx) {
         debug_assert!(self.points.len() >= 2);
 
         let mut best_point = self.points[0];
         let mut best_dist = f64::MAX;
-        let mut best_idx = 0;
+        let mut best_idx: PolyIdx = 0;
 
         for (i, point) in self.points.iter().enumerate() {
             let dist = point.distance_to(*pos);
             if dist <= best_dist {
                 best_dist = dist;
                 best_point = *point;
-                best_idx = i;
+                best_idx = i as PolyIdx; // u32
             }
         }
-        let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx);
-        (best_point, best_dist, tangent)
+        let (tangent, lateral) = tangent_and_lateral_right(&self.points, best_idx as usize);
+        (best_point, best_dist, tangent, best_idx)
     }
     pub fn update_heights(
         &mut self,
@@ -1000,7 +972,12 @@ impl RoadStorage {
 
         id
     }
-
+    pub fn segment_of_lane(&self, lane_id: LaneId) -> Option<SegmentId> {
+        match self.lane_exists(&lane_id) {
+            true => Some(self.lane(&lane_id).segment()),
+            false => None,
+        }
+    }
     fn merge_regions(&mut self, a: RoadRegionId, b: RoadRegionId) {
         let len_a = self.regions[a as usize].nodes.len();
         let len_b = self.regions[b as usize].nodes.len();
@@ -1259,10 +1236,11 @@ impl RoadStorage {
                     println!("Shit Error! In segment_ids_touchin_chunk(). End node is DISABLED!?!");
                     return None;
                 };
-                let start_pos = start.position();
-                let end_pos = end.position();
+                let start_pos = start.pos();
+                let end_pos = end.pos();
 
                 if segment_touches_chunk_precise(start_pos, end_pos, chunk_coord) {
+                    // TODO! Not precise enough! It should use the outermost lanes instead of just a straight center line!!! Like, of course!
                     Some(SegmentId::new(idx as u32))
                 } else {
                     None
@@ -1294,7 +1272,6 @@ impl RoadStorage {
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
-        base_cost: f32,
     ) -> LaneId {
         let seg = &self.segments[segment.0 as usize];
         debug_assert!(
@@ -1312,7 +1289,6 @@ impl RoadStorage {
             speed_limit,
             capacity,
             vehicle_mask,
-            base_cost,
             geometry,
         ));
 
@@ -1418,8 +1394,6 @@ impl RoadStorage {
         merging: Vec<LaneRef>,
         splitting: Vec<LaneRef>,
         geometry: LaneGeometry,
-        base_cost: f32,
-        dynamic_cost: f32,
         speed_limit: f32,
         vehicle_mask: u32,
     ) -> NodeLaneId {
@@ -1434,8 +1408,6 @@ impl RoadStorage {
             merging,
             splitting,
             geometry,
-            base_cost,
-            dynamic_cost,
             enabled: true,
             speed_limit,
             vehicle_mask,
@@ -1473,8 +1445,8 @@ impl RoadStorage {
     }
 
     /// Expensive!
-    pub fn closest_point_to(&self, pos: &WorldPos) -> Option<(WorldPos, f64, Vec3)> {
-        let mut best: Option<(WorldPos, f64, Vec3)> = None;
+    pub fn closest_lane_point_to(&self, pos: &WorldPos) -> Option<(WorldPos, f64, Vec3, PolyIdx)> {
+        let mut best: Option<(WorldPos, f64, Vec3, PolyIdx)> = None;
         for segment_id in self.segment_ids_touching_chunk(pos.chunk) {
             let segment = self.segment(segment_id);
             for lane_id in segment.lanes() {
@@ -1483,13 +1455,13 @@ impl RoadStorage {
                     continue;
                 }
 
-                let (lane_pos, dist, tangent) = lane.geometry.closest_point_to(pos);
+                let (lane_pos, dist, tangent, poly_idx) = lane.geometry.closest_point_to(pos);
                 if let Some(best) = best.as_mut() {
                     if dist < best.1 {
-                        *best = (lane_pos, dist, tangent);
+                        *best = (lane_pos, dist, tangent, poly_idx);
                     }
                 } else {
-                    best = Some((lane_pos, dist, tangent));
+                    best = Some((lane_pos, dist, tangent, poly_idx));
                 }
             }
         }
@@ -1650,6 +1622,55 @@ impl RoadStorage {
         }
     }
 
+    pub fn lane_ref_closest_to_pos(&self, pos: &WorldPos) -> LaneRef {
+        let segment_ids = self.segment_ids_touching_chunk(pos.chunk);
+
+        let mut best_dist = f64::INFINITY;
+        let mut best_ref = None;
+
+        // Check all lanes in nearby segments
+        for &seg_id in &segment_ids {
+            let Some(segment) = self.segments.get(seg_id.index()) else {
+                continue;
+            };
+
+            for &lane_id in &segment.lanes {
+                let Some(lane) = self.lanes.get(lane_id.index()) else {
+                    continue;
+                };
+
+                let (_, dist, _, poly_idx) = lane.geometry().closest_point_to(pos);
+
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_ref = Some(LaneRef::Lane(lane_id, poly_idx));
+                }
+            }
+        }
+
+        // Check all node lanes connected to nearby segments
+        for node_id in segment_ids.iter().flat_map(|&seg_id| {
+            self.segments
+                .get(seg_id.index())
+                .map_or(vec![], |s| s.nodes())
+        }) {
+            let Some(node) = self.node(node_id) else {
+                continue;
+            };
+
+            for node_lane in node.node_lanes() {
+                let (_, dist, _, poly_idx) = node_lane.geometry().closest_point_to(pos);
+
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_ref = Some(LaneRef::NodeLane(node_id, node_lane.id, poly_idx));
+                }
+            }
+        }
+
+        best_ref.unwrap_or(LaneRef::Lane(LaneId(0), 0))
+    }
+
     // ONLY in preview!!
     pub fn add_raw(
         &mut self,
@@ -1735,14 +1756,14 @@ impl RoadStorage {
 
             node.node_lanes.retain(|nl| {
                 let ref_ok = |lr: &LaneRef| match lr {
-                    LaneRef::Segment(lid, _) => remap_lane.contains_key(lid),
-                    LaneRef::NodeLane(_, _) => true,
+                    LaneRef::Lane(lid, _) => remap_lane.contains_key(lid),
+                    LaneRef::NodeLane(_, _, _) => true,
                 };
                 nl.merging.iter().all(ref_ok) && nl.splitting.iter().all(ref_ok)
             });
             for nl in &mut node.node_lanes {
                 for lr in nl.merging.iter_mut().chain(nl.splitting.iter_mut()) {
-                    if let LaneRef::Segment(lid, _) = lr {
+                    if let LaneRef::Lane(lid, _) = lr {
                         if let Some(&new_id) = remap_lane.get(lid) {
                             *lid = new_id;
                         }
@@ -1895,8 +1916,8 @@ pub fn sample_lane_position(lane: &Lane, t: f64, storage: &RoadStorage) -> Optio
     let from = storage.node(lane.from_node())?;
     let to = storage.node(lane.to_node())?;
 
-    let from_pos = from.position();
-    let to_pos = to.position();
+    let from_pos = from.pos();
+    let to_pos = to.pos();
 
     Some(from_pos.lerp(to_pos, t))
 }
@@ -1912,8 +1933,8 @@ pub fn project_point_to_lane_xz(
     let from = storage.node(lane.from_node())?;
     let to = storage.node(lane.to_node())?;
 
-    let from_pos = from.position();
-    let to_pos = to.position();
+    let from_pos = from.pos();
+    let to_pos = to.pos();
 
     Some(project_point_to_segment_xz(point, from_pos, to_pos))
 }
@@ -2171,7 +2192,6 @@ pub enum RoadCommand {
         speed_limit: f32,
         capacity: u32,
         vehicle_mask: u32,
-        base_cost: f32,
         chunk_id: ChunkId,
     },
     /// Add a new lane to a segment.
@@ -2180,11 +2200,8 @@ pub enum RoadCommand {
         merging: Vec<LaneRef>,
         splitting: Vec<LaneRef>,
         geometry: LaneGeometry,
-        // Cached costs for pathfinding
         speed_limit: f32,
         vehicle_mask: u32,
-        base_cost: f32,
-        dynamic_cost: f32,
         chunk_id: ChunkId,
     },
     AddRaw {
@@ -2498,7 +2515,6 @@ pub fn apply_road_command(
             speed_limit,
             capacity,
             vehicle_mask,
-            base_cost,
             chunk_id,
         } => {
             if from.raw() as usize >= storage.node_count()
@@ -2516,7 +2532,6 @@ pub fn apply_road_command(
                 *speed_limit,
                 *capacity,
                 *vehicle_mask,
-                *base_cost,
             );
             CommandResult::LaneCreated(*chunk_id, id)
         }
@@ -2527,8 +2542,6 @@ pub fn apply_road_command(
             geometry,
             speed_limit,
             vehicle_mask,
-            base_cost,
-            dynamic_cost,
             chunk_id,
         } => {
             let id = storage.add_node_lane(
@@ -2536,9 +2549,7 @@ pub fn apply_road_command(
                 merging.clone(),
                 splitting.clone(),
                 geometry.clone(),
-                *base_cost,
                 *speed_limit,
-                *dynamic_cost,
                 *vehicle_mask,
             );
             CommandResult::NodeLaneCreated(*chunk_id, id)
@@ -2776,7 +2787,6 @@ pub fn apply_command(
                     speed_limit,
                     capacity,
                     vehicle_mask,
-                    base_cost,
                     chunk_id,
                 } => {
                     if from.raw() as usize >= storage.node_count()
@@ -2794,7 +2804,6 @@ pub fn apply_command(
                         speed_limit,
                         capacity,
                         vehicle_mask,
-                        base_cost,
                     );
                     affected_chunk = Some(chunk_id);
                     CommandResult::LaneCreated(chunk_id, id)
@@ -2806,8 +2815,6 @@ pub fn apply_command(
                     geometry,
                     speed_limit,
                     vehicle_mask,
-                    base_cost,
-                    dynamic_cost,
                     chunk_id,
                 } => {
                     let id = storage.add_node_lane(
@@ -2815,9 +2822,7 @@ pub fn apply_command(
                         merging,
                         splitting,
                         geometry,
-                        base_cost,
                         speed_limit,
-                        dynamic_cost,
                         vehicle_mask,
                     );
                     affected_chunk = Some(chunk_id);
@@ -3239,7 +3244,6 @@ fn generate_segment_preview(
             speed_limit: speed,
             capacity,
             vehicle_mask: mask,
-            base_cost: lane_def.base_cost,
             chunk_id: 0,
         });
     }
@@ -3298,7 +3302,6 @@ fn generate_node_with_stub(
             speed_limit: speed,
             capacity,
             vehicle_mask: mask,
-            base_cost: lane_def.base_cost,
             chunk_id: 0,
         });
     }
@@ -3309,7 +3312,6 @@ struct LaneDefinition {
     lane_index: i8,
     is_forward: bool,
     geometry: LaneGeometry,
-    base_cost: f32,
 }
 
 /// Compute all lane geometries from a centerline polyline
@@ -3333,13 +3335,11 @@ fn compute_lane_geometries(
             road_type.structure,
         );
         let geometry = LaneGeometry::from_polyline(polyline);
-        let base_cost = geometry.total_len.max(0.1) as f32;
 
         lanes.push(LaneDefinition {
             lane_index,
             is_forward: true,
             geometry,
-            base_cost,
         });
     }
 
@@ -3355,13 +3355,11 @@ fn compute_lane_geometries(
         );
         polyline.reverse();
         let geometry = LaneGeometry::from_polyline(polyline);
-        let base_cost = geometry.total_len.max(0.1) as f32;
 
         lanes.push(LaneDefinition {
             lane_index,
             is_forward: false,
             geometry,
-            base_cost,
         });
     }
 

@@ -169,6 +169,11 @@ impl Time {
         }
     }
 
+    #[inline]
+    pub fn sim_time(&self) -> f64 {
+        self.total_game_time
+    }
+
     pub fn set_tps(&mut self, tps: f32) {
         let tps = tps.max(1.0);
         self.target_sim_dt = 1.0 / tps;

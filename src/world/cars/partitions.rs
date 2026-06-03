@@ -29,7 +29,13 @@ pub enum DestinationType {
     // Segment(LaneId, LaneT),
     Building(BuildingId),
 }
-
+impl DestinationType {
+    pub fn as_building(&self) -> Option<BuildingId> {
+        match self {
+            DestinationType::Building(building_id) => Some(*building_id),
+        }
+    }
+}
 #[derive(Debug)]
 pub struct Address {
     pub destination: DestinationType,
@@ -49,7 +55,7 @@ impl Partition {
         self.buildings
             .iter()
             .flat_map(|b| buildings.storage.get(*b))
-            .map(|b| b.position.chunk)
+            .map(|b| b.pos.chunk)
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect()
@@ -58,7 +64,7 @@ impl Partition {
         self.buildings
             .iter()
             .flat_map(|b| buildings.storage.get(*b))
-            .map(|b| b.position)
+            .map(|b| b.pos)
             .collect()
     }
 }
@@ -66,7 +72,7 @@ impl Partition {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PartitionStorage {
     pub partitions: Vec<Partition>,
-    pub(crate) alive: Vec<bool>,
+    pub alive: Vec<bool>,
     free_list: Vec<u32>,
     chunk_to_partitions: HashMap<ChunkCoord, Vec<PartitionId>>,
 }
@@ -351,7 +357,7 @@ impl PartitionManager {
                 .buildings
                 .iter()
                 .filter_map(|id| buildings.storage.get(*id))
-                .map(|building| building.position.distance_to(building_pos))
+                .map(|building| building.pos.distance_to(building_pos))
                 .fold(f64::MAX, |acc, d| acc.min(d));
 
             if closest_distance < best_distance {

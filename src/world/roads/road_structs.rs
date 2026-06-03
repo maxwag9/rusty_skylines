@@ -172,7 +172,7 @@ impl From<LaneId> for u32 {
 }
 
 pub type NodeLaneId = u32;
-pub type PolyIdx = u16;
+pub type PolyIdx = u32;
 
 /// Stable identifier for traffic control attachments within a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -312,7 +312,7 @@ impl Default for RoadType {
 
             lanes_each_direction: (1, 1),
 
-            lane_width: 3.1,
+            lane_width: 3.6,
             lane_height: 0.0,
             lane_material_id: 2, // asphalt
 
@@ -320,14 +320,14 @@ impl Default for RoadType {
             sidewalk_height: 0.15,
             sidewalk_material_id: 0, // concrete
 
-            median_width: 0.3,
+            median_width: 0.0,
             median_height: 0.15,
             median_material_id: 0, // concrete
 
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.2,
+            turn_tightness: 1.5,
         }
     }
 }
@@ -571,7 +571,7 @@ impl PlannedNode {
         match self {
             PlannedNode::Existing(id) => {
                 let node = storage.node(*id)?;
-                Some(node.position())
+                Some(node.pos())
             }
             PlannedNode::New { pos } => Some(*pos),
             PlannedNode::Split { pos, .. } => Some(*pos),

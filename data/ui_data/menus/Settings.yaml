@@ -92,6 +92,18 @@ layers:
           editable: true
         editing_tool: false
       - !Advanced
+        name: checkbox_render_signfinding_gizmo
+        ap_name: checkbox
+        ap_var: render_signfinding_gizmo
+        x: 0.6
+        y: 0.3
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
         name: checkbox_always_day
         ap_name: checkbox
         ap_var: always_day

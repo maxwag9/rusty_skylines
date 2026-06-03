@@ -252,8 +252,50 @@ impl Ui {
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus);
 
-        // Now we can mutably borrow touch_manager separately
         self.touch_manager.update(dt, input_snapshot, &elements);
+        for (menu_name, menu) in self.menus.iter() {
+            for layer in menu.layers.iter() {
+                for element in layer.iter_all() {
+                    let element_ref = ElementRef::new(
+                        menu_name.as_str(),
+                        layer.name.as_str(),
+                        element.id(),
+                        element.kind(),
+                    );
+
+                    let is_active = element.is_active() && layer.active && menu.active;
+
+                    let was_active = *self
+                        .touch_manager
+                        .element_actives
+                        .entry(element_ref.clone())
+                        .or_insert(false);
+                    // if element_ref == ElementRef::new("Settings", "checkbox_render_signfinding_gizmo", "Checkbox Indicator", ElementKind::Rect) {
+                    //     println!("Checkbox in question:");
+                    //     println!("is_active: {}, was_active: {}", is_active, was_active);
+                    // }
+                    if was_active != is_active {
+                        self.touch_manager
+                            .element_actives
+                            .insert(element_ref.clone(), is_active);
+
+                        self.touch_manager.events.push(if is_active {
+                            TouchEvent::Activated {
+                                element: element_ref,
+                                actions: element.actions().clone(),
+                                buttons: input_snapshot.buttons,
+                            }
+                        } else {
+                            TouchEvent::Deactivated {
+                                element: element_ref,
+                                actions: element.actions().clone(),
+                                buttons: input_snapshot.buttons,
+                            }
+                        });
+                    }
+                }
+            }
+        }
 
         // Process all emitted events
         let result =
@@ -408,6 +450,8 @@ impl Ui {
             }
 
             TouchEvent::Nothing { .. } => {}
+            TouchEvent::Activated { .. } => {}
+            TouchEvent::Deactivated { .. } => {}
             // PRESS/RELEASE EVENTS
             TouchEvent::Press {
                 element,

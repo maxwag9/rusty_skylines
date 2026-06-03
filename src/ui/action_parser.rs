@@ -460,6 +460,8 @@ pub enum TouchEventKind {
     DragMove,
     Nothing,
     Always,
+    Activated,
+    Deactivated,
 }
 pub fn actions_to_uicommands(
     ui: &mut Ui,
@@ -548,6 +550,18 @@ pub fn actions_to_uicommands(
             element,
             MouseButtons::default(),
         ),
+        TouchEvent::Activated {
+            actions,
+            element,
+            buttons,
+            ..
+        } => (TouchEventKind::Activated, actions, element, *buttons),
+        TouchEvent::Deactivated {
+            actions,
+            element,
+            buttons,
+            ..
+        } => (TouchEventKind::Deactivated, actions, element, *buttons),
         _ => return vec![],
     };
 
@@ -1081,6 +1095,8 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
                 ("s", TouchEventKind::ScrollOnElement),
                 ("sel", TouchEventKind::Select),
                 ("desel", TouchEventKind::DeSelect),
+                ("activated", TouchEventKind::Activated),
+                ("deactivated", TouchEventKind::Deactivated),
             ],
         ) {
             filters.events.push(event);

@@ -809,7 +809,7 @@ fn color_and_normals_and_motion_targets(pipelines: &Pipelines) -> Vec<Option<Col
         }),
     ]
 }
-pub(crate) fn color_and_normals_and_instance_targets(
+pub fn color_and_normals_and_instance_targets(
     pipelines: &Pipelines,
 ) -> Vec<Option<ColorTargetState>> {
     vec![

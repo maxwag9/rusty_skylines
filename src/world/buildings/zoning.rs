@@ -637,7 +637,7 @@ fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<
 
     Some(Building {
         id: 631864891,
-        position: lot.center,
+        pos: lot.center,
         segment_id: lot.segment_id,
         lot_id: lot.id,
         level: Default::default(),
@@ -1359,11 +1359,11 @@ impl Zoning {
             }
         };
 
-        if let Some((pos, dist, _)) = roads
+        if let Some((pos, dist, _, _)) = roads
             .road_manager
             .roads
-            .closest_point_to(&picked.pos)
-            .filter(|(_, dist, _)| *dist <= SNAP_RADIUS)
+            .closest_lane_point_to(&picked.pos)
+            .filter(|(_, dist, _, _)| *dist <= SNAP_RADIUS)
         {
             consider(PlacePos::RoadSnap(pos, dist));
         }
@@ -1944,13 +1944,9 @@ impl ZoningStorage {
         self.districts.par_iter_mut()
     }
     pub fn new() -> Self {
-        let mut districts: Vec<Option<District>> = Vec::new();
-        districts.push(None); // reserve index 0 — for no reason
-        let mut lots: Vec<Option<Lot>> = Vec::new();
-        lots.push(None); // reserve index 0 — for no reason
         Self {
-            districts,
-            lots,
+            districts: Vec::new(),
+            lots: Vec::new(),
             district_free_list: Vec::new(),
             lot_free_list: Vec::new(),
             lot_chunk_storage: Default::default(),
@@ -1975,10 +1971,6 @@ impl ZoningStorage {
     }
 
     pub fn despawn_district(&mut self, id: DistrictId) {
-        if id == 0 {
-            // index 0 is reserved, ignore attempts to despawn it
-            return;
-        }
         let mut lots_to_despawn = Vec::new();
         if self
             .districts
@@ -2001,7 +1993,7 @@ impl ZoningStorage {
     }
 
     pub fn district_count(&self) -> usize {
-        self.districts.len() - self.district_free_list.len() - 1
+        self.districts.len() - self.district_free_list.len()
     }
 
     #[inline]
@@ -2100,11 +2092,6 @@ impl ZoningStorage {
     }
 
     pub fn despawn_lot(&mut self, id: LotId) {
-        if id == 0 {
-            // index 0 is reserved, ignore attempts to despawn it
-            return;
-        }
-
         if let Some(Some(lot)) = self.lots.get(id as usize) {
             // Remove from district
             if let Some(Some(district)) = self.districts.get_mut(lot.district_id as usize) {
@@ -2130,7 +2117,7 @@ impl ZoningStorage {
     }
 
     pub fn lot_count(&self) -> usize {
-        self.lots.len() - self.lot_free_list.len() - 1
+        self.lots.len() - self.lot_free_list.len()
     }
 
     #[inline]

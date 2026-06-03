@@ -1,9 +1,10 @@
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
-use crate::world::cars::partitions::Address;
-use crate::world::roads::road_structs::LaneId;
-use crate::world::roads::roads::{LaneRef, TurnType};
+use crate::world::cars::partitions::{Address, DestinationType};
+use crate::world::cars::signfinding::{CarSignfindingTrajectory, TurnIdentification};
+use crate::world::roads::road_structs::{PolyIdx, SegmentId};
+use crate::world::roads::roads::{LaneRef, RoadStorage};
 use glam::{Quat, Vec3};
 use rand::rngs::ThreadRng;
 use rayon::iter::IntoParallelRefMutIterator;
@@ -311,6 +312,16 @@ pub struct CarStorage {
     free_list: Vec<CarId>,
     // Reverse mapping so I can remove from chunks in O(1) when despawning/moving
     car_locations: HashMap<CarId, ChunkCoord>,
+    /// CarId → SegmentId – lets us remove from `segment_car_index` in O(1)
+    /// when a car changes lanes or despawns.
+    /// `None` while the car is inside an intersection (NodeLane).
+    car_lane_index: HashMap<CarId, SegmentId>,
+
+    /// SegmentId → all car IDs currently on that segment (any lane of it).
+    /// Order within the Vec is insertion order; callers sort by position
+    /// themselves since that's cheaper than keeping it sorted here.
+    segment_car_index: HashMap<SegmentId, Vec<CarId>>,
+
     center_chunk: ChunkCoord,
 }
 
@@ -318,12 +329,7 @@ impl CarStorage {
     pub fn update_target(&mut self, target_chunk: ChunkCoord) {
         self.center_chunk = target_chunk;
     }
-    pub fn move_car_between_chunks(&mut self, from: ChunkCoord, to: ChunkCoord, car_id: CarId) {
-        self.car_chunk_storage.remove_car(from, car_id);
-        let car_chunk_distance = ChunkDistance::from_chunk_positions(self.center_chunk, to);
-        self.car_chunk_storage
-            .add_car(to, car_chunk_distance, car_id);
-    }
+
     pub fn iter_cars(&self) -> Iter<'_, Option<Car>> {
         self.cars.iter()
     }
@@ -354,7 +360,7 @@ impl CarStorage {
 
 impl CarStorage {
     pub fn new() -> Self {
-        let mut cars: Vec<Option<Car>> = Vec::new();
+        let cars: Vec<Option<Car>> = Vec::new();
         let mut rng = ThreadRng::default();
         let car = make_random_car(
             WorldPos::new(
@@ -363,66 +369,96 @@ impl CarStorage {
             ),
             &mut rng,
         );
-        cars.push(Some(car)); // reserve index 0 — never use it for a real car, because car 0 doesn't get RTX shadows.
         Self {
             car_chunk_storage: CarChunkStorage::new(),
             cars,
             free_list: Vec::new(),
             car_locations: HashMap::new(),
+            car_lane_index: Default::default(),
+            segment_car_index: Default::default(),
             center_chunk: ChunkCoord::zero(),
         }
     }
 
-    pub fn spawn(
-        &mut self,
-        chunk_coord: ChunkCoord,
-        car_chunk_distance: ChunkDistance,
-        mut car: Car,
-    ) -> CarId {
-        let car_id = if let Some(reused_id) = self.free_list.pop() {
-            // Reuse slot - III know it's None because it's in free_list
-            car.id = reused_id;
-            self.cars[reused_id as usize] = Some(car);
-            reused_id
-        } else {
-            let new_id = self.cars.len() as u32;
-            car.id = new_id;
-            self.cars.push(Some(car));
-            new_id
-        };
+    /// Spawn a car and register it in all three reverse-index maps.
+    pub fn spawn(&mut self, car: Car, chunk: ChunkCoord, road_storage: &RoadStorage) -> CarId {
+        let id = self.allocate_slot(car);
+        // Chunk index.
+        let dist = ChunkDistance::from_chunk_positions(self.center_chunk, chunk);
+        self.car_chunk_storage.add_car(chunk, dist, id);
+        self.car_locations.insert(id, chunk);
 
-        // Add to chunk storage and record location
-        self.car_chunk_storage
-            .add_car(chunk_coord, car_chunk_distance, car_id);
-        self.car_locations.insert(car_id, chunk_coord);
+        // Segment index – register immediately if the car starts on a segment.
+        if let Some(car) = self.get(id) {
+            if let Some(LaneRef::Lane(lane_id, _)) = car.lane {
+                if let Some(seg_id) = road_storage.segment_of_lane(lane_id) {
+                    self.car_lane_index.insert(id, seg_id);
+                    self.segment_car_index.entry(seg_id).or_default().push(id);
+                }
+            }
+        }
 
-        car_id
+        id
     }
 
-    pub fn despawn(&mut self, id: CarId) {
-        if id == 0 {
-            // index 0 is reserved, ignore attempts to despawn it
-            return;
+    /// Remove a car and clean up all reverse-index maps.
+    pub fn despawn(&mut self, car_id: CarId) {
+        // Chunk index.
+        if let Some(&chunk) = self.car_locations.get(&car_id) {
+            self.car_chunk_storage.remove_car(chunk, car_id);
         }
-        if self
-            .cars
-            .get(id as usize)
-            .and_then(|opt| opt.as_ref())
-            .is_some()
-        {
-            // Remove from chunk first using reverse lookup
-            if let Some(chunk_coord) = self.car_locations.remove(&id) {
-                self.car_chunk_storage.remove_car(chunk_coord, id);
-            }
+        self.car_locations.remove(&car_id);
 
-            // Actually free the slot
-            self.cars[id as usize] = None;
-            self.free_list.push(id);
+        // Segment index.
+        self.remove_from_segment_index(car_id);
+
+        // Free the slot.
+        if let Some(slot) = self.cars.get_mut(car_id as usize) {
+            *slot = None;
+        }
+        self.free_list.push(car_id);
+    }
+
+    /// Move a car to a different chunk (physics chunk-crossing).
+    /// Does NOT touch the lane/segment index – that's only updated by
+    /// `set_car_lane` in signfinding.
+    pub fn move_car_between_chunks(&mut self, from: ChunkCoord, to: ChunkCoord, car_id: CarId) {
+        self.car_chunk_storage.remove_car(from, car_id);
+        let dist = ChunkDistance::from_chunk_positions(self.center_chunk, to);
+        self.car_chunk_storage.add_car(to, dist, car_id);
+        self.car_locations.insert(car_id, to);
+    }
+
+    /// Allocate a slot (reusing a free one if available) and return the new id.
+    fn allocate_slot(&mut self, mut car: Car) -> CarId {
+        if let Some(id) = self.free_list.pop() {
+            car.id = id;
+            self.cars[id as usize] = Some(car);
+            id
+        } else {
+            let id = self.cars.len() as CarId;
+            car.id = id;
+            self.cars.push(Some(car));
+            id
+        }
+    }
+
+    /// Remove `car_id` from `segment_car_index` and `car_lane_index`.
+    /// No-op if the car is not currently registered (e.g. inside intersection).
+    fn remove_from_segment_index(&mut self, car_id: CarId) {
+        if let Some(old_seg) = self.car_lane_index.remove(&car_id) {
+            if let Some(vec) = self.segment_car_index.get_mut(&old_seg) {
+                // Vec is usually small (tens of cars per segment) so retain is fine.
+                vec.retain(|&id| id != car_id);
+                if vec.is_empty() {
+                    self.segment_car_index.remove(&old_seg);
+                }
+            }
         }
     }
 
     pub fn car_count(&self) -> usize {
-        self.cars.len() - self.free_list.len() - 1
+        self.cars.len() - self.free_list.len()
     }
 
     #[inline]
@@ -433,6 +469,109 @@ impl CarStorage {
     #[inline]
     pub fn get_mut(&mut self, id: CarId) -> Option<&mut Car> {
         self.cars.get_mut(id as usize)?.as_mut()
+    }
+
+    /// All cars currently on `segment`, in unspecified order.
+    ///
+    /// To find the car immediately ahead of a given car, collect this slice,
+    /// sort by `lane_poly_progress` (or project each car's world position onto
+    /// the segment polyline), and binary-search for the car you care about.
+    pub fn cars_on_segment(&self, segment: SegmentId) -> &[CarId] {
+        self.segment_car_index
+            .get(&segment)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Cars ahead of `reference_car` on the same segment, sorted front-to-back
+    /// by their `poly_idx` progress along the segment's lane polyline.
+    ///
+    /// Returns an empty Vec when the car is not on a segment (e.g. inside an
+    /// intersection) or when it is alone on the segment.
+    pub fn cars_ahead_on_segment(
+        &self,
+        reference_car: CarId,
+        road_storage: &RoadStorage,
+    ) -> Vec<CarId> {
+        let Some(car) = self.get(reference_car) else {
+            return Vec::new();
+        };
+
+        // Only meaningful while on a named segment lane.
+        let Some(LaneRef::Lane(lane_id, my_poly_idx)) = car.lane else {
+            return Vec::new();
+        };
+
+        let segment_id = match road_storage.segment_of_lane(lane_id) {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+
+        let candidates = self.cars_on_segment(segment_id);
+        if candidates.len() <= 1 {
+            return Vec::new();
+        }
+
+        let mut ahead: Vec<(PolyIdx, CarId)> = candidates
+            .iter()
+            .filter_map(|&cid| {
+                if cid == reference_car {
+                    return None;
+                }
+                let other = self.get(cid)?;
+                // Only compare cars on the same lane (same direction).
+                let Some(LaneRef::Lane(other_lane, other_poly)) = other.lane else {
+                    return None;
+                };
+                if other_lane != lane_id {
+                    return None;
+                }
+                // A car is "ahead" if it is further along the polyline.
+                if other_poly > my_poly_idx {
+                    Some((other_poly, cid))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Closest first.
+        ahead.sort_unstable_by_key(|(poly, _)| *poly);
+        ahead.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Notify storage that `car_id` has moved to a new `LaneRef`.
+    ///
+    /// Call this from signfinding whenever a car crosses a lane boundary.
+    /// This is the ONLY place `segment_car_index` and `car_lane_index` are
+    /// mutated (outside spawn/despawn), which keeps the bookkeeping cheap:
+    /// one HashMap remove + one Vec retain + one push per lane transition.
+    pub fn set_car_lane(
+        &mut self,
+        car_id: CarId,
+        new_lane: Option<LaneRef>,
+        road_storage: &RoadStorage,
+    ) {
+        // 1. Remove from old segment (if any).
+        self.remove_from_segment_index(car_id);
+
+        // 2. Write the new lane onto the car.
+        if let Some(car) = self.get_mut(car_id) {
+            car.lane = new_lane;
+        }
+
+        // 3. Insert into new segment (only for segment lanes, not intersections).
+        if let Some(LaneRef::Lane(lane_id, _)) = new_lane {
+            if let Some(seg_id) = road_storage.segment_of_lane(lane_id) {
+                self.car_lane_index.insert(car_id, seg_id);
+                self.segment_car_index
+                    .entry(seg_id)
+                    .or_default()
+                    .push(car_id);
+            }
+        }
+        // If NodeLane: car_lane_index has no entry → segment_car_index not
+        // touched → perfectly consistent.
     }
 }
 
@@ -789,7 +928,8 @@ pub struct Car {
     pub color: [f32; 3],
 
     // === Physical state ===
-    pub trajectory: Option<CarTrajectory>,
+    pub physical_trajectory: Option<CarTrajectory>,
+    pub signfinding_trajectory: Option<CarSignfindingTrajectory>,
     pub pos: WorldPos,
     pub quat: Quat,
     pub current_velocity: Vec3, // planar velocity (y = 0)
@@ -807,26 +947,12 @@ pub struct Car {
     pub engine_rpm: f32,
     pub wheel_radius: f32,
 
-    // === Topology state ===
-    pub lane: LaneRef, // current lane
-    pub lane_s: f32,   // position along lane [0..lane.length]
-
-    // === Short-term intent (IMPORTANT) ===
-    pub committed_arm: Option<u8>, // arm index at next_node (None until chosen)
-    pub committed_lane: Option<LaneRef>, // chosen outgoing lane
-
-    // === Destination ===
+    pub lane: Option<LaneRef>, // current lane
     pub destination_addr: Option<Address>,
 
-    // === Decision memory (very small) ===
-    pub last_turn: Option<TurnType>,
+    pub last_turn: Option<TurnIdentification>,
 
-    // === Timing ===
     pub spawn_time: SimTime,
-    pub last_decision_time: SimTime,
-
-    // === Reporting ===
-    pub entered_arm_time: Option<SimTime>, // when entering current arm
 
     pub driver_profile: DriverProfile,
 }
@@ -838,7 +964,8 @@ impl Default for Car {
             vehicle_type: VehicleType::normal(),
             engine_rpm: 0.0,
             color: [1.0, 0.0, 0.0],
-            trajectory: None,
+            physical_trajectory: None,
+            signfinding_trajectory: None,
             pos: Default::default(),
             quat: Quat::IDENTITY,
             current_velocity: Vec3::ZERO,
@@ -848,20 +975,19 @@ impl Default for Car {
             yaw_rate: 0.0,
 
             length: 4.0,
-            width: 2.2,
+            width: 2.1,
             accel: 7.0,
             decel: 10.0,
             throttle: 0.0,
             brake: 0.0,
-            lane: LaneRef::Segment(LaneId(0), 0),
-            lane_s: 0.0,
-            committed_arm: None,
-            committed_lane: None,
-            destination_addr: None,
+            lane: None,
+            destination_addr: Some(Address {
+                destination: DestinationType::Building(0),
+                partition: 0,
+                district: 0,
+            }),
             last_turn: None,
             spawn_time: 0.0,
-            last_decision_time: 0.0,
-            entered_arm_time: None,
             driver_profile: DriverProfile::Normal,
             gear: 0,
             wheel_radius: 0.34,

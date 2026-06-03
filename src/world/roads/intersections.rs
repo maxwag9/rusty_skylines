@@ -600,7 +600,7 @@ pub fn build_intersection_at_node(
 
             carve_lanes_with_polygon(storage, node_id, &geom, gizmo);
 
-            let mut flattening_polygon = if let Some(sw_poly) = geom.sidewalk_polygon {
+            let flattening_polygon = if let Some(sw_poly) = geom.sidewalk_polygon {
                 sw_poly.ring
             } else {
                 geom.polygon.ring
@@ -981,7 +981,7 @@ fn carve_lanes_with_polygon(
                 continue;
             }
 
-            let node_pos = storage.node(node_id).unwrap().position();
+            let node_pos = storage.node(node_id).unwrap().pos();
             let Some(node_idx) = endpoint_index_near_node(pts, node_pos) else {
                 continue;
             };
@@ -1210,7 +1210,7 @@ pub fn mesh_intersection(
     indices: &mut Vec<u32>,
     gizmo: &mut Gizmo,
 ) -> IntersectionMeshResult {
-    let center = node.position();
+    let center = node.pos();
 
     let params = IntersectionBuildParams::default();
 
@@ -1490,7 +1490,7 @@ fn compute_intersection_geometry(
     gizmo: &mut Gizmo,
 ) -> Option<IntersectionGeometry> {
     let node = storage.node(node_id)?;
-    let center = node.position();
+    let center = node.pos();
 
     let arms = node.arms();
 
@@ -1832,7 +1832,7 @@ fn build_node_lanes_for_intersection(
         return Vec::new();
     };
 
-    let node_pos = node.position();
+    let node_pos = node.pos();
 
     // Gather ALL lanes connected to this node and classify them geometrically
     let connected_segments = storage.enabled_segments_connected_to_node(node_id);
@@ -2003,11 +2003,9 @@ fn build_node_lanes_for_intersection(
 
             let nl = NodeLane::new(
                 (lane_idx_base + node_lanes.len()) as NodeLaneId,
-                vec![LaneRef::Segment(*in_id, *in_node_idx as PolyIdx)],
-                vec![LaneRef::Segment(*out_id, *out_node_idx as PolyIdx)],
+                vec![LaneRef::Lane(*in_id, *in_node_idx as PolyIdx)],
+                vec![LaneRef::Lane(*out_id, *out_node_idx as PolyIdx)],
                 geom,
-                0.0,
-                0.0,
                 50.0,
                 0,
             );

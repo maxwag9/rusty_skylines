@@ -11,6 +11,7 @@ use crate::ui::vertex::{LineVtxRender, LineVtxWorld, TextVtxRender};
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::point_in_polygon_xz;
 use crate::world::camera::Camera;
+use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::partitions::PartitionId;
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
@@ -53,6 +54,7 @@ pub struct Gizmo {
     pub text_raster_min: f32,    // good start: 8.0
     pub text_raster_max: f32,    // good start: 256.0
 }
+
 #[derive(Default)]
 pub struct GizmoBatches {
     pub thin_vertices: Vec<LineVtxRender>,
@@ -277,7 +279,7 @@ impl Gizmo {
 
             for &node_idx in node_indices {
                 if let Some(node) = road_storage.node(NodeId::new(node_idx)) {
-                    let pos = node.position();
+                    let pos = node.pos();
                     positions.push(pos);
                     self.circle(pos, 4.0, color, thickness, duration);
                     self.cross(pos, 2.0, secondary_color, thickness, duration);
@@ -315,6 +317,84 @@ impl Gizmo {
         }
     }
 
+    pub fn visualize_signfinding_trajectories(
+        &mut self,
+        car_storage: &CarStorage,
+        terrain: &Terrain,
+        road_storage: &RoadStorage,
+        buildings: &Buildings,
+    ) {
+        for car in car_storage
+            .car_chunk_storage
+            .close_car_ids()
+            .flat_map(|car_id| car_storage.get(car_id))
+        {
+            if let Some(physical_traj) = &car.physical_trajectory {
+                let offsets: Vec<Vec3> = physical_traj
+                    .points
+                    .iter()
+                    .map(|p| p.pos)
+                    .collect::<Vec<Vec3>>();
+                self.polyline_relative(
+                    physical_traj.origin,
+                    offsets,
+                    [car.color[0], car.color[1], car.color[2], 1.0],
+                    5.0,
+                    0.0,
+                    0.0,
+                );
+            }
+        }
+        if let Some(picked) = &terrain.last_picked {
+            let max_d2 = 625.0; // 25m
+            let picked = car_storage
+                .car_chunk_storage
+                .close_car_ids()
+                .filter_map(|id| {
+                    let car = car_storage.get(id)?;
+
+                    let dist2 = car.pos.distance_squared(picked.pos);
+                    if dist2 < max_d2 {
+                        Some((dist2, id))
+                    } else {
+                        None
+                    }
+                })
+                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+                .map(|(_, id)| id);
+
+            if let Some(car_id) = picked {
+                if let Some(car) = car_storage.get(car_id) {
+                    self.circle(car.pos, car.length, [0.1, 0.3, 0.3, 0.9], 0.2, 0.0);
+                    if let Some(sf_traj) = &car.signfinding_trajectory {
+                        for turn in &sf_traj.turns {
+                            let Some(segment) = road_storage.segments.get(turn.segment_id.index())
+                            else {
+                                continue;
+                            };
+                            let Some(from_node) = road_storage.nodes.get(turn.node_id.index())
+                            else {
+                                continue;
+                            };
+                            let Some(to_node_id) = segment.other_node(turn.node_id) else {
+                                continue;
+                            };
+                            let Some(to_node) = road_storage.nodes.get(to_node_id.index()) else {
+                                continue;
+                            };
+                            let color = if turn.is_final_turn {
+                                [1.0, 0.2, 0.3, 1.0]
+                            } else {
+                                [1.0, 1.0, 1.0, 1.0]
+                            };
+
+                            self.arrow(from_node.pos(), to_node.pos(), color, false, 0.5, 0.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Internal: push a gizmo render
     #[inline]
     fn push(&mut self, vertices: Vec<LineVtxWorld>, thickness: f32, duration: f32, filled: bool) {
@@ -688,17 +768,19 @@ impl Gizmo {
 
     /// Polyline from an anchor WorldPos and relative Vec3 offsets.
     /// Useful when you have data in local/relative coordinates.
-    pub fn polyline_relative(
+    pub fn polyline_relative<I>(
         &mut self,
         anchor: WorldPos,
-        offsets: &[Vec3],
+        offsets: I,
         color: [f32; 4],
         arrow_spacing: f32,
         thickness: f32,
         duration: f32,
-    ) {
-        let cs = chunk_size() as f32;
-        let points: Vec<_> = offsets.iter().map(|&o| anchor.add_vec3(o)).collect();
+    ) where
+        I: IntoIterator<Item = Vec3>,
+    {
+        let points: Vec<_> = offsets.into_iter().map(|o| anchor.add_vec3(o)).collect();
+
         self.polyline(&points, color, arrow_spacing, thickness, duration);
     }
 
@@ -881,7 +963,7 @@ impl Gizmo {
         for storage in [&road_manager.roads, &road_manager.preview_roads] {
             for (_node_id, node) in storage.iter_nodes() {
                 // Node circle
-                let node_pos = node.position();
+                let node_pos = node.pos();
                 let node_color = if node.is_enabled() {
                     [0.0, 0.0, 0.9, 1.0]
                 } else {
@@ -1048,7 +1130,7 @@ impl Gizmo {
             };
             self.text(
                 format!("Node ID: {}", id.to_string()),
-                node.position(),
+                node.pos(),
                 2.0,
                 [1.0, 1.0, 1.0, 1.0],
                 None,

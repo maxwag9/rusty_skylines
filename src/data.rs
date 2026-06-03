@@ -662,6 +662,7 @@ define_settings! {
     ZoomSpeed => zoom_speed: f32 = 10.0; Val,
     RenderLanesGizmo => render_lanes_gizmo: bool = false; Bool,
     RenderIntersectionGizmo => render_intersection_gizmo: bool = false; Bool,
+    RenderSignFindingGizmo => render_signfinding_gizmo: bool = false; Bool,
     RenderPartitionsGizmo => render_partitions_gizmo: bool = false; Bool,
     RenderNodeIdsGizmo => render_node_ids_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,

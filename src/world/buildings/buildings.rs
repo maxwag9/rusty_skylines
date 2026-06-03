@@ -250,7 +250,7 @@ pub enum BuildingLevel {
 #[derive(Serialize, Deserialize, Clone, Default, Hash)]
 pub struct Building {
     pub id: BuildingId,
-    pub position: WorldPos,
+    pub pos: WorldPos,
     pub segment_id: SegmentId,
     pub lot_id: LotId,
     pub level: BuildingLevel,
@@ -348,15 +348,13 @@ impl BuildingStorage {
         }
     }
     pub fn new() -> Self {
-        let mut buildings: Vec<Option<Building>> = Vec::new();
-        buildings.push(None); // reserve index 0 — never use it for a real building, because building 0 doesn't get RT shadows.
         Self {
             building_chunk_storage: BuildingChunkStorage::new(),
-            buildings,
+            buildings: Vec::new(),
             free_list: Vec::new(),
             building_locations: HashMap::new(),
             center_chunk: ChunkCoord::zero(),
-            building_to_partition: vec![None],
+            building_to_partition: Vec::new(),
         }
     }
 
@@ -372,7 +370,7 @@ impl BuildingStorage {
         let entrance_pos = zoning
             .zoning_storage
             .get_lot(building.lot_id)
-            .map_or(building.position, |l| l.entrance.0);
+            .map_or(building.pos, |l| l.entrance.0);
         let building_id = if let Some(reused_id) = storage.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
             building.id = reused_id;
@@ -412,10 +410,7 @@ impl BuildingStorage {
         let Some(id) = id.into() else {
             return;
         };
-        if id == 0 {
-            // index 0 is reserved, ignore attempts to despawn it
-            return;
-        }
+
         let storage = &mut buildings.storage;
         if let Some(building) = storage
             .buildings
@@ -442,7 +437,7 @@ impl BuildingStorage {
     }
 
     pub fn building_count(&self) -> usize {
-        self.buildings.len() - self.free_list.len() - 1
+        self.buildings.len() - self.free_list.len()
     }
 
     #[inline]
