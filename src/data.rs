@@ -673,6 +673,7 @@ define_settings! {
     ReversedDepthZ => reversed_depth_z: bool = true; Bool,
     ShowFog => show_fog: bool = true; Bool,
     DriveCar => drive_car: bool = false; Bool,
+    SimpleCarFollowing => simple_car_following: bool = false; Bool,
     RenderRtGizmo => render_rt_gizmo: bool = false; Bool,
     Noclip => noclip: bool = false; Bool,
 }

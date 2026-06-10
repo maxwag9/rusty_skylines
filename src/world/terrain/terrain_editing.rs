@@ -272,6 +272,7 @@ impl TerrainEditor {
 
     pub fn remove_edit(&mut self, edit_id: EditId) -> bool {
         if let Some(pos) = self.edits.iter().position(|e| e.id() == edit_id) {
+            // TODO: Make ids be the index.
             let removed = self.edits.remove(pos);
             // Rebuild entire affected set conservatively – still way faster than per-frame scan
             self.rebuild_affected_set();

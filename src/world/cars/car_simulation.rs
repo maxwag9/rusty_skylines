@@ -45,6 +45,7 @@ pub struct CarTrajectory {
     pub end_yaw_rate: f32,
     pub end_steering_angle: f32,
     pub end_steering_vel: f32,
+    pub is_last_turn_of_sf_traj: bool,
 }
 #[derive(Debug)]
 pub struct CarEngineResult {

@@ -9,10 +9,11 @@ use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
 use crate::ui::ui_editor::Ui;
 use crate::ui::vertex::{LineVtxRender, LineVtxWorld, TextVtxRender};
 use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::zoning::point_in_polygon_xz;
+use crate::world::buildings::zoning::{Zoning, point_in_polygon_xz};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
 use crate::world::cars::partitions::PartitionId;
+use crate::world::cars::signfinding::{SFTurnType, get_last_turn};
 use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
@@ -323,6 +324,7 @@ impl Gizmo {
         terrain: &Terrain,
         road_storage: &RoadStorage,
         buildings: &Buildings,
+        zoning: &Zoning,
     ) {
         for car in car_storage
             .car_chunk_storage
@@ -335,60 +337,167 @@ impl Gizmo {
                     .iter()
                     .map(|p| p.pos)
                     .collect::<Vec<Vec3>>();
+
                 self.polyline_relative(
                     physical_traj.origin,
                     offsets,
-                    [car.color[0], car.color[1], car.color[2], 1.0],
-                    5.0,
+                    [car.color[0], car.color[1], car.color[2], 0.45],
+                    4.0,
                     0.0,
                     0.0,
                 );
             }
         }
-        if let Some(picked) = &terrain.last_picked {
-            let max_d2 = 625.0; // 25m
-            let picked = car_storage
-                .car_chunk_storage
-                .close_car_ids()
-                .filter_map(|id| {
-                    let car = car_storage.get(id)?;
 
-                    let dist2 = car.pos.distance_squared(picked.pos);
-                    if dist2 < max_d2 {
-                        Some((dist2, id))
-                    } else {
-                        None
+        let Some(picked) = &terrain.last_picked else {
+            return;
+        };
+
+        let max_d2 = 625.0; // 25 m
+        let picked_car_id = car_storage
+            .car_chunk_storage
+            .close_car_ids()
+            .filter_map(|id| {
+                let car = car_storage.get(id)?;
+                let dist2 = car.pos.distance_squared(picked.pos);
+                if dist2 < max_d2 {
+                    Some((dist2, id))
+                } else {
+                    None
+                }
+            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+            .map(|(_, id)| id);
+
+        let Some(car_id) = picked_car_id else {
+            return;
+        };
+
+        let Some(car) = car_storage.get(car_id) else {
+            return;
+        };
+
+        self.circle(car.pos, car.length, [0.1, 0.3, 0.3, 0.9], 0.1, 0.0);
+
+        let Some(sf_traj) = &car.signfinding_trajectory else {
+            return;
+        };
+
+        if sf_traj.turns.is_empty() {
+            return;
+        }
+
+        if let Some(address) = &car.destination_addr {
+            if let Some(building) = buildings.storage.get(address.destination.as_building()) {
+                if let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) {
+                    let pos = car.pos.add_vec3(Vec3::new(0.0, 5.0, 0.0));
+                    self.text(
+                        format!(
+                            "Current Turn: {:?}",
+                            get_last_turn(
+                                &sf_traj.turns,
+                                car,
+                                road_storage,
+                                building.pos,
+                                lot.segment_id
+                            )
+                        ),
+                        pos,
+                        1.0,
+                        [0.1, 0.96, 0.64, 0.9],
+                        None,
+                        false,
+                        0.0,
+                        0.0,
+                    );
+                    let pos = car.pos.add_vec3(Vec3::new(0.0, 4.0, 0.0));
+                    self.text(
+                        format!("Current Lane: {:?}", car.current_lane),
+                        pos,
+                        1.0,
+                        [0.1, 0.66, 0.64, 0.9],
+                        None,
+                        false,
+                        0.0,
+                        0.0,
+                    );
+                };
+            };
+        };
+
+        // Assumes turns are ordered from closest to farthest.
+        // We render them in reverse so farther turns are drawn on top.
+        let turn_count = sf_traj.turns.len() as f32;
+
+        for (i, turn) in sf_traj.turns.iter().enumerate().rev() {
+            let t = if turn_count <= 1.0 {
+                0.0
+            } else {
+                i as f32 / (turn_count - 1.0)
+            };
+
+            let thickness = 0.1; //2.0 - t * 5.5;
+            let alpha = 0.25 + (1.0 - t) * 0.50;
+            let color = if turn.is_final_turn_to_building {
+                [1.0, 0.15, 0.25, alpha.max(0.75)]
+            } else {
+                [1.0 - t * 0.35, 1.0 - t * 0.30, 1.0, alpha]
+            };
+            match &turn.turn_type {
+                SFTurnType::SegmentLanes {
+                    segment_id,
+                    possible_lanes,
+                } => {
+                    for lane_id in possible_lanes {
+                        let Some(lane) = road_storage.lanes.get(lane_id.index()) else {
+                            continue;
+                        };
+                        self.polyline(lane.polyline(), color, 5.0, thickness, 0.0);
                     }
-                })
-                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-                .map(|(_, id)| id);
+                    let Some(segment) = road_storage.segment_safe(*segment_id) else {
+                        continue;
+                    };
+                    let Some(from_pos) = road_storage.node(segment.start()).map(|p| p.pos()) else {
+                        continue;
+                    };
+                    let Some(to_pos) = road_storage.node(segment.start()).map(|p| p.pos()) else {
+                        continue;
+                    };
+                    // Midpoint label, lifted a bit so it reads cleanly
+                    let mid = from_pos.lerp(to_pos, 0.5);
+                    let label_pos = mid.add_vec3(Vec3::new(0.0, 4.45, 0.0));
 
-            if let Some(car_id) = picked {
-                if let Some(car) = car_storage.get(car_id) {
-                    self.circle(car.pos, car.length, [0.1, 0.3, 0.3, 0.9], 0.2, 0.0);
-                    if let Some(sf_traj) = &car.signfinding_trajectory {
-                        for turn in &sf_traj.turns {
-                            let Some(segment) = road_storage.segments.get(turn.segment_id.index())
-                            else {
-                                continue;
-                            };
-                            let Some(from_node) = road_storage.nodes.get(turn.node_id.index())
-                            else {
-                                continue;
-                            };
-                            let Some(to_node_id) = segment.other_node(turn.node_id) else {
-                                continue;
-                            };
-                            let Some(to_node) = road_storage.nodes.get(to_node_id.index()) else {
-                                continue;
-                            };
-                            let color = if turn.is_final_turn {
-                                [1.0, 0.2, 0.3, 1.0]
-                            } else {
-                                [1.0, 1.0, 1.0, 1.0]
-                            };
+                    // Small badge behind the text
+                    self.circle(
+                        label_pos,
+                        0.55 + thickness * 0.03,
+                        [0.0, 0.0, 0.0, 0.35 + (1.0 - t) * 0.15],
+                        0.0,
+                        0.0,
+                    );
 
-                            self.arrow(from_node.pos(), to_node.pos(), color, false, 0.5, 0.0);
+                    let label = if turn.is_final_turn_to_building {
+                        format!("T: {}  FINAL  Seg: {}", i + 1, segment_id.index())
+                    } else {
+                        format!("T: {}  Seg: {}", i + 1, segment_id.index())
+                    };
+
+                    self.text(label, label_pos, 1.0, color, None, false, 0.0, 0.0);
+                }
+                SFTurnType::IntersectionLanes {
+                    node_id,
+                    possible_paths,
+                    to_segment_id,
+                } => {
+                    let Some(node) = road_storage.nodes.get(node_id.index()) else {
+                        continue;
+                    };
+                    for path in possible_paths {
+                        for &nodelane_id in path.0.iter() {
+                            let Some(lane) = node.node_lane(nodelane_id) else {
+                                continue;
+                            };
+                            self.polyline(lane.polyline(), color, 5.0, thickness, 0.0);
                         }
                     }
                 }
@@ -961,7 +1070,7 @@ impl Gizmo {
         let render_lane_arrows = false;
 
         for storage in [&road_manager.roads, &road_manager.preview_roads] {
-            for (_node_id, node) in storage.iter_nodes() {
+            for (_node_id, node) in storage.iter_enabled_nodes() {
                 // Node circle
                 let node_pos = node.pos();
                 let node_color = if node.is_enabled() {
@@ -972,7 +1081,7 @@ impl Gizmo {
                 self.circle(node_pos, 2.0, node_color, 0.0, 0.0);
 
                 // Incoming lanes
-                for lane_id in node.incoming_lanes() {
+                for &lane_id in node.incoming_lanes() {
                     let lane = storage.lane(lane_id);
                     if !lane.is_enabled() && !render_disabled {
                         continue;
@@ -1001,6 +1110,19 @@ impl Gizmo {
                             self.arrow(*last, node_pos, color, false, 0.0, 0.0);
                         }
                     }
+                    if let Some(&middle) = points.get(points.len() / 2) {
+                        //let (pos, _, tangent, _) = lane.geometry().closest_point_to(middle);
+                        self.text(
+                            format!("{}", lane_id),
+                            middle,
+                            1.0,
+                            color,
+                            None,
+                            false,
+                            0.0,
+                            0.0,
+                        );
+                    }
                 }
 
                 // Node lanes
@@ -1024,7 +1146,112 @@ impl Gizmo {
                             self.arrow(*last, node_pos, color, false, 0.0, 0.0);
                         }
                     }
+                    if let Some(first) = points.first() {
+                        self.text(
+                            format!(
+                                "Nl_id: {}, merging: {:?}",
+                                node_lane.id(),
+                                node_lane.merging()
+                            ),
+                            *first,
+                            0.4,
+                            color,
+                            None,
+                            false,
+                            0.0,
+                            0.0,
+                        );
+                    }
+
+                    if let Some(last) = points.last() {
+                        self.text(
+                            format!(
+                                "Nl_id: {}, splitting: {:?}",
+                                node_lane.id(),
+                                node_lane.splitting()
+                            ),
+                            *last,
+                            0.4,
+                            color,
+                            None,
+                            false,
+                            0.0,
+                            0.0,
+                        );
+                    }
                 }
+            }
+            for (segment_id, segment) in storage.iter_enabled_segments() {
+                let mut left_lane = None;
+                let mut right_lane = None;
+
+                for &lane_id in segment.lanes() {
+                    let lane = storage.lane(lane_id);
+
+                    if !lane.is_enabled() && !render_disabled {
+                        continue;
+                    }
+
+                    let idx = lane.lane_index();
+
+                    if idx < 0 {
+                        // Highest negative index: -1 beats -2
+                        if left_lane
+                            .map(|(_, best_idx)| idx > best_idx)
+                            .unwrap_or(true)
+                        {
+                            left_lane = Some((lane_id, idx));
+                        }
+                    } else if idx > 0 {
+                        // Lowest positive index: 1 beats 2
+                        if right_lane
+                            .map(|(_, best_idx)| idx < best_idx)
+                            .unwrap_or(true)
+                        {
+                            right_lane = Some((lane_id, idx));
+                        }
+                    }
+                }
+
+                let middle = match (left_lane, right_lane) {
+                    (Some((left_id, _)), Some((right_id, _))) => {
+                        let left = storage.lane(left_id);
+                        let right = storage.lane(right_id);
+
+                        let left_points = left.polyline();
+                        let right_points = right.polyline();
+
+                        // Use the midpoint sample of the innermost lanes.
+                        let li = (left_points.len() / 2).saturating_sub(2);
+                        let ri = (right_points.len() / 2).saturating_add(2);
+                        let Some(left_point) = left_points.get(li) else {
+                            continue;
+                        };
+                        let Some(right_point) = right_points.get(ri) else {
+                            continue;
+                        };
+                        WorldPos::barycenter(vec![*left_point, *right_point].as_slice())
+                    }
+
+                    // One-way road
+                    (Some((lane_id, _)), None) | (None, Some((lane_id, _))) => {
+                        let points = storage.lane(lane_id).polyline();
+                        points[points.len() / 2]
+                    }
+
+                    (None, None) => continue,
+                };
+
+                self.text(
+                    format!("Seg_id: {}", segment_id.raw()),
+                    middle,
+                    1.0,
+                    [1.0, 0.0, 0.0, 1.0],
+                    None,
+                    false,
+                    0.0,
+                    0.0,
+                );
             }
         }
     }

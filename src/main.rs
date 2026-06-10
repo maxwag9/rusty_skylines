@@ -12,11 +12,16 @@ mod ui;
 pub mod world;
 
 use app::App;
+use tracing_subscriber::FmtSubscriber;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 fn main() {
     let event_loop = EventLoop::new().expect("Failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(tracing::Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
     let app = App::new(
         #[cfg(target_arch = "wasm32")]
         &event_loop,

@@ -260,8 +260,7 @@ impl Cars {
                     if input.gameplay_repeat("Place Car") {
                         let mut rng = rng();
                         let car = make_random_car(picked.pos, &mut rng);
-                        self.car_storage
-                            .spawn(car, picked.pos.chunk, &road_manager.roads);
+                        self.car_storage.spawn(car, &road_manager.roads);
                     }
                 }
             }
@@ -322,14 +321,11 @@ impl Cars {
                     break;
                 }
                 let lane_id = outgoing[rng.random_range(0..outgoing.len())];
-                let lane = road_manager.roads.lane(&lane_id);
+                let lane = road_manager.roads.lane(lane_id);
                 let polyline = lane.polyline();
                 let first_point = polyline.first().unwrap();
-                self.car_storage.spawn(
-                    make_random_car(*first_point, &mut rng),
-                    first_point.chunk,
-                    &road_manager.roads,
-                );
+                self.car_storage
+                    .spawn(make_random_car(*first_point, &mut rng), &road_manager.roads);
             }
         }
         for idx in to_remove.into_iter().rev() {

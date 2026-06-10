@@ -240,6 +240,7 @@ pub fn run_interpolation(resources: &mut Resources) {
                 &resources.world.terrain,
                 &resources.world.roads.road_manager.roads,
                 &resources.world.buildings,
+                &resources.world.zoning,
             )
     }
 }

@@ -104,6 +104,18 @@ layers:
           editable: true
         editing_tool: false
       - !Advanced
+        name: checkbox_simple_car_following
+        ap_name: checkbox
+        ap_var: simple_car_following
+        x: 0.7
+        y: 0.3
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
         name: checkbox_always_day
         ap_name: checkbox
         ap_var: always_day

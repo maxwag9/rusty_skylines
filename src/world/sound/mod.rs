@@ -669,7 +669,7 @@ impl Sounds {
             let result = match format {
                 SampleFormat::F32 => Self::build_stream_f32(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -678,7 +678,7 @@ impl Sounds {
                 ),
                 SampleFormat::I16 => Self::build_stream_i16(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -687,7 +687,7 @@ impl Sounds {
                 ),
                 SampleFormat::U16 => Self::build_stream_u16(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -696,7 +696,7 @@ impl Sounds {
                 ),
                 SampleFormat::I8 => Self::build_stream_i8(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -705,7 +705,7 @@ impl Sounds {
                 ),
                 SampleFormat::I32 => Self::build_stream_i32(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -714,7 +714,7 @@ impl Sounds {
                 ),
                 SampleFormat::I64 => Self::build_stream_i64(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -723,7 +723,7 @@ impl Sounds {
                 ),
                 SampleFormat::U8 => Self::build_stream_u8(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -732,7 +732,7 @@ impl Sounds {
                 ),
                 SampleFormat::U32 => Self::build_stream_u32(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -741,7 +741,7 @@ impl Sounds {
                 ),
                 SampleFormat::U64 => Self::build_stream_u64(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -750,7 +750,7 @@ impl Sounds {
                 ),
                 SampleFormat::F64 => Self::build_stream_f64(
                     device,
-                    &stream_config,
+                    stream_config,
                     Arc::clone(&state),
                     Arc::clone(&stream_error),
                     Arc::clone(&sample_counter),
@@ -770,7 +770,7 @@ impl Sounds {
 
     fn build_stream_f32(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -796,7 +796,7 @@ impl Sounds {
 
     fn build_stream_i16(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -826,7 +826,7 @@ impl Sounds {
 
     fn build_stream_i32(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -856,7 +856,7 @@ impl Sounds {
 
     fn build_stream_u16(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -886,7 +886,7 @@ impl Sounds {
 
     fn build_stream_i8(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -916,7 +916,7 @@ impl Sounds {
 
     fn build_stream_u8(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -946,7 +946,7 @@ impl Sounds {
 
     fn build_stream_i64(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -976,7 +976,7 @@ impl Sounds {
 
     fn build_stream_u32(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -1006,7 +1006,7 @@ impl Sounds {
 
     fn build_stream_u64(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
@@ -1036,7 +1036,7 @@ impl Sounds {
 
     fn build_stream_f64(
         device: &Device,
-        config: &StreamConfig,
+        config: StreamConfig,
         state: Arc<Mutex<AudioState>>,
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,

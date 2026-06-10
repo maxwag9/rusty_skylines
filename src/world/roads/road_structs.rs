@@ -5,6 +5,7 @@ use crate::systems::systems::RoadDestroyType;
 use crate::world::roads::roads::{RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 pub type RoadTypeId = u32;
@@ -170,7 +171,11 @@ impl From<LaneId> for u32 {
         id.0
     }
 }
-
+impl Display for LaneId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        format!("LaneId: {}", self.0).fmt(f)
+    }
+}
 pub type NodeLaneId = u32;
 pub type PolyIdx = u32;
 
@@ -327,7 +332,7 @@ impl Default for RoadType {
             speed_limit: 16.7,
             vehicle_mask: 1,
             structure: StructureType::Surface,
-            turn_tightness: 1.5,
+            turn_tightness: 1.0,
         }
     }
 }

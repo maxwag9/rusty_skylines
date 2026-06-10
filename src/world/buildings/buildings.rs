@@ -1,6 +1,6 @@
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
-use crate::renderer::props::{PropInstance, Props};
+use crate::renderer::props::{PropInstance, PropInstanceId, Props};
 use crate::renderer::textures::material_keys::terrain_material_keys;
 use crate::ui::input::Input;
 use crate::ui::parser::Value;
@@ -256,6 +256,7 @@ pub struct Building {
     pub level: BuildingLevel,
     pub building_params: BuildingParamsLevels,
     pub edit_id: Option<EditId>,
+    pub prop_instance_ids: Vec<PropInstanceId>,
 }
 impl Building {
     pub fn current_level_params(&self) -> &BuildingParams {
@@ -361,9 +362,6 @@ impl BuildingStorage {
     pub fn spawn(
         buildings: &mut Buildings,
         zoning: &mut Zoning,
-        chunk_coord: ChunkCoord,
-        zoning_type: ZoningType,
-        building_chunk_distance: ChunkDistance,
         mut building: Building,
     ) -> BuildingId {
         let storage = &mut buildings.storage;
@@ -371,6 +369,7 @@ impl BuildingStorage {
             .zoning_storage
             .get_lot(building.lot_id)
             .map_or(building.pos, |l| l.entrance.0);
+        let chunk_coord = entrance_pos.chunk;
         let building_id = if let Some(reused_id) = storage.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
             building.id = reused_id;
@@ -386,7 +385,7 @@ impl BuildingStorage {
         // Add to chunk storage and record location
         storage.building_chunk_storage.add_building(
             chunk_coord,
-            building_chunk_distance,
+            ChunkDistance::from_chunk_positions(storage.center_chunk, chunk_coord),
             building_id,
         );
         storage.building_locations.insert(building_id, chunk_coord);
@@ -1012,6 +1011,7 @@ impl BuildingMeshManager {
             if let Some(edit_id) = building.edit_id {
                 terrain.terrain_editor.remove_edit(edit_id);
             }
+            props.remove_instances(lot.center.chunk, building.prop_instance_ids.as_slice());
             let bounds: Vec<_> = lot
                 .bounds
                 .iter()
@@ -1028,6 +1028,7 @@ impl BuildingMeshManager {
                 3.0,
                 TerrainEditSource::Building(building.id),
             ));
+            let mut prop_instance_ids = vec![];
             let level = building.current_level_params();
             let story_height = level.story_height;
             let num_stories = level.num_stories;
@@ -1190,10 +1191,12 @@ impl BuildingMeshManager {
                                     right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5),
                                 );
                                 center.local.y = zero_height;
-                                props.place_prop(
+                                let prop_instance_id = props.place_prop(
                                     center,
                                     "oak",
                                     PropInstance {
+                                        id: None,
+                                        archetype_id: None,
                                         pos: center,
                                         scale: rand::random_range(0.8..1.5),
                                         rotation_y_rad: rand::random_range(0.0..5.0),
@@ -1203,6 +1206,7 @@ impl BuildingMeshManager {
                                         variant: 0,
                                     },
                                 );
+                                prop_instance_ids.push(prop_instance_id);
                             }
                             TileType::Garden => {
                                 mesh.push_square(
@@ -1325,6 +1329,7 @@ impl BuildingMeshManager {
                 roof_id,
                 roof_side_id,
             );
+            building.prop_instance_ids = prop_instance_ids;
         }
 
         BuildingChunkMesh {

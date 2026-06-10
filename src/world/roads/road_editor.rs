@@ -440,7 +440,7 @@ impl RoadEditor {
         let excluded_segments = self.get_excluded_segments(storage, start_anchor, end_anchor);
 
         for (lane_id, _) in storage.iter_enabled_lanes() {
-            let lane = storage.lane(&lane_id);
+            let lane = storage.lane(lane_id);
             let seg_id = lane.segment();
 
             if crossed_segments.contains(&seg_id) {
@@ -566,7 +566,7 @@ impl RoadEditor {
         let mut closest_abs_idx = i8::MAX;
 
         for lane_id in segment.lanes() {
-            let lane = storage.lane(lane_id);
+            let lane = storage.lane(*lane_id);
             if !lane.is_enabled() {
                 continue;
             }
@@ -655,15 +655,15 @@ impl RoadEditor {
         for anchor in [start_anchor, end_anchor] {
             match &anchor.planned_node {
                 PlannedNode::Split { lane_id, .. } => {
-                    excluded.insert(storage.lane(lane_id).segment());
+                    excluded.insert(storage.lane(*lane_id).segment());
                 }
                 PlannedNode::Existing(node_id) => {
                     if let Some(node) = storage.node(*node_id) {
                         for lane_id in node.incoming_lanes() {
-                            excluded.insert(storage.lane(lane_id).segment());
+                            excluded.insert(storage.lane(*lane_id).segment());
                         }
                         for lane_id in node.outgoing_lanes() {
-                            excluded.insert(storage.lane(lane_id).segment());
+                            excluded.insert(storage.lane(*lane_id).segment());
                         }
                     }
                 }
@@ -691,7 +691,7 @@ impl RoadEditor {
         control: Option<WorldPos>,
         lane_id: &LaneId,
     ) -> Option<CrossingPoint> {
-        let lane = storage.lane(lane_id);
+        let lane = storage.lane(*lane_id);
         let lane_points = &lane.geometry().points;
 
         // For each segment in our test polyline
@@ -907,7 +907,7 @@ impl RoadEditor {
             pos: start_node_pos,
             t: 0.0,
         });
-        // Splitting a segment makes 2 nodes regenerate, so this is necessary. But actually not necessary, because  AH wait it is necessary! I was about to say that it wasn't necessary because the nodes would be non-intersection nodes (only 0 or 1 connections) anyway, but then I remembered that the nodes could connect to other segments too! Thanks for listening.
+        // Splitting a segment makes 2 nodes regenerate, so this is necessary. But actually not necessary, because AH wait it is necessary! I was about to say that it wasn't necessary because the nodes would be non-intersection nodes (only 0 or 1 connections) anyway, but then I remembered that the nodes could connect to other segments too! Thanks for listening.
         // Process crossings in order
         for crossing in crossings {
             let node_id = match crossing.kind {
@@ -1106,7 +1106,7 @@ impl RoadEditor {
         _gizmo: &mut Gizmo,
     ) -> Option<(LaneId, f64, WorldPos, f64)> {
         let nearest_lane_id = nearest_lane_to_point(storage, pos)?;
-        let nearest_lane = storage.lane(&nearest_lane_id);
+        let nearest_lane = storage.lane(nearest_lane_id);
         let segment_id = nearest_lane.segment();
         let segment = storage.segment(segment_id);
 
@@ -1125,7 +1125,7 @@ impl RoadEditor {
         let mut closest_abs_idx = i8::MAX;
 
         for lane_id in segment.lanes() {
-            let lane = storage.lane(lane_id);
+            let lane = storage.lane(*lane_id);
             if !lane.is_enabled() {
                 continue;
             }
@@ -1193,7 +1193,7 @@ impl RoadEditor {
             return None;
         }
 
-        let rep_lane = storage.lane(&rep_lane_id);
+        let rep_lane = storage.lane(rep_lane_id);
 
         if rep_t < ENDPOINT_T_EPS {
             let node_id = rep_lane.from_node();
@@ -1250,13 +1250,13 @@ impl RoadEditor {
                 let node = storage.node(id).unwrap();
 
                 for lane_id in node.incoming_lanes() {
-                    let lane = storage.lane(lane_id);
+                    let lane = storage.lane(*lane_id);
                     let dir = lane_direction_at_node(lane, id);
                     in_lanes.push((lane_id.clone(), dir));
                 }
 
                 for lane_id in node.outgoing_lanes() {
-                    let lane = storage.lane(lane_id);
+                    let lane = storage.lane(*lane_id);
                     let dir = lane_direction_at_node(lane, id);
                     out_lanes.push((lane_id.clone(), dir));
                 }
@@ -1272,7 +1272,7 @@ impl RoadEditor {
                 if t < ENDPOINT_T_EPS || t > 1.0 - ENDPOINT_T_EPS {
                     (NodePreviewResult::NewNode, Vec::new(), Vec::new())
                 } else {
-                    let lane = storage.lane(&lane_id);
+                    let lane = storage.lane(lane_id);
                     let dir = lane.polyline()[0].delta_to(lane.polyline()[1]);
 
                     (
@@ -1302,7 +1302,7 @@ impl RoadEditor {
         lane_id: LaneId,
         t: f64,
     ) -> Option<LanePreview> {
-        let lane = storage.lane(&lane_id);
+        let lane = storage.lane(lane_id);
         let mut p = sample_lane_position(lane, t, storage)?;
 
         let sample_count = 11;
@@ -1391,7 +1391,7 @@ impl RoadEditor {
         split_pos: WorldPos,
         chunk_id: ChunkId,
     ) -> Option<(Vec<RoadCommand>, NodeId, [NodeId; 2])> {
-        let lane = storage.lane(&lane_id);
+        let lane = storage.lane(lane_id);
         let old_segment_id = lane.segment();
         let old_segment = storage.segment(old_segment_id);
 
@@ -1483,7 +1483,7 @@ impl RoadEditor {
             //     lane_id: *old_lane_id,
             //     chunk_id,
             // });
-            let old_lane = storage.lane(old_lane_id);
+            let old_lane = storage.lane(*old_lane_id);
 
             let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
 

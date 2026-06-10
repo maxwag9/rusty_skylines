@@ -1,6 +1,6 @@
 use crate::helpers::paths::saves_dir;
 use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
-use crate::renderer::props::{Props, SavePropChunk};
+use crate::renderer::props::{Props, SavedProps};
 use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::partitions::PartitionManager;
@@ -371,9 +371,9 @@ define_migrations! {
                 copy: [
                     name, chunk_size, timestamp_unix,
                     player_pos, player_yaw, player_pitch,
-                    terrain_edits, roads, props,
+                    terrain_edits, roads,
                 ],
-                default:   [zones: ZoningStorage, buildings: BuildingStorage, partitions: PartitionManager, road_types: RoadTypes, city_state: CityState],
+                default:   [zones: ZoningStorage, buildings: BuildingStorage, partitions: PartitionManager, road_types: RoadTypes, city_state: CityState, props: SavedProps],
                 transform: [version: |_v: &SaveStateAlpha1_6_16a| SaveVersion::current()],
             },
             downgrade: {
@@ -411,7 +411,7 @@ pub struct SaveStateAlpha1_6_16a {
     pub player_pitch: f32,
     pub terrain_edits: Vec<TerrainEdit>,
     pub roads: RoadStorage,
-    pub props: Vec<SavePropChunk>,
+    pub props: SavedProps,
 }
 
 #[derive(
@@ -452,7 +452,7 @@ pub struct SaveState {
     pub roads: RoadStorage,
     pub road_types: RoadTypes,
     pub partitions: PartitionManager,
-    pub props: Vec<SavePropChunk>,
+    pub props: SavedProps,
     #[serde(default)]
     pub zones: ZoningStorage,
     pub buildings: BuildingStorage,

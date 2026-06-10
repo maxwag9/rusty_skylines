@@ -11,24 +11,31 @@ use crate::world::buildings::buildings::{
     WallMaterial,
 };
 use crate::world::camera::Camera;
-use crate::world::cars::car_structs::ChunkDistance;
+use crate::world::cars::car_structs::{Car, CarStorage, SimTime};
+use crate::world::cars::car_subsystem::make_random_car;
+use crate::world::cars::partitions::{Address, DestinationType};
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
     world_pos_chunk_to_id,
 };
 use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::roads::roads::RoadStorage;
 use crate::world::statisticals::demands::ZoningDemand;
+use crate::world::statisticals::schedule::{Schedule, SchedulePhase};
+use crate::world::statisticals::transports::CarTripType;
 use crate::world::terrain::terrain_subsystem::{CursorMode, PickedPoint, Terrain};
-use glam::{Vec2, Vec3};
-use rand::RngExt;
+use glam::{Quat, Vec2, Vec3};
 use rand::rngs::ThreadRng;
+use rand::{Rng, RngExt};
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
-use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::slice::IterMut;
 
 const SNAP_RADIUS: f64 = 20.0;
@@ -91,81 +98,89 @@ impl District {
         self.center = WorldPos::centroid(&self.points);
     }
     pub fn update(
-        gizmo: &mut Gizmo,
         terrain: &Terrain,
         time: &Time,
-        buildings: &mut Buildings,
-        zoning: &mut Zoning,
+        buildings: &Buildings,
+        zoning: &Zoning,
+        schedule: &Schedule,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
-    ) -> Option<District> {
+    ) -> DistrictUpdateCallback {
+        let mut callback = DistrictUpdateCallback::new(district_id);
         let Some(district) = zoning
             .zoning_storage
             .districts
             .get(district_id as usize)
             .and_then(|d| d.as_ref())
         else {
-            return None;
+            return callback;
         };
+
+        let rng = &mut ThreadRng::default();
         for lot_id in district.lot_ids.clone() {
             let (chunk, zoning_type, maybe_building) = {
+                if let Some((car_pos, car_opposite_dir, car_trip_type)) =
+                    Lot::get_car_spawn(zoning, buildings, schedule, lot_id, rng)
+                {
+                    let dir = -car_opposite_dir;
+                    let mut car = make_random_car(car_pos, rng);
+                    let forward = dir.normalize();
+                    let up = Vec3::Y;
+
+                    car.quat = Quat::from_rotation_arc(forward, up);
+                    car.destination_addr =
+                        zoning
+                            .zoning_storage
+                            .get_work_place_address(car.pos, car_trip_type, rng);
+
+                    callback.new_cars.push((lot_id, Some(car)));
+                };
                 let Some(lot) = zoning
                     .zoning_storage
                     .lots
-                    .get_mut(lot_id as usize)
-                    .and_then(|lot| lot.as_mut())
+                    .get(lot_id as usize)
+                    .and_then(|lot| lot.as_ref())
                 else {
                     continue;
                 };
-
+                let Some(district) = zoning
+                    .zoning_storage
+                    .districts
+                    .get(district_id as usize)
+                    .and_then(|d| d.as_ref())
+                else {
+                    return callback;
+                };
+                if !rng.random_bool(
+                    district
+                        .zoning_demand
+                        .demand_from_zoning_type(lot.zoning_type)
+                        .clamp(0.0, 1.0) as f64,
+                ) {
+                    continue;
+                }
                 if buildings.storage.get(lot.building_id).is_some() {
                     continue;
                 }
 
-                let building = generate_building(gizmo, terrain, lot);
+                let building = generate_building(terrain, lot);
                 (lot.center.chunk, lot.zoning_type, building)
             };
 
-            let Some(building) = maybe_building else {
-                continue;
-            };
-
-            let building_id = BuildingStorage::spawn(
-                buildings,
-                zoning,
-                chunk,
-                zoning_type,
-                ChunkDistance::Close,
-                building,
-            );
-
-            if let Some(lot) = zoning
-                .zoning_storage
-                .lots
-                .get_mut(lot_id as usize)
-                .and_then(|lot| lot.as_mut())
-            {
-                lot.building_id = Some(building_id);
-            }
+            callback.new_buildings.push((lot_id, maybe_building));
         }
         let average_land_value = zoning.average_land_value(district_id);
-        let Some(district) = zoning.zoning_storage.get_mut_district(district_id) else {
-            return None;
+        callback.average_land_value = Some(average_land_value);
+        let Some(district) = zoning.zoning_storage.get_district(district_id) else {
+            return callback;
         };
-        district
-            .zoning_demand
-            .update_demands(time, average_land_value);
 
         if !matches!(district.district_type, DistrictType::PlayerMade) && district.should_split() {
-            let split_result =
-                Self::split(&mut zoning.zoning_storage, district_id, road_edge_storage);
+            let split_result = Self::split(&zoning.zoning_storage, district_id, road_edge_storage);
             //println!("{:?}", split_result);
-            return match split_result {
-                DistrictSplitResult::Alright(new_other_district) => Some(new_other_district),
-                _ => None,
-            };
+            callback.district_split = Some(split_result);
         }
-        None
+        callback
     }
     fn should_split(&self) -> bool {
         if self.points.len() < 3 {
@@ -200,7 +215,7 @@ impl District {
     ///
     /// Everything stays in WorldPos — dx/dz for geometry, delta_to for offsets.
     pub fn split(
-        zoning_storage: &mut ZoningStorage,
+        zoning_storage: &ZoningStorage,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
     ) -> DistrictSplitResult {
@@ -538,15 +553,6 @@ impl District {
             }
         }
 
-        // ── 5. Mutate original district and return the new one ──────────────────
-        let Some(district) = zoning_storage.get_mut_district(district_id) else {
-            return DistrictSplitResult::DistrictDoesntExist;
-        };
-
-        district.replace_points(poly_a);
-        district.lot_ids = lots_a;
-        district.district_type = DistrictType::AutomaticallyMade;
-
         let mut rng = ThreadRng::default();
         let name = generate_district_name(&mut rng);
 
@@ -554,11 +560,26 @@ impl District {
         new_district.lot_ids = lots_b;
         new_district.zoning_demand = ZoningDemand::new();
 
-        DistrictSplitResult::Alright(new_district)
+        DistrictSplitResult::Alright(new_district, (district_id, poly_a, lots_a))
     }
 }
-
-fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<Building> {
+#[derive(Default)]
+pub struct DistrictUpdateCallback {
+    district_id: DistrictId,
+    average_land_value: Option<f32>,
+    district_split: Option<DistrictSplitResult>,
+    new_cars: Vec<(LotId, Option<Car>)>,
+    new_buildings: Vec<(LotId, Option<Building>)>,
+}
+impl DistrictUpdateCallback {
+    pub fn new(district_id: DistrictId) -> Self {
+        Self {
+            district_id,
+            ..Default::default()
+        }
+    }
+}
+fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
     if matches!(lot.zoning_type, ZoningType::None) {
         return None;
     };
@@ -643,6 +664,7 @@ fn generate_building(gizmo: &mut Gizmo, terrain: &Terrain, lot: &Lot) -> Option<
         level: Default::default(),
         building_params,
         edit_id: None,
+        prop_instance_ids: vec![],
     })
 }
 
@@ -671,6 +693,15 @@ impl ZoningType {
                 _ => ZoningType::None,
             },
             _ => ZoningType::None,
+        }
+    }
+    pub fn is_workplace(&self) -> bool {
+        match self {
+            ZoningType::None => false,
+            ZoningType::Residential => false,
+            ZoningType::Commercial => true,
+            ZoningType::Industrial => true,
+            ZoningType::Office => true,
         }
     }
 }
@@ -954,24 +985,76 @@ impl Zoning {
         terrain: &Terrain,
         zoning: &mut Zoning,
         buildings: &mut Buildings,
+        car_storage: &mut CarStorage,
+        schedule: &Schedule,
         time: &Time,
+        road_storage: &RoadStorage,
         road_edge_storage: &RoadEdgeStorage,
     ) {
-        if !zoning.ticker.tick(time.target_sim_dt) {
-            return;
-        }
-        //println!("updating districts");
-        for district_id in zoning.zoning_storage.district_ids() {
-            if let Some(district) = District::update(
-                gizmo,
-                terrain,
-                time,
-                buildings,
-                zoning,
-                district_id,
-                road_edge_storage,
-            ) {
-                zoning.zoning_storage.spawn_district(district);
+        let callbacks: Vec<DistrictUpdateCallback> = zoning
+            .zoning_storage
+            .get_district_ids_to_tick(time.sim_time())
+            .par_iter()
+            .map(|&district_id| {
+                District::update(
+                    terrain,
+                    time,
+                    buildings,
+                    zoning,
+                    schedule,
+                    district_id,
+                    road_edge_storage,
+                )
+            })
+            .collect();
+
+        for callback in callbacks {
+            if let Some(district) = zoning.zoning_storage.get_mut_district(callback.district_id) {
+                if let Some(average_land_value) = callback.average_land_value {
+                    district
+                        .zoning_demand
+                        .update_demands(time, average_land_value);
+                }
+            }
+
+            if let Some(split_result) = callback.district_split {
+                match split_result {
+                    DistrictSplitResult::Alright(
+                        new_other_district,
+                        (district_id, poly_a, lots_a),
+                    ) => {
+                        if let Some(district) = zoning.zoning_storage.get_mut_district(district_id)
+                        {
+                            district.replace_points(poly_a);
+                            district.lot_ids = lots_a;
+                            district.district_type = DistrictType::AutomaticallyMade;
+                        }
+
+                        zoning.zoning_storage.spawn_district(new_other_district);
+                    }
+                    _ => {}
+                };
+            }
+
+            for (lot_id, maybe_car) in callback.new_cars {
+                if let Some(car) = maybe_car {
+                    car_storage.spawn(car, road_storage);
+                }
+            }
+
+            for (lot_id, maybe_building) in callback.new_buildings {
+                if let Some(building) = maybe_building {
+                    let building_id = BuildingStorage::spawn(buildings, zoning, building);
+
+                    if let Some(lot) = zoning
+                        .zoning_storage
+                        .lots
+                        .get_mut(lot_id as usize)
+                        .and_then(|lot| lot.as_mut())
+                    {
+                        lot.building_id = Some(building_id);
+                    }
+                }
             }
         }
     }
@@ -1362,7 +1445,7 @@ impl Zoning {
         if let Some((pos, dist, _, _)) = roads
             .road_manager
             .roads
-            .closest_lane_point_to(&picked.pos)
+            .closest_lane_point_to(picked.pos)
             .filter(|(_, dist, _, _)| *dist <= SNAP_RADIUS)
         {
             consider(PlacePos::RoadSnap(pos, dist));
@@ -1846,10 +1929,139 @@ impl Lot {
 
         tiles
     }
+
+    /// Designed for once per second.
+    pub fn get_car_spawn(
+        zoning: &Zoning,
+        buildings: &Buildings,
+        schedule: &Schedule,
+        lot_id: LotId,
+        rng: &mut impl Rng,
+    ) -> Option<(WorldPos, Vec3, CarTripType)> {
+        //println!("Trying car spawn...");
+        let lot = zoning.zoning_storage.get_lot(lot_id)?;
+        let building = buildings.storage.get(lot.building_id)?;
+        let district = zoning.zoning_storage.get_district(lot.district_id)?;
+
+        let tenants = building
+            .current_level_params()
+            .max_people(lot.get_floor_area());
+        if tenants == 0 {
+            return None;
+        }
+
+        let age = district.zoning_demand.demography.get_random_age(rng);
+
+        let zoning_type = lot.zoning_type;
+
+        let phase_factor = match schedule.phase {
+            SchedulePhase::Night => match zoning_type {
+                ZoningType::None => 0.00001,
+                ZoningType::Residential => 0.002,
+                ZoningType::Commercial => 0.0005,
+                ZoningType::Industrial => 0.0002,
+                ZoningType::Office => 0.0004,
+            },
+
+            SchedulePhase::CommuteToWork => match zoning_type {
+                ZoningType::None => 0.00001,
+                ZoningType::Residential => 0.020,
+                ZoningType::Commercial => 0.004,
+                ZoningType::Industrial => 0.006,
+                ZoningType::Office => 0.006,
+            },
+
+            SchedulePhase::Work => match zoning_type {
+                ZoningType::None => 0.00001,
+                ZoningType::Residential => 0.005,
+                ZoningType::Commercial => 0.012,
+                ZoningType::Industrial => 0.018,
+                ZoningType::Office => 0.013,
+            },
+
+            SchedulePhase::Lunch => match zoning_type {
+                ZoningType::None => 0.00001,
+                ZoningType::Residential => 0.006,
+                ZoningType::Commercial => 0.016,
+                ZoningType::Industrial => 0.035,
+                ZoningType::Office => 0.024,
+            },
+
+            SchedulePhase::CommuteHome => match zoning_type {
+                ZoningType::None => 0.00001,
+                ZoningType::Residential => 0.002,
+                ZoningType::Commercial => 0.035,
+                ZoningType::Industrial => 0.042,
+                ZoningType::Office => 0.036,
+            },
+
+            SchedulePhase::Evening => match zoning_type {
+                ZoningType::None => 0.00001,
+                ZoningType::Residential => 0.010,
+                ZoningType::Commercial => 0.012,
+                ZoningType::Industrial => 0.003,
+                ZoningType::Office => 0.003,
+            },
+        };
+
+        let age_factor = match schedule.phase {
+            SchedulePhase::CommuteToWork | SchedulePhase::Work => match age {
+                0..=14 => 0.05,
+                15..=24 => 0.70,
+                25..=64 => 1.00,
+                _ => 0.35,
+            },
+
+            SchedulePhase::CommuteHome => match age {
+                0..=14 => 0.10,
+                15..=24 => 0.75,
+                25..=64 => 1.00,
+                _ => 0.40,
+            },
+
+            SchedulePhase::Lunch | SchedulePhase::Evening => match age {
+                0..=14 => 0.50,
+                15..=24 => 0.90,
+                25..=64 => 1.00,
+                _ => 0.80,
+            },
+
+            SchedulePhase::Night => match age {
+                0..=14 => 0.02,
+                15..=24 => 0.08,
+                25..=64 => 0.04,
+                _ => 0.06,
+            },
+        };
+
+        let size_factor = ((tenants as f32).sqrt() / 4.0).clamp(0.25, 2.0);
+
+        let probability = phase_factor * age_factor * size_factor * schedule.traffic_multiplier;
+        //println!("Car spawn probability: {}", probability);
+        if !rng.random_bool(probability.clamp(0.0, 1.0) as f64) {
+            return None;
+        }
+
+        let car_trip_type = CarTripType::pick_car_trip_type(zoning_type, schedule.phase, rng);
+
+        Some((lot.entrance.0, lot.entrance.1, car_trip_type))
+    }
+
+    pub fn get_floor_area(&self) -> f64 {
+        self.get_tiles()
+            .values()
+            .filter_map(|tile| match tile {
+                Tile::Square(TileType::House) => Some(1.0),
+                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points)),
+                _ => None,
+            })
+            .sum()
+    }
 }
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct ZoningStorage {
     districts: Vec<Option<District>>,
+    district_next_ticks: HashMap<DistrictId, SimTime>,
     lots: Vec<Option<Lot>>,
     district_free_list: Vec<DistrictId>,
     lot_free_list: Vec<LotId>,
@@ -1858,6 +2070,60 @@ pub struct ZoningStorage {
 }
 
 impl ZoningStorage {
+    pub fn get_work_place_address(
+        &self,
+        pos: WorldPos,
+        car_trip_type: CarTripType,
+        rng: &mut impl Rng,
+    ) -> Option<Address> {
+        const MAX_COMMUTE_DISTANCE: f64 = 1500.0;
+        const MAX_DIST2: f64 = MAX_COMMUTE_DISTANCE * MAX_COMMUTE_DISTANCE;
+        const EPS: f64 = 1.0;
+
+        let chunk_coords = pos.chunk.get_chunks_in_distance(MAX_COMMUTE_DISTANCE);
+        let lot_ids_to_consider = self.lots_in_chunks(chunk_coords);
+
+        let mut candidates: Vec<(LotId, f64)> = Vec::new();
+
+        for lot_id in lot_ids_to_consider {
+            let lot = self.get_lot(lot_id)?;
+            if !lot.zoning_type.is_workplace() {
+                continue;
+            }
+
+            let dist2 = lot.entrance.0.distance_squared(pos);
+
+            if dist2 > MAX_DIST2 {
+                continue;
+            }
+
+            let weight = 1.0 / (dist2 + EPS);
+            candidates.push((lot_id, weight));
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // weighted random pick
+        let total: f64 = candidates.iter().map(|(_, w)| w).sum();
+        let mut pick = rng.random::<f64>() * total;
+
+        let mut chosen = None;
+        for (lot_id, weight) in candidates {
+            pick -= weight;
+            if pick <= 0.0 {
+                chosen = Some(lot_id);
+                break;
+            }
+        }
+
+        let lot = self.get_lot(chosen?)?;
+
+        Some(Address {
+            destination: DestinationType::Building(lot.building_id?),
+        })
+    }
     pub fn sample_land_value(&self, center: ChunkCoord) -> f32 {
         let lot_ids = self.lots_in_chunk_plus(center.chunk_id());
         if lot_ids.is_empty() {
@@ -1883,6 +2149,44 @@ impl ZoningStorage {
             .map(|d| d.id)
             .collect::<Vec<DistrictId>>()
     }
+    pub fn get_district_ids_to_tick(&mut self, current_time: SimTime) -> Vec<DistrictId> {
+        const DISTRICT_AVERAGE_TICK_TIME: f64 = 1.0; // s
+
+        let mut out = Vec::new();
+
+        for district_id in self.district_ids() {
+            let offset = self.stable_offset_seconds(district_id, DISTRICT_AVERAGE_TICK_TIME as f32);
+            let next_tick = self
+                .district_next_ticks
+                .entry(district_id)
+                .or_insert_with(|| {
+                    // Stable offset so not all districts tick on the same frame.
+                    current_time + offset as f64
+                });
+
+            if current_time >= *next_tick {
+                out.push(district_id);
+
+                // Keep it roughly once per second, even if we lag behind.
+                let mut due = *next_tick;
+                while due <= current_time {
+                    due += DISTRICT_AVERAGE_TICK_TIME;
+                }
+                *next_tick = due;
+            }
+        }
+        //println!("Ticking {} Districts", out.len());
+        out
+    }
+
+    fn stable_offset_seconds(&self, district_id: DistrictId, max: f32) -> f32 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        district_id.hash(&mut hasher);
+        let h = hasher.finish();
+
+        let frac = (h as f64 / u64::MAX as f64) as f32;
+        frac * max
+    }
     pub fn lots_in_chunk(&self, chunk_id: ChunkId) -> Vec<LotId> {
         self.lot_chunk_storage
             .get(&chunk_id)
@@ -1891,19 +2195,16 @@ impl ZoningStorage {
     }
     pub fn lots_in_chunk_plus(&self, chunk_id: ChunkId) -> Vec<LotId> {
         let c = chunk_id_to_coord(chunk_id);
-        let chunk_ids = [
-            c.chunk_id(),
-            c.offset(-1, 0).chunk_id(),
-            c.offset(1, 0).chunk_id(),
-            c.offset(0, 1).chunk_id(),
-            c.offset(0, -1).chunk_id(),
-        ];
+        let chunk_coords = c.get_chunks_plus();
 
-        chunk_ids
-            .iter()
+        self.lots_in_chunks(chunk_coords)
+    }
+    pub fn lots_in_chunks(&self, chunk_coords: Vec<ChunkCoord>) -> Vec<LotId> {
+        chunk_coords
+            .into_iter()
             .flat_map(|c_id| {
                 self.lot_chunk_storage
-                    .get(c_id)
+                    .get(&c_id.chunk_id())
                     .into_iter()
                     .flatten()
                     .copied()
@@ -1946,6 +2247,7 @@ impl ZoningStorage {
     pub fn new() -> Self {
         Self {
             districts: Vec::new(),
+            district_next_ticks: HashMap::new(),
             lots: Vec::new(),
             district_free_list: Vec::new(),
             lot_free_list: Vec::new(),
@@ -1966,10 +2268,23 @@ impl ZoningStorage {
             self.districts.push(Some(district));
             new_id
         };
-
+        self.ensure_lots_reference_district(district_id);
         district_id
     }
-
+    pub fn ensure_lots_reference_district(&mut self, district_id: DistrictId) {
+        let Some(district) = self
+            .districts
+            .get_mut(district_id as usize)
+            .and_then(|d| d.as_mut())
+        else {
+            return;
+        };
+        for &lot in district.lot_ids.iter() {
+            self.lots[lot as usize]
+                .as_mut()
+                .map(|l| l.district_id = district_id);
+        }
+    }
     pub fn despawn_district(&mut self, id: DistrictId) {
         let mut lots_to_despawn = Vec::new();
         if self
@@ -2384,7 +2699,7 @@ fn boundary_crossing_count(polyline: &[WorldPos], boundary: &[WorldPos]) -> usiz
     count
 }
 
-fn generate_district_name(rng: &mut impl rand::Rng) -> String {
+fn generate_district_name(rng: &mut impl Rng) -> String {
     let prefixes = [
         "North", "South", "East", "West", "New", "Old", "Upper", "Lower",
     ];
@@ -2411,7 +2726,7 @@ fn generate_district_name(rng: &mut impl rand::Rng) -> String {
 
 #[derive(Debug)]
 enum DistrictSplitResult {
-    Alright(District),
+    Alright(District, (DistrictId, Vec<WorldPos>, Vec<LotId>)),
     NotEnoughPoints,
 
     NoBestLine,

@@ -24,7 +24,6 @@ pub struct ChunkCoord {
     pub x: i32,
     pub z: i32,
 }
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalPos {
     pub x: f32,
@@ -69,7 +68,7 @@ impl ChunkCoord {
         chunk_coord_to_id(self.x, self.z)
     }
     #[inline]
-    pub fn get_chunks_cross(&self) -> Vec<ChunkCoord> {
+    pub fn get_chunks_plus(&self) -> Vec<ChunkCoord> {
         vec![
             *self,
             self.offset(0, 1),
@@ -91,6 +90,28 @@ impl ChunkCoord {
             self.offset(-1, 1),
             self.offset(-1, -1),
         ]
+    }
+    #[inline]
+    pub fn get_chunks_in_distance(&self, distance: f64) -> Vec<ChunkCoord> {
+        let cs = chunk_size() as i64;
+        let radius_chunks = (distance / cs as f64).ceil() as i32;
+
+        let radius2 = (distance as i64) * (distance as i64);
+
+        let mut out = Vec::new();
+
+        for dz in -radius_chunks..=radius_chunks {
+            for dx in -radius_chunks..=radius_chunks {
+                let wx = dx as i64 * cs;
+                let wz = dz as i64 * cs;
+
+                if wx * wx + wz * wz <= radius2 {
+                    out.push(self.offset(dx, dz));
+                }
+            }
+        }
+
+        out
     }
 }
 impl LocalPos {

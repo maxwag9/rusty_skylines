@@ -39,7 +39,7 @@ elements:
     roundness: 0.5
   - !Text
     id: setting_text
-    x: 0.02
+    x: 0.00
     y: 0.04
     pt: 8.0
     color:

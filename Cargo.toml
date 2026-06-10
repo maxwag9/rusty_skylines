@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.7.15"
+version = "0.7.16"
 edition = "2024"
 
 [dependencies]
@@ -9,7 +9,7 @@ winit = { version = "0.31.0-beta.2", features = ["serde"] }
 wgpu = "29.0.3"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
-glam = { version = "0.33.0", features = ["serde"] }
+glam = { version = "0.33.1", features = ["serde"] }
 toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
 anyhow = "1.0.102"
@@ -24,21 +24,23 @@ serde_yaml = { version = "0.9.34" }
 wgpu_render_manager = "0.2.14"                          # HERE!
 earcutr = "0.5.0"
 clipper2-rust = "1.0.3"
-log = "0.4.30"
+log = "0.4.32"
 rayon = "1.12.0"
-cpal = "0.17.3"
+cpal = "0.18.1"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 wgpu_text = "29.0.3"
 sanitize-filename = "0.7.0-beta"
 image = "0.25.10"
 dirs = "6.0.0"
-chrono = "0.4.44"
+chrono = "0.4.45"
 strum_macros = "0.28.0"
 strum = "0.28.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
 rand_chacha = "0.10.0"
 gilrs = "0.11.2"
 rand_distr = "0.6.0"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
 
 [profile.fastdev]
 inherits = "release"      # start with release defaults

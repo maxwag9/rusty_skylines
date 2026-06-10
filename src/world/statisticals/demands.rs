@@ -1,7 +1,7 @@
-use crate::helpers::positions::WorldPos;
 use crate::resources::{DAYS_PER_YEAR, Time};
 use crate::world::buildings::buildings::{BuildingId, Buildings};
-use crate::world::buildings::zoning::{Tile, TileType, Zoning, ZoningType};
+use crate::world::buildings::zoning::{Zoning, ZoningType};
+use crate::world::statisticals::transports::TransportStats;
 use rand::rngs::ThreadRng;
 use rand::{Rng, RngExt};
 use rand_distr::{Distribution, Poisson};
@@ -455,12 +455,34 @@ impl Demography {
     fn update(&mut self, time: &Time) {
         self.education.update(time, self.population);
     }
+
+    pub fn get_random_age(&self, rng: &mut impl Rng) -> usize {
+        let total = self.age_groups.whole_population();
+
+        if total == 0 {
+            return 0;
+        }
+
+        let mut pick = rng.random_range(0..total);
+
+        for age in 0..MAX_AGE {
+            let count = self.age_groups.get(age);
+
+            if pick < count {
+                return age;
+            }
+
+            pick -= count;
+        }
+
+        0 // fallback (should never hit if totals are consistent)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ZoningDemand {
     pub demography: Demography, // BTW! This is ONE District!!
-
+    pub transport_stats: TransportStats,
     pub housing_capacity: u32,
     pub commercial_capacity: u32,
     pub industrial_capacity: u32,
@@ -487,10 +509,12 @@ pub struct ZoningDemand {
 
     pub prestige: f32,
 }
+
 impl ZoningDemand {
     pub fn new() -> Self {
         ZoningDemand {
             demography: Demography::new(),
+            transport_stats: TransportStats::new(),
 
             housing_capacity: 0,
             commercial_capacity: 0,
@@ -618,14 +642,7 @@ impl ZoningDemand {
             return;
         };
         let tiles = lot.get_tiles();
-        let story_area: f64 = tiles
-            .values()
-            .filter_map(|tile| match tile {
-                Tile::Square(TileType::House) => Some(1.0),
-                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points)),
-                _ => None,
-            })
-            .sum();
+        let story_area: f64 = lot.get_floor_area();
         let max_people = building.current_level_params().max_people(story_area);
         let zoning_type = lot.zoning_type;
         let Some(district) = zoning.zoning_storage.get_mut_district(lot.district_id) else {
@@ -652,14 +669,7 @@ impl ZoningDemand {
             return;
         };
         let tiles = lot.get_tiles();
-        let story_area: f64 = tiles
-            .values()
-            .filter_map(|tile| match tile {
-                Tile::Square(TileType::House) => Some(1.0),
-                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points)),
-                _ => None,
-            })
-            .sum();
+        let story_area: f64 = lot.get_floor_area();
         let max_people = building.current_level_params().max_people(story_area);
         let zoning_type = lot.zoning_type;
         let Some(district) = zoning.zoning_storage.get_mut_district(lot.district_id) else {
@@ -672,6 +682,16 @@ impl ZoningDemand {
             ZoningType::Commercial => district.zoning_demand.commercial_capacity -= max_people,
             ZoningType::Industrial => district.zoning_demand.industrial_capacity -= max_people,
             ZoningType::Office => district.zoning_demand.office_capacity -= max_people,
+        }
+    }
+
+    pub fn demand_from_zoning_type(&self, zoning_type: ZoningType) -> f32 {
+        match zoning_type {
+            ZoningType::None => 0.0,
+            ZoningType::Residential => self.residential,
+            ZoningType::Commercial => self.commercial,
+            ZoningType::Industrial => self.industrial,
+            ZoningType::Office => self.office,
         }
     }
 }

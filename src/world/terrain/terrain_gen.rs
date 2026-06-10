@@ -1,4 +1,4 @@
-#![allow(dead_code, unused_variables)]
+#![allow(dead_code, unused_variables, unused_assignments)]
 use crate::helpers::hsv::{HSV, hsv_to_rgb, lerp_hsv};
 use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};

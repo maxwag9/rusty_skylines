@@ -1,3 +1,4 @@
+use crate::resources::Time;
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
 use crate::world::statisticals::money::Economy;
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod demands;
 pub mod money;
 pub mod schedule;
+pub mod transports;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct CityState {
@@ -25,11 +27,12 @@ impl CityState {
 
     // Start of intercontinental district manager
 
-    pub fn update(&mut self, zoning: &mut Zoning, buildings: &Buildings) {
+    pub fn update(&mut self, time: &Time, zoning: &mut Zoning, buildings: &Buildings) {
         self.world_population = zoning
             .zoning_storage
             .iter_districts()
             .map(|d| d.zoning_demand.demography.population as u64)
-            .sum()
+            .sum();
+        self.schedule.update(time);
     }
 }

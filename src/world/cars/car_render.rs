@@ -1,6 +1,6 @@
 //! cars_render.rs
 
-use crate::helpers::positions::WorldPos;
+use crate::helpers::positions::{LocalPos, WorldPos};
 use crate::resources::Time;
 use crate::world::cars::car_player::conform_car_to_terrain;
 use crate::world::cars::car_structs::{CarId, CarStorage};
@@ -18,6 +18,7 @@ use crate::world::roads::roads::{LaneRef, RoadStorage};
 use bytemuck::{Pod, Zeroable};
 use glam::{Quat, Vec3};
 use rayon::iter::IntoParallelRefIterator;
+use tracing::error;
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
 #[repr(C)]
@@ -88,14 +89,15 @@ impl CarInstance {
 }
 
 #[derive(Clone)]
-enum CarChange {
+pub enum CarChange {
     Position(WorldPos),
     Quat(Quat),
     Velocity(Vec3),
     Snap(WorldPos, Quat, Vec3),
     PhysicalTrajectory(Option<CarTrajectory>),
     SignfindingTrajectory(Option<CarSignfindingTrajectory>),
-    LaneRef(Option<LaneRef>),
+    CurrentLane(Option<LaneRef>),
+    LastTurn(Option<SFTurnIdentification>),
 }
 
 fn interpolate_car(
@@ -120,7 +122,7 @@ fn interpolate_car(
     let traj = match &car.physical_trajectory {
         Some(t) => t,
         None => {
-            let (signfinding, physical) = make_new_trajectory(
+            let (signfinding, physical, cb) = match make_new_trajectory(
                 time,
                 car,
                 storage,
@@ -128,7 +130,27 @@ fn interpolate_car(
                 buildings,
                 zoning,
                 sf_options,
-            );
+            ) {
+                Ok(ok) => ok,
+                Err(e) => {
+                    error!("Make new trajectory failed for car_id {}: {:?}", car_id, e);
+                    (
+                        None,
+                        idle_trajectory(
+                            car,
+                            WorldPos::new(car.pos.chunk, LocalPos::zero()),
+                            time.sim_time(),
+                            0.5,
+                        ),
+                        None,
+                    )
+                }
+            };
+            if let Some(mut cb) = cb {
+                changes.push(CarChange::LastTurn(cb.last_turn.clone()));
+                changes.append(&mut cb.car_changes);
+            }
+
             if let Some(s) = signfinding {
                 changes.push(CarChange::SignfindingTrajectory(Some(s)));
             }
@@ -164,6 +186,7 @@ fn interpolate_car(
         changes.push(CarChange::Position(world_pos));
         changes.push(CarChange::Quat(rot));
         changes.push(CarChange::Velocity(vel));
+        changes.push(CarChange::CurrentLane(first.lane_ref));
         return changes;
     }
 
@@ -185,6 +208,13 @@ fn interpolate_car(
         changes.push(CarChange::Quat(rot));
         changes.push(CarChange::Velocity(vel));
         changes.push(CarChange::PhysicalTrajectory(None));
+        changes.push(CarChange::CurrentLane(last.lane_ref));
+
+        if traj.is_last_turn_of_sf_traj {
+            changes.push(CarChange::SignfindingTrajectory(None));
+            //changes.push(CarChange::LastTurn(None));
+        }
+
         return changes;
     }
 
@@ -225,7 +255,7 @@ fn interpolate_car(
     changes.push(CarChange::Position(world_pos));
     changes.push(CarChange::Quat(rot));
     changes.push(CarChange::Velocity(vel));
-    changes.push(CarChange::LaneRef(p0.lane_ref));
+    changes.push(CarChange::CurrentLane(p0.lane_ref));
 
     changes
 }
@@ -256,7 +286,8 @@ fn apply_car_changes(
                 }
                 CarChange::PhysicalTrajectory(traj) => car.physical_trajectory = traj,
                 CarChange::SignfindingTrajectory(traj) => car.signfinding_trajectory = traj,
-                CarChange::LaneRef(lane_ref) => lane_change = Some(lane_ref),
+                CarChange::CurrentLane(lane_ref) => lane_change = Some(lane_ref),
+                CarChange::LastTurn(last_turn) => car.last_turn = last_turn,
             }
         }
         conform_car_to_terrain(car, terrain, time.render_dt);
@@ -274,7 +305,7 @@ pub fn interpolate_cars(world: &mut World, variables: &Variables, settings: &Set
         let storage = car_subsystem.car_storage();
         storage.car_chunk_storage.close_car_ids().collect()
     };
-    let sf_options = SignFindingOptions::new(variables);
+    let sf_options = SignFindingOptions::new(variables, settings);
     // Calculate interpolation
     let changes: Vec<(CarId, Vec<CarChange>)> = {
         let storage = car_subsystem.car_storage();

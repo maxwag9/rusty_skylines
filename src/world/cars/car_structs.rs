@@ -2,7 +2,7 @@ use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::partitions::{Address, DestinationType};
-use crate::world::cars::signfinding::{CarSignfindingTrajectory, TurnIdentification};
+use crate::world::cars::signfinding::{CarSignfindingTrajectory, SFTurnIdentification};
 use crate::world::roads::road_structs::{PolyIdx, SegmentId};
 use crate::world::roads::roads::{LaneRef, RoadStorage};
 use glam::{Quat, Vec3};
@@ -381,7 +381,8 @@ impl CarStorage {
     }
 
     /// Spawn a car and register it in all three reverse-index maps.
-    pub fn spawn(&mut self, car: Car, chunk: ChunkCoord, road_storage: &RoadStorage) -> CarId {
+    pub fn spawn(&mut self, car: Car, road_storage: &RoadStorage) -> CarId {
+        let chunk = car.pos.chunk;
         let id = self.allocate_slot(car);
         // Chunk index.
         let dist = ChunkDistance::from_chunk_positions(self.center_chunk, chunk);
@@ -390,7 +391,7 @@ impl CarStorage {
 
         // Segment index – register immediately if the car starts on a segment.
         if let Some(car) = self.get(id) {
-            if let Some(LaneRef::Lane(lane_id, _)) = car.lane {
+            if let Some(LaneRef::Lane(lane_id, _)) = car.current_lane {
                 if let Some(seg_id) = road_storage.segment_of_lane(lane_id) {
                     self.car_lane_index.insert(id, seg_id);
                     self.segment_car_index.entry(seg_id).or_default().push(id);
@@ -498,7 +499,7 @@ impl CarStorage {
         };
 
         // Only meaningful while on a named segment lane.
-        let Some(LaneRef::Lane(lane_id, my_poly_idx)) = car.lane else {
+        let Some(LaneRef::Lane(lane_id, my_poly_idx)) = car.current_lane else {
             return Vec::new();
         };
 
@@ -520,7 +521,7 @@ impl CarStorage {
                 }
                 let other = self.get(cid)?;
                 // Only compare cars on the same lane (same direction).
-                let Some(LaneRef::Lane(other_lane, other_poly)) = other.lane else {
+                let Some(LaneRef::Lane(other_lane, other_poly)) = other.current_lane else {
                     return None;
                 };
                 if other_lane != lane_id {
@@ -557,7 +558,7 @@ impl CarStorage {
 
         // 2. Write the new lane onto the car.
         if let Some(car) = self.get_mut(car_id) {
-            car.lane = new_lane;
+            car.current_lane = new_lane;
         }
 
         // 3. Insert into new segment (only for segment lanes, not intersections).
@@ -947,10 +948,11 @@ pub struct Car {
     pub engine_rpm: f32,
     pub wheel_radius: f32,
 
-    pub lane: Option<LaneRef>, // current lane
+    pub current_lane: Option<LaneRef>, // current lane
+    //pub next_lane: Option<LaneRef>, // next lane if known
     pub destination_addr: Option<Address>,
 
-    pub last_turn: Option<TurnIdentification>,
+    pub last_turn: Option<SFTurnIdentification>,
 
     pub spawn_time: SimTime,
 
@@ -980,11 +982,9 @@ impl Default for Car {
             decel: 10.0,
             throttle: 0.0,
             brake: 0.0,
-            lane: None,
+            current_lane: None,
             destination_addr: Some(Address {
                 destination: DestinationType::Building(0),
-                partition: 0,
-                district: 0,
             }),
             last_turn: None,
             spawn_time: 0.0,

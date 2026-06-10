@@ -35,7 +35,7 @@ impl Default for Schedule {
             commercial_trip_rate: 0.0,
             industrial_trip_rate: 0.0,
 
-            traffic_multiplier: 0.0,
+            traffic_multiplier: 0.01,
             pedestrian_multiplier: 0.0,
 
             parking_demand: 0.0,

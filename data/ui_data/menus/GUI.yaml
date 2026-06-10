@@ -1,9 +1,5 @@
 name: GUI
 layers:
-  - name: gui2
-    order: 3
-    elements: [ ]
-    editing_tool: false
   - name: gui
     order: 2
     elements:
@@ -114,7 +110,8 @@ layers:
         anchor: TopLeft
       - !Text
         id: non_educated_population_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.86
         pt: 10.0
         color:
@@ -125,7 +122,8 @@ layers:
         text: 'Non Educated Population: {non_educated_population}'
       - !Text
         id: low_educated_population_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.88
         pt: 10.0
         color:
@@ -136,8 +134,9 @@ layers:
         text: 'Low Educated Population: {low_educated_population}'
       - !Text
         id: medium_educated_population_text
-        x: 0.90
-        y: 0.90
+        actions: [ ]
+        x: 0.9
+        y: 0.9
         pt: 10.0
         color:
           - 1.0
@@ -147,7 +146,8 @@ layers:
         text: 'Medium Educated Population: {medium_educated_population}'
       - !Text
         id: highly_educated_population_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.92
         pt: 10.0
         color:
@@ -156,10 +156,10 @@ layers:
           - 1.0
           - 0.9
         text: 'Highly Educated Population: {highly_educated_population}'
-
       - !Text
         id: housing_capacity_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.77
         pt: 10.0
         color:
@@ -170,7 +170,8 @@ layers:
         text: 'Housing Capacity: {housing_capacity}'
       - !Text
         id: commercial_capacity_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.79
         pt: 10.0
         color:
@@ -181,7 +182,8 @@ layers:
         text: 'Commercial Capacity: {commercial_capacity}'
       - !Text
         id: industrial_capacity_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.81
         pt: 10.0
         color:
@@ -192,7 +194,8 @@ layers:
         text: 'Industrial Capacity: {industrial_capacity}'
       - !Text
         id: office_capacity_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.83
         pt: 10.0
         color:
@@ -201,10 +204,10 @@ layers:
           - 1.0
           - 0.9
         text: 'Office Capacity: {office_capacity}'
-
       - !Text
         id: prestige_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.65
         pt: 10.0
         color:
@@ -215,7 +218,8 @@ layers:
         text: 'Prestige: {prestige}'
       - !Text
         id: residential_attractiveness_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.68
         pt: 10.0
         color:
@@ -226,8 +230,9 @@ layers:
         text: 'Residential Attractiveness: {residential_attractiveness}'
       - !Text
         id: commercial_attractiveness_text
-        x: 0.90
-        y: 0.70
+        actions: [ ]
+        x: 0.9
+        y: 0.7
         pt: 10.0
         color:
           - 1.0
@@ -237,7 +242,8 @@ layers:
         text: 'Commercial Attractiveness: {commercial_attractiveness}'
       - !Text
         id: industrial_attractiveness_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.72
         pt: 10.0
         color:
@@ -248,7 +254,8 @@ layers:
         text: 'Industrial Attractiveness: {industrial_attractiveness}'
       - !Text
         id: office_attractiveness_text
-        x: 0.90
+        actions: [ ]
+        x: 0.9
         y: 0.74
         pt: 10.0
         color:
@@ -257,7 +264,6 @@ layers:
           - 1.0
           - 0.9
         text: 'Office Attractiveness: {office_attractiveness}'
-
       - !Rect
         id: set_none_zone
         actions:
@@ -515,13 +521,12 @@ layers:
           active: true
           pressable: true
           editable: true
-
       - !Rect
         id: set_cursor_to_destruction
         actions:
           - on:r set(cursor_mode, Destruction)
           - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
-        x: 0.657968747
+        x: 0.65796876
         y: 0.96428573
         w: 0.02
         h: 0.02
@@ -659,4 +664,8 @@ layers:
           active: true
           pressable: true
           editable: true
+    editing_tool: false
+  - name: gui2
+    order: 3
+    elements: [ ]
     editing_tool: false

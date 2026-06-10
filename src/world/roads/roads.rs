@@ -11,14 +11,11 @@
 //! - Every node is an intersection with attachable traffic controls
 //! - Mutable operations must occur outside simulation ticks
 
-// ============================================================================
-// ID Newtypes
-// ============================================================================
-
 use crate::data::Settings;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
+use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::cars::partitions::{Address, DestinationType, PartitionStorage};
@@ -60,8 +57,6 @@ pub struct Arm {
     half_width: f32,
     /// Length of this arm/corridor
     pub corridor_length: f32,
-    /// Whether the segment points toward this node (end == node_id)
-    points_to_node: bool, // TO/DO: SUS!
 
     incoming_lanes: Vec<LaneId>,
     outgoing_lanes: Vec<LaneId>,
@@ -79,7 +74,6 @@ impl Arm {
         direction: Vec3,
         half_width: f32,
         corridor_length: f32,
-        points_to_node: bool,
     ) -> Self {
         Self {
             segment_id: segment,
@@ -87,7 +81,6 @@ impl Arm {
             direction: direction.normalize_or_zero(),
             half_width,
             corridor_length,
-            points_to_node,
             incoming_lanes: Vec::new(),
             outgoing_lanes: Vec::new(),
             building_travel_times: HashMap::new(),
@@ -144,36 +137,31 @@ impl Arm {
 
     pub fn travel_time_for_address(
         &self,
-        partitions: &PartitionStorage,
+        buildings: &Buildings,
         zoning: &ZoningStorage,
         address: &Address,
     ) -> Option<ExponentialMovingAverage> {
-        if let Some(tt) = self.travel_time_for_destination(&address.destination) {
-            Some(tt.clone())
-        } else if let Some(tt) = self.travel_time_for_partition(partitions, address.partition) {
-            Some(tt)
-        } else if let Some(tt) = self.travel_time_for_district(zoning, address.district) {
-            Some(tt)
-        } else {
-            None
-        }
+        self.travel_time_for_destination(&address.destination)
+            .cloned()
+            .or_else(|| {
+                address
+                    .partition(&buildings.storage)
+                    .and_then(|p| self.travel_time_for_partition(&buildings.partitions.storage, p))
+            })
+            .or_else(|| {
+                address
+                    .district(&buildings.storage, zoning)
+                    .and_then(|d| self.travel_time_for_district(zoning, d))
+            })
     }
     pub fn travel_time_for_address_f32(
         &self,
-        partitions: &PartitionStorage,
+        buildings: &Buildings,
         zoning: &ZoningStorage,
         address: &Address,
     ) -> f32 {
-        self.travel_time_for_destination(&address.destination)
+        self.travel_time_for_address(buildings, zoning, address)
             .map(|tt| tt.get())
-            .or_else(|| {
-                self.travel_time_for_partition(partitions, address.partition)
-                    .map(|tt| tt.get())
-            })
-            .or_else(|| {
-                self.travel_time_for_district(zoning, address.district)
-                    .map(|tt| tt.get())
-            })
             .unwrap_or(f32::MAX)
     }
     // === Getters ===
@@ -194,10 +182,6 @@ impl Arm {
 
     pub fn half_width(&self) -> f32 {
         self.half_width
-    }
-
-    pub fn points_to_node(&self) -> bool {
-        self.points_to_node
     }
 
     pub fn incoming_lanes(&self) -> &[LaneId] {
@@ -234,14 +218,14 @@ impl Arm {
     /// Sort lanes by lane index (rightmost first for proper turn ordering)
     pub fn sort_lanes_by_index(&mut self, storage: &RoadStorage) {
         self.incoming_lanes.sort_by(|a, b| {
-            let idx_a = storage.lane(a).lane_index();
-            let idx_b = storage.lane(b).lane_index();
+            let idx_a = storage.lane(*a).lane_index();
+            let idx_b = storage.lane(*b).lane_index();
             idx_b.cmp(&idx_a) // Descending (rightmost first)
         });
 
         self.outgoing_lanes.sort_by(|a, b| {
-            let idx_a = storage.lane(a).lane_index();
-            let idx_b = storage.lane(b).lane_index();
+            let idx_a = storage.lane(*a).lane_index();
+            let idx_b = storage.lane(*b).lane_index();
             idx_a.cmp(&idx_b) // Ascending (rightmost first for outgoing)
         });
     }
@@ -375,7 +359,7 @@ impl Node {
     // TODO: No way found should activate compass mode (wait no... Not here, but whoever calls this function should do it!)
     pub fn ranked_arms_for_address(
         &self,
-        partitions: &PartitionStorage,
+        buildings: &Buildings,
         zoning: &ZoningStorage,
         address: &Address,
     ) -> Vec<(&Arm, f32)> {
@@ -385,13 +369,17 @@ impl Node {
             .map(|arm| {
                 (
                     arm,
-                    arm.travel_time_for_address_f32(partitions, zoning, address),
+                    arm.travel_time_for_address_f32(buildings, zoning, address),
                 )
             })
             .collect();
 
         ranked.sort_by(|a, b| a.1.total_cmp(&b.1));
         ranked
+    }
+    #[inline]
+    pub fn arm_for_segment(&self, segment_id: SegmentId) -> Option<&Arm> {
+        self.arms.iter().find(|arm| arm.segment_id == segment_id)
     }
     pub fn _version(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
@@ -476,8 +464,8 @@ impl Node {
         self.incoming_lanes.iter().chain(self.outgoing_lanes.iter())
     }
     #[inline]
-    pub fn node_lane(&self, node_lane_id: NodeLaneId) -> &NodeLane {
-        &self.node_lanes.get(node_lane_id as usize).unwrap()
+    pub fn node_lane(&self, node_lane_id: NodeLaneId) -> Option<&NodeLane> {
+        self.node_lanes.get(node_lane_id as usize)
     }
     #[inline]
     pub fn _attached_controls(&self) -> &[AttachedControl] {
@@ -590,7 +578,7 @@ impl Segment {
         let mut forward = 0;
         let mut backward = 0;
         for lane_id in &self.lanes {
-            let lane = storage.lane(lane_id);
+            let lane = storage.lane(*lane_id);
             if lane.from_node() == self.start {
                 forward += 1;
             } else {
@@ -837,7 +825,7 @@ impl LaneGeometry {
         }
     }
 
-    pub fn closest_point_to(&self, pos: &WorldPos) -> (WorldPos, f64, Vec3, PolyIdx) {
+    pub fn closest_point_to(&self, pos: WorldPos) -> (WorldPos, f64, Vec3, PolyIdx) {
         debug_assert!(self.points.len() >= 2);
 
         let mut best_point = self.points[0];
@@ -845,7 +833,7 @@ impl LaneGeometry {
         let mut best_idx: PolyIdx = 0;
 
         for (i, point) in self.points.iter().enumerate() {
-            let dist = point.distance_to(*pos);
+            let dist = point.distance_to(pos);
             if dist <= best_dist {
                 best_dist = dist;
                 best_point = *point;
@@ -973,8 +961,8 @@ impl RoadStorage {
         id
     }
     pub fn segment_of_lane(&self, lane_id: LaneId) -> Option<SegmentId> {
-        match self.lane_exists(&lane_id) {
-            true => Some(self.lane(&lane_id).segment()),
+        match self.lane_exists(lane_id) {
+            true => Some(self.lane(lane_id).segment()),
             false => None,
         }
     }
@@ -1105,7 +1093,7 @@ impl RoadStorage {
         let seg_node_a_id = segment.start();
         let seg_node_b_id = segment.end();
         for lane_id in segment.lanes.iter() {
-            let lane = self.lane(lane_id);
+            let lane = self.lane(*lane_id);
             if lane.from == seg_node_a_id && lane.to == seg_node_b_id {
                 right_lanes += 1;
             } else {
@@ -1176,7 +1164,10 @@ impl RoadStorage {
     pub fn segment(&self, id: SegmentId) -> &Segment {
         &self.segments[id.0 as usize]
     }
-
+    #[inline]
+    pub fn segment_safe(&self, id: SegmentId) -> Option<&Segment> {
+        self.segments.get(id.index())
+    }
     #[inline]
     pub fn segment_mut(&mut self, id: SegmentId) -> &mut Segment {
         &mut self.segments[id.0 as usize]
@@ -1300,12 +1291,20 @@ impl RoadStorage {
     }
 
     #[inline]
-    pub fn lane(&self, id: &LaneId) -> &Lane {
-        &self.lanes[id.0 as usize]
+    pub fn lane(&self, id: LaneId) -> &Lane {
+        &self.lanes[id.index()]
     }
-
     #[inline]
-    pub fn lane_exists(&self, id: &LaneId) -> bool {
+    pub fn lane_safe(&self, id: LaneId) -> Option<&Lane> {
+        self.lanes.get(id.index())
+    }
+    #[inline]
+    /// Gives the lane back only if it exists and is active.
+    pub fn active_lane(&self, id: LaneId) -> Option<&Lane> {
+        self.lanes.get(id.index()).filter(|lane| lane.is_enabled())
+    }
+    #[inline]
+    pub fn lane_exists(&self, id: LaneId) -> bool {
         self.lanes.get(id.raw() as usize).is_some()
     }
 
@@ -1445,11 +1444,11 @@ impl RoadStorage {
     }
 
     /// Expensive!
-    pub fn closest_lane_point_to(&self, pos: &WorldPos) -> Option<(WorldPos, f64, Vec3, PolyIdx)> {
+    pub fn closest_lane_point_to(&self, pos: WorldPos) -> Option<(WorldPos, f64, Vec3, PolyIdx)> {
         let mut best: Option<(WorldPos, f64, Vec3, PolyIdx)> = None;
         for segment_id in self.segment_ids_touching_chunk(pos.chunk) {
             let segment = self.segment(segment_id);
-            for lane_id in segment.lanes() {
+            for &lane_id in segment.lanes() {
                 let lane = self.lane(lane_id);
                 if lane.is_disabled() {
                     continue;
@@ -1622,22 +1621,47 @@ impl RoadStorage {
         }
     }
 
-    pub fn lane_ref_closest_to_pos(&self, pos: &WorldPos) -> LaneRef {
-        let segment_ids = self.segment_ids_touching_chunk(pos.chunk);
+    pub fn lane_ref_closest_to_pos(&self, pos: WorldPos) -> Option<LaneRef> {
+        let chunk = pos.chunk;
 
+        // Stage 1: only current chunk
+        if let Some(r) = self.search_lane_ref_in_chunks(pos, std::iter::once(chunk)) {
+            return Some(r);
+        }
+
+        // Stage 2: broader search (3x3)
+        let broader_chunks = chunk.get_chunks_3x3();
+        self.search_lane_ref_in_chunks(pos, broader_chunks)
+    }
+
+    fn search_lane_ref_in_chunks<I>(&self, pos: WorldPos, chunks: I) -> Option<LaneRef>
+    where
+        I: IntoIterator<Item = ChunkCoord>,
+    {
         let mut best_dist = f64::INFINITY;
         let mut best_ref = None;
 
-        // Check all lanes in nearby segments
+        let mut segment_ids = Vec::new();
+
+        for chunk in chunks {
+            segment_ids.extend(self.segment_ids_touching_chunk(chunk));
+        }
+
         for &seg_id in &segment_ids {
             let Some(segment) = self.segments.get(seg_id.index()) else {
                 continue;
             };
+            if !segment.is_enabled() {
+                continue;
+            }
 
             for &lane_id in &segment.lanes {
                 let Some(lane) = self.lanes.get(lane_id.index()) else {
                     continue;
                 };
+                if lane.is_disabled() {
+                    continue;
+                }
 
                 let (_, dist, _, poly_idx) = lane.geometry().closest_point_to(pos);
 
@@ -1648,7 +1672,6 @@ impl RoadStorage {
             }
         }
 
-        // Check all node lanes connected to nearby segments
         for node_id in segment_ids.iter().flat_map(|&seg_id| {
             self.segments
                 .get(seg_id.index())
@@ -1657,8 +1680,15 @@ impl RoadStorage {
             let Some(node) = self.node(node_id) else {
                 continue;
             };
+            if !node.is_enabled() {
+                continue;
+            }
 
             for node_lane in node.node_lanes() {
+                if !node_lane.is_enabled() {
+                    continue;
+                }
+
                 let (_, dist, _, poly_idx) = node_lane.geometry().closest_point_to(pos);
 
                 if dist < best_dist {
@@ -1668,7 +1698,7 @@ impl RoadStorage {
             }
         }
 
-        best_ref.unwrap_or(LaneRef::Lane(LaneId(0), 0))
+        best_ref
     }
 
     // ONLY in preview!!
@@ -2669,11 +2699,9 @@ pub fn apply_road_command(
             if node_id.raw() as usize >= storage.node_count() {
                 return CommandResult::InvalidReference;
             }
-
             let arms = gather_arms(storage, road_types, *node_id, gizmo);
 
             storage.node_mut(*node_id).arms = arms;
-
             build_intersection_at_node(
                 terrain,
                 storage,
@@ -2684,6 +2712,10 @@ pub fn apply_road_command(
                 settings,
                 gizmo,
             );
+            // Twice is correct
+            let arms = gather_arms(storage, road_types, *node_id, gizmo);
+
+            storage.node_mut(*node_id).arms = arms;
             CommandResult::Ok
         }
         RoadCommand::UpgradeSegmentBegin {
@@ -2948,7 +2980,10 @@ pub fn apply_command(
                     build_intersection_at_node(
                         terrain, storage, road_types, node_id, &params, clear, settings, gizmo,
                     );
+                    // Twice is correct
+                    let arms = gather_arms(storage, road_types, node_id, gizmo);
 
+                    storage.node_mut(node_id).arms = arms;
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
@@ -3120,7 +3155,7 @@ fn generate_destruction_preview(
         lanes: impact
             .lanes
             .into_iter()
-            .map(|id| (id, roads.road_manager.roads.lane(&id).clone()))
+            .map(|id| (id, roads.road_manager.roads.lane(id).clone()))
             .collect(),
         nodes_needing_regen: impact
             .nodes_needing_regen

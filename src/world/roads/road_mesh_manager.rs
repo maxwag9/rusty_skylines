@@ -192,7 +192,7 @@ fn mesh_segment(
     let mut max_lane: Option<(i8, LaneId)> = None;
 
     for &lane_id in segment.lanes() {
-        let lane = storage.lane(&lane_id);
+        let lane = storage.lane(lane_id);
         if lane.is_disabled() {
             continue;
         }
@@ -219,7 +219,7 @@ fn mesh_segment(
 
     // 1. Draw lane surfaces
     for (_idx, lane_id) in &lane_data {
-        let geom = storage.lane(&lane_id).geometry();
+        let geom = storage.lane(**&lane_id).geometry();
         let width = road_type.lane_width;
         let edges = make_ribbon_edges(gizmo, geom, width, 0.0, start_clip, end_clip);
         build_ribbon_mesh(
@@ -242,7 +242,7 @@ fn mesh_segment(
 
     // 2. Draw sidewalks on outer edges
     if let Some((_idx, lane_id)) = min_lane {
-        let geom = storage.lane(&lane_id).geometry();
+        let geom = storage.lane(lane_id).geometry();
         let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
         let width = road_type.sidewalk_width;
         let edges = make_ribbon_edges(gizmo, geom, width, offset, start_clip, end_clip);
@@ -302,7 +302,7 @@ fn mesh_segment(
     }
 
     if let Some((_idx, lane_id)) = max_lane {
-        let geom = storage.lane(&lane_id).geometry();
+        let geom = storage.lane(lane_id).geometry();
         let offset = road_type.lane_width * 0.5 + road_type.sidewalk_width * 0.5;
 
         let width = road_type.sidewalk_width;
@@ -365,7 +365,7 @@ fn mesh_segment(
     // 3. Draw median if needed
     if min_lane.is_some() && max_lane.is_some() && road_type.median_width > 0.1 {
         if let Some((_lane_idx, lane_id)) = lane_data.iter().find(|(i, _)| *i == 1) {
-            let geom = storage.lane(&lane_id).geometry();
+            let geom = storage.lane(**&lane_id).geometry();
             let offset = -road_type.lane_width * 0.5;
 
             let width = road_type.median_width;
@@ -757,7 +757,7 @@ pub fn build_ribbon_mesh(
         right_pos.local.y += height;
 
         // UV calculation: u based on arc length, v spans the width
-        let u = lane_geom.lengths[i] as f32 * uv_config.0 as f32;
+        let u = lane_geom.lengths[i] as f32 * uv_config.0;
         let v_min = 0.0;
         let v_max = width * uv_config.1;
 
@@ -898,7 +898,7 @@ pub fn build_vertical_face(
             high_res_height,
         );
         p_top.local.y += top_height;
-        let u = ref_geom.lengths[i] as f32 * uv_config.0 as f32;
+        let u = ref_geom.lengths[i] as f32 * uv_config.0;
         let v_h = (top_height - bottom_height).abs() * uv_config.1;
 
         // Bottom vertex
@@ -1047,7 +1047,7 @@ impl RoadMeshManager {
                     .iter()
                     .chain(node.outgoing_lanes().iter())
                 {
-                    let lane = storage.lane(lane_id);
+                    let lane = storage.lane(*lane_id);
                     connected_lanes_info.push((lane.lane_index(), road_type.lane_width));
                 }
 
@@ -1197,7 +1197,7 @@ fn compute_cap_direction(
         .iter()
         .chain(node.outgoing_lanes().iter())
     {
-        let lane = storage.lane(lane_id);
+        let lane = storage.lane(*lane_id);
         let pts = &lane.geometry().points;
 
         let dir = if lane.from_node() == node_id {

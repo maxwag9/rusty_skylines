@@ -20,7 +20,6 @@ use wgpu::*;
 use wgpu_render_manager::generator::{TextureKey, TextureParams};
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
-
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct PropVertex {
@@ -160,6 +159,8 @@ impl GpuPropInstance {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PropInstance {
+    pub id: Option<PropInstanceId>,
+    pub archetype_id: Option<ArchetypeId>,
     pub pos: WorldPos,
     pub rotation_y_rad: f32,
     pub scale: f32,
@@ -178,8 +179,8 @@ pub struct Mesh {
 
 pub struct PropChunk {
     pub chunk_coord: ChunkCoord,
-    pub archetype_instances: HashMap<String, Vec<PropInstance>>,
-    pub gpu_instance_buffers: HashMap<String, (Buffer, u32)>,
+    pub archetype_instances: HashMap<ArchetypeId, Vec<PropInstanceId>>,
+    pub gpu_instance_buffers: HashMap<ArchetypeId, (Buffer, u32)>,
 }
 
 impl PropChunk {
@@ -194,10 +195,31 @@ impl PropChunk {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SavePropChunk {
     pub chunk_coord: ChunkCoord,
-    pub archetype_instances: HashMap<String, Vec<PropInstance>>,
+    pub archetype_instances: HashMap<ArchetypeId, Vec<PropInstanceId>>,
 }
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedPropInstance {
+    pub archetype: String,
+    pub pos: WorldPos,
+    pub rotation_y_rad: f32,
+    pub scale: f32,
+    pub color: [f32; 4],
+    pub seed: u32,
+    pub variant: u16,
+    pub wind_strength: f32,
+}
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub struct SavedProps {
+    pub instances: Vec<SavedPropInstance>,
+}
+pub type PropInstanceId = u64;
+pub type ArchetypeId = u32;
 pub struct Props {
-    pub props: HashMap<String, Prop>,
+    archetypes: Vec<Option<Archetype>>,
+    archetypes_free: Vec<ArchetypeId>,
+    archetype_to_id: HashMap<String, ArchetypeId>,
+    prop_instances: Vec<Option<PropInstance>>,
+    prop_instances_free: Vec<PropInstanceId>,
     pub chunks: HashMap<ChunkCoord, PropChunk>,
     pub prev_models: HashMap<u64, [[f32; 4]; 4]>, // key: hash of (chunk, archetype, index)
     device: Device,
@@ -206,87 +228,196 @@ pub struct Props {
 impl Props {
     pub fn new(device: &Device) -> Self {
         Self {
-            props: HashMap::new(),
+            archetypes: vec![],
+            archetypes_free: vec![],
+            archetype_to_id: HashMap::new(),
+            prop_instances: vec![],
+            prop_instances_free: vec![],
             chunks: HashMap::new(),
             prev_models: HashMap::new(),
             device: device.clone(),
         }
     }
 
-    pub fn get_props(&self) -> Vec<SavePropChunk> {
-        let mut prop_chunks: Vec<SavePropChunk> = Vec::new();
+    pub fn get_props(&self) -> SavedProps {
+        let mut instances = Vec::new();
 
-        for chunk in self.chunks.values() {
-            prop_chunks.push(SavePropChunk {
-                chunk_coord: chunk.chunk_coord,
-                archetype_instances: chunk.archetype_instances.clone(),
-            })
+        for prop in self.prop_instances.iter().flatten() {
+            let archetype_name = self.archetypes[prop.archetype_id.unwrap() as usize]
+                .as_ref()
+                .unwrap()
+                .name
+                .clone();
+
+            instances.push(SavedPropInstance {
+                archetype: archetype_name,
+                pos: prop.pos,
+                rotation_y_rad: prop.rotation_y_rad,
+                scale: prop.scale,
+                color: prop.color,
+                seed: prop.seed,
+                variant: prop.variant,
+                wind_strength: prop.wind_strength,
+            });
         }
 
-        prop_chunks
+        SavedProps { instances }
     }
-    pub fn load_props(&mut self, chunks: Vec<SavePropChunk>) {
-        for chunk in chunks {
-            for archetype in chunk.archetype_instances.keys() {
-                let key = &archetype.to_lowercase();
-                if !self.is_registered(key) {
-                    if let Some(prop) = make_prop(key, &self.device) {
-                        self.register_prop(key.clone(), prop);
-                    }
+    pub fn clear(&mut self) {
+        self.archetypes.clear();
+        self.archetypes_free.clear();
+        self.archetype_to_id.clear();
+        self.prop_instances.clear();
+        self.prop_instances_free.clear();
+        self.chunks.clear();
+        self.prev_models.clear();
+    }
+    pub fn load_props(&mut self, saved: SavedProps) {
+        self.clear();
+
+        for prop in saved.instances {
+            let key = &prop.archetype.to_lowercase();
+            if !self.is_registered(key) {
+                if let Some(archetype) = make_archetype(key, &self.device) {
+                    self.register_archetype(archetype);
                 }
             }
-            self.chunks.insert(
-                chunk.chunk_coord,
-                PropChunk {
-                    chunk_coord: chunk.chunk_coord,
-                    archetype_instances: chunk.archetype_instances.clone(),
-                    gpu_instance_buffers: HashMap::new(),
-                },
-            );
+            let Some(archetype_id) = self.archetype_to_id.get(key).copied() else {
+                continue;
+            };
+            let prop_instance = PropInstance {
+                id: None,
+                archetype_id: Some(archetype_id),
+                pos: prop.pos,
+                rotation_y_rad: prop.rotation_y_rad,
+                scale: prop.scale,
+                color: prop.color,
+                seed: prop.seed,
+                variant: prop.variant,
+                wind_strength: prop.wind_strength,
+            };
+            self.add_instance(prop.pos.chunk, prop_instance);
         }
     }
-    pub fn register_prop(&mut self, key: impl Into<String>, prop: Prop) {
-        self.props.insert(key.into(), prop);
-    }
+    pub fn register_archetype(&mut self, archetype: Archetype) -> ArchetypeId {
+        let name = archetype.name.clone();
+        let id = if let Some(id) = self.archetypes_free.pop() {
+            self.archetypes[id as usize] = Some(archetype);
+            id
+        } else {
+            let id = self.archetypes.len() as ArchetypeId;
+            self.archetypes.push(Some(archetype));
+            id
+        };
 
+        self.archetype_to_id.insert(name, id);
+
+        id
+    }
+    pub fn get_archetype_id_for_name(&self, name: &str) -> Option<ArchetypeId> {
+        self.archetype_to_id.get(name).copied()
+    }
     pub fn is_registered(&self, key: impl Into<String>) -> bool {
-        self.props.contains_key(&key.into())
+        self.archetype_to_id.contains_key(&key.into())
     }
 
     pub fn add_instance(
         &mut self,
         chunk_coord: ChunkCoord,
-        archetype: &str,
-        instance: PropInstance,
-    ) {
+        mut instance: PropInstance,
+    ) -> PropInstanceId {
         let chunk = self
             .chunks
             .entry(chunk_coord)
             .or_insert_with(|| PropChunk::new(chunk_coord));
-        chunk
+
+        let chunk_instances = chunk
             .archetype_instances
-            .entry(archetype.to_string())
-            .or_default()
-            .push(instance);
+            .entry(instance.archetype_id.unwrap()) // It SHOULD panic to ensure I coded it correctly.
+            .or_default();
+
+        let id = if let Some(id) = self.prop_instances_free.pop() {
+            instance.id = Some(id);
+            self.prop_instances[id as usize] = Some(instance);
+            id
+        } else {
+            let id = self.prop_instances.len() as PropInstanceId;
+            instance.id = Some(id);
+            self.prop_instances.push(Some(instance));
+            id
+        };
+
+        chunk_instances.push(id);
+
+        id
     }
+
+    pub fn remove_instance(&mut self, chunk_coord: ChunkCoord, id: PropInstanceId) -> bool {
+        let Some(chunk) = self.chunks.get_mut(&chunk_coord) else {
+            return false;
+        };
+        let Some(instance) = self
+            .prop_instances
+            .get(id as usize)
+            .and_then(|p| p.as_ref())
+        else {
+            return false;
+        };
+        let Some(chunk_instances) = chunk
+            .archetype_instances
+            .get_mut(&instance.archetype_id.unwrap())
+        else {
+            // It SHOULD panic, because instances in the instance list 100% have an archetype id
+            return false;
+        };
+        chunk_instances.retain(|&cid| cid != id);
+
+        let Some(slot) = self.prop_instances.get_mut(id as usize) else {
+            return false;
+        };
+
+        self.prop_instances_free.push(id);
+        if slot.is_none() {
+            // Slot was empty anyway
+            return false;
+        }
+
+        *slot = None;
+
+        true
+    }
+    pub fn remove_instances(&mut self, chunk_coord: ChunkCoord, ids: &[PropInstanceId]) {
+        for &id in ids.iter() {
+            self.remove_instance(chunk_coord, id);
+        }
+    }
+    #[inline]
+    pub fn get_instance(&self, id: PropInstanceId) -> Option<&PropInstance> {
+        self.prop_instances.get(id as usize)?.as_ref()
+    }
+    // NO get instance mut!! Edits must happen through helper functions here!
 
     pub fn clear_chunk(&mut self, chunk_coord: ChunkCoord) {
         self.chunks.remove(&chunk_coord);
     }
 
-    pub fn clear_archetype_in_chunk(&mut self, chunk_coord: ChunkCoord, archetype: &str) {
+    pub fn clear_archetype_in_chunk(&mut self, chunk_coord: ChunkCoord, archetype_id: ArchetypeId) {
         if let Some(chunk) = self.chunks.get_mut(&chunk_coord) {
-            chunk.archetype_instances.remove(archetype);
-            chunk.gpu_instance_buffers.remove(archetype);
+            chunk.archetype_instances.remove(&archetype_id);
+            chunk.gpu_instance_buffers.remove(&archetype_id);
         }
     }
 
-    fn instance_key(chunk: ChunkCoord, archetype: &str, index: usize) -> u64 {
+    fn instance_key(
+        chunk: ChunkCoord,
+        archetype_id: ArchetypeId,
+        id: Option<PropInstanceId>,
+    ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         chunk.hash(&mut hasher);
-        archetype.hash(&mut hasher);
-        index.hash(&mut hasher);
+        archetype_id.hash(&mut hasher);
+        id.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -303,17 +434,24 @@ impl Props {
             .map(|visible_chunk| visible_chunk.coords.chunk_coord)
         {
             if let Some(chunk) = self.chunks.get_mut(&coord) {
-                for (archetype, instances) in chunk.archetype_instances.iter() {
+                for (archetype_id, instances) in chunk.archetype_instances.iter() {
                     let count = instances.len() as u32;
                     if count == 0 {
-                        chunk.gpu_instance_buffers.remove(archetype);
+                        chunk.gpu_instance_buffers.remove(archetype_id);
                         continue;
                     }
 
                     let mut gpu_instances: Vec<GpuPropInstance> =
                         Vec::with_capacity(instances.len());
 
-                    for (i, inst) in instances.iter().enumerate() {
+                    for inst in instances.iter() {
+                        let Some(inst) = self
+                            .prop_instances
+                            .get(*inst as usize)
+                            .and_then(|inst| inst.as_ref())
+                        else {
+                            continue;
+                        };
                         // Convert to render-space position relative to camera
                         let render_pos = inst.pos.to_relative_pos(camera.eye_world());
                         let model = Mat4::from_scale_rotation_translation(
@@ -322,7 +460,7 @@ impl Props {
                             render_pos,
                         );
 
-                        let key = Self::instance_key(coord, archetype, i);
+                        let key = Self::instance_key(coord, *archetype_id, inst.id);
                         let prev_model_array = self
                             .prev_models
                             .get(&key)
@@ -347,7 +485,7 @@ impl Props {
                     let bytes = bytemuck::cast_slice(&gpu_instances);
 
                     // Recreate buffer if needed (double size for growth)
-                    let recreate = match chunk.gpu_instance_buffers.get(archetype) {
+                    let recreate = match chunk.gpu_instance_buffers.get(archetype_id) {
                         None => true,
                         Some((_, existing_count)) => *existing_count < count,
                     };
@@ -355,18 +493,29 @@ impl Props {
                     if recreate {
                         let capacity = (count.max(1) * 2) as BufferAddress
                             * size_of::<GpuPropInstance>() as BufferAddress;
+                        let name = if let Some(name) = self
+                            .archetypes
+                            .get(*archetype_id as usize)
+                            .and_then(|a| a.as_ref())
+                            .and_then(|a| Some(a.name.clone()))
+                        {
+                            name
+                        } else {
+                            archetype_id.to_string()
+                        };
                         let buffer = device.create_buffer(&BufferDescriptor {
-                            label: Some(&format!("prop_inst_{}_{:?}", archetype, coord)),
+                            label: Some(&format!("prop_inst_{}_{:?}", name, coord)),
                             size: capacity,
                             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                             mapped_at_creation: false,
                         });
                         chunk
                             .gpu_instance_buffers
-                            .insert(archetype.clone(), (buffer, count));
+                            .insert(archetype_id.clone(), (buffer, count));
                     }
 
-                    if let Some((buf, stored_count)) = chunk.gpu_instance_buffers.get_mut(archetype)
+                    if let Some((buf, stored_count)) =
+                        chunk.gpu_instance_buffers.get_mut(archetype_id)
                     {
                         queue.write_buffer(buf, 0, bytes);
                         *stored_count = count;
@@ -379,30 +528,33 @@ impl Props {
     pub fn place_props(&mut self, terrain: &Terrain, input: &mut Input, device: &Device) {
         match &terrain.cursor.mode {
             CursorMode::Props => {
-                let Some(key) = &terrain.cursor.prop_name else {
+                let Some(name) = &terrain.cursor.prop_name else {
                     return;
                 };
-                let key = &key.to_lowercase();
-                if !self.is_registered(key) {
-                    if let Some(prop) = make_prop(key, device) {
-                        self.register_prop(key.clone(), prop);
+                let name = &name.to_lowercase();
+                if !self.is_registered(name) {
+                    if let Some(archetype) = make_archetype(name, device) {
+                        self.register_archetype(archetype);
                     }
                 }
                 if input.action_repeat("Place Prop") {
                     if let Some(picked_point) = &terrain.last_picked {
-                        self.add_instance(
-                            picked_point.chunk.coords.chunk_coord,
-                            key,
-                            PropInstance {
-                                pos: picked_point.pos,
-                                scale: rand::random_range(0.8..1.5),
-                                rotation_y_rad: rand::random_range(0.0..5.0),
-                                seed: rand::random(),
-                                color: [1.0, 1.0, 1.0, 1.0],
-                                wind_strength: 0.2,
-                                variant: 0,
-                            },
-                        );
+                        if let Some(&archetype_id) = self.archetype_to_id.get(name) {
+                            self.add_instance(
+                                picked_point.chunk.coords.chunk_coord,
+                                PropInstance {
+                                    id: None,
+                                    archetype_id: Some(archetype_id),
+                                    pos: picked_point.pos,
+                                    scale: rand::random_range(0.8..1.5),
+                                    rotation_y_rad: rand::random_range(0.0..5.0),
+                                    seed: rand::random(),
+                                    color: [1.0, 1.0, 1.0, 1.0],
+                                    wind_strength: 0.2,
+                                    variant: 0,
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -410,15 +562,20 @@ impl Props {
         }
     }
 
-    pub fn place_prop(&mut self, position: WorldPos, prop_name: &str, prop_instance: PropInstance) {
-        let key = &prop_name.to_lowercase();
+    pub fn place_prop(
+        &mut self,
+        position: WorldPos,
+        archetype_name: &str,
+        mut prop_instance: PropInstance,
+    ) -> PropInstanceId {
+        let key = &archetype_name.to_lowercase();
         if !self.is_registered(key) {
-            if let Some(prop) = make_prop(key, &self.device) {
-                self.register_prop(key.clone(), prop);
+            if let Some(archetype) = make_archetype(key, &self.device) {
+                self.register_archetype(archetype);
             }
         }
-
-        self.add_instance(position.chunk, key, prop_instance);
+        prop_instance.archetype_id = Some(self.archetype_to_id.get(key).copied().unwrap());
+        self.add_instance(position.chunk, prop_instance)
     }
 
     /// Normal rendering pass
@@ -465,23 +622,27 @@ impl Props {
             ));
             let lod_level = select_lod(dist);
 
-            for (archetype, instances) in &chunk.archetype_instances {
+            for (&archetype_id, instances) in &chunk.archetype_instances {
                 if instances.is_empty() {
                     continue;
                 }
 
-                let Some(prop) = self.props.get(archetype) else {
+                let Some(archetype) = self
+                    .archetypes
+                    .get(archetype_id as usize)
+                    .and_then(|a| a.as_ref())
+                else {
                     continue;
                 };
-                let Some(mesh) = prop.get_lod(lod_level) else {
+                let Some(mesh) = archetype.get_lod(lod_level) else {
                     continue;
                 };
-                let Some((inst_buf, count)) = chunk.gpu_instance_buffers.get(archetype) else {
+                let Some((inst_buf, count)) = chunk.gpu_instance_buffers.get(&archetype_id) else {
                     continue;
                 };
 
                 render_manager.render(
-                    &prop.texture_keys,
+                    &archetype.texture_keys,
                     shader_path.as_path(),
                     &opts,
                     &[&pipelines.buffers.camera],
@@ -538,23 +699,27 @@ impl Props {
             ));
             let lod_level = select_lod(dist);
 
-            for (archetype, instances) in &chunk.archetype_instances {
+            for (&archetype_id, instances) in &chunk.archetype_instances {
                 if instances.is_empty() {
                     continue;
                 }
 
-                let Some(prop) = self.props.get(archetype) else {
+                let Some(archetype) = self
+                    .archetypes
+                    .get(archetype_id as usize)
+                    .and_then(|a| a.as_ref())
+                else {
                     continue;
                 };
-                let Some(mesh) = prop.get_lod(lod_level) else {
+                let Some(mesh) = archetype.get_lod(lod_level) else {
                     continue;
                 };
-                let Some((inst_buf, count)) = chunk.gpu_instance_buffers.get(archetype) else {
+                let Some((inst_buf, count)) = chunk.gpu_instance_buffers.get(&archetype_id) else {
                     continue;
                 };
 
                 render_manager.render(
-                    &prop.texture_keys,
+                    &archetype.texture_keys,
                     shader.as_path(),
                     &opts,
                     &[&pipelines.buffers.camera, shadow_mat_buffer],
@@ -568,7 +733,8 @@ impl Props {
         }
     }
 }
-struct Prop {
+struct Archetype {
+    name: String,
     lod0: Option<Mesh>,
     lod1: Option<Mesh>,
     lod2: Option<Mesh>,
@@ -576,7 +742,7 @@ struct Prop {
     texture_keys: [TextureKey; 4], // 4 slots for textures in the shader.
 }
 
-impl Prop {
+impl Archetype {
     /// Get mesh for requested LOD level, falling back to nearest available
     pub fn get_lod(&self, level: u32) -> Option<&Mesh> {
         match level {
@@ -624,7 +790,7 @@ fn select_lod(dist: f64) -> u32 {
     }
 }
 
-fn make_prop(key: &str, device: &Device) -> Option<Prop> {
+fn make_archetype(key: &str, device: &Device) -> Option<Archetype> {
     match key.to_lowercase().as_str() {
         "oak" | "oak_tree" => make_oak_tree(device),
         "pine" | "pine_tree" => make_pine_tree(device),
@@ -632,8 +798,9 @@ fn make_prop(key: &str, device: &Device) -> Option<Prop> {
     }
 }
 
-fn make_oak_tree(device: &Device) -> Option<Prop> {
-    Some(Prop {
+fn make_oak_tree(device: &Device) -> Option<Archetype> {
+    Some(Archetype {
+        name: "oak".to_string(),
         lod0: Some(make_oak_lod(device, 0)),
         lod1: Some(make_oak_lod(device, 1)),
         lod2: Some(make_oak_lod(device, 2)),
@@ -677,8 +844,9 @@ fn make_oak_tree(device: &Device) -> Option<Prop> {
     })
 }
 
-fn make_pine_tree(device: &Device) -> Option<Prop> {
-    Some(Prop {
+fn make_pine_tree(device: &Device) -> Option<Archetype> {
+    Some(Archetype {
+        name: "pine".to_string(),
         lod0: Some(make_pine_lod(device, 0)),
         lod1: Some(make_pine_lod(device, 1)),
         lod2: Some(make_pine_lod(device, 2)),

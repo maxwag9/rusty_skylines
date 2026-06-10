@@ -270,7 +270,7 @@ fn compute_max_corridor_for_arm(arm: &Arm, storage: &RoadStorage) -> f32 {
     let mut min_available = MAX_CORRIDOR_LENGTH;
 
     for lane_id in all_lanes {
-        let lane = storage.lane(&lane_id);
+        let lane = storage.lane(lane_id);
         let pts = lane.polyline();
 
         if pts.len() < 3 {
@@ -971,7 +971,7 @@ fn carve_lanes_with_polygon(
             .collect();
 
         for lane_id in all_lanes {
-            let lane = storage.lane(&lane_id);
+            let lane = storage.lane(lane_id);
             if !lane.is_enabled() {
                 continue;
             }
@@ -1494,7 +1494,7 @@ fn compute_intersection_geometry(
 
     let arms = node.arms();
 
-    if arms.len() < 2 {
+    if arms.len() < 1 {
         // It's not an intersection you bigot! WTF are you doing here??!
         return None;
     }
@@ -1746,13 +1746,12 @@ pub fn gather_arms(
             };
             let lane_width = road_type.lane_width;
             let sidewalk_width = road_type.sidewalk_width;
-            let points_to_node = segment.end() == node_id;
 
             let lane_ids: Vec<LaneId> = segment
                 .lanes()
                 .iter()
                 .copied()
-                .filter(|id| storage.lane(id).is_enabled())
+                .filter(|id| storage.lane(*id).is_enabled())
                 .collect();
 
             if lane_ids.is_empty() {
@@ -1769,11 +1768,11 @@ pub fn gather_arms(
             let lane_count = lane_ids.len();
             let half_width = lane_count as f32 * lane_width * 0.5 + sidewalk_width;
 
-            let mut arm = Arm::new(seg_id, bearing, direction, half_width, 10.0, points_to_node); // 10.0 is a placeholder
+            let mut arm = Arm::new(seg_id, bearing, direction, half_width, 10.0); // 10.0 is a placeholder
 
             for lane_id in &lane_ids {
-                let lane = storage.lane(lane_id);
-                let flows_to_node = lane.lane_index() > 0;
+                let lane = storage.lane(*lane_id);
+                let flows_to_node = lane.to_node() == node_id;
                 if flows_to_node {
                     arm.add_incoming_lane(*lane_id);
                 } else {
@@ -1846,7 +1845,7 @@ fn build_node_lanes_for_intersection(
         let segment_ends_here = segment.end() == node_id;
 
         for lane_id in segment.lanes() {
-            let lane = storage.lane(lane_id);
+            let lane = storage.lane(*lane_id);
             if !lane.is_enabled() {
                 continue;
             }
@@ -1947,7 +1946,7 @@ fn build_node_lanes_for_intersection(
     let mut node_lanes = Vec::new();
     let lane_idx_base = storage.node_lane_count_for_node(node_id);
     for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
-        let in_lane = storage.lane(in_id);
+        let in_lane = storage.lane(*in_id);
 
         for (out_id, out_node_idx, out_pt, out_dir) in &outgoing_lanes {
             // Skip same lane
@@ -1956,10 +1955,10 @@ fn build_node_lanes_for_intersection(
             }
 
             // Skip same segment (no U-turns within same road)
-            let out_lane = storage.lane(out_id);
-            if in_lane.segment() == out_lane.segment() {
-                continue;
-            }
+            let out_lane = storage.lane(*out_id);
+            // if in_lane.segment() == out_lane.segment() {
+            //     continue;
+            // }
 
             // Angle-based filtering
             // in_dir points INTO the intersection (direction of incoming traffic)
@@ -1971,9 +1970,9 @@ fn build_node_lanes_for_intersection(
             let dot = in_dir.dot(*out_dir);
 
             // Filter out U-turns and very sharp turns
-            if dot < -0.7 {
-                continue;
-            }
+            // if dot < -0.99 {
+            //     continue;
+            // }
 
             // Compute turn geometry
             let chord = in_pt.distance_to(*out_pt);
@@ -2165,7 +2164,7 @@ fn segment_direction_at_node(
     gizmo: &mut Gizmo,
 ) -> Option<Vec3> {
     let lane_id = *segment.lanes().first()?;
-    let pts = storage.lane(&lane_id).polyline();
+    let pts = storage.lane(lane_id).polyline();
 
     if pts.len() < 2 {
         return None;

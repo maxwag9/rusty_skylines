@@ -99,10 +99,15 @@ impl Simulation {
             &world.terrain,
             &mut world.zoning,
             &mut world.buildings,
+            world.cars.car_storage_mut(),
+            &world.city_state.schedule,
             &world.time,
+            &world.roads.road_manager.roads,
             &renderer.road_renderer.mesh_manager.road_edge_storage,
         );
-        world.city_state.update(&mut world.zoning, &world.buildings);
+        world
+            .city_state
+            .update(&world.time, &mut world.zoning, &world.buildings);
     }
 }
 
