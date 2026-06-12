@@ -18,18 +18,55 @@ use winit::dpi::PhysicalSize;
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LineVtxRender {
+pub struct ThinLineVtxRender {
     pub pos: [f32; 3],
     pub color: [f32; 4],
 }
-
-impl LineVtxRender {
+impl ThinLineVtxRender {
     pub fn layout<'a>() -> VertexBufferLayout<'a> {
         const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x4];
         VertexBufferLayout {
-            array_stride: size_of::<LineVtxRender>() as u64,
+            array_stride: size_of::<ThinLineVtxRender>() as u64,
             step_mode: VertexStepMode::Vertex,
             attributes: ATTRS,
+        }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ThickLineVtxRender {
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+    pub end_sign: f32,  // -1.0 for start side, +1.0 for end side
+    pub side_sign: f32, // -1.0 or +1.0
+    pub width_px: f32,
+    pub color: [f32; 4],
+}
+impl ThickLineVtxRender {
+    pub fn layout<'a>() -> VertexBufferLayout<'a> {
+        const ATTRS: &[VertexAttribute] = &vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Float32, 4 => Float32, 5 => Float32x4];
+        VertexBufferLayout {
+            array_stride: size_of::<ThickLineVtxRender>() as u64,
+            step_mode: VertexStepMode::Vertex,
+            attributes: ATTRS,
+        }
+    }
+    #[inline]
+    pub fn new(
+        start: [f32; 3],
+        end: [f32; 3],
+        end_sign: f32,
+        side_sign: f32,
+        width_px: f32,
+        color: [f32; 4],
+    ) -> Self {
+        Self {
+            start,
+            end,
+            end_sign,
+            side_sign,
+            width_px,
+            color,
         }
     }
 }

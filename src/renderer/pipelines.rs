@@ -197,7 +197,6 @@ pub struct PostFxTextures {
     pub rt_full: TextureView,
     pub rt_full_history: TextureView,
     pub rt_instance: TextureView,
-    pub dummy_msaa_rt_instance: TextureView,
     pub linear_depth_full: TextureView,
     pub motion_full: TextureView,
     pub dummy_motion: TextureView,
@@ -345,7 +344,6 @@ impl Pipelines {
         let motion_full = create_motion_texture(device, config, 1.0, 1);
         let dummy_motion = create_motion_texture(device, config, 1.0, msaa_samples);
 
-        let dummy_msaa_rt_instance = create_instance_texture(device, config, 1.0, msaa_samples);
         let rt_instance = create_instance_texture(device, config, 1.0, 1);
 
         let gtao_history = [
@@ -359,7 +357,6 @@ impl Pipelines {
             normal_half,
             gtao_blurred_half,
             gtao_history,
-            dummy_msaa_rt_instance,
             rt_instance,
             rt_raw_half,
             rt_full,
@@ -850,7 +847,7 @@ pub fn make_new_camera_uniforms(
         camera_local: [eye.local.x, eye.local.y, eye.local.z],
         chunk_size: chunk_size() as f32,
         camera_chunk: [eye.chunk.x, eye.chunk.z],
-        _pad_cam: [0, 0],
+        screen_size: [config.width as f32, config.height as f32],
 
         prev_camera_local: [prev_eye.local.x, prev_eye.local.y, prev_eye.local.z],
         frame_index: time_system.frame_count as u32,

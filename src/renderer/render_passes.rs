@@ -4,10 +4,10 @@ use crate::helpers::paths::shader_dir;
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::pipelines::{DEPTH_FORMAT, Pipelines};
-use crate::renderer::props::Props;
+use crate::renderer::props::{GpuPropInstance, PropVertex, Props};
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::textures::material_keys::*;
-use crate::ui::vertex::{LineVtxRender, TextVtxRender, Vertex};
+use crate::ui::vertex::{TextVtxRender, ThickLineVtxRender, ThinLineVtxRender, Vertex};
 use crate::world::buildings::buildings::{BuildingRenderer, BuildingVertex, Buildings};
 use crate::world::camera::Camera;
 use crate::world::cars::car_mesh::CarVertex;
@@ -86,7 +86,7 @@ pub fn make_color_attachment<'a>(
 /// Special-case instance attachment factory.
 /// If msaa_samples > 1 it will write into `msaa_instance_view` and resolve into `resolved_instance_view`.
 /// clear_color controls whether the resolved instance texture is cleared (Some) or left intact (None).
-pub fn make_instance_attachment<'a>(
+pub fn make_motion_attachment<'a>(
     msaa_instance_view: &'a TextureView,
     resolved_instance_view: &'a TextureView,
     msaa_samples: u32,
@@ -161,7 +161,7 @@ pub fn create_world_pass<'a>(
         if clear { Some(Color::BLACK) } else { None },
     );
 
-    let motion_attachment = make_instance_attachment(
+    let motion_attachment = make_motion_attachment(
         &pipelines.post_fx.dummy_motion, // dummy MSAA view (must match msaa_samples)
         &pipelines.post_fx.motion_full,  // resolved motion texture
         msaa_samples,
@@ -182,59 +182,34 @@ pub fn create_world_pass<'a>(
     })
 }
 
-/// Instanced pass: re-uses existing resolved color/normal and instance textures (does NOT clear them).
-/// This uses the dummy MSAA view for the instance slot if needed so sample-counts match.
-/// IMPORTANT: pass `clear_instance_target = false` to avoid wiping instance texture.
-pub fn create_instanced_pass<'a>(
+pub fn create_id_pass<'a>(
     encoder: &'a mut CommandEncoder,
     pipelines: &'a Pipelines,
-    config: &'a RenderPassConfig,
-    msaa_samples: u32,
 ) -> RenderPass<'a> {
-    // For the instanced pass we want to LOAD previous color/normal contents (no clear).
-    let color_attachment = make_color_attachment(
-        &pipelines.msaa.hdr,
-        &pipelines.resolved.hdr,
-        msaa_samples,
-        None, // load existing hdr
-    );
-
-    let normal_attachment = make_color_attachment(
-        &pipelines.msaa.normal,
-        &pipelines.resolved.normal,
-        msaa_samples,
-        None, // load existing normals
-    );
-
-    let instance_attachment = make_instance_attachment(
-        &pipelines.post_fx.dummy_msaa_rt_instance, // dummy MSAA view (must match msaa_samples)
-        &pipelines.post_fx.rt_instance,            // resolved R32Uint instance texture
-        msaa_samples,
-        true,
-    );
-
-    let motion_attachment = make_instance_attachment(
-        &pipelines.post_fx.dummy_motion, // dummy MSAA view (must match msaa_samples)
-        &pipelines.post_fx.motion_full,  // resolved motion texture
-        msaa_samples,
-        false,
-    );
+    let id_attachment = RenderPassColorAttachment {
+        view: &pipelines.post_fx.rt_instance,
+        resolve_target: None, // IMPORTANT: no resolve
+        ops: Operations {
+            load: LoadOp::Clear(Color::BLACK),
+            store: StoreOp::Store,
+        },
+        depth_slice: None,
+    };
 
     encoder.begin_render_pass(&RenderPassDescriptor {
-        label: Some("Instanced World Pass"),
-        color_attachments: &[
-            Some(color_attachment),
-            Some(normal_attachment),
-            Some(instance_attachment),
-            Some(motion_attachment),
-        ],
-        depth_stencil_attachment: Some(make_depth_attachment(&pipelines.msaa.depth, config, false)),
-        timestamp_writes: None,
+        label: Some("Instance ID Pass"),
+        color_attachments: &[Some(id_attachment)],
+        depth_stencil_attachment: None,
+        // Some(make_depth_attachment(
+        //     &pipelines.buffers,
+        //     &RenderPassConfig::from_settings(settings),
+        //     false,
+        // )),
         occlusion_query_set: None,
+        timestamp_writes: None,
         multiview_mask: None,
     })
 }
-
 // RENDER PASSES
 
 pub fn render_sky<'a>(
@@ -608,7 +583,8 @@ pub fn render_gizmo<'a>(
     let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let targets = color_and_normals_and_motion_targets(pipelines);
     let batches = gizmo.collect_batches(camera, pipelines, queue);
-    let (thin_count, thick_count, text_count) = gizmo.update_buffers(device, queue, &batches);
+    let (thin_count, thick_count, filled_count, text_count) =
+        gizmo.update_buffers(device, queue, &batches);
 
     // Render thin lines with LineList
     if thin_count > 0 {
@@ -625,7 +601,7 @@ pub fn render_gizmo<'a>(
                     bias: Default::default(),
                 }),
                 msaa_samples,
-                vertex_layouts: Vec::from([LineVtxRender::layout()]),
+                vertex_layouts: Vec::from([ThinLineVtxRender::layout()]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
                 },
@@ -634,12 +610,41 @@ pub fn render_gizmo<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
-        pass.set_vertex_buffer(0, gizmo.gizmo_buffer.slice(..));
+        pass.set_vertex_buffer(0, gizmo.thin_buffer.slice(..));
         pass.draw(0..thin_count, 0..1);
     }
 
-    // Render thick lines and filled areas with TriangleList
+    // Render thick lines with TriangleList
     if thick_count > 0 {
+        render_manager.render_with_textures(
+            &[],
+            shader_dir().join("thick_lines.wgsl").as_path(),
+            &PipelineOptions {
+                topology: TriangleList,
+                depth_stencil: Some(DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                msaa_samples,
+                vertex_layouts: Vec::from([ThickLineVtxRender::layout()]),
+                fragment: FragmentOption::Default {
+                    targets: targets.clone(),
+                },
+                cull_mode: None,
+                ..Default::default()
+            },
+            &[&pipelines.buffers.camera],
+            pass,
+        );
+        pass.set_vertex_buffer(0, gizmo.thick_buffer.slice(..));
+        pass.draw(0..thick_count, 0..1);
+    }
+
+    // Render filled areas with TriangleList
+    if filled_count > 0 {
         render_manager.render_with_textures(
             &[],
             shader_dir().join("lines.wgsl").as_path(),
@@ -648,12 +653,12 @@ pub fn render_gizmo<'a>(
                 depth_stencil: Some(DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: Some(false),
-                    depth_compare: Some(CompareFunction::Always),
+                    depth_compare: Some(Always),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
                 msaa_samples,
-                vertex_layouts: Vec::from([LineVtxRender::layout()]),
+                vertex_layouts: Vec::from([ThinLineVtxRender::layout()]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
                 },
@@ -662,8 +667,8 @@ pub fn render_gizmo<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
-        pass.set_vertex_buffer(0, gizmo.thick_buffer.slice(..));
-        pass.draw(0..thick_count, 0..1);
+        pass.set_vertex_buffer(0, gizmo.filled_buffer.slice(..));
+        pass.draw(0..filled_count, 0..1);
     }
 
     // Render text in 3D
@@ -684,7 +689,7 @@ pub fn render_gizmo<'a>(
                 vertex_layouts: Vec::from([TextVtxRender::layout()]),
                 fragment: FragmentOption::Default { targets },
                 sampler: SamplerDescriptor {
-                    label: Some("text sampler"),
+                    label: Some("Text Sampler"),
                     address_mode_u: AddressMode::ClampToEdge,
                     address_mode_v: AddressMode::ClampToEdge,
                     address_mode_w: AddressMode::ClampToEdge,
@@ -716,12 +721,12 @@ pub fn render_cars<'a>(
     camera: &Camera,
     config: &RenderPassConfig,
 ) {
-    let pass = &mut create_instanced_pass(encoder, pipelines, config, settings.msaa_samples);
+    let pass = &mut create_world_pass(encoder, pipelines, config, settings.msaa_samples, false);
     let keys = cars_material_keys();
     let shader_path = shader_dir().join("car.wgsl");
     let shadow = make_shadow_option(settings, pipelines);
 
-    let targets = color_and_normals_and_instance_targets(pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
     // Cars
     render_manager.render(
         keys.as_slice(),
@@ -742,6 +747,72 @@ pub fn render_cars<'a>(
 
     car_renderer.render(pipelines, rt_subsystem, car_storage, camera, pass);
 }
+pub fn render_instance_ids<'a>(
+    pass: &mut RenderPass<'a>,
+    render_manager: &mut RenderManager,
+    pipelines: &Pipelines,
+    car_renderer: &mut CarRenderSubsystem,
+    settings: &Settings,
+    camera: &'a Camera,
+    props: &'a Props,
+    terrain: &'a Terrain,
+) {
+    let shader_path = shader_dir().join("car_instance_id.wgsl");
+
+    render_manager.render(
+        cars_material_keys().as_slice(),
+        shader_path.as_path(),
+        &PipelineOptions {
+            topology: TriangleList,
+            depth_stencil: None,
+            msaa_samples: 1, // IMPORTANT
+            vertex_layouts: vec![CarVertex::layout(), CarInstance::layout()],
+            cull_mode: Some(Face::Back),
+            fragment: FragmentOption::Default {
+                targets: vec![Some(ColorTargetState {
+                    format: TextureFormat::R32Uint,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            },
+            ..Default::default()
+        },
+        &[&pipelines.buffers.camera],
+        pass,
+    );
+
+    car_renderer.render_last(pass);
+    let shader_path = shader_dir().join("props_instance_id.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+    //let targets = color_and_normals_and_motion_targets(pipelines);
+
+    let opts = PipelineOptions {
+        topology: TriangleList,
+        depth_stencil: None,
+        msaa_samples: 1,
+        vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
+        cull_mode: Some(Face::Back),
+        fragment: FragmentOption::Default {
+            targets: vec![Some(ColorTargetState {
+                format: TextureFormat::R32Uint,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+        },
+        shadow: shadow.clone(),
+        ..Default::default()
+    };
+    props.render(
+        render_manager,
+        pass,
+        shader_path,
+        opts,
+        camera,
+        terrain,
+        pipelines,
+        settings,
+    );
+}
 
 pub fn render_props<'a>(
     encoder: &'a mut CommandEncoder,
@@ -755,15 +826,37 @@ pub fn render_props<'a>(
     queue: &Queue,
     config: &RenderPassConfig,
 ) {
-    let pass = &mut create_instanced_pass(encoder, pipelines, config, settings.msaa_samples);
+    let pass = &mut create_world_pass(encoder, pipelines, config, settings.msaa_samples, false);
+    let shader_path = shader_dir().join("props.wgsl");
+    let shadow = make_shadow_option(settings, pipelines);
+    let targets = color_and_normals_and_motion_targets(pipelines);
+
+    let opts = PipelineOptions {
+        topology: TriangleList,
+        depth_stencil: Some(depth_stencil(Default::default(), settings)),
+        msaa_samples: settings.msaa_samples,
+        vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
+        cull_mode: Some(Face::Back),
+        fragment: FragmentOption::Default {
+            targets: targets.clone(),
+        },
+        shadow: shadow.clone(),
+        ..Default::default()
+    };
     // Draw all props
-    props.render(render_manager, pass, camera, terrain, pipelines, settings);
+    props.render(
+        render_manager,
+        pass,
+        shader_path,
+        opts,
+        camera,
+        terrain,
+        pipelines,
+        settings,
+    );
 }
 
-pub(crate) fn make_shadow_option(
-    settings: &Settings,
-    pipelines: &Pipelines,
-) -> Option<ShadowOptions> {
+pub fn make_shadow_option(settings: &Settings, pipelines: &Pipelines) -> Option<ShadowOptions> {
     match settings.shadow_type {
         ShadowType::CSM => match settings.reversed_depth_z {
             true => Some(ShadowOptions {
@@ -809,32 +902,7 @@ fn color_and_normals_and_motion_targets(pipelines: &Pipelines) -> Vec<Option<Col
         }),
     ]
 }
-pub fn color_and_normals_and_instance_targets(
-    pipelines: &Pipelines,
-) -> Vec<Option<ColorTargetState>> {
-    vec![
-        Some(ColorTargetState {
-            format: pipelines.msaa.hdr.texture().format(),
-            blend: Some(BlendState::ALPHA_BLENDING),
-            write_mask: ColorWrites::ALL,
-        }),
-        Some(ColorTargetState {
-            format: pipelines.msaa.normal.texture().format(),
-            blend: None,
-            write_mask: ColorWrites::ALL,
-        }),
-        Some(ColorTargetState {
-            format: pipelines.post_fx.rt_instance.texture().format(),
-            blend: None,
-            write_mask: ColorWrites::ALL,
-        }),
-        Some(ColorTargetState {
-            format: pipelines.post_fx.motion_full.texture().format(),
-            blend: None,
-            write_mask: ColorWrites::ALL,
-        }),
-    ]
-}
+
 pub fn color_target(
     pipelines: &Pipelines,
     blend: Option<BlendState>,

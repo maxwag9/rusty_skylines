@@ -705,6 +705,17 @@ impl Renderer {
                 &self.queue,
             );
         });
+        let pass = &mut create_id_pass(encoder, &self.pipelines);
+        render_instance_ids(
+            pass,
+            &mut self.render_manager,
+            &self.pipelines,
+            &mut self.car_renderer,
+            settings,
+            camera,
+            &self.props,
+            terrain,
+        );
     }
     fn execute_gtao_pass(
         &mut self,

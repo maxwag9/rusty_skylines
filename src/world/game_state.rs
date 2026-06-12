@@ -172,30 +172,30 @@ impl GameState {
         props: &Props,
         target_version: Option<SaveVersion>,
     ) -> SaveResult {
-        let mut safe_name = sanitize(&self.current_save.name).to_string();
+        let safe_name = sanitize(&self.current_save.name).to_string();
 
-        if safe_name.is_empty() {
-            let base_name = "New World";
-            safe_name = base_name.to_string();
-
-            let mut path = saves_dir().join(format!("{}.rss", safe_name));
-
-            if path.exists() {
-                let mut i = 0;
-
-                loop {
-                    let candidate = format!("{base_name} {i}");
-                    path = saves_dir().join(format!("{}.rss", candidate));
-
-                    if !path.exists() {
-                        safe_name = candidate;
-                        break;
-                    }
-
-                    i += 1;
-                }
-            }
-        }
+        // if safe_name.is_empty() {
+        //     let base_name = "New World";
+        //     safe_name = base_name.to_string();
+        //
+        //     let mut path = saves_dir().join(format!("{}.rss", safe_name));
+        //
+        //     if path.exists() {
+        //         let mut i = 0;
+        //
+        //         loop {
+        //             let candidate = format!("{base_name} {i}");
+        //             path = saves_dir().join(format!("{}.rss", candidate));
+        //
+        //             if !path.exists() {
+        //                 safe_name = candidate;
+        //                 break;
+        //             }
+        //
+        //             i += 1;
+        //         }
+        //     }
+        // }
 
         let path = saves_dir().join(format!("{}.rss", safe_name));
 

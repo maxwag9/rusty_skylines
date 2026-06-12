@@ -3,11 +3,12 @@
 use crate::data::Settings;
 use crate::helpers::hsv::{HSV, depth_to_color, hsv_to_rgb};
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
+
 use crate::renderer::pipelines::Pipelines;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
 use crate::ui::ui_editor::Ui;
-use crate::ui::vertex::{LineVtxRender, LineVtxWorld, TextVtxRender};
+use crate::ui::vertex::{LineVtxWorld, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender};
 use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::{Zoning, point_in_polygon_xz};
 use crate::world::camera::Camera;
@@ -18,11 +19,15 @@ use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
-use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use tracing::error;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue, SurfaceConfiguration};
 use wgpu_text::glyph_brush::ab_glyph::{FontArc, PxScale, Rect};
-use wgpu_text::glyph_brush::{Extra, GlyphBrush, GlyphBrushBuilder, OwnedSection, Section, Text};
+use wgpu_text::glyph_brush::{
+    BrushAction, Extra, GlyphBrush, GlyphBrushBuilder, OwnedSection, Section, Text,
+};
 
 const CIRCLE_SEGMENT_COUNT: usize = 16;
 pub const DEBUG_DRAW_DURATION: f32 = 20.0; // Seconds
@@ -35,6 +40,7 @@ pub struct PendingGizmoRender {
     pub start_time: f64,
     pub filled: bool,
 }
+
 pub struct PendingGizmoTextRender {
     pub section: OwnedSection,
     pub center: WorldPos,
@@ -44,23 +50,87 @@ pub struct PendingGizmoTextRender {
     pub facing: Option<Vec3>,
     pub scale_with_cam: bool,
 }
+// impl Hash for PendingGizmoTextRender {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         // I hate Glyph brush
+//         for section_text in &self.section.text {
+//             section_text.text.hash(state);
+//
+//             section_text.font_id.0.hash(state);
+//
+//             section_text.scale.x.to_bits().hash(state);
+//             section_text.scale.y.to_bits().hash(state);
+//         }
+//
+//         self.section.screen_position.0.to_bits().hash(state);
+//         self.section.screen_position.1.to_bits().hash(state);
+//
+//         self.section.bounds.0.to_bits().hash(state);
+//         self.section.bounds.1.to_bits().hash(state);
+//
+//         self.section.layout.hash(state);
+//
+//
+//         self.center.hash(state);
+//         self.scale.to_bits().hash(state);
+//         for c in &self.color {
+//             c.to_bits().hash(state);
+//         }
+//         self.scale_with_cam.hash(state);
+//         match self.facing {
+//             Some(v) => {
+//                 v.x.to_bits().hash(state);
+//                 v.y.to_bits().hash(state);
+//                 v.z.to_bits().hash(state);
+//             }
+//             None => {
+//                 0u8.hash(state);
+//             }
+//         }
+//     }
+// }
+impl PendingGizmoTextRender {
+    pub fn glyph_cache_key(&self, raster_scale: f32) -> u64 {
+        let mut h = DefaultHasher::new();
+
+        self.section.screen_position.0.to_bits().hash(&mut h);
+        self.section.screen_position.1.to_bits().hash(&mut h);
+
+        self.section.bounds.0.to_bits().hash(&mut h);
+        self.section.bounds.1.to_bits().hash(&mut h);
+
+        self.section.layout.hash(&mut h);
+
+        raster_scale.to_bits().hash(&mut h);
+
+        for t in &self.section.text {
+            t.text.hash(&mut h);
+            t.font_id.0.hash(&mut h);
+        }
+
+        h.finish()
+    }
+}
 pub struct Gizmo {
     pub pending_renders: Vec<PendingGizmoRender>,
-    pub gizmo_buffer: Buffer,
+    pub thin_buffer: Buffer,
     pub thick_buffer: Buffer,
+    pub filled_buffer: Buffer,
     pub text_buffer: Buffer,
     total_game_time: f64,
-    pub brush: GlyphBrush<(), Extra>,
+    pub brush: GlyphBrush<GlyphQuad, Extra>,
     pub text_raster_factor: f32, // good start: 48.0
     pub text_raster_min: f32,    // good start: 8.0
     pub text_raster_max: f32,    // good start: 256.0
+    text_glyph_cache: HashMap<u64, Vec<GlyphQuad>>,
 }
 
 #[derive(Default)]
 pub struct GizmoBatches {
-    pub thin_vertices: Vec<LineVtxRender>,
-    pub thick_vertices: Vec<LineVtxRender>,
+    pub thin_vertices: Vec<ThinLineVtxRender>,
+    pub thick_vertices: Vec<ThickLineVtxRender>,
     pub text_vertices: Vec<TextVtxRender>,
+    pub filled_vertices: Vec<ThinLineVtxRender>,
 }
 impl Gizmo {
     pub fn new(
@@ -69,15 +139,21 @@ impl Gizmo {
         font_arc: &FontArc,
         msaa_samples: u32,
     ) -> Self {
-        let gizmo_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Gizmo VB"),
-            size: (size_of::<LineVtxRender>() * 2048) as u64,
+        let thin_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Gizmo Thin VB"),
+            size: (size_of::<ThinLineVtxRender>() * 2048) as u64,
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let filled_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Gizmo Filled VB"),
+            size: (size_of::<ThinLineVtxRender>() * 2048) as u64,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let thick_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Gizmo Custom Thickness VB"),
-            size: (size_of::<LineVtxRender>() * 2048) as u64,
+            label: Some("Gizmo Thick VB"),
+            size: (size_of::<ThickLineVtxRender>() * 2048) as u64,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -87,19 +163,22 @@ impl Gizmo {
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let brush: GlyphBrush<(), Extra> = GlyphBrushBuilder::using_font(font_arc.clone())
+        let brush: GlyphBrush<GlyphQuad, Extra> = GlyphBrushBuilder::using_font(font_arc.clone())
             .initial_cache_size((2048, 2048))
+            .cache_redraws(true)
             .build();
         Self {
             pending_renders: Vec::new(),
-            gizmo_buffer,
+            thin_buffer,
             thick_buffer,
+            filled_buffer,
             text_buffer,
             total_game_time: 0.0,
             brush,
             text_raster_factor: 2048.0,
             text_raster_min: 8.0,
             text_raster_max: 128.0,
+            text_glyph_cache: HashMap::new(),
         }
     }
     pub fn clear(&mut self) {
@@ -113,64 +192,90 @@ impl Gizmo {
         device: &Device,
         queue: &Queue,
         batches: &GizmoBatches,
-    ) -> (u32, u32, u32) {
+    ) -> (u32, u32, u32, u32) {
         let thin_count = batches.thin_vertices.len() as u32;
         let thick_count = batches.thick_vertices.len() as u32;
+        let filled_count = batches.filled_vertices.len() as u32;
         let text_count = batches.text_vertices.len() as u32;
+
         // Update thin line buffer
         if thin_count > 0 {
-            let byte_size = (batches.thin_vertices.len() * size_of::<LineVtxRender>()) as u64;
-            if byte_size > self.gizmo_buffer.size() {
-                let new_size = (self.gizmo_buffer.size() * 2).max(byte_size);
+            let byte_size = (batches.thin_vertices.len() * size_of::<ThinLineVtxRender>()) as u64;
+            if byte_size > self.thin_buffer.size() {
+                let new_size = (self.thin_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
-                    return (0, 0, 0);
+                    error!("Gizmo Thin Buffer tried to become larger than the max_buffer_size");
+                    return (0, 0, 0, 0);
                 }
-                self.gizmo_buffer = device.create_buffer(&BufferDescriptor {
-                    label: Some("Gizmo Thin Lines VB"),
+                self.thin_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("Gizmo Thin VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
             }
             queue.write_buffer(
-                &self.gizmo_buffer,
+                &self.thin_buffer,
                 0,
                 bytemuck::cast_slice(&batches.thin_vertices),
             );
         }
-
         // Update thick geometry buffer
         if thick_count > 0 {
-            let byte_size = (batches.thick_vertices.len() * size_of::<LineVtxRender>()) as u64;
+            let byte_size = (batches.thick_vertices.len() * size_of::<ThickLineVtxRender>()) as u64;
             if byte_size > self.thick_buffer.size() {
                 let new_size = (self.thick_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
-                    return (0, 0, 0);
+                    error!("Gizmo Thick Buffer tried to become larger than the max_buffer_size");
+                    return (0, 0, 0, 0);
                 }
                 self.thick_buffer = device.create_buffer(&BufferDescriptor {
-                    label: Some("Gizmo Thick Geometry VB"),
+                    label: Some("Gizmo Thick VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
             }
             queue.write_buffer(
+                // Error here
                 &self.thick_buffer,
                 0,
                 bytemuck::cast_slice(&batches.thick_vertices),
             );
         }
-
+        // Update filled buffer
+        if filled_count > 0 {
+            let byte_size = (batches.filled_vertices.len() * size_of::<ThinLineVtxRender>()) as u64;
+            if byte_size > self.filled_buffer.size() {
+                let new_size = (self.filled_buffer.size() * 2).max(byte_size);
+                if new_size > device.limits().max_buffer_size {
+                    error!("Gizmo Filled Buffer tried to become larger than the max_buffer_size");
+                    return (0, 0, 0, 0);
+                }
+                self.filled_buffer = device.create_buffer(&BufferDescriptor {
+                    label: Some("Gizmo Filled VB"),
+                    size: new_size,
+                    usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            queue.write_buffer(
+                &self.filled_buffer,
+                0,
+                bytemuck::cast_slice(&batches.filled_vertices),
+            );
+        }
         // Update text geometry buffer
         if text_count > 0 {
             let byte_size = (batches.text_vertices.len() * size_of::<TextVtxRender>()) as u64;
             if byte_size > self.text_buffer.size() {
                 let new_size = (self.text_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
-                    return (0, 0, 0);
+                    error!("Gizmo Text Buffer tried to become larger than the max_buffer_size");
+                    return (0, 0, 0, 0);
                 }
                 self.text_buffer = device.create_buffer(&BufferDescriptor {
-                    label: Some("Gizmo Text Geometry VB"),
+                    label: Some("Gizmo Text VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                     mapped_at_creation: false,
@@ -183,7 +288,7 @@ impl Gizmo {
             );
         }
 
-        (thin_count, thick_count, text_count)
+        (thin_count, thick_count, filled_count, text_count)
     }
 
     pub fn visualize_partitions(&mut self, buildings: &Buildings) {
@@ -1103,7 +1208,7 @@ impl Gizmo {
                     // Convert polyline to WorldPos
                     let points: &Vec<WorldPos> = lane.polyline();
 
-                    self.polyline(&points, color, 15.0, 0.0, 0.0);
+                    self.polyline(&points, color, 15.0, 10.0, 0.0);
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
@@ -1644,6 +1749,7 @@ impl Gizmo {
         }
     }
 
+    /// It works, but I am still mad at glyph_brush. Nothing personal, just pain.
     pub fn collect_batches(
         &mut self,
         camera: &Camera,
@@ -1652,173 +1758,181 @@ impl Gizmo {
     ) -> GizmoBatches {
         let mut batches = GizmoBatches::default();
         let eye = camera.eye_world();
-        let text_idx = 0;
+
         for render in self.pending_renders.iter_mut() {
             if render.filled {
-                // Triangulate filled area
                 batches
-                    .thick_vertices
+                    .filled_vertices
                     .extend(Self::triangulate_filled(&render.vertices, eye));
             } else if render.thickness > 0.0 {
-                // Generate thick line quads
-
                 batches.thick_vertices.extend(Self::generate_thick_lines(
                     &render.vertices,
                     render.thickness,
                     eye,
                 ));
-            } else {
-                let verts = RefCell::new(Vec::<TextVertex3D>::new());
-                if let Some(text) = &mut render.text {
-                    let distance = (camera.eye_world().distance_to(text.center) as f32).max(0.001);
-                    let world_scale = if text.scale_with_cam {
-                        text.scale * distance * camera.fov.to_radians().tan() * 0.001
-                    } else {
-                        text.scale
-                    };
-                    // Bigger factor = higher glyph resolution overall.
-                    // More distance = lower raster scale.
-                    // Bigger world text = higher raster scale.
-                    let raw = self.text_raster_factor * world_scale
-                        / (distance * camera.fov.to_radians().tan());
-                    let step = 2.0;
-                    let raster_scale = ((raw / step).round() * step)
-                        .clamp(self.text_raster_min, self.text_raster_max);
-                    // if text_idx == 0 {
-                    //     println!(
-                    //         "Raw: {}, FOV: {}, FOV.tan(): {}, Final Res: {}",
-                    //         raw,
-                    //         camera.fov,
-                    //         camera.fov.to_radians().tan(),
-                    //         raster_scale
-                    //     );
-                    // }
-                    // text_idx += 1;
-                    for t in text.section.text.iter_mut() {
-                        t.scale = PxScale::from(raster_scale);
-                    }
-                    let facing: Option<Vec3> = text.facing;
+            } else if let Some(text) = &mut render.text {
+                let distance = (camera.eye_world().distance_to(text.center) as f32).max(0.001);
 
-                    let section = text.section.to_borrowed();
+                let world_scale = if text.scale_with_cam {
+                    text.scale * distance * camera.fov.to_radians().tan() * 0.01
+                } else {
+                    text.scale
+                };
 
-                    self.brush.queue(&section);
+                let raw = (self.text_raster_factor * world_scale)
+                    .clamp(self.text_raster_min, self.text_raster_max);
 
-                    let color = section
-                        .text
-                        .first()
-                        .map(|t| t.extra.color)
-                        .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                let step = 2.0;
+                let raster_scale =
+                    ((raw / step).round() * step).clamp(self.text_raster_min, self.text_raster_max);
 
-                    let glyphs = RefCell::new(Vec::<GlyphQuad>::new());
-
-                    let min_x = Cell::new(f32::INFINITY);
-                    let min_y = Cell::new(f32::INFINITY);
-                    let max_x = Cell::new(f32::NEG_INFINITY);
-                    let max_y = Cell::new(f32::NEG_INFINITY);
-
-                    let _ = self.brush.process_queued(
-                        |rect, tex_data| {
-                            let width = rect.width();
-                            let height = rect.height();
-
-                            queue.write_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &pipelines.resolved.atlas.texture(),
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d {
-                                        x: rect.min[0],
-                                        y: rect.min[1],
-                                        z: 0,
-                                    },
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                tex_data,
-                                wgpu::TexelCopyBufferLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(width),
-                                    rows_per_image: Some(height),
-                                },
-                                wgpu::Extent3d {
-                                    width,
-                                    height,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-                        },
-                        |v| {
-                            let px = v.pixel_coords;
-                            let uv = v.tex_coords;
-
-                            min_x.set(min_x.get().min(px.min.x));
-                            min_y.set(min_y.get().min(px.min.y));
-                            max_x.set(max_x.get().max(px.max.x));
-                            max_y.set(max_y.get().max(px.max.y));
-
-                            glyphs.borrow_mut().push(GlyphQuad { px, uv });
-                        },
-                    );
-
-                    let center_x = (min_x.get() + max_x.get()) * 0.5;
-                    let center_y = (min_y.get() + max_y.get()) * 0.5;
-                    let glyphs = glyphs.into_inner();
-
-                    let forward = if let Some(dir) = facing {
-                        dir.normalize()
-                    } else {
-                        text.center.direction_to(camera.eye_world()).normalize()
-                    };
-
-                    let world_up = if forward.dot(Vec3::Y).abs() > 0.99 {
-                        Vec3::X
-                    } else {
-                        Vec3::Y
-                    };
-
-                    let right = world_up.cross(forward).normalize();
-                    let up = right.cross(forward).normalize();
-                    let world_to_geom = world_scale / raster_scale;
-
-                    for glyph in glyphs {
-                        let px = glyph.px;
-                        let uv = glyph.uv;
-
-                        let x0 = (px.min.x - center_x) * world_to_geom;
-                        let y0 = (px.min.y - center_y) * world_to_geom;
-                        let x1 = (px.max.x - center_x) * world_to_geom;
-                        let y1 = (px.max.y - center_y) * world_to_geom;
-
-                        let p0 = text.center.add_vec3(right * x0 + up * y0);
-                        let p1 = text.center.add_vec3(right * x1 + up * y0);
-                        let p2 = text.center.add_vec3(right * x1 + up * y1);
-                        let p3 = text.center.add_vec3(right * x0 + up * y1);
-
-                        let uv0 = [uv.min.x, uv.min.y];
-                        let uv1 = [uv.max.x, uv.min.y];
-                        let uv2 = [uv.max.x, uv.max.y];
-                        let uv3 = [uv.min.x, uv.max.y];
-
-                        verts.borrow_mut().extend([
-                            TextVertex3D::new(p0, uv0, color),
-                            TextVertex3D::new(p1, uv1, color),
-                            TextVertex3D::new(p2, uv2, color),
-                            TextVertex3D::new(p2, uv2, color),
-                            TextVertex3D::new(p3, uv3, color),
-                            TextVertex3D::new(p0, uv0, color),
-                        ]);
-                    }
-
-                    text.vertices = verts.into_inner();
-
-                    batches
-                        .text_vertices
-                        .extend(text.vertices.iter().map(|v| v.to_render(eye)));
+                for t in text.section.text.iter_mut() {
+                    t.scale = PxScale::from(raster_scale);
                 }
 
+                let section = text.section.to_borrowed();
+
+                let color = section
+                    .text
+                    .first()
+                    .map(|t| t.extra.color)
+                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+
+                let key = text.glyph_cache_key(raster_scale);
+
+                // ---- Process this section individually ----
+                // No more slicing a shared fresh_glyphs array.
+                // Each queue+process cycle yields exactly this section's quads.
+                self.brush.queue(&section);
+
+                let process_result = self.brush.process_queued(
+                    |rect, tex_data| {
+                        let width = rect.width();
+                        let height = rect.height();
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &pipelines.resolved.atlas.texture(),
+                                mip_level: 0,
+                                origin: wgpu::Origin3d {
+                                    x: rect.min[0],
+                                    y: rect.min[1],
+                                    z: 0,
+                                },
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            tex_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(width),
+                                rows_per_image: Some(height),
+                            },
+                            wgpu::Extent3d {
+                                width,
+                                height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    },
+                    |v| GlyphQuad {
+                        px: v.pixel_coords,
+                        uv: v.tex_coords,
+                    },
+                );
+
+                let glyphs: Vec<GlyphQuad> = match process_result {
+                    Ok(BrushAction::Draw(fresh)) => {
+                        self.text_glyph_cache.insert(key, fresh.clone());
+                        fresh
+                    }
+                    Ok(BrushAction::ReDraw) => {
+                        self.text_glyph_cache.get(&key).cloned().unwrap_or_default()
+                    }
+                    Err(err) => {
+                        error!("{}", err);
+                        continue;
+                    }
+                };
+
+                if glyphs.is_empty() {
+                    continue;
+                }
+
+                let forward = if let Some(dir) = text.facing {
+                    dir.normalize()
+                } else {
+                    text.center.direction_to(camera.eye_world()).normalize()
+                };
+
+                let world_up = if forward.dot(Vec3::Y).abs() > 0.99 {
+                    Vec3::X
+                } else {
+                    Vec3::Y
+                };
+
+                let right = world_up.cross(forward).normalize();
+                let up = right.cross(forward).normalize();
+                let world_to_geom = world_scale / raster_scale;
+
+                let mut min_x = f32::INFINITY;
+                let mut min_y = f32::INFINITY;
+                let mut max_x = f32::NEG_INFINITY;
+                let mut max_y = f32::NEG_INFINITY;
+
+                for glyph in &glyphs {
+                    min_x = min_x.min(glyph.px.min.x);
+                    min_y = min_y.min(glyph.px.min.y);
+                    max_x = max_x.max(glyph.px.max.x);
+                    max_y = max_y.max(glyph.px.max.y);
+                }
+
+                let center_x = (min_x + max_x) * 0.5;
+                let center_y = (min_y + max_y) * 0.5;
+
+                let mut verts = Vec::<TextVertex3D>::with_capacity(glyphs.len() * 6);
+
+                for glyph in glyphs {
+                    let px = glyph.px;
+                    let uv = glyph.uv;
+
+                    let x0 = (px.min.x - center_x) * world_to_geom;
+                    let y0 = (px.min.y - center_y) * world_to_geom;
+                    let x1 = (px.max.x - center_x) * world_to_geom;
+                    let y1 = (px.max.y - center_y) * world_to_geom;
+
+                    let center = text.center;
+                    let p0 = center.add_vec3(right * x0 + up * y0);
+                    let p1 = center.add_vec3(right * x1 + up * y0);
+                    let p2 = center.add_vec3(right * x1 + up * y1);
+                    let p3 = center.add_vec3(right * x0 + up * y1);
+
+                    let uv0 = [uv.min.x, uv.min.y];
+                    let uv1 = [uv.max.x, uv.min.y];
+                    let uv2 = [uv.max.x, uv.max.y];
+                    let uv3 = [uv.min.x, uv.max.y];
+
+                    verts.extend([
+                        TextVertex3D::new(p0, uv0, color),
+                        TextVertex3D::new(p1, uv1, color),
+                        TextVertex3D::new(p2, uv2, color),
+                        TextVertex3D::new(p2, uv2, color),
+                        TextVertex3D::new(p3, uv3, color),
+                        TextVertex3D::new(p0, uv0, color),
+                    ]);
+                }
+
+                text.vertices = verts;
+
+                batches
+                    .text_vertices
+                    .extend(text.vertices.iter().map(|v| v.to_render(eye)));
+            } else {
+                // Only thin-line renders go here
                 batches
                     .thin_vertices
                     .extend(render.vertices.iter().map(|v| v.to_render(eye)));
             }
         }
+
         batches
     }
 
@@ -1826,99 +1940,141 @@ impl Gizmo {
         vertices: &[LineVtxWorld],
         thickness: f32,
         eye: WorldPos,
-    ) -> Vec<LineVtxRender> {
+    ) -> Vec<ThickLineVtxRender> {
         let mut result = Vec::new();
-        let half_thick = thickness * 0.5;
 
-        // Process pairs of vertices (line segments)
         for pair in vertices.chunks_exact(2) {
             let v0 = pair[0].to_render(eye);
             let v1 = pair[1].to_render(eye);
 
-            // Calculate perpendicular offset in screen space (we'll do this in shader for better performance)
-            // For now, generate a quad with metadata
-            // We'll use a modified shader approach - pass thickness as a vertex attribute
-
-            // Generate quad (2 triangles = 6 vertices)
-            let quad = Self::line_to_quad(v0, v1, half_thick, eye);
-            result.extend_from_slice(&quad);
+            result.extend(Self::line_to_quad(v0, v1, thickness));
         }
 
         result
     }
-
     fn line_to_quad(
-        v0: LineVtxRender,
-        v1: LineVtxRender,
-        half_thickness: f32,
-        eye: WorldPos,
-    ) -> [LineVtxRender; 6] {
-        let dx = v1.pos[0] - v0.pos[0];
-        let dy = v1.pos[1] - v0.pos[1];
-        let dz = v1.pos[2] - v0.pos[2];
+        v0: ThinLineVtxRender,
+        v1: ThinLineVtxRender,
+        thickness: f32,
+    ) -> [ThickLineVtxRender; 6] {
+        let p0 = v0.pos;
+        let p1 = v1.pos;
 
-        let len = (dx * dx + dy * dy + dz * dz).sqrt();
-        if len < 0.0001 {
-            return [v0; 6];
+        let dx = p1[0] - p0[0];
+        let dy = p1[1] - p0[1];
+        let dz = p1[2] - p0[2];
+
+        let len2 = dx * dx + dy * dy + dz * dz;
+
+        let c0 = v0.color;
+        let c1 = v1.color;
+
+        if len2 < 1e-6 {
+            return [
+                ThickLineVtxRender {
+                    start: p0,
+                    end: p1,
+                    side_sign: -1.0,
+                    end_sign: 0.0,
+                    width_px: thickness,
+                    color: c0,
+                },
+                ThickLineVtxRender {
+                    start: p0,
+                    end: p1,
+                    side_sign: 1.0,
+                    end_sign: 0.0,
+                    width_px: thickness,
+                    color: c0,
+                },
+                ThickLineVtxRender {
+                    start: p1,
+                    end: p0,
+                    side_sign: 1.0,
+                    end_sign: 1.0,
+                    width_px: thickness,
+                    color: c0,
+                },
+                ThickLineVtxRender {
+                    start: p1,
+                    end: p0,
+                    side_sign: 1.0,
+                    end_sign: 1.0,
+                    width_px: thickness,
+                    color: c0,
+                },
+                ThickLineVtxRender {
+                    start: p1,
+                    end: p0,
+                    side_sign: -1.0,
+                    end_sign: 1.0,
+                    width_px: thickness,
+                    color: c0,
+                },
+                ThickLineVtxRender {
+                    start: p0,
+                    end: p1,
+                    side_sign: -1.0,
+                    end_sign: 0.0,
+                    width_px: thickness,
+                    color: c0,
+                },
+            ];
         }
 
-        let dir = [dx / len, dy / len, dz / len];
-
-        // midpoint of segment
-        let mx = (v0.pos[0] + v1.pos[0]) * 0.5;
-        let my = (v0.pos[1] + v1.pos[1]) * 0.5;
-        let mz = (v0.pos[2] + v1.pos[2]) * 0.5;
-
-        let camera_pos = eye.to_relative_pos(eye);
-
-        // view direction
-        let mut vx = camera_pos[0] - mx;
-        let mut vy = camera_pos[1] - my;
-        let mut vz = camera_pos[2] - mz;
-
-        let vlen = (vx * vx + vy * vy + vz * vz).sqrt();
-        if vlen > 0.0001 {
-            vx /= vlen;
-            vy /= vlen;
-            vz /= vlen;
-        }
-
-        // perpendicular = dir × view
-        let mut ox = dir[1] * vz - dir[2] * vy;
-        let mut oy = dir[2] * vx - dir[0] * vz;
-        let mut oz = dir[0] * vy - dir[1] * vx;
-
-        let olen = (ox * ox + oy * oy + oz * oz).sqrt();
-        if olen < 0.0001 {
-            return [v0; 6];
-        }
-
-        let scale = half_thickness / olen;
-        ox *= scale;
-        oy *= scale;
-        oz *= scale;
-
-        let p0 = LineVtxRender {
-            pos: [v0.pos[0] + ox, v0.pos[1] + oy, v0.pos[2] + oz],
-            color: v0.color,
-        };
-        let p1 = LineVtxRender {
-            pos: [v0.pos[0] - ox, v0.pos[1] - oy, v0.pos[2] - oz],
-            color: v0.color,
-        };
-        let p2 = LineVtxRender {
-            pos: [v1.pos[0] + ox, v1.pos[1] + oy, v1.pos[2] + oz],
-            color: v1.color,
-        };
-        let p3 = LineVtxRender {
-            pos: [v1.pos[0] - ox, v1.pos[1] - oy, v1.pos[2] - oz],
-            color: v1.color,
-        };
-
-        [p0, p1, p2, p1, p3, p2]
+        [
+            ThickLineVtxRender {
+                start: p0,
+                end: p1,
+                side_sign: -1.0,
+                end_sign: 0.0,
+                width_px: thickness,
+                color: c0,
+            },
+            ThickLineVtxRender {
+                start: p0,
+                end: p1,
+                side_sign: 1.0,
+                end_sign: 0.0,
+                width_px: thickness,
+                color: c0,
+            },
+            ThickLineVtxRender {
+                start: p1,
+                end: p0,
+                side_sign: 1.0,
+                end_sign: 1.0,
+                width_px: thickness,
+                color: c1,
+            },
+            ThickLineVtxRender {
+                start: p1,
+                end: p0,
+                side_sign: 1.0,
+                end_sign: 1.0,
+                width_px: thickness,
+                color: c1,
+            },
+            ThickLineVtxRender {
+                start: p1,
+                end: p0,
+                side_sign: -1.0,
+                end_sign: 1.0,
+                width_px: thickness,
+                color: c1,
+            },
+            ThickLineVtxRender {
+                start: p0,
+                end: p1,
+                side_sign: -1.0,
+                end_sign: 0.0,
+                width_px: thickness,
+                color: c0,
+            },
+        ]
     }
 
-    fn triangulate_filled(vertices: &[LineVtxWorld], camera: WorldPos) -> Vec<LineVtxRender> {
+    fn triangulate_filled(vertices: &[LineVtxWorld], camera: WorldPos) -> Vec<ThinLineVtxRender> {
         if vertices.len() < 3 {
             return Vec::new();
         }
@@ -1959,9 +2115,9 @@ impl LineVtxWorld {
     }
 
     #[inline]
-    pub fn to_render(&self, camera_pos: WorldPos) -> LineVtxRender {
+    pub fn to_render(&self, camera_pos: WorldPos) -> ThinLineVtxRender {
         let rp = self.pos.to_relative_pos(camera_pos);
-        LineVtxRender {
+        ThinLineVtxRender {
             pos: rp.to_array(),
             color: self.color,
         }
@@ -2012,7 +2168,10 @@ fn point_in_triangle(a: P, b: P, c: P, p: P) -> bool {
     (c1 < 0.0) && (c2 < 0.0) && (c3 < 0.0)
 }
 
-pub fn triangulate_ear_clipping(vertices: &[LineVtxWorld], camera: WorldPos) -> Vec<LineVtxRender> {
+pub fn triangulate_ear_clipping(
+    vertices: &[LineVtxWorld],
+    camera: WorldPos,
+) -> Vec<ThinLineVtxRender> {
     let n = vertices.len();
     if n < 3 {
         return vec![];
@@ -2122,6 +2281,13 @@ struct TextVertex3D {
     pos: WorldPos,
     uv: [f32; 2],
     color: [f32; 4],
+}
+impl Hash for TextVertex3D {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pos.hash(state);
+        self.uv.map(|c| c.to_bits()).hash(state);
+        self.color.map(|c| c.to_bits()).hash(state);
+    }
 }
 impl TextVertex3D {
     pub fn new(pos: WorldPos, uv: [f32; 2], color: [f32; 4]) -> Self {

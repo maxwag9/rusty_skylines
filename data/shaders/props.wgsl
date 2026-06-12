@@ -30,7 +30,7 @@ struct InstanceInput {
     @location(11) prev_model_col2: vec4<f32>,
     @location(12) prev_model_col3: vec4<f32>,
     @location(13) color: vec4<f32>,
-    @location(14) misc: vec4<f32>, // x: seed, y: wind_strength, z: variant, w: unused
+    @location(14) misc: vec4<f32> // x: seed, y: wind_strength, z: variant, w: unused
 };
 
 struct VertexOutput {
@@ -40,26 +40,23 @@ struct VertexOutput {
     @location(2) world_pos: vec3<f32>,
     @location(3) instance_color: vec4<f32>,
     @location(4) texture_id: u32,
-    @location(5) @interpolate(flat) instance_id: u32,
-    @location(6) curr_pos_cs: vec4<f32>,
-    @location(7) prev_pos_cs: vec4<f32>,
-    @location(8) misc: vec4<f32>,
-    @location(9) vertex_color: vec4<f32>,
+    @location(5) curr_pos_cs: vec4<f32>,
+    @location(6) prev_pos_cs: vec4<f32>,
+    @location(7) misc: vec4<f32>,
+    @location(8) vertex_color: vec4<f32>
 };
 
 struct FragmentOut {
     @location(0) color: vec4<f32>,     // color target
     @location(1) normal: vec4<f32>,    // normal target
-    @location(2) instance_id: u32,     // R32Uint instance id target for RAY TRACING
-    @location(3) motion: vec2<f32>,
+    @location(2) motion: vec2<f32>
 };
 
 
 @vertex
 fn vs_main(
     vertex: VertexInput,
-    instance: InstanceInput,
-    @builtin(instance_index) instance_index: u32
+    instance: InstanceInput
 ) -> VertexOutput {
     var out: VertexOutput;
 
@@ -97,7 +94,6 @@ fn vs_main(
     out.instance_color = instance.color;
     out.vertex_color = vertex.color;
     out.texture_id = vertex.texture_id;
-    out.instance_id = instance_index;
     out.curr_pos_cs = out.clip_position;
     out.prev_pos_cs = uniforms.prev_view_proj * prev_world_pos;
     out.misc = instance.misc;
@@ -166,8 +162,6 @@ fn fs_main(in: VertexOutput) -> FragmentOut {
     let prev_ndc = in.prev_pos_cs.xy / in.prev_pos_cs.w;
     let velocity = (curr_ndc - prev_ndc) * 0.5;
     out.motion = velocity;
-
-    out.instance_id = in.instance_id;
 
     return out;
 }

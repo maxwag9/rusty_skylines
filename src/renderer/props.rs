@@ -2,9 +2,6 @@ use crate::data::Settings;
 use crate::helpers::paths::shader_dir;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos};
 use crate::renderer::pipelines::Pipelines;
-use crate::renderer::render_passes::{
-    color_and_normals_and_instance_targets, depth_stencil, make_shadow_option,
-};
 use crate::renderer::shadows::{shadow_bias_for_cascade, shadow_pipeline_options};
 use crate::ui::input::Input;
 use crate::world::camera::Camera;
@@ -14,7 +11,7 @@ use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::PI;
-use wgpu::PrimitiveTopology::TriangleList;
+use std::path::PathBuf;
 use wgpu::util::DeviceExt;
 use wgpu::*;
 use wgpu_render_manager::generator::{TextureKey, TextureParams};
@@ -583,6 +580,8 @@ impl Props {
         &'a self,
         render_manager: &mut RenderManager,
         pass: &mut RenderPass<'a>,
+        shader_path: PathBuf,
+        opts: PipelineOptions,
         camera: &'a Camera,
         terrain: &'a Terrain,
         pipelines: &Pipelines,
@@ -590,23 +589,6 @@ impl Props {
     ) {
         let eye = camera.eye_world();
         let terrain_height = terrain.get_height_at(eye, true);
-
-        let shader_path = shader_dir().join("props.wgsl");
-        let shadow = make_shadow_option(settings, pipelines);
-        let targets = color_and_normals_and_instance_targets(pipelines);
-
-        let opts = PipelineOptions {
-            topology: TriangleList,
-            depth_stencil: Some(depth_stencil(Default::default(), settings)),
-            msaa_samples: settings.msaa_samples,
-            vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
-            cull_mode: Some(Face::Back),
-            fragment: FragmentOption::Default {
-                targets: targets.clone(),
-            },
-            shadow: shadow.clone(),
-            ..Default::default()
-        };
 
         for visible_chunk in terrain.visible.iter() {
             let coord = visible_chunk.coords.chunk_coord;

@@ -6,6 +6,8 @@ use crate::world::statisticals::schedule::Schedule;
 use serde::{Deserialize, Serialize};
 
 pub mod demands;
+pub mod demography;
+pub mod education;
 pub mod money;
 pub mod schedule;
 pub mod transports;

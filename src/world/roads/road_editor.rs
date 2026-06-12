@@ -8,6 +8,8 @@ use crate::world::roads::roads::{
     Lane, LaneGeometry, METERS_PER_LANE_POLYLINE_STEP, RoadCommand, RoadManager, RoadStorage,
     nearest_lane_to_point, project_point_to_lane_xz, sample_lane_position,
 };
+use crate::world::statisticals::CityState;
+use crate::world::statisticals::money::*;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use glam::{Vec2, Vec3, Vec3Swizzles};
 use std::collections::HashSet;
@@ -40,6 +42,7 @@ impl RoadEditor {
         &mut self,
         road_manager: &mut RoadManager,
         terrain: &Terrain,
+        city_state: &mut CityState,
         input: &mut Input,
         gizmo: &mut Gizmo,
     ) -> Vec<RoadEditorCommand> {
@@ -96,6 +99,7 @@ impl RoadEditor {
                     &snap,
                     place_pressed,
                     chunk_id,
+                    city_state,
                     &mut output,
                     gizmo,
                 );
@@ -118,6 +122,7 @@ impl RoadEditor {
                     &snap,
                     place_pressed,
                     chunk_id,
+                    city_state,
                     &mut output,
                     gizmo,
                 );
@@ -161,6 +166,7 @@ impl RoadEditor {
         snap: &SnapResult,
         place_pressed: bool,
         chunk_id: ChunkId,
+        city_state: &mut CityState,
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) {
@@ -217,12 +223,65 @@ impl RoadEditor {
         let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
+        let cost = calculate_road_cost(road_type, crossings.as_slice(), estimated_length) as i64;
         // Preview crossing points
         for crossing in crossings {
             output.push(RoadEditorCommand::PreviewCrossing(crossing));
         }
 
+        let sign_pos = snap.world_pos.add_vec3(Vec3::new(0.0, 10.0, 0.0));
+        let scale = 2.0;
+        gizmo.text(
+            format!("{:.1}m", estimated_length),
+            sign_pos.add_vec3(Vec3::new(0.0, -2.0, 0.0)),
+            scale,
+            [0.43, 0.50, 0.53, 0.85],
+            None,
+            true,
+            0.0,
+            0.0,
+        );
+        if city_state.economy.can_buy(cost) {
+            gizmo.text(
+                format!("{:.0}€", -cost),
+                sign_pos,
+                scale,
+                [0.03, 0.96, 0.03, 0.85],
+                None,
+                true,
+                0.0,
+                0.0,
+            );
+        } else {
+            gizmo.text(
+                format!("{:.0}€", -cost),
+                sign_pos,
+                scale,
+                [0.96, 0.03, 0.03, 0.85],
+                None,
+                true,
+                0.0,
+                0.0,
+            );
+        };
         if place_pressed && is_valid {
+            if !city_state.economy.buy(cost) {
+                output.push(RoadEditorCommand::PreviewError(
+                    PreviewError::InsufficientFunds { cost: cost },
+                ));
+                return;
+            };
+            // Can buy and now placed, so show how much it cost to build for a few seconds.
+            gizmo.text(
+                format!("{:.0}€", -cost),
+                sign_pos,
+                scale * 1.1,
+                [0.03, 0.96, 0.03, 0.85],
+                None,
+                true,
+                0.0,
+                3.0,
+            );
             let road_cmds = self.commit_road_with_crossings(
                 terrain_renderer,
                 storage,
@@ -300,6 +359,7 @@ impl RoadEditor {
         snap: &SnapResult,
         place_pressed: bool,
         chunk_id: ChunkId,
+        city_state: &mut CityState,
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) {
@@ -370,12 +430,64 @@ impl RoadEditor {
         let node_preview = self.build_node_preview_from_snap(storage, snap);
         output.push(RoadEditorCommand::PreviewNode(node_preview));
 
+        let cost = calculate_road_cost(road_type, crossings.as_slice(), estimated_length) as i64;
         // Preview crossing points
         for crossing in crossings {
             output.push(RoadEditorCommand::PreviewCrossing(crossing));
         }
-
+        let sign_pos = snap.world_pos.add_vec3(Vec3::new(0.0, 10.0, 0.0));
+        let scale = 2.0;
+        gizmo.text(
+            format!("{:.1}m", estimated_length),
+            sign_pos.add_vec3(Vec3::new(0.0, -2.0, 0.0)),
+            scale,
+            [0.43, 0.50, 0.53, 0.85],
+            None,
+            true,
+            0.0,
+            0.0,
+        );
+        if city_state.economy.can_buy(cost) {
+            gizmo.text(
+                format!("{:.0}€", -cost),
+                sign_pos,
+                scale,
+                [0.03, 0.96, 0.03, 0.85],
+                None,
+                true,
+                0.0,
+                0.0,
+            );
+        } else {
+            gizmo.text(
+                format!("{:.0}€", -cost),
+                sign_pos,
+                scale,
+                [0.96, 0.03, 0.03, 0.85],
+                None,
+                true,
+                0.0,
+                0.0,
+            );
+        };
         if place_pressed && is_valid {
+            if !city_state.economy.buy(cost) {
+                output.push(RoadEditorCommand::PreviewError(
+                    PreviewError::InsufficientFunds { cost },
+                ));
+                return;
+            };
+            // Can buy and now placed, so show how much it cost to build for a few seconds.
+            gizmo.text(
+                format!("{:.0}€", -cost),
+                sign_pos,
+                scale * 1.1,
+                [0.03, 0.96, 0.03, 0.85],
+                None,
+                true,
+                0.0,
+                3.0,
+            );
             let road_cmds = self.commit_road_with_crossings(
                 terrain_renderer,
                 storage,
@@ -483,8 +595,8 @@ impl RoadEditor {
                 let end_node = storage.node(segment.end).unwrap();
                 let end_node_pos = end_node.pos();
 
-                let dist_to_start = crossing.world_pos.length_to(start_node_pos);
-                let dist_to_end = crossing.world_pos.length_to(end_node_pos);
+                let dist_to_start = crossing.pos.length_to(start_node_pos);
+                let dist_to_end = crossing.pos.length_to(end_node_pos);
 
                 if dist_to_start < CROSSING_SNAP_TO_NODE_RADIUS
                     || dist_to_end < CROSSING_SNAP_TO_NODE_RADIUS
@@ -501,7 +613,7 @@ impl RoadEditor {
                         if new_t > ENDPOINT_T_EPS && new_t < 1.0 - ENDPOINT_T_EPS {
                             crossings.push(CrossingPoint {
                                 t: new_t,
-                                world_pos: closest_pos,
+                                pos: closest_pos,
                                 kind: CrossingKind::ExistingNode(closest_node_id),
                             });
                             crossed_segments.insert(seg_id);
@@ -531,7 +643,7 @@ impl RoadEditor {
                 if dist < NODE_SNAP_RADIUS && t > ENDPOINT_T_EPS && t < 1.0 - ENDPOINT_T_EPS {
                     crossings.push(CrossingPoint {
                         t,
-                        world_pos: node_pos,
+                        pos: node_pos,
                         kind: CrossingKind::ExistingNode(node_id),
                     });
                 }
@@ -617,7 +729,7 @@ impl RoadEditor {
 
                     Some(CrossingPoint {
                         t: avg_t,
-                        world_pos: center_pos,
+                        pos: center_pos,
                         kind: CrossingKind::LaneCrossing {
                             lane_id: *id1,
                             lane_t,
@@ -734,7 +846,7 @@ impl RoadEditor {
 
                     return Some(CrossingPoint {
                         t: path_t,
-                        world_pos,
+                        pos: world_pos,
                         kind: CrossingKind::LaneCrossing {
                             lane_id: lane_id.clone(),
                             lane_t,
@@ -914,7 +1026,7 @@ impl RoadEditor {
                 CrossingKind::ExistingNode(id) => id,
                 CrossingKind::LaneCrossing { lane_id, .. } => {
                     let Some((split_cmds, new_node_id, endpoint_nodes)) =
-                        self.plan_split(storage, lane_id, crossing.world_pos, chunk_id)
+                        self.plan_split(storage, lane_id, crossing.pos, chunk_id)
                     else {
                         continue;
                     };
@@ -929,7 +1041,7 @@ impl RoadEditor {
 
             waypoints.push(ResolvedWaypoint {
                 node_id,
-                pos: crossing.world_pos,
+                pos: crossing.pos,
                 t: crossing.t,
             });
         }

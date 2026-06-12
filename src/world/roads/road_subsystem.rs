@@ -15,6 +15,7 @@ use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::Cars;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::world::roads::road_structs::RoadEditorCommand;
+use crate::world::statisticals::CityState;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue};
@@ -218,14 +219,15 @@ impl Roads {
         &mut self,
         terrain: &mut Terrain,
         cars: &mut Cars,
+        city_state: &mut CityState,
         input: &mut Input,
         _time: &Time,
         settings: &Settings,
         gizmo: &mut Gizmo,
     ) {
-        self.road_commands = self
-            .road_editor
-            .update(&mut self.road_manager, terrain, input, gizmo);
+        self.road_commands =
+            self.road_editor
+                .update(&mut self.road_manager, terrain, city_state, input, gizmo);
         self.preview_state.ingest(self.road_commands.as_slice());
         // Apply preview commands to preview_roads (world-side storage mutation only, no mesh)
         if self.preview_state.has_changed {

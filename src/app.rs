@@ -619,7 +619,7 @@ fn update_time(resources: &mut Resources) {
         ui.variables.set_i64("hour", time.hour());
         ui.variables.set_i64("minute", time.minute());
         ui.variables
-            .set_f64("money", world.city_state.economy.money);
+            .set_i64("money", world.city_state.economy.money);
         ui.variables
             .set_i64("world_population", world.city_state.world_population as i64);
         if let Some(district) = world

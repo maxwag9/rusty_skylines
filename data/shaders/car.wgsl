@@ -27,9 +27,8 @@ struct VertexOutput {
     @location(2) world_pos: vec3<f32>,
     @location(3) @interpolate(flat) instance_color: vec3<f32>,
 
-    @location(4) @interpolate(flat) instance_id: u32,
-    @location(5) prev_pos_cs: vec4<f32>,  // previous clip-space
-    @location(6) curr_pos_cs: vec4<f32>,
+    @location(4) prev_pos_cs: vec4<f32>,  // previous clip-space
+    @location(5) curr_pos_cs: vec4<f32>,
 };
 
 
@@ -63,12 +62,11 @@ fn g_smith(NdotV: f32, NdotL: f32, roughness: f32) -> f32 {
 struct FragmentOut {
     @location(0) color: vec4<f32>,     // color target
     @location(1) normal: vec4<f32>,    // normal target
-    @location(2) instance_id: u32,     // R32Uint instance id target for RAY TRACING
-    @location(3) motion: vec2<f32>,
+    @location(2) motion: vec2<f32>,
 };
 
 @vertex
-fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     var out: VertexOutput;
 
     let model = mat4x4<f32>(
@@ -93,8 +91,6 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, @builtin(instance_index
     out.world_pos = world_pos.xyz;
     out.instance_color = instance.color.rgb;
 
-    // pass instance id (instanced draws only)
-    out.instance_id = instance_index;
     out.curr_pos_cs = out.clip_position;
     out.prev_pos_cs = uniforms.prev_view_proj * prev_world_pos;
     return out;
@@ -149,7 +145,6 @@ fn fs_main(input: VertexOutput) -> FragmentOut {
 
     out.color = vec4<f32>(rgb, 1.0);
     out.normal = vec4<f32>(N * 0.5 + 0.5, 1.0);
-    out.instance_id = input.instance_id;
 
     if (input.clip_position.w <= 0.0 || input.prev_pos_cs.w <= 0.0) {
         out.motion = vec2<f32>(0.0);

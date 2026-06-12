@@ -1,12 +1,12 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.7.16"
+version = "0.7.17"
 edition = "2024"
 
 [dependencies]
 winit = { version = "0.31.0-beta.2", features = ["serde"] }
 
-wgpu = "29.0.3"
+wgpu = { version = "29.0.3", features = ["strict_asserts"] }
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 glam = { version = "0.33.1", features = ["serde"] }

@@ -202,6 +202,14 @@ impl CarRenderSubsystem {
 
         pass.draw_indexed(0..self.index_count, 0, 0..instance_count);
     }
+
+    pub fn render_last(&mut self, pass: &mut RenderPass) {
+        pass.set_vertex_buffer(0, self.vb.slice(..));
+        pass.set_vertex_buffer(1, self.instance_buf.slice(..));
+        pass.set_index_buffer(self.ib.slice(..), IndexFormat::Uint32);
+
+        pass.draw_indexed(0..self.index_count, 0, 0..self.current_instance_count);
+    }
 }
 
 pub struct Cars {

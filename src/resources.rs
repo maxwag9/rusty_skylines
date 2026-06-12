@@ -91,6 +91,7 @@ impl Resources {
 }
 
 pub const DAYS_PER_YEAR: f64 = 20.0;
+pub const HOURS_PER_YEAR: f64 = DAYS_PER_YEAR * HOURS_PER_DAY;
 const SCHOOL_YEAR_START_DAY: u32 = (DAYS_PER_YEAR * 0.75) as u32; // ~September 1
 
 pub struct Time {
@@ -354,7 +355,7 @@ pub struct Uniforms {
     pub camera_local: [f32; 3], // vec3<f32> + 1 float pad
     pub chunk_size: f32,
     pub camera_chunk: [i32; 2], // vec2<i32>
-    pub _pad_cam: [u32; 2],     // align to 16
+    pub screen_size: [f32; 2],
 
     // ── Previous camera (chunk-relative) ────────────────────────
     pub prev_camera_local: [f32; 3], // vec3<f32> + 1 float pad

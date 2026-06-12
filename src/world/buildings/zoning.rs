@@ -21,6 +21,7 @@ use crate::world::roads::road_mesh_manager::{
 use crate::world::roads::road_structs::{LaneId, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
 use crate::world::roads::roads::RoadStorage;
+use crate::world::statisticals::CityState;
 use crate::world::statisticals::demands::ZoningDemand;
 use crate::world::statisticals::schedule::{Schedule, SchedulePhase};
 use crate::world::statisticals::transports::CarTripType;
@@ -191,7 +192,7 @@ impl District {
         }
         let area = WorldPos::area(self.points.as_slice());
         //println!("Area: {}", area);
-        if area > 5_000_000.0 {
+        if area > 50_000_000.0 {
             return true;
         }
         false
@@ -986,7 +987,7 @@ impl Zoning {
         zoning: &mut Zoning,
         buildings: &mut Buildings,
         car_storage: &mut CarStorage,
-        schedule: &Schedule,
+        city_state: &mut CityState,
         time: &Time,
         road_storage: &RoadStorage,
         road_edge_storage: &RoadEdgeStorage,
@@ -1001,19 +1002,21 @@ impl Zoning {
                     time,
                     buildings,
                     zoning,
-                    schedule,
+                    &city_state.schedule,
                     district_id,
                     road_edge_storage,
                 )
             })
             .collect();
-
+        let rng = &mut ThreadRng::default();
         for callback in callbacks {
             if let Some(district) = zoning.zoning_storage.get_mut_district(callback.district_id) {
                 if let Some(average_land_value) = callback.average_land_value {
-                    district
-                        .zoning_demand
-                        .update_demands(time, average_land_value);
+                    let taxes =
+                        district
+                            .zoning_demand
+                            .update_demands(rng, time, average_land_value);
+                    city_state.economy.add_money(taxes);
                 }
             }
 

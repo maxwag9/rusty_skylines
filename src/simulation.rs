@@ -100,7 +100,7 @@ impl Simulation {
             &mut world.zoning,
             &mut world.buildings,
             world.cars.car_storage_mut(),
-            &world.city_state.schedule,
+            &mut world.city_state,
             &world.time,
             &world.roads.road_manager.roads,
             &renderer.road_renderer.mesh_manager.road_edge_storage,

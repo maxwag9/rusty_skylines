@@ -338,6 +338,43 @@ impl Default for RoadType {
 }
 
 impl RoadType {
+    pub fn cost_per_meter(&self) -> f64 {
+        let (left, right) = self.lanes_each_direction;
+
+        // Core carriageway width
+        let carriageway_width = (left + right) as f64 * self.lane_width as f64;
+
+        // Sidewalks (both sides if present)
+        let sidewalk_width = self.sidewalk_width as f64 * 2.0;
+
+        // Median only matters if it exists
+        let median_width = self.median_width as f64;
+
+        // Base physical width
+        let total_width = carriageway_width + sidewalk_width + median_width;
+
+        // Base cost per meter per meter of width (tuned for gameplay)
+        let base_cost_per_m2 = 15.0;
+
+        // Structure multiplier
+        let structure_multiplier = match self.structure {
+            StructureType::Surface => 1.0,
+            StructureType::Bridge => 4.0,
+            StructureType::Tunnel => 7.0,
+        };
+
+        // Lane complexity scaling (diminishing returns)
+        let lane_count = (left + right).max(1) as f64;
+        let lane_complexity = lane_count.sqrt();
+
+        // Small quality/speed factor (higher speed roads cost slightly more)
+        let speed_factor = 1.0 + (self.speed_limit.clamp(30.0, 200.0) as f64 / 50.0) * 0.15;
+
+        let raw = total_width * base_cost_per_m2;
+
+        raw * structure_multiplier * lane_complexity * speed_factor
+    }
+
     #[inline]
     pub fn total_lanes(&self) -> usize {
         self.lanes_each_direction.0 + self.lanes_each_direction.1
@@ -543,8 +580,25 @@ pub enum PreviewError {
     MissingSegmentData,
     MissingLaneData,
     InvalidSnap,
+    InsufficientFunds { cost: i64 },
 }
-
+// impl Hash for PreviewError {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         match self {
+//             PreviewError::NoPickedPoint => 0u8.hash(state),
+//             PreviewError::TooShort => 1u8.hash(state),
+//             PreviewError::SameNode => 2u8.hash(state),
+//             PreviewError::MissingNodeData => 3u8.hash(state),
+//             PreviewError::MissingSegmentData => 4u8.hash(state),
+//             PreviewError::MissingLaneData => 5u8.hash(state),
+//             PreviewError::InvalidSnap => 6u8.hash(state),
+//             PreviewError::InsufficientFunds { cost } => {
+//                 7u8.hash(state);
+//                 cost.to_bits().hash(state);
+//             }
+//         }
+//     }
+// }
 #[derive(Debug, Clone)]
 pub enum RoadEditorCommand {
     Road(RoadCommand),
@@ -658,14 +712,14 @@ pub struct CrossingPoint {
     /// Position along the new road from 0.0 (start) to 1.0 (end)
     pub t: f64,
     /// World position of the crossing
-    pub world_pos: WorldPos,
+    pub pos: WorldPos,
     /// What we're crossing
     pub kind: CrossingKind,
 }
 impl Hash for CrossingPoint {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.t.hash_bits(state);
-        self.world_pos.hash(state);
+        self.pos.hash(state);
         self.kind.hash(state);
     }
 }

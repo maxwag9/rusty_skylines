@@ -11,7 +11,10 @@ use crate::world::cars::car_render::interpolate_cars;
 use crate::world::roads::road_mesh_manager::RoadMeshManager;
 use crate::world::roads::road_structs::{NodeId, RoadEditorCommand, SegmentId};
 use crate::world::roads::road_subsystem::Roads;
+use crate::world::statisticals::CityState;
+use crate::world::statisticals::money::calculate_road_cost;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
+use glam::Vec3;
 use winit::event_loop::ActiveEventLoop;
 
 pub fn run_ticked(resources: &mut Resources) {
@@ -19,7 +22,7 @@ pub fn run_ticked(resources: &mut Resources) {
     let renderer = &mut resources.render_core;
     let camera = &world.world_state.camera;
     let variables = &resources.ui.variables;
-    let (time, terrain, roads, zoning, buildings, cars, input) = (
+    let (time, terrain, roads, zoning, buildings, cars, input, city_state) = (
         &mut world.time,
         &mut world.terrain,
         &mut world.roads,
@@ -27,6 +30,7 @@ pub fn run_ticked(resources: &mut Resources) {
         &mut world.buildings,
         &mut world.cars,
         &mut world.input,
+        &mut world.city_state,
     );
     let (settings, gizmo, road_mesh_manager) = (
         &mut resources.settings,
@@ -52,8 +56,9 @@ pub fn run_ticked(resources: &mut Resources) {
         buildings,
         roads,
         road_mesh_manager,
+        city_state,
     );
-    roads.update(terrain, cars, input, time, settings, gizmo);
+    roads.update(terrain, cars, city_state, input, time, settings, gizmo);
 }
 
 fn handle_destruction(
@@ -65,6 +70,7 @@ fn handle_destruction(
     buildings: &mut Buildings,
     roads: &mut Roads,
     road_mesh_manager: &RoadMeshManager,
+    city_state: &mut CityState,
 ) {
     if !matches!(terrain.cursor.mode, CursorMode::Destruction) {
         return;
@@ -150,20 +156,56 @@ fn handle_destruction(
                 closest_road = Some(RoadDestroyType::Segment(segment_id));
             }
         }
-
+        let sign_pos = picked.pos.add_vec3(Vec3::new(0.0, 10.0, 0.0));
+        let scale = 2.0;
+        let destroy = input.action_pressed_once("Destroy");
         if let Some(destroy_type) = closest_road {
             match destroy_type {
                 RoadDestroyType::Segment(segment_id) => {
                     if let Some(edges) = road_mesh_manager.road_edge_storage.get(&segment_id) {
                         let points: Vec<WorldPos> =
                             collect_road_points(edges).into_iter().copied().collect();
-                        gizmo.area(points.as_slice(), [0.5, 0.2, 0.0, 0.3], 0.0);
+                        //gizmo.area(points.as_slice(), [0.5, 0.2, 0.0, 0.3], 0.0);
+                        if let Some(segment) = roads.road_manager.roads.segment_safe(segment_id) {
+                            if let Some(lane) = segment
+                                .lanes()
+                                .first()
+                                .and_then(|&lane_id| roads.road_manager.roads.lane_safe(lane_id))
+                            {
+                                if let Some(road_type) = roads
+                                    .road_manager
+                                    .road_types
+                                    .get_road_type(segment.road_type_id)
+                                {
+                                    let cost = (calculate_road_cost(
+                                        road_type,
+                                        &[],
+                                        lane.geometry().total_len,
+                                    ) as f64
+                                        * 0.2)
+                                        as i64;
+                                    gizmo.text(
+                                        format!("Refund: {}€", cost),
+                                        sign_pos,
+                                        scale,
+                                        [0.03, 0.97, 0.03, 0.85],
+                                        None,
+                                        true,
+                                        0.0,
+                                        if destroy { 2.0 } else { 0.0 },
+                                    );
+                                    if destroy {
+                                        city_state.economy.add_money(cost);
+                                    };
+                                };
+                            };
+                        };
                         roads
                             .road_editor
                             .pending_outside_commands
                             .push(RoadEditorCommand::PreviewDestruction(destroy_type));
                     }
-                    if input.action_pressed_once("Destroy") {
+                    if destroy {
                         roads.road_manager.roads.disable_segment(
                             segment_id,
                             &roads.road_manager.road_types,
@@ -174,7 +216,50 @@ fn handle_destruction(
                 RoadDestroyType::Node(node_id) => {
                     if let Some(node) = roads.road_manager.roads.node(node_id) {
                         //let points: Vec<WorldPos> = collect_road_points(edges).into_iter().copied().collect();
-                        gizmo.circle(node.pos(), 3.0, [0.5, 0.2, 0.0, 0.3], 0.6, 0.0);
+                        gizmo.circle(node.pos(), 4.0, [0.5, 0.2, 0.0, 0.3], 0.6, 0.0);
+                        let mut total_cost = 0;
+                        for segment in
+                            node.arms()
+                                .iter()
+                                .map(|arm| arm.segment())
+                                .flat_map(|segment_id| {
+                                    roads.road_manager.roads.segment_safe(segment_id)
+                                })
+                        {
+                            if let Some(lane) = segment
+                                .lanes()
+                                .first()
+                                .and_then(|&lane_id| roads.road_manager.roads.lane_safe(lane_id))
+                            {
+                                if let Some(road_type) = roads
+                                    .road_manager
+                                    .road_types
+                                    .get_road_type(segment.road_type_id)
+                                {
+                                    let cost = (calculate_road_cost(
+                                        road_type,
+                                        &[],
+                                        lane.geometry().total_len,
+                                    ) as f64
+                                        * 0.2)
+                                        as i64;
+                                    total_cost += cost;
+                                };
+                            };
+                        }
+                        gizmo.text(
+                            format!("Refund: {}€", total_cost),
+                            sign_pos,
+                            scale,
+                            [0.03, 0.97, 0.03, 0.85],
+                            None,
+                            true,
+                            0.0,
+                            if destroy { 2.0 } else { 0.0 },
+                        );
+                        if destroy {
+                            city_state.economy.add_money(total_cost);
+                        };
                         roads
                             .road_editor
                             .pending_outside_commands
