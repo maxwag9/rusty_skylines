@@ -15,15 +15,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             ext: ""
+            artifact_name: linux-x86_64
+
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            ext: ""
+            artifact_name: linux-arm64
+
+          # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
+            artifact_name: windows-x86_64
+
+          # Windows ARM64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            ext: ".exe"
+            artifact_name: windows-arm64
+
+          # macOS Intel
           - os: macos-latest
             target: x86_64-apple-darwin
             ext: ""
+            artifact_name: macos-x86_64
+
+          # macOS Apple Silicon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+            artifact_name: macos-arm64
 
     steps:
       - name: Checkout source
@@ -47,7 +73,7 @@ jobs:
         run: |
           GAME_NAME="RustySkylines"
           VERSION="${{ github.event.inputs.release_tag }}"
-          OUTDIR="artifacts/${{ matrix.os }}"
+          OUTDIR="artifacts/${{ matrix.artifact_name }}"
           mkdir -p "$OUTDIR"
 
           BIN_PATH="target/${{ matrix.target }}/release"
@@ -56,8 +82,8 @@ jobs:
           # place "data" next to the binary
           if [ -d "data" ]; then cp -r data "$OUTDIR/data"; fi
 
-          cd artifacts
-          tar -czf "../${GAME_NAME}_${VERSION}_${{ matrix.os }}.tar.gz" "${{ matrix.os }}"
+          cd "$OUTDIR"
+          tar -czf "../../../${GAME_NAME}_${VERSION}_${{ matrix.artifact_name }}.tar.gz" .
           cd ..
 
       - name: Prepare artifacts (Windows)
@@ -66,7 +92,7 @@ jobs:
         run: |
           $GameName = "RustySkylines"
           $Version = "${{ github.event.inputs.release_tag }}"
-          $OutDir = "artifacts/${{ matrix.os }}"
+          $OutDir = "artifacts/${{ matrix.artifact_name }}"
           New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
           $BinPath = "target/${{ matrix.target }}/release"
@@ -75,15 +101,15 @@ jobs:
           # place "data" next to the binary
           if (Test-Path "data") { Copy-Item -Recurse -Force "data" "$OutDir\data" }
 
-          Compress-Archive -Path "$OutDir\*" -DestinationPath "RustySkylines_${Version}_${{ matrix.os }}.zip"
+          Compress-Archive -Path "$OutDir\*" -DestinationPath "RustySkylines_${Version}_${{ matrix.artifact_name }}.zip"
 
       - name: Upload compressed artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-package
+          name: ${{ matrix.artifact_name }}-package
           path: |
-            RustySkylines_${{ github.event.inputs.release_tag }}_${{ matrix.os }}.zip
-            RustySkylines_${{ github.event.inputs.release_tag }}_${{ matrix.os }}.tar.gz
+            RustySkylines_${{ github.event.inputs.release_tag }}_${{ matrix.artifact_name }}.zip
+            RustySkylines_${{ github.event.inputs.release_tag }}_${{ matrix.artifact_name }}.tar.gz
           if-no-files-found: ignore
 
   release:
