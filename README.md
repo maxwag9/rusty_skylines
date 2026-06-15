@@ -6,7 +6,7 @@ Drive the city. Build the city. Infinite scale. Tiny download. Real Sky. Procedu
 The goal is to make **Rusty Skylines**: 
 A Cities: Skylines inspired game featuring better features and way better performance as a priority.
 
-<img width="2562" height="1430" alt="Roads" src="https://github.com/user-attachments/assets/11597c41-9dca-4a05-aea6-fb61fac35a9e" />
+<img width="2562" height="1430" alt="Screenshot_20260123_131033" src="https://github.com/user-attachments/assets/403e6fcd-961e-4ada-8f93-b5c556119229" />
 
 ---
 ## Priorities:
@@ -27,6 +27,11 @@ A Cities: Skylines inspired game featuring better features and way better perfor
 - Modding in the **future** with lua for low-performance and wasm for higher complexity/performance  
 
 ---
+
+<img width="2560" height="1400" alt="2026-06-13__00h-24m-04s" src="https://github.com/user-attachments/assets/e7d792f5-1865-4eeb-a6e8-6aa6b943a122" />
+
+---
+
 ## It currently features:  
 
 A 3D scene with orbiting mechanics and movement of the camera. Duh  
@@ -43,13 +48,15 @@ The 3D scene has:
 
 - Water rendered with Moon and Sun reflections  
 
-- Roads and cars.
+- Roads, and cars driving using Signfinding to find their way
   
 - Props and trees
 
 - Fully procedural buildings
 
 - Lots and districts system
+
+- Demography, Taxes, Economy, Cost of building roads, demand and Education as a statistical Simulation
 
 ---
 ## More features:
@@ -61,7 +68,11 @@ The 3D scene has:
 
 **Cascaded Shadows (4 Cascades)**  
 
+**Ray Traced Shadows for cars and props (shader based)**
+
 Driving a car with WASD.
+
+Minecraft-style Keybinds: F1 to hide GUI, F2 to take a screenshot, F3 to toggle the Debug overlay, C to ZOOM!
 
 A WIP GUI Editor with the ability to edit any GUI in-game and save it,
 allowing expressions and logic and animations to be available through modding (WIP!!) 
@@ -74,10 +85,6 @@ therefore creating great modding support. Win-Win!
 All graphics are MSAA anti-aliased. 
 (I didn't see a performance hit yet, but we'll see about that!) (Now I do see a performance hit when tons of vertices exist, but fine.)
 
-## Terrain
-
-<img width="2562" height="1430" alt="Screenshot_20260123_131033" src="https://github.com/user-attachments/assets/403e6fcd-961e-4ada-8f93-b5c556119229" />
-
 ## Cars
 
 <img width="2562" height="1430" alt="Screenshot_20260211_174818" src="https://github.com/user-attachments/assets/0ce379bf-612e-40c4-9ef6-0598a8d2da80" />
@@ -85,6 +92,8 @@ All graphics are MSAA anti-aliased.
 ## Intersections
 
 <img width="2562" height="1430" alt="Screenshot_20260122_013021" src="https://github.com/user-attachments/assets/0a00a2cb-b2e8-4e5b-819a-c8c487e615b4" />
+
+<img width="2562" height="1430" alt="Roads" src="https://github.com/user-attachments/assets/11597c41-9dca-4a05-aea6-fb61fac35a9e" />
 
 Rusty Skylines is open for modding and non-commercial use.
 Attribution required, no resale or commercial distribution of the base game.
