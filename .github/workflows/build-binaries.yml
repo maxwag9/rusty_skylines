@@ -176,8 +176,12 @@ jobs:
       - name: Gather release notes
         id: notes
         run: |
-          DESC=$(git log -1 --pretty=%B | sed 's/"/\\"/g')
-          echo "desc=$DESC" >> $GITHUB_OUTPUT
+          DESC=$(git log -1 --pretty=%B)
+          {
+            echo "desc<<EOF"
+            echo "$DESC"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
           
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
