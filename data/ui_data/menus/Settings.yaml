@@ -128,12 +128,12 @@ layers:
           editable: true
         editing_tool: false
       - !Advanced
-        name: cycle_tonemapping_state
-        ap_name: cycle
+        name: tonemapping_state_dropdown
+        ap_name: dropdown
         ap_var: tonemapping_state
         x: 0.1
         y: 0.6
-        scale: 1.5
+        scale: 1.0
         misc:
           active: true
           pressable: false

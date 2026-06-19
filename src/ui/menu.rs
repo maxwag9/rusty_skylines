@@ -1,9 +1,11 @@
+use crate::data::Settings;
 use crate::ui::cache::*;
-use crate::ui::ui_editor::Ui;
 use crate::ui::ui_runtime::UiRuntimes;
 use crate::ui::variables::Variables;
 use crate::ui::vertex::*;
+use std::collections::HashMap;
 use wgpu_text::TextBrush;
+use winit::dpi::PhysicalSize;
 
 #[derive(Debug)]
 pub struct Menu {
@@ -41,16 +43,20 @@ impl Menu {
 
     pub fn rebuild_layer_cache_index(
         &mut self,
+        settings: &Settings,
         brush: &TextBrush,
         layer_index: usize,
         runtime: &UiRuntimes,
-    ) {
+        aps: &HashMap<String, UiLayerYaml>,
+        window_size: PhysicalSize<u32>,
+    ) -> Vec<RuntimeLayer> {
+        let mut ap_layers = vec![];
         let (before, rest) = self.layers.split_at_mut(layer_index);
         let (layer, after) = rest.split_first_mut().unwrap();
 
         let dirty = layer.dirty;
         if !dirty.any() || !layer.active {
-            return;
+            return ap_layers;
         }
 
         let outlines_dirty = dirty.outlines || dirty.polygons || dirty.rects || dirty.circles;
@@ -59,7 +65,32 @@ impl Menu {
         init_cache_structure(layer);
 
         if dirty.aps {
-            //rebuild_ap_cache() TODO
+            // Do not remove the ap references, references must stay. Only if they are temporary though...
+            let mut ids_to_remove = vec![];
+            for (idx, element) in layer.elements.iter().enumerate() {
+                match element {
+                    UiElement::Advanced(ap) => {
+                        if !before
+                            .iter()
+                            .chain(std::iter::once(&*layer))
+                            .chain(after.iter())
+                            .any(|l| l.name == ap.id)
+                        {
+                            let layer =
+                                ap.clone().to_layer(settings, aps, layer.order, window_size);
+                            ap_layers.push(layer);
+                        }
+                        if ap.is_temporary {
+                            ids_to_remove.push(idx);
+                        }
+                    }
+                    _ => continue,
+                }
+            }
+            ids_to_remove.sort_unstable();
+            ids_to_remove.into_iter().rev().for_each(|i| {
+                let _ = layer.elements.remove(i);
+            });
         }
 
         if dirty.texts {
@@ -87,6 +118,7 @@ impl Menu {
         }
 
         layer.dirty.clear(rebuilt);
+        ap_layers
     }
 
     pub fn bump_layer_order(&mut self, layer_name: &str, delta: i32, variables: &mut Variables) {
@@ -99,111 +131,5 @@ impl Menu {
             }
         }
         self.layers.sort_by_key(|l| l.order);
-    }
-
-    pub fn change_element_color(
-        &mut self,
-        layer_name: &str,
-        element_id: &str,
-        element_type: ElementKind,
-        new_color: [f32; 4],
-    ) -> bool {
-        let layer = match self
-            .layers
-            .iter_mut()
-            .find(|l| l.active && l.saveable && l.name == layer_name)
-        {
-            Some(l) => l,
-            None => return false,
-        };
-
-        match element_type {
-            ElementKind::Polygon => {
-                if let Some(p) = layer
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_polygon_mut)
-                    .find(|p| p.id == element_id)
-                {
-                    for v in p.unscaled_vertices.iter_mut() {
-                        v.color = new_color;
-                    }
-                    p.invalidate_scaled_vertices_cache();
-                    layer.dirty.mark_polygons();
-                    return true;
-                }
-            }
-
-            ElementKind::Circle => {
-                if let Some(c) = layer
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_circle_mut)
-                    .find(|c| c.id == element_id)
-                {
-                    c.fill_color = new_color.into();
-                    layer.dirty.mark_circles();
-                    return true;
-                }
-            }
-
-            ElementKind::Text => {
-                if let Some(t) = layer
-                    .elements
-                    .iter_mut()
-                    .filter_map(UiElement::as_text_mut)
-                    .find(|t| t.id == element_id)
-                {
-                    t.color = new_color;
-                    layer.dirty.mark_texts();
-                    return true;
-                }
-            }
-
-            ElementKind::Outline | ElementKind::Handle | ElementKind::None => {}
-            _ => {}
-        }
-
-        false
-    }
-}
-
-pub fn get_selected_element_color(loader: &Ui) -> Option<[f32; 4]> {
-    let Some(sel) = &loader.touch_manager.selection.selected.first() else {
-        return None;
-    };
-
-    // Find the menu
-    let menu = loader.menus.get(&sel.menu)?;
-    // Find the layer
-    let layer = menu
-        .layers
-        .iter()
-        .find(|l| l.active && l.saveable && l.name == sel.layer)?;
-
-    // Match element type
-    match sel.kind {
-        ElementKind::Polygon => {
-            let poly = layer.iter_polygons().find(|p| p.id == sel.id)?;
-
-            // take color from first vertex (but they are not all the same!!)
-            poly.unscaled_vertices.get(0).map(|v| v.color)
-        }
-
-        ElementKind::Circle => {
-            let circle = layer.iter_circles().find(|c| c.id == sel.id)?;
-
-            Some(circle.fill_color.into())
-        }
-
-        ElementKind::Text => {
-            let text = layer.iter_texts().find(|t| t.id == sel.id)?;
-
-            Some(text.color)
-        }
-
-        ElementKind::Outline => None,
-        ElementKind::Handle => None,
-        ElementKind::None | _ => None,
     }
 }

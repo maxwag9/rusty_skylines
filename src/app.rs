@@ -37,6 +37,7 @@ const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
     ("Slow down Time 2x", 0.5),
 ];
 const MAX_SIM_STEPS_PER_FRAME: usize = 1_000;
+pub const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct App {
     window: Option<Arc<Box<dyn Window>>>,
@@ -339,7 +340,8 @@ impl ApplicationHandler for App {
                         .command_queues
                         .ui_command_queue
                         .push(UiCommand::ToggleMenu {
-                            menu_name: "Debug_Menu".to_string(),
+                            element_ref: ElementRef::default(),
+                            menu_name: "str:Debug_Menu".to_string(),
                         });
                     let debug_menu_active = ui.menus.get("Debug_Menu").unwrap().active;
                     ui.variables.set_bool("debug_mode", debug_menu_active);
@@ -349,17 +351,20 @@ impl ApplicationHandler for App {
                 if !main_menu_active && input.action_released("Exit to Main Menu") {
                     let cmds: Vec<UiCommand> = vec![
                         UiCommand::OpenMenu {
-                            menu_name: "MainMenu".to_string(),
+                            element_ref: ElementRef::default(),
+                            menu_name: "str:MainMenu".to_string(),
                         },
                         UiCommand::CloseMenu {
-                            menu_name: "Editor_Menu".to_string(),
+                            element_ref: ElementRef::default(),
+                            menu_name: "str:Editor_Menu".to_string(),
                         },
                         UiCommand::CloseMenu {
-                            menu_name: "Debug_Menu".to_string(),
+                            element_ref: ElementRef::default(),
+                            menu_name: "str:Debug_Menu".to_string(),
                         },
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
-                            name: "editor_mode".to_string(),
+                            name: "str:editor_mode".to_string(),
                             value: "false".to_string(),
                         },
                         // UiCommand::SetVar {
@@ -369,7 +374,7 @@ impl ApplicationHandler for App {
                         // },
                         UiCommand::SetVar {
                             element_ref: ElementRef::default(),
-                            name: "override_mode".to_string(),
+                            name: "str:override_mode".to_string(),
                             value: "false".to_string(),
                         },
                     ];
@@ -441,7 +446,9 @@ impl ApplicationHandler for App {
                 if let Some(resources) = self.resources.as_mut() {
                     let scroll = resources.world.input.handle_mouse_wheel(delta);
 
-                    if !resources.settings.editor_mode {
+                    if !resources.settings.editor_mode
+                        && resources.ui.touch_manager.hovered().is_none()
+                    {
                         let cam_controller = &mut resources.world.world_state.cam_controller;
                         let zoom_factor = 10.0;
                         cam_controller.zoom_velocity -= scroll.y * zoom_factor;

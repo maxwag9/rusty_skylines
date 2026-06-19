@@ -1,6 +1,6 @@
 name: checkbox
 elements:
-  # Soft outer border
+  # Outer border
   - !Rect
     id: Checkbox Border
     actions:

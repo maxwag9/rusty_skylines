@@ -206,9 +206,7 @@ macro_rules! define_commands {
         Some(out)
     }};
 
-    // -----------------------------
     // SPECIAL FIELD: commands
-    // -----------------------------
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
         $element:ident, $event_kind:ident, $buttons:ident, commands, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
@@ -217,11 +215,36 @@ macro_rules! define_commands {
                 $idx += 1;
             }
 
-            let cmds = raw.split(';')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
-                .collect();
+            let mut cmds = Vec::new();
+            let mut start = 0;
+            let mut depth = 0isize; // Track () [] {}
+            let bytes = raw.as_bytes();
+
+            for i in 0..bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth -= 1,
+                    b';' if depth == 0 => {
+                        // Only split on ';' if we are not inside brackets/parens
+                        let part = raw[start..i].trim();
+                        if !part.is_empty() {
+                            if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
+                                cmds.push(cmd);
+                            }
+                        }
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Don't forget the last command after the final ';'
+            let part = raw[start..].trim();
+            if !part.is_empty() {
+                if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
+                    cmds.push(cmd);
+                }
+            }
 
             Some(cmds)
         } else {
@@ -238,11 +261,36 @@ macro_rules! define_commands {
                 $idx += 1;
             }
 
-            let cmds = raw.split(';')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
-                .collect();
+            let mut cmds = Vec::new();
+            let mut start = 0;
+            let mut depth = 0isize; // Track () [] {}
+            let bytes = raw.as_bytes();
+
+            for i in 0..bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth -= 1,
+                    b';' if depth == 0 => {
+                        // Only split on ';' if we are not inside brackets/parens
+                        let part = raw[start..i].trim();
+                        if !part.is_empty() {
+                            if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
+                                cmds.push(cmd);
+                            }
+                        }
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Don't forget the last command after the final ';'
+            let part = raw[start..].trim();
+            if !part.is_empty() {
+                if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
+                    cmds.push(cmd);
+                }
+            }
 
             Some(cmds)
         } else {
@@ -258,11 +306,36 @@ macro_rules! define_commands {
                 $idx += 1;
             }
 
-            let cmds = raw.split(';')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
-                .collect();
+            let mut cmds = Vec::new();
+            let mut start = 0;
+            let mut depth = 0isize; // Track () [] {}
+            let bytes = raw.as_bytes();
+
+            for i in 0..bytes.len() {
+                match bytes[i] {
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth -= 1,
+                    b';' if depth == 0 => {
+                        // Only split on ';' if we are not inside brackets/parens
+                        let part = raw[start..i].trim();
+                        if !part.is_empty() {
+                            if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
+                                cmds.push(cmd);
+                            }
+                        }
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Don't forget the last command after the final ';'
+            let part = raw[start..].trim();
+            if !part.is_empty() {
+                if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
+                    cmds.push(cmd);
+                }
+            }
 
             Some(cmds)
         } else {
@@ -310,66 +383,55 @@ macro_rules! define_commands {
 define_commands! {
     // ===== MENU COMMANDS =====
     "open_menu" | "openmenu"
-        => OpenMenu { menu_name: String },
+        => OpenMenu { element_ref: ElementRef, menu_name: String },
 
     "close_menu" | "closemenu"
-        => CloseMenu { menu_name: String },
+        => CloseMenu { element_ref: ElementRef, menu_name: String },
 
     "close_all_menus" | "closeall"
         => CloseAllMenus,
 
     "toggle_menu" | "togglemenu"
-        => ToggleMenu { menu_name: String },
+        => ToggleMenu { element_ref: ElementRef, menu_name: String },
 
     "menu_active" | "menuactive"
-        => MenuActive { menu_name: String },
+        => MenuActive { element_ref: ElementRef, menu_name: String },
 
     // ===== LAYER COMMANDS =====
     "open_layer" | "openlayer"
-        => OpenLayer { menu_name: String, layer_name: String },
+        => OpenLayer { element_ref: ElementRef, menu_name: String, layer_name: String },
 
     "close_layer" | "closelayer"
-        => CloseLayer { menu_name: String, layer_name: String },
+        => CloseLayer { element_ref: ElementRef, menu_name: String, layer_name: String },
 
     "toggle_layer" | "togglelayer"
-        => ToggleLayer { menu_name: String, layer_name: String },
+        => ToggleLayer { element_ref: ElementRef, menu_name: String, layer_name: String },
 
     // ===== VARIABLE COMMANDS =====
     "set_var" | "setvar" | "set"
         => SetVar { element_ref: ElementRef, name: String, value: String },
 
     "inc_var" | "incvar" | "inc"
-        => IncVar { element_ref: ElementRef, name: String, amount: f64 },
+        => IncVar { element_ref: ElementRef, name: String, amount: String },
 
     "dec_var" | "decvar" | "dec"
-        => DecVar { element_ref: ElementRef, name: String, amount: f64 },
+        => DecVar { element_ref: ElementRef, name: String, amount: String },
 
     "mul_var" | "mulvar" | "mul"
-        => MulVar { element_ref: ElementRef, name: String, factor: f64 },
+        => MulVar { element_ref: ElementRef, name: String, factor: String },
 
     "toggle_var" | "togglevar" | "toggle"
         => ToggleVar { element_ref: ElementRef, name: String },
 
     "clamp" | "clampvar"
-        => Clamp { element_ref: ElementRef, name: String, min: f64, max: f64 },
+        => Clamp { element_ref: ElementRef, name: String, min: String, max: String },
 
     "set_var_expr" | "setexpr" | "set_expr"
         => SetVarExpr { element_ref: ElementRef, name: String, expr: String },
 
-    // ===== ACTION STATE COMMANDS =====
-    "start_action" | "startaction"
-        => StartAction { action_name: String },
-
-    "stop_action" | "stopaction"
-        => StopAction { action_name: String },
-
-    "remove_action" | "removeaction"
-        => RemoveAction { action_name: String },
-
-
     // ===== FLOW CONTROL =====
     "delay" | "wait" | "sleep"
-        => Delay { seconds: f64 },
+        => Delay { element_ref: ElementRef, seconds: String },
 
     "halt" | "break"
         => Halt,
@@ -383,7 +445,13 @@ define_commands! {
         => IfVarEq { element_ref: ElementRef, var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
 
     "add_element" | "addelem" | "add"
-        => AddElement { element_ref: ElementRef, menu: String, layer: String, id: String, kind: String, center: String},
+        => AddElement { element_ref: ElementRef, menu: String, layer: String, id: String, kind: String, center: String, undoable: bool},
+
+    "add_ap" | "addap"
+        => AddAP { element_ref: ElementRef, menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
+
+    "del_ap" | "delap"
+        => DeleteAP { element_ref: ElementRef, menu: String, layer: String, reference_id: String},
 
     "clone_element" | "cloneelem" | "clone"
         => CloneElement { element_ref: ElementRef,
@@ -393,30 +461,29 @@ define_commands! {
         to_menu: String,
         to_layer: String,
         to_id: String,
-        center: String,},
+        center: String,
+        undoable: bool
+    },
 
-    "clone_element_undoable" | "cloneu" | "copyu"
-        => CloneElementUndoable {
-        element_ref: ElementRef,
+    "clone_layer" | "clonelayer"
+        => CloneLayer { element_ref: ElementRef,
         from_menu: String,
         from_layer: String,
-        from_id: String,
         to_menu: String,
         to_layer: String,
-        to_id: String,
-        center: String,},
+        undoable: bool},
 
     "delete_element" | "delelem" | "delete"
-        => DeleteElement {element_ref: ElementRef, menu: String, layer: String, id: String},
+        => DeleteElement {element_ref: ElementRef, menu: String, layer: String, id: String, undoable: bool},
 
-    "delete_element_undoable" | "deleteu" | "removeu"
-        => DeleteElement {element_ref: ElementRef, menu: String, layer: String, id: String},
+    "delete_layer" | "dellayer"
+        => DeleteLayer {element_ref: ElementRef, menu: String, layer: String, undoable: bool},
 
     "save" | "savegame"
         => SaveGame,
 
     "load" | "loadgame" | "load_save"
-        => LoadSave {save_name: String, without_saving: bool  },
+        => LoadSave { element_ref: ElementRef, save_name: String, without_saving: bool  },
 
     "exit" | "quit"
         => ExitGame,
@@ -442,7 +509,7 @@ define_commands! {
 
     // ===== UTILITY =====
     "noop" | "no_op" | "none"
-        => Noop,
+        => Noop
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum TouchEventKind {
@@ -525,13 +592,19 @@ pub fn actions_to_uicommands(
             ..
         } => (TouchEventKind::DragMove, actions, element, *buttons),
         TouchEvent::ScrollOnElement {
-            actions, element, ..
-        } => (
-            TouchEventKind::ScrollOnElement,
             actions,
             element,
-            MouseButtons::default(),
-        ),
+            delta,
+        } => {
+            //println!("SCROLLED!!");
+            ui.variables.set_f64("scroll_delta", *delta);
+            (
+                TouchEventKind::ScrollOnElement,
+                actions,
+                element,
+                MouseButtons::default(),
+            )
+        }
         TouchEvent::SelectionRequested { element, .. } => (
             TouchEventKind::Select,
             &vec![],
@@ -1014,201 +1087,171 @@ struct ParsedAction {
 }
 
 fn parse_action_filters(action: &mut String) -> ActionFilters {
-    // ALWAYS remove the found filter!!!!
     let mut filters = ActionFilters::default();
+    let mut consumed = 0;
 
-    // Keep removing filters until none are found
     loop {
-        let mut found_something = false;
-        let button_prefix = "button:";
-        // Try to extract a button: filter
-        if let Some(button) = try_extract_filter(
-            action,
-            button_prefix,
-            &[
-                ("any", ParsedButton::Any),
-                ("right", ParsedButton::Right),
-                ("middle", ParsedButton::Middle),
-                ("back", ParsedButton::Back),
-                ("forward", ParsedButton::Forward),
-                ("left", ParsedButton::Left),
-                ("a", ParsedButton::Any),
-                ("l", ParsedButton::Left),
-                ("r", ParsedButton::Right),
-                ("m", ParsedButton::Middle),
-                ("b", ParsedButton::Back),
-                ("f", ParsedButton::Forward),
-            ],
-        ) {
-            filters.buttons.push(button);
-            found_something = true;
-        } else if let Some(start) = action.find(button_prefix) {
-            let rest = &action[start + button_prefix.len()..];
+        let (rest, ws) = trim_leading_whitespace(&action[consumed..]);
+        consumed += ws;
 
-            // Handle quoted string
-            if rest.starts_with('"') {
-                if let Some(end_quote) = rest[1..].find('"') {
-                    let key = rest[1..=end_quote].to_string();
-                    let total_len = button_prefix.len() + end_quote + 2; // +2 for both quotes
-                    remove_filter_span(action, start, start + total_len);
-                    filters.buttons.push(ParsedButton::Key(key));
-                    found_something = true;
-                }
-            }
-        }
-
-        // Try to extract an on: filter (event type)
-        if let Some(event) = try_extract_filter(
-            action,
-            "on:",
-            &[
-                ("a", TouchEventKind::Always),
-                ("always", TouchEventKind::Always),
-                ("n", TouchEventKind::Nothing),
-                ("nothing", TouchEventKind::Nothing),
-                ("hover_enter", TouchEventKind::HoverEnter),
-                ("hoverenter", TouchEventKind::HoverEnter),
-                ("hovering", TouchEventKind::Hovering),
-                ("hover", TouchEventKind::Hovering),
-                ("hover_exit", TouchEventKind::HoverExit),
-                ("hoverexit", TouchEventKind::HoverExit),
-                ("press", TouchEventKind::Press),
-                ("release", TouchEventKind::Release),
-                ("click", TouchEventKind::Click),
-                ("double_click", TouchEventKind::DoubleClick),
-                ("doubleclick", TouchEventKind::DoubleClick),
-                ("drag_move", TouchEventKind::DragMove),
-                ("dragging", TouchEventKind::DragMove),
-                ("drag", TouchEventKind::DragMove),
-                ("down", TouchEventKind::Down),
-                ("d", TouchEventKind::Down),
-                ("hold", TouchEventKind::Down),
-                ("scroll", TouchEventKind::ScrollOnElement),
-                ("h_enter", TouchEventKind::HoverEnter),
-                ("h", TouchEventKind::Hovering),
-                ("h_exit", TouchEventKind::HoverExit),
-                ("p", TouchEventKind::Press),
-                ("r", TouchEventKind::Release),
-                ("c", TouchEventKind::Click),
-                ("dc", TouchEventKind::DoubleClick),
-                ("dr", TouchEventKind::DragMove),
-                ("s", TouchEventKind::ScrollOnElement),
-                ("sel", TouchEventKind::Select),
-                ("desel", TouchEventKind::DeSelect),
-                ("activated", TouchEventKind::Activated),
-                ("deactivated", TouchEventKind::Deactivated),
-            ],
-        ) {
-            filters.events.push(event);
-            found_something = true;
-        }
-
-        // Try to extract an in: filter (mode)
-        if let Some(mode) = try_extract_string_filter(action, "in:") {
-            filters.modes.push(mode);
-            found_something = true;
-        }
-
-        // If nothing was extracted, we're done
-        if !found_something {
+        if rest.is_empty() {
             break;
         }
+
+        if rest.starts_with(',') {
+            consumed += 1;
+            continue;
+        }
+
+        let parsed = try_parse_button(rest, &mut filters)
+            .or_else(|| try_parse_on(rest, &mut filters))
+            .or_else(|| try_parse_in(rest, &mut filters));
+
+        let Some(used) = parsed else {
+            break;
+        };
+
+        consumed += used;
     }
+
+    action.drain(..consumed);
+
     if filters.buttons.is_empty() {
         filters.buttons.push(ParsedButton::Left);
     }
+
     filters
 }
 
-fn try_extract_filter<T: Clone>(
-    action: &mut String,
-    prefix: &str,
-    options: &[(&str, T)],
-) -> Option<T> {
-    if let Some(start) = action.find(prefix) {
-        let rest = &action[start + prefix.len()..];
-        if rest.starts_with('"') {
+fn try_parse_button(input: &str, filters: &mut ActionFilters) -> Option<usize> {
+    let (value, consumed) = parse_prefixed_value(input, "button:")?;
+
+    let button = match value.to_ascii_lowercase().as_str() {
+        "any" => ParsedButton::Any,
+        "right" => ParsedButton::Right,
+        "middle" => ParsedButton::Middle,
+        "back" => ParsedButton::Back,
+        "forward" => ParsedButton::Forward,
+        "left" => ParsedButton::Left,
+        "a" => ParsedButton::Any,
+        "l" => ParsedButton::Left,
+        "r" => ParsedButton::Right,
+        "m" => ParsedButton::Middle,
+        "b" => ParsedButton::Back,
+        "f" => ParsedButton::Forward,
+        _ => {
+            println!("Invalid button filter: button:{}", value);
             return None;
         }
-        for (name, value) in options {
-            if rest.starts_with(name) {
-                // Verify it's a complete token (followed by separator or end)
-                let after = start + prefix.len() + name.len();
-                if after >= action.len() || is_separator(action.as_bytes()[after]) {
-                    remove_filter_span(action, start, after);
-                    return Some(value.clone());
-                }
+    };
+
+    filters.buttons.push(button);
+    Some(consumed)
+}
+
+fn try_parse_on(input: &str, filters: &mut ActionFilters) -> Option<usize> {
+    let (value, consumed) = parse_prefixed_value(input, "on:")?;
+
+    let event = match value.to_ascii_lowercase().as_str() {
+        "a" | "always" => TouchEventKind::Always,
+        "n" | "nothing" => TouchEventKind::Nothing,
+        "hover_enter" | "hoverenter" | "h_enter" => TouchEventKind::HoverEnter,
+        "hovering" | "hover" | "h" => TouchEventKind::Hovering,
+        "hover_exit" | "hoverexit" | "h_exit" => TouchEventKind::HoverExit,
+        "press" | "p" => TouchEventKind::Press,
+        "release" | "r" => TouchEventKind::Release,
+        "click" | "c" => TouchEventKind::Click,
+        "double_click" | "doubleclick" | "dc" => TouchEventKind::DoubleClick,
+        "drag_move" | "dragging" | "drag" | "dr" => TouchEventKind::DragMove,
+        "down" | "d" | "hold" => TouchEventKind::Down,
+        "scroll" | "s" => TouchEventKind::ScrollOnElement,
+        "sel" => TouchEventKind::Select,
+        "desel" => TouchEventKind::DeSelect,
+        "activated" => TouchEventKind::Activated,
+        "deactivated" => TouchEventKind::Deactivated,
+        _ => {
+            println!("Invalid on filter: on:{}", value);
+            return None;
+        }
+    };
+
+    filters.events.push(event);
+    Some(consumed)
+}
+
+fn try_parse_in(input: &str, filters: &mut ActionFilters) -> Option<usize> {
+    let (value, consumed) = parse_prefixed_value(input, "in:")?;
+    filters.modes.push(value);
+    Some(consumed)
+}
+
+fn parse_prefixed_value(input: &str, prefix: &str) -> Option<(String, usize)> {
+    let rest = input.strip_prefix(prefix)?;
+
+    if rest.is_empty() {
+        return None;
+    }
+
+    let (value, value_len) = if rest.starts_with('"') {
+        parse_quoted_value(rest)?
+    } else {
+        parse_bare_value(rest)?
+    };
+
+    let after = &rest[value_len..];
+    if let Some(ch) = after.chars().next() {
+        if !ch.is_whitespace() && ch != ',' {
+            return None;
+        }
+    }
+
+    Some((value, prefix.len() + value_len))
+}
+
+fn parse_bare_value(input: &str) -> Option<(String, usize)> {
+    let end = input
+        .char_indices()
+        .find(|&(_, c)| c.is_whitespace() || c == ',')
+        .map(|(i, _)| i)
+        .unwrap_or(input.len());
+
+    if end == 0 {
+        return None;
+    }
+
+    Some((input[..end].to_string(), end))
+}
+
+fn parse_quoted_value(input: &str) -> Option<(String, usize)> {
+    let mut escaped = false;
+
+    for (i, c) in input.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match c {
+            '\\' => escaped = true,
+            '"' => {
+                let value = input[1..i].to_string();
+                return Some((value, i + 1));
             }
-        }
-
-        // Unrecognized value after prefix
-        let end = rest
-            .find(|c: char| is_separator(c as u8))
-            .unwrap_or(rest.len());
-        let invalid = &rest[..end];
-        let valid_options: Vec<_> = options.iter().map(|(n, _)| *n).collect();
-        println!(
-            "Invalid filter: '{}{}'. Valid options: {}",
-            prefix,
-            invalid,
-            valid_options.join(", ")
-        );
-    }
-
-    None
-}
-
-fn try_extract_string_filter(action: &mut String, prefix: &str) -> Option<String> {
-    if let Some(start) = action.find(prefix) {
-        let rest = &action[start + prefix.len()..];
-
-        // Extract until separator
-        let end = rest
-            .find(|c: char| is_separator(c as u8))
-            .unwrap_or(rest.len());
-
-        if end > 0 {
-            let value = rest[..end].to_string();
-            remove_filter_span(action, start, start + prefix.len() + end);
-            return Some(value);
+            _ => {}
         }
     }
 
     None
 }
 
-fn is_separator(b: u8) -> bool {
-    b.is_ascii_whitespace() || b == b',' || b == b')' || b == b'('
+fn trim_leading_whitespace(s: &str) -> (&str, usize) {
+    let trimmed = s.trim_start();
+    let consumed = s.len() - trimmed.len();
+    (trimmed, consumed)
 }
 
-fn remove_filter_span(action: &mut String, start: usize, end: usize) {
-    let bytes = action.as_bytes();
-    let mut actual_start = start;
-    let mut actual_end = end;
-
-    // Trim trailing comma/whitespace
-    while actual_end < bytes.len()
-        && (bytes[actual_end] == b',' || bytes[actual_end].is_ascii_whitespace())
-    {
-        actual_end += 1;
-    }
-
-    // Trim leading comma/whitespace
-    while actual_start > 0 {
-        let prev = bytes[actual_start - 1];
-        if prev == b',' || prev.is_ascii_whitespace() {
-            actual_start -= 1;
-        } else {
-            break;
-        }
-    }
-
-    // If we trimmed leading, don't also trim trailing comma
-    if actual_start < start {
-        actual_end = end;
-    }
-
-    action.drain(actual_start..actual_end);
+fn starts_with_filter_prefix(s: &str) -> bool {
+    s.starts_with("button:") || s.starts_with("on:") || s.starts_with("in:")
 }
 
 fn filters_match(

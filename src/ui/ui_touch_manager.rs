@@ -22,6 +22,7 @@ use crate::ui::vertex::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
+use tracing::error;
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -1139,7 +1140,8 @@ impl EditorTouchExtension {
         action: &Vec<String>,
         scroll_delta: f32,
     ) -> Option<TouchEvent> {
-        if !self.enabled || scroll_delta == 0.0 {
+        //println!("{}", scroll_delta);
+        if scroll_delta == 0.0 {
             return None;
         }
 
@@ -1172,9 +1174,24 @@ impl TouchEventQueue {
 
     pub fn push(&mut self, event: TouchEvent) {
         if self.events.len() >= self.capacity {
-            self.events.pop_front();
+            self.grow();
         }
+
         self.events.push_back(event);
+    }
+
+    fn grow(&mut self) {
+        const MAX_CAPACITY: usize = 4096;
+
+        if self.capacity >= MAX_CAPACITY {
+            error!("TouchEvent queue is full!");
+            return;
+        }
+
+        let new_capacity = (self.capacity * 2).min(MAX_CAPACITY);
+
+        self.events.reserve(new_capacity - self.capacity);
+        self.capacity = new_capacity;
     }
 
     pub fn push_all(&mut self, events: impl IntoIterator<Item = TouchEvent>) {
@@ -1293,7 +1310,7 @@ impl UiTouchManager {
             self.editor.enabled,
             self.options.override_mode,
         );
-
+        //println!("{:?}", top_hit);
         // Process hover changes
         self.process_hover(&top_hit);
 
@@ -1312,6 +1329,7 @@ impl UiTouchManager {
             });
         }
         for touchable_element in elements {
+            // Important for when not hovering and such, super important for always-on functions!
             self.events.push(TouchEvent::Nothing {
                 element: ElementRef::new(
                     touchable_element.menu,
@@ -1590,13 +1608,11 @@ impl UiTouchManager {
     /// Process scroll input
     fn process_scroll(&mut self, delta: f32) {
         if let Some(hover) = &self.current_hover {
-            if self.editor.enabled {
-                if let Some(event) =
-                    self.editor
-                        .process_scroll(&hover.element, &hover.actions, delta)
-                {
-                    self.events.push(event);
-                }
+            if let Some(event) = self
+                .editor
+                .process_scroll(&hover.element, &hover.actions, delta)
+            {
+                self.events.push(event);
             }
         }
     }
@@ -1650,11 +1666,6 @@ impl UiTouchManager {
     /// Set snap grid size
     pub fn set_snap_grid(&mut self, size: f32) {
         self.config.snap_grid_size = size.max(1.0);
-    }
-
-    /// Drain all events for processing
-    pub fn drain_events(&mut self) -> impl Iterator<Item = TouchEvent> + '_ {
-        self.events.drain()
     }
 }
 

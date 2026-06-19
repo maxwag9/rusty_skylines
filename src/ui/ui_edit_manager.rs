@@ -504,6 +504,148 @@ impl UIEditCommand for DeleteElementCommand {
     }
 }
 
+/// Command for creating an Advanced Primitive
+#[derive(Clone, Debug)]
+pub struct CreateAPCommand {
+    pub menu: String,
+    pub layer: String,
+    pub element: UiElement,
+}
+
+impl UIEditCommand for CreateAPCommand {
+    fn undo(
+        &self,
+        _touch_manager: &mut UiTouchManager,
+
+        menus: &mut HashMap<String, Menu>,
+        _variables: &mut Variables,
+        _mouse: &Mouse,
+    ) {
+        let Some(menu) = menus.get_mut(self.menu.as_str()) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == self.layer) else {
+            return;
+        };
+        //let _ = delete_element(menus, &self.affected_element);
+    }
+
+    fn redo(
+        &mut self,
+        _touch_manager: &mut UiTouchManager,
+        menus: &mut HashMap<String, Menu>,
+        _variables: &mut Variables,
+        mouse: &Mouse,
+    ) {
+        let Some(menu) = menus.get_mut(self.menu.as_str()) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == self.layer) else {
+            return;
+        };
+
+        // Push element veryyy simple
+        layer.dirty.mark_advanced_primitives();
+
+        layer.elements.push(self.element.clone());
+    }
+
+    fn description(&self) -> String {
+        format!("Create {}", self.element.kind_name())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
+        Box::new(self.clone())
+    }
+}
+
+/// Command for deleting an Advanced Primitive reference
+#[derive(Clone, Debug)]
+pub struct DeleteAPCommand {
+    pub menu: String,
+    pub layer: String,
+    pub reference_id: String,
+}
+
+impl UIEditCommand for DeleteAPCommand {
+    fn undo(
+        &self,
+        _touch_manager: &mut UiTouchManager,
+
+        menus: &mut HashMap<String, Menu>,
+        _variables: &mut Variables,
+        _mouse: &Mouse,
+    ) {
+        let Some(menu) = menus.get_mut(self.menu.as_str()) else {
+            return;
+        };
+        let Some(layer) = menu.layers.iter_mut().find(|l| l.name == self.layer) else {
+            return;
+        };
+        //let _ = delete_element(menus, &self.affected_element);
+    }
+
+    fn redo(
+        &mut self,
+        _touch_manager: &mut UiTouchManager,
+        menus: &mut HashMap<String, Menu>,
+        _variables: &mut Variables,
+        mouse: &Mouse,
+    ) {
+        println!("Removing AP {}", self.reference_id);
+        let Some(menu) = menus.get_mut(self.menu.as_str()) else {
+            return;
+        };
+
+        // Remove AP *LAYER*
+        if let Some(layer_idx) = menu
+            .layers
+            .iter()
+            .position(|l| l.name == self.reference_id.as_str())
+        {
+            // Remove the layer
+            menu.layers.remove(layer_idx);
+            menu.sort_layers();
+        }
+
+        // Remove AP *REFERENCE* if it exists
+        // Get layer where reference lives
+        if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == self.layer) {
+            // Get the idx where the reference is in the layer.elements vec
+            if let Some(ap_idx) = layer
+                .elements
+                .iter()
+                .position(|el| el.id() == self.reference_id.as_str())
+            {
+                //let ap_name = layer.elements.get(ap_idx).and_then(|el|el.as_ap().and_then(|ap| Some(ap.ap_name.clone())));
+                layer.dirty.mark_advanced_primitives();
+                // Remove the reference
+                layer.elements.remove(ap_idx);
+            };
+        };
+    }
+
+    fn description(&self) -> String {
+        format!("Delete {} AP!", self.reference_id)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn clone_box(&self) -> Box<dyn UIEditCommand> {
+        Box::new(self.clone())
+    }
+}
+
 /// Command for changing z-index
 #[derive(Clone, Debug)]
 pub struct ChangeZIndexCommand {

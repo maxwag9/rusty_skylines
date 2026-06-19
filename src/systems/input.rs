@@ -6,6 +6,7 @@ use glam::Vec3;
 
 pub fn run_inputs(resources: &mut Resources) {
     let world = &mut resources.world;
+
     let dt = world.time.target_sim_dt;
     if dt <= 0.0 {
         return;
@@ -57,7 +58,10 @@ pub fn run_inputs(resources: &mut Resources) {
     }
 
     let mut wish = Vec3::ZERO;
-    if !resources.settings.editor_mode && !resources.settings.drive_car {
+    if !resources.settings.editor_mode
+        && !resources.settings.drive_car
+        && !resources.ui.touch_manager.hovered().is_some()
+    {
         if input.gameplay_down("Fly Camera Forward") {
             wish += forward;
         }

@@ -5,6 +5,18 @@ use std::{fs, path::Path};
 use strum_macros::{Display, EnumString};
 use wgpu::*;
 
+macro_rules! setting_options {
+    (Bool, $ty:ty) => {
+        Value::Array(vec![Value::Bool(true), Value::Bool(false)])
+    };
+    (Cycle, $ty:ty) => {
+        Value::Array(<$ty>::cycle_options())
+    };
+    (Val, $ty:ty) => {
+        Value::Array(vec![])
+    };
+}
+
 macro_rules! impl_cycle {
     ($ty:ty : $($variant:expr),+ $(,)?) => {
         impl Cycle for $ty {
@@ -24,12 +36,18 @@ macro_rules! impl_cycle {
                     .unwrap_or(0);
                 variants[(idx + len - 1) % len].clone()
             }
+            /// Returns a list of all possible options for this cycle as UI Values
+            fn cycle_options() -> Vec<Value> {
+                let variants: &[$ty] = &[$($variant),+];
+                variants.iter().map(|v| Value::String(v.to_string())).collect()
+            }
         }
     };
 }
 pub trait Cycle {
     fn next(&self) -> Self;
     fn prev(&self) -> Self;
+    fn cycle_options() -> Vec<Value>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Display, EnumString)]
@@ -604,6 +622,14 @@ macro_rules! define_settings {
             pub fn kind(self) -> SettingKind {
                 match self {
                     $(SettingKey::$key => SettingKind::$kind,)*
+                }
+            }
+
+            pub fn options(self) -> Value {
+                match self {
+                    $(
+                        SettingKey::$key => setting_options!($kind, $ty),
+                    )*
                 }
             }
 

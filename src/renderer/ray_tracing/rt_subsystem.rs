@@ -6,6 +6,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
 // rt_subsystem.rs
 use std::mem::size_of;
+use tracing::{log, warn};
 use wgpu::util::{BufferInitDescriptor, DeviceExt};
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue};
 use wgpu_render_manager::compute_system::BufferSet;
@@ -94,7 +95,7 @@ impl RTSubsystem {
         let blas = Blas::build(vertices.to_vec(), indices.to_vec());
 
         if blas.bvh_nodes.is_empty() {
-            log::warn!("BLAS build produced no nodes");
+            warn!("BLAS build produced no nodes");
             return;
         }
 

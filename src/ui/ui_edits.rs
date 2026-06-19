@@ -1,7 +1,3 @@
-// ========================================================================
-// ELEMENT POSITION/SIZE/COLOR SETTERS (for undo system)
-// ========================================================================
-
 use crate::ui::input::Mouse;
 use crate::ui::menu::Menu;
 use crate::ui::parser::Value;

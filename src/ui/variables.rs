@@ -2,6 +2,7 @@ use crate::data::Settings;
 use crate::ui::parser::Value;
 use crate::ui::ui_editor::Ui;
 use crate::world::astronomy::{Astronomy, TimeScales};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -133,31 +134,49 @@ impl Variables {
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<&Value> {
-        let (base, suffix_opt) = match name.rsplit_once('.') {
-            Some((base, suffix)) => {
-                if Self::component_index(suffix).is_some() {
-                    (base, Some(suffix))
-                } else {
-                    (name, None)
-                }
+    pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
+        //println!("In variabled.get(): {}", name);
+        let mut base = name;
+        let mut suffixes: Vec<&str> = Vec::new();
+
+        while let Some((left, right)) = base.rsplit_once('.') {
+            if right == "options" || Self::component_index(right).is_some() {
+                suffixes.push(right);
+                base = left;
+            } else {
+                break;
             }
-            None => (name, None),
-        };
-
-        let v = self.vars.get(base)?;
-        //println!("In Variables::get(): Name: {}, Value: {:?}", base, v);
-        let suffix = match suffix_opt {
-            Some(s) => s,
-            None => return Some(v),
-        };
-
-        let idx = Self::component_index(suffix)?;
-
-        match v {
-            Value::Array(a) => a.get(idx),
-            _ => None,
         }
+
+        let mut value: Cow<'_, Value> = Cow::Borrowed(self.vars.get(base)?);
+
+        for suffix in suffixes.into_iter().rev() {
+            if suffix == "options" {
+                value = match value.as_ref() {
+                    Value::Bool(_) => {
+                        Cow::Owned(Value::Array(vec![Value::Bool(true), Value::Bool(false)]))
+                    }
+                    Value::Array(_) => value,
+                    _ => return None,
+                };
+                continue;
+            }
+
+            let idx = Self::component_index(suffix)?;
+
+            value = match value {
+                Cow::Borrowed(v) => match v {
+                    Value::Array(a) => Cow::Borrowed(a.get(idx)?),
+                    _ => return None,
+                },
+                Cow::Owned(v) => match v {
+                    Value::Array(a) => Cow::Owned(a.get(idx)?.clone()),
+                    _ => return None,
+                },
+            };
+        }
+
+        Some(value)
     }
     pub fn get_f64(&self, name: &str) -> Option<f64> {
         match self.vars.get(name)? {
@@ -187,9 +206,10 @@ impl Variables {
         }
     }
 
-    pub fn get_array(&self, name: &str) -> Option<&Vec<Value>> {
+    pub fn get_array(&self, name: &str) -> Option<Cow<'_, Vec<Value>>> {
         match self.get(name)? {
-            Value::Array(a) => Some(a),
+            Cow::Borrowed(Value::Array(a)) => Some(Cow::Borrowed(a)),
+            Cow::Owned(Value::Array(a)) => Some(Cow::Owned(a)),
             _ => None,
         }
     }
@@ -391,7 +411,7 @@ pub fn load_colors(path: PathBuf, settings: &Settings, vars: &mut Variables) {
             }
         };
         keys.push(key);
-        let value = Value::from_str(settings, vars, value_str);
+        let value = Value::from_str(settings, vars, value_str, true, true);
         match &value {
             Value::Array(_) => {}
             _ => {
@@ -420,7 +440,13 @@ pub fn load_colors(path: PathBuf, settings: &Settings, vars: &mut Variables) {
 
 pub fn save_colors(path: PathBuf, vars: &Variables) {
     let mut out = String::new();
-    for key in vars.get_array("color_keys").into_iter().flatten() {
+
+    let keys = if let Some(keys) = vars.get_array("color_keys") {
+        keys.to_vec()
+    } else {
+        Vec::new()
+    };
+    for key in keys.iter() {
         let key = match key {
             Value::String(key) => key.as_str(),
             _ => continue,

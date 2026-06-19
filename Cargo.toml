@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.7.17"
+version = "0.7.18"
 edition = "2024"
 
 [dependencies]
@@ -24,7 +24,6 @@ serde_yaml = { version = "0.9.34" }
 wgpu_render_manager = "0.2.14"                          # HERE!
 earcutr = "0.5.0"
 clipper2-rust = "1.0.3"
-log = "0.4.32"
 rayon = "1.12.0"
 cpal = "0.18.1"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }

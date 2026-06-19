@@ -412,6 +412,7 @@ pub struct AdvancedPrimitive {
     pub scale: f32,
     pub misc: MiscButtonSettings,
     pub editing_tool: bool,
+    pub is_temporary: bool,
 }
 
 impl AdvancedPrimitive {
@@ -431,6 +432,7 @@ impl AdvancedPrimitive {
                 editable: Editability::from_bool(yaml.misc.editable),
             },
             editing_tool: yaml.editing_tool,
+            is_temporary: false,
         }
     }
     pub fn to_yaml(&self) -> AdvancedPrimitiveYaml {
@@ -474,7 +476,7 @@ impl AdvancedPrimitive {
         } else {
             Vec::new()
         };
-
+        //println!("AP {}: {}", self.id, elements.len());
         RuntimeLayer {
             name: self.id,
             ap_name: Some(self.ap_name),
@@ -785,7 +787,12 @@ impl UiElement {
             _ => None,
         }
     }
-
+    pub fn as_ap_mut(&mut self) -> Option<&mut AdvancedPrimitive> {
+        match self {
+            UiElement::Advanced(ap) => Some(ap),
+            _ => None,
+        }
+    }
     pub fn as_outline(&self) -> Option<&UiButtonOutline> {
         match self {
             UiElement::Outline(o) => Some(o),
@@ -1055,8 +1062,17 @@ impl UiElement {
 
     pub fn set_pos_normalized(&mut self, norm_x: f32, norm_y: f32, window_size: PhysicalSize<u32>) {
         // Convert normalized coordinates (0.0..1.0) to pixel coordinates
-        let x = norm_x * window_size.width as f32;
-        let y = norm_y * window_size.height as f32;
+        let x = if norm_x < 1.5 {
+            norm_x * window_size.width as f32
+        } else {
+            norm_x
+        };
+
+        let y = if norm_y < 1.5 {
+            norm_y * window_size.height as f32
+        } else {
+            norm_y
+        };
 
         self.set_pos(x, y);
     }
@@ -1066,8 +1082,17 @@ impl UiElement {
         norm_y: f32,
         window_size: PhysicalSize<u32>,
     ) {
-        let offset_x = norm_x * window_size.width as f32;
-        let offset_y = norm_y * window_size.height as f32;
+        let offset_x = if norm_x < 1.5 {
+            norm_x * window_size.width as f32
+        } else {
+            norm_x
+        };
+
+        let offset_y = if norm_y < 1.5 {
+            norm_y * window_size.height as f32
+        } else {
+            norm_y
+        };
         self.translate(offset_x, offset_y);
     }
     fn misc_mut(&mut self) -> &mut MiscButtonSettings {
@@ -1491,6 +1516,9 @@ impl RuntimeLayer {
     }
     pub fn iter_aps(&self) -> impl Iterator<Item = &AdvancedPrimitive> {
         self.elements.iter().filter_map(UiElement::as_ap)
+    }
+    pub fn iter_aps_mut(&mut self) -> impl Iterator<Item = &mut AdvancedPrimitive> {
+        self.elements.iter_mut().filter_map(UiElement::as_ap_mut)
     }
     pub fn iter_outlines(&self) -> impl Iterator<Item = &UiButtonOutline> {
         self.elements.iter().filter_map(UiElement::as_outline)
@@ -2507,6 +2535,7 @@ impl Default for AdvancedPrimitive {
             scale: 1.0,
             misc: MiscButtonSettings::default(),
             editing_tool: false,
+            is_temporary: false,
         }
     }
 }

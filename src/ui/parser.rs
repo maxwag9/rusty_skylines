@@ -25,7 +25,14 @@ impl fmt::Display for Value {
 }
 
 impl Value {
-    pub fn from_str(settings: &Settings, variables: &Variables, s: &str) -> Self {
+    pub fn from_str(
+        settings: &Settings,
+        variables: &Variables,
+        s: &str,
+        with_expr: bool,
+        with_post_expr: bool,
+    ) -> Self {
+        let s = Self::replace_inline_variables(variables, s);
         let s = s.trim();
 
         if s.is_empty() {
@@ -52,10 +59,45 @@ impl Value {
                 "string" | "str" => {
                     return Value::String(value.to_string());
                 }
+                "strexpr" => {
+                    //println!("strexpr was given: {}", value);
+                    let s = Value::String(
+                        Value::from_str(settings, variables, value, true, false)
+                            .into_string_value(),
+                    );
+                    //println!("strexpr gave: {}", s);
+                    return s;
+                }
+                // "strexprvar" => {
+                //     println!("strexprvar was given: {}", value);
+                //     let s = Value::String(Value::from_str(settings, variables, value, true, true).into_string_value());
+                //     println!("strexprvar gave: {}", s);
+                //     return s;
+                // }
                 "setting" => {
-                    let key = SettingKey::from_str(value);
-                    if let Some(key) = key {
-                        return settings.read_setting(key).to_value();
+                    match value.split_once(".") {
+                        None => {
+                            let key = SettingKey::from_str(value);
+                            if let Some(key) = key {
+                                let value = settings.read_setting(key).to_value();
+                                //println!("{:?} {:?}", key, value);
+                                return value;
+                            }
+                        }
+                        Some((l, r)) => {
+                            let key = SettingKey::from_str(l);
+                            if let Some(key) = key {
+                                match r {
+                                    "options" => {
+                                        return key.options();
+                                    }
+                                    _ => {}
+                                }
+                                let value = settings.read_setting(key).to_value();
+                                //println!("{:?} {:?}", key, value);
+                                return value;
+                            }
+                        }
                     }
                 }
                 "var" | "variable" => match Self::load_variable(variables, &s.to_string()) {
@@ -95,35 +137,85 @@ impl Value {
             return Value::F64(f);
         }
 
+        // Might be setting key?
+        match s.split_once(".") {
+            None => {
+                let key = SettingKey::from_str(s);
+                if let Some(key) = key {
+                    let value = settings.read_setting(key).to_value();
+                    //println!("{:?} {:?}", key, value);
+                    return value;
+                }
+            }
+            Some((l, r)) => {
+                let key = SettingKey::from_str(l);
+                if let Some(key) = key {
+                    match r {
+                        "options" => {
+                            return key.options();
+                        }
+                        _ => {
+                            match r.split_once(".") {
+                                None => {
+                                    return key.options();
+                                }
+                                Some((l, r)) => {
+                                    if let Ok(idx) = r.parse::<usize>() {
+                                        if let Some(array) = key.options().as_array() {
+                                            if let Some(val) = array.get(idx) {
+                                                //println!("HOLY JESUS0, {:?}, {}", array, idx);
+                                                return val.to_owned();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let value = settings.read_setting(key).to_value();
+                    //println!("{:?} {:?}", key, value);
+                    return value;
+                }
+            }
+        }
+
         match Self::load_variable(variables, &s.to_string()) {
             Some(value) => return value,
             None => {}
         };
 
-        // Might be setting key?
-        let key = SettingKey::from_str(s);
-        if let Some(key) = key {
-            let value = settings.read_setting(key).to_value();
-            //println!("{:?} {:?}", key, value);
-            return value;
-        }
-
         //println!("In from_str() Evaluating Expression... Input: {} ", s);
-        match eval_expr(s, variables) {
-            Some(value) => match value {
-                Value::Null => {
-                    //println!("Input: {}, Output: Null!!!", s);
+        if with_expr {
+            let expr_value = match eval_expr(s, variables) {
+                Some(value) => match value {
+                    Value::Null => {
+                        //println!("Input: {}, Output: Null!!!", s);
+                        Value::String(s.to_string())
+                    }
+                    _ => {
+                        //println!("Input: {}, Output: {}({})", s, value.type_name(), value);
+                        value
+                    }
+                },
+                None => {
+                    //println!("NONE!! in from_str() NONE!!: {}", s);
                     Value::String(s.to_string())
                 }
-                _ => {
-                    //println!("Input: {}, Output: {}({})", s, value.type_name(), value);
-                    value
+            };
+            if with_post_expr {
+                match expr_value {
+                    Value::String(s) => {
+                        //println!("{s}");
+                        Value::from_str(settings, variables, &s, false, false)
+                    }
+                    _ => expr_value,
                 }
-            },
-            None => {
-                //println!("NONE!! in from_str() NONE!!: {}", s);
-                Value::String(s.to_string())
+            } else {
+                expr_value
             }
+            //expr_value
+        } else {
+            Value::String(s.to_string())
         }
     }
     pub fn from_vec<I, T>(iter: I) -> Self
@@ -134,7 +226,7 @@ impl Value {
         Value::Array(iter.into_iter().map(|e| Value::F64(e.into())).collect())
     }
     fn load_variable(variables: &Variables, name: &String) -> Option<Value> {
-        variables.get(name).cloned()
+        variables.get(name).map(|v| v.into_owned())
     }
     pub fn is_f64(&self) -> Option<Value> {
         match self {
@@ -184,6 +276,12 @@ impl Value {
     pub fn as_array(&self) -> Option<Vec<Value>> {
         match self {
             Value::Array(arr) => Some(arr.clone()),
+            _ => None,
+        }
+    }
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Value::String(str) => Some(str),
             _ => None,
         }
     }
@@ -345,11 +443,54 @@ impl Value {
         for elem in elements {
             let elem = elem.trim();
             if !elem.is_empty() {
-                result.push(Value::from_str(settings, variables, elem));
+                result.push(Value::from_str(settings, variables, elem, true, true));
             }
         }
 
         Some(result)
+    }
+    fn replace_inline_variables(variables: &Variables, s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let mut var_name = String::new();
+                let mut found_end = false;
+
+                // Consume characters until we find the closing '}'
+                for inner_c in chars.by_ref() {
+                    if inner_c == '}' {
+                        found_end = true;
+                        break;
+                    }
+                    var_name.push(inner_c);
+                }
+
+                if found_end && !var_name.is_empty() {
+                    // Try to load the variable
+                    if let Some(value) = Self::load_variable(variables, &var_name) {
+                        // Replace with the variable's string representation
+                        result.push_str(&value.to_string());
+                    } else {
+                        // Variable doesn't exist yet, leave it exactly as it was
+                        result.push('{');
+                        result.push_str(&var_name);
+                        result.push('}');
+                    }
+                } else {
+                    // Unclosed brace or empty {}, leave as is
+                    result.push('{');
+                    result.push_str(&var_name);
+                    if found_end {
+                        result.push('}');
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
     }
 }
 impl From<f64> for Value {
@@ -410,452 +551,6 @@ impl From<&str> for Value {
     fn from(v: &str) -> Self {
         Value::String(v.to_string())
     }
-}
-
-// ------------------------------------------------------------
-// Lexer / tokens
-// ------------------------------------------------------------
-#[derive(Clone, Debug, PartialEq)]
-enum Token {
-    Number(f64),
-    Ident(String),
-    StrLit(String),
-    True,
-    False,
-    Null,
-
-    // Arithmetic
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent, // %
-    Power,   // **
-
-    // Bitwise
-    BitAnd, // &
-    BitOr,  // |
-    BitXor, // ^
-    BitNot, // ~
-    Shl,    // <<
-    Shr,    // >>
-
-    // Comparison
-    Eq,  // ==
-    Neq, // !=
-    Lt,  // <
-    Gt,  // >
-    Le,  // <=
-    Ge,  // >=
-
-    // Strict equality
-    StrictEq,  // ===
-    StrictNeq, // !==
-
-    // Logical
-    And, // &&
-    Or,  // ||
-    Not, // !
-
-    // Null coalescing
-    NullCoalesce, // ??
-
-    // Optional chaining (for future)
-    OptChain, // ?.
-
-    // Ternary
-    Question,
-    Colon,
-
-    // Grouping & access
-    LParen,
-    RParen,
-    LBracket,
-    RBracket,
-    Comma,
-    Dot,
-
-    // Range
-    DotDot,   // ..
-    DotDotEq, // ..=
-
-    // String interpolation
-    Dollar, // $
-
-    // Pipeline
-    Pipe, // |>
-
-    End,
-}
-
-//noinspection GrazieInspection
-fn tokenize_expr(input: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(&c) = chars.peek() {
-        if c.is_whitespace() {
-            chars.next();
-        } else if c == '"' {
-            chars.next();
-            let mut s = String::new();
-            while let Some(&d) = chars.peek() {
-                chars.next();
-                if d == '"' {
-                    break;
-                } else if d == '\\' {
-                    // Escape sequences
-                    if let Some(&e) = chars.peek() {
-                        chars.next();
-                        match e {
-                            'n' => s.push('\n'),
-                            't' => s.push('\t'),
-                            'r' => s.push('\r'),
-                            '\\' => s.push('\\'),
-                            '"' => s.push('"'),
-                            '\'' => s.push('\''),
-                            '0' => s.push('\0'),
-                            'x' => {
-                                // Hex escape \xNN
-                                let mut hex = String::new();
-                                for _ in 0..2 {
-                                    if let Some(&h) = chars.peek() {
-                                        if h.is_ascii_hexdigit() {
-                                            hex.push(h);
-                                            chars.next();
-                                        }
-                                    }
-                                }
-                                if let Ok(code) = u8::from_str_radix(&hex, 16) {
-                                    s.push(code as char);
-                                }
-                            }
-                            _ => {
-                                s.push('\\');
-                                s.push(e);
-                            }
-                        }
-                    }
-                } else {
-                    s.push(d);
-                }
-            }
-            tokens.push(Token::StrLit(s));
-        } else if c == '\'' {
-            chars.next();
-            let mut s = String::new();
-            while let Some(&d) = chars.peek() {
-                chars.next();
-                if d == '\'' {
-                    break;
-                } else if d == '\\' {
-                    if let Some(&e) = chars.peek() {
-                        chars.next();
-                        match e {
-                            'n' => s.push('\n'),
-                            't' => s.push('\t'),
-                            'r' => s.push('\r'),
-                            '\\' => s.push('\\'),
-                            '\'' => s.push('\''),
-                            '"' => s.push('"'),
-                            _ => {
-                                s.push('\\');
-                                s.push(e);
-                            }
-                        }
-                    }
-                } else {
-                    s.push(d);
-                }
-            }
-            tokens.push(Token::StrLit(s));
-        } else if c == '`' {
-            // Template literal (backtick strings)
-            chars.next();
-            let mut s = String::new();
-            while let Some(&d) = chars.peek() {
-                chars.next();
-                if d == '`' {
-                    break;
-                } else {
-                    s.push(d);
-                }
-            }
-            tokens.push(Token::StrLit(s));
-        } else if c.is_ascii_digit()
-            || (c == '.' && chars.clone().nth(1).map_or(false, |n| n.is_ascii_digit()))
-        {
-            let mut s = String::new();
-            let mut has_dot = false;
-            let mut has_exp = false;
-
-            // Check for hex/binary/octal
-            if c == '0' {
-                s.push(c);
-                chars.next();
-                if let Some(&next) = chars.peek() {
-                    match next {
-                        'x' | 'X' => {
-                            s.push(next);
-                            chars.next();
-                            while let Some(&d) = chars.peek() {
-                                if d.is_ascii_hexdigit() || d == '_' {
-                                    if d != '_' {
-                                        s.push(d);
-                                    }
-                                    chars.next();
-                                } else {
-                                    break;
-                                }
-                            }
-                            if let Ok(v) = i64::from_str_radix(&s[2..], 16) {
-                                tokens.push(Token::Number(v as f64));
-                            }
-                            continue;
-                        }
-                        'b' | 'B' => {
-                            s.push(next);
-                            chars.next();
-                            while let Some(&d) = chars.peek() {
-                                if d == '0' || d == '1' || d == '_' {
-                                    if d != '_' {
-                                        s.push(d);
-                                    }
-                                    chars.next();
-                                } else {
-                                    break;
-                                }
-                            }
-                            if let Ok(v) = i64::from_str_radix(&s[2..], 2) {
-                                tokens.push(Token::Number(v as f64));
-                            }
-                            continue;
-                        }
-                        'o' | 'O' => {
-                            s.push(next);
-                            chars.next();
-                            while let Some(&d) = chars.peek() {
-                                if ('0'..='7').contains(&d) || d == '_' {
-                                    if d != '_' {
-                                        s.push(d);
-                                    }
-                                    chars.next();
-                                } else {
-                                    break;
-                                }
-                            }
-                            if let Ok(v) = i64::from_str_radix(&s[2..], 8) {
-                                tokens.push(Token::Number(v as f64));
-                            }
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-            } else {
-                s.push(c);
-                chars.next();
-            }
-
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() || d == '_' {
-                    if d != '_' {
-                        s.push(d);
-                    }
-                    chars.next();
-                } else if d == '.' && !has_dot && !has_exp {
-                    // Check it's not .. range operator
-                    let mut peek_chars = chars.clone();
-                    peek_chars.next();
-                    if peek_chars.peek() == Some(&'.') {
-                        break;
-                    }
-                    has_dot = true;
-                    s.push(d);
-                    chars.next();
-                } else if (d == 'e' || d == 'E') && !has_exp {
-                    has_exp = true;
-                    s.push(d);
-                    chars.next();
-                    if let Some(&sign) = chars.peek() {
-                        if sign == '+' || sign == '-' {
-                            s.push(sign);
-                            chars.next();
-                        }
-                    }
-                } else {
-                    break;
-                }
-            }
-            if let Ok(v) = s.parse() {
-                tokens.push(Token::Number(v));
-            }
-        } else if c.is_alphabetic() || c == '_' {
-            let mut s = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_alphanumeric() || d == '_' {
-                    s.push(d);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-
-            // Keep consuming .identifier parts (handles self.center.x, color_picker_hsv.h, etc.)
-            while chars.peek() == Some(&'.') {
-                let mut peek_chars = chars.clone();
-                peek_chars.next(); // skip the '.'
-
-                // Check if next char starts a valid identifier continuation
-                if let Some(&next) = peek_chars.peek() {
-                    if next.is_alphabetic() || next == '_' || next.is_ascii_digit() {
-                        // Consume the '.'
-                        chars.next();
-                        s.push('.');
-
-                        // Consume the identifier part
-                        while let Some(&d) = chars.peek() {
-                            if d.is_alphanumeric() || d == '_' {
-                                s.push(d);
-                                chars.next();
-                            } else {
-                                break;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            match s.as_str() {
-                "true" => tokens.push(Token::True),
-                "false" => tokens.push(Token::False),
-                "null" | "nil" | "none" => tokens.push(Token::Null),
-                _ => tokens.push(Token::Ident(s)),
-            }
-        } else {
-            chars.next();
-            match c {
-                '+' => tokens.push(Token::Plus),
-                '-' => tokens.push(Token::Minus),
-                '*' => {
-                    if chars.peek() == Some(&'*') {
-                        chars.next();
-                        tokens.push(Token::Power);
-                    } else {
-                        tokens.push(Token::Star);
-                    }
-                }
-                '/' => tokens.push(Token::Slash),
-                '%' => tokens.push(Token::Percent),
-                '(' => tokens.push(Token::LParen),
-                ')' => tokens.push(Token::RParen),
-                '[' => tokens.push(Token::LBracket),
-                ']' => tokens.push(Token::RBracket),
-                ',' => tokens.push(Token::Comma),
-                '$' => tokens.push(Token::Dollar),
-                '~' => tokens.push(Token::BitNot),
-                '?' => {
-                    if chars.peek() == Some(&'?') {
-                        chars.next();
-                        tokens.push(Token::NullCoalesce);
-                    } else if chars.peek() == Some(&'.') {
-                        chars.next();
-                        tokens.push(Token::OptChain);
-                    } else {
-                        tokens.push(Token::Question);
-                    }
-                }
-                ':' => tokens.push(Token::Colon),
-                '.' => {
-                    if chars.peek() == Some(&'.') {
-                        chars.next();
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            tokens.push(Token::DotDotEq);
-                        } else {
-                            tokens.push(Token::DotDot);
-                        }
-                    } else {
-                        tokens.push(Token::Dot);
-                    }
-                }
-                '!' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            tokens.push(Token::StrictNeq);
-                        } else {
-                            tokens.push(Token::Neq);
-                        }
-                    } else {
-                        tokens.push(Token::Not);
-                    }
-                }
-                '=' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        if chars.peek() == Some(&'=') {
-                            chars.next();
-                            tokens.push(Token::StrictEq);
-                        } else {
-                            tokens.push(Token::Eq);
-                        }
-                    }
-                }
-                '<' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        tokens.push(Token::Le);
-                    } else if chars.peek() == Some(&'<') {
-                        chars.next();
-                        tokens.push(Token::Shl);
-                    } else {
-                        tokens.push(Token::Lt);
-                    }
-                }
-                '>' => {
-                    if chars.peek() == Some(&'=') {
-                        chars.next();
-                        tokens.push(Token::Ge);
-                    } else if chars.peek() == Some(&'>') {
-                        chars.next();
-                        tokens.push(Token::Shr);
-                    } else {
-                        tokens.push(Token::Gt);
-                    }
-                }
-                '&' => {
-                    if chars.peek() == Some(&'&') {
-                        chars.next();
-                        tokens.push(Token::And);
-                    } else {
-                        tokens.push(Token::BitAnd);
-                    }
-                }
-                '|' => {
-                    if chars.peek() == Some(&'|') {
-                        chars.next();
-                        tokens.push(Token::Or);
-                    } else if chars.peek() == Some(&'>') {
-                        chars.next();
-                        tokens.push(Token::Pipe);
-                    } else {
-                        tokens.push(Token::BitOr);
-                    }
-                }
-                '^' => tokens.push(Token::BitXor),
-                _ => {}
-            }
-        }
-    }
-
-    tokens.push(Token::End);
-    tokens
 }
 
 // Built-in functions registry
@@ -1903,12 +1598,358 @@ impl fmt::Display for AnnoyingError {
 
 type ParseResult<T> = Result<T, ParseError>;
 
-// ========== PARSER ==========
+#[derive(Clone, Debug, PartialEq)]
+enum Token {
+    Number(f64),
+    Ident(String),
+    StrLit(String),
+    True,
+    False,
+    Null,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Power,
+    BitAnd,
+    BitOr,
+    BitXor,
+    BitNot,
+    Shl,
+    Shr,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    StrictEq,
+    StrictNeq,
+    And,
+    Or,
+    Not,
+    NullCoalesce,
+    OptChain,
+    Question,
+    Colon,
+    LParen,
+    RParen,
+    LBracket,
+    RBracket,
+    Comma,
+    Dot,
+    DotDot,
+    DotDotEq,
+    Dollar,
+    Pipe,
+    End,
+    RBrace,
+    LBrace,
+}
+
+fn tokenize_expr(input: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+        } else if c == '"' || c == '\'' || c == '`' {
+            let quote = c;
+            chars.next();
+            let mut s = String::new();
+            while let Some(&d) = chars.peek() {
+                chars.next();
+                if d == quote {
+                    break;
+                } else if d == '\\' {
+                    if let Some(&e) = chars.peek() {
+                        chars.next();
+                        match e {
+                            'n' => s.push('\n'),
+                            't' => s.push('\t'),
+                            'r' => s.push('\r'),
+                            '\\' => s.push('\\'),
+                            '"' => s.push('"'),
+                            '\'' => s.push('\''),
+                            '0' => s.push('\0'),
+                            _ => {
+                                s.push('\\');
+                                s.push(e);
+                            }
+                        }
+                    }
+                } else {
+                    s.push(d);
+                }
+            }
+            tokens.push(Token::StrLit(s));
+        } else {
+            let prev_is_operand = matches!(
+                tokens.last(),
+                Some(Token::Number(_))
+                    | Some(Token::Ident(_))
+                    | Some(Token::RParen)
+                    | Some(Token::RBracket)
+                    | Some(Token::StrLit(_))
+            );
+
+            if c.is_ascii_digit()
+                || (c == '.'
+                    && !prev_is_operand
+                    && chars.clone().nth(1).map_or(false, |n| n.is_ascii_digit()))
+            {
+                let mut s = String::new();
+                let mut has_dot = false;
+                let mut has_exp = false;
+
+                if c == '0' {
+                    s.push(c);
+                    chars.next();
+                    if let Some(&next) = chars.peek() {
+                        match next {
+                            'x' | 'X' => {
+                                s.push(next);
+                                chars.next();
+                                while let Some(&d) = chars.peek() {
+                                    if d.is_ascii_hexdigit() || d == '_' {
+                                        if d != '_' {
+                                            s.push(d);
+                                        }
+                                        chars.next();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                if let Ok(v) = i64::from_str_radix(&s[2..], 16) {
+                                    tokens.push(Token::Number(v as f64));
+                                }
+                                continue;
+                            }
+                            'b' | 'B' => {
+                                s.push(next);
+                                chars.next();
+                                while let Some(&d) = chars.peek() {
+                                    if d == '0' || d == '1' || d == '_' {
+                                        if d != '_' {
+                                            s.push(d);
+                                        }
+                                        chars.next();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                if let Ok(v) = i64::from_str_radix(&s[2..], 2) {
+                                    tokens.push(Token::Number(v as f64));
+                                }
+                                continue;
+                            }
+                            'o' | 'O' => {
+                                s.push(next);
+                                chars.next();
+                                while let Some(&d) = chars.peek() {
+                                    if ('0'..='7').contains(&d) || d == '_' {
+                                        if d != '_' {
+                                            s.push(d);
+                                        }
+                                        chars.next();
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                if let Ok(v) = i64::from_str_radix(&s[2..], 8) {
+                                    tokens.push(Token::Number(v as f64));
+                                }
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    s.push(c);
+                    chars.next();
+                }
+
+                while let Some(&d) = chars.peek() {
+                    if d.is_ascii_digit() || d == '_' {
+                        if d != '_' {
+                            s.push(d);
+                        }
+                        chars.next();
+                    } else if d == '.' && !has_dot && !has_exp {
+                        let mut peek_chars = chars.clone();
+                        peek_chars.next();
+                        if peek_chars.peek() == Some(&'.') {
+                            break;
+                        }
+                        has_dot = true;
+                        s.push(d);
+                        chars.next();
+                    } else if (d == 'e' || d == 'E') && !has_exp {
+                        has_exp = true;
+                        s.push(d);
+                        chars.next();
+                        if let Some(&sign) = chars.peek() {
+                            if sign == '+' || sign == '-' {
+                                s.push(sign);
+                                chars.next();
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                if let Ok(v) = s.parse() {
+                    tokens.push(Token::Number(v));
+                }
+            } else if c.is_alphabetic() || c == '_' {
+                let mut s = String::new();
+                while let Some(&d) = chars.peek() {
+                    if d.is_alphanumeric() || d == '_' {
+                        s.push(d);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+
+                match s.as_str() {
+                    "true" => tokens.push(Token::True),
+                    "false" => tokens.push(Token::False),
+                    "null" | "nil" | "none" => tokens.push(Token::Null),
+                    _ => tokens.push(Token::Ident(s)),
+                }
+            } else {
+                chars.next();
+                match c {
+                    '+' => tokens.push(Token::Plus),
+                    '-' => tokens.push(Token::Minus),
+                    '*' => {
+                        if chars.peek() == Some(&'*') {
+                            chars.next();
+                            tokens.push(Token::Power);
+                        } else {
+                            tokens.push(Token::Star);
+                        }
+                    }
+                    '/' => tokens.push(Token::Slash),
+                    '%' => tokens.push(Token::Percent),
+                    '(' => tokens.push(Token::LParen),
+                    ')' => tokens.push(Token::RParen),
+                    '[' => tokens.push(Token::LBracket),
+                    ']' => tokens.push(Token::RBracket),
+                    '{' => tokens.push(Token::LBrace),
+                    '}' => tokens.push(Token::RBrace),
+                    ',' => tokens.push(Token::Comma),
+                    '$' => tokens.push(Token::Dollar),
+                    '~' => tokens.push(Token::BitNot),
+                    '?' => {
+                        if chars.peek() == Some(&'?') {
+                            chars.next();
+                            tokens.push(Token::NullCoalesce);
+                        } else if chars.peek() == Some(&'.') {
+                            chars.next();
+                            tokens.push(Token::OptChain);
+                        } else {
+                            tokens.push(Token::Question);
+                        }
+                    }
+                    ':' => tokens.push(Token::Colon),
+                    '.' => {
+                        if chars.peek() == Some(&'.') {
+                            chars.next();
+                            if chars.peek() == Some(&'=') {
+                                chars.next();
+                                tokens.push(Token::DotDotEq);
+                            } else {
+                                tokens.push(Token::DotDot);
+                            }
+                        } else {
+                            tokens.push(Token::Dot);
+                        }
+                    }
+                    '!' => {
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            if chars.peek() == Some(&'=') {
+                                chars.next();
+                                tokens.push(Token::StrictNeq);
+                            } else {
+                                tokens.push(Token::Neq);
+                            }
+                        } else {
+                            tokens.push(Token::Not);
+                        }
+                    }
+                    '=' => {
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            if chars.peek() == Some(&'=') {
+                                chars.next();
+                                tokens.push(Token::StrictEq);
+                            } else {
+                                tokens.push(Token::Eq);
+                            }
+                        }
+                    }
+                    '<' => {
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            tokens.push(Token::Le);
+                        } else if chars.peek() == Some(&'<') {
+                            chars.next();
+                            tokens.push(Token::Shl);
+                        } else {
+                            tokens.push(Token::Lt);
+                        }
+                    }
+                    '>' => {
+                        if chars.peek() == Some(&'=') {
+                            chars.next();
+                            tokens.push(Token::Ge);
+                        } else if chars.peek() == Some(&'>') {
+                            chars.next();
+                            tokens.push(Token::Shr);
+                        } else {
+                            tokens.push(Token::Gt);
+                        }
+                    }
+                    '&' => {
+                        if chars.peek() == Some(&'&') {
+                            chars.next();
+                            tokens.push(Token::And);
+                        } else {
+                            tokens.push(Token::BitAnd);
+                        }
+                    }
+                    '|' => {
+                        if chars.peek() == Some(&'|') {
+                            chars.next();
+                            tokens.push(Token::Or);
+                        } else if chars.peek() == Some(&'>') {
+                            chars.next();
+                            tokens.push(Token::Pipe);
+                        } else {
+                            tokens.push(Token::BitOr);
+                        }
+                    }
+                    '^' => tokens.push(Token::BitXor),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    tokens.push(Token::End);
+    tokens
+}
 
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
     vars: &'a Variables,
+    is_inside_braces: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -1917,628 +1958,659 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             vars,
+            is_inside_braces: false,
         }
     }
 
-    fn current_pos(&self) -> usize {
-        self.pos
+    fn peek(&self) -> Token {
+        self.tokens.get(self.pos).cloned().unwrap_or(Token::End)
     }
-
-    fn peek(&self) -> &Token {
-        self.tokens.get(self.pos).unwrap_or(&Token::End)
-    }
-
-    fn advance(&mut self) -> Token {
-        let tok = self.peek().clone();
-        if !matches!(tok, Token::End) {
-            self.pos += 1;
-        }
-        tok
-    }
-
-    fn expect(&mut self, expected: Token) -> ParseResult<()> {
-        if self.peek() == &expected {
-            self.advance();
-            Ok(())
-        } else {
-            Err(ParseError::UnexpectedToken {
-                expected: format!("{:?}", expected),
-                found: self.peek().clone(),
-                pos: self.pos,
-            })
-        }
-    }
-
-    fn expect_ident(&mut self) -> ParseResult<String> {
-        match self.advance() {
-            Token::Ident(s) => Ok(s),
-            tok => Err(ParseError::UnexpectedToken {
-                expected: "identifier".to_string(),
-                found: tok,
-                pos: self.pos - 1,
-            }),
-        }
-    }
-
-    // ========== MAIN ENTRY ==========
 
     pub fn parse(&mut self) -> ParseResult<Value> {
-        self.pipeline()
-    }
-
-    // ========== EXPRESSION PARSING (Precedence Climbing) ==========
-
-    fn pipeline(&mut self) -> ParseResult<Value> {
-        let mut val = self.ternary()?;
-
-        while matches!(self.peek(), Token::Pipe) {
-            let pipe_pos = self.pos;
-            self.advance();
-            let name = self.expect_ident()?;
-            let args = self.maybe_call_args(val)?;
-            val = call_builtin(&name, args).ok_or_else(|| ParseError::UndefinedFunction {
-                name: name.clone(),
-                pos: pipe_pos,
-            })?;
+        let value = self.parse_expr(0)?;
+        if self.peek() != Token::End {
+            return Err(ParseError::UnexpectedToken {
+                expected: "end of expression".to_string(),
+                found: self.peek(),
+                pos: self.pos,
+            });
         }
-        Ok(val)
+        Ok(value)
     }
 
-    fn ternary(&mut self) -> ParseResult<Value> {
-        let cond = self.null_coalesce()?;
+    fn parse_expr(&mut self, min_bp: u8) -> ParseResult<Value> {
+        let mut left = self.parse_primary()?;
 
-        if !matches!(self.peek(), Token::Question) {
-            return Ok(cond);
-        }
-        self.advance();
+        loop {
+            let op = self.peek();
 
-        let yes = self.pipeline()?;
-        self.expect(Token::Colon)?;
-        let no = self.pipeline()?;
+            if let Value::String(ref l) = left {
+                if matches!(op, Token::Ident(_) | Token::StrLit(_) | Token::LBrace) {
+                    let right = self.parse_primary()?;
+                    left = Value::String(format!("{}{}", l, value_to_text(&right)));
+                    continue;
+                }
+            }
 
-        Ok(if cond.is_truthy() { yes } else { no })
-    }
+            let (l_bp, r_bp) = match op {
+                Token::Pipe => (1, 2),
+                Token::Question => (2, 0),
+                Token::NullCoalesce => (3, 4),
+                Token::Or => (4, 5),
+                Token::And => (5, 6),
+                Token::BitOr => (6, 7),
+                Token::BitXor => (7, 8),
+                Token::BitAnd => (8, 9),
+                Token::Eq | Token::Neq | Token::StrictEq | Token::StrictNeq => (9, 10),
+                Token::Lt | Token::Gt | Token::Le | Token::Ge => (10, 11),
+                Token::Shl | Token::Shr => (11, 12),
+                Token::Plus | Token::Minus => (12, 13),
+                Token::Star | Token::Slash | Token::Percent => (13, 14),
+                Token::Power => (15, 14),
+                Token::Dot | Token::LBracket => (16, 17),
+                _ => break,
+            };
 
-    fn null_coalesce(&mut self) -> ParseResult<Value> {
-        let val = self.binary_ops(
-            Self::binary_ops_logical,
-            &[Token::NullCoalesce],
-            Self::eval_null_coalesce,
-        )?;
-        Ok(val)
-    }
+            if l_bp < min_bp {
+                break;
+            }
 
-    // Consolidate all binary operations into one pattern
-    fn binary_ops<F, E>(
-        &mut self,
-        next_precedence: F,
-        operators: &[Token],
-        evaluator: E,
-    ) -> ParseResult<Value>
-    where
-        F: Fn(&mut Self) -> ParseResult<Value>,
-        E: Fn(&mut Self, Value, Value, &Token, usize) -> ParseResult<Value>,
-    {
-        let mut left = next_precedence(self)?;
+            self.pos += 1;
 
-        while operators.iter().any(|op| self.peek() == op) {
-            let op = self.advance();
-            let op_pos = self.pos - 1;
-            let right = next_precedence(self)?;
-            left = evaluator(self, left, right, &op, op_pos)?;
+            if op == Token::Question {
+                let yes = self.parse_expr(0)?;
+                if self.peek() != Token::Colon {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: ":".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+                self.pos += 1;
+                let no = self.parse_expr(2)?;
+                left = if left.is_truthy() { yes } else { no };
+                continue;
+            }
+
+            if op == Token::Pipe {
+                let name = match self.peek() {
+                    Token::Ident(s) => {
+                        self.pos += 1;
+                        s
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "identifier".to_string(),
+                            found: self.peek(),
+                            pos: self.pos,
+                        });
+                    }
+                };
+                let mut args = vec![left.clone()];
+                if self.peek() == Token::LParen {
+                    self.pos += 1;
+                    let mut more_args = Vec::new();
+                    if self.peek() != Token::RParen {
+                        loop {
+                            more_args.push(self.parse_expr(0)?);
+                            match self.peek() {
+                                Token::Comma => {
+                                    self.pos += 1;
+                                }
+                                Token::RParen => break,
+                                tok => {
+                                    return Err(ParseError::UnexpectedToken {
+                                        expected: "',' or ')'".to_string(),
+                                        found: tok.clone(),
+                                        pos: self.pos,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    self.pos += 1;
+                    args.append(&mut more_args);
+                } else if self.peek() == Token::Dot {
+                    self.pos += 1;
+                    let precision = self.peek();
+                    let precision: usize = match precision {
+                        Token::Number(n) => n as usize,
+                        Token::Ident(ident) => {
+                            let precision_val = self.parse_expr(0)?;
+
+                            match precision_val.as_f64() {
+                                Some(v) => v as usize,
+                                None => {
+                                    return Err(ParseError::TypeMismatch {
+                                        operation: "precision".to_string(),
+                                        expected: "number".to_string(),
+                                        found: precision_val.type_name().to_string(),
+                                        pos: self.pos,
+                                    });
+                                }
+                            }
+                        }
+                        Token::StrLit(str) => {
+                            let precision_val = self.parse_expr(0)?;
+
+                            match precision_val.as_f64() {
+                                Some(v) => v as usize,
+                                None => {
+                                    return Err(ParseError::TypeMismatch {
+                                        operation: "precision".to_string(),
+                                        expected: "number".to_string(),
+                                        found: precision_val.type_name().to_string(),
+                                        pos: self.pos,
+                                    });
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "number or ident or strlit".to_string(),
+                                found: self.peek(),
+                                pos: self.pos,
+                            });
+                        }
+                    };
+                    let Some(n) = left.as_f64() else {
+                        return Err(ParseError::TypeMismatch {
+                            operation: "".to_string(),
+                            expected: "number".to_string(),
+                            found: left.into_string_value(),
+                            pos: self.pos,
+                        });
+                    };
+                    left = Value::String(format!("{:.*}", precision, n));
+                    continue;
+                }
+                left = call_builtin(&name, args).ok_or(ParseError::UndefinedFunction {
+                    name: name.clone(),
+                    pos: self.pos - 1,
+                })?;
+                continue;
+            }
+
+            if op == Token::Dot {
+                let prop_tok = self.peek();
+                self.pos += 1;
+                match prop_tok {
+                    Token::Ident(prop) => {
+                        left = match get_property(&left, &prop) {
+                            Some(v) => v,
+                            None => Value::String(format!("{}.{}", value_to_text(&left), prop)),
+                        };
+                    }
+                    Token::Number(n) => {
+                        if n.fract() == 0.0 && n >= 0.0 {
+                            let idx = Value::I64(n as i64);
+                            //println!("Numbah: {}.{}", value_to_text(&left), idx);
+                            left = match get_index(&left, &idx) {
+                                Some(v) => v,
+                                None => {
+                                    let full_name =
+                                        format!("{}.{}", value_to_text(&left), n as i64);
+                                    match self.vars.get(full_name.as_str()) {
+                                        None => Value::String(full_name),
+                                        Some(val) => val.into_owned(),
+                                    }
+                                }
+                            };
+                        } else {
+                            let full_name = format!("{}.{}", value_to_text(&left), n as i64);
+                            left = match self.vars.get(full_name.as_str()) {
+                                None => Value::String(full_name),
+                                Some(val) => val.into_owned(),
+                            }
+                        }
+                    }
+                    Token::LBrace => {
+                        let prev_inside = self.is_inside_braces;
+                        self.is_inside_braces = true;
+                        let key = self.parse_expr(0)?;
+                        if self.peek() != Token::RBrace {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "}".to_string(),
+                                found: self.peek(),
+                                pos: self.pos,
+                            });
+                        }
+                        self.pos += 1;
+                        self.is_inside_braces = prev_inside;
+                        let resolved = match &key {
+                            Value::I64(_) | Value::F64(_) => get_index(&left, &key),
+                            _ => get_property(&left, &value_to_text(&key)),
+                        };
+                        left = resolved.unwrap_or_else(|| {
+                            Value::String(format!(
+                                "{}.{}",
+                                value_to_text(&left),
+                                value_to_text(&key)
+                            ))
+                        });
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "identifier or numeric index".to_string(),
+                            found: prop_tok.clone(),
+                            pos: self.pos - 1,
+                        });
+                    }
+                }
+            } else if op == Token::LBracket {
+                let idx = self.parse_expr(0)?;
+                if self.peek() != Token::RBracket {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "]".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+                self.pos += 1;
+                left = get_index(&left, &idx).ok_or(ParseError::InvalidIndexAccess {
+                    index_type: idx.type_name().to_string(),
+                    on_type: left.type_name().to_string(),
+                    pos: self.pos - 1,
+                })?;
+            } else {
+                let right = self.parse_expr(r_bp)?;
+                left = eval_binary(left, right, &op, self.pos - 1)?; // TODO
+            }
         }
         Ok(left)
     }
 
-    fn binary_ops_logical(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::binary_ops_bitwise,
-            &[Token::Or, Token::And],
-            Self::eval_logical,
-        )
-    }
-
-    fn binary_ops_bitwise(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::binary_ops_equality,
-            &[Token::BitOr, Token::BitXor, Token::BitAnd],
-            Self::eval_bitwise,
-        )
-    }
-
-    fn binary_ops_equality(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::binary_ops_comparison,
-            &[Token::Eq, Token::Neq, Token::StrictEq, Token::StrictNeq],
-            Self::eval_equality,
-        )
-    }
-
-    fn binary_ops_comparison(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::binary_ops_shift,
-            &[Token::Lt, Token::Gt, Token::Le, Token::Ge],
-            Self::eval_comparison,
-        )
-    }
-
-    fn binary_ops_shift(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::binary_ops_additive,
-            &[Token::Shl, Token::Shr],
-            Self::eval_shift,
-        )
-    }
-
-    fn binary_ops_additive(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::binary_ops_multiplicative,
-            &[Token::Plus, Token::Minus],
-            Self::eval_additive,
-        )
-    }
-
-    fn binary_ops_multiplicative(&mut self) -> ParseResult<Value> {
-        self.binary_ops(
-            Self::power,
-            &[Token::Star, Token::Slash, Token::Percent],
-            Self::eval_multiplicative,
-        )
-    }
-
-    // ========== BINARY OPERATION EVALUATORS ==========
-
-    fn eval_null_coalesce(
-        &mut self,
-        _left: Value,
-        right: Value,
-        _op: &Token,
-        _pos: usize,
-    ) -> ParseResult<Value> {
-        Ok(right) // Simple implementation; adjust for your null semantics
-    }
-
-    fn eval_logical(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        _pos: usize,
-    ) -> ParseResult<Value> {
-        Ok(Value::Bool(match op {
-            Token::Or => left.is_truthy() || right.is_truthy(),
-            Token::And => left.is_truthy() && right.is_truthy(),
-            _ => unreachable!(),
-        }))
-    }
-
-    fn eval_bitwise(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        pos: usize,
-    ) -> ParseResult<Value> {
-        let l = left.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-            operation: format!("bitwise {:?}", op),
-            expected: "integer".to_string(),
-            found: left.type_name().to_string(),
-            pos,
-        })?;
-        let r = right.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-            operation: format!("bitwise {:?}", op),
-            expected: "integer".to_string(),
-            found: right.type_name().to_string(),
-            pos,
-        })?;
-
-        Ok(Value::I64(match op {
-            Token::BitOr => l | r,
-            Token::BitXor => l ^ r,
-            Token::BitAnd => l & r,
-            _ => unreachable!(),
-        }))
-    }
-
-    fn eval_equality(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        _pos: usize,
-    ) -> ParseResult<Value> {
-        let eq = left == right;
-        Ok(Value::Bool(match op {
-            Token::Eq | Token::StrictEq => eq,
-            Token::Neq | Token::StrictNeq => !eq,
-            _ => unreachable!(),
-        }))
-    }
-
-    fn eval_comparison(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        pos: usize,
-    ) -> ParseResult<Value> {
-        let a = left.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-            operation: "comparison".to_string(),
-            expected: "number".to_string(),
-            found: left.type_name().to_string(),
-            pos,
-        })?;
-        let b = right.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-            operation: "comparison".to_string(),
-            expected: "number".to_string(),
-            found: right.type_name().to_string(),
-            pos,
-        })?;
-
-        Ok(Value::Bool(match op {
-            Token::Lt => a < b,
-            Token::Gt => a > b,
-            Token::Le => a <= b,
-            Token::Ge => a >= b,
-            _ => unreachable!(),
-        }))
-    }
-
-    fn eval_shift(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        pos: usize,
-    ) -> ParseResult<Value> {
-        let a = left.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-            operation: "shift".to_string(),
-            expected: "integer".to_string(),
-            found: left.type_name().to_string(),
-            pos,
-        })?;
-        let b = right.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-            operation: "shift amount".to_string(),
-            expected: "integer".to_string(),
-            found: right.type_name().to_string(),
-            pos,
-        })? as u32;
-
-        Ok(Value::I64(match op {
-            Token::Shl => a << b,
-            Token::Shr => a >> b,
-            _ => unreachable!(),
-        }))
-    }
-
-    fn eval_additive(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        pos: usize,
-    ) -> ParseResult<Value> {
-        let left_type = left.type_name();
-        let right_type = right.type_name();
-        match op {
-            Token::Plus => add_values(left, right).ok_or_else(|| ParseError::TypeMismatch {
-                operation: "addition".to_string(),
-                expected: "number or string".to_string(),
-                found: format!("{} + {}", left_type, right_type),
-                pos,
-            }),
-            Token::Minus => {
-                let a = left.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                    operation: "subtraction".to_string(),
-                    expected: "number".to_string(),
-                    found: left.type_name().to_string(),
-                    pos,
-                })?;
-                let b = right.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                    operation: "subtraction".to_string(),
-                    expected: "number".to_string(),
-                    found: right.type_name().to_string(),
-                    pos,
-                })?;
-                Ok(Value::F64(a - b))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    fn eval_multiplicative(
-        &mut self,
-        left: Value,
-        right: Value,
-        op: &Token,
-        pos: usize,
-    ) -> ParseResult<Value> {
-        match op {
-            Token::Star => multiply_values(left, right).ok_or_else(|| ParseError::TypeMismatch {
-                operation: "multiplication".to_string(),
-                expected: "number".to_string(),
-                found: "incompatible types".to_string(),
-                pos,
-            }),
-            Token::Slash | Token::Percent => {
-                let a = left.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                    operation: if matches!(op, Token::Slash) {
-                        "division".to_string()
-                    } else {
-                        "modulo".to_string()
-                    },
-                    expected: "number".to_string(),
-                    found: left.type_name().to_string(),
-                    pos,
-                })?;
-                let b = right.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                    operation: if matches!(op, Token::Slash) {
-                        "division".to_string()
-                    } else {
-                        "modulo".to_string()
-                    },
-                    expected: "number".to_string(),
-                    found: right.type_name().to_string(),
-                    pos,
-                })?;
-                Ok(Value::F64(if matches!(op, Token::Slash) {
-                    a / b
-                } else {
-                    a % b
-                }))
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    // ========== SPECIAL PRECEDENCE LEVELS ==========
-
-    fn power(&mut self) -> ParseResult<Value> {
-        let base = self.unary()?;
-        if matches!(self.peek(), Token::Power) {
-            let pow_pos = self.pos;
-            self.advance();
-            let exp = self.power()?; // right-associative
-            let b = base.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                operation: "exponentiation (base)".to_string(),
-                expected: "number".to_string(),
-                found: base.type_name().to_string(),
-                pos: pow_pos,
-            })?;
-            let e = exp.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                operation: "exponentiation (exponent)".to_string(),
-                expected: "number".to_string(),
-                found: exp.type_name().to_string(),
-                pos: pow_pos,
-            })?;
-            Ok(Value::F64(b.powf(e)))
-        } else {
-            Ok(base)
-        }
-    }
-
-    fn unary(&mut self) -> ParseResult<Value> {
-        let op = self.peek().clone();
-        let op_pos = self.pos;
-
-        match op {
-            Token::Not => {
-                self.advance();
-                Ok(Value::Bool(!self.unary()?.is_truthy()))
-            }
-            Token::Minus => {
-                self.advance();
-                let val = self.unary()?;
-                let n = val.as_f64().ok_or_else(|| ParseError::TypeMismatch {
-                    operation: "unary negation".to_string(),
-                    expected: "number".to_string(),
-                    found: val.type_name().to_string(),
-                    pos: op_pos,
-                })?;
-                Ok(Value::F64(-n))
-            }
-            Token::BitNot => {
-                self.advance();
-                let val = self.unary()?;
-                let n = val.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-                    operation: "bitwise NOT".to_string(),
-                    expected: "integer".to_string(),
-                    found: val.type_name().to_string(),
-                    pos: op_pos,
-                })?;
-                Ok(Value::I64(!n))
-            }
-            _ => self.postfix(),
-        }
-    }
-
-    fn postfix(&mut self) -> ParseResult<Value> {
-        let mut val = self.primary()?;
-
-        loop {
-            match self.peek() {
-                Token::Dot => {
-                    let dot_pos = self.pos;
-                    self.advance();
-                    let prop = self.expect_ident()?;
-                    val = get_property(&val, &prop).ok_or_else(|| {
-                        ParseError::InvalidPropertyAccess {
-                            property: prop.clone(),
-                            on_type: val.type_name().to_string(),
-                            pos: dot_pos,
-                        }
-                    })?;
-                }
-                Token::LBracket => {
-                    let bracket_pos = self.pos;
-                    self.advance();
-                    let idx = self.pipeline()?;
-                    self.expect(Token::RBracket)?;
-                    val = get_index(&val, &idx).ok_or_else(|| ParseError::InvalidIndexAccess {
-                        index_type: idx.type_name().to_string(),
-                        on_type: val.type_name().to_string(),
-                        pos: bracket_pos,
-                    })?;
-                }
-                _ => break,
-            }
-        }
-        Ok(val)
-    }
-
-    fn primary(&mut self) -> ParseResult<Value> {
-        let tok = self.advance();
-        let tok_pos = self.pos - 1;
+    fn parse_primary(&mut self) -> ParseResult<Value> {
+        let tok = self.peek();
+        self.pos += 1;
+        let pos = self.pos - 1;
 
         match tok {
             Token::Number(n) => Ok(Value::F64(n)),
             Token::StrLit(s) => Ok(Value::String(s)),
             Token::True => Ok(Value::Bool(true)),
             Token::False => Ok(Value::Bool(false)),
-            Token::Null => Err(ParseError::TypeMismatch {
-                operation: "null literal".to_string(),
-                expected: "value".to_string(),
-                found: "null".to_string(),
-                pos: tok_pos,
-            }),
-            Token::Ident(name) => self.resolve_identifier(&name, tok_pos),
-            Token::LBracket => self.parse_array_literal(),
-            Token::LParen => {
-                let v = self.pipeline()?;
-                self.expect(Token::RParen)?;
+            Token::Null => Ok(Value::Null),
+            Token::Minus => Ok(Value::F64(
+                -(self
+                    .parse_expr(15)?
+                    .as_f64()
+                    .ok_or(ParseError::TypeMismatch {
+                        operation: "negation".to_string(),
+                        expected: "number".to_string(),
+                        found: "value".to_string(),
+                        pos,
+                    })?),
+            )),
+            Token::Not => Ok(Value::Bool(!self.parse_expr(15)?.is_truthy())),
+            Token::BitNot => Ok(Value::I64(
+                !(self
+                    .parse_expr(15)?
+                    .as_i64()
+                    .ok_or(ParseError::TypeMismatch {
+                        operation: "bitnot".to_string(),
+                        expected: "integer".to_string(),
+                        found: "value".to_string(),
+                        pos,
+                    })?),
+            )),
+            Token::LBrace => {
+                let prev_inside = self.is_inside_braces;
+                self.is_inside_braces = true;
+                let v = self.parse_expr(0)?;
+                if self.peek() != Token::RBrace {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "}".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+                self.pos += 1;
+                self.is_inside_braces = prev_inside;
                 Ok(v)
+            }
+            Token::LParen => {
+                let v = self.parse_expr(0)?;
+                if self.peek() != Token::RParen {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: ")".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+                self.pos += 1;
+                Ok(v)
+            }
+            Token::LBracket => {
+                let mut items = Vec::new();
+                if self.peek() != Token::RBracket {
+                    loop {
+                        let item = self.parse_expr(0)?;
+                        if self.peek() == Token::DotDot || self.peek() == Token::DotDotEq {
+                            let inclusive = self.peek() == Token::DotDotEq;
+                            self.pos += 1;
+                            let end_val = self.parse_expr(0)?;
+                            let start = item.as_i64().ok_or(ParseError::TypeMismatch {
+                                operation: "range start".to_string(),
+                                expected: "integer".to_string(),
+                                found: item.type_name().to_string(),
+                                pos,
+                            })?;
+                            let end = end_val.as_i64().ok_or(ParseError::TypeMismatch {
+                                operation: "range end".to_string(),
+                                expected: "integer".to_string(),
+                                found: end_val.type_name().to_string(),
+                                pos,
+                            })?;
+                            let range: Box<dyn Iterator<Item = i64>> = if inclusive {
+                                Box::new(start..=end)
+                            } else {
+                                Box::new(start..end)
+                            };
+                            items.extend(range.map(|i| Value::F64(i as f64)));
+                        } else {
+                            items.push(item);
+                        }
+                        match self.peek() {
+                            Token::Comma => {
+                                self.pos += 1;
+                            }
+                            Token::RBracket => break,
+                            tok => {
+                                return Err(ParseError::UnexpectedToken {
+                                    expected: "',' or ']'".to_string(),
+                                    found: tok.clone(),
+                                    pos: self.pos,
+                                });
+                            }
+                        }
+                    }
+                }
+                self.pos += 1;
+                Ok(Value::Array(items))
+            }
+            Token::Ident(name) => {
+                if self.peek() == Token::LParen {
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    if self.peek() != Token::RParen {
+                        loop {
+                            args.push(self.parse_expr(0)?);
+                            match self.peek() {
+                                Token::Comma => {
+                                    self.pos += 1;
+                                }
+                                Token::RParen => break,
+                                tok => {
+                                    return Err(ParseError::UnexpectedToken {
+                                        expected: "',' or ')'".to_string(),
+                                        found: tok.clone(),
+                                        pos: self.pos,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    self.pos += 1;
+                    call_builtin(&name, args).ok_or(ParseError::UndefinedFunction {
+                        name: name.clone(),
+                        pos,
+                    })
+                } else if self.is_inside_braces {
+                    match name.as_str() {
+                        "PI" | "pi" => Ok(Value::F64(std::f64::consts::PI)),
+                        "TAU" | "tau" => Ok(Value::F64(std::f64::consts::TAU)),
+                        "E" | "e" => Ok(Value::F64(std::f64::consts::E)),
+                        "INF" | "inf" => Ok(Value::F64(f64::INFINITY)),
+                        "NAN" | "NaN" => Ok(Value::F64(f64::NAN)),
+                        _ => Ok(self
+                            .vars
+                            .get(&name)
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_else(|| Value::String(name))),
+                    }
+                } else {
+                    Ok(Value::String(name))
+                }
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: tok,
-                pos: tok_pos,
+                pos,
             }),
         }
     }
+}
 
-    // ========== HELPERS ==========
-
-    fn maybe_call_args(&mut self, first: Value) -> ParseResult<Vec<Value>> {
-        if matches!(self.peek(), Token::LParen) {
-            self.advance();
-            let mut args = self.parse_arg_list()?;
-            args.insert(0, first);
-            Ok(args)
-        } else {
-            Ok(vec![first])
-        }
+fn value_to_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        _ => v.to_string(),
     }
+}
 
-    fn parse_arg_list(&mut self) -> ParseResult<Vec<Value>> {
-        let mut items = Vec::new();
-
-        if !matches!(self.peek(), Token::RParen) {
-            loop {
-                items.push(self.pipeline()?);
-                match self.peek() {
-                    Token::Comma => {
-                        let _ = self.advance();
-                    }
-                    Token::RParen => break,
-                    tok => {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "',' or ')'".to_string(),
-                            found: tok.clone(),
-                            pos: self.pos,
-                        });
-                    }
-                }
-            }
+fn eval_binary(left: Value, right: Value, op: &Token, pos: usize) -> ParseResult<Value> {
+    match op {
+        Token::Plus => add_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+            operation: "addition".to_string(),
+            expected: "number or string".to_string(),
+            found: format!("{} + {}", left.type_name(), right.type_name()),
+            pos,
+        }),
+        Token::Minus => {
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "subtraction".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "subtraction".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
+            Ok(Value::F64(a - b))
         }
-        self.advance(); // consume )
-        Ok(items)
+        Token::Star => multiply_values(left, right).ok_or(ParseError::TypeMismatch {
+            operation: "multiplication".to_string(),
+            expected: "number".to_string(),
+            found: "incompatible types".to_string(),
+            pos,
+        }),
+        Token::Slash | Token::Percent => {
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "div/mod".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "div/mod".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
+            Ok(Value::F64(if matches!(op, Token::Slash) {
+                a / b
+            } else {
+                a % b
+            }))
+        }
+        Token::Power => {
+            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "power".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })?;
+            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "power".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?;
+            Ok(Value::F64(a.powf(b)))
+        }
+        Token::Eq | Token::StrictEq => Ok(Value::Bool(left == right)),
+        Token::Neq | Token::StrictNeq => Ok(Value::Bool(left != right)),
+        Token::Lt => Ok(Value::Bool(
+            left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "lt".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? < right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "lt".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::Gt => Ok(Value::Bool(
+            left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "gt".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? > right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "gt".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::Le => Ok(Value::Bool(
+            left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "le".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? <= right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "le".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::Ge => Ok(Value::Bool(
+            left.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "ge".to_string(),
+                expected: "number".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? >= right.as_f64().ok_or(ParseError::TypeMismatch {
+                operation: "ge".to_string(),
+                expected: "number".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::Shl => Ok(Value::I64(
+            left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "shl".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? << right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "shl".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })? as u32,
+        )),
+        Token::Shr => Ok(Value::I64(
+            left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "shr".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? >> right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "shr".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })? as u32,
+        )),
+        Token::BitAnd => Ok(Value::I64(
+            left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitand".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? & right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitand".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::BitOr => Ok(Value::I64(
+            left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitor".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? | right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitor".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::BitXor => Ok(Value::I64(
+            left.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitxor".to_string(),
+                expected: "integer".to_string(),
+                found: left.type_name().to_string(),
+                pos,
+            })? ^ right.as_i64().ok_or(ParseError::TypeMismatch {
+                operation: "bitxor".to_string(),
+                expected: "integer".to_string(),
+                found: right.type_name().to_string(),
+                pos,
+            })?,
+        )),
+        Token::And => Ok(Value::Bool(left.is_truthy() && right.is_truthy())),
+        Token::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
+        Token::NullCoalesce => Ok(if left.is_truthy() { left } else { right }),
+        _ => unreachable!(),
     }
+}
 
-    fn parse_array_literal(&mut self) -> ParseResult<Value> {
-        let mut items = Vec::new();
+fn call_builtin(name: &str, args: Vec<Value>) -> Option<Value> {
+    get_builtin(name)?(args)
+}
 
-        if !matches!(self.peek(), Token::RBracket) {
-            loop {
-                let item = self.pipeline()?;
-
-                // Handle range syntax: [1..5] or [1..=5]
-                if matches!(self.peek(), Token::DotDot | Token::DotDotEq) {
-                    let inclusive = matches!(self.peek(), Token::DotDotEq);
-                    let range_pos = self.pos;
-                    self.advance();
-
-                    let end_val = self.pipeline()?;
-                    let start = item.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-                        operation: "range start".to_string(),
-                        expected: "integer".to_string(),
-                        found: item.type_name().to_string(),
-                        pos: range_pos,
-                    })?;
-                    let end = end_val.as_i64().ok_or_else(|| ParseError::TypeMismatch {
-                        operation: "range end".to_string(),
-                        expected: "integer".to_string(),
-                        found: end_val.type_name().to_string(),
-                        pos: range_pos,
-                    })?;
-
-                    let range: Box<dyn Iterator<Item = i64>> = if inclusive {
-                        Box::new(start..=end)
-                    } else {
-                        Box::new(start..end)
-                    };
-                    items.extend(range.map(|i| Value::F64(i as f64)));
-                } else {
-                    items.push(item);
-                }
-
-                match self.peek() {
-                    Token::Comma => {
-                        let _ = self.advance();
-                    }
-                    Token::RBracket => break,
-                    tok => {
-                        return Err(ParseError::UnexpectedToken {
-                            expected: "',' or ']'".to_string(),
-                            found: tok.clone(),
-                            pos: self.pos,
-                        });
-                    }
-                }
-            }
+fn add_values(a: Value, b: Value) -> Option<Value> {
+    match (a, b) {
+        (Value::F64(x), Value::F64(y)) => Some(Value::F64(x + y)),
+        (Value::I64(x), Value::F64(y)) => Some(Value::F64(x as f64 + y)),
+        (Value::F64(x), Value::I64(y)) => Some(Value::F64(x + y as f64)),
+        (Value::String(s), Value::F64(n)) => Some(Value::String(format!("{}{}", s, n))),
+        (Value::F64(n), Value::String(s)) => Some(Value::String(format!("{}{}", n, s))),
+        (Value::I64(x), Value::I64(y)) => Some(Value::I64(x + y)),
+        (Value::String(s), Value::I64(n)) => Some(Value::String(format!("{}{}", s, n))),
+        (Value::I64(n), Value::String(s)) => Some(Value::String(format!("{}{}", n, s))),
+        (Value::String(x), Value::String(y)) => Some(Value::String(x + &y)),
+        (Value::Bool(x), Value::String(y)) => Some(Value::String(format!("{}{}", x, y))),
+        (Value::String(x), Value::Bool(y)) => Some(Value::String(format!("{}{}", x, y))),
+        (Value::Array(mut x), Value::Array(y)) => {
+            x.extend(y);
+            Some(Value::Array(x))
         }
-        self.advance(); // consume ]
-        Ok(Value::Array(items))
-    }
-
-    fn resolve_identifier(&mut self, name: &str, name_pos: usize) -> ParseResult<Value> {
-        // Function call?
-        if matches!(self.peek(), Token::LParen) {
-            self.advance();
-            let args = self.parse_arg_list()?;
-            return call_builtin(name, args).ok_or_else(|| ParseError::UndefinedFunction {
-                name: name.to_string(),
-                pos: name_pos,
-            });
+        (Value::Array(mut x), v) => {
+            x.push(v);
+            Some(Value::Array(x))
         }
-
-        // Constants
-        match name {
-            "PI" | "pi" => return Ok(Value::F64(std::f64::consts::PI)),
-            "TAU" | "tau" => return Ok(Value::F64(std::f64::consts::TAU)),
-            "E" | "e" => return Ok(Value::F64(std::f64::consts::E)),
-            "INF" | "inf" => return Ok(Value::F64(f64::INFINITY)),
-            "NAN" | "NaN" => return Ok(Value::F64(f64::NAN)),
-            _ => {}
+        (v, Value::Array(mut y)) => {
+            y.insert(0, v);
+            Some(Value::Array(y))
         }
-
-        // Variable lookup
-        self.vars
-            .get(name)
-            .cloned()
-            .ok_or_else(|| ParseError::UndefinedVariable {
-                name: name.to_string(),
-                pos: name_pos,
-            })
+        (Value::String(s), Value::Null) => Some(Value::String(s)),
+        (Value::Null, Value::String(s)) => Some(Value::String(s)),
+        _ => None,
     }
 }
 
@@ -2647,15 +2719,15 @@ fn int_property(n: i64, prop: &str) -> Option<Value> {
 
 fn get_index(value: &Value, index: &Value) -> Option<Value> {
     let idx = index.as_i64()?;
-
     match value {
-        Value::String(s) => {
-            let chars: Vec<char> = s.chars().collect();
-            let i = normalize_index(idx, chars.len())?;
-            Some(Value::String(chars[i].to_string()))
-        }
+        // Value::String(s) => {
+        //     let chars: Vec<char> = s.chars().collect();
+        //     let i = normalize_index(idx, chars.len())?;
+        //     Some(Value::String(chars[i].to_string()))
+        // }
         Value::Array(arr) => {
             let i = normalize_index(idx, arr.len())?;
+            // println!("Get index thingie: {} {} {}", value, index, idx);
             Some(arr[i].clone())
         }
         _ => None,
@@ -2671,43 +2743,161 @@ fn normalize_index(idx: i64, len: usize) -> Option<usize> {
     }
 }
 
-fn call_builtin(name: &str, args: Vec<Value>) -> Option<Value> {
-    get_builtin(name)?(args)
+// pub fn evaluate_placeholder(src: &str, vars: &Variables) -> String {
+//     format_slot(src.trim(), vars)
+// }
+
+fn format_slot(src: &str, vars: &Variables) -> String {
+    let (expr, modifiers) = split_format_chain(src);
+    let mut value = match eval_expr(expr, vars) {
+        Some(v) => v,
+        None => return src.to_string(),
+    };
+    for modifier in modifiers {
+        value = match apply_modifier(value, modifier) {
+            Some(v) => v,
+            None => return src.to_string(),
+        };
+    }
+    value.into_string_value()
 }
 
-fn add_values(a: Value, b: Value) -> Option<Value> {
-    match (a, b) {
-        (Value::F64(x), Value::F64(y)) => Some(Value::F64(x + y)),
-        (Value::I64(x), Value::F64(y)) => Some(Value::F64(x as f64 + y)),
-        (Value::F64(x), Value::I64(y)) => Some(Value::F64(x + y as f64)),
-        (Value::String(s), Value::F64(n)) => Some(Value::String(format!("{}{}", s, n))),
-        (Value::F64(n), Value::String(s)) => Some(Value::String(format!("{}{}", n, s))),
-        (Value::I64(x), Value::I64(y)) => Some(Value::I64(x + y)),
-        (Value::String(s), Value::I64(n)) => Some(Value::String(format!("{}{}", s, n))),
-        (Value::I64(n), Value::String(s)) => Some(Value::String(format!("{}{}", n, s))),
-        (Value::String(x), Value::String(y)) => Some(Value::String(x + &y)),
-        (Value::Bool(x), Value::String(y)) => Some(Value::String(format!("{}{}", x, y))),
-        (Value::String(x), Value::Bool(y)) => Some(Value::String(format!("{}{}", x, y))),
-        (Value::Array(mut x), Value::Array(y)) => {
-            x.extend(y);
-            Some(Value::Array(x))
+fn split_format_chain(src: &str) -> (&str, Vec<&str>) {
+    let mut paren_depth: i32 = 0;
+    let mut bracket_depth: i32 = 0;
+    let mut brace_depth: i32 = 0;
+    let mut ternary_depth = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escape = false;
+
+    for (idx, ch) in src.char_indices() {
+        if escape {
+            escape = false;
+            continue;
         }
-        (Value::Array(mut x), v) => {
-            x.push(v);
-            Some(Value::Array(x))
+        if in_single {
+            match ch {
+                '\\' => escape = true,
+                '\'' => in_single = false,
+                _ => {}
+            }
+            continue;
         }
-        (v, Value::Array(mut y)) => {
-            y.insert(0, v);
-            Some(Value::Array(y))
+        if in_double {
+            match ch {
+                '\\' => escape = true,
+                '"' => in_double = false,
+                _ => {}
+            }
+            continue;
         }
-        (Value::String(s), Value::Null) => Some(Value::String(s)),
-        (Value::Null, Value::String(s)) => Some(Value::String(s)),
-        _ => None,
+        match ch {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '?' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => ternary_depth += 1,
+            ':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                if ternary_depth > 0 {
+                    ternary_depth -= 1;
+                } else {
+                    let expr = src[..idx].trim();
+                    let mods = src[idx + 1..]
+                        .split(':')
+                        .map(|m| m.trim())
+                        .filter(|m| !m.is_empty())
+                        .collect();
+                    return (expr, mods);
+                }
+            }
+            _ => {}
+        }
+    }
+    (src.trim(), Vec::new())
+}
+
+fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
+    let modifier = modifier.trim();
+    if modifier.is_empty() {
+        return Some(value);
+    }
+    if let Some(precision_str) = modifier.strip_prefix('.') {
+        let precision = precision_str.trim().parse::<usize>().ok()?;
+        let n = value.as_f64()?;
+        return Some(Value::String(format!("{:.*}", precision, n)));
+    }
+    if let Some(func) = get_builtin(modifier) {
+        return func(vec![value]);
+    }
+    None
+}
+
+pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
+    let tokens = tokenize_expr(expr);
+    let result = Parser::new(&tokens, vars).parse();
+    match result {
+        Ok(result) => Some(result),
+        Err(e) => {
+            println!("ParseError for '{}': {}", expr, e);
+            None
+        }
     }
 }
 
-pub fn evaluate_placeholder(src: &str, vars: &Variables) -> String {
-    format_slot(src.trim(), vars)
+pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -> String {
+    let mut out = String::new();
+    let mut chars = template.char_indices().peekable();
+
+    while let Some((i, c)) = chars.next() {
+        if c == '{' {
+            if let Some(&(_, '{')) = chars.peek() {
+                chars.next();
+                out.push('{');
+                continue;
+            }
+            let start = i + 1;
+            let mut end_opt = None;
+            let mut brace_depth = 1;
+            while let Some(&(j, cj)) = chars.peek() {
+                chars.next();
+                if cj == '{' {
+                    brace_depth += 1;
+                } else if cj == '}' {
+                    brace_depth -= 1;
+                    if brace_depth == 0 {
+                        end_opt = Some(j);
+                        break;
+                    }
+                }
+            }
+            if let Some(end) = end_opt {
+                let inside = &template[start..end];
+                let val = if let Some(key) = SettingKey::from_str(inside) {
+                    settings.read_setting(key).to_string()
+                } else {
+                    Value::from_str(settings, vars, inside.trim(), true, true).into_string_value()
+                };
+                out.push_str(&val);
+            } else {
+                out.push('{');
+            }
+        } else if c == '}' {
+            if let Some(&(_, '}')) = chars.peek() {
+                chars.next();
+                out.push('}');
+            } else {
+                out.push(c);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn trim_float(n: f64) -> String {
@@ -2731,185 +2921,6 @@ fn trim_float(n: f64) -> String {
     }
 
     if s == "-0" { "0".to_string() } else { s }
-}
-fn format_slot(src: &str, vars: &Variables) -> String {
-    let (expr, modifiers) = split_format_chain(src);
-
-    let mut value = match eval_expr(expr, vars) {
-        Some(v) => v,
-        None => return src.to_string(),
-    };
-
-    for modifier in modifiers {
-        value = match apply_modifier(value, modifier) {
-            Some(v) => v,
-            None => return src.to_string(),
-        };
-    }
-    value.into_string_value()
-}
-
-fn value_to_text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        _ => v.to_string(),
-    }
-}
-fn split_format_chain(src: &str) -> (&str, Vec<&str>) {
-    let mut paren_depth: i32 = 0;
-    let mut bracket_depth: i32 = 0;
-    let mut brace_depth: i32 = 0;
-    let mut ternary_depth: i32 = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escape = false;
-
-    for (idx, ch) in src.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-
-        if in_single {
-            match ch {
-                '\\' => escape = true,
-                '\'' => in_single = false,
-                _ => {}
-            }
-            continue;
-        }
-
-        if in_double {
-            match ch {
-                '\\' => escape = true,
-                '"' => in_double = false,
-                _ => {}
-            }
-            continue;
-        }
-
-        match ch {
-            '\'' => in_single = true,
-            '"' => in_double = true,
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth += 1,
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '?' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                ternary_depth += 1;
-            }
-            ':' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                if ternary_depth > 0 {
-                    ternary_depth -= 1;
-                } else {
-                    let expr = src[..idx].trim();
-                    let mods = src[idx + 1..]
-                        .split(':')
-                        .map(|m| m.trim())
-                        .filter(|m| !m.is_empty())
-                        .collect::<Vec<_>>();
-                    return (expr, mods);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    (src.trim(), Vec::new())
-}
-
-fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
-    let modifier = modifier.trim();
-    if modifier.is_empty() {
-        return Some(value);
-    }
-
-    if let Some(precision_str) = modifier.strip_prefix('.') {
-        let precision = precision_str.trim().parse::<usize>().ok()?;
-        let n = value.as_f64()?;
-        return Some(Value::String(format!("{:.*}", precision, n)));
-    }
-
-    if let Some(func) = get_builtin(modifier) {
-        return func(vec![value]);
-    }
-
-    None
-}
-
-pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
-    let tokens = tokenize_expr(expr);
-    //println!("{:?}", tokens);
-    let result = Parser::new(&tokens, vars).parse();
-    //println!("{}: {:?}", expr, result);
-    match result {
-        Ok(result) => Some(result),
-        Err(e) => {
-            //println!("{}", e);
-            None
-        }
-    }
-}
-
-//noinspection GrazieInspection
-pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -> String {
-    let mut out = String::new();
-    let mut chars = template.char_indices().peekable();
-
-    while let Some((i, c)) = chars.next() {
-        if c == '{' {
-            // Check for escaped brace {{
-            if let Some(&(_, '{')) = chars.peek() {
-                chars.next();
-                out.push('{');
-                continue;
-            }
-
-            let start = i + 1;
-            let mut end_opt = None;
-            let mut brace_depth = 1;
-
-            while let Some(&(j, cj)) = chars.peek() {
-                chars.next();
-                if cj == '{' {
-                    brace_depth += 1;
-                } else if cj == '}' {
-                    brace_depth -= 1;
-                    if brace_depth == 0 {
-                        end_opt = Some(j);
-                        break;
-                    }
-                }
-            }
-
-            if let Some(end) = end_opt {
-                let inside = &template[start..end];
-
-                let val = if let Some(key) = SettingKey::from_str(inside) {
-                    settings.read_setting(key).to_string()
-                } else {
-                    evaluate_placeholder(inside.trim(), vars)
-                };
-                out.push_str(&val);
-            } else {
-                out.push('{');
-            }
-        } else if c == '}' {
-            // Check for escaped brace }}
-            if let Some(&(_, '}')) = chars.peek() {
-                chars.next();
-                out.push('}');
-            } else {
-                out.push(c);
-            }
-        } else {
-            out.push(c);
-        }
-    }
-
-    out
 }
 
 pub fn set_input_box(template: &str, current_text: &str, _vars: &mut Variables) -> String {

@@ -24,8 +24,6 @@ use wgpu_text::glyph_brush::ab_glyph::FontArc;
 use wgpu_text::{BrushBuilder, TextBrush};
 use winit::dpi::PhysicalSize;
 
-pub const PAD: i32 = 1;
-
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ScreenUniform {
@@ -33,19 +31,6 @@ pub struct ScreenUniform {
     pub time: f32,
     pub enable_dither: u32, // use 0 = off, 1 = on
     pub mouse: [f32; 2],    // position!
-}
-
-#[derive(Clone, Copy)]
-pub struct GlyphUv {
-    pub u0: f32,
-    pub v0: f32,
-    pub u1: f32,
-    pub v1: f32,
-    pub advance: f32,
-    pub width: f32,
-    pub height: f32, // px
-    pub bearing_x: f32,
-    pub bearing_y: f32,
 }
 
 #[repr(C)]
@@ -237,11 +222,11 @@ impl UiRenderer {
         time: &Time,
         input_state: &Input,
         queue: &Queue,
-        size: &PhysicalSize<u32>,
+        window_size: PhysicalSize<u32>,
         settings: &Settings,
     ) {
         let new_uniform = ScreenUniform {
-            size: [size.width as f32, size.height as f32],
+            size: [window_size.width as f32, window_size.height as f32],
             time: time.total_time as f32,
             enable_dither: 1,
             mouse: input_state.mouse.pos.to_array(),
@@ -277,11 +262,26 @@ impl UiRenderer {
                 .filter(|(_, l)| l.active && l.dirty.any())
                 .map(|(i, _)| i)
                 .collect();
-
+            let mut ap_layers = vec![];
             for idx in dirty_indices {
-                menu.rebuild_layer_cache_index(&self.brush, idx, &ui_loader.touch_manager.runtimes);
+                ap_layers.append(&mut menu.rebuild_layer_cache_index(
+                    settings,
+                    &self.brush,
+                    idx,
+                    &ui_loader.touch_manager.runtimes,
+                    &ui_loader.aps,
+                    window_size,
+                ));
                 let layer = &mut menu.layers[idx];
                 self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
+            }
+            for ap_layer in ap_layers {
+                menu.layers.push(ap_layer);
+                let Some(layer) = menu.layers.last_mut() else {
+                    continue;
+                };
+                self.upload_layer(queue, layer, &ui_loader.touch_manager, time, menu_name);
+                layer.dirty.mark_all();
             }
         }
     }

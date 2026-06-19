@@ -24,7 +24,7 @@ elements:
   - !Rect
     id: Zoning Indicator
     actions:
-      - on:a button:a set(f32:self.size.y, 20.0*{ap})
+      - on:a button:a set(self.size.y, 20.0*{{ap}})
 
       #- on:release, ifvareq({ap}, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
@@ -47,5 +47,5 @@ elements:
       - 1.0
       - 1.0
       - 0.9
-    text: '{{ap}:.1}'
+    text: '{{ap}}'
     anchor: Center

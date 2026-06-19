@@ -8,8 +8,8 @@ use crate::ui::action_parser::{TouchEventKind, parse_action};
 use crate::ui::menu::Menu;
 use crate::ui::parser::{Value, eval_expr};
 use crate::ui::ui_edit_manager::{
-    ChangeColorCommand, ColorComponent, CreateElementCommand, DeleteElementCommand,
-    DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
+    ChangeColorCommand, ColorComponent, CreateAPCommand, CreateElementCommand, DeleteAPCommand,
+    DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
 use crate::ui::ui_editor::{Ui, get_element, get_element_position, get_element_size};
 use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
@@ -25,7 +25,7 @@ use crate::world::game_state::{GameState, LoadResult, SaveResult, SaveState};
 use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
 use crate::world::world::World;
 use glam::Vec2;
-use std::cmp::PartialEq;
+use std::cmp::{Ordering, PartialEq};
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use winit::dpi::PhysicalSize;
@@ -138,29 +138,36 @@ impl UiCommandType {
 pub enum UiCommand {
     // ===== MENU COMMANDS =====
     OpenMenu {
+        element_ref: ElementRef,
         menu_name: String,
     },
     CloseMenu {
+        element_ref: ElementRef,
         menu_name: String,
     },
     CloseAllMenus,
     ToggleMenu {
+        element_ref: ElementRef,
         menu_name: String,
     },
     MenuActive {
+        element_ref: ElementRef,
         menu_name: String,
     },
 
     // ===== LAYER COMMANDS =====
     OpenLayer {
+        element_ref: ElementRef,
         menu_name: String,
         layer_name: String,
     },
     CloseLayer {
+        element_ref: ElementRef,
         menu_name: String,
         layer_name: String,
     },
     ToggleLayer {
+        element_ref: ElementRef,
         menu_name: String,
         layer_name: String,
     },
@@ -174,17 +181,17 @@ pub enum UiCommand {
     IncVar {
         element_ref: ElementRef,
         name: String,
-        amount: f64,
+        amount: String,
     },
     DecVar {
         element_ref: ElementRef,
         name: String,
-        amount: f64,
+        amount: String,
     },
     MulVar {
         element_ref: ElementRef,
         name: String,
-        factor: f64,
+        factor: String,
     },
     ToggleVar {
         element_ref: ElementRef,
@@ -193,24 +200,14 @@ pub enum UiCommand {
     Clamp {
         element_ref: ElementRef,
         name: String,
-        min: f64,
-        max: f64,
-    },
-
-    // ===== ACTION STATE COMMANDS =====
-    StartAction {
-        action_name: String,
-    },
-    StopAction {
-        action_name: String,
-    },
-    RemoveAction {
-        action_name: String,
+        min: String,
+        max: String,
     },
 
     // ===== FLOW CONTROL =====
     Delay {
-        seconds: f64,
+        element_ref: ElementRef,
+        seconds: String,
     },
     Halt,
     Skip {
@@ -241,6 +238,23 @@ pub enum UiCommand {
         id: String,
         kind: String,
         center: String,
+        undoable: bool,
+    },
+    AddAP {
+        element_ref: ElementRef,
+        menu: String,
+        name: String,
+        ap_name: String,
+        ap_var: String,
+        center: String,
+        scale: String,
+        is_temporary: bool,
+    },
+    DeleteAP {
+        element_ref: ElementRef,
+        menu: String,
+        layer: String,
+        reference_id: String,
     },
     CloneElement {
         element_ref: ElementRef,
@@ -251,31 +265,32 @@ pub enum UiCommand {
         to_layer: String,
         to_id: String,
         center: String,
+        undoable: bool,
     },
-    CloneElementUndoable {
+    CloneLayer {
         element_ref: ElementRef,
         from_menu: String,
         from_layer: String,
-        from_id: String,
         to_menu: String,
         to_layer: String,
-        to_id: String,
-        center: String,
+        undoable: bool,
+    },
+    DeleteLayer {
+        element_ref: ElementRef,
+        menu: String,
+        layer: String,
+        undoable: bool,
     },
     DeleteElement {
         element_ref: ElementRef,
         menu: String,
         layer: String,
         id: String,
-    },
-    DeleteElementUndoable {
-        element_ref: ElementRef,
-        menu: String,
-        layer: String,
-        id: String,
+        undoable: bool,
     },
     SaveGame,
     LoadSave {
+        element_ref: ElementRef,
         save_name: String,
         without_saving: bool,
     },
@@ -533,10 +548,20 @@ impl CommandQueue {
         }
     }
     fn execute_one(&mut self, cmd: UiCommand, ctx: &mut CommandContext) -> CommandResult {
+        //println!("{:?}", cmd);
         match cmd {
             // ===== MENU COMMANDS =====
-            UiCommand::OpenMenu { menu_name } => {
-                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
+            UiCommand::OpenMenu {
+                element_ref,
+                menu_name,
+            } => {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in open_menu() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                     menu.active = true;
                     CommandResult::Ok
                 } else {
@@ -544,8 +569,17 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::CloseMenu { menu_name } => {
-                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
+            UiCommand::CloseMenu {
+                element_ref,
+                menu_name,
+            } => {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in close_menu() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                     menu.active = false;
                     CommandResult::Ok
                 } else {
@@ -560,8 +594,17 @@ impl CommandQueue {
                 CommandResult::Ok
             }
 
-            UiCommand::ToggleMenu { menu_name } => {
-                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
+            UiCommand::ToggleMenu {
+                element_ref,
+                menu_name,
+            } => {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in toggle_menu() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                     menu.active = !menu.active;
                     CommandResult::Ok
                 } else {
@@ -569,11 +612,20 @@ impl CommandQueue {
                 }
             }
 
-            UiCommand::MenuActive { menu_name } => {
+            UiCommand::MenuActive {
+                element_ref,
+                menu_name,
+            } => {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in menu_active() wasn't resolved to string".to_string(),
+                    );
+                };
                 let is_active = ctx
                     .ui
                     .menus
-                    .get(&menu_name)
+                    .get(menu_name)
                     .map(|m| m.active)
                     .unwrap_or(false);
                 ctx.ui.variables.set_bool("_result", is_active);
@@ -582,10 +634,23 @@ impl CommandQueue {
 
             // ===== LAYER COMMANDS =====
             UiCommand::OpenLayer {
+                element_ref,
                 menu_name,
                 layer_name,
             } => {
-                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in open_layer() wasn't resolved to string".to_string(),
+                    );
+                };
+                let layer_name = string_to_value(ctx, &element_ref, layer_name);
+                let Some(layer_name) = layer_name.as_string() else {
+                    return CommandResult::Error(
+                        "Layer name in open_layer() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         menu.active = true;
                         layer.active = true;
@@ -600,10 +665,23 @@ impl CommandQueue {
             }
 
             UiCommand::CloseLayer {
+                element_ref,
                 menu_name,
                 layer_name,
             } => {
-                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in close_layer() wasn't resolved to string".to_string(),
+                    );
+                };
+                let layer_name = string_to_value(ctx, &element_ref, layer_name);
+                let Some(layer_name) = layer_name.as_string() else {
+                    return CommandResult::Error(
+                        "Layer name in close_layer() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = false;
                         return CommandResult::Ok;
@@ -614,10 +692,23 @@ impl CommandQueue {
             }
 
             UiCommand::ToggleLayer {
+                element_ref,
                 menu_name,
                 layer_name,
             } => {
-                if let Some(menu) = ctx.ui.menus.get_mut(&menu_name) {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in toggle_layer() wasn't resolved to string".to_string(),
+                    );
+                };
+                let layer_name = string_to_value(ctx, &element_ref, layer_name);
+                let Some(layer_name) = layer_name.as_string() else {
+                    return CommandResult::Error(
+                        "Layer name in toggle_layer() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         layer.active = !layer.active;
                         return CommandResult::Ok;
@@ -636,7 +727,15 @@ impl CommandQueue {
                 //println!("Pre to-value: {}", value);
                 let value = string_to_value(ctx, &element_ref, value);
                 //println!("Post to-value: {}", value);
-                let (name, value) = initialize_value(name.as_str(), value);
+                let initial_name = name.clone();
+                let name = string_to_value(ctx, &element_ref, name);
+                //println!("After string to value: {}", name);
+                let Some(name) = name.as_string() else {
+                    return CommandResult::Error(format!(
+                        "'{initial_name}' in set_var() wasn't resolved to string"
+                    ));
+                };
+                let (name, value) = initialize_value(name, value);
                 //println!("Post init-value: {}", value);
                 if let Some(key) = get_setting_key(&name) {
                     if let Some(setting_value) = key.parse_command_arg(&value) {
@@ -660,23 +759,42 @@ impl CommandQueue {
                 name,
                 amount,
             } => {
+                let name = string_to_value(ctx, &element_ref, name);
+                let Some(name) = name.as_string() else {
+                    return CommandResult::Error("Name in inc_var() wasn't resolved to string, use 'str' or 'strexpr:' or do something else".to_string());
+                };
+                let Some(amount) = string_to_value(ctx, &element_ref, amount).as_f64() else {
+                    return CommandResult::Error(
+                        "Value in inc_var() wasn't resolved to f64".to_string(),
+                    );
+                };
                 if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
 
                     if let Some(new_value) = current.add(amount) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     } else {
-                        let steps = amount.max(0.0) as usize;
+                        let steps = amount as isize;
 
-                        for _ in 0..steps {
-                            ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                        match steps.cmp(&0) {
+                            Ordering::Greater => {
+                                for _ in 0..steps {
+                                    ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                                }
+                            }
+                            Ordering::Less => {
+                                for _ in 0..steps.unsigned_abs() {
+                                    ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                                }
+                            }
+                            Ordering::Equal => {}
                         }
                     }
 
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name) {
+                let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::F64(f)) => Value::F64(f + amount),
                     Some(Value::I64(i)) => Value::F64(*i as f64 + amount),
                     _ => Value::F64(amount),
@@ -690,23 +808,44 @@ impl CommandQueue {
                 name,
                 amount,
             } => {
+                let name = string_to_value(ctx, &element_ref, name);
+                let Some(name) = name.as_string() else {
+                    return CommandResult::Error(
+                        "Name in dec_var() wasn't resolved to string".to_string(),
+                    );
+                };
+                let Some(amount) = string_to_value(ctx, &element_ref, amount).as_f64() else {
+                    return CommandResult::Error(
+                        "Value in dec_var() wasn't resolved to f64".to_string(),
+                    );
+                };
                 if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
 
                     if let Some(new_value) = current.subtract(amount) {
                         ctx.settings.apply_setting(key, SettingOp::Set(new_value));
                     } else {
-                        let steps = amount.max(0.0) as usize;
+                        let steps = amount as isize;
 
-                        for _ in 0..steps {
-                            ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                        match steps.cmp(&0) {
+                            Ordering::Greater => {
+                                for _ in 0..steps {
+                                    ctx.settings.apply_setting(key, SettingOp::CycleNext);
+                                }
+                            }
+                            Ordering::Less => {
+                                for _ in 0..steps.unsigned_abs() {
+                                    ctx.settings.apply_setting(key, SettingOp::CyclePrev);
+                                }
+                            }
+                            Ordering::Equal => {}
                         }
                     }
 
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name) {
+                let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::F64(f)) => Value::F64(f - amount),
                     Some(Value::I64(i)) => Value::F64(*i as f64 - amount),
                     _ => Value::F64(-amount),
@@ -720,6 +859,17 @@ impl CommandQueue {
                 name,
                 factor,
             } => {
+                let name = string_to_value(ctx, &element_ref, name);
+                let Some(name) = name.as_string() else {
+                    return CommandResult::Error(
+                        "Name in mul_var() wasn't resolved to string".to_string(),
+                    );
+                };
+                let Some(factor) = string_to_value(ctx, &element_ref, factor).as_f64() else {
+                    return CommandResult::Error(
+                        "Factor in mul_var() wasn't resolved to f64".to_string(),
+                    );
+                };
                 if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
 
@@ -730,7 +880,7 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name) {
+                let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::F64(f)) => Value::F64(f * factor),
                     Some(Value::I64(i)) => Value::F64(*i as f64 * factor),
                     _ => Value::F64(factor),
@@ -740,13 +890,19 @@ impl CommandQueue {
             }
 
             UiCommand::ToggleVar { element_ref, name } => {
+                let name = string_to_value(ctx, &element_ref, name);
+                let Some(name) = name.as_string() else {
+                    return CommandResult::Error(
+                        "Name in toggle_var() wasn't resolved to string".to_string(),
+                    );
+                };
                 if let Some(key) = get_setting_key(&name) {
                     ctx.settings.apply_setting(key, SettingOp::Toggle);
 
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name) {
+                let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::Bool(b)) => Value::Bool(!b),
                     _ => Value::Bool(true),
                 };
@@ -760,6 +916,22 @@ impl CommandQueue {
                 min,
                 max,
             } => {
+                let name = string_to_value(ctx, &element_ref, name);
+                let Some(name) = name.as_string() else {
+                    return CommandResult::Error(
+                        "Name in clamp() wasn't resolved to string".to_string(),
+                    );
+                };
+                let Some(min) = string_to_value(ctx, &element_ref, min).as_f64() else {
+                    return CommandResult::Error(
+                        "Min in clamp() wasn't resolved to f64".to_string(),
+                    );
+                };
+                let Some(max) = string_to_value(ctx, &element_ref, max).as_f64() else {
+                    return CommandResult::Error(
+                        "Max in clamp() wasn't resolved to f64".to_string(),
+                    );
+                };
                 if let Some(key) = get_setting_key(&name) {
                     let current = ctx.settings.read_setting(key);
 
@@ -770,7 +942,7 @@ impl CommandQueue {
                     return CommandResult::Ok;
                 }
 
-                let new_val = match ctx.ui.variables.get(&name) {
+                let new_val = match ctx.ui.variables.get(&name).as_deref() {
                     Some(Value::F64(f)) => Value::F64(f.clamp(min, max)),
                     Some(Value::I64(i)) => Value::F64((*i as f64).clamp(min, max)),
                     _ => Value::F64(min),
@@ -785,6 +957,12 @@ impl CommandQueue {
                 expr,
             } => match eval_expr(&expr, &ctx.ui.variables) {
                 Some(value) => {
+                    let name = string_to_value(ctx, &element_ref, name);
+                    let Some(name) = name.as_string() else {
+                        return CommandResult::Error(
+                            "Name in set_var_expr() wasn't resolved to string".to_string(),
+                        );
+                    };
                     if let Some(key) = get_setting_key(&name) {
                         if let Some(setting_value) = key.parse_command_arg(&value) {
                             ctx.settings
@@ -805,41 +983,16 @@ impl CommandQueue {
                 None => CommandResult::Error(format!("Failed to eval expr '{}'", expr)),
             },
 
-            // ===== ACTION STATE COMMANDS =====
-            UiCommand::StartAction { action_name } => {
-                let state = ActionState::with_time(&action_name, ctx.world.time.total_time);
-                ctx.ui
-                    .touch_manager
-                    .runtimes
-                    .action_states
-                    .insert(action_name, state);
-                CommandResult::Ok
-            }
-
-            UiCommand::StopAction { action_name } => {
-                if let Some(state) = ctx
-                    .ui
-                    .touch_manager
-                    .runtimes
-                    .action_states
-                    .get_mut(&action_name)
-                {
-                    state.active = false;
-                }
-                CommandResult::Ok
-            }
-
-            UiCommand::RemoveAction { action_name } => {
-                ctx.ui
-                    .touch_manager
-                    .runtimes
-                    .action_states
-                    .remove(&action_name);
-                CommandResult::Ok
-            }
-
             // ===== FLOW CONTROL =====
-            UiCommand::Delay { seconds } => {
+            UiCommand::Delay {
+                element_ref,
+                seconds,
+            } => {
+                let Some(seconds) = string_to_value(ctx, &element_ref, seconds).as_f64() else {
+                    return CommandResult::Error(
+                        "Seconds in delay() wasn't resolved to f64".to_string(),
+                    );
+                };
                 let remaining: Vec<UiCommand> = self.queue.drain(..).collect();
                 CommandResult::Delay { seconds, remaining }
             }
@@ -875,17 +1028,17 @@ impl CommandQueue {
                 then,
                 else_branch,
             } => {
-                let var_value = if let Some(key) = get_setting_key(&var_name) {
-                    Some(ctx.settings.read_setting(key).to_value())
-                } else {
-                    ctx.ui.variables.get(&var_name).cloned()
-                };
+                let var_value = string_to_value(ctx, &element_ref, var_name);
+                //let Some(var_value) = var_name.as_string() else { return CommandResult::Error(format!("Var Name in ifvareq() wasn't resolved to string, instead to: {}", var_name)) };
+                //println!("{} {}", var_name, value);
+                // let var_value = if let Some(key) = get_setting_key(&var_name) {
+                //     Some(ctx.settings.read_setting(key).to_value())
+                // } else {
+                //     ctx.ui.variables.get(&var_name).map(|v| v.into_owned())
+                // };
 
-                let Some(var_value) = var_value else {
-                    return CommandResult::Ok;
-                };
                 let compare_value = string_to_value(ctx, &element_ref, value);
-
+                //println!("{} {}", var_value, compare_value);
                 if var_value == compare_value {
                     for cmd in then.into_iter().rev() {
                         self.queue.push_front(cmd);
@@ -939,6 +1092,7 @@ impl CommandQueue {
                 id,
                 kind,
                 center,
+                undoable,
             } => {
                 let kind = ElementKind::from_string(kind.to_string().as_str());
                 if kind == ElementKind::None {
@@ -952,7 +1106,7 @@ impl CommandQueue {
                         "Couldn't unpack center pos from AddElement center argument".to_string(),
                     );
                 };
-                let Some(element) = make_element(id.to_string(), &kind, center) else {
+                let Some(element) = make_element(id.to_string(), kind, center) else {
                     return CommandResult::Error("Couldn't make element in AddElement".to_string());
                 };
                 ctx.ui.ui_edit_manager.execute_command(
@@ -972,6 +1126,80 @@ impl CommandQueue {
                 );
                 CommandResult::Ok
             }
+            UiCommand::AddAP {
+                element_ref,
+                menu,
+                name,
+                ap_name,
+                ap_var,
+                center,
+                scale,
+                is_temporary,
+            } => {
+                let center = string_to_value(ctx, &element_ref, center);
+                let Some(center) = center.as_pos() else {
+                    return CommandResult::Error(format!(
+                        "Couldn't unpack center pos from AddAP center argument, parsed to: {}",
+                        center
+                    ));
+                };
+                let scale = string_to_value(ctx, &element_ref, scale);
+                let Some(scale) = scale.as_f64() else {
+                    return CommandResult::Error(
+                        "Couldn't unpack scale from AddAP scale argument".to_string(),
+                    );
+                };
+                let menu = string_to_value(ctx, &element_ref, menu).into_string_value();
+                let name = string_to_value(ctx, &element_ref, name).into_string_value();
+                let ap_name = string_to_value(ctx, &element_ref, ap_name).into_string_value();
+                let ap_var = string_to_value(ctx, &element_ref, ap_var).into_string_value();
+                //println!("Adding AP: {} {} {} {:?} {}", name, ap_name, ap_var, center, scale);
+                let ap = {
+                    let mut ap = AdvancedPrimitive::default();
+                    ap.id = name.clone();
+                    ap.set_pos(center);
+                    ap.ap_name = ap_name;
+                    ap.ap_var = ap_var;
+                    ap.scale = scale as f32;
+                    ap.is_temporary = is_temporary;
+                    ap
+                };
+                ctx.ui.ui_edit_manager.execute_command(
+                    CreateAPCommand {
+                        menu,
+                        layer: element_ref.layer,
+                        element: UiElement::Advanced(ap),
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.world.input.mouse,
+                );
+                CommandResult::Ok
+            }
+            UiCommand::DeleteAP {
+                element_ref,
+                menu,
+                layer,
+                reference_id,
+            } => {
+                let menu = string_to_value(ctx, &element_ref, menu).into_string_value();
+                let layer = string_to_value(ctx, &element_ref, layer).into_string_value();
+                let reference_id =
+                    string_to_value(ctx, &element_ref, reference_id).into_string_value();
+                ctx.ui.ui_edit_manager.execute_command(
+                    DeleteAPCommand {
+                        menu,
+                        layer,
+                        reference_id,
+                    },
+                    &mut ctx.ui.touch_manager,
+                    &mut ctx.ui.menus,
+                    &mut ctx.ui.variables,
+                    &ctx.world.input.mouse,
+                );
+                CommandResult::Ok
+            }
             UiCommand::CloneElement {
                 element_ref,
                 from_menu,
@@ -981,6 +1209,7 @@ impl CommandQueue {
                 to_layer,
                 to_id,
                 center,
+                undoable,
             } => {
                 let from_element = ElementRef::new(
                     from_menu.to_string().as_str(),
@@ -988,77 +1217,117 @@ impl CommandQueue {
                     from_id.to_string().as_str(),
                     ElementKind::None,
                 );
-                let Some(mut element) = get_element(&ctx.ui.menus, &from_element) else {
-                    return CommandResult::Error(
-                        "Couldn't unpack element in CloneElement".to_string(),
+                if undoable {
+                    let to_element = ElementRef::new(
+                        to_menu.to_string().as_str(),
+                        to_layer.to_string().as_str(),
+                        to_id.to_string().as_str(),
+                        ElementKind::None,
                     );
-                };
-                let to_element = ElementRef::new(
-                    to_menu.to_string().as_str(),
-                    to_layer.to_string().as_str(),
-                    to_id.to_string().as_str(),
-                    element.kind(),
-                );
+                    let center = string_to_value(ctx, &element_ref, center);
+                    ctx.ui.ui_edit_manager.execute_command(
+                        DuplicateElementCommand {
+                            from_element,
+                            to_element,
+                            cached_element: None,
+                            optional_center: center.as_pos(),
+                        },
+                        &mut ctx.ui.touch_manager,
+                        &mut ctx.ui.menus,
+                        &mut ctx.ui.variables,
+                        &ctx.world.input.mouse,
+                    );
+                    CommandResult::Ok
+                } else {
+                    let Some(mut element) = get_element(&ctx.ui.menus, &from_element) else {
+                        return CommandResult::Error(
+                            "Couldn't unpack element in CloneElement".to_string(),
+                        );
+                    };
+                    let to_element = ElementRef::new(
+                        to_menu.to_string().as_str(),
+                        to_layer.to_string().as_str(),
+                        to_id.to_string().as_str(),
+                        element.kind(),
+                    );
 
-                element.set_id(&to_id.to_string());
-                let center = string_to_value(ctx, &element_ref, center);
-                if let Some(center) = center.as_pos() {
-                    element.set_pos(center[0], center[1])
-                };
-                let result = create_element(
-                    &mut ctx.ui.menus,
-                    &to_element.menu,
-                    &to_element.layer,
-                    element,
-                    &ctx.world.input.mouse,
-                );
-                match result {
-                    Ok(ok) => CommandResult::Ok,
-                    Err(err) => CommandResult::Error(err.to_string()),
+                    element.set_id(&to_id.to_string());
+                    let center = string_to_value(ctx, &element_ref, center);
+                    if let Some(center) = center.as_pos() {
+                        element.set_pos(center[0], center[1])
+                    };
+                    let result = create_element(
+                        &mut ctx.ui.menus,
+                        &to_element.menu,
+                        &to_element.layer,
+                        element,
+                        &ctx.world.input.mouse,
+                    );
+                    match result {
+                        Ok(ok) => CommandResult::Ok,
+                        Err(err) => CommandResult::Error(err.to_string()),
+                    }
                 }
             }
-            UiCommand::CloneElementUndoable {
+
+            UiCommand::CloneLayer {
                 element_ref,
                 from_menu,
                 from_layer,
-                from_id,
                 to_menu,
                 to_layer,
-                to_id,
-                center,
+                undoable,
             } => {
-                let from_element = ElementRef::new(
-                    from_menu.to_string().as_str(),
-                    from_layer.to_string().as_str(),
-                    from_id.to_string().as_str(),
-                    ElementKind::None,
-                );
-                let to_element = ElementRef::new(
-                    to_menu.to_string().as_str(),
-                    to_layer.to_string().as_str(),
-                    to_id.to_string().as_str(),
-                    ElementKind::None,
-                );
-                let center = string_to_value(ctx, &element_ref, center);
-                ctx.ui.ui_edit_manager.execute_command(
-                    DuplicateElementCommand {
-                        from_element,
-                        to_element,
-                        cached_element: None,
-                        optional_center: center.as_pos(),
-                    },
-                    &mut ctx.ui.touch_manager,
-                    &mut ctx.ui.menus,
-                    &mut ctx.ui.variables,
-                    &ctx.world.input.mouse,
-                );
-                CommandResult::Ok
+                let Some(mut layer) = (if let Some(menu) = ctx.ui.menus.get(&from_menu) {
+                    if let Some(layer) = menu.layers.iter().find(|l| l.name == from_layer) {
+                        Some(layer.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }) else {
+                    return CommandResult::Error(
+                        "Couldn't find from_layer or from_menu".to_string(),
+                    );
+                };
+
+                layer.name = to_layer;
+
+                if let Some(menu) = ctx.ui.menus.get_mut(&to_menu) {
+                    menu.layers.push(layer);
+                    menu.sort_layers();
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Error("Couldn't target Menu".to_string())
+                }
+            }
+            UiCommand::DeleteLayer {
+                element_ref,
+                menu,
+                layer,
+                undoable,
+            } => {
+                if let Some(menu) = ctx.ui.menus.get_mut(&menu) {
+                    if let Some(idx) = menu.layers.iter().position(|l| l.name == layer) {
+                        menu.layers.remove(idx);
+                        menu.sort_layers();
+                    } else {
+                        return CommandResult::Error(
+                            "Couldn't find layer in menu to delete...".to_string(),
+                        );
+                    }
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Error("Couldn't find Menu to delete...".to_string())
+                }
             }
             UiCommand::DeleteElement {
                 element_ref,
                 menu,
                 layer,
                 id,
+                undoable,
             } => {
                 let element = ElementRef::new(
                     menu.to_string().as_str(),
@@ -1066,49 +1335,46 @@ impl CommandQueue {
                     id.to_string().as_str(),
                     ElementKind::None,
                 );
-
-                let result = delete_element(&mut ctx.ui.menus, &element);
-                match result {
-                    Ok(ok) => CommandResult::Ok,
-                    Err(err) => CommandResult::Error(err.to_string()),
+                if undoable {
+                    ctx.ui.ui_edit_manager.execute_command(
+                        DeleteElementCommand {
+                            affected_element: element,
+                            cached_element: None,
+                        },
+                        &mut ctx.ui.touch_manager,
+                        &mut ctx.ui.menus,
+                        &mut ctx.ui.variables,
+                        &ctx.world.input.mouse,
+                    );
+                    CommandResult::Ok
+                } else {
+                    let result = delete_element(&mut ctx.ui.menus, &element);
+                    match result {
+                        Ok(ok) => CommandResult::Ok,
+                        Err(err) => CommandResult::Error(err.to_string()),
+                    }
                 }
             }
-            UiCommand::DeleteElementUndoable {
-                element_ref,
-                menu,
-                layer,
-                id,
-            } => {
-                let element = ElementRef::new(
-                    menu.to_string().as_str(),
-                    layer.to_string().as_str(),
-                    id.to_string().as_str(),
-                    ElementKind::None,
-                );
-                ctx.ui.ui_edit_manager.execute_command(
-                    DeleteElementCommand {
-                        affected_element: element,
-                        cached_element: None,
-                    },
-                    &mut ctx.ui.touch_manager,
-                    &mut ctx.ui.menus,
-                    &mut ctx.ui.variables,
-                    &ctx.world.input.mouse,
-                );
-                CommandResult::Ok
-            }
+
             UiCommand::SaveGame => {
                 save_game(ctx.game_state, ctx.world, ctx.props);
                 CommandResult::Ok
             }
             UiCommand::LoadSave {
+                element_ref,
                 save_name,
                 without_saving,
             } => {
+                let save_name = string_to_value(ctx, &element_ref, save_name);
+                let Some(save_name) = save_name.as_string() else {
+                    return CommandResult::Error(
+                        "Save name in load_save() wasn't resolved to string".to_string(),
+                    );
+                };
                 if !without_saving {
                     save_game(ctx.game_state, ctx.world, ctx.props);
                 }
-                load_save(ctx.game_state, ctx.world, ctx.props, save_name.as_str());
+                load_save(ctx.game_state, ctx.world, ctx.props, save_name);
                 CommandResult::Ok
             }
             UiCommand::ExitGame => {
@@ -1150,8 +1416,8 @@ impl CommandQueue {
                 let Some(color) = color_value.as_color4() else {
                     return CommandResult::Error(
                         format!(
-                            "Couldn't unpack value as color, you typed: {}, parsed to: {}",
-                            color, color_value
+                            "Couldn't unpack value as color, tried to unpack: {} as vec4 color",
+                            color_value
                         )
                         .to_string(),
                     );
@@ -1160,13 +1426,13 @@ impl CommandQueue {
                     v.max(0.0).min(1.0)
                 }
                 let return_color = format!(
-                    "on:h_exit on:r button:a set(self.color.fill, [{}, {}, {}, {}])",
+                    "on:h_exit on:r button:a set(str:self.color.fill, [{}, {}, {}, {}])",
                     color[0], color[1], color[2], color[3]
                 );
 
                 // noticeable hover: brighter + more visible
                 let hover_color = format!(
-                    "on:h button:a set(self.color.fill, [{}, {}, {}, {}])",
+                    "on:h button:a set(str:self.color.fill, [{}, {}, {}, {}])",
                     clamp(color[0] * 1.8 + 0.05),
                     clamp(color[1] * 1.8 + 0.05),
                     clamp(color[2] * 1.8 + 0.05),
@@ -1175,7 +1441,7 @@ impl CommandQueue {
 
                 // strong press: darker + slight shrink in alpha
                 let press_color = format!(
-                    "on:d set(self.color.fill, [{}, {}, {}, {}])",
+                    "on:d set(str:self.color.fill, [{}, {}, {}, {}])",
                     clamp(color[0] * 0.5),
                     clamp(color[1] * 0.5),
                     clamp(color[2] * 0.5),
@@ -1311,7 +1577,7 @@ fn string_to_value(ctx: &mut CommandContext, self_element_ref: &ElementRef, s: S
         &ctx.ui.touch_manager,
         self_element_ref,
     );
-    let val = Value::from_str(ctx.settings, &ctx.ui.variables, s.as_str());
+    let val = Value::from_str(ctx.settings, &ctx.ui.variables, s.as_str(), true, true);
     //println!("Parse arg for Value in action_parser input: {}: {}", s, val);
     val
 }
@@ -1744,7 +2010,7 @@ pub fn set_element_property(
     CommandResult::Ok
 }
 
-pub fn make_element(id: String, kind: &ElementKind, center: [f32; 2]) -> Option<UiElement> {
+pub fn make_element(id: String, kind: ElementKind, center: [f32; 2]) -> Option<UiElement> {
     match kind {
         ElementKind::None => None,
 

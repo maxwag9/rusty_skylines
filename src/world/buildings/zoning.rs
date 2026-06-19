@@ -2515,7 +2515,12 @@ pub fn draw_area(
         ZoningType::Office => "office_zone_color",
     };
 
-    if let Some(mut c) = variables.get(key).unwrap_or(&Value::Null).as_color4() {
+    if let Some(mut c) = variables
+        .get(key)
+        .as_deref()
+        .unwrap_or(&Value::Null)
+        .as_color4()
+    {
         if let Some(m) = color_multiplier {
             for i in 0..4 {
                 c[i] *= m[i];

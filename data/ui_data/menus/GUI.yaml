@@ -304,6 +304,7 @@ layers:
         actions:
           - set(new_zone_type, residential)
           - button:a show_interaction([0.005, 0.72, 0.1, 1.0])
+          #- button:a, debug_menus
         x: 0.19140625
         y: 0.96428573
         w: 0.02

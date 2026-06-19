@@ -1,7 +1,6 @@
 use crate::data::{Settings, ShadowType};
 use crate::helpers::positions::chunk_size;
 use crate::renderer::pipelines_outsource::*;
-use crate::renderer::render_core::SURFACE_FORMAT;
 use crate::renderer::shadows::{CSM_CASCADES, CascadedShadowMap, create_csm_shadow_texture};
 use crate::renderer::taa::taa_jitter_pair;
 use crate::renderer::textures::noise::create_blue_noise_texture_gpu;
@@ -212,7 +211,6 @@ pub struct UniformBuffers {
     pub gtao: Buffer,
     pub gtao_blur: Buffer,
     pub gtao_upsample_apply: Buffer,
-    //pub ui_texture: Buffer
 }
 
 pub struct SceneResources {
@@ -509,7 +507,7 @@ pub fn create_resolved_targets(
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: SURFACE_FORMAT,
+        format: config.format,
         usage: TextureUsages::RENDER_ATTACHMENT
             | TextureUsages::COPY_SRC
             | TextureUsages::TEXTURE_BINDING,

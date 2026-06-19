@@ -3,7 +3,6 @@
 //! Uses Command pattern for all undoable operations.
 
 use crate::data::Settings;
-use crate::helpers::hsv::{HSV, rgb_to_hsv};
 use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
 use crate::resources::{CommandQueues, Time};
@@ -11,7 +10,7 @@ use crate::ui::action_parser::actions_to_uicommands;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{Input, Mouse};
-use crate::ui::menu::{Menu, get_selected_element_color};
+use crate::ui::menu::Menu;
 use crate::ui::parser::{resolve_template, set_input_box};
 use crate::ui::ui_edit_manager::{
     ChangeLayerOrderCommand, ChangeZIndexCommand, DeleteElementCommand, DeselectAllCommand,
@@ -49,7 +48,7 @@ pub struct DragStartState {
 }
 
 /// Results from processing touch events
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct EventProcessingResult {
     /// Commands to push to undo system
     commands: Vec<Box<dyn UIEditCommand>>,
@@ -86,6 +85,7 @@ pub struct Ui {
 
     // Element clipboard
     pub element_clipboard: Option<UiElement>,
+    pub aps: HashMap<String, UiLayerYaml>,
 }
 #[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct GlobalActions {
@@ -121,6 +121,7 @@ impl Ui {
         println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
             menus: HashMap::new(),
+            aps: advanced_primitives,
             global_actions,
             variables: Variables::new(),
             console_lines: VecDeque::new(),
@@ -186,7 +187,7 @@ impl Ui {
                 continue;
             };
             for (ap, order) in aps {
-                let layer = ap.to_layer(settings, &advanced_primitives, order + 1, window_size);
+                let layer = ap.to_layer(settings, &loader.aps, order + 1, window_size);
 
                 menu.layers.push(layer);
             }
@@ -240,18 +241,13 @@ impl Ui {
             &world.input.mouse,
         );
         let input = &mut world.input;
-        self.sync_settings_and_ui(settings);
         self.handle_undo_redo_input(input, dt);
-
-        // Reset frame flags
-        self.sync_selected_element_color();
 
         // Create input snapshot
         let input_snapshot = self.create_input_snapshot(input);
 
         // Collect elements - borrow only self.menus
         let elements = Self::collect_touchable_elements(&self.menus);
-
         self.touch_manager.update(dt, input_snapshot, &elements);
         for (menu_name, menu) in self.menus.iter() {
             for layer in menu.layers.iter() {
@@ -278,7 +274,7 @@ impl Ui {
                         self.touch_manager
                             .element_actives
                             .insert(element_ref.clone(), is_active);
-
+                        //println!("Huh {}", element_ref.id);
                         self.touch_manager.events.push(if is_active {
                             TouchEvent::Activated {
                                 element: element_ref,
@@ -300,10 +296,10 @@ impl Ui {
         // Process all emitted events
         let result =
             self.process_touch_events(&mut command_queues.ui_command_queue, input, settings);
-
+        //println!("{:?}", result);
         // Apply results
         self.apply_event_results(result, &input.mouse);
-
+        //println!("The Variable is: {:?}", self.variables.get("tonemapping_state_open"));
         // Handle text editing
         if self.touch_manager.editor.enabled {
             self.handle_text_editing(input, input_snapshot);
@@ -419,6 +415,10 @@ impl Ui {
         let mut result = EventProcessingResult::default();
         // Drain events from touch manager
         let events: Vec<TouchEvent> = self.touch_manager.events.drain().collect();
+        // println!("events: {:?}", events.iter().flat_map(|e| match e {
+        //     TouchEvent::Nothing { .. } => None,
+        //     _ => Some(e)
+        // } ).collect::<Vec<_>>());
         push_commands(ui_command_queue, self, &events, input, settings);
 
         for event in events {
@@ -570,10 +570,6 @@ impl Ui {
             }
         }
     }
-
-    // ========================================================================
-    // EVENT HANDLERS
-    // ========================================================================
 
     fn handle_hover_enter(&mut self, element: &ElementRef, result: &mut EventProcessingResult) {
         // Update text hover state
@@ -1318,17 +1314,6 @@ impl Ui {
                 }
             }
         }
-    }
-
-    fn sync_selected_element_color(&mut self) {
-        let Some(color) = get_selected_element_color(self) else {
-            return;
-        };
-
-        let HSV { h, s, v } = rgb_to_hsv(color);
-
-        // self.variables.set_array("color_picker_color", color);
-        // self.variables.set_array("color_picker_hsv", [h, s, v]);
     }
 
     fn get_current_hit_for_actions(&self) -> Option<HitResult> {
@@ -2076,13 +2061,16 @@ impl Ui {
     pub fn set_starting_menu(&mut self, settings: &Settings, ui_command_queue: &mut CommandQueue) {
         ui_command_queue.push(UiCommand::CloseAllMenus);
         ui_command_queue.push(UiCommand::OpenMenu {
-            menu_name: "MainMenu".to_string(),
+            element_ref: ElementRef::default(),
+            menu_name: "str:MainMenu".to_string(),
         });
         ui_command_queue.push(UiCommand::CloseMenu {
-            menu_name: "Editor_Menu".to_string(),
+            element_ref: ElementRef::default(),
+            menu_name: "str:Editor_Menu".to_string(),
         });
         ui_command_queue.push(UiCommand::CloseMenu {
-            menu_name: "Debug_Menu".to_string(),
+            element_ref: ElementRef::default(),
+            menu_name: "str:Debug_Menu".to_string(),
         });
     }
     pub fn hash_id(id: &str) -> f32 {
@@ -2092,25 +2080,6 @@ impl Ui {
         let hash_u64 = hasher.finish(); // 64-bit
         // map to [0, 1]
         (hash_u64 as f64 / u64::MAX as f64) as f32
-    }
-
-    fn sync_settings_and_ui(&mut self, settings: &Settings) {
-        // for menu in self.menus.values_mut() {
-        //     for layer in menu.layers.iter_mut() {
-        //         let Some(setting) = &layer.setting else {
-        //             continue;
-        //         };
-        //
-        //         let value = settings.read_setting(setting.key);
-        //
-        //         match value {
-        //             SettingValue::Bool(value) => {
-        //
-        //             }
-        //             _ => {}
-        //         }
-        //     }
-        // }
     }
 }
 

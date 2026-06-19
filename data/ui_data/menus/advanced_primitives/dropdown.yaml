@@ -1,0 +1,145 @@
+name: dropdown
+elements:
+  - !Rect
+    id: Main Button Background
+    actions:
+      # Toggle the open/closed state variable
+      - on:release button:left, toggle_var(str:{ap}_open)
+      #- on:scroll button:a, print(str:{ap}, scroll_delta)
+      - on:scroll button:a, inc_var(str:{ap}, scroll_delta)
+
+      # If opening: Iterate over the options array and clone the template AP
+      #- on:release button:a, print(str:{ap}.{idx})
+      - on:release button:left, ifvareq({ap}_open, bool:true, forin({ap}.options, add_ap(self.menu, {ap}_Option_{idx}, "dropdown_option", str:{ap}.options.{idx}, [{self.center.x}, {self.center.y} + {self.size.y} * ({idx} + 1)], 1.0, true);))
+      - on:release button:left, set_var(dd_{ap}_layer, self.layer)
+      #- on:release button:left, print("dd_{ap}_layer")
+      # If closing: Iterate over the options array and delete the cloned APs
+      #- on:release button:left, print("{ap}_open")
+      #- button:a, print({ap}_open)
+      #- button:a, print(Name in dd:, str:{ap}_open)
+      - on:release button:left, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, {ap}_Option_{idx})))
+
+      # Visual feedback for the main button
+      - button:a show_interaction(self.color.fill)
+    #      - on:hovering, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.5, 0.5, 0.5, 1.0]), set(self.color.fill, [0.2, 0.2, 0.2, 1.0]))
+    #      - on:hover_exit, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.4, 0.4, 0.4, 1.0]), set(self.color.fill, [0.1, 0.1, 0.1, 1.0]))
+
+    x: 0.0
+    y: 0.0
+    w: 0.15
+    h: 0.03
+    color:
+      - 0.1
+      - 0.1
+      - 0.1
+      - 1.0
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.1
+    border_thickness_percentage: 0.05
+
+  - !Text
+    id: Main Button Text
+    x: 0.000
+    y: 0.005
+    pt: 11.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    # Evaluates to the currently selected option string
+    text: "{ap}: {{ap}}"
+    anchor: Center
+
+
+
+
+
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION0
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION6
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION5
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION4
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION3
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION2
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false
+#  - !Advanced
+#    name: TEST_DROPDOWN_OPTION1
+#    ap_name: dropdown_option
+#    ap_var: brbrbr
+#    x: 0.4
+#    y: 0.45
+#    scale: 2.0
+#    misc:
+#      active: true
+#      pressable: false
+#      editable: true
+#    editing_tool: false

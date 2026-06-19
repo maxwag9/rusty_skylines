@@ -359,7 +359,7 @@ impl Renderer {
             time,
             input,
             &self.queue,
-            &PhysicalSize::new(self.config.width, self.config.height),
+            PhysicalSize::new(self.config.width, self.config.height),
             settings,
         );
         self.road_renderer.update(
