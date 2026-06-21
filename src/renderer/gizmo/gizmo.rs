@@ -448,6 +448,7 @@ impl Gizmo {
                     offsets,
                     [car.color[0], car.color[1], car.color[2], 0.45],
                     4.0,
+                    false,
                     0.0,
                     0.0,
                 );
@@ -557,7 +558,7 @@ impl Gizmo {
                         let Some(lane) = road_storage.lanes.get(lane_id.index()) else {
                             continue;
                         };
-                        self.polyline(lane.polyline(), color, 5.0, thickness, 0.0);
+                        self.polyline(lane.polyline(), color, 5.0, false, thickness, 0.0);
                     }
                     let Some(segment) = road_storage.segment_safe(*segment_id) else {
                         continue;
@@ -602,7 +603,7 @@ impl Gizmo {
                             let Some(lane) = node.node_lane(nodelane_id) else {
                                 continue;
                             };
-                            self.polyline(lane.polyline(), color, 5.0, thickness, 0.0);
+                            self.polyline(lane.polyline(), color, 5.0, false, thickness, 0.0);
                         }
                     }
                 }
@@ -895,6 +896,7 @@ impl Gizmo {
         points: &[WorldPos],
         color: [f32; 4],
         arrow_spacing: f32,
+        closed: bool,
         thickness: f32,
         duration: f32,
     ) {
@@ -906,56 +908,81 @@ impl Gizmo {
         let flap = flap_color(color);
         let mut verts = Vec::new();
 
+        let seg_count = if closed {
+            points.len()
+        } else {
+            points.len() - 1
+        };
+
         // Draw line segments
-        for w in points.windows(2) {
-            verts.push(LineVtxWorld::new(w[0], color));
-            verts.push(LineVtxWorld::new(w[1], color));
+        for i in 0..seg_count {
+            let a = points[i];
+            let b = if i + 1 < points.len() {
+                points[i + 1]
+            } else {
+                points[0]
+            };
+            verts.push(LineVtxWorld::new(a, color));
+            verts.push(LineVtxWorld::new(b, color));
         }
 
         // Compute cumulative lengths
         let mut lengths = vec![0.0f32];
-        for w in points.windows(2) {
-            let d = w[1].to_relative_pos(w[0]).length();
+        for i in 0..seg_count {
+            let a = points[i];
+            let b = if i + 1 < points.len() {
+                points[i + 1]
+            } else {
+                points[0]
+            };
+            let d = b.to_relative_pos(a).length();
             lengths.push(lengths.last().unwrap() + d);
         }
+
         let total_len = *lengths.last().unwrap();
         if total_len < 0.001 {
             self.push(verts, thickness, duration, false);
             return;
         }
 
-        // Sample position and direction at distance t along polyline
         let sample_at = |t: f32| -> (WorldPos, Vec3) {
             let mut i = 1;
             while i < lengths.len() && lengths[i] < t {
                 i += 1;
             }
             let i0 = i - 1;
-            let i1 = i.min(points.len() - 1);
+            let i1 = i.min(seg_count);
+
+            let a = points[i0];
+            let b = if i1 < points.len() {
+                points[i1]
+            } else {
+                points[0]
+            };
+
             let seg_t = if lengths[i1] > lengths[i0] {
                 (t - lengths[i0]) / (lengths[i1] - lengths[i0])
             } else {
                 0.0
             };
 
-            let pos = points[i0].lerp(points[i1], seg_t as f64);
-            let dir = points[i1].to_relative_pos(points[i0]).normalize_or_zero();
+            let pos = a.lerp(b, seg_t as f64);
+            let dir = b.to_relative_pos(a).normalize_or_zero();
             (pos, dir)
         };
 
-        // Arrow parameters
         let head_len = 0.30;
         let head_width = 0.25;
         let spin_speed = 1.0;
         let time = self.total_game_time as f32;
 
-        // Place arrows along polyline
         let mut t = arrow_spacing;
         let mut idx = 0;
         if t == 0.0 {
             self.push(verts, thickness, duration, false);
             return;
         }
+
         while t < total_len {
             let (pos, dir) = sample_at(t);
             if dir.length_squared() < 0.0001 {
@@ -988,6 +1015,7 @@ impl Gizmo {
         offsets: I,
         color: [f32; 4],
         arrow_spacing: f32,
+        closed: bool,
         thickness: f32,
         duration: f32,
     ) where
@@ -995,7 +1023,7 @@ impl Gizmo {
     {
         let points: Vec<_> = offsets.into_iter().map(|o| anchor.add_vec3(o)).collect();
 
-        self.polyline(&points, color, arrow_spacing, thickness, duration);
+        self.polyline(&points, color, arrow_spacing, closed, thickness, duration);
     }
 
     /// Render area. Points are WorldPos.
@@ -1208,7 +1236,7 @@ impl Gizmo {
                     // Convert polyline to WorldPos
                     let points: &Vec<WorldPos> = lane.polyline();
 
-                    self.polyline(&points, color, 15.0, 10.0, 0.0);
+                    self.polyline(&points, color, 15.0, false, 10.0, 0.0);
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
@@ -1244,7 +1272,7 @@ impl Gizmo {
 
                     let points: &Vec<WorldPos> = node_lane.polyline();
 
-                    self.polyline(&points, color, 4.0, 0.0, 0.0);
+                    self.polyline(&points, color, 4.0, false, 0.0, 0.0);
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
@@ -1952,6 +1980,7 @@ impl Gizmo {
 
         result
     }
+
     fn line_to_quad(
         v0: ThinLineVtxRender,
         v1: ThinLineVtxRender,
@@ -1959,68 +1988,8 @@ impl Gizmo {
     ) -> [ThickLineVtxRender; 6] {
         let p0 = v0.pos;
         let p1 = v1.pos;
-
-        let dx = p1[0] - p0[0];
-        let dy = p1[1] - p0[1];
-        let dz = p1[2] - p0[2];
-
-        let len2 = dx * dx + dy * dy + dz * dz;
-
         let c0 = v0.color;
         let c1 = v1.color;
-
-        if len2 < 1e-6 {
-            return [
-                ThickLineVtxRender {
-                    start: p0,
-                    end: p1,
-                    side_sign: -1.0,
-                    end_sign: 0.0,
-                    width_px: thickness,
-                    color: c0,
-                },
-                ThickLineVtxRender {
-                    start: p0,
-                    end: p1,
-                    side_sign: 1.0,
-                    end_sign: 0.0,
-                    width_px: thickness,
-                    color: c0,
-                },
-                ThickLineVtxRender {
-                    start: p1,
-                    end: p0,
-                    side_sign: 1.0,
-                    end_sign: 1.0,
-                    width_px: thickness,
-                    color: c0,
-                },
-                ThickLineVtxRender {
-                    start: p1,
-                    end: p0,
-                    side_sign: 1.0,
-                    end_sign: 1.0,
-                    width_px: thickness,
-                    color: c0,
-                },
-                ThickLineVtxRender {
-                    start: p1,
-                    end: p0,
-                    side_sign: -1.0,
-                    end_sign: 1.0,
-                    width_px: thickness,
-                    color: c0,
-                },
-                ThickLineVtxRender {
-                    start: p0,
-                    end: p1,
-                    side_sign: -1.0,
-                    end_sign: 0.0,
-                    width_px: thickness,
-                    color: c0,
-                },
-            ];
-        }
 
         [
             ThickLineVtxRender {
@@ -2028,7 +1997,7 @@ impl Gizmo {
                 end: p1,
                 side_sign: -1.0,
                 end_sign: 0.0,
-                width_px: thickness,
+                width: thickness,
                 color: c0,
             },
             ThickLineVtxRender {
@@ -2036,31 +2005,31 @@ impl Gizmo {
                 end: p1,
                 side_sign: 1.0,
                 end_sign: 0.0,
-                width_px: thickness,
+                width: thickness,
                 color: c0,
             },
             ThickLineVtxRender {
-                start: p1,
-                end: p0,
+                start: p0,
+                end: p1,
                 side_sign: 1.0,
                 end_sign: 1.0,
-                width_px: thickness,
+                width: thickness,
                 color: c1,
             },
             ThickLineVtxRender {
-                start: p1,
-                end: p0,
+                start: p0,
+                end: p1,
                 side_sign: 1.0,
                 end_sign: 1.0,
-                width_px: thickness,
+                width: thickness,
                 color: c1,
             },
             ThickLineVtxRender {
-                start: p1,
-                end: p0,
+                start: p0,
+                end: p1,
                 side_sign: -1.0,
                 end_sign: 1.0,
-                width_px: thickness,
+                width: thickness,
                 color: c1,
             },
             ThickLineVtxRender {
@@ -2068,7 +2037,7 @@ impl Gizmo {
                 end: p1,
                 side_sign: -1.0,
                 end_sign: 0.0,
-                width_px: thickness,
+                width: thickness,
                 color: c0,
             },
         ]

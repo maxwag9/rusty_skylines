@@ -52,10 +52,22 @@ impl Resources {
         let editor_mode = settings.editor_mode.clone();
 
         let (surface, adapter, size) = create_surface_and_adapter(window.clone(), event_loop);
+        print!("[app] surface + adapter created");
         let (config, msaa_samples) = create_surface_config(&surface, &adapter, &mut settings, size);
+        println!(
+            "[app] surface config: {}x{}, format={:?}, present_mode={:?}, alpha_mode={:?}, msaa={}",
+            config.width,
+            config.height,
+            config.format,
+            config.present_mode,
+            config.alpha_mode,
+            msaa_samples
+        );
         let (device, queue) = &create_device(&adapter);
 
         surface.configure(device, &config);
+        print!("[app] surface configured");
+
         let mut game_state = GameState::new();
         let mut world_core = World::new(device, queue, &settings, &mut game_state);
         let camera = &mut world_core.world_state.camera;

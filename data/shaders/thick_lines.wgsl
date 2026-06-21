@@ -7,7 +7,7 @@ struct VSIn {
     @location(1) end: vec3<f32>,
     @location(2) end_sign: f32,
     @location(3) side_sign: f32,
-    @location(4) width_px: f32,
+    @location(4) thickness: f32,
     @location(5) color: vec4<f32>,
 };
 
@@ -23,79 +23,63 @@ struct VSOut {
 
 fn clip_to_px(clip: vec4<f32>) -> vec2<f32> {
     let ndc = clip.xy / clip.w;
-    return (ndc * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5)) * vec2<f32>(2560.0, 1440.0);
+    return (ndc * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5)) * uniforms.screen_size;
 }
 
-fn offset_clip(
-    clip: vec4<f32>,
-    dir: vec2<f32>,
-    normal: vec2<f32>,
-    end_sign: f32,
-    side_sign: f32,
-    half_width_px: f32,
-) -> vec4<f32> {
-    var out = clip;
-
-    // Expand in NDC by half width in pixels.
-    let ndc_offset = (dir * end_sign + normal * side_sign)
-        * (half_width_px * 2.0 / vec2<f32>(2560.0, 1440.0));
-
-    let offset = ndc_offset * clip.w;
-
-    out.x += offset.x;
-    out.y += offset.y;
-    return out;
+fn billboard_right(dir: vec3<f32>, to_eye: vec3<f32>) -> vec3<f32> {
+    var right = cross(dir, to_eye);
+    if (dot(right, right) < 1e-10) {
+        right = cross(dir, vec3<f32>(0.0, 1.0, 0.0));
+    }
+    if (dot(right, right) < 1e-10) {
+        right = cross(dir, vec3<f32>(1.0, 0.0, 0.0));
+    }
+    return normalize(right);
 }
 
 @vertex
 fn vs_main(input: VSIn) -> VSOut {
-    let start_clip = uniforms.view_proj * vec4<f32>(input.start, 1.0);
-    let end_clip = uniforms.view_proj * vec4<f32>(input.end, 1.0);
+    let seg = input.end - input.start;
+    var dir = seg;
+    if (dot(dir, dir) < 1e-10) {
+        dir = vec3<f32>(1.0, 0.0, 0.0);
+    } else {
+        dir = normalize(dir);
+    }
 
-    let start_ndc = start_clip.xy / start_clip.w;
-    let end_ndc = end_clip.xy / end_clip.w;
+    let mid = (input.start + input.end) * 0.5;
+    var to_eye = -mid;
+    if (dot(to_eye, to_eye) < 1e-10) {
+        to_eye = vec3<f32>(0.0, 0.0, 1.0);
+    } else {
+        to_eye = normalize(to_eye);
+    }
 
-    let dir = normalize(end_ndc - start_ndc);
-    let normal = vec2<f32>(-dir.y, dir.x);
+    let right = billboard_right(dir, to_eye);
+    let half_thickness = input.thickness * 0.5;
 
-    let half_width_px = input.width_px * 0.5;
+    let base = select(input.start, input.end, input.end_sign > 0.0);
+    let world_pos = base
+        + right * (input.side_sign * half_thickness)
+        + dir * (input.end_sign * input.thickness);
 
-    let base_clip = select(start_clip, end_clip, input.end_sign > 0.0);
-    let pos_clip = offset_clip(
-        base_clip,
-        dir,
-        normal,
-        input.end_sign,
-        input.side_sign,
-        half_width_px,
-    );
+    let pos_clip = uniforms.view_proj * vec4<f32>(world_pos, 1.0);
 
     var out: VSOut;
     out.pos = pos_clip;
     out.color = input.color;
+
+    let start_clip = uniforms.view_proj * vec4<f32>(input.start, 1.0);
+    let end_clip = uniforms.view_proj * vec4<f32>(input.end, 1.0);
     out.start_px = clip_to_px(start_clip);
     out.end_px = clip_to_px(end_clip);
-    out.half_width_px = half_width_px;
+
+    let base_clip = select(start_clip, end_clip, input.end_sign > 0.0);
+    let edge_clip = uniforms.view_proj * vec4<f32>(base + right * half_thickness, 1.0);
+    out.half_width_px = distance(clip_to_px(edge_clip), clip_to_px(base_clip));
+
     out.curr_clip = pos_clip;
-
-    let prev_start_clip = uniforms.prev_view_proj * vec4<f32>(input.start, 1.0);
-    let prev_end_clip = uniforms.prev_view_proj * vec4<f32>(input.end, 1.0);
-
-    let prev_start_ndc = prev_start_clip.xy / prev_start_clip.w;
-    let prev_end_ndc = prev_end_clip.xy / prev_end_clip.w;
-
-    let prev_dir = normalize(prev_end_ndc - prev_start_ndc);
-    let prev_normal = vec2<f32>(-prev_dir.y, prev_dir.x);
-
-    let prev_base_clip = select(prev_start_clip, prev_end_clip, input.end_sign > 0.0);
-    out.prev_clip = offset_clip(
-        prev_base_clip,
-        prev_dir,
-        prev_normal,
-        input.end_sign,
-        input.side_sign,
-        half_width_px,
-    );
+    out.prev_clip = uniforms.prev_view_proj * vec4<f32>(world_pos, 1.0);
 
     return out;
 }

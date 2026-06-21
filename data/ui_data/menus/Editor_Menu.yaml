@@ -135,7 +135,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Mouse Position change since last frame: {mouse_pos_delta.x:.2|fix|int=3}, {mouse_pos_delta.y:.2|fix|int=3}'
+        text: 'Mouse Position change since last frame: {{mouse_pos_delta.x}:.2}, {{mouse_pos_delta.y}:.2}'
       - !Text
         id: selected_menu_text
         actions: [ ]
@@ -231,7 +231,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Mouse Position: {mouse_pos.x:.0|fix}, {mouse_pos.y:.0|fix}'
+        text: 'Mouse Position: {{mouse_pos.x}:.0}, {{mouse_pos.y}:.0}'
       - !Text
         id: any_text.being_hovered_text
         actions: [ ]
@@ -267,7 +267,7 @@ layers:
           - 1.0
           - 1.0
           - 1.0
-        text: 'Color: , R={color_picker.r:.2|fix}, G={color_picker.g:.2|fix}, B={color_picker.b:.2|fix}, H={color_picker.h:.2|fix}, S={color_picker.s:.2|fix}, V={color_picker.v:.2|fix},'
+        text: 'Color: , R={{color_picker.r}:.2}, G={{color_picker.g}:.2}, B={{color_picker.b}:.2}, H={{color_picker.h}:.2}, S={{color_picker.s}:.2}, V={{color_picker.v}:.2},'
       - !Text
         id: editor_mode_text
         actions: [ ]
@@ -372,7 +372,7 @@ layers:
           - 0.7
           - 0.7
           - 1.0
-        text: 'Red: {color_picker_color.r:fix:.2}'
+        text: 'Red: {{color_picker_color.r}:.2}'
         misc:
           active: true
           pressable: true
@@ -389,7 +389,7 @@ layers:
           - 0.7
           - 0.7
           - 1.0
-        text: 'Green: {color_picker_color.g:fix:.2}'
+        text: 'Green: {{color_picker_color.g}:.2}'
         misc:
           active: true
           pressable: true
@@ -406,7 +406,7 @@ layers:
           - 0.7
           - 0.7
           - 1.0
-        text: 'Blue: {color_picker_color.b:fix:.2}'
+        text: 'Blue: {{color_picker_color.b}:.2}'
         misc:
           active: true
           pressable: true

@@ -51,10 +51,10 @@ layers:
       - !Text
         id: back_text
         actions:
-          - on:r set(editor_mode, false)
-          - on:r set(override_mode, false)
+          - on:r set(str:editor_mode, false)
+          - on:r set(str:override_mode, false)
           - on:r close_all_menus
-          - on:r open_menu(MainMenu)
+          - on:r open_menu(str:MainMenu)
         x: 0.1
         y: 0.05
         pt: 18.0
@@ -67,7 +67,7 @@ layers:
       - !Text
         id: faster_text
         actions:
-          - on:d inc(ball.speed, 0.1)
+          - on:d inc(str:ball.speed, 0.1)
         x: 0.1
         y: 0.09
         pt: 15.0
@@ -80,7 +80,7 @@ layers:
       - !Text
         id: slower_text
         actions:
-          - on:d dec(ball.speed, 0.1)
+          - on:d dec(str:ball.speed, 0.1)
         x: 0.1
         y: 0.12
         pt: 15.0
@@ -129,18 +129,18 @@ layers:
       - !Circle
         id: ball
         actions:
-          - on:n button:a set(self.center.x, self.center.x + ball.velocity.x * ball.speed)
-          - on:n button:a set(self.center.y, self.center.y + ball.velocity.y * ball.speed)
-          - on:n button:a if(self.center.y < self.radius, if(ball.velocity.y * ball.speed < 0, set(ball.velocity.y, -ball.velocity.y)))
-          - on:n button:a if(self.center.y > screen.y - self.radius, if(ball.velocity.y * ball.speed > 0, set(ball.velocity.y, -ball.velocity.y)))
-          - on:n button:a if(self.center.x - self.radius < left_paddle.center.x + left_paddle.size.x*0.5 && self.center.x + self.radius > left_paddle.center.x - left_paddle.size.x*0.5 && self.center.y > left_paddle.center.y - left_paddle.size.y*0.5 && self.center.y < left_paddle.center.y + left_paddle.size.y*0.5 && ball.velocity.x < 0, set(ball.velocity.x, -ball.velocity.x))
-          - on:n button:a if(self.center.x - self.radius < right_paddle.center.x + right_paddle.size.x*0.5 && self.center.x + self.radius > right_paddle.center.x - right_paddle.size.x*0.5 && self.center.y > right_paddle.center.y - right_paddle.size.y*0.5 && self.center.y < right_paddle.center.y + right_paddle.size.y*0.5 && ball.velocity.x > 0, set(ball.velocity.x, -ball.velocity.x))
-          - on:n button:a if(self.center.x < 0, set(ball.visitor_score, ball.visitor_score + 1); set(ball.velocity.x, 1.5); set(ball.velocity.y, random(-1.5, 1.5)); set(self.center.x, screen.x * 0.5); set(self.center.y, screen.y * 0.5); )
-          - on:n button:a if(self.center.x > screen.x, inc(ball.home_score, 1))
-          - on:n button:a if(self.center.x > screen.x, set(ball.velocity.x, -1.5))
-          - on:n button:a if(self.center.x > screen.x, set(ball.velocity.y, random(-1.5, 1.5)))
-          - on:n button:a if(self.center.x > screen.x, set(self.center.x, screen.x * 0.5))
-          - on:n button:a if(self.center.x > screen.x, set(self.center.y, screen.y * 0.5))
+          - on:n button:a set(str:self.center.x, {self.center.x} + {ball.velocity.x} * {ball.speed})
+          - on:n button:a set(str:self.center.y, {self.center.y} + {ball.velocity.y} * {ball.speed})
+          - on:n button:a if({self.center.y} < {self.radius}, if({ball.velocity.y} * {ball.speed} < 0, set(str:ball.velocity.y, -{ball.velocity.y})))
+          - on:n button:a if({self.center.y} > {screen.y} - {self.radius}, if({ball.velocity.y} * {ball.speed} > 0, set(str:ball.velocity.y, -{ball.velocity.y})))
+          - on:n button:a if({self.center.x} - {self.radius} < {left_paddle.center.x} + {left_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {left_paddle.center.x} - {left_paddle.size.x}*0.5 && {self.center.y} > {left_paddle.center.y} - {left_paddle.size.y}*0.5 && {self.center.y} < {left_paddle.center.y} + {left_paddle.size.y}*0.5 && {ball.velocity.x} < 0, set(str:ball.velocity.x, -{ball.velocity.x}))
+          - on:n button:a if({self.center.x} - {self.radius} < {right_paddle.center.x} + {right_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {right_paddle.center.x} - {right_paddle.size.x}*0.5 && {self.center.y} > {right_paddle.center.y} - {right_paddle.size.y}*0.5 && {self.center.y} < {right_paddle.center.y} + {right_paddle.size.y}*0.5 && {ball.velocity.x} > 0, set(str:ball.velocity.x, -{ball.velocity.x}))
+          - on:n button:a if({self.center.x} < 0, set(str:ball.visitor_score, {ball.visitor_score} + 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, random(-1.5, 1.5)); set(str:self.center.x, {screen.x} * 0.5); set(str:self.center.y, {screen.y} * 0.5); )
+          - on:n button:a if({self.center.x} > {screen.x}, inc(str:ball.home_score, 1))
+          - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.x, -1.5))
+          - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.y, random(-1.5, 1.5)))
+          - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.x, {screen.x} * 0.5))
+          - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.y, {screen.y} * 0.5))
         style: Hue Circle
         x: 0.6
         y: 0.5
@@ -166,10 +166,10 @@ layers:
       - !Rect
         id: left paddle
         actions:
-          - on:n button:"KeyW" if(self.center.y - self.size.y*0.5 > paddle_speed+1, set(self.center.y, self.center.y - paddle_speed))
-          - on:n button:"KeyS" if(self.center.y + self.size.y*0.5 < screen.y - (paddle_speed+1), set(self.center.y, self.center.y + paddle_speed))
-          - on:n button:a set(left_paddle.size, self.size)
-          - on:n button:a set(left_paddle.center, self.center)
+          - on:n button:"KeyW" if({self.center.y} - {self.size.y}*0.5 > {paddle_speed}+1, set(str:self.center.y, {self.center.y} - {paddle_speed}))
+          - on:n button:"KeyS" if({self.center.y} + {self.size.y}*0.5 < {screen.y} - ({paddle_speed}+1), set(str:self.center.y, {self.center.y} + {paddle_speed}))
+          - on:n button:a set(str:left_paddle.size, self.size)
+          - on:n button:a set(str:left_paddle.center, self.center)
         x: 0.02
         y: 0.5
         w: 0.02
@@ -206,10 +206,10 @@ layers:
       - !Rect
         id: right paddle
         actions:
-          - on:n button:"ArrowUp" if(self.center.y - self.size.y*0.5 > paddle_speed+1, set(self.center.y, self.center.y - paddle_speed))
-          - on:n button:"ArrowDown" if(self.center.y + self.size.y*0.5 < screen.y - (paddle_speed+1), set(self.center.y, self.center.y + paddle_speed))
-          - on:n button:a set(right_paddle.size, self.size)
-          - on:n button:a set(right_paddle.center, self.center)
+          - on:n button:"ArrowUp" if({self.center.y} - {self.size.y}*0.5 > {paddle_speed}+1, set(str:self.center.y, {self.center.y} - {paddle_speed}))
+          - on:n button:"ArrowDown" if({self.center.y} + {self.size.y}*0.5 < {screen.y} - ({paddle_speed}+1), set(str:self.center.y, {self.center.y} + {paddle_speed}))
+          - on:n button:a set(str:right_paddle.size, self.size)
+          - on:n button:a set(str:right_paddle.center, self.center)
         x: 0.98
         y: 0.5
         w: 0.02

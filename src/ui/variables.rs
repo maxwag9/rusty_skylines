@@ -356,33 +356,22 @@ impl From<glam::Vec4> for Value {
 }
 
 pub fn update_ui_variables(
-    ui_loader: &mut Ui,
+    ui: &mut Ui,
     time_scales: &TimeScales,
     astronomy: &Astronomy,
     obliquity: f64,
     settings: &Settings,
 ) {
-    ui_loader
-        .variables
-        .set_f64("day_length", time_scales.day_length);
-    ui_loader
-        .variables
-        .set_f64("total_days", time_scales.total_days);
-    ui_loader
-        .variables
-        .set_f64("base_year", time_scales.base_year);
-    ui_loader
-        .variables
+    ui.variables.set_f64("day_length", time_scales.day_length);
+    ui.variables.set_f64("total_days", time_scales.total_days);
+    ui.variables.set_f64("base_year", time_scales.base_year);
+    ui.variables
         .set_f64("current_year", time_scales.current_year);
-    ui_loader.variables.set_f64("earth_obliquity", obliquity);
-    ui_loader
-        .variables
+    ui.variables.set_f64("earth_obliquity", obliquity);
+    ui.variables
         .set_f64("sun_declination", astronomy.sun_declination);
-    ui_loader
-        .variables
-        .set_f64("moon_phase", astronomy.moon_phase);
-    ui_loader
-        .variables
+    ui.variables.set_f64("moon_phase", astronomy.moon_phase);
+    ui.variables
         .set_bool("reversed_depth_z", settings.reversed_depth_z);
 }
 
@@ -410,6 +399,8 @@ pub fn load_colors(path: PathBuf, settings: &Settings, vars: &mut Variables) {
                 continue;
             }
         };
+        //println!("'{}'", key);
+        //println!("{}", value_str);
         keys.push(key);
         let value = Value::from_str(settings, vars, value_str, true, true);
         match &value {
@@ -432,7 +423,7 @@ pub fn load_colors(path: PathBuf, settings: &Settings, vars: &mut Variables) {
                 continue;
             }
         };
-
+        //println!("{} {:?}", key, out);
         vars.set_array(key, out);
     }
     vars.set_array("color_keys", keys)

@@ -605,12 +605,15 @@ pub fn actions_to_uicommands(
                 MouseButtons::default(),
             )
         }
-        TouchEvent::SelectionRequested { element, .. } => (
-            TouchEventKind::Select,
-            &vec![],
-            element,
-            MouseButtons::default(),
-        ),
+        TouchEvent::SelectionRequested { element, .. } => {
+            //println!("{:?}", element);
+            (
+                TouchEventKind::Select,
+                &vec![],
+                element,
+                MouseButtons::default(),
+            )
+        }
         TouchEvent::DeselectAllRequested {} => (
             TouchEventKind::DeSelect,
             &vec![],
@@ -1070,7 +1073,9 @@ fn button_matches(input: &mut Input, button: ParsedButton, buttons: &MouseButton
             } else {
                 input.combo_down(s)
             };
-        }
+        } // } else {
+          //     println!("Invalid button filter: button:{}", value);
+          //     return None;
     };
     state.pressed || state.just_released
 }
@@ -1139,10 +1144,7 @@ fn try_parse_button(input: &str, filters: &mut ActionFilters) -> Option<usize> {
         "m" => ParsedButton::Middle,
         "b" => ParsedButton::Back,
         "f" => ParsedButton::Forward,
-        _ => {
-            println!("Invalid button filter: button:{}", value);
-            return None;
-        }
+        _ => ParsedButton::Key(value),
     };
 
     filters.buttons.push(button);

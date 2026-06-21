@@ -118,7 +118,7 @@ impl Ui {
         let global_actions: GlobalActions = load_global_actions(&menus_dir, bend_mode)
             .ok()
             .unwrap_or_default();
-        println!("Global Actions loaded: {:?}", global_actions);
+        //println!("Global Actions loaded: {:?}", global_actions);
         let mut loader = Self {
             menus: HashMap::new(),
             aps: advanced_primitives,
@@ -391,13 +391,15 @@ impl Ui {
                 }
 
                 for (idx, element) in layer.elements.iter().enumerate() {
-                    elements.push(TouchableElement {
-                        menu: menu_name.as_str(),   // &'a str - borrows from HashMap key
-                        layer: layer.name.as_str(), // &'a str - borrows from Layer in Menu
-                        order: layer.order,
-                        idx,
-                        element,
-                    });
+                    if element.is_active() {
+                        elements.push(TouchableElement {
+                            menu: menu_name.as_str(),   // &'a str - borrows from HashMap key
+                            layer: layer.name.as_str(), // &'a str - borrows from Layer in Menu
+                            order: layer.order,
+                            idx,
+                            element,
+                        });
+                    }
                 }
             }
         }

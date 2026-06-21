@@ -39,7 +39,7 @@ pub struct ThickLineVtxRender {
     pub end: [f32; 3],
     pub end_sign: f32,  // -1.0 for start side, +1.0 for end side
     pub side_sign: f32, // -1.0 or +1.0
-    pub width_px: f32,
+    pub width: f32,
     pub color: [f32; 4],
 }
 impl ThickLineVtxRender {
@@ -49,24 +49,6 @@ impl ThickLineVtxRender {
             array_stride: size_of::<ThickLineVtxRender>() as u64,
             step_mode: VertexStepMode::Vertex,
             attributes: ATTRS,
-        }
-    }
-    #[inline]
-    pub fn new(
-        start: [f32; 3],
-        end: [f32; 3],
-        end_sign: f32,
-        side_sign: f32,
-        width_px: f32,
-        color: [f32; 4],
-    ) -> Self {
-        Self {
-            start,
-            end,
-            end_sign,
-            side_sign,
-            width_px,
-            color,
         }
     }
 }

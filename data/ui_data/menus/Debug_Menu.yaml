@@ -14,7 +14,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'FPS: {fps:fix:.1} | Frame: {(render_dt * 1000):fix:.2}ms | Render CPU: {(total_cpu_render_time):fix:.2}ms | Sim: {(sim_dt * 1000):fix:.2}ms | {fps > 60 ? ''Smooth'' : ''Laggy''}'
+        text: 'FPS: {fix({fps}, 2, 3)} | Frame: {(fix({render_dt} * 1000):.2)}ms | Render CPU: {fix({total_cpu_render_time}:.2, 2, 2)}ms | Sim: {({sim_dt} * 1000):.2}ms | {{fps} > 60 ? "Smooth" : "Laggy"}'
         anchor: TopLeft
       - !Text
         id: frametime_main_pass_text
@@ -27,7 +27,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'Total everything: {total_frametime:.2}ms, Sky: {(sky_frametime):.2}ms, Stars: {(stars_frametime):.2}ms, Terrain: {(terrain_frametime):.2}ms, Water: {(water_frametime):.2}ms, Roads: {(roads_frametime):.2}ms  Reversed Depth Z: {reversed_depth_z}'
+        text: 'Total everything: {{total_frametime}:.2}ms, Sky: {{sky_frametime}:.2}ms, Stars: {{stars_frametime}:.2}ms, Terrain: {{terrain_frametime}:.2}ms, Water: {{water_frametime}:.2}ms, Roads: {{roads_frametime}:.2}ms  Reversed Depth Z: {reversed_depth_z}'
         anchor: TopLeft
       - !Text
         id: gtao_frametimes_text
@@ -40,7 +40,7 @@ layers:
           - 0.2
           - 0.2
           - 1.0
-        text: 'GTAO: Total: {(gtao_frametime):.2}ms, Prep: {(gtao_prep_frametime):.2}ms, Generate: {(gtao_generate_frametime):.2}ms, Blur: {(gtao_blur_frametime):.2}ms, Upsample/Apply: {(gtao_upsample_apply_frametime):.2}ms'
+        text: 'GTAO: Total: {{gtao_frametime}:.2}ms, Prep: {{gtao_prep_frametime}:.2}ms, Generate: {{gtao_generate_frametime}:.2}ms, Blur: {{gtao_blur_frametime}:.2}ms, Upsample/Apply: {{gtao_upsample_apply_frametime}:.2}ms'
         anchor: TopLeft
       - !Text
         id: fog_frametime_text
@@ -53,7 +53,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'Fog: {(fog_frametime):.2}ms, UI: {(ui_frametime):.2}ms, Tonemapping: {(tonemap_frametime):.2}ms, Cars: {(cars_frametime):.2}ms, Props: {(props_frametime):.2}ms, Gizmo: {(gizmo_frametime):.2}ms'
+        text: 'Fog: {{fog_frametime}:.2}ms, UI: {{ui_frametime}:.2}ms, Tonemapping: {{tonemap_frametime}:.2}ms, Cars: {{cars_frametime}:.2}ms, Props: {{props_frametime}:.2}ms, Gizmo: {{gizmo_frametime}:.2}ms'
         anchor: TopLeft
       - !Text
         id: shadows_frametime_text
@@ -66,7 +66,7 @@ layers:
           - 0.0
           - 1.0
           - 1.0
-        text: 'CSM Shadows: {(csm_frametime):.2}ms, RT Total: {(rt_frametime):.2}ms, RT Rays: {(rt_tracing_frametime):.2}ms, RT Upsampling: {(rt_upsample_frametime):.2}ms, RT Apply: {(rt_apply_frametime):.2}ms'
+        text: 'CSM Shadows: {{csm_frametime}:.2}ms, RT Total: {{rt_frametime}:.2}ms, RT Rays: {{rt_tracing_frametime}:.2}ms, RT Upsampling: {{rt_upsample_frametime}:.2}ms, RT Apply: {{rt_apply_frametime}:.2}ms'
         anchor: TopLeft
       - !Text
         id: sky_info_text
@@ -79,7 +79,7 @@ layers:
           - 0.5
           - 1.0
           - 1.0
-        text: 'Requested Time Speed: {time_speed:.2:fix}x, Actual Time Speed: {achieved_time_speed:.2:fix}x, Total Game Time: {total_game_time:fix:elapsed}, Day length: {day_length:.2:fix}s, Total_days: {total_days:.2:fix}d, Sun declination: {sun_declination:.2:fix} degrees'
+        text: 'Requested Time Speed: {{time_speed}:.2}x, Actual Time Speed: {{achieved_time_speed}:.2}x, Total Game Time: {elapsed({total_game_time})}, Day length: {{day_length}:.2}s, Total_days: {{total_days}:.2}d, Sun declination: {{sun_declination}:.2} degrees'
         anchor: TopLeft
       - !Text
         id: player_info_text
@@ -92,7 +92,7 @@ layers:
           - 0.5
           - 1.0
           - 1.0
-        text: 'Player Pos: X: {target_pos.x:.2} Y: {target_pos.y:.2} Z: {target_pos.z:.2} Chunk Pos: CX: {target_pos_cx:.2} CZ: {target_pos_cz:.2}'
+        text: 'Player Pos: X: {{target_pos.x}:.2} Y: {{target_pos.y}:.2} Z: {{target_pos.z}:.2} Chunk Pos: CX: {{target_pos_cx}:.2} CZ: {{target_pos_cz}:.2}'
         anchor: TopLeft
       - !Text
         id: world_info_text

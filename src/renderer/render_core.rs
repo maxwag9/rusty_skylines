@@ -167,15 +167,18 @@ impl Renderer {
         ui: &mut Ui,
         settings: &Settings,
     ) {
+        println!("[render] start");
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         //let t = Instant::now();
         self.update_render(world, ui, settings, aspect, screen_size);
-
+        print!(" [render] after update_render");
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
+            println!("[render] acquire_frame returned None!!");
             return;
         };
+        print!("[render] acquired frame");
         let time = &world.time;
         let camera = &world.world_state.camera;
         let astronomy = &world.time.astronomy;
@@ -224,8 +227,11 @@ impl Renderer {
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
         ui.variables
             .set_f64("total_cpu_render_time", total_cpu_render_time);
+        print!(" [render] before submit");
         self.queue.submit(Some(encoder.finish()));
+        print!(" [render] after submit, before present");
         frame.present();
+        print!(" [render] after present");
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui.variables);
     }
@@ -1516,26 +1522,41 @@ pub fn acquire_frame(
     device: &Device,
     config: &SurfaceConfiguration,
 ) -> Option<SurfaceTexture> {
+    println!("[surface] get_current_texture: start");
+
     match surface.get_current_texture() {
-        CurrentSurfaceTexture::Success(surface) => Some(surface),
+        CurrentSurfaceTexture::Success(surface) => {
+            println!("[surface] get_current_texture: success");
+            Some(surface)
+        }
         CurrentSurfaceTexture::Suboptimal(surface_texture) => {
+            println!("[surface] get_current_texture: suboptimal");
             surface.configure(device, config);
             Some(surface_texture)
         }
-        CurrentSurfaceTexture::Lost | CurrentSurfaceTexture::Outdated => {
+        CurrentSurfaceTexture::Lost => {
+            println!("[surface] get_current_texture: lost");
+            surface.configure(device, config);
+            None
+        }
+        CurrentSurfaceTexture::Outdated => {
+            println!("[surface] get_current_texture: outdated");
             surface.configure(device, config);
             None
         }
         CurrentSurfaceTexture::Timeout => {
-            println!("Timeout while acquiring surface");
+            println!("[surface] get_current_texture: timeout");
+            surface.configure(device, config);
             None
         }
         CurrentSurfaceTexture::Occluded => {
-            println!("occluded");
+            println!("[surface] get_current_texture: occluded");
+            surface.configure(device, config);
             None
         }
         CurrentSurfaceTexture::Validation => {
-            println!("Validation error while acquiring surface");
+            println!("[surface] get_current_texture: validation");
+            surface.configure(device, config);
             None
         }
     }

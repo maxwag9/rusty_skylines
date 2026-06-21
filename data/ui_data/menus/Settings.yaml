@@ -139,4 +139,16 @@ layers:
           pressable: false
           editable: true
         editing_tool: false
+      - !Advanced
+        name: present_mode_dropdown
+        ap_name: dropdown
+        ap_var: present_mode
+        x: 0.1
+        y: 0.7
+        scale: 1.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
     editing_tool: false

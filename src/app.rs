@@ -54,7 +54,8 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    fn new_events(&mut self, _event_loop: &dyn ActiveEventLoop, _cause: StartCause) {
+    fn new_events(&mut self, _event_loop: &dyn ActiveEventLoop, cause: StartCause) {
+        println!("[app] new_events: {:?}", cause);
         if let Some(resources) = self.resources.as_mut() {
             let world = &mut resources.world;
             let input = &mut world.input;
@@ -72,9 +73,12 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {} // For Mobile only
+    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
+        println!("[app] resumed");
+    }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        println!("[app] can_create_surfaces: start");
         let window = Arc::new(
             event_loop
                 .create_window(
@@ -84,7 +88,7 @@ impl ApplicationHandler for App {
                 )
                 .expect("Failed to create window"),
         );
-
+        print!("  [app] window created");
         let mut resources = Resources::new(window.clone(), event_loop);
         let world = &mut resources.world;
         let time = &mut world.time;
@@ -117,6 +121,7 @@ impl ApplicationHandler for App {
 
         event_loop.set_control_flow(ControlFlow::Poll);
         window.request_redraw();
+        print!("  [app] initial redraw requested");
     } // resumed() but new
 
     fn window_event(
@@ -456,6 +461,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::SurfaceResized(size) => {
+                println!("[event] surface resized: {}x{}", size.width, size.height);
                 if let Some(resources) = self.resources.as_mut() {
                     resources
                         .render_core
@@ -463,6 +469,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
+                println!("[event] scale factor changed");
                 if let Some(resources) = self.resources.as_mut() {
                     let size = resources.window.surface_size(); // << get the real physical size
                     if size.width > 0 && size.height > 0 {
@@ -474,6 +481,7 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
+                println!("[event] redraw requested");
                 let Some(resources) = self.resources.as_mut() else {
                     event_loop.exit();
                     return;
@@ -532,8 +540,9 @@ impl ApplicationHandler for App {
 
                 run_interpolation(resources);
                 run_sounds(resources);
+                print!("  [event] redraw: before run_render");
                 run_render(resources); // use commands output
-
+                print!("  [event] redraw: after run_render");
                 // FPS cap
                 let elapsed = frame_start.elapsed();
                 let target =
@@ -543,15 +552,37 @@ impl ApplicationHandler for App {
                 }
 
                 if let Some(window) = &self.window {
+                    print!("  [event] requesting next redraw");
                     window.request_redraw();
                 }
             }
 
-            WindowEvent::Focused(false) | WindowEvent::Focused(true) => {
+            WindowEvent::Occluded(occluded) => {
+                println!("[event] occluded = {}", occluded);
+                // When the window is no longer occluded, request a redraw to resume rendering
+                if !occluded {
+                    print!("  [event] occluded cleared, requesting redraw");
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+
+            // Replaced your previous Focused(true/false) match with this
+            WindowEvent::Focused(focused) => {
                 if let Some(resources) = self.resources.as_mut() {
                     let input = &mut resources.world.input;
                     let time = &mut resources.world.time;
                     input.reset_all(time.total_time);
+                }
+
+                // Also request a redraw on focus, just to be safe
+                println!("[event] focused set to: {}", focused);
+                if focused {
+                    print!("  [event] focused true, requesting redraw");
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
                 }
             }
 

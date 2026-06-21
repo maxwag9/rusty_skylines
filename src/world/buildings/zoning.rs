@@ -808,11 +808,12 @@ impl Zoning {
                     None,
                 );
             }
-
+            //println!("{}", district.points.as_slice().len());
             gizmo.polyline(
                 district.points.as_slice(),
                 [0.14, 0.21, 0.5, 0.5],
                 0.0,
+                true,
                 0.1,
                 0.0,
             );
@@ -820,8 +821,8 @@ impl Zoning {
             gizmo.text(
                 district.name.clone(),
                 district.center,
-                12.0,
-                [0.05, 0.05, 0.05, 0.5],
+                1.0,
+                [0.05, 0.05, 0.05, 0.4],
                 None,
                 true,
                 0.0,
@@ -1219,7 +1220,7 @@ impl Zoning {
             return None;
         }
 
-        const CLEARANCE: f64 = 0.0;
+        const CLEARANCE: f64 = -0.1;
 
         // 1. Check edge-to-edge intersections (including closing the polygons)
         for edge_a in points_a.windows(2) {
@@ -1277,8 +1278,12 @@ impl Zoning {
         new_zoning_type: ZoningType,
         gizmo: &mut Gizmo,
     ) {
+        //println!("{:?}", variables.get_f64("lot_width"));
         let lot_width = variables.get_f64("lot_width").unwrap_or(15.0) as f32;
         let lot_length = variables.get_f64("lot_length").unwrap_or(20.0) as f32;
+        let rng = &mut ThreadRng::default();
+        // let lot_width = rng.random_range(10.0..20.0);
+        // let lot_length = rng.random_range(15.0..26.0);
         let mut inside_lot_id: Option<LotId> = None;
         for lot in self.zoning_storage.iter_lots() {
             if point_in_polygon_xz(picked.pos, lot.bounds.as_slice()) {
@@ -1316,12 +1321,26 @@ impl Zoning {
                 true => {
                     // Oh, no it does intersect!
                     // Preview draw
-                    gizmo.polyline(preview.as_slice(), [0.8, 0.1, 0.1, 1.0], 8.0, 0.25, 0.0);
+                    gizmo.polyline(
+                        preview.as_slice(),
+                        [0.8, 0.1, 0.1, 1.0],
+                        8.0,
+                        false,
+                        0.25,
+                        0.0,
+                    );
                 }
                 false => {
                     // DOESN'T INTERSECT LETS GO
                     // Preview draw
-                    gizmo.polyline(preview.as_slice(), [0.1, 0.8, 0.1, 1.0], 8.0, 0.2, 0.0);
+                    gizmo.polyline(
+                        preview.as_slice(),
+                        [0.1, 0.8, 0.1, 1.0],
+                        8.0,
+                        false,
+                        0.2,
+                        0.0,
+                    );
                     if input.action_repeat("Place Zoning Point") {
                         let lot_center = WorldPos::centroid(&preview);
                         let lot = Lot {
@@ -1378,7 +1397,14 @@ impl Zoning {
                 );
             }
 
-            gizmo.polyline(lot.bounds.as_slice(), [0.1, 0.3, 0.7, 0.8], 10.0, 0.10, 0.0);
+            gizmo.polyline(
+                lot.bounds.as_slice(),
+                [0.1, 0.3, 0.7, 0.8],
+                10.0,
+                false,
+                0.10,
+                0.0,
+            );
         }
         if let Some(lot_id) = inside_lot_id
             && removing_lot
@@ -1625,7 +1651,7 @@ impl Zoning {
                             {
                                 if district.points.len() >= 3 {
                                     district.add_point(pos);
-                                    println!("Closed zoning loop");
+                                    //println!("Closed zoning loop");
                                     self.zoning_state = None;
                                 }
                             }
@@ -2514,7 +2540,7 @@ pub fn draw_area(
         ZoningType::Industrial => "industrial_zone_color",
         ZoningType::Office => "office_zone_color",
     };
-
+    //println!("{:?}", points.len());
     if let Some(mut c) = variables
         .get(key)
         .as_deref()

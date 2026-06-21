@@ -3,7 +3,9 @@ elements:
   # Soft outer border
   - !Rect
     id: Zoning Border
-    actions: [ ]
+    actions:
+      - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_height, self.size.y)
+      - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_y, self.center.y)
     x: 0.0
     y: 0.0
     w: 0.0105
@@ -19,14 +21,18 @@ elements:
       - 1.0
       - 0.2
     roundness: 0.05
-    border_thickness_percentage: 0.02
+    border_thickness_percentage: 0.04
   # inner indicator
   - !Rect
     id: Zoning Indicator
     actions:
-      - on:a button:a set(self.size.y, 20.0*{{ap}})
-
-      #- on:release, ifvareq({ap}, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
+      - on:a button:a set(str:self.size.y, {zoning_demand_indicator_{ap}_border_height}*{{ap}})
+      - on:a button:a set(str:self.center.y,
+        ({zoning_demand_indicator_{ap}_border_y} + 0.5 * {zoning_demand_indicator_{ap}_border_height})
+        - 0.5 * ({zoning_demand_indicator_{ap}_border_height}*{{ap}})
+        )
+      - button:a show_interaction(self.color.fill)
+      #- on:release, ifvareq(str:{ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
     y: 0.0
     w: 0.010
@@ -38,14 +44,14 @@ elements:
       - 0.9
     roundness: 0.1
   - !Text
-    id: zoning_text
-    x: 0.02
-    y: 0.04
-    pt: 10.0
+    id: zoning_value_text
+    x: 0.00
+    y: 0.00
+    pt: 8.0
     color:
-      - 1.0
-      - 1.0
-      - 1.0
+      - 0.94
+      - 0.02
+      - 0.09
       - 0.9
-    text: '{{ap}}'
+    text: '{{{ap}}:.2}'
     anchor: Center

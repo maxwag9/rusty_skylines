@@ -1249,7 +1249,14 @@ pub fn mesh_intersection(
             .iter()
             .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y)))
             .collect::<Vec<WorldPos>>();
-        gizmo.polyline(points.as_slice(), [1.0, 1.0, 1.0, 1.0], 3.0, 0.2, 50.0);
+        gizmo.polyline(
+            points.as_slice(),
+            [1.0, 1.0, 1.0, 1.0],
+            3.0,
+            false,
+            0.1,
+            20.0,
+        );
     }
 
     let asphalt_corners = create_corner_fillers(&arms, &asphalt_hw, &params);
@@ -1517,7 +1524,14 @@ fn compute_intersection_geometry(
                 .iter()
                 .map(|v| center.add_vec3(Vec3::new(v.x, 0.0, v.y)))
                 .collect::<Vec<WorldPos>>();
-            gizmo.polyline(points.as_slice(), [1.0, 0.0, 1.0, 1.0], 3.0, 0.2, 50.0);
+            gizmo.polyline(
+                points.as_slice(),
+                [1.0, 0.0, 1.0, 1.0],
+                3.0,
+                false,
+                0.1,
+                20.0,
+            );
         }
     }
 

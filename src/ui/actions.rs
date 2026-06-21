@@ -1815,7 +1815,10 @@ pub fn set_element_property(
                     // Setting full vector
                     None => {
                         let Some(arr) = new_val.as_array() else {
-                            return CommandResult::Error("set_element_property: center requires an array value when no component specified".to_string());
+                            return CommandResult::Error(format!(
+                                "set_element_property: center requires an array value when no component specified, but got: {}",
+                                new_val.to_string_value()
+                            ));
                         };
                         if arr.len() != 2 {
                             return CommandResult::Error(format!(
@@ -1825,16 +1828,17 @@ pub fn set_element_property(
                         }
 
                         let Some(x) = arr[0].as_f64() else {
-                            return CommandResult::Error(
-                                "set_element_property: center array[0] is not a valid number"
-                                    .to_string(),
-                            );
+                            return CommandResult::Error(format!(
+                                "set_element_property: center array[0] must be a number, got: {}",
+                                arr[0].to_string_value()
+                            ));
                         };
+
                         let Some(y) = arr[1].as_f64() else {
-                            return CommandResult::Error(
-                                "set_element_property: center array[1] is not a valid number"
-                                    .to_string(),
-                            );
+                            return CommandResult::Error(format!(
+                                "set_element_property: center array[1] must be a number, got: {}",
+                                arr[1].to_string_value()
+                            ));
                         };
 
                         [x as f32, y as f32]
@@ -1843,7 +1847,10 @@ pub fn set_element_property(
                     // Setting single component
                     Some(idx) => {
                         let Some(val) = new_val.as_f64() else {
-                            return CommandResult::Error("set_element_property: center component value is not a valid number".to_string());
+                            return CommandResult::Error(format!(
+                                "set_element_property: center component value must be a number, got: {}",
+                                new_val.to_string_value()
+                            ));
                         };
 
                         let mut after = before;
@@ -1893,7 +1900,10 @@ pub fn set_element_property(
                     // Setting full vector
                     None => {
                         let Some(arr) = new_val.as_array() else {
-                            return CommandResult::Error("set_element_property: size requires an array value when no component specified".to_string());
+                            return CommandResult::Error(format!(
+                                "set_element_property: size requires an array value when no component specified, but got: {}",
+                                new_val.to_string_value()
+                            ));
                         };
                         if arr.len() != 2 {
                             return CommandResult::Error(format!(
@@ -1903,16 +1913,17 @@ pub fn set_element_property(
                         }
 
                         let Some(x) = arr[0].as_f64() else {
-                            return CommandResult::Error(
-                                "set_element_property: size array[0] is not a valid number"
-                                    .to_string(),
-                            );
+                            return CommandResult::Error(format!(
+                                "set_element_property: size array[0] must be a number, got: {}",
+                                arr[0].to_string_value()
+                            ));
                         };
+
                         let Some(y) = arr[1].as_f64() else {
-                            return CommandResult::Error(
-                                "set_element_property: size array[1] is not a valid number"
-                                    .to_string(),
-                            );
+                            return CommandResult::Error(format!(
+                                "set_element_property: size array[1] must be a number, got: {}",
+                                arr[1].to_string_value()
+                            ));
                         };
 
                         [x as f32, y as f32]
@@ -1922,10 +1933,10 @@ pub fn set_element_property(
                     Some(idx) => {
                         //println!("Val: {}, idx: {}", new_val, idx);
                         let Some(val) = new_val.as_f64() else {
-                            return CommandResult::Error(
-                                "set_element_property: size component value is not a valid number"
-                                    .to_string(),
-                            );
+                            return CommandResult::Error(format!(
+                                "set_element_property: size component value must be a number, got: {}",
+                                new_val.to_string_value()
+                            ));
                         };
 
                         let mut after = before;
@@ -1934,7 +1945,7 @@ pub fn set_element_property(
                             1 => after[1] = val as f32,
                             _ => {
                                 return CommandResult::Error(format!(
-                                    "set_element_property: invalid size component index {}",
+                                    "set_element_property: invalid size component index {}, expected 0 or 1",
                                     idx
                                 ));
                             }
@@ -1958,9 +1969,10 @@ pub fn set_element_property(
 
             "radius" => {
                 let Some(radius) = new_val.as_f64() else {
-                    return CommandResult::Error(
-                        "set_element_property: radius value is not a valid number".to_string(),
-                    );
+                    return CommandResult::Error(format!(
+                        "set_element_property: radius value must be a number, got: {}",
+                        new_val.to_string_value()
+                    ));
                 };
 
                 ctx.ui.ui_edit_manager.execute_command(
@@ -1980,9 +1992,10 @@ pub fn set_element_property(
                 let color_property = ColorComponent::from_str(component); // MSRV!!
                 //println!("{}", new_val);
                 let Some(new_color) = new_val.as_color4() else {
-                    return CommandResult::Error(
-                        ".as_color4() failed in set_element_property".to_string(),
-                    );
+                    return CommandResult::Error(format!(
+                        "set_element_property: expected color4 value, but got: {}",
+                        new_val.to_string_value()
+                    ));
                 };
 
                 ctx.ui.ui_edit_manager.execute_command(

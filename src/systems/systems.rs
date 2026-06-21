@@ -96,7 +96,14 @@ fn handle_destruction(
         let removing_lot = input.action_down("Destroy");
         //let finished_removing_lot = input.action_released("Destroy");
         if let Some(lot) = zoning.zoning_storage.get_lot(lot_id) {
-            gizmo.polyline(lot.bounds.as_slice(), [0.8, 0.3, 0.7, 0.8], 10.0, 0.15, 0.0);
+            gizmo.polyline(
+                lot.bounds.as_slice(),
+                [0.8, 0.3, 0.7, 0.8],
+                10.0,
+                false,
+                0.15,
+                0.0,
+            );
             if removing_lot {
                 draw_area(
                     lot.bounds.as_slice(),

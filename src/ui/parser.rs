@@ -116,6 +116,7 @@ impl Value {
         // Auto-detect array (bracket notation)
         if s.starts_with('[') && s.ends_with(']') {
             if let Some(arr) = Self::parse_array(settings, variables, s) {
+                //println!("from_str color: {:?}", arr);
                 return Value::Array(arr);
             }
         }
@@ -561,7 +562,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
         "fix" => |args| {
             let val = args.first()?;
             let n = val.as_f64()?;
-
+            //println!("'{}'", n);
             // defaults
             let decimals = args.get(1).and_then(|v| v.as_f64()).unwrap_or(3.0) as usize;
             let min_int = args
@@ -596,7 +597,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             } else {
                 format!("{}{}", sign, padded_int)
             };
-
+            //println!("'{}'", result);
             Some(Value::String(result))
         },
         // Math functions
@@ -1383,7 +1384,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             _ => Some(Value::Null),
         },
         "random" => |args| {
-            println!("{:?}", args);
+            //println!("{:?}", args);
             let mut rng = ThreadRng::default();
             match args.first() {
                 Some(Value::Array(array)) => {
@@ -1698,6 +1699,7 @@ fn tokenize_expr(input: &str) -> Vec<Token> {
             if c.is_ascii_digit()
                 || (c == '.'
                     && !prev_is_operand
+                    && !matches!(tokens.last(), Some(Token::Colon))
                     && chars.clone().nth(1).map_or(false, |n| n.is_ascii_digit()))
             {
                 let mut s = String::new();
@@ -1855,7 +1857,14 @@ fn tokenize_expr(input: &str) -> Vec<Token> {
                             tokens.push(Token::Question);
                         }
                     }
-                    ':' => tokens.push(Token::Colon),
+                    ':' => {
+                        tokens.push(Token::Colon);
+
+                        if chars.peek() == Some(&'.') {
+                            chars.next();
+                            tokens.push(Token::Dot);
+                        }
+                    }
                     '.' => {
                         if chars.peek() == Some(&'.') {
                             chars.next();
@@ -1966,8 +1975,12 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.pos).cloned().unwrap_or(Token::End)
     }
 
+    fn peek_n(&self, n: usize) -> Token {
+        self.tokens.get(self.pos + n).cloned().unwrap_or(Token::End)
+    }
+
     pub fn parse(&mut self) -> ParseResult<Value> {
-        let value = self.parse_expr(0)?;
+        let value = self.parse_expr_bp(0, false)?;
         if self.peek() != Token::End {
             return Err(ParseError::UnexpectedToken {
                 expected: "end of expression".to_string(),
@@ -1979,10 +1992,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self, min_bp: u8) -> ParseResult<Value> {
+        self.parse_expr_bp(min_bp, false)
+    }
+
+    fn parse_expr_bp(&mut self, min_bp: u8, stop_at_ternary_colon: bool) -> ParseResult<Value> {
         let mut left = self.parse_primary()?;
 
         loop {
             let op = self.peek();
+
+            if stop_at_ternary_colon && op == Token::Colon && self.peek_n(1) != Token::Dot {
+                break;
+            }
 
             if let Value::String(ref l) = left {
                 if matches!(op, Token::Ident(_) | Token::StrLit(_) | Token::LBrace) {
@@ -1995,6 +2016,7 @@ impl<'a> Parser<'a> {
             let (l_bp, r_bp) = match op {
                 Token::Pipe => (1, 2),
                 Token::Question => (2, 0),
+                Token::Colon => (16, 17),
                 Token::NullCoalesce => (3, 4),
                 Token::Or => (4, 5),
                 Token::And => (5, 6),
@@ -2018,7 +2040,7 @@ impl<'a> Parser<'a> {
             self.pos += 1;
 
             if op == Token::Question {
-                let yes = self.parse_expr(0)?;
+                let yes = self.parse_expr_bp(0, true)?;
                 if self.peek() != Token::Colon {
                     return Err(ParseError::UnexpectedToken {
                         expected: ":".to_string(),
@@ -2027,7 +2049,8 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.pos += 1;
-                let no = self.parse_expr(2)?;
+
+                let no = self.parse_expr_bp(2, false)?;
                 left = if left.is_truthy() { yes } else { no };
                 continue;
             }
@@ -2046,13 +2069,16 @@ impl<'a> Parser<'a> {
                         });
                     }
                 };
+
                 let mut args = vec![left.clone()];
+
                 if self.peek() == Token::LParen {
                     self.pos += 1;
                     let mut more_args = Vec::new();
+
                     if self.peek() != Token::RParen {
                         loop {
-                            more_args.push(self.parse_expr(0)?);
+                            more_args.push(self.parse_expr_bp(0, false)?);
                             match self.peek() {
                                 Token::Comma => {
                                     self.pos += 1;
@@ -2068,62 +2094,11 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
+
                     self.pos += 1;
                     args.append(&mut more_args);
-                } else if self.peek() == Token::Dot {
-                    self.pos += 1;
-                    let precision = self.peek();
-                    let precision: usize = match precision {
-                        Token::Number(n) => n as usize,
-                        Token::Ident(ident) => {
-                            let precision_val = self.parse_expr(0)?;
-
-                            match precision_val.as_f64() {
-                                Some(v) => v as usize,
-                                None => {
-                                    return Err(ParseError::TypeMismatch {
-                                        operation: "precision".to_string(),
-                                        expected: "number".to_string(),
-                                        found: precision_val.type_name().to_string(),
-                                        pos: self.pos,
-                                    });
-                                }
-                            }
-                        }
-                        Token::StrLit(str) => {
-                            let precision_val = self.parse_expr(0)?;
-
-                            match precision_val.as_f64() {
-                                Some(v) => v as usize,
-                                None => {
-                                    return Err(ParseError::TypeMismatch {
-                                        operation: "precision".to_string(),
-                                        expected: "number".to_string(),
-                                        found: precision_val.type_name().to_string(),
-                                        pos: self.pos,
-                                    });
-                                }
-                            }
-                        }
-                        _ => {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "number or ident or strlit".to_string(),
-                                found: self.peek(),
-                                pos: self.pos,
-                            });
-                        }
-                    };
-                    let Some(n) = left.as_f64() else {
-                        return Err(ParseError::TypeMismatch {
-                            operation: "".to_string(),
-                            expected: "number".to_string(),
-                            found: left.into_string_value(),
-                            pos: self.pos,
-                        });
-                    };
-                    left = Value::String(format!("{:.*}", precision, n));
-                    continue;
                 }
+
                 left = call_builtin(&name, args).ok_or(ParseError::UndefinedFunction {
                     name: name.clone(),
                     pos: self.pos - 1,
@@ -2131,9 +2106,62 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            if op == Token::Colon {
+                if self.peek() != Token::Dot {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: ".".to_string(),
+                        found: self.peek(),
+                        pos: self.pos,
+                    });
+                }
+
+                self.pos += 1;
+
+                let precision = match self.peek() {
+                    Token::Number(n) => {
+                        self.pos += 1;
+                        n as usize
+                    }
+                    Token::Ident(_) | Token::StrLit(_) | Token::LBrace => {
+                        let precision_val = self.parse_expr_bp(17, false)?;
+                        match precision_val.as_f64() {
+                            Some(v) => v as usize,
+                            None => {
+                                return Err(ParseError::TypeMismatch {
+                                    operation: "precision".to_string(),
+                                    expected: "number".to_string(),
+                                    found: precision_val.type_name().to_string(),
+                                    pos: self.pos,
+                                });
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "precision value".to_string(),
+                            found: self.peek(),
+                            pos: self.pos,
+                        });
+                    }
+                };
+
+                let Some(n) = left.as_f64() else {
+                    return Err(ParseError::TypeMismatch {
+                        operation: "format".to_string(),
+                        expected: "number".to_string(),
+                        found: left.type_name().to_string(),
+                        pos: self.pos,
+                    });
+                };
+
+                left = Value::String(format!("{:.*}", precision, n));
+                continue;
+            }
+
             if op == Token::Dot {
                 let prop_tok = self.peek();
                 self.pos += 1;
+
                 match prop_tok {
                     Token::Ident(prop) => {
                         left = match get_property(&left, &prop) {
@@ -2144,7 +2172,6 @@ impl<'a> Parser<'a> {
                     Token::Number(n) => {
                         if n.fract() == 0.0 && n >= 0.0 {
                             let idx = Value::I64(n as i64);
-                            //println!("Numbah: {}.{}", value_to_text(&left), idx);
                             left = match get_index(&left, &idx) {
                                 Some(v) => v,
                                 None => {
@@ -2161,13 +2188,13 @@ impl<'a> Parser<'a> {
                             left = match self.vars.get(full_name.as_str()) {
                                 None => Value::String(full_name),
                                 Some(val) => val.into_owned(),
-                            }
+                            };
                         }
                     }
                     Token::LBrace => {
                         let prev_inside = self.is_inside_braces;
                         self.is_inside_braces = true;
-                        let key = self.parse_expr(0)?;
+                        let key = self.parse_expr_bp(0, false)?;
                         if self.peek() != Token::RBrace {
                             return Err(ParseError::UnexpectedToken {
                                 expected: "}".to_string(),
@@ -2177,10 +2204,12 @@ impl<'a> Parser<'a> {
                         }
                         self.pos += 1;
                         self.is_inside_braces = prev_inside;
+
                         let resolved = match &key {
                             Value::I64(_) | Value::F64(_) => get_index(&left, &key),
                             _ => get_property(&left, &value_to_text(&key)),
                         };
+
                         left = resolved.unwrap_or_else(|| {
                             Value::String(format!(
                                 "{}.{}",
@@ -2198,7 +2227,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             } else if op == Token::LBracket {
-                let idx = self.parse_expr(0)?;
+                let idx = self.parse_expr_bp(0, false)?;
                 if self.peek() != Token::RBracket {
                     return Err(ParseError::UnexpectedToken {
                         expected: "]".to_string(),
@@ -2213,10 +2242,11 @@ impl<'a> Parser<'a> {
                     pos: self.pos - 1,
                 })?;
             } else {
-                let right = self.parse_expr(r_bp)?;
-                left = eval_binary(left, right, &op, self.pos - 1)?; // TODO
+                let right = self.parse_expr_bp(r_bp, false)?;
+                left = eval_binary(left, right, &op, self.pos - 1)?;
             }
         }
+
         Ok(left)
     }
 
@@ -2231,9 +2261,10 @@ impl<'a> Parser<'a> {
             Token::True => Ok(Value::Bool(true)),
             Token::False => Ok(Value::Bool(false)),
             Token::Null => Ok(Value::Null),
+
             Token::Minus => Ok(Value::F64(
                 -(self
-                    .parse_expr(15)?
+                    .parse_expr_bp(15, false)?
                     .as_f64()
                     .ok_or(ParseError::TypeMismatch {
                         operation: "negation".to_string(),
@@ -2242,10 +2273,12 @@ impl<'a> Parser<'a> {
                         pos,
                     })?),
             )),
-            Token::Not => Ok(Value::Bool(!self.parse_expr(15)?.is_truthy())),
+
+            Token::Not => Ok(Value::Bool(!self.parse_expr_bp(15, false)?.is_truthy())),
+
             Token::BitNot => Ok(Value::I64(
                 !(self
-                    .parse_expr(15)?
+                    .parse_expr_bp(15, false)?
                     .as_i64()
                     .ok_or(ParseError::TypeMismatch {
                         operation: "bitnot".to_string(),
@@ -2254,10 +2287,11 @@ impl<'a> Parser<'a> {
                         pos,
                     })?),
             )),
+
             Token::LBrace => {
                 let prev_inside = self.is_inside_braces;
                 self.is_inside_braces = true;
-                let v = self.parse_expr(0)?;
+                let v = self.parse_expr_bp(0, false)?;
                 if self.peek() != Token::RBrace {
                     return Err(ParseError::UnexpectedToken {
                         expected: "}".to_string(),
@@ -2269,8 +2303,9 @@ impl<'a> Parser<'a> {
                 self.is_inside_braces = prev_inside;
                 Ok(v)
             }
+
             Token::LParen => {
-                let v = self.parse_expr(0)?;
+                let v = self.parse_expr_bp(0, false)?;
                 if self.peek() != Token::RParen {
                     return Err(ParseError::UnexpectedToken {
                         expected: ")".to_string(),
@@ -2281,15 +2316,19 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(v)
             }
+
             Token::LBracket => {
                 let mut items = Vec::new();
+
                 if self.peek() != Token::RBracket {
                     loop {
-                        let item = self.parse_expr(0)?;
+                        let item = self.parse_expr_bp(0, false)?;
+
                         if self.peek() == Token::DotDot || self.peek() == Token::DotDotEq {
                             let inclusive = self.peek() == Token::DotDotEq;
                             self.pos += 1;
-                            let end_val = self.parse_expr(0)?;
+
+                            let end_val = self.parse_expr_bp(0, false)?;
                             let start = item.as_i64().ok_or(ParseError::TypeMismatch {
                                 operation: "range start".to_string(),
                                 expected: "integer".to_string(),
@@ -2302,15 +2341,18 @@ impl<'a> Parser<'a> {
                                 found: end_val.type_name().to_string(),
                                 pos,
                             })?;
+
                             let range: Box<dyn Iterator<Item = i64>> = if inclusive {
                                 Box::new(start..=end)
                             } else {
                                 Box::new(start..end)
                             };
+
                             items.extend(range.map(|i| Value::F64(i as f64)));
                         } else {
                             items.push(item);
                         }
+
                         match self.peek() {
                             Token::Comma => {
                                 self.pos += 1;
@@ -2326,16 +2368,19 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+
                 self.pos += 1;
                 Ok(Value::Array(items))
             }
+
             Token::Ident(name) => {
                 if self.peek() == Token::LParen {
                     self.pos += 1;
                     let mut args = Vec::new();
+
                     if self.peek() != Token::RParen {
                         loop {
-                            args.push(self.parse_expr(0)?);
+                            args.push(self.parse_expr_bp(0, false)?);
                             match self.peek() {
                                 Token::Comma => {
                                     self.pos += 1;
@@ -2351,6 +2396,7 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
+
                     self.pos += 1;
                     call_builtin(&name, args).ok_or(ParseError::UndefinedFunction {
                         name: name.clone(),
@@ -2374,6 +2420,7 @@ impl<'a> Parser<'a> {
                     Ok(Value::String(name))
                 }
             }
+
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: tok,
@@ -2843,7 +2890,7 @@ pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
     match result {
         Ok(result) => Some(result),
         Err(e) => {
-            println!("ParseError for '{}': {}", expr, e);
+            //println!("ParseError for '{}': {}", expr, e);
             None
         }
     }
@@ -2855,11 +2902,6 @@ pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -
 
     while let Some((i, c)) = chars.next() {
         if c == '{' {
-            if let Some(&(_, '{')) = chars.peek() {
-                chars.next();
-                out.push('{');
-                continue;
-            }
             let start = i + 1;
             let mut end_opt = None;
             let mut brace_depth = 1;
@@ -2887,12 +2929,7 @@ pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -
                 out.push('{');
             }
         } else if c == '}' {
-            if let Some(&(_, '}')) = chars.peek() {
-                chars.next();
-                out.push('}');
-            } else {
-                out.push(c);
-            }
+            out.push(c);
         } else {
             out.push(c);
         }

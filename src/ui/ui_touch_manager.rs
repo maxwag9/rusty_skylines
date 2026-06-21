@@ -1263,7 +1263,7 @@ pub struct UiTouchManager {
     element_states: HashMap<String, ElementTouchData>,
     current_hover: Option<CurrentHover>,
     interaction_mode: InteractionMode,
-    pub(crate) last_input: InputSnapshot,
+    pub last_input: InputSnapshot,
 
     // Timing
     accumulated_time: f32,

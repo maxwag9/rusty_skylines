@@ -4,7 +4,8 @@ elements:
   - !Rect
     id: Checkbox Border
     actions:
-      - on:release, toggle({ap})
+      - on:release, toggle(str:{ap})
+      - button:a show_interaction(self.color.fill)
     x: 0.0
     y: 0.0
     w: 0.02
@@ -25,8 +26,9 @@ elements:
   - !Rect
     id: Checkbox Indicator
     actions:
-      - on:release, toggle({ap})
-      - on:release on:activated button:a, ifvareq({ap}, bool:false, set_var(self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(self.color.fill, [0.0, 0.5, 0.0, 1.0]))
+      - on:release, toggle(str:{ap})
+      - button:a show_interaction(self.color.fill)
+      - on:release on:activated button:a, ifvareq(str:{ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
     y: 0.0
     w: 0.010

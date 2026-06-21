@@ -39,13 +39,13 @@ layers:
       - !Text
         id: play_text
         actions:
-          - on:r set(show_world, true)
-          - on:r set(editor_mode, false)
-          - on:r set(override_mode, false)
+          - on:r set(str:show_world, true)
+          - on:r set(str:editor_mode, false)
+          - on:r set(str:override_mode, false)
           - on:r close_all_menus
-          - on:r open_menu(Debug_Menu)
-          - on:r load_save(first_save_ever, false)
-          - on:r open_menu(GUI)
+          - on:r open_menu(str:Debug_Menu)
+          - on:r load_save(str:first_save_ever, false)
+          - on:r open_menu(str:GUI)
         x: 0.5
         y: 0.3
         pt: 20.0
@@ -58,10 +58,10 @@ layers:
       - !Text
         id: settings_text
         actions:
-          - on:r set(editor_mode, false)
-          - on:r set(override_mode, false)
+          - on:r set(str:editor_mode, false)
+          - on:r set(str:override_mode, false)
           - on:r close_all_menus
-          - on:r open_menu(Settings)
+          - on:r open_menu(str:Settings)
         x: 0.5
         y: 0.35
         pt: 15.0
@@ -88,15 +88,15 @@ layers:
         id: pingpong_text
         actions:
           - on:r close_all_menus
-          - on:r open_menu(PingPong)
-          - on:r set(ball.direction, 0.9)
-          - on:r set(ball.speed, 3.0)
-          - on:r set(ball.velocity.x, cos(ball.direction)*2)
-          - on:r set(ball.velocity.y, sin(ball.direction)*2)
-          - on:r set(paddle_speed, 30)
-          - on:r set(show_world, false)
-          - on:r set(ball.home_score, 0)
-          - on:r set(ball.visitor_score, 0)
+          - on:r open_menu(str:PingPong)
+          - on:r set(str:ball.direction, 0.9)
+          - on:r set(str:ball.speed, 3.0)
+          - on:r set(str:ball.velocity.x, cos({ball.direction})*2)
+          - on:r set(str:ball.velocity.y, sin({ball.direction})*2)
+          - on:r set(str:paddle_speed, 30)
+          - on:r set(str:show_world, false)
+          - on:r set(str:ball.home_score, 0)
+          - on:r set(str:ball.visitor_score, 0)
         x: 0.8
         y: 0.9
         pt: 15.0
@@ -113,7 +113,7 @@ layers:
       - !Text
         id: add_circle_test
         actions:
-          - on:r add(self.menu, self.layer, heytherewhatsup, circle, [self.center.x, self.center.y+self.center.y*0.2])
+          - on:r add(str:self.menu, str:self.layer, str:heytherewhatsup, str:circle, [self.center.x, {self.center.y}+{self.center.y}*0.2])
         x: 0.2
         y: 0.35
         pt: 18.0
@@ -126,7 +126,7 @@ layers:
       - !Text
         id: clone_test
         actions:
-          - on:r clone(self.menu, self.layer, self.id, self.menu, self.layer, heytherewhatsupduped, [self.center.x, self.center.y+self.center.y*0.2])
+          - on:r clone(str:self.menu, str:self.layer, str:self.id, str:self.menu, str:self.layer, str:heytherewhatsupduped, [self.center.x, {self.center.y}+{self.center.y}*0.2])
         x: 0.2
         y: 0.45
         pt: 18.0
@@ -139,7 +139,7 @@ layers:
       - !Text
         id: delete_test
         actions:
-          - on:r delete(self.menu, self.layer, heytherewhatsupduped)
+          - on:r delete(str:self.menu, str:self.layer, str:heytherewhatsupduped)
         x: 0.1
         y: 0.5
         pt: 18.0
