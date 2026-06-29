@@ -178,9 +178,9 @@ pub struct MsaaTextures {
 pub struct ResolvedTextures {
     pub hdr: TextureView,
     pub normal: TextureView,
-    pub tonemapped: TextureView,
     pub ui: TextureView,
     pub atlas: TextureView,
+    pub tonemapped: TextureView,
 
     // For the in-game Map
     pub terrain_map_heights: TextureView,
@@ -318,9 +318,9 @@ impl Pipelines {
         ResolvedTextures {
             hdr,
             normal,
-            tonemapped,
             ui,
             atlas,
+            tonemapped,
             terrain_map_heights,
             terrain_map_colors,
         }

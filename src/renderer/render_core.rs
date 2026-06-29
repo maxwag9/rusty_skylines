@@ -1,6 +1,6 @@
 use crate::data::{DebugViewState, Settings, ShadowType};
 use crate::gpu_timestamp;
-use crate::helpers::paths::{compute_shader_dir, shader_dir, texture_dir};
+use crate::helpers::paths::{compute_shader_dir, next_screenshot_path, shader_dir, texture_dir};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
 //use crate::renderer::gizmo::partition_gizmo::PartitionGizmo;
@@ -167,18 +167,23 @@ impl Renderer {
         ui: &mut Ui,
         settings: &Settings,
     ) {
-        println!("[render] start");
+        if settings.render_debug_print {
+            println!("[render] start");
+        }
         let total_cpu_render_time_start = Instant::now();
         let aspect = self.config.width as f32 / self.config.height as f32;
         let screen_size: UVec2 = UVec2::new(self.config.width, self.config.height);
         //let t = Instant::now();
         self.update_render(world, ui, settings, aspect, screen_size);
-        print!(" [render] after update_render");
+        if settings.render_debug_print {
+            print!(" [render] after update_render");
+        }
         let Some(frame) = acquire_frame(&surface, &self.device, &self.config) else {
-            println!("[render] acquire_frame returned None!!");
             return;
         };
-        print!("[render] acquired frame");
+        if settings.render_debug_print {
+            print!("[render] acquired frame");
+        }
         let time = &world.time;
         let camera = &world.world_state.camera;
         let astronomy = &world.time.astronomy;
@@ -212,7 +217,7 @@ impl Renderer {
                 camera,
                 aspect,
                 time,
-                &world.input,
+                &mut world.input,
                 ui,
                 terrain,
                 &world.buildings,
@@ -227,11 +232,17 @@ impl Renderer {
         let total_cpu_render_time = total_cpu_render_time_start.elapsed().as_secs_f32() * 1000.0f32;
         ui.variables
             .set_f64("total_cpu_render_time", total_cpu_render_time);
-        print!(" [render] before submit");
+        if settings.render_debug_print {
+            print!(" [render] before submit");
+        }
         self.queue.submit(Some(encoder.finish()));
-        print!(" [render] after submit, before present");
+        if settings.render_debug_print {
+            print!(" [render] after submit, before present");
+        }
         frame.present();
-        print!(" [render] after present");
+        if settings.render_debug_print {
+            print!(" [render] after present");
+        }
         self.profiler
             .end_frame(&self.device, &self.queue, &mut ui.variables);
     }
@@ -515,7 +526,7 @@ impl Renderer {
         camera: &Camera,
         aspect: f32,
         time: &Time,
-        input_state: &Input,
+        input: &mut Input,
         ui: &mut Ui,
         terrain: &Terrain,
         buildings: &Buildings,
@@ -555,33 +566,114 @@ impl Renderer {
         self.execute_fog_pass(encoder, settings);
 
         gpu_timestamp!(encoder, &mut self.profiler, "UI", {
-            self.execute_ui_pass(encoder, ui, time, input_state, settings);
+            self.execute_ui_pass(encoder, ui, time, input, settings);
         });
 
         self.execute_debug_preview_pass(encoder, settings, &terrain.terrain_gen);
 
         gpu_timestamp!(encoder, &mut self.profiler, "Tonemap", {
-            self.execute_tonemap_pass(encoder);
+            self.execute_tonemap_pass(encoder, surface_view);
         });
-        encoder.copy_texture_to_texture(
-            TexelCopyTextureInfo {
-                texture: &self.pipelines.resolved.tonemapped.texture(),
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            TexelCopyTextureInfo {
-                texture: &surface_view.texture(),
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            Extent3d {
-                width: self.config.width,
-                height: self.config.height,
-                depth_or_array_layers: 1,
-            },
-        );
+        if input.action_repeat("Screenshot") {
+            let view = &self.pipelines.resolved.tonemapped;
+            let width = view.texture().width();
+            let height = view.texture().height();
+
+            let bytes_per_pixel = 4; // Rgba8UnormSrgb
+            let unpadded_bytes_per_row = bytes_per_pixel * width;
+            let padded_bytes_per_row = unpadded_bytes_per_row.next_multiple_of(256);
+            let buffer_size = (padded_bytes_per_row * height) as BufferAddress;
+
+            let output_buffer = self.device.create_buffer(&BufferDescriptor {
+                label: Some("Screenshot Buffer"),
+                size: buffer_size,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                TexelCopyTextureInfo {
+                    texture: &view.texture(),
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyBufferInfo {
+                    buffer: &output_buffer,
+                    layout: TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            self.queue.submit(Some(encoder.finish()));
+
+            let buffer_slice = output_buffer.slice(..);
+            buffer_slice.map_async(MapMode::Read, |_| {});
+            self.device
+                .poll(PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(Duration::from_secs(1)),
+                })
+                .ok();
+
+            let data = buffer_slice.get_mapped_range();
+
+            // Handle row padding when saving
+            if padded_bytes_per_row != unpadded_bytes_per_row {
+                // Strip padding
+                let mut pixels = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
+                for row in 0..height {
+                    let start = (row * padded_bytes_per_row) as usize;
+                    let end = start + unpadded_bytes_per_row as usize;
+                    pixels.extend_from_slice(&data[start..end]);
+                }
+                image::save_buffer(
+                    next_screenshot_path(),
+                    &pixels,
+                    width,
+                    height,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            } else {
+                image::save_buffer(
+                    next_screenshot_path(),
+                    &data,
+                    width,
+                    height,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+        }
+        // encoder.copy_texture_to_texture(
+        //     TexelCopyTextureInfo {
+        //         texture: &self.pipelines.resolved.tonemapped.texture(),
+        //         mip_level: 0,
+        //         origin: Origin3d::ZERO,
+        //         aspect: TextureAspect::All,
+        //     },
+        //     TexelCopyTextureInfo {
+        //         texture: &surface_view.texture(),
+        //         mip_level: 0,
+        //         origin: Origin3d::ZERO,
+        //         aspect: TextureAspect::All,
+        //     },
+        //     Extent3d {
+        //         width: self.config.width,
+        //         height: self.config.height,
+        //         depth_or_array_layers: 1,
+        //     },
+        // );
     }
 
     fn execute_world_pass(
@@ -1229,9 +1321,18 @@ impl Renderer {
         }
     }
 
-    fn execute_tonemap_pass(&mut self, encoder: &mut CommandEncoder) {
+    fn execute_tonemap_pass(&mut self, encoder: &mut CommandEncoder, surface_view: &TextureView) {
         // Post-process passes don't need MSAA - render directly to target
-        let color_attachment = RenderPassColorAttachment {
+        let surface_attachment = RenderPassColorAttachment {
+            view: surface_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations {
+                load: LoadOp::Clear(Color::BLACK),
+                store: StoreOp::Store,
+            },
+        };
+        let tonemapped_attachment = RenderPassColorAttachment {
             view: &self.pipelines.resolved.tonemapped,
             depth_slice: None,
             resolve_target: None,
@@ -1240,10 +1341,9 @@ impl Renderer {
                 store: StoreOp::Store,
             },
         };
-
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Main Pass (Tonemapping)"),
-            color_attachments: &[Some(color_attachment)],
+            color_attachments: &[Some(surface_attachment), Some(tonemapped_attachment)],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -1257,12 +1357,18 @@ impl Renderer {
             vertex_layouts: vec![],
             cull_mode: None,
             fragment: FragmentOption::Default {
-                targets: vec![Some(ColorTargetState {
-                    // Use the actual render target format, not surface format
-                    format: self.pipelines.resolved.tonemapped.texture().format(),
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
+                targets: vec![
+                    Some(ColorTargetState {
+                        format: surface_view.texture().format(),
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                    Some(ColorTargetState {
+                        format: self.pipelines.resolved.tonemapped.texture().format(),
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    }),
+                ],
             },
             shadow: None,
             sampler: Default::default(),
@@ -1399,7 +1505,7 @@ pub fn create_surface_config(
     let present_mode = pick_present_mode(surface, adapter, settings.present_mode.clone().to_wgpu());
 
     let config = SurfaceConfiguration {
-        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST,
+        usage: TextureUsages::RENDER_ATTACHMENT,
         format,
         width: size.width.max(1),
         height: size.height.max(1),
@@ -1522,15 +1628,14 @@ pub fn acquire_frame(
     device: &Device,
     config: &SurfaceConfiguration,
 ) -> Option<SurfaceTexture> {
-    println!("[surface] get_current_texture: start");
-
+    //println!("[surface] get_current_texture: start");
     match surface.get_current_texture() {
         CurrentSurfaceTexture::Success(surface) => {
-            println!("[surface] get_current_texture: success");
+            //println!("[surface] get_current_texture: success");
             Some(surface)
         }
         CurrentSurfaceTexture::Suboptimal(surface_texture) => {
-            println!("[surface] get_current_texture: suboptimal");
+            //println!("[surface] get_current_texture: suboptimal");
             surface.configure(device, config);
             Some(surface_texture)
         }

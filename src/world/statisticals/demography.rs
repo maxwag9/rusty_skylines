@@ -6,27 +6,40 @@ use rand_distr::Distribution;
 use rand_distr::Poisson;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::ops::RangeInclusive;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 pub const MAX_AGE: usize = 23;
+pub const INFANT_AGE_RANGE: RangeInclusive<usize> = 0..=1;
+pub const CHILD_AGE_RANGE: RangeInclusive<usize> = 2..=7;
+pub const YOUNG_ADULT_AGE_RANGE: RangeInclusive<usize> = 8..=12;
+pub const ADULT_AGE_RANGE: RangeInclusive<usize> = 13..=19;
+pub const ELDER_AGE_RANGE: RangeInclusive<usize> = 20..=22;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash, EnumIter)]
+// Workhorse population (YoungAdult and Adult combined)
+pub const WORKHORSE_AGE_RANGE: RangeInclusive<usize> =
+    *YOUNG_ADULT_AGE_RANGE.start()..=*ADULT_AGE_RANGE.end();
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter)]
 pub enum LifeStage {
     Infant,     // 0–1
-    Child,      // 2–8
-    YoungAdult, // 9–13
-    Adult,      // 14–19
+    Child,      // 2–7
+    YoungAdult, // 8–12
+    Adult,      // 13–19
     Elder,      // 20–22
 }
 
 impl LifeStage {
-    pub fn from_usize(year: usize) -> Self {
-        match year {
-            0..=1 => Self::Infant,
-            2..=8 => Self::Child,
-            9..=13 => Self::YoungAdult,
-            14..=19 => Self::Adult,
+    pub fn from_int<T>(year: T) -> Self
+    where
+        T: Into<usize>,
+    {
+        match year.into() {
+            y if INFANT_AGE_RANGE.contains(&y) => Self::Infant,
+            y if CHILD_AGE_RANGE.contains(&y) => Self::Child,
+            y if YOUNG_ADULT_AGE_RANGE.contains(&y) => Self::YoungAdult,
+            y if ADULT_AGE_RANGE.contains(&y) => Self::Adult,
             _ => Self::Elder,
         }
     }
@@ -41,6 +54,19 @@ impl LifeStage {
             x if x < 0.94 => LifeStage::Adult,
             _ => LifeStage::Elder,
         }
+    }
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            LifeStage::Infant => *INFANT_AGE_RANGE.start() as u8,
+            LifeStage::Child => *CHILD_AGE_RANGE.start() as u8,
+            LifeStage::YoungAdult => *YOUNG_ADULT_AGE_RANGE.start() as u8,
+            LifeStage::Adult => *ADULT_AGE_RANGE.start() as u8,
+            LifeStage::Elder => *ELDER_AGE_RANGE.start() as u8,
+        }
+    }
+
+    pub fn is_workhorse(&self) -> bool {
+        matches!(self, LifeStage::YoungAdult | LifeStage::Adult)
     }
 }
 
@@ -105,7 +131,7 @@ impl LifeStageConfig {
 pub struct DemographySnapshot {
     pub total_game_time: f64,
     pub population: u32,
-    pub ages: AgeGroups,
+    pub ages: Groups,
     pub births: u32,
     pub deaths: u32,
 }
@@ -139,7 +165,7 @@ impl DemographyHistory {
         self.pending_deaths += deaths;
     }
 
-    fn new_day(&mut self, total_game_time: f64, population: u32, ages: AgeGroups) {
+    fn new_day(&mut self, total_game_time: f64, population: u32, ages: Groups) {
         self.daily.push_back(DemographySnapshot {
             total_game_time,
             population,
@@ -154,47 +180,140 @@ impl DemographyHistory {
 
 /// Factors that influence demographic change each hour.
 pub struct DemographyTick {
-    /// 0.0 = starving, 1.0 = well fed. Affects both birth rate and mortality.
+    /// 0.0 = starving, 1.0 = well-fed. Affects both birth rate and mortality.
     pub food_availability: f64,
     /// 0.0 = miserable, 1.0 = thriving. Affects birth rate.
     pub happiness: f64,
+    pub prestige: f32,
 }
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AgeGroups {
-    groups: [u32; MAX_AGE],
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, Hash)]
+pub struct Groups {
+    age_groups: [u32; MAX_AGE],
+    education_groups: [[u32; EducationLevel::LEVELS]; MAX_AGE],
 }
-impl AgeGroups {
+
+impl Groups {
     pub fn new() -> Self {
         Self {
-            groups: [0; MAX_AGE],
+            age_groups: [0; MAX_AGE],
+            education_groups: [[0; EducationLevel::LEVELS]; MAX_AGE],
         }
     }
-    pub fn get<T: Into<usize>>(&self, age: T) -> u32 {
-        let age: usize = age.into();
-
-        self.groups.get(age).copied().unwrap_or(0) // age as usize is a bug, that would be the ENUM index, not the age. Use age.to_usize(), just for my future self. I changed it anyway.
+    #[inline]
+    pub fn get_age<T: Into<usize>>(&self, age: T) -> u32 {
+        let age = age.into();
+        self.age_groups.get(age).copied().unwrap_or(0)
     }
 
-    pub fn set<T: Into<usize>>(&mut self, age: T, new_population: u32) {
-        let age: usize = age.into();
-
-        self.groups.get_mut(age).map(|p| *p = new_population);
+    #[inline]
+    pub fn set_age<T: Into<usize>>(&mut self, age: T, value: u32) {
+        let age = age.into();
+        if let Some(slot) = self.age_groups.get_mut(age) {
+            *slot = value;
+        }
     }
-    pub fn add<T: Into<usize>>(&mut self, age: T, rhs: u32) {
-        let age: usize = age.into();
 
-        self.groups.get_mut(age).map(|p| *p += rhs);
+    #[inline]
+    pub fn add_age<T: Into<usize>>(&mut self, age: T, rhs: u32) {
+        let age = age.into();
+        if let Some(slot) = self.age_groups.get_mut(age) {
+            *slot = slot.saturating_add(rhs);
+        }
     }
+
+    #[inline]
+    pub fn remove_age<T: Into<usize>>(&mut self, age: T, rhs: u32) {
+        let age = age.into();
+        if let Some(slot) = self.age_groups.get_mut(age) {
+            *slot = slot.saturating_sub(rhs);
+        }
+    }
+    #[inline]
+    pub fn get_education<T: Into<usize>>(&self, age: T, level: EducationLevel) -> u32 {
+        let age = age.into();
+        let lvl = level as usize;
+
+        self.education_groups
+            .get(age)
+            .and_then(|row| row.get(lvl))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    #[inline]
+    pub fn set_education<T: Into<usize>>(&mut self, age: T, level: EducationLevel, value: u32) {
+        let age = age.into();
+        let lvl = level as usize;
+
+        if let Some(row) = self.education_groups.get_mut(age) {
+            if let Some(slot) = row.get_mut(lvl) {
+                *slot = value;
+            }
+        }
+    }
+
+    #[inline]
+    pub fn add_education<T: Into<usize>>(&mut self, age: T, level: EducationLevel, rhs: u32) {
+        let age = age.into();
+        let lvl = level as usize;
+
+        if let Some(row) = self.education_groups.get_mut(age) {
+            if let Some(slot) = row.get_mut(lvl) {
+                *slot = slot.saturating_add(rhs);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn remove_education<T: Into<usize>>(&mut self, age: T, level: EducationLevel, rhs: u32) {
+        let age = age.into();
+        let lvl = level as usize;
+
+        if let Some(row) = self.education_groups.get_mut(age) {
+            if let Some(slot) = row.get_mut(lvl) {
+                *slot = slot.saturating_sub(rhs);
+            }
+        }
+    }
+    #[inline]
     pub fn whole_population(&self) -> u32 {
-        self.groups.iter().sum()
+        self.age_groups.iter().sum()
+    }
+    #[inline]
+    pub fn workhorse_population(&self) -> u32 {
+        self.age_groups[WORKHORSE_AGE_RANGE].iter().sum()
+    }
+    #[inline]
+    pub fn clear(&mut self) {
+        self.age_groups = [0; MAX_AGE];
+        self.education_groups = [[0; EducationLevel::LEVELS]; MAX_AGE];
+    }
+    #[inline]
+    pub fn add_groups(&mut self, other: &Groups) {
+        for i in 0..MAX_AGE {
+            self.age_groups[i] = self.age_groups[i].saturating_add(other.age_groups[i]);
+
+            for j in 0..EducationLevel::LEVELS {
+                self.education_groups[i][j] =
+                    self.education_groups[i][j].saturating_add(other.education_groups[i][j]);
+            }
+        }
+    }
+    #[inline]
+    pub fn education_total(&self, level: EducationLevel) -> u32 {
+        let lvl = level as usize;
+        self.education_groups
+            .iter()
+            .map(|row| row.get(lvl).copied().unwrap_or(0))
+            .sum()
     }
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Demography {
     pub population: u32,
 
-    /// Age buckets: [children 0–4, youth 5–9, young_adult 10–14, adult 15–19, elderly 20+]1
-    pub age_groups: AgeGroups,
+    pub age_groups: Groups,
     pub lifestage_config: HashMap<LifeStage, LifeStageConfig>,
     pub income: IncomeDistribution,
     pub tax_config: TaxConfig,
@@ -216,7 +335,7 @@ impl Demography {
 
         Self {
             population: 0,
-            age_groups: AgeGroups::new(),
+            age_groups: Groups::new(),
             lifestage_config: LifeStageConfig::defaults(),
             income: IncomeDistribution::new(),
             tax_config: TaxConfig::default(),
@@ -233,103 +352,75 @@ impl Demography {
         let start = 9usize;
         let end = 19usize;
 
-        (start..=end).map(|age| self.age_groups.get(age)).sum()
-    }
-    #[inline]
-    pub fn add_person(&mut self, life_stage: LifeStage, ed_level: EducationLevel) {
-        self.education.add_person(self.population, ed_level); // MUST be before population increments!!
-        self.population += 1;
-        self.age_groups.add(life_stage, 1);
+        (start..=end).map(|age| self.age_groups.get_age(age)).sum()
     }
 
     /// Advance one in-game hour. Returns births
-    pub fn age(&mut self, rng: &mut impl Rng, time: &Time, tick: &DemographyTick) {
+    pub fn age_building_groups(
+        &self,
+        groups: &mut Groups,
+        rng: &mut impl Rng,
+        tick: DemographyTick,
+    ) -> (u32, u32) {
         let food = tick.food_availability.clamp(0.0, 1.0);
         let happiness = tick.happiness.clamp(0.0, 1.0);
 
-        // At food=0: mortality_modifier = 1 + starvation_scale
-        // At food=1: mortality_modifier = 1.0 (no penalty)
         let food_mort_mod = 1.0 + self.starvation_mortality_scale * (1.0 - food);
 
-        // Probability of aging one year per hour = 1 / hours_per_year
         let graduation_rate = 1.0 / (HOURS_PER_YEAR);
 
         let mut graduating = [0u32; MAX_AGE];
         let mut total_deaths = 0u32;
-
         for year in 0..MAX_AGE {
-            let pop = self.age_groups.get(year);
-            let cfg = &self.lifestage_config[&LifeStage::from_usize(year)];
+            let pop = groups.get_age(year);
+            let life_stage = LifeStage::from_int(year);
+            let cfg = &self.lifestage_config[&life_stage];
 
-            // Deaths this hour for this cohort
             let mort = self.base_mortality_rate * cfg.mortality_multiplier * food_mort_mod;
             let deaths = poisson(rng, pop as f64 * mort).min(pop);
             let survivors = pop - deaths;
             total_deaths += deaths;
 
-            // Graduate survivors into the next year slot (no graduation at max age)
             graduating[year] = if year < MAX_AGE - 1 {
                 poisson(rng, survivors as f64 * graduation_rate).min(survivors)
             } else {
                 0
             };
 
-            self.age_groups.set(year, survivors - graduating[year]);
+            groups.set_age(year, survivors - graduating[year]);
         }
 
-        // Pour graduating cohorts into the next year slot
         for year in 1..MAX_AGE {
-            let new_population = self
-                .age_groups
-                .get(year)
-                .saturating_add(graduating[year - 1]);
-            self.age_groups.set(year, new_population);
+            let new_population = groups.get_age(year).saturating_add(graduating[year - 1]);
+            groups.set_age(year, new_population);
         }
 
-        // Births — summed fertility contribution weighted by age group
         let fertile_pop: f64 = (0..MAX_AGE)
             .map(|y| {
-                self.age_groups.get(y) as f64
-                    * self.lifestage_config[&LifeStage::from_usize(y)].fertility_multiplier
+                groups.get_age(y) as f64
+                    * self.lifestage_config[&LifeStage::from_int(y)].fertility_multiplier
             })
             .sum();
+
         let births = poisson(rng, fertile_pop * self.base_birth_rate * food * happiness);
-        self.age_groups.add(0usize, births);
 
-        self.income.on_births(births, &self.age_groups);
-
-        self.population = self.age_groups.whole_population();
-        self.history.accumulate(births, total_deaths);
-
-        // Snapshot once per in-game day
-        if time.is_new_day() {
-            self.day_counter += 1;
-
-            self.history.new_day(
-                time.total_game_time,
-                self.population,
-                self.age_groups.clone(),
-            );
-            if self.day_counter % DAYS_PER_YEAR as u32 == 0 && self.day_counter > 0 {
-                self.income.apply_annual_transitions();
-            }
-        }
+        (births, total_deaths)
     }
     /// Tax revenue collected this in-game day, in €.
     ///
     /// Iterates over every age cohort, weights each income class by its share
     /// and the cohort's LifeStage productivity, then divides annual income down
     /// to a per-hour figure. Infants and children short-circuit at productivity = 0.0.
-    pub fn collect_taxes(&self, day_length: f64) -> u64 {
+    pub fn collect_taxes(&self, day_length: f64) -> i64 {
         let mut total = 0.0f64;
 
         for age in 0..MAX_AGE {
-            let pop = self.age_groups.get(age) as f64;
+            let pop = self.age_groups.get_age(age) as f64;
             if pop == 0.0 {
                 continue;
             }
 
-            let productivity = self.lifestage_config[&LifeStage::from_usize(age)].work_productivity;
+            let productivity = self.lifestage_config[&LifeStage::from_int(age)].work_productivity;
             if productivity == 0.0 {
                 continue;
             }
@@ -344,15 +435,27 @@ impl Demography {
             }
         }
 
-        total.round() as u64
+        total.round() as i64
     }
-    pub fn update(&mut self, rng: &mut impl Rng, time: &Time) {
-        self.education.update(time, self.population);
-        let demography_tick = DemographyTick {
-            food_availability: 1.0,
-            happiness: 1.0,
-        };
-        self.age(rng, time, &demography_tick);
+    pub fn update(&mut self, time: &Time, births: u32, deaths: u32) {
+        self.education.update(time, &self.age_groups);
+
+        self.income.on_births(births, &self.age_groups);
+
+        self.history.accumulate(births, deaths);
+
+        if time.is_new_day() {
+            self.day_counter += 1;
+
+            self.history.new_day(
+                time.total_game_time,
+                self.population,
+                self.age_groups.clone(),
+            );
+            if self.day_counter % DAYS_PER_YEAR as u32 == 0 && self.day_counter > 0 {
+                self.income.apply_annual_transitions();
+            }
+        }
     }
 
     pub fn get_random_age(&self, rng: &mut impl Rng) -> usize {
@@ -365,7 +468,7 @@ impl Demography {
         let mut pick = rng.random_range(0..total);
 
         for age in 0..MAX_AGE {
-            let count = self.age_groups.get(age);
+            let count = self.age_groups.get_age(age);
 
             if pick < count {
                 return age;
@@ -376,8 +479,25 @@ impl Demography {
 
         0 // fallback (should never hit if totals are consistent)
     }
+    pub fn get_random_person(&self, rng: &mut impl Rng) -> Option<Person> {
+        if self.population == 0 {
+            return None;
+        }
+        let age = self.get_random_age(rng);
+        let ed = self
+            .education
+            .get_citizen_education(LifeStage::from_int(age));
+        Some(Person {
+            education_level: ed,
+            age: age as u8,
+        })
+    }
 }
-
+#[derive(Debug, Clone, Copy)]
+pub struct Person {
+    pub education_level: EducationLevel,
+    pub age: u8,
+}
 /// Poisson sample — correct variance unlike floor+Bernoulli.
 /// Falls back gracefully on degenerate λ.
 fn poisson(rng: &mut impl Rng, lambda: f64) -> u32 {

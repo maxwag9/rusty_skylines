@@ -207,10 +207,17 @@ pub fn make_new_signfinding_traj(
     let Some(address) = &car.destination_addr else {
         return Err(NoAddress("Car destination Address is None".to_string()));
     };
-    let (building_pos, building_segment_id) =
+    let (driveway_entrances, building_pos, building_segment_id) =
         if let Some(building) = buildings.storage.get(address.destination.as_building()) {
             if let Some(lot) = zoning.get_lot(building.lot_id) {
-                (building.pos, lot.segment_id)
+                if let Some(layout) = lot.layout.as_ref() {
+                    (&layout.driveway_entrances, building.pos, lot.segment_ids)
+                } else {
+                    return Err(LotLayoutDoesntExist(
+                        "The LotLayout of the Lot of the destination's building doesn't exist"
+                            .to_string(),
+                    ));
+                }
             } else {
                 return Err(LotDoesntExist(
                     "Lot of the destination's building doesn't exist".to_string(),
@@ -283,7 +290,7 @@ pub fn make_new_signfinding_traj(
                     )));
                 }; // NEXT node
                 let mut best_arms: Vec<(&Arm, f32)> =
-                    node.ranked_arms_for_address(&buildings, zoning, address); // TODO: allow U-turns and Roundabouts
+                    node.ranked_arms_for_address(&buildings, zoning, address); // TO//DO: allow U-turns and Roundabouts
                 // if best_arms.len() > 1 {
                 //     // If the node has one more arm that is not the previous segment, then I can filter out the previous segment to avoid pathfinding back and forth. Stupid idea, I should just rank better based on the compass in the initial phase like I wanted to!!
                 //     best_arms.retain(|(arm, _)| arm.segment() != *previous_segment_id);
@@ -486,6 +493,7 @@ pub enum SignfindingError {
     InvalidArmWeights(String),
     BuildingDoesntExist(String),
     LotDoesntExist(String),
+    LotLayoutDoesntExist(String),
     SegmentEndPointsDontMatchLastTurn(String),
     LaneDoesntExist(String),
     ArmDoesntExist(String),
@@ -727,10 +735,14 @@ fn build_road_path(
     let Some(address) = &car.destination_addr else {
         return Err(RoadPathBuildError::NoAddress);
     };
-    let (building_pos, building_segment_id) =
+    let (driveway_entrances, building_pos, building_segment_id) =
         if let Some(building) = buildings.storage.get(address.destination.as_building()) {
             if let Some(lot) = zoning_storage.get_lot(building.lot_id) {
-                (building.pos, lot.segment_id)
+                if let Some(layout) = lot.layout.as_ref() {
+                    (&layout.driveway_entrances, building.pos, lot.segment_ids)
+                } else {
+                    return Err(RoadPathBuildError::LotLayoutDoesntExist);
+                }
             } else {
                 return Err(RoadPathBuildError::LotDoesntExist);
             }
@@ -1533,6 +1545,7 @@ pub enum RoadPathBuildError {
     },
     NoAddress,
     LotDoesntExist,
+    LotLayoutDoesntExist,
     BuildingDoesntExist,
     RoadNetworkDoesntExist,
     TurnsAreEmpty,

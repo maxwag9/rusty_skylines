@@ -146,6 +146,10 @@ pub enum UiCommand {
         menu_name: String,
     },
     CloseAllMenus,
+    CloseAllLayers {
+        element_ref: ElementRef,
+        menu_name: String,
+    },
     ToggleMenu {
         element_ref: ElementRef,
         menu_name: String,
@@ -304,7 +308,7 @@ pub enum UiCommand {
     // ===== DEBUG COMMANDS =====
     Print {
         element_ref: ElementRef,
-        args: Vec<String>,
+        statement: String,
     },
     DebugVars,
     DebugMenus,
@@ -586,12 +590,33 @@ impl CommandQueue {
                     CommandResult::Error(format!("Menu '{}' not found", menu_name))
                 }
             }
-
             UiCommand::CloseAllMenus => {
                 for (_, menu) in ctx.ui.menus.iter_mut() {
                     menu.active = false;
                 }
                 CommandResult::Ok
+            }
+            UiCommand::CloseAllLayers {
+                element_ref,
+                menu_name,
+            } => {
+                let menu_name = string_to_value(ctx, &element_ref, menu_name);
+                let Some(menu_name) = menu_name.as_string() else {
+                    return CommandResult::Error(
+                        "Menu name in close_all_layers() wasn't resolved to string".to_string(),
+                    );
+                };
+                if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
+                    for layer in menu.layers.iter_mut() {
+                        layer.active = false;
+                    }
+                    CommandResult::Ok
+                } else {
+                    CommandResult::Error(format!(
+                        "Menu '{}' not found for close_all_layers()",
+                        menu_name
+                    ))
+                }
             }
 
             UiCommand::ToggleMenu {
@@ -651,15 +676,24 @@ impl CommandQueue {
                     );
                 };
                 if let Some(menu) = ctx.ui.menus.get_mut(menu_name) {
+                    let mut aps_to_activate = vec![];
                     if let Some(layer) = menu.layers.iter_mut().find(|l| l.name == layer_name) {
                         menu.active = true;
                         layer.active = true;
-                        return CommandResult::Ok;
+                        aps_to_activate = layer.iter_aps().map(|ap| ap.id.clone()).collect();
+                    } else {
+                        return CommandResult::Error(format!(
+                            "Layer '{}' not found in '{}'",
+                            layer_name, menu_name
+                        ));
                     }
-                    return CommandResult::Error(format!(
-                        "Layer '{}' not found in '{}'",
-                        layer_name, menu_name
-                    ));
+                    for id in aps_to_activate {
+                        menu.layers
+                            .iter_mut()
+                            .filter(|l| l.name == id)
+                            .for_each(|l| l.active = true);
+                    }
+                    return CommandResult::Ok;
                 }
                 CommandResult::Error(format!("Menu '{}' not found", menu_name))
             }
@@ -735,7 +769,11 @@ impl CommandQueue {
                         "'{initial_name}' in set_var() wasn't resolved to string"
                     ));
                 };
-                let (name, value) = initialize_value(name, value);
+                let (field_type, name) = match name.split_once(':') {
+                    Some((field_type, base)) => (field_type, base),
+                    None => ("None", name),
+                };
+                let value = initialize_value(field_type, Some(value));
                 //println!("Post init-value: {}", value);
                 if let Some(key) = get_setting_key(&name) {
                     if let Some(setting_value) = key.parse_command_arg(&value) {
@@ -955,7 +993,7 @@ impl CommandQueue {
                 element_ref,
                 name,
                 expr,
-            } => match eval_expr(&expr, &ctx.ui.variables) {
+            } => match eval_expr(&expr, &ctx.ui.variables, &ctx.settings) {
                 Some(value) => {
                     let name = string_to_value(ctx, &element_ref, name);
                     let Some(name) = name.as_string() else {
@@ -1028,6 +1066,7 @@ impl CommandQueue {
                 then,
                 else_branch,
             } => {
+                //println!("{:?} {:?}", then, else_branch);
                 let var_value = string_to_value(ctx, &element_ref, var_name);
                 //let Some(var_value) = var_name.as_string() else { return CommandResult::Error(format!("Var Name in ifvareq() wasn't resolved to string, instead to: {}", var_name)) };
                 //println!("{} {}", var_name, value);
@@ -1441,7 +1480,7 @@ impl CommandQueue {
 
                 // strong press: darker + slight shrink in alpha
                 let press_color = format!(
-                    "on:d set(str:self.color.fill, [{}, {}, {}, {}])",
+                    "on:d button:a set(str:self.color.fill, [{}, {}, {}, {}])",
                     clamp(color[0] * 0.5),
                     clamp(color[1] * 0.5),
                     clamp(color[2] * 0.5),
@@ -1485,12 +1524,12 @@ impl CommandQueue {
                 CommandResult::Ok
             }
             // ===== DEBUG COMMANDS =====
-            UiCommand::Print { element_ref, args } => {
-                let msg: String = args
-                    .into_iter()
-                    .map(|s| string_to_value(ctx, &element_ref, s).to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ");
+            UiCommand::Print {
+                element_ref,
+                statement,
+            } => {
+                //println!("printing: {}", statement);
+                let msg: String = string_to_value(ctx, &element_ref, statement).to_string();
                 println!("[UI] {}", msg);
                 CommandResult::Ok
             }
@@ -1990,7 +2029,7 @@ pub fn set_element_property(
 
             "color" => {
                 let color_property = ColorComponent::from_str(component); // MSRV!!
-                //println!("{}", new_val);
+                //println!("in set_element_property: {} to {}", color_property, new_val);
                 let Some(new_color) = new_val.as_color4() else {
                     return CommandResult::Error(format!(
                         "set_element_property: expected color4 value, but got: {}",

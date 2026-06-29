@@ -132,7 +132,7 @@ macro_rules! define_commands {
             menus: &HashMap<String, Menu>,
             touch_manager: &UiTouchManager,
             func_name: &str,
-            mut args: Vec<String>,
+            args: Vec<String>,
             element: &ElementRef,
             event_kind: &TouchEventKind,
             buttons: &MouseButtons
@@ -196,15 +196,46 @@ macro_rules! define_commands {
     // SPECIAL FIELD: args
     // -----------------------------
 
-    (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, args, $ftype:ty) => {{
-        let out = $args.split_off($idx);
-        #[allow(unused_assignments)]
-        {
-            $idx = $args.len();
-        }
-        Some(out)
-    }};
+    // (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
+    //     $element:ident, $event_kind:ident, $buttons:ident, args, $ftype:ty) => {{
+    //     if let Some(raw) = $args.get($idx) {
+    //         #[allow(unused_assignments)]
+    //         {
+    //             $idx += 1;
+    //         }
+    //
+    //         let mut parts = Vec::new();
+    //         let mut start = 0;
+    //         let mut depth = 0isize; // Track () [] {}
+    //         let bytes = raw.as_bytes();
+    //
+    //         for i in 0..bytes.len() {
+    //             match bytes[i] {
+    //                 b'(' | b'[' | b'{' => depth += 1,
+    //                 b')' | b']' | b'}' => depth -= 1,
+    //                 b';' if depth == 0 => {
+    //                     // Only split on ';' if I are not inside brackets/parens
+    //                     let part = raw[start..i].trim();
+    //                     if !part.is_empty() {
+    //                         parts.push(part.to_string());
+    //                     }
+    //                     start = i + 1;
+    //                 }
+    //                 _ => {}
+    //             }
+    //         }
+    //
+    //         // Don't forget the last string after the final ';'
+    //         let part = raw[start..].trim();
+    //         if !part.is_empty() {
+    //             parts.push(part.to_string())
+    //         }
+    //
+    //         Some(parts)
+    //     } else {
+    //         Some(Vec::new())
+    //     }
+    // }};
 
     // SPECIAL FIELD: commands
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
@@ -390,7 +421,8 @@ define_commands! {
 
     "close_all_menus" | "closeall"
         => CloseAllMenus,
-
+    "close_all_layers"
+        => CloseAllLayers { element_ref: ElementRef, menu_name: String },
     "toggle_menu" | "togglemenu"
         => ToggleMenu { element_ref: ElementRef, menu_name: String },
 
@@ -492,7 +524,7 @@ define_commands! {
 
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
-        => Print { element_ref: ElementRef, args: Vec<String> },
+        => Print { element_ref: ElementRef, statement: String },
 
     "debug_vars" | "debugvars"
         => DebugVars,
@@ -896,7 +928,7 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
         return args;
     }
 
-    let mut args = Vec::new();
+    let mut args = vec![s.to_string()];
     let mut pos = 0usize;
 
     while pos < len {

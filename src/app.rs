@@ -1,5 +1,5 @@
 use crate::data::Cycle;
-use crate::helpers::paths::{data_dir, next_screenshot_path};
+use crate::helpers::paths::data_dir;
 use crate::resources::Resources;
 use crate::simulation::update_picked_pos;
 use crate::systems::input::run_inputs;
@@ -16,10 +16,6 @@ use glam::Vec2;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use wgpu::{
-    BufferAddress, BufferDescriptor, BufferUsages, Extent3d, MapMode, Origin3d, PollType,
-    TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
-};
 use winit::application::ApplicationHandler;
 use winit::cursor::CustomCursorSource;
 use winit::event::{ElementState, StartCause, WindowEvent};
@@ -55,8 +51,10 @@ impl App {
 
 impl ApplicationHandler for App {
     fn new_events(&mut self, _event_loop: &dyn ActiveEventLoop, cause: StartCause) {
-        println!("[app] new_events: {:?}", cause);
         if let Some(resources) = self.resources.as_mut() {
+            if resources.settings.render_debug_print {
+                println!("[app] new_events: {:?}", cause);
+            }
             let world = &mut resources.world;
             let input = &mut world.input;
             let time = &world.time;
@@ -234,97 +232,6 @@ impl ApplicationHandler for App {
                     ui.touch_manager.editor.enabled = settings.editor_mode;
                     ui.variables.set_bool("editor_mode", settings.editor_mode)
                 }
-                if input.action_repeat("Screenshot") {
-                    let view = &resources.render_core.pipelines.resolved.tonemapped;
-                    let width = view.texture().width();
-                    let height = view.texture().height();
-
-                    let bytes_per_pixel = 4; // Rgba8UnormSrgb
-                    let unpadded_bytes_per_row = bytes_per_pixel * width;
-                    let padded_bytes_per_row = unpadded_bytes_per_row.next_multiple_of(256);
-                    let buffer_size = (padded_bytes_per_row * height) as BufferAddress;
-
-                    let output_buffer =
-                        resources
-                            .render_core
-                            .device
-                            .create_buffer(&BufferDescriptor {
-                                label: Some("Screenshot Buffer"),
-                                size: buffer_size,
-                                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-                                mapped_at_creation: false,
-                            });
-
-                    let mut encoder = resources
-                        .render_core
-                        .device
-                        .create_command_encoder(&Default::default());
-                    encoder.copy_texture_to_buffer(
-                        TexelCopyTextureInfo {
-                            texture: &view.texture(),
-                            mip_level: 0,
-                            origin: Origin3d::ZERO,
-                            aspect: TextureAspect::All,
-                        },
-                        TexelCopyBufferInfo {
-                            buffer: &output_buffer,
-                            layout: TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(padded_bytes_per_row),
-                                rows_per_image: Some(height),
-                            },
-                        },
-                        Extent3d {
-                            width,
-                            height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    resources.render_core.queue.submit(Some(encoder.finish()));
-
-                    let buffer_slice = output_buffer.slice(..);
-                    buffer_slice.map_async(MapMode::Read, |_| {});
-                    resources
-                        .render_core
-                        .device
-                        .poll(PollType::Wait {
-                            submission_index: None,
-                            timeout: Some(Duration::from_secs(1)),
-                        })
-                        .ok();
-
-                    let data = buffer_slice.get_mapped_range();
-
-                    // Handle row padding when saving
-                    if padded_bytes_per_row != unpadded_bytes_per_row {
-                        // Strip padding
-                        let mut pixels =
-                            Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
-                        for row in 0..height {
-                            let start = (row * padded_bytes_per_row) as usize;
-                            let end = start + unpadded_bytes_per_row as usize;
-                            pixels.extend_from_slice(&data[start..end]);
-                        }
-                        image::save_buffer(
-                            next_screenshot_path(),
-                            &pixels,
-                            width,
-                            height,
-                            image::ColorType::Rgba8,
-                        )
-                        .unwrap();
-                    } else {
-                        image::save_buffer(
-                            next_screenshot_path(),
-                            &data,
-                            width,
-                            height,
-                            image::ColorType::Rgba8,
-                        )
-                        .unwrap();
-                    }
-                }
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
@@ -481,11 +388,13 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                println!("[event] redraw requested");
                 let Some(resources) = self.resources.as_mut() else {
                     event_loop.exit();
                     return;
                 };
+                if resources.settings.render_debug_print {
+                    println!("[event] redraw requested");
+                }
                 let frame_start = Instant::now();
                 update_time(resources);
 
@@ -540,9 +449,13 @@ impl ApplicationHandler for App {
 
                 run_interpolation(resources);
                 run_sounds(resources);
-                print!("  [event] redraw: before run_render");
+                if resources.settings.render_debug_print {
+                    print!("  [event] redraw: before run_render");
+                }
                 run_render(resources); // use commands output
-                print!("  [event] redraw: after run_render");
+                if resources.settings.render_debug_print {
+                    print!("  [event] redraw: after run_render");
+                }
                 // FPS cap
                 let elapsed = frame_start.elapsed();
                 let target =
@@ -552,7 +465,10 @@ impl ApplicationHandler for App {
                 }
 
                 if let Some(window) = &self.window {
-                    print!("  [event] requesting next redraw");
+                    if resources.settings.render_debug_print {
+                        print!("  [event] requesting next redraw");
+                    }
+
                     window.request_redraw();
                 }
             }
@@ -658,6 +574,7 @@ fn update_time(resources: &mut Resources) {
         ui.variables.set_i64("minute", time.minute());
         ui.variables
             .set_i64("money", world.city_state.economy.money);
+        //println!("World population: {}", world.city_state.world_population);
         ui.variables
             .set_i64("world_population", world.city_state.world_population as i64);
         if let Some(district) = world
@@ -678,8 +595,10 @@ fn update_time(resources: &mut Resources) {
             ui.variables
                 .set_f64("office_demand", district.zoning_demand.office);
 
-            ui.variables
-                .set_f64("housing_capacity", district.zoning_demand.housing_capacity);
+            ui.variables.set_f64(
+                "housing_capacity",
+                district.zoning_demand.residential_capacity,
+            );
             ui.variables.set_f64(
                 "commercial_capacity",
                 district.zoning_demand.commercial_capacity,

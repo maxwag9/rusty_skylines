@@ -1,4 +1,5 @@
 use crate::resources::Time;
+use crate::world::statisticals::demography::{Groups, LifeStage};
 use rand::RngExt;
 use rand::prelude::ThreadRng;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ pub enum EducationLevel {
 }
 
 impl EducationLevel {
+    pub const LEVELS: usize = 4;
     /// prestige:
     /// 0.0 = terrible city, mostly uneducated immigrants
     /// 1.0 = average city
@@ -82,17 +84,54 @@ impl Education {
         (district_population as f64 * self.highly_educated_population_factor) as u32
     }
 
-    pub fn get_citizen_education(&self) -> EducationLevel {
+    pub fn get_citizen_education(&self, age: LifeStage) -> EducationLevel {
         let mut rng = ThreadRng::default();
 
-        let none = self.non_educated_population_factor.max(0.0);
-        let low = self.low_educated_population_factor.max(0.0);
-        let med = self.medium_educated_population_factor.max(0.0);
-        let high = self.highly_educated_population_factor.max(0.0);
+        let mut none = self.non_educated_population_factor.max(0.0);
+        let mut low = self.low_educated_population_factor.max(0.0);
+        let mut med = self.medium_educated_population_factor.max(0.0);
+        let mut high = self.highly_educated_population_factor.max(0.0);
+
+        // age-based skewing
+        match age {
+            LifeStage::Infant => {
+                none *= 3.0;
+                low *= 0.5;
+                med *= 0.1;
+                high *= 0.01;
+            }
+
+            LifeStage::Child => {
+                none *= 2.0;
+                low *= 1.2;
+                med *= 0.3;
+                high *= 0.05;
+            }
+
+            LifeStage::YoungAdult => {
+                none *= 1.2;
+                low *= 1.3;
+                med *= 1.0;
+                high *= 0.5;
+            }
+
+            LifeStage::Adult => {
+                none *= 0.8;
+                low *= 1.0;
+                med *= 1.4;
+                high *= 1.2;
+            }
+
+            LifeStage::Elder => {
+                none *= 0.7;
+                low *= 0.9;
+                med *= 1.1;
+                high *= 1.3;
+            }
+        }
 
         let sum = none + low + med + high;
 
-        // fallback if everything is zero
         if sum <= 0.0 {
             return EducationLevel::None;
         }
@@ -110,13 +149,35 @@ impl Education {
         }
     }
 
-    pub fn update(&mut self, time: &Time, population: u32) {
+    pub fn update(&mut self, time: &Time, groups: &Groups) {
         let current_school_year = time.school_year();
         if self.school_year != current_school_year {
-            // New school year! People graduated!
             self.school_year = current_school_year;
-            //println!("{}", current_school_year);
         }
+
+        self.update_from_groups(groups);
+    }
+
+    pub fn update_from_groups(&mut self, groups: &Groups) {
+        let population = groups.whole_population();
+        if population == 0 {
+            self.non_educated_population_factor = 1.0;
+            self.low_educated_population_factor = 0.0;
+            self.medium_educated_population_factor = 0.0;
+            self.highly_educated_population_factor = 0.0;
+            return;
+        }
+
+        let population = population as f64;
+
+        self.non_educated_population_factor =
+            groups.education_total(EducationLevel::None) as f64 / population;
+        self.low_educated_population_factor =
+            groups.education_total(EducationLevel::Low) as f64 / population;
+        self.medium_educated_population_factor =
+            groups.education_total(EducationLevel::Medium) as f64 / population;
+        self.highly_educated_population_factor =
+            groups.education_total(EducationLevel::High) as f64 / population;
     }
     pub fn add_person(&mut self, prev_population: u32, ed_level: EducationLevel) {
         let mut none = self.non_educated_population(prev_population);
@@ -140,5 +201,37 @@ impl Education {
         self.medium_educated_population_factor = med as f64 / new_population as f64;
 
         self.highly_educated_population_factor = high as f64 / new_population as f64;
+    }
+    pub fn remove_person(&mut self, prev_population: u32, ed_level: EducationLevel) {
+        if prev_population == 0 {
+            return;
+        }
+
+        // Compute absolute counts BEFORE the removal (same pattern as add_person)
+        let mut none = self.non_educated_population(prev_population);
+        let mut low = self.low_educated_population(prev_population);
+        let mut med = self.medium_educated_population(prev_population);
+        let mut high = self.highly_educated_population(prev_population);
+
+        match ed_level {
+            EducationLevel::None => none = none.saturating_sub(1),
+            EducationLevel::Low => low = low.saturating_sub(1),
+            EducationLevel::Medium => med = med.saturating_sub(1),
+            EducationLevel::High => high = high.saturating_sub(1),
+        }
+
+        let new_pop = prev_population - 1;
+        if new_pop > 0 {
+            self.non_educated_population_factor = none as f64 / new_pop as f64;
+            self.low_educated_population_factor = low as f64 / new_pop as f64;
+            self.medium_educated_population_factor = med as f64 / new_pop as f64;
+            self.highly_educated_population_factor = high as f64 / new_pop as f64;
+        } else {
+            // city emptied — reset to defaults
+            self.non_educated_population_factor = 1.0;
+            self.low_educated_population_factor = 0.0;
+            self.medium_educated_population_factor = 0.0;
+            self.highly_educated_population_factor = 0.0;
+        }
     }
 }

@@ -2066,14 +2066,18 @@ impl Ui {
             element_ref: ElementRef::default(),
             menu_name: "str:MainMenu".to_string(),
         });
-        ui_command_queue.push(UiCommand::CloseMenu {
-            element_ref: ElementRef::default(),
-            menu_name: "str:Editor_Menu".to_string(),
-        });
-        ui_command_queue.push(UiCommand::CloseMenu {
-            element_ref: ElementRef::default(),
-            menu_name: "str:Debug_Menu".to_string(),
-        });
+        // ui_command_queue.push(UiCommand::OpenMenu {
+        //     element_ref: ElementRef::default(),
+        //     menu_name: "str:Milestones".to_string(),
+        // });
+        // ui_command_queue.push(UiCommand::CloseMenu {
+        //     element_ref: ElementRef::default(),
+        //     menu_name: "str:Editor_Menu".to_string(),
+        // });
+        // ui_command_queue.push(UiCommand::CloseMenu {
+        //     element_ref: ElementRef::default(),
+        //     menu_name: "str:Debug_Menu".to_string(),
+        // });
     }
     pub fn hash_id(id: &str) -> f32 {
         use std::hash::{Hash, Hasher};

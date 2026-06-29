@@ -278,7 +278,7 @@ impl ChunkDistance {
     }
     #[inline]
     pub fn from_chunk_positions(center_chunk: ChunkCoord, other: ChunkCoord) -> Self {
-        let dist2 = center_chunk.dist2(&other);
+        let dist2 = center_chunk.dist2(other);
         ChunkDistance::from_dist2(dist2)
     }
 }
@@ -347,7 +347,7 @@ impl CarStorage {
     pub fn update_carchunk_distances(&mut self, target_pos: WorldPos) {
         let (moved, removed) = self
             .car_chunk_storage
-            .update_all_distances(target_pos.chunk);
+            .update_all_distances(target_pos.chunk); // TODO: Shit performance?
 
         if !removed.is_empty() {
             //println!("Removed {} empty car chunks", removed.len());
@@ -896,11 +896,11 @@ impl CarChunkStorage {
         // Collect all coords and their new distances
         let updates: Vec<(ChunkCoord, ChunkDistance, bool)> = self
             .iter()
-            .map(|(coord, chunk)| {
+            .map(|(&coord, chunk)| {
                 let is_empty = chunk.car_ids.is_empty();
                 let dist2 = center_chunk.dist2(coord);
                 let new_dist = ChunkDistance::from_dist2(dist2);
-                (*coord, new_dist, is_empty)
+                (coord, new_dist, is_empty)
             })
             .collect();
 

@@ -54,17 +54,17 @@ impl ChunkCoord {
         }
     }
     #[inline]
-    pub fn dist2(&self, other: &ChunkCoord) -> u64 {
-        let dx = self.x as i64 - other.x as i64;
-        let dz = self.z as i64 - other.z as i64;
+    pub fn dist2(self, other: ChunkCoord) -> u64 {
+        let dx = (self.x - other.x) as i64;
+        let dz = (self.z - other.z) as i64;
         (dx * dx + dz * dz) as u64
     }
     #[inline]
-    pub fn as_slice(&self) -> [i32; 2] {
+    pub fn as_slice(self) -> [i32; 2] {
         [self.x, self.z]
     }
     #[inline]
-    pub fn chunk_id(&self) -> ChunkId {
+    pub fn chunk_id(self) -> ChunkId {
         chunk_coord_to_id(self.x, self.z)
     }
     #[inline]
@@ -106,6 +106,23 @@ impl ChunkCoord {
                 let wz = dz as i64 * cs;
 
                 if wx * wx + wz * wz <= radius2 {
+                    out.push(self.offset(dx, dz));
+                }
+            }
+        }
+
+        out
+    }
+    #[inline]
+    pub fn get_chunks_in_chunk_distance(&self, distance: i32) -> Vec<ChunkCoord> {
+        let radius_chunks = distance;
+        let cd2 = distance * distance;
+
+        let mut out = Vec::new();
+
+        for dz in -radius_chunks..=radius_chunks {
+            for dx in -radius_chunks..=radius_chunks {
+                if dx * dx + dz * dz <= cd2 {
                     out.push(self.offset(dx, dz));
                 }
             }

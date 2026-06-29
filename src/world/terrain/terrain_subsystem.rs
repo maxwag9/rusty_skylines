@@ -829,7 +829,7 @@ impl Terrain {
             if visible_set.contains(&coord) {
                 continue;
             }
-            let dist2 = chunk_coord.dist2(&frame.cam_pos.chunk);
+            let dist2 = chunk_coord.dist2(frame.cam_pos.chunk);
 
             if dist2 > r2 {
                 to_remove.push(coord);

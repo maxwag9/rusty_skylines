@@ -1,0 +1,18 @@
+name: Milestones
+layers:
+  - name: milestone_300_citizens
+    order: 20
+    elements:
+      - !Advanced
+        name: milestone_screen_300
+        ap_name: milestone_screen
+        ap_var: "300"
+        x: 0.0
+        y: 0.0
+        scale: 1.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+    editing_tool: false

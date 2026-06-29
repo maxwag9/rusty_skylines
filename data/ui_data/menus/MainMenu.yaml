@@ -25,7 +25,7 @@ layers:
         roundness: 0.2
         border_thickness_percentage: 0.01
         fade: 0.0
-        blur: 5.0
+        blur: 5.5
         glow_color:
           - 0.0
           - 0.0

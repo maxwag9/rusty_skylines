@@ -505,7 +505,7 @@ impl Gizmo {
                                 car,
                                 road_storage,
                                 building.pos,
-                                lot.segment_id
+                                lot.segment_ids
                             )
                         ),
                         pos,
@@ -1236,7 +1236,7 @@ impl Gizmo {
                     // Convert polyline to WorldPos
                     let points: &Vec<WorldPos> = lane.polyline();
 
-                    self.polyline(&points, color, 15.0, false, 10.0, 0.0);
+                    self.polyline(&points, color, 15.0, false, 0.1, 0.0);
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
@@ -1491,7 +1491,7 @@ impl Gizmo {
             self.text(
                 format!("Node ID: {}", id.to_string()),
                 node.pos(),
-                2.0,
+                1.0,
                 [1.0, 1.0, 1.0, 1.0],
                 None,
                 false,

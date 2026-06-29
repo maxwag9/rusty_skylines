@@ -52,22 +52,21 @@ pub struct TimeScales {
 impl TimeScales {
     pub fn from_game_time(total_game_time: f64, day_length: f64, always_day: bool) -> Self {
         let total_days = total_game_time / day_length;
-
-        let jd = GAME_EPOCH_JD + total_days + SKY_OFFSET_HOURS / 24.0;
-
-        let base_day_phase = (total_days) % 1.0;
+        let whole_days = total_days.floor();
+        let normal_day_phase = total_days.rem_euclid(1.0);
 
         let day_phase = if always_day {
-            let t = (total_game_time / day_length) * TAU;
-            let ping_pong = t.sin().abs();
-            0.25 + 0.25 * ping_pong
+            let t = total_days * TAU;
+            0.5 + 0.05 * t.sin()
         } else {
-            base_day_phase
+            normal_day_phase
         };
+
+        let jd = GAME_EPOCH_JD + whole_days + day_phase + SKY_OFFSET_HOURS / 24.0;
 
         let day_angle = day_phase * TAU;
 
-        let year_phase = (total_days / DAYS_PER_YEAR) % 1.0;
+        let year_phase = (total_days / DAYS_PER_YEAR).rem_euclid(1.0);
         let year_angle = year_phase * TAU;
 
         let base_year = 2026.0;

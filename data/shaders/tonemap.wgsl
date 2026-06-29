@@ -1,3 +1,4 @@
+// tonemap.wgsl
 struct VSOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -39,9 +40,13 @@ var<uniform> uniforms: ToneMappingUniforms;
 fn tonemap_aces(a: f32, b: f32, c: f32, d: f32, e: f32, x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3(0.0), vec3(1.0));
 }
-
+struct FSOut {
+    @location(0) surface: vec4<f32>,
+    @location(1) screenshot: vec4<f32>,
+};
 @fragment
-fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+fn fs_main(in: VSOut) -> FSOut {
+    var out: FSOut;
     let uv = in.uv;
 
     let hdr = textureSample(hdr_tex, hdr_sampler, uv).rgb;
@@ -60,7 +65,13 @@ fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
     let hdr_v = composed_rgb * v;
 
     let color = tonemap_aces(uniforms.a, uniforms.b, uniforms.c, uniforms.d, uniforms.e, hdr_v);
-    return vec4(color, 1.0);
+
+    let final_color = vec4(color, 1.0);
+
+    out.surface = final_color;
+    out.screenshot = final_color;
+
+    return out;
 }
 
 fn vignette(uv: vec2<f32>, strength: f32, radius: f32, softness: f32, aspect: f32) -> f32 {

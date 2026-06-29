@@ -6,9 +6,9 @@ use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
 use crate::world::buildings::buildings::{
-    Building, BuildingId, BuildingParams, BuildingParamsLevels, BuildingStorage, BuildingUsage,
-    Buildings, Color, DrivewayMaterial, GarageParams, MiscBuildingParams, RoofMaterial, RoofType,
-    WallMaterial,
+    Building, BuildingComplaint, BuildingId, BuildingOccupancy, BuildingParams,
+    BuildingParamsLevels, BuildingStorage, BuildingUsage, Buildings, Color, DrivewayMaterial,
+    GarageParams, MiscBuildingParams, RoofMaterial, RoofType, WallMaterial,
 };
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarStorage, SimTime};
@@ -23,6 +23,8 @@ use crate::world::roads::road_subsystem::Roads;
 use crate::world::roads::roads::RoadStorage;
 use crate::world::statisticals::CityState;
 use crate::world::statisticals::demands::ZoningDemand;
+use crate::world::statisticals::demography::{DemographyTick, Groups, LifeStage, Person};
+use crate::world::statisticals::education::EducationLevel;
 use crate::world::statisticals::schedule::{Schedule, SchedulePhase};
 use crate::world::statisticals::transports::CarTripType;
 use crate::world::terrain::terrain_subsystem::{CursorMode, PickedPoint, Terrain};
@@ -106,6 +108,7 @@ impl District {
         schedule: &Schedule,
         district_id: DistrictId,
         road_edge_storage: &RoadEdgeStorage,
+        target_chunk: ChunkCoord,
     ) -> DistrictUpdateCallback {
         let mut callback = DistrictUpdateCallback::new(district_id);
         let Some(district) = zoning
@@ -117,14 +120,15 @@ impl District {
             return callback;
         };
 
+        let job_occupancy = district.zoning_demand.infer_job_occupancy();
         let rng = &mut ThreadRng::default();
         for lot_id in district.lot_ids.clone() {
             let (chunk, zoning_type, maybe_building) = {
-                if let Some((car_pos, car_opposite_dir, car_trip_type)) =
+                if let Some((lot_entrance, car_trip_type)) =
                     Lot::get_car_spawn(zoning, buildings, schedule, lot_id, rng)
                 {
-                    let dir = -car_opposite_dir;
-                    let mut car = make_random_car(car_pos, rng);
+                    let dir = -lot_entrance.dir; // Flip in_dir to become out_dir
+                    let mut car = make_random_car(lot_entrance.pos, rng);
                     let forward = dir.normalize();
                     let up = Vec3::Y;
 
@@ -136,6 +140,7 @@ impl District {
 
                     callback.new_cars.push((lot_id, Some(car)));
                 };
+
                 let Some(lot) = zoning
                     .zoning_storage
                     .lots
@@ -144,32 +149,146 @@ impl District {
                 else {
                     continue;
                 };
-                let Some(district) = zoning
-                    .zoning_storage
-                    .districts
-                    .get(district_id as usize)
-                    .and_then(|d| d.as_ref())
-                else {
-                    return callback;
-                };
-                if !rng.random_bool(
-                    district
-                        .zoning_demand
-                        .demand_from_zoning_type(lot.zoning_type)
-                        .clamp(0.0, 1.0) as f64,
-                ) {
-                    continue;
-                }
-                if buildings.storage.get(lot.building_id).is_some() {
-                    continue;
-                }
 
-                let building = generate_building(terrain, lot);
-                (lot.center.chunk, lot.zoning_type, building)
+                if let Some(building) = buildings.storage.get(lot.building_id) {
+                    if building.pos.chunk.dist2(target_chunk)
+                        < ((terrain.view_radius_render as f32 * 0.8)
+                            * (terrain.view_radius_render as f32 * 0.8))
+                            as u64
+                    {
+                        let complaint = building.occupancy.complaint(
+                            lot.zoning_type,
+                            &district.zoning_demand,
+                            &job_occupancy,
+                        );
+                        callback
+                            .complaining_buildings
+                            .push((building.id, building.pos, complaint));
+                        // match complaint {
+                        //     None => {}
+                        //     Some(c) => {
+                        //         match c {
+                        //             BuildingComplaint::NotEnoughWorkers => {}
+                        //             BuildingComplaint::NotEnoughCustomers => {}
+                        //             BuildingComplaint::NotEnoughJobs => {
+                        //
+                        //             }
+                        //         }
+                        //     }
+                        // }
+                    };
+                    let floor_area = lot.get_floor_area();
+                    let current_level = building.current_level_params();
+                    let building_capacity = current_level.max_people(floor_area);
+                    let full_area = floor_area * current_level.num_stories as f64;
+
+                    if matches!(
+                        lot.zoning_type,
+                        ZoningType::Commercial | ZoningType::Industrial | ZoningType::Office
+                    ) {
+                        let tax = district.zoning_demand.corporate_tax_config.compute_lot_tax(
+                            lot.zoning_type,
+                            full_area,
+                            building.level,
+                            &job_occupancy,
+                            time.day_length,
+                        );
+
+                        callback.corporate_taxes += tax as i64;
+                    }
+
+                    let building_occ = district.zoning_demand.distribute_occupancy_to_building(
+                        lot.zoning_type,
+                        building_capacity,
+                        &job_occupancy,
+                        building.occupancy.clone(),
+                    );
+                    let target_lv = district.zoning_demand.target_land_value(
+                        lot.zoning_type,
+                        building.level,
+                        &building_occ,
+                    );
+                    // EMA: 2% of the way toward target each tick, slow enough to be stable
+                    // even though prestige feeds back into target_lv.
+                    let new_land_value = lot.land_value + (target_lv - lot.land_value) * 0.02;
+
+                    match lot.zoning_type {
+                        ZoningType::None => {}
+                        ZoningType::Residential => {
+                            callback.residential_capacity += building_capacity;
+                            let mut aged_groups = building.occupancy.groups.clone();
+                            let demography_tick = DemographyTick {
+                                food_availability: 1.0,
+                                happiness: 1.0,
+                                prestige: district.zoning_demand.prestige,
+                            };
+
+                            let (births, deaths) = district
+                                .zoning_demand
+                                .demography
+                                .age_building_groups(&mut aged_groups, rng, demography_tick);
+                            callback.total_births += births;
+                            callback.total_deaths += deaths;
+                            callback.new_age_groups.add_groups(&aged_groups);
+                            callback
+                                .building_demography_updates
+                                .push((building.id, aged_groups));
+
+                            for _ in 0..building.occupancy.unemployed() {
+                                let age = building.occupancy.random_employable_age();
+                                let person = Person {
+                                    education_level: district
+                                        .zoning_demand
+                                        .demography
+                                        .education
+                                        .get_citizen_education(LifeStage::from_int(age)),
+                                    age: age as u8,
+                                };
+                                let Some(workplace_id) = zoning.zoning_storage.get_work_place(
+                                    building.pos,
+                                    &buildings.storage,
+                                    person,
+                                    rng,
+                                ) else {
+                                    break;
+                                };
+                                callback.new_workers.push((building.id, workplace_id));
+                            }
+                        }
+                        ZoningType::Commercial => callback.commercial_capacity += building_capacity,
+                        ZoningType::Industrial => callback.industrial_capacity += building_capacity,
+                        ZoningType::Office => callback.office_capacity += building_capacity,
+                    }
+
+                    callback.occupancy_updates.push((building.id, building_occ));
+                    callback.land_value_updates.push((lot_id, new_land_value));
+                    continue;
+                } else {
+                    let Some(district) = zoning
+                        .zoning_storage
+                        .districts
+                        .get(district_id as usize)
+                        .and_then(|d| d.as_ref())
+                    else {
+                        return callback;
+                    };
+                    if !rng.random_bool(
+                        district
+                            .zoning_demand
+                            .demand_from_zoning_type(lot.zoning_type)
+                            .clamp(0.0, 1.0) as f64,
+                    ) {
+                        continue;
+                    }
+
+                    let building = generate_building(terrain, lot);
+                    (lot.center.chunk, lot.zoning_type, building)
+                }
             };
 
             callback.new_buildings.push((lot_id, maybe_building));
         }
+
         let average_land_value = zoning.average_land_value(district_id);
         callback.average_land_value = Some(average_land_value);
         let Some(district) = zoning.zoning_storage.get_district(district_id) else {
@@ -390,11 +509,11 @@ impl District {
                 continue;
             };
 
-            if !seen_segments.insert(lot.segment_id) {
+            if !seen_segments.insert(lot.segment_ids) {
                 continue;
             }
 
-            let Some(road_edges) = road_edge_storage.get(&lot.segment_id) else {
+            let Some(road_edges) = road_edge_storage.get(&lot.segment_ids) else {
                 continue;
             };
 
@@ -563,14 +682,134 @@ impl District {
 
         DistrictSplitResult::Alright(new_district, (district_id, poly_a, lots_a))
     }
+
+    pub fn add_immigrants(
+        zoning_storage: &mut ZoningStorage,
+        building_storage: &mut BuildingStorage,
+        district_id: DistrictId,
+        immigrants: Vec<Person>,
+        rng: &mut impl Rng,
+    ) {
+        //println!("IMMIGRANTS: {}", immigrants.len());
+        for person in immigrants {
+            let Some(residence_id) =
+                zoning_storage.get_residence(district_id, building_storage, person, rng)
+            else {
+                continue;
+            };
+            let Some(residence) = building_storage.get_mut(residence_id) else {
+                continue;
+            };
+            //println!("IMMIGRANT moving into building id: {}", building_id);
+            residence.occupancy.groups.add_age(person.age, 1);
+            residence
+                .occupancy
+                .groups
+                .add_education(person.age, person.education_level, 1);
+            let Some(workplace_id) =
+                zoning_storage.get_work_place(residence.pos, building_storage, person, rng)
+            else {
+                continue;
+            };
+            let Some(workplace) = building_storage.get_mut(workplace_id) else {
+                continue;
+            };
+            workplace.occupancy.workers += 1;
+            let Some(residence) = building_storage.get_mut(residence_id) else {
+                continue;
+            };
+            residence.occupancy.employed_tenants += 1;
+            //println!("Added immigrant, total tenants in building: {}, Building object address: {:p}, Building ID: {}", building.occupancy.tenants, building, building.id);
+        }
+    }
+    pub fn remove_emigrants(
+        zoning_storage: &mut ZoningStorage,
+        building_storage: &mut BuildingStorage,
+        district_id: DistrictId,
+        emigrants: Vec<Person>,
+        rng: &mut impl Rng,
+    ) {
+        //println!("EMIGRANTS: {}", emigrants.len());
+        for person in emigrants {
+            let Some(residence_id) =
+                zoning_storage.get_residence(district_id, building_storage, person, rng)
+            else {
+                continue;
+            };
+            let Some(residence) = building_storage.get_mut(residence_id) else {
+                continue;
+            };
+            residence.occupancy.groups.remove_age(person.age, 1);
+            residence
+                .occupancy
+                .groups
+                .remove_education(person.age, person.education_level, 1);
+            let Some(workplace_id) =
+                zoning_storage.get_work_place(residence.pos, building_storage, person, rng)
+            else {
+                continue;
+            };
+            let Some(workplace) = building_storage.get_mut(workplace_id) else {
+                continue;
+            };
+            workplace.occupancy.workers -= 1;
+            let Some(residence) = building_storage.get_mut(residence_id) else {
+                continue;
+            };
+            residence.occupancy.employed_tenants -= 1;
+            //println!("Removed emigrant, total tenants in building: {}, Building object address: {:p}, Building ID: {}", building.occupancy.tenants, building, building.id);
+        }
+    }
+    pub fn add_births(
+        zoning_storage: &mut ZoningStorage,
+        building_storage: &mut BuildingStorage,
+        district_id: DistrictId,
+        births: u32,
+        rng: &mut impl Rng,
+    ) {
+        let baby = Person {
+            education_level: EducationLevel::None,
+            age: 0,
+        };
+        let bb = 0..births;
+        for _ in bb {
+            // Add baby 🥰😳🖕
+            let Some(residence_id) =
+                zoning_storage.get_residence(district_id, building_storage, baby, rng)
+            else {
+                continue;
+            };
+            let Some(residence) = building_storage.get_mut(residence_id) else {
+                continue;
+            };
+            residence.occupancy.groups.add_age(baby.age, 1);
+            residence
+                .occupancy
+                .groups
+                .add_education(baby.age, EducationLevel::None, 1);
+        }
+    }
 }
 #[derive(Default)]
 pub struct DistrictUpdateCallback {
-    district_id: DistrictId,
-    average_land_value: Option<f32>,
-    district_split: Option<DistrictSplitResult>,
-    new_cars: Vec<(LotId, Option<Car>)>,
-    new_buildings: Vec<(LotId, Option<Building>)>,
+    pub district_id: DistrictId,
+    pub average_land_value: Option<f32>,
+    pub district_split: Option<DistrictSplitResult>,
+    pub new_cars: Vec<(LotId, Option<Car>)>,
+    pub new_buildings: Vec<(LotId, Option<Building>)>,
+    pub corporate_taxes: i64,
+    pub occupancy_updates: Vec<(BuildingId, BuildingOccupancy)>,
+    pub land_value_updates: Vec<(LotId, f32)>,
+    pub complaining_buildings: Vec<(BuildingId, WorldPos, Option<BuildingComplaint>)>,
+    pub residential_capacity: u32,
+    pub commercial_capacity: u32,
+    pub industrial_capacity: u32,
+    pub office_capacity: u32,
+    pub new_age_groups: Groups,
+    pub building_demography_updates: Vec<(BuildingId, Groups)>,
+    pub total_births: u32,
+    pub total_deaths: u32,
+    pub new_workers: Vec<(BuildingId, BuildingId)>,
 }
 impl DistrictUpdateCallback {
     pub fn new(district_id: DistrictId) -> Self {
@@ -660,12 +899,13 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
     Some(Building {
         id: 631864891,
         pos: lot.center,
-        segment_id: lot.segment_id,
+        segment_id: lot.segment_ids,
         lot_id: lot.id,
         level: Default::default(),
         building_params,
         edit_id: None,
         prop_instance_ids: vec![],
+        occupancy: Default::default(),
     })
 }
 
@@ -971,16 +1211,15 @@ impl Zoning {
         }
     }
     pub fn average_land_value(&self, district_id: DistrictId) -> f32 {
-        if let Some(district) = self.zoning_storage.get_district(district_id) {
-            district
-                .lot_ids
-                .iter()
-                .flat_map(|lot_id| self.zoning_storage.get_lot(*lot_id))
-                .map(|lot| lot.land_value)
-                .sum()
-        } else {
-            0.0
-        }
+        let Some(district) = self.zoning_storage.get_district(district_id) else {
+            return 0.0;
+        };
+        let (sum, count) = district
+            .lot_ids
+            .iter()
+            .flat_map(|lot_id| self.zoning_storage.get_lot(*lot_id))
+            .fold((0.0f32, 0usize), |(s, c), lot| (s + lot.land_value, c + 1));
+        if count == 0 { 0.0 } else { sum / count as f32 }
     }
     pub fn update_districts(
         gizmo: &mut Gizmo,
@@ -992,6 +1231,7 @@ impl Zoning {
         time: &Time,
         road_storage: &RoadStorage,
         road_edge_storage: &RoadEdgeStorage,
+        target_pos: WorldPos,
     ) {
         let callbacks: Vec<DistrictUpdateCallback> = zoning
             .zoning_storage
@@ -1006,19 +1246,100 @@ impl Zoning {
                     &city_state.schedule,
                     district_id,
                     road_edge_storage,
+                    target_pos.chunk,
                 )
             })
             .collect();
+
         let rng = &mut ThreadRng::default();
         for callback in callbacks {
+            let mut immigration_changes: Option<(Vec<Person>, Vec<Person>)> = None;
+
+            for (building_id, occ) in callback.occupancy_updates {
+                // MUST BE FIRST
+                if let Some(building) = buildings.storage.get_mut(building_id) {
+                    building.occupancy = occ;
+                }
+            }
+
+            for (building_id, groups) in callback.building_demography_updates {
+                if let Some(building) = buildings.storage.get_mut(building_id) {
+                    building.occupancy.groups = groups;
+                }
+            }
+
             if let Some(district) = zoning.zoning_storage.get_mut_district(callback.district_id) {
+                district.zoning_demand.demography.age_groups = callback.new_age_groups;
+                district.zoning_demand.demography.population = district
+                    .zoning_demand
+                    .demography
+                    .age_groups
+                    .whole_population();
+
                 if let Some(average_land_value) = callback.average_land_value {
-                    let taxes =
+                    let (taxes, i, e) =
                         district
                             .zoning_demand
                             .update_demands(rng, time, average_land_value);
+                    immigration_changes = Some((i, e));
+
                     city_state.economy.add_money(taxes);
                 }
+
+                // Corporate taxes computed per-lot above, fully separate
+                if callback.corporate_taxes > 0 {
+                    city_state.economy.add_money(callback.corporate_taxes);
+                    district.zoning_demand.total_taxes_collected += callback.corporate_taxes;
+                }
+
+                district.zoning_demand.residential_capacity = callback.residential_capacity;
+                district.zoning_demand.commercial_capacity = callback.commercial_capacity;
+                district.zoning_demand.industrial_capacity = callback.industrial_capacity;
+                district.zoning_demand.office_capacity = callback.office_capacity;
+                for &(residence_id, workplace_id) in callback.new_workers.iter() {
+                    if let Some(workplace) = buildings.storage.get_mut(workplace_id) {
+                        workplace.occupancy.workers += 1;
+                        let Some(residence) = buildings.storage.get_mut(residence_id) else {
+                            continue;
+                        };
+                        residence.occupancy.employed_tenants += 1;
+                    }
+                }
+
+                //println!("Callback Population: {}", callback.population);
+
+                district.zoning_demand.demography.update(
+                    time,
+                    callback.total_births,
+                    callback.total_deaths,
+                );
+            }
+
+            District::add_births(
+                &mut zoning.zoning_storage,
+                &mut buildings.storage,
+                callback.district_id,
+                callback.total_births,
+                rng,
+            );
+
+            if let Some((immigrants, emigrants)) = immigration_changes {
+                // Add immigrants
+                District::add_immigrants(
+                    &mut zoning.zoning_storage,
+                    &mut buildings.storage,
+                    callback.district_id,
+                    immigrants,
+                    rng,
+                );
+                // Remove emigrants and dead people
+                District::remove_emigrants(
+                    &mut zoning.zoning_storage,
+                    &mut buildings.storage,
+                    callback.district_id,
+                    emigrants,
+                    rng,
+                );
             }
 
             if let Some(split_result) = callback.district_split {
@@ -1060,7 +1381,67 @@ impl Zoning {
                     }
                 }
             }
+
+            for (lot_id, land_value) in callback.land_value_updates {
+                if let Some(lot) = zoning
+                    .zoning_storage
+                    .lots
+                    .get_mut(lot_id as usize)
+                    .and_then(|lot| lot.as_mut())
+                {
+                    lot.land_value = land_value;
+                }
+            }
+            for complainant in callback.complaining_buildings.into_iter() {
+                let Some(complaint) = complainant.2 else {
+                    continue;
+                };
+                let pos = complainant.1;
+                //println!("{:?}", complaint);
+                match complaint {
+                    BuildingComplaint::NotEnoughWorkers => {
+                        gizmo.text(
+                            "Not enough Workers!",
+                            pos,
+                            3.0,
+                            [1.0, 0.0, 0.0, 1.0],
+                            None,
+                            false,
+                            0.0,
+                            1.0,
+                        );
+                    }
+                    BuildingComplaint::NotEnoughCustomers => {
+                        gizmo.text(
+                            "Not enough Customers!",
+                            pos,
+                            3.0,
+                            [1.0, 0.0, 0.0, 1.0],
+                            None,
+                            false,
+                            0.0,
+                            1.0,
+                        );
+                    }
+                    BuildingComplaint::NotEnoughJobs => {
+                        gizmo.text(
+                            "Not enough Jobs!",
+                            pos,
+                            3.0,
+                            [1.0, 0.0, 0.0, 1.0],
+                            None,
+                            false,
+                            0.0,
+                            1.0,
+                        );
+                    }
+                }
+            }
         }
+
+        // for chunk in terrain.visible.iter().map(|v|v.coords.chunk_coord) {
+        //     let Some(lots) =
+        // }
     }
     fn can_place_zoning_point(
         &self,
@@ -1347,9 +1728,10 @@ impl Zoning {
                             id: 6945220,
                             bounds: preview,
                             center: Default::default(),
-                            entrance: (snap_point.pos, snap_point.lateral),
+                            entrance: LotEntrance::new(snap_point.pos, snap_point.lateral),
+                            layout: None,
                             zoning_type: new_zoning_type.clone(),
-                            segment_id: snap_point.segment_id,
+                            segment_ids: snap_point.segment_id,
                             district_id: 6378186,
                             building_id: None,
                             land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
@@ -1791,6 +2173,7 @@ pub fn collect_lot_point(
 
 pub type DistrictId = u32;
 pub type LotId = u32;
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum TileType {
     Grass,
     Tree,
@@ -1802,23 +2185,41 @@ pub enum TileType {
     Garage,
     Driveway,
 }
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Tile {
     Square(TileType),
     Polygon(TileType, Vec<WorldPos>),
 }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct Lot {
     pub id: LotId,
     pub bounds: Vec<WorldPos>,
     pub center: WorldPos,
-    pub entrance: (WorldPos, Vec3), // From this point into the lot
+    pub entrance: LotEntrance, // From this point into the lot
+    pub layout: Option<LotLayout>,
     pub zoning_type: ZoningType,
-    pub segment_id: SegmentId,
+    pub segment_ids: SegmentId,
 
     pub district_id: DistrictId,
     pub building_id: Option<BuildingId>,
 
-    pub land_value: f32, // Money €
+    pub land_value: f32, // Money € per square meter m²
+}
+impl Clone for Lot {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            bounds: self.bounds.clone(),
+            center: self.center,
+            entrance: self.entrance.clone(),
+            layout: None, // Expensive and useless to clone
+            zoning_type: self.zoning_type,
+            segment_ids: self.segment_ids,
+            district_id: self.district_id,
+            building_id: self.building_id,
+            land_value: self.land_value,
+        }
+    }
 }
 impl Lot {
     #[inline]
@@ -1826,19 +2227,18 @@ impl Lot {
         world_pos_chunk_to_id(&self.center)
     }
 
-    pub fn get_tiles(&self) -> HashMap<(i32, i32), Tile> {
+    pub fn generate_layout(&self) -> LotLayout {
         let mut tiles = HashMap::new();
+        let mut driveway_entrances = Vec::new();
 
         let mut rng = ChaCha8Rng::seed_from_u64(self.id as u64);
 
-        // Stable local frame from the entrance
-        let origin = self.entrance.0;
-        let direction = self.entrance.1;
+        let origin = self.entrance.pos;
+        let direction = self.entrance.dir;
 
         let forward = Vec2::new(direction.x, direction.z).normalize_or_zero();
         let right = Vec2::new(forward.y, -forward.x);
 
-        // Bounds in local grid space
         let mut min_x = i32::MAX;
         let mut max_x = i32::MIN;
         let mut min_z = i32::MAX;
@@ -1858,31 +2258,25 @@ impl Lot {
         let width = max_x - min_x + 1;
         let depth = max_z - min_z + 1;
 
-        // Randomized but deterministic proportions
         let house_w = ((width as f32) * rng.random_range(0.38..0.52)).round() as i32;
-
         let house_d = ((depth as f32) * rng.random_range(0.32..0.45)).round() as i32;
 
         let garage_w = rng.random_range(2..=3);
         let garage_d = rng.random_range(2..=4);
-
         let driveway_w = rng.random_range(2..=3);
 
         let house_w = house_w.clamp(4, (width - 2).max(4));
         let house_d = house_d.clamp(4, (depth - 3).max(4));
 
         let center_x = (min_x + max_x) / 2;
-
         let house_offset = rng.random_range(-1..=1);
 
         let house_x0 = (center_x - house_w / 2 + house_offset).clamp(min_x + 1, max_x - house_w);
 
         let house_x1 = house_x0 + house_w - 1;
-
         let house_z1 = max_z - 1;
 
         let front_setback = rng.random_range(0..=2);
-
         let house_z0 = (house_z1 - house_d + 1 - front_setback).clamp(min_z + 2, max_z - house_d);
 
         let garage_on_right = rng.random_bool(0.7) && house_x1 + 1 + garage_w <= max_x;
@@ -1896,16 +2290,24 @@ impl Lot {
         let garage_x1 = garage_x0 + garage_w - 1;
 
         let garage_z0 = house_z0 + rng.random_range(0..=1);
-
         let garage_z1 = (garage_z0 + garage_d - 1).min(house_z1);
 
         let driveway_center_x = garage_x0 + garage_w / 2;
-
         let driveway_x0 = driveway_center_x - driveway_w / 2;
         let driveway_x1 = driveway_x0 + driveway_w - 1;
 
-        let balcony_enabled = rng.random_bool(0.45);
+        // Key part: compute driveway entrance point(s)
+        let entrance_z = min_z + 1;
+        let entrance_x = driveway_center_x;
 
+        let entrance_tile_pos = origin
+            .add_vec2(right * (entrance_x as f32 + 0.5) + forward * (entrance_z as f32 + 0.5));
+
+        let inward_dir = forward.extend(0.0);
+
+        driveway_entrances.push(LotEntrance::new(entrance_tile_pos, inward_dir));
+
+        let balcony_enabled = rng.random_bool(0.45);
         let balcony_z = house_z1;
 
         let balcony_x0 = (house_x0 + rng.random_range(0..=1)).clamp(house_x0, house_x1);
@@ -1956,9 +2358,11 @@ impl Lot {
             }
         }
 
-        tiles
+        LotLayout {
+            tiles,
+            driveway_entrances,
+        }
     }
-
     /// Designed for once per second.
     pub fn get_car_spawn(
         zoning: &Zoning,
@@ -1966,7 +2370,7 @@ impl Lot {
         schedule: &Schedule,
         lot_id: LotId,
         rng: &mut impl Rng,
-    ) -> Option<(WorldPos, Vec3, CarTripType)> {
+    ) -> Option<(LotEntrance, CarTripType)> {
         //println!("Trying car spawn...");
         let lot = zoning.zoning_storage.get_lot(lot_id)?;
         let building = buildings.storage.get(lot.building_id)?;
@@ -2073,18 +2477,38 @@ impl Lot {
 
         let car_trip_type = CarTripType::pick_car_trip_type(zoning_type, schedule.phase, rng);
 
-        Some((lot.entrance.0, lot.entrance.1, car_trip_type))
+        Some((lot.entrance.clone(), car_trip_type)) // TODO: huh? entrance
     }
 
     pub fn get_floor_area(&self) -> f64 {
-        self.get_tiles()
+        let tiles = if let Some(layout) = &self.layout {
+            &layout.tiles
+        } else {
+            &self.generate_layout().tiles
+        };
+        tiles
             .values()
             .filter_map(|tile| match tile {
                 Tile::Square(TileType::House) => Some(1.0),
-                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points)),
+                Tile::Polygon(TileType::House, points) => Some(WorldPos::area(points.as_slice())),
                 _ => None,
             })
             .sum()
+    }
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LotLayout {
+    pub tiles: HashMap<(i32, i32), Tile>,
+    pub driveway_entrances: Vec<LotEntrance>,
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LotEntrance {
+    pub pos: WorldPos,
+    pub dir: Vec3,
+}
+impl LotEntrance {
+    pub fn new(pos: WorldPos, dir: Vec3) -> Self {
+        LotEntrance { pos, dir }
     }
 }
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -2120,7 +2544,7 @@ impl ZoningStorage {
                 continue;
             }
 
-            let dist2 = lot.entrance.0.distance_squared(pos);
+            let dist2 = lot.entrance.pos.distance_squared(pos);
 
             if dist2 > MAX_DIST2 {
                 continue;
@@ -2152,6 +2576,207 @@ impl ZoningStorage {
         Some(Address {
             destination: DestinationType::Building(lot.building_id?),
         })
+    }
+    pub fn get_work_place(
+        &self,
+        pos: WorldPos,
+        building_storage: &BuildingStorage,
+        person: Person,
+        rng: &mut impl Rng,
+    ) -> Option<BuildingId> {
+        const MAX_COMMUTE_DISTANCE: f32 = 1500.0;
+        const MAX_DIST2: f32 = MAX_COMMUTE_DISTANCE * MAX_COMMUTE_DISTANCE;
+        const EPS: f32 = 1.0;
+
+        // Precomputed bias tables
+        const EDUCATION_BIASES: [[f32; 4]; 5] = [
+            // None, Low, Medium, High
+            [0.0, 0.0, 0.0, 0.0], // None
+            [0.0, 0.0, 0.4, 1.0], // Office
+            [0.0, 0.5, 0.9, 0.7], // Commercial
+            [0.5, 1.0, 0.9, 0.3], // Industrial
+            [0.0, 0.0, 0.0, 0.0], // Residential
+        ];
+
+        const AGE_BIASES: [[f32; 5]; 5] = [
+            // Infant, Child, YoungAdult, Adult, Elder
+            [0.0, 0.0, 0.0, 0.0, 0.0], // None
+            [0.0, 0.0, 0.1, 1.0, 0.0], // Office
+            [0.0, 0.0, 0.7, 1.0, 0.0], // Commercial
+            [0.0, 0.0, 0.7, 1.0, 0.0], // Industrial
+            [0.0, 0.0, 0.0, 0.0, 0.0], // Residential
+        ];
+
+        let lifestage = LifeStage::from_int(person.age);
+        if !lifestage.is_workhorse() {
+            return None;
+        }
+
+        let education_idx = match person.education_level {
+            EducationLevel::None => 0,
+            EducationLevel::Low => 1,
+            EducationLevel::Medium => 2,
+            EducationLevel::High => 3,
+        };
+
+        let age_idx = match lifestage {
+            LifeStage::Infant => 0,
+            LifeStage::Child => 1,
+            LifeStage::YoungAdult => 2,
+            LifeStage::Adult => 3,
+            LifeStage::Elder => 4,
+        };
+        let chunk_coords = pos
+            .chunk
+            .get_chunks_in_distance(MAX_COMMUTE_DISTANCE as f64);
+        let lot_ids = self.lots_in_chunks(chunk_coords);
+
+        let mut total_weight: f32 = 0.0;
+        let mut chosen: Option<BuildingId> = None;
+
+        for lot_id in lot_ids {
+            let Some(lot) = self.get_lot(lot_id) else {
+                continue;
+            };
+
+            if !lot.zoning_type.is_workplace() {
+                continue;
+            }
+
+            let dist2 = lot.entrance.pos.distance_squared(pos) as f32;
+            if dist2 > MAX_DIST2 {
+                continue;
+            }
+
+            let Some(job_building_id) = lot.building_id else {
+                continue;
+            };
+            let Some(building) = building_storage.get(job_building_id) else {
+                continue;
+            };
+
+            let fill_rate = building.occupancy.fill_rate_workplace();
+            if fill_rate >= 1.0 {
+                continue;
+            }
+
+            let free_rate = 1.0 - fill_rate;
+
+            let zoning_idx = match lot.zoning_type {
+                ZoningType::None => 0,
+                ZoningType::Residential => 4,
+                ZoningType::Commercial => 2,
+                ZoningType::Industrial => 3,
+                ZoningType::Office => 1,
+            };
+            let education_bias = EDUCATION_BIASES[zoning_idx][education_idx];
+            let age_bias = AGE_BIASES[zoning_idx][age_idx];
+
+            if education_bias <= 0.0 || age_bias <= 0.0 {
+                continue;
+            }
+
+            let weight = (free_rate * free_rate) * education_bias * age_bias / (dist2 + EPS);
+
+            if weight <= 0.0 {
+                continue;
+            }
+
+            total_weight += weight;
+
+            // single-pass weighted selection (no Vec, no second loop)
+            if rng.random::<f32>() * total_weight < weight {
+                chosen = Some(job_building_id);
+            }
+        }
+
+        chosen
+    }
+    pub fn get_residence(
+        &self,
+        district_id: DistrictId,
+        building_storage: &BuildingStorage,
+        person: Person,
+        rng: &mut impl Rng,
+    ) -> Option<BuildingId> {
+        let lot_ids_to_consider = self.get_district(district_id)?.lot_ids.clone();
+
+        let base_desired: f32 = match person.education_level {
+            EducationLevel::None => 0.18,
+            EducationLevel::Low => 0.32,
+            EducationLevel::Medium => 0.55,
+            EducationLevel::High => 0.78,
+        };
+        let lifestage = LifeStage::from_int(person.age);
+        let age_shift: f32 = match lifestage {
+            LifeStage::Infant => -0.06,
+            LifeStage::Child => -0.04,
+            LifeStage::YoungAdult => 0.05,
+            LifeStage::Adult => 0.02,
+            LifeStage::Elder => -0.02,
+        };
+
+        let desired_land_value: f32 = (base_desired + age_shift).clamp(0.0, 1.0);
+
+        let sigma = match person.education_level {
+            EducationLevel::None => 0.34,
+            EducationLevel::Low => 0.30,
+            EducationLevel::Medium => 0.26,
+            EducationLevel::High => 0.22,
+        };
+
+        let mut candidates: Vec<(BuildingId, f32)> = Vec::new();
+
+        for lot_id in lot_ids_to_consider {
+            let lot = self.get_lot(lot_id)?;
+            if lot.zoning_type.is_workplace() {
+                continue;
+            }
+
+            let building_id = lot.building_id?;
+            let building = building_storage.get(building_id)?;
+
+            let fill_rate: f32 = building.occupancy.fill_rate_residential();
+
+            let land_value = lot.land_value;
+            let gap = land_value - desired_land_value;
+
+            let desirability_weight = (-gap * gap / (2.0 * sigma * sigma)).exp();
+            let fill_weight = 0.08 + (1.0 - fill_rate).powf(2.0) * 0.92;
+            let age_weight: f32 = match lifestage {
+                LifeStage::Infant => 0.95,
+                LifeStage::Child => 1.00,
+                LifeStage::YoungAdult => 1.10,
+                LifeStage::Adult => 1.00,
+                LifeStage::Elder => 0.90,
+            };
+
+            let weight = desirability_weight * fill_weight * age_weight;
+
+            if weight > 0.0 {
+                candidates.push((building_id, weight));
+            }
+        }
+
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let total: f32 = candidates.iter().map(|(_, w)| w).sum();
+        if total <= 0.0 {
+            return None;
+        }
+
+        let mut pick = rng.random::<f32>() * total;
+
+        for (building_id, weight) in candidates {
+            pick -= weight;
+            if pick <= 0.0 {
+                return Some(building_id);
+            }
+        }
+
+        None
     }
     pub fn sample_land_value(&self, center: ChunkCoord) -> f32 {
         let lot_ids = self.lots_in_chunk_plus(center.chunk_id());

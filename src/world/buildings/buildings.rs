@@ -12,10 +12,14 @@ use crate::world::cars::partitions::{PartitionId, PartitionManager};
 use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_to_coord};
 use crate::world::roads::road_structs::SegmentId;
 use crate::world::roads::road_subsystem::{ChunkGpuMesh, Roads};
-use crate::world::statisticals::demands::ZoningDemand;
+use crate::world::statisticals::demands::{JobOccupancy, ZoningDemand};
+use crate::world::statisticals::demography::{Groups, LifeStage, Person, WORKHORSE_AGE_RANGE};
 use crate::world::terrain::terrain_editing::{EditId, TerrainEditSource, TerrainEditor};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
+use rand::RngExt;
+use rand::rngs::ThreadRng;
+use rand_distr::num_traits::Zero;
 use rayon::iter::IntoParallelRefMutIterator;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -237,7 +241,7 @@ pub struct BuildingParamsLevels {
     pub level4: BuildingParams,
     pub level5: BuildingParams,
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Serialize, Deserialize, Copy, Clone, Default, Hash)]
 pub enum BuildingLevel {
     #[default]
     Level0,
@@ -247,7 +251,141 @@ pub enum BuildingLevel {
     Level4,
     Level5,
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+impl BuildingLevel {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            BuildingLevel::Level0 => 0,
+            BuildingLevel::Level1 => 1,
+            BuildingLevel::Level2 => 2,
+            BuildingLevel::Level3 => 3,
+            BuildingLevel::Level4 => 4,
+            BuildingLevel::Level5 => 5,
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum BuildingComplaint {
+    NotEnoughWorkers,
+    NotEnoughCustomers,
+    NotEnoughJobs,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BuildingOccupancy {
+    pub workers: u32,
+    pub residential_capacity: u32,
+    pub jobs_capacity: u32,
+    pub employed_tenants: u32,
+    pub groups: Groups,
+}
+
+impl BuildingOccupancy {
+    pub fn fill_rate_workplace(&self) -> f32 {
+        if self.jobs_capacity == 0 {
+            return 1.0;
+        }
+        (self.workers / self.jobs_capacity) as f32
+    }
+    pub fn fill_rate_residential(&self) -> f32 {
+        if self.residential_capacity == 0 {
+            return 0.0;
+        }
+        (self.groups.whole_population() / self.residential_capacity) as f32
+    }
+    pub fn fill_rate(&self, zoning_type: ZoningType) -> f32 {
+        if zoning_type.is_workplace() {
+            if self.jobs_capacity == 0 {
+                return 0.0;
+            }
+            (self.workers / self.jobs_capacity) as f32
+        } else {
+            if self.residential_capacity == 0 {
+                return 0.0;
+            }
+            (self.groups.whole_population() / self.residential_capacity) as f32
+        }
+    }
+    pub fn employment(&self) -> f32 {
+        let workhorses = self.groups.workhorse_population();
+        if workhorses.is_zero() {
+            // I am interesting
+            f32::zero()
+        } else {
+            self.employed_tenants as f32 / workhorses as f32
+        }
+    }
+    pub fn unemployed(&self) -> u32 {
+        let workhorses = self.groups.workhorse_population();
+        if workhorses.is_zero() {
+            u32::zero()
+        } else {
+            self.employed_tenants / workhorses
+        }
+    }
+    pub fn random_employable_age(&self) -> usize {
+        let mut rng = ThreadRng::default();
+
+        let total = self.groups.workhorse_population();
+
+        if total == 0 {
+            return *WORKHORSE_AGE_RANGE.start();
+        }
+
+        let mut roll = rng.random_range(0..total);
+
+        for age in WORKHORSE_AGE_RANGE {
+            let count = self.groups.get_age(age);
+            if roll < count {
+                return age;
+            }
+            roll -= count;
+        }
+
+        *WORKHORSE_AGE_RANGE.end()
+    }
+    pub fn add_worker(&mut self) {}
+    // commercial_attractiveness < 0  →  more capacity than workers, so footfall is low too
+    // residential_attractiveness < 0 →  job_pull < housing_deficit, people are leaving
+    pub fn complaint(
+        &self,
+        zoning_type: ZoningType,
+        demand: &ZoningDemand,
+        job_occupancy: &JobOccupancy,
+    ) -> Option<BuildingComplaint> {
+        match zoning_type {
+            ZoningType::Residential => {
+                if self.employment() < 0.7 && self.fill_rate_residential() < 0.4 {
+                    //  TODO
+                    return Some(BuildingComplaint::NotEnoughJobs);
+                }
+                None
+            }
+            ZoningType::Commercial => {
+                if self.jobs_capacity == 0 {
+                    return None;
+                }
+                if self.fill_rate_workplace() < 0.4 {
+                    if demand.commercial_attractiveness < -0.2 {
+                        return Some(BuildingComplaint::NotEnoughCustomers);
+                    }
+                    return Some(BuildingComplaint::NotEnoughWorkers);
+                }
+                None
+            }
+            ZoningType::Industrial | ZoningType::Office => {
+                if self.jobs_capacity == 0 {
+                    return None;
+                }
+                if self.fill_rate_workplace() < 0.3 {
+                    return Some(BuildingComplaint::NotEnoughWorkers);
+                }
+                None
+            }
+            ZoningType::None => None,
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Building {
     pub id: BuildingId,
     pub pos: WorldPos,
@@ -257,6 +395,7 @@ pub struct Building {
     pub building_params: BuildingParamsLevels,
     pub edit_id: Option<EditId>,
     pub prop_instance_ids: Vec<PropInstanceId>,
+    pub occupancy: BuildingOccupancy,
 }
 impl Building {
     pub fn current_level_params(&self) -> &BuildingParams {
@@ -368,7 +507,7 @@ impl BuildingStorage {
         let entrance_pos = zoning
             .zoning_storage
             .get_lot(building.lot_id)
-            .map_or(building.pos, |l| l.entrance.0);
+            .map_or(building.pos, |l| l.entrance.pos);
         let chunk_coord = entrance_pos.chunk;
         let building_id = if let Some(reused_id) = storage.free_list.pop() {
             // Reuse slot - III know it's None because it's in free_list
@@ -393,7 +532,6 @@ impl BuildingStorage {
         let storage = &mut buildings.storage;
         storage.set_partition_of_building(building_id, partition_id);
 
-        ZoningDemand::spawn_building(buildings, zoning, building_id);
         //println!("Created building: {}", building_id);
         building_id
     }
@@ -410,28 +548,73 @@ impl BuildingStorage {
             return;
         };
 
-        let storage = &mut buildings.storage;
-        if let Some(building) = storage
+        // Check building exists before proceeding
+        if buildings
+            .storage
             .buildings
             .get(id as usize)
             .and_then(|opt| opt.as_ref())
+            .is_none()
         {
-            // Remove from chunk first using reverse lookup
-            if let Some(chunk_coord) = storage.building_locations.remove(&id) {
-                storage
-                    .building_chunk_storage
-                    .remove_building(chunk_coord, id);
-            }
-            if let Some(edit_id) = building.edit_id {
-                terrain_editor.remove_edit(edit_id);
+            return;
+        }
+
+        // Remove from chunk first using reverse lookup
+        if let Some(chunk_coord) = buildings.storage.building_locations.remove(&id) {
+            buildings
+                .storage
+                .building_chunk_storage
+                .remove_building(chunk_coord, id);
+        }
+        if let Some(edit_id) = buildings.storage.buildings[id as usize]
+            .as_ref()
+            .and_then(|b| b.edit_id)
+        {
+            terrain_editor.remove_edit(edit_id);
+        }
+
+        PartitionManager::remove_building(buildings, id);
+
+        // Actually free the slot
+        let storage = &mut buildings.storage;
+        storage.free_list.push(id);
+        let Some(building) = storage.buildings[id as usize].take() else {
+            return;
+        };
+
+        // Remove jobs
+        let Some(district) = zoning
+            .zoning_storage
+            .get_lot(building.lot_id)
+            .and_then(|lot| zoning.zoning_storage.get_district(lot.district_id))
+        else {
+            return;
+        };
+
+        let mut rng = ThreadRng::default();
+        for _ in 0..building.occupancy.employed_tenants {
+            let age = building.occupancy.random_employable_age();
+            let person = Person {
+                education_level: district
+                    .zoning_demand
+                    .demography
+                    .education
+                    .get_citizen_education(LifeStage::from_int(age)),
+                age: age as u8,
             };
 
-            PartitionManager::remove_building(buildings, id);
-            // Actually free the slot
-            let storage = &mut buildings.storage;
-            storage.buildings[id as usize] = None;
-            storage.free_list.push(id);
-            ZoningDemand::despawn_building(buildings, zoning, id);
+            let Some(workplace_id) = zoning.zoning_storage.get_work_place(
+                building.pos,
+                &buildings.storage,
+                person,
+                &mut rng,
+            ) else {
+                break;
+            };
+
+            if let Some(workplace) = buildings.storage.get_mut(workplace_id) {
+                workplace.occupancy.workers -= 1;
+            }
         }
     }
 
@@ -833,11 +1016,11 @@ impl BuildingChunkStorage {
         // Collect all coords and their new distances
         let updates: Vec<(ChunkCoord, ChunkDistance, bool)> = self
             .iter()
-            .map(|(coord, chunk)| {
+            .map(|(&coord, chunk)| {
                 let is_empty = chunk.building_ids.is_empty();
                 let dist2 = center_chunk.dist2(coord);
                 let new_dist = ChunkDistance::from_dist2(dist2);
-                (*coord, new_dist, is_empty)
+                (coord, new_dist, is_empty)
             })
             .collect();
 
@@ -1001,10 +1184,10 @@ impl BuildingMeshManager {
 
         let lot_ids: Vec<LotId> = zoning.zoning_storage.lots_in_chunk(cid);
 
-        for lot in lot_ids
-            .iter()
-            .flat_map(|id| zoning.zoning_storage.get_lot(*id))
-        {
+        for id in lot_ids.iter() {
+            let Some(lot) = zoning.zoning_storage.get_mut_lot(*id) else {
+                continue;
+            };
             let Some(building) = buildings.storage.get_mut(lot.building_id) else {
                 continue;
             };
@@ -1017,7 +1200,7 @@ impl BuildingMeshManager {
                 .iter()
                 .cloned()
                 .map(|mut p| {
-                    p.local.y = lot.entrance.0.local.y;
+                    p.local.y = lot.entrance.pos.local.y;
                     p
                 })
                 .collect();
@@ -1120,21 +1303,29 @@ impl BuildingMeshManager {
                 continue;
             }
 
-            let direction = lot.entrance.1;
+            let direction = lot.entrance.dir;
             let forward = Vec2::new(direction.x, direction.z).normalize();
             let right = Vec2::new(forward.y, -forward.x);
-            let zero_height = lot.entrance.0.local.y;
+            let zero_height = lot.entrance.pos.local.y;
 
             let mut roof_tiles: Vec<RoofTile> = Vec::new();
-            let tiles = lot.get_tiles();
+            if lot.layout.is_none() {
+                let lot_layout = lot.generate_layout();
+                lot.layout = Some(lot_layout);
+            }
+
+            let Some(layout) = lot.layout.as_ref() else {
+                continue;
+            };
+            let tiles = &layout.tiles;
             for ((x, z), tile) in tiles.iter() {
-                let direction = lot.entrance.1;
+                let direction = lot.entrance.dir;
 
                 let forward = Vec2::new(direction.x, direction.z).normalize();
                 let right = Vec2::new(forward.y, -forward.x);
                 let mut tile_origin = lot
                     .entrance
-                    .0
+                    .pos
                     .add_vec2(right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5));
                 tile_origin.local.y = terrain.get_height_at(tile_origin, true);
                 let is_house_tile = |tp: Option<&Tile>| {
@@ -1148,14 +1339,14 @@ impl BuildingMeshManager {
                 let west_open = !is_house_tile(tiles.get(&(*x - 1, *z)));
                 match tile {
                     Tile::Square(tile_type) => {
-                        let zero_height = lot.entrance.0.local.y;
+                        let zero_height = lot.entrance.pos.local.y;
                         let corners_local =
                             [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
 
                         let mut points: Vec<WorldPos> = corners_local
                             .iter()
                             .map(|(cx, cz)| {
-                                let mut corner = lot.entrance.0.add_vec2(
+                                let mut corner = lot.entrance.pos.add_vec2(
                                     right * (*x as f32 + cx) + forward * (*z as f32 + cz),
                                 );
                                 corner.local.y = terrain.get_height_at(corner, true);
@@ -1187,7 +1378,7 @@ impl BuildingMeshManager {
                                     (*x, *z),
                                     garden_id,
                                 );
-                                let mut center = lot.entrance.0.add_vec2(
+                                let mut center = lot.entrance.pos.add_vec2(
                                     right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5),
                                 );
                                 center.local.y = zero_height;
@@ -1381,7 +1572,7 @@ impl BuildingMeshBuilder {
         let points: Vec<WorldPos> = corners_local
             .iter()
             .map(|(cx, cz)| {
-                let mut corner = lot.entrance.0.add_vec2(
+                let mut corner = lot.entrance.pos.add_vec2(
                     right * (tile_pos.0 as f32 + cx) + forward * (tile_pos.1 as f32 + cz),
                 );
 
@@ -1466,7 +1657,7 @@ impl BuildingMeshBuilder {
         let corner_world = |cx: f32, cz: f32, y: f32| -> WorldPos {
             let mut corner = lot
                 .entrance
-                .0
+                .pos
                 .add_vec2(right * (tile_pos.0 as f32 + cx) + forward * (tile_pos.1 as f32 + cz));
             corner.local.y = y;
             corner
@@ -1539,7 +1730,7 @@ impl BuildingMeshBuilder {
         gz: f32,
         y: f32,
     ) -> WorldPos {
-        let mut p = lot.entrance.0.add_vec2(right * gx + forward * gz);
+        let mut p = lot.entrance.pos.add_vec2(right * gx + forward * gz);
         p.local.y = y;
         p
     }
@@ -2462,19 +2653,6 @@ pub struct BuildingChunkMesh {
     pub topo_version: u64,
 }
 
-impl BuildingChunkMesh {
-    #![allow(dead_code)]
-    pub fn new() -> Self {
-        Self {
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            topo_version: 0,
-        }
-    }
-    pub fn is_empty(&self) -> bool {
-        self.indices.is_empty()
-    }
-}
 #[derive(Clone, Debug)]
 pub struct BuildingMeshIndex {
     pub building_id: BuildingId,
@@ -2498,4 +2676,18 @@ fn compute_building_chunk_topo_version(chunk_id: ChunkId, buildings: &Buildings)
         return hasher.finish();
     }
     0
+}
+
+impl Hash for Building {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.pos.hash(state);
+        self.segment_id.hash(state);
+        self.lot_id.hash(state);
+        self.level.hash(state);
+        self.building_params.hash(state);
+        // self.edit_id.hash(state);
+        // self.prop_instance_ids.hash(state);
+        // I DO NOT hash occupancy cuz I update it all the time!
+    }
 }

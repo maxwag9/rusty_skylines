@@ -88,17 +88,20 @@ impl Variables {
     {
         //println!("In variables set(): {:?} to {}", name, value);
         let name = name.as_ref();
-
-        let (init, value) = initialize_value(name, value.into());
-        let (base, suffix_opt) = match init.rsplit_once('.') {
+        let (field_type, base) = match name.split_once(':') {
+            Some((field_type, base)) => (field_type, base),
+            None => ("None", name),
+        };
+        let value = initialize_value(field_type, Some(value.into()));
+        let (base, suffix_opt) = match base.rsplit_once('.') {
             Some((base, suffix)) => {
                 if Self::component_index(suffix).is_some() {
                     (base, Some(suffix))
                 } else {
-                    (init, None)
+                    (base, None)
                 }
             }
-            None => (init, None),
+            None => (base, None),
         };
         //println!("In variables set() base: {:?}, suffix: {:?}", base, suffix_opt);
         let suffix = match suffix_opt {
@@ -254,77 +257,19 @@ impl Variables {
     }
 }
 
-/// Output is (base, value)
-pub fn initialize_value(name: &str, value: Value) -> (&str, Value) {
-    let (field_type, base) = match name.split_once(':') {
-        Some((field_type, base)) => (field_type, base),
-        None => ("None", name),
-    };
-
+/// Force the value to be the target value!
+pub fn initialize_value(field_type: &str, value: Option<Value>) -> Value {
     let field_type = field_type.to_ascii_lowercase();
-
+    let value = value.unwrap_or(Value::Null);
     let value = match field_type.as_str() {
-        "f" | "f64" | "f32" => coerce_to_f64(value),
-        "i" | "i64" | "i32" => coerce_to_i64(value),
-        "str" | "string" | "s" => coerce_to_string(value),
-        "bool" | "b" => coerce_to_bool(value),
+        "f" | "f64" | "f32" => value.to_f64(),
+        "i" | "i64" | "i32" => value.to_i64(),
+        "str" | "string" | "s" => Value::String(value.into_string_value()),
+        "bool" | "b" => Value::Bool(value.is_truthy()),
         _ => value,
     };
 
-    (base, value)
-}
-
-fn coerce_to_f64(value: Value) -> Value {
-    match value {
-        Value::F64(v) => Value::F64(v),
-        Value::I64(v) => Value::F64(v as f64),
-        Value::Bool(v) => Value::F64(if v { 1.0 } else { 0.0 }),
-        Value::String(s) => s.parse::<f64>().map(Value::F64).unwrap_or(Value::F64(1.0)),
-        _ => value,
-    }
-}
-
-fn coerce_to_i64(value: Value) -> Value {
-    match value {
-        Value::I64(v) => Value::I64(v),
-        Value::F64(v) => {
-            if v.is_finite() && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
-                Value::I64(v as i64)
-            } else {
-                Value::I64(1)
-            }
-        }
-        Value::Bool(v) => Value::I64(if v { 1 } else { 0 }),
-        Value::String(s) => s.parse::<i64>().map(Value::I64).unwrap_or(Value::I64(1)),
-        _ => value,
-    }
-}
-
-fn coerce_to_string(value: Value) -> Value {
-    match value {
-        Value::String(s) => Value::String(s),
-        Value::F64(v) => Value::String(v.to_string()),
-        Value::I64(v) => Value::String(v.to_string()),
-        Value::Bool(v) => Value::String(v.to_string()),
-        _ => value,
-    }
-}
-
-fn coerce_to_bool(value: Value) -> Value {
-    match value {
-        Value::Bool(v) => Value::Bool(v),
-        Value::I64(v) => Value::Bool(v != 0),
-        Value::F64(v) => Value::Bool(v != 0.0),
-        Value::String(s) => {
-            let t = s.trim().to_ascii_lowercase();
-            match t.as_str() {
-                "true" | "1" | "yes" | "y" | "on" => Value::Bool(true),
-                "false" | "0" | "no" | "n" | "off" => Value::Bool(false),
-                _ => Value::Bool(true),
-            }
-        }
-        _ => value,
-    }
+    value
 }
 
 impl From<glam::Vec3> for Value {
@@ -337,7 +282,6 @@ impl From<glam::Vec3> for Value {
     }
 }
 
-// Bonus: Vec2 and Vec4 if you need them
 impl From<glam::Vec2> for Value {
     fn from(v: glam::Vec2) -> Self {
         Value::Array(vec![Value::F64(v.x as f64), Value::F64(v.y as f64)])

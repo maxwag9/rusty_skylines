@@ -1,6 +1,9 @@
 use crate::resources::HOURS_PER_YEAR;
+use crate::world::buildings::buildings::BuildingLevel;
+use crate::world::buildings::zoning::ZoningType;
 use crate::world::roads::road_structs::{CrossingPoint, RoadType};
-use crate::world::statisticals::demography::{AgeGroups, LifeStage, MAX_AGE};
+use crate::world::statisticals::demands::JobOccupancy;
+use crate::world::statisticals::demography::{Groups, LifeStage, MAX_AGE};
 use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -206,11 +209,11 @@ impl IncomeDistribution {
     ///
     /// Newborns inherit the current working-age income mix, then are blended
     /// into the existing age-0 cohort by a population-weighted average.
-    pub fn on_births(&mut self, births: u32, age_groups: &AgeGroups) {
+    pub fn on_births(&mut self, births: u32, age_groups: &Groups) {
         if births == 0 {
             return;
         }
-        let new_total = age_groups.get(0usize) as f64;
+        let new_total = age_groups.get_age(0usize) as f64;
         if new_total == 0.0 {
             return;
         }
@@ -235,7 +238,7 @@ impl IncomeDistribution {
     ///   new_share[to] = Σ_from  old_share[from] × M[from][to]
     pub fn apply_annual_transitions(&mut self) {
         for age in 0..MAX_AGE {
-            let stage = LifeStage::from_usize(age);
+            let stage = LifeStage::from_int(age);
             let m = self.transitions[&stage];
 
             let old: [f64; NUM_INCOME_CLASSES] = std::array::from_fn(|ic| self.shares[ic][age]);
@@ -280,14 +283,14 @@ impl IncomeDistribution {
     }
 
     /// Population-weighted fractions across every age group combined.
-    pub fn overall_fractions(&self, age_groups: &AgeGroups) -> [f64; NUM_INCOME_CLASSES] {
+    pub fn overall_fractions(&self, age_groups: &Groups) -> [f64; NUM_INCOME_CLASSES] {
         let total = age_groups.whole_population() as f64;
         if total == 0.0 {
             return IncomeClass::base_distribution();
         }
         let mut out = [0.0f64; NUM_INCOME_CLASSES];
         for age in 0..MAX_AGE {
-            let w = age_groups.get(age) as f64 / total;
+            let w = age_groups.get_age(age) as f64 / total;
             for ic in 0..NUM_INCOME_CLASSES {
                 out[ic] += self.shares[ic][age] * w;
             }
@@ -298,12 +301,12 @@ impl IncomeDistribution {
     // ── Internal helpers ─────────────────────────────────────────────────────
 
     /// Population-weighted income distribution of working-age citizens (ages 9–19).
-    fn working_age_distribution(&self, age_groups: &AgeGroups) -> [f64; NUM_INCOME_CLASSES] {
+    fn working_age_distribution(&self, age_groups: &Groups) -> [f64; NUM_INCOME_CLASSES] {
         let mut totals = [0.0f64; NUM_INCOME_CLASSES];
         let mut pop = 0.0f64;
 
         for age in 9..=19 {
-            let n = age_groups.get(age) as f64;
+            let n = age_groups.get_age(age) as f64;
             pop += n;
             for ic in 0..NUM_INCOME_CLASSES {
                 totals[ic] += self.shares[ic][age] * n;
@@ -380,5 +383,86 @@ fn stage_transition_matrix(stage: &LifeStage) -> IncomeTransitionMatrix {
             [0.00, 0.01, 0.02, 0.94, 0.03], // Upper
             [0.00, 0.00, 0.01, 0.02, 0.97], // Wealthy
         ],
+    }
+}
+
+/// Revenue and tax parameters for one non-residential zone type.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ZoneTaxBand {
+    /// Annual gross revenue per m² of *total* floor area (all storeys),
+    /// at full efficiency and full occupancy.
+    pub annual_revenue_per_sqm: f64,
+    /// Effective corporate tax rate (0.0 – 1.0).
+    pub tax_rate: f64,
+}
+
+/// Per-district corporate tax config. Stored on `ZoningDemand`, completely
+/// decoupled from the residential `TaxConfig` on `Demography`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CorporateTaxConfig {
+    pub commercial: ZoneTaxBand,
+    pub industrial: ZoneTaxBand,
+    pub office: ZoneTaxBand,
+    /// Efficiency multiplier indexed by `BuildingLevel as usize` (0 = Level0 … 5 = Level5).
+    /// A derelict Level0 shell generates a fraction of what a premium Level5 facility does.
+    pub level_efficiency: [f64; 6],
+}
+
+impl Default for CorporateTaxConfig {
+    fn default() -> Self {
+        Self {
+            //                                         rev/m²    tax rate
+            commercial: ZoneTaxBand {
+                annual_revenue_per_sqm: 80.0,
+                tax_rate: 0.20,
+            },
+            industrial: ZoneTaxBand {
+                annual_revenue_per_sqm: 110.0,
+                tax_rate: 0.18,
+            },
+            office: ZoneTaxBand {
+                annual_revenue_per_sqm: 260.0,
+                tax_rate: 0.25,
+            },
+            // Level0 = empty shell; Level5 = modern high-efficiency facility
+            level_efficiency: [0.30, 0.50, 0.70, 0.85, 1.00, 1.20],
+        }
+    }
+}
+
+impl CorporateTaxConfig {
+    /// Tax revenue for **one game tick** from a single building.
+    ///
+    /// `full_area`  – `floor_area × num_stories` (m²), already computed in the lot loop
+    /// `occupancy`  – 0.0–1.0, typically `demand_from_zoning_type(lot.zoning_type)`
+    /// `day_length` – keeps tick-scaling identical to `TaxConfig::secondly_tax_per_worker`
+    pub fn compute_lot_tax(
+        &self,
+        zoning_type: ZoningType,
+        full_area: f64,
+        building_level: BuildingLevel,
+        job_occupancy: &JobOccupancy,
+        day_length: f64,
+    ) -> f64 {
+        let band = match zoning_type {
+            ZoningType::Commercial => &self.commercial,
+            ZoningType::Industrial => &self.industrial,
+            ZoningType::Office => &self.office,
+            _ => return 0.0,
+        };
+        let occupancy = match zoning_type {
+            ZoningType::Commercial => job_occupancy.commercial_fill,
+            ZoningType::Industrial => job_occupancy.industrial_fill,
+            ZoningType::Office => job_occupancy.office_fill,
+            _ => 0.0,
+        };
+        // building_level as usize assumes a plain C-like enum (Level0=0 … Level5=5).
+        // Add a `fn index(self) -> usize` to BuildingLevel if you'd rather be explicit.
+        let efficiency = self.level_efficiency[(building_level as usize).min(5)];
+
+        // Annual tax = area × revenue density × rate
+        // Tick-scale uses the same ×20 / (HOURS_PER_YEAR × day_length) as residential.
+        let annual_tax = full_area * band.annual_revenue_per_sqm * band.tax_rate;
+        annual_tax * efficiency * (occupancy as f64) / (HOURS_PER_YEAR * day_length) * 20.0
     }
 }

@@ -93,7 +93,7 @@ fn handle_destruction(
         }
     }
     if let Some(lot_id) = inside_lot_id {
-        let removing_lot = input.action_down("Destroy");
+        let removing_building = input.action_down("Destroy");
         //let finished_removing_lot = input.action_released("Destroy");
         if let Some(lot) = zoning.zoning_storage.get_lot(lot_id) {
             gizmo.polyline(
@@ -104,7 +104,7 @@ fn handle_destruction(
                 0.15,
                 0.0,
             );
-            if removing_lot {
+            if removing_building {
                 draw_area(
                     lot.bounds.as_slice(),
                     lot.zoning_type,

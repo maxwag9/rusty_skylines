@@ -97,7 +97,11 @@ layers:
         anchor: TopLeft
       - !Text
         id: world_population_text
-        actions: [ ]
+        actions:
+          #- button:a print({world_population}>3&&!bool({reached_300_pop}))
+          - button:a if({world_population}>300 && !bool({reached_300_pop}), set_var(str:reached_300_pop, true); close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_300_citizens))
+          - button:a if({world_population}>1200, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_1200_citizens))
+          - button:a if({world_population}>4500, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_4500_citizens))
         x: 0.87
         y: 0.98
         pt: 18.0
@@ -422,7 +426,7 @@ layers:
         actions:
           - set(str:new_zone_type, industrial)
           - button:a show_interaction([0.72, 0.72, 0.1, 1.0])
-        x: 0.26171875
+        x: 0.23828125
         y: 0.96428573
         w: 0.02
         h: 0.02
@@ -457,7 +461,7 @@ layers:
         actions:
           - set(str:new_zone_type, office)
           - button:a show_interaction([0.72, 0.1, 0.72, 1.0])
-        x: 0.23828125
+        x: 0.26171875
         y: 0.96428573
         w: 0.02
         h: 0.02

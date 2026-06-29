@@ -59,6 +59,10 @@ impl Address {
             ),
         }
     }
+    #[inline]
+    pub fn building_id(&self) -> Option<BuildingId> {
+        self.destination.as_building()
+    }
 }
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Partition {

@@ -1,0 +1,109 @@
+name: milestone_screen
+elements:
+  # Fullscreen Blur
+  - !Rect
+    id: Milestone Fullscreen Blur
+    actions: [ ]
+    x: 0.5
+    y: 0.5
+    w: 1.0
+    h: 1.0
+    blur: 6.0
+    color:
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+    border_color:
+      - 0.0
+      - 0.5
+      - 0.0
+      - 1.0
+    roundness: 0.0
+    border_thickness_percentage: 0.004
+  # Outer border
+  - !Rect
+    id: Milestone Border
+    actions:
+      - on:activated button:a set_var(str:milestone_screen_top_y, self.y)
+    x: 0.5
+    y: 0.5
+    w: 0.7
+    h: 0.7
+    blur: 0.0
+    color:
+      - 0.03
+      - 0.03
+      - 0.03
+      - 0.95
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 1.0
+    roundness: 0.03
+    border_thickness_percentage: 0.002
+  # exiting circle
+  #  - !Circle
+  #    id: ball
+  #    actions:
+  #      - on:n button:a set(str:self.center.x, {self.center.x} + {ball.velocity.x} * {ball.speed})
+  #      - on:n button:a set(str:self.center.y, {self.center.y} + {ball.velocity.y} * {ball.speed})
+  #      - on:n button:a if({self.center.y} < {self.radius}, if({ball.velocity.y} * {ball.speed} < 0, set(str:ball.velocity.y, -{ball.velocity.y})))
+  #      - on:n button:a if({self.center.y} > {screen.y} - {self.radius}, if({ball.velocity.y} * {ball.speed} > 0, set(str:ball.velocity.y, -{ball.velocity.y})))
+  #      - on:n button:a if({self.center.x} - {self.radius} < {left_paddle.center.x} + {left_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {left_paddle.center.x} - {left_paddle.size.x}*0.5 && {self.center.y} > {left_paddle.center.y} - {left_paddle.size.y}*0.5 && {self.center.y} < {left_paddle.center.y} + {left_paddle.size.y}*0.5 && {ball.velocity.x} < 0, set(str:ball.velocity.x, -{ball.velocity.x}))
+  #      - on:n button:a if({self.center.x} - {self.radius} < {right_paddle.center.x} + {right_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {right_paddle.center.x} - {right_paddle.size.x}*0.5 && {self.center.y} > {right_paddle.center.y} - {right_paddle.size.y}*0.5 && {self.center.y} < {right_paddle.center.y} + {right_paddle.size.y}*0.5 && {ball.velocity.x} > 0, set(str:ball.velocity.x, -{ball.velocity.x}))
+  #      - on:n button:a if({self.center.x} < 0, set(str:ball.visitor_score, {ball.visitor_score} + 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, random(-1.5, 1.5)); set(str:self.center.x, {screen.x} * 0.5); set(str:self.center.y, {screen.y} * 0.5); )
+  #      - on:n button:a if({self.center.x} > {screen.x}, inc(str:ball.home_score, 1))
+  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.x, -1.5))
+  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.y, random(-1.5, 1.5)))
+  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.x, {screen.x} * 0.5))
+  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.y, {screen.y} * 0.5))
+  #    style: Hue Circle
+  #    x: 0.6
+  #    y: 0.5
+  #    radius: 0.02804
+  #    fill_color:
+  #      - 0.5
+  #      - 0.5
+  #      - 0.5
+  #      - 0.98
+  #    glow_color:
+  #      - 0.2
+  #      - 0.0
+  #      - 0.7
+  #      - 0.98
+  #    glow_misc:
+  #      glow_size: 40.0
+  #      glow_speed: 5.0
+  #      glow_intensity: 0.5
+  #    misc:
+  #      active: true
+  #      pressable: false
+  #      editable: true
+  # Grand text
+  - !Text
+    id: grand_text
+    actions:
+      - on:activated button:a set(str:self.center.y, milestone_screen_top_y + milestone_screen_top_y*1.05)
+    x: 0.5
+    y: 0.16
+    pt: 24.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: "You've reached a population of {str:{ap}}!"
+  # Unlock text
+  - !Text
+    id: unlock_text
+    x: 0.5
+    y: 0.19
+    pt: 18.0
+    color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.9
+    text: "You've unlocked:"

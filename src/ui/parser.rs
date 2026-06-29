@@ -1,6 +1,6 @@
 use crate::data::{SettingKey, Settings};
 use crate::helpers::hsv::{HSV, hsv_to_rgb};
-use crate::ui::variables::Variables;
+use crate::ui::variables::{Variables, initialize_value};
 use rand::RngExt;
 use rand::rngs::ThreadRng;
 use std::fmt;
@@ -187,7 +187,7 @@ impl Value {
 
         //println!("In from_str() Evaluating Expression... Input: {} ", s);
         if with_expr {
-            let expr_value = match eval_expr(s, variables) {
+            let expr_value = match eval_expr(s, variables, settings) {
                 Some(value) => match value {
                     Value::Null => {
                         //println!("Input: {}, Output: Null!!!", s);
@@ -245,12 +245,25 @@ impl Value {
             Value::Null => Some(0.0),
         }
     }
+
+    pub fn to_f64(self) -> Value {
+        match self {
+            Value::F64(v) => Value::F64(v),
+            Value::I64(v) => Value::F64(v as f64),
+            Value::Bool(v) => Value::F64(if v { 1.0 } else { 0.0 }),
+            Value::String(s) => s.parse::<f64>().map(Value::F64).unwrap_or(Value::F64(1.0)),
+            Value::Null => Value::F64(0.0),
+            Value::Array(_) => Value::F64(0.0),
+        }
+    }
+
     pub fn is_i64(&self) -> Option<Value> {
         match self {
             Value::I64(n) => Some(self.clone()),
             _ => None,
         }
     }
+
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::F64(n) => Some(*n as i64),
@@ -262,6 +275,22 @@ impl Value {
         }
     }
 
+    pub fn to_i64(self) -> Value {
+        match self {
+            Value::I64(v) => Value::I64(v),
+            Value::F64(v) => {
+                if v.is_finite() && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
+                    Value::I64(v as i64)
+                } else {
+                    Value::I64(1)
+                }
+            }
+            Value::Bool(v) => Value::I64(if v { 1 } else { 0 }),
+            Value::String(s) => s.parse::<i64>().map(Value::I64).unwrap_or(Value::I64(1)),
+            Value::Null => Value::I64(0),
+            Value::Array(_) => Value::I64(0),
+        }
+    }
     pub fn is_string(&self) -> Option<Value> {
         match self {
             Value::String(n) => Some(self.clone()),
@@ -327,7 +356,17 @@ impl Value {
             Value::Bool(b) => *b,
             Value::I64(i) => *i != 0,
             Value::F64(f) => *f != 0.0,
-            Value::String(s) => !s.is_empty() && s != "false" && s != "0",
+            Value::String(s) => {
+                if s.is_empty() {
+                    return false;
+                };
+                let t = s.trim().to_ascii_lowercase();
+                match t.as_str() {
+                    "true" | "1" | "yes" | "y" | "on" => true,
+                    "false" | "0" | "no" | "n" | "off" => false,
+                    _ => true,
+                }
+            }
             Value::Array(arr) => !arr.is_empty(),
             Value::Null => false,
         }
@@ -1120,10 +1159,10 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
         "isarray" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::Array(_))))),
 
         // Conversion functions
-        "str" => |args| Some(Value::String(args.first()?.to_string())),
+        "str" => |args| Some(Value::String(args.first()?.clone().into_string_value())),
         "bool" => |args| Some(Value::Bool(args.first()?.is_truthy())),
-        "int" => |args| args.first()?.as_i64().map(|n| Value::I64(n)),
-        "float" => |args| args.first()?.as_f64().map(|n| Value::F64(n)),
+        "int" => |args| Some(args.first()?.clone().to_i64()),
+        "float" => |args| Some(args.first()?.clone().to_f64()),
 
         // Formatting functions
         "format" => |args| {
@@ -1449,6 +1488,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 }
             }
         },
+
         _ => return None,
     })
 }
@@ -1958,15 +1998,17 @@ struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
     vars: &'a Variables,
+    settings: &'a Settings,
     is_inside_braces: bool,
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Token], vars: &'a Variables) -> Self {
+    fn new(tokens: &'a [Token], vars: &'a Variables, settings: &'a Settings) -> Self {
         Self {
             tokens,
             pos: 0,
             vars,
+            settings,
             is_inside_braces: false,
         }
     }
@@ -2403,18 +2445,25 @@ impl<'a> Parser<'a> {
                         pos,
                     })
                 } else if self.is_inside_braces {
+                    //println!("{}", name);
                     match name.as_str() {
                         "PI" | "pi" => Ok(Value::F64(std::f64::consts::PI)),
                         "TAU" | "tau" => Ok(Value::F64(std::f64::consts::TAU)),
                         "E" | "e" => Ok(Value::F64(std::f64::consts::E)),
                         "INF" | "inf" => Ok(Value::F64(f64::INFINITY)),
                         "NAN" | "NaN" => Ok(Value::F64(f64::NAN)),
-                        _ => Ok(self
-                            .vars
-                            .get(&name)
-                            .as_deref()
-                            .cloned()
-                            .unwrap_or_else(|| Value::String(name))),
+                        _ => {
+                            if let Some(key) = SettingKey::from_str(name.as_str()) {
+                                Ok(self.settings.read_setting(key).to_value())
+                            } else {
+                                let val = self.vars.get(&name).as_deref().cloned();
+                                let (field_type, _) = match name.split_once('=') {
+                                    Some((field_type, base)) => (field_type, base),
+                                    None => ("None", name.as_str()),
+                                };
+                                Ok(initialize_value(field_type, val))
+                            }
+                        }
                     }
                 } else {
                     Ok(Value::String(name))
@@ -2794,9 +2843,9 @@ fn normalize_index(idx: i64, len: usize) -> Option<usize> {
 //     format_slot(src.trim(), vars)
 // }
 
-fn format_slot(src: &str, vars: &Variables) -> String {
+fn format_slot(src: &str, vars: &Variables, settings: &Settings) -> String {
     let (expr, modifiers) = split_format_chain(src);
-    let mut value = match eval_expr(expr, vars) {
+    let mut value = match eval_expr(expr, vars, settings) {
         Some(v) => v,
         None => return src.to_string(),
     };
@@ -2884,9 +2933,10 @@ fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
     None
 }
 
-pub fn eval_expr(expr: &str, vars: &Variables) -> Option<Value> {
+pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
     let tokens = tokenize_expr(expr);
-    let result = Parser::new(&tokens, vars).parse();
+    //println!("{:?}", expr);
+    let result = Parser::new(&tokens, vars, settings).parse();
     match result {
         Ok(result) => Some(result),
         Err(e) => {

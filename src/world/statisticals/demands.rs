@@ -1,8 +1,9 @@
 use crate::resources::Time;
-use crate::world::buildings::buildings::{BuildingId, Buildings};
-use crate::world::buildings::zoning::{Zoning, ZoningType};
-use crate::world::statisticals::demography::{Demography, LifeStage};
+use crate::world::buildings::buildings::{BuildingLevel, BuildingOccupancy};
+use crate::world::buildings::zoning::ZoningType;
+use crate::world::statisticals::demography::{Demography, LifeStage, Person};
 use crate::world::statisticals::education::EducationLevel;
+use crate::world::statisticals::money::CorporateTaxConfig;
 use crate::world::statisticals::transports::TransportStats;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,9 @@ pub const HOURS_PER_DAY: f64 = 24.0;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ZoningDemand {
     pub demography: Demography, // BTW! This is ONE District!!
+    pub corporate_tax_config: CorporateTaxConfig,
     pub transport_stats: TransportStats,
-    pub housing_capacity: u32,
+    pub residential_capacity: u32,
     pub commercial_capacity: u32,
     pub industrial_capacity: u32,
     pub office_capacity: u32,
@@ -38,16 +40,17 @@ pub struct ZoningDemand {
     pub last_updated: f64,
 
     pub prestige: f32,
-    pub total_taxes_collected: u64,
+    pub total_taxes_collected: i64,
 }
 
 impl ZoningDemand {
     pub fn new() -> Self {
         ZoningDemand {
             demography: Demography::new(),
+            corporate_tax_config: CorporateTaxConfig::default(),
             transport_stats: TransportStats::new(),
 
-            housing_capacity: 0,
+            residential_capacity: 0,
             commercial_capacity: 0,
             industrial_capacity: 0,
             office_capacity: 0,
@@ -89,17 +92,91 @@ impl ZoningDemand {
 
         unmet * relevance
     }
+
+    pub fn distribute_occupancy_to_building(
+        &self,
+        zoning_type: ZoningType,
+        building_capacity: u32,
+        job_occupancy: &JobOccupancy,
+        mut building_occupancy: BuildingOccupancy,
+    ) -> BuildingOccupancy {
+        if building_capacity == 0 {
+            return building_occupancy;
+        }
+
+        match zoning_type {
+            ZoningType::Residential => {
+                building_occupancy.jobs_capacity = 0;
+                building_occupancy.workers = 0;
+                building_occupancy.residential_capacity = building_capacity;
+                let unemployed = building_occupancy.unemployed();
+                for _ in 0..=unemployed {
+
+                    // let Some(workplace_id) = zoning_storage.get_work_place(residence.pos, building_storage, person, rng) else { continue };
+                    // let Some(workplace) = building_storage.get_mut(workplace_id) else { continue };
+                    // workplace.occupancy.workers +=1;
+                }
+            }
+            ZoningType::Commercial => {
+                building_occupancy.residential_capacity = 0;
+                building_occupancy.jobs_capacity = building_capacity;
+                building_occupancy.groups.clear(); // NO ONE lives here!! For now.
+            }
+            ZoningType::Industrial => {
+                building_occupancy.residential_capacity = 0;
+                building_occupancy.jobs_capacity = building_capacity;
+                let total_cap = self.industrial_capacity.max(1);
+                building_occupancy.groups.clear();
+            }
+            ZoningType::Office => {
+                building_occupancy.residential_capacity = 0;
+                building_occupancy.jobs_capacity = building_capacity;
+                building_occupancy.groups.clear();
+            }
+            ZoningType::None => {}
+        }
+        building_occupancy
+    }
+
+    // Target land value for one lot's EMA.
+    // Outputs ~0.04–0.35 so that average_land_value (true average across lots)
+    // feeds cleanly into the prestige formula below (* 3.0 → 0.0–1.0).
+    pub fn target_land_value(
+        &self,
+        zoning_type: ZoningType,
+        building_level: BuildingLevel,
+        occ: &BuildingOccupancy,
+    ) -> f32 {
+        let level_mult = 1.0 + building_level.to_u8() as f32 * 0.3;
+        let fill_mult = 0.1 + occ.fill_rate(zoning_type) * 1.2;
+        let prestige_mult = 1.0 + self.prestige * 1.5;
+        let attractiveness_bonus = match zoning_type {
+            ZoningType::Residential => self.residential_attractiveness.max(0.0),
+            ZoningType::Commercial => self.commercial_attractiveness.max(0.0),
+            ZoningType::Industrial => self.industrial_attractiveness.max(0.0),
+            ZoningType::Office => self.office_attractiveness.max(0.0),
+            ZoningType::None => 0.0,
+        };
+        (0.04 * level_mult * fill_mult * prestige_mult * (1.0 + attractiveness_bonus * 0.4))
+            .max(0.0)
+    }
     pub fn update_demands(
         &mut self,
         rng: &mut impl Rng,
         time: &Time,
         average_land_value: f32,
-    ) -> i64 {
+    ) -> (i64, Vec<Person>, Vec<Person>) {
         self.last_updated = time.total_game_time;
-        self.demography.update(rng, time);
 
         let pop = self.demography.population.max(1);
         let pop_f = pop as f32;
+
+        let job_occ = self.infer_job_occupancy();
+        let employed = (job_occ.commercial_workers
+            + job_occ.industrial_workers
+            + job_occ.office_workers) as f32;
+        let job_capacity =
+            (self.commercial_capacity + self.industrial_capacity + self.office_capacity) as f32;
 
         let working_age = self.demography.working_age_population() as f32;
         let none = self.demography.education.non_educated_population(pop) as f32;
@@ -107,38 +184,71 @@ impl ZoningDemand {
         let med = self.demography.education.medium_educated_population(pop) as f32;
         let high = self.demography.education.highly_educated_population(pop) as f32;
 
-        self.prestige =
-            (self.residential_attractiveness * 0.05 + average_land_value * 0.5).clamp(0.0, 1.0);
+        self.prestige = (average_land_value * 3.0).clamp(0.0, 1.0);
 
-        let housing_deficit = ((pop_f - self.housing_capacity as f32) / pop_f).clamp(0.0, 1.0);
-        let job_capacity =
-            self.commercial_capacity + self.industrial_capacity + self.office_capacity;
-        let job_pull = (job_capacity as f32 / pop_f).clamp(0.0, 1.0);
+        let housing_balance = if self.residential_capacity == 0 {
+            -1.0
+        } else {
+            1.0 - (self.demography.population as f32 / self.residential_capacity as f32)
+        };
+        let housing_balance = housing_balance.clamp(-1.0, 1.0);
 
-        let target_residential = (0.85 * housing_deficit + 0.35 * job_pull).clamp(0.0, 1.0);
+        let job_vacancy = if job_capacity <= 0.0 {
+            0.0
+        } else {
+            ((job_capacity - employed) / job_capacity).clamp(0.0, 1.0)
+        };
 
-        let commercial_need = med * 1.15 + working_age * 0.10;
-        let industrial_need = (none + low) * 1.10 + working_age * 0.12;
+        let unemployment_pressure = if working_age > 0.0 {
+            ((working_age - employed) / working_age).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
 
-        let office_need = high * 1.20 + working_age * 0.005 * (1.0 + self.prestige);
+        let housing_deficit = if self.demography.population == 0 {
+            0.0
+        } else {
+            ((pop_f - self.residential_capacity as f32) / pop_f).clamp(0.0, 1.0)
+        };
 
-        // Pass pop_f as the scale so tiny needs don't generate full demand
-        let target_commercial =
-            Self::deficit_demand(commercial_need, self.commercial_capacity, pop_f);
-        let target_industrial =
-            Self::deficit_demand(industrial_need, self.industrial_capacity, pop_f);
-        // Office is a prestige-gated zone: scale the *target* by prestige, not the need!!
-        let target_office =
-            Self::deficit_demand(office_need, self.office_capacity, pop_f) * self.prestige.max(0.1); // clamp floor so a brand-new city can still start building
+        let target_residential =
+            (0.9 * housing_balance.max(0.0) + 0.5 * job_vacancy + 0.2 * self.prestige)
+                .clamp(0.0, 1.0);
 
-        // Smooth bars so they don't jump
         self.residential = Self::smooth(self.residential, target_residential, 0.35);
-        self.commercial = Self::smooth(self.commercial, target_commercial, 0.35);
-        self.industrial = Self::smooth(self.industrial, target_industrial, 0.35);
-        self.office = Self::smooth(self.office, target_office, 0.35);
+        self.commercial = Self::smooth(
+            self.commercial,
+            Self::deficit_demand(
+                med * 1.15 + working_age * 0.10,
+                self.commercial_capacity,
+                pop_f,
+            ),
+            0.35,
+        );
+        self.industrial = Self::smooth(
+            self.industrial,
+            Self::deficit_demand(
+                (none + low) * 1.10 + working_age * 0.12,
+                self.industrial_capacity,
+                pop_f,
+            ),
+            0.35,
+        );
+        self.office = Self::smooth(
+            self.office,
+            Self::deficit_demand(
+                high * 1.20 + working_age * 0.005 * (1.0 + self.prestige),
+                self.office_capacity,
+                pop_f,
+            ) * self.prestige.max(0.1),
+            0.35,
+        );
 
-        // Attractiveness (supply/demand ratio per education tier)
-        self.residential_attractiveness = (job_pull - housing_deficit + 0.2).clamp(-1.0, 1.0);
+        self.residential_attractiveness =
+            (housing_balance * 0.75 + job_vacancy * 0.45 + self.prestige * 0.20
+                - unemployment_pressure * 0.25)
+                .clamp(-1.0, 1.0);
+
         self.commercial_attractiveness =
             ((med / pop_f) - (self.commercial_capacity as f32 / pop_f)).clamp(-1.0, 1.0);
         self.industrial_attractiveness =
@@ -147,86 +257,48 @@ impl ZoningDemand {
             ((high / pop_f) - (self.office_capacity as f32 / pop_f)).clamp(-1.0, 1.0);
 
         // Immigration
+        let mut immigrants = vec![];
+        let mut emigrants = vec![];
         if self.residential_attractiveness > 0.0 {
             let free_capacity = self
-                .housing_capacity
+                .residential_capacity
                 .saturating_sub(self.demography.population);
             let expected = self.residential_attractiveness as f64 * 0.02 * free_capacity as f64;
             let guaranteed = expected.floor() as u32;
             let fractional = expected.fract();
             let prestige = self.residential_attractiveness * 0.1;
-
+            //println!("Guaranteed Immigrants: {}, fractional: {}, {} {} {} {} {}", guaranteed, fractional, self.residential_capacity, self.demography.population, free_capacity, self.residential_attractiveness, expected);
             for _ in 0..guaranteed {
-                self.demography.add_person(
-                    LifeStage::random_life_stage(),
-                    EducationLevel::random_weighted(prestige),
-                );
+                let person = Person {
+                    education_level: EducationLevel::random_weighted(prestige),
+                    age: LifeStage::random_life_stage().to_u8(),
+                };
+                immigrants.push(person);
             }
             if rand::random::<f64>() < fractional {
-                self.demography.add_person(
-                    LifeStage::random_life_stage(),
-                    EducationLevel::random_weighted(prestige),
-                );
+                let person = Person {
+                    education_level: EducationLevel::random_weighted(prestige),
+                    age: LifeStage::random_life_stage().to_u8(),
+                };
+                immigrants.push(person);
+            }
+        } else if self.residential_attractiveness < 0.0 {
+            let leave_rate = (-self.residential_attractiveness) as f64 * 0.02;
+            let to_remove = (leave_rate * self.demography.population as f64).floor() as u32;
+            for _ in 0..to_remove.min(self.demography.population) {
+                let Some(person) = self.demography.get_random_person(rng) else {
+                    continue;
+                };
+                emigrants.push(person);
             }
         }
 
-        // Taxes
+        // Residential Taxes
         let taxes = self.demography.collect_taxes(time.day_length);
 
         self.total_taxes_collected += taxes;
 
-        taxes as i64
-    }
-
-    pub fn spawn_building(buildings: &mut Buildings, zoning: &mut Zoning, building_id: BuildingId) {
-        let Some(building) = buildings.storage.get(building_id) else {
-            return;
-        };
-        let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) else {
-            return;
-        };
-        let tiles = lot.get_tiles();
-        let story_area: f64 = lot.get_floor_area();
-        let max_people = building.current_level_params().max_people(story_area);
-        let zoning_type = lot.zoning_type;
-        let Some(district) = zoning.zoning_storage.get_mut_district(lot.district_id) else {
-            return;
-        };
-        //println!("{}", max_people);
-        match zoning_type {
-            ZoningType::None => {}
-            ZoningType::Residential => district.zoning_demand.housing_capacity += max_people,
-            ZoningType::Commercial => district.zoning_demand.commercial_capacity += max_people,
-            ZoningType::Industrial => district.zoning_demand.industrial_capacity += max_people,
-            ZoningType::Office => district.zoning_demand.office_capacity += max_people,
-        }
-    }
-    pub fn despawn_building(
-        buildings: &mut Buildings,
-        zoning: &mut Zoning,
-        building_id: BuildingId,
-    ) {
-        let Some(building) = buildings.storage.get(building_id) else {
-            return;
-        };
-        let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) else {
-            return;
-        };
-        let tiles = lot.get_tiles();
-        let story_area: f64 = lot.get_floor_area();
-        let max_people = building.current_level_params().max_people(story_area);
-        let zoning_type = lot.zoning_type;
-        let Some(district) = zoning.zoning_storage.get_mut_district(lot.district_id) else {
-            return;
-        };
-        //println!("{}", max_people);
-        match zoning_type {
-            ZoningType::None => {}
-            ZoningType::Residential => district.zoning_demand.housing_capacity -= max_people,
-            ZoningType::Commercial => district.zoning_demand.commercial_capacity -= max_people,
-            ZoningType::Industrial => district.zoning_demand.industrial_capacity -= max_people,
-            ZoningType::Office => district.zoning_demand.office_capacity -= max_people,
-        }
+        (taxes, immigrants, emigrants)
     }
 
     pub fn demand_from_zoning_type(&self, zoning_type: ZoningType) -> f32 {
@@ -238,6 +310,81 @@ impl ZoningDemand {
             ZoningType::Office => self.office,
         }
     }
+
+    pub fn infer_job_occupancy(&self) -> JobOccupancy {
+        let pop = self.demography.population;
+
+        let working_age = self.demography.working_age_population();
+
+        if working_age == 0 {
+            return JobOccupancy {
+                commercial_workers: 0,
+                industrial_workers: 0,
+                office_workers: 0,
+                commercial_fill: 0.0,
+                industrial_fill: 0.0,
+                office_fill: 0.0,
+                unemployed: 0,
+            };
+        }
+
+        let none = self.demography.education.non_educated_population(pop);
+        let low = self.demography.education.low_educated_population(pop);
+        let med = self.demography.education.medium_educated_population(pop);
+        let high = self.demography.education.highly_educated_population(pop);
+
+        let industrial_desire = none as f32 * 1.2 + low as f32 * 1.0 + med as f32 * 0.25;
+
+        let commercial_desire = low as f32 * 0.3 + med as f32 * 1.2 + high as f32 * 0.5;
+
+        let office_desire = med as f32 * 0.4 + high as f32 * 2.0;
+
+        let total_desire = industrial_desire + commercial_desire + office_desire;
+
+        if total_desire <= 0.0 {
+            return JobOccupancy {
+                commercial_workers: 0,
+                industrial_workers: 0,
+                office_workers: 0,
+                commercial_fill: 0.0,
+                industrial_fill: 0.0,
+                office_fill: 0.0,
+                unemployed: working_age,
+            };
+        }
+
+        let mut industrial_workers =
+            ((industrial_desire / total_desire) * working_age as f32) as u32;
+
+        let mut commercial_workers =
+            ((commercial_desire / total_desire) * working_age as f32) as u32;
+
+        let mut office_workers = ((office_desire / total_desire) * working_age as f32) as u32;
+
+        industrial_workers = industrial_workers.min(self.industrial_capacity);
+
+        commercial_workers = commercial_workers.min(self.commercial_capacity);
+
+        office_workers = office_workers.min(self.office_capacity);
+
+        let employed = industrial_workers + commercial_workers + office_workers;
+
+        let unemployed = working_age.saturating_sub(employed);
+
+        JobOccupancy {
+            commercial_workers,
+            industrial_workers,
+            office_workers,
+
+            commercial_fill: commercial_workers as f32 / self.commercial_capacity.max(1) as f32,
+
+            industrial_fill: industrial_workers as f32 / self.industrial_capacity.max(1) as f32,
+
+            office_fill: office_workers as f32 / self.office_capacity.max(1) as f32,
+
+            unemployed,
+        }
+    }
 }
 
 pub struct Demands {}
@@ -246,4 +393,17 @@ impl Demands {
         Demands {}
     }
     pub fn update_demands(&mut self) {}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct JobOccupancy {
+    pub commercial_workers: u32,
+    pub industrial_workers: u32,
+    pub office_workers: u32,
+
+    pub commercial_fill: f32,
+    pub industrial_fill: f32,
+    pub office_fill: f32,
+
+    pub unemployed: u32,
 }

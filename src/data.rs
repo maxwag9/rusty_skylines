@@ -702,6 +702,7 @@ define_settings! {
     SimpleCarFollowing => simple_car_following: bool = false; Bool,
     RenderRtGizmo => render_rt_gizmo: bool = false; Bool,
     Noclip => noclip: bool = false; Bool,
+    RenderDebugPrint => render_debug_print: bool = false; Bool,
 }
 
 impl Settings {

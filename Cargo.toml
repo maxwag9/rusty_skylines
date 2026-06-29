@@ -1,6 +1,6 @@
 [package]
 name = "Rusty_Skylines"
-version = "0.7.19"
+version = "0.8.0"
 edition = "2024"
 
 [dependencies]
@@ -9,10 +9,10 @@ winit = { version = "0.31.0-beta.2", features = ["serde"] }
 wgpu = { version = "29.0.3", features = ["strict_asserts"] }
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
-glam = { version = "0.33.1", features = ["serde"] }
+glam = { version = "0.33.2", features = ["serde"] }
 toml = "1.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 notify = "9.0.0-rc.4"
 num_cpus = "1.17.0"
 crossbeam-channel = "0.5.15"
