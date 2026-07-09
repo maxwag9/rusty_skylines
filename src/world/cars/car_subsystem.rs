@@ -299,13 +299,9 @@ impl Cars {
         let mut to_remove: Vec<usize> = Vec::new();
         for (idx, spawning_node) in self.spawning_nodes.iter_mut().enumerate() {
             let Some(node) = road_manager.roads.node(spawning_node.node_id) else {
-                continue;
-            };
-
-            if !node.is_enabled() {
                 to_remove.push(idx);
                 continue;
-            }
+            };
 
             let spawning_rate = node.car_spawning_rate(); // Cars per minute: f32
             if !(spawning_rate > 0.0) {

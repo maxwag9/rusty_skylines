@@ -69,6 +69,18 @@ layers:
           active: true
           pressable: false
           editable: true
+      - !Advanced
+        name: pause button
+        ap_name: pause_button
+        ap_var: sim_running
+        x: 0.03
+        y: 0.96
+        scale: 1.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
       - !Text
         id: time_text
         actions: [ ]

@@ -13,6 +13,7 @@ use crate::world::cars::car_subsystem::CarRenderSubsystem;
 use crate::world::roads::road_mesh_manager::AdvancedVertex;
 use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
+use glam::dcamera::rh::proj::directx::orthographic;
 use glam::{Mat4, Vec3, Vec4};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
@@ -198,7 +199,7 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     center *= 1.0 / 8.0;
 
     let light_eye = center + sun_dir * 2000.0;
-    let light_view = Mat4::look_at_rh(light_eye, center, up);
+    let light_view = glam::camera::rh::view::look_at_mat4(light_eye, center, up);
 
     let mut min_x = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -266,12 +267,26 @@ pub fn compute_light_matrix_fit_frustum_slice_stable(
     far_d = far_d + z_pad;
 
     let light_proj = if reversed_z {
-        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, far_d, near_d)
+        orthographic(
+            min_x as f64,
+            max_x as f64,
+            min_y as f64,
+            max_y as f64,
+            far_d as f64,
+            near_d as f64,
+        )
     } else {
-        Mat4::orthographic_rh(min_x, max_x, min_y, max_y, near_d, far_d)
+        orthographic(
+            min_x as f64,
+            max_x as f64,
+            min_y as f64,
+            max_y as f64,
+            near_d as f64,
+            far_d as f64,
+        )
     };
 
-    (light_proj * light_view, texel_world)
+    (light_proj.as_mat4() * light_view, texel_world)
 }
 
 fn compute_shadow_distance(eye_height_agl: f32, orbit_radius: f32) -> f32 {
@@ -381,7 +396,7 @@ pub fn shadow_bias_for_cascade(
 pub fn shadow_pipeline_options<'a>(
     settings: &Settings,
     bias: DepthBiasState,
-    vertex_layouts: Vec<wgpu::VertexBufferLayout<'static>>,
+    vertex_layouts: Vec<Option<wgpu::VertexBufferLayout<'static>>>,
     cull_mode: Face,
     fragment: FragmentOption,
 ) -> PipelineOptions<'a> {
@@ -426,7 +441,7 @@ pub fn render_roads_shadows(
     let opts = shadow_pipeline_options(
         settings,
         bias,
-        vec![AdvancedVertex::layout()],
+        vec![Some(AdvancedVertex::layout())],
         Face::Back,
         FragmentOption::None,
     );
@@ -451,7 +466,7 @@ pub fn render_roads_shadows(
         let opts2 = shadow_pipeline_options(
             settings,
             preview_bias,
-            vec![AdvancedVertex::layout()],
+            vec![Some(AdvancedVertex::layout())],
             Face::Back,
             FragmentOption::None,
         );
@@ -490,7 +505,7 @@ pub fn render_buildings_shadows(
     let opts = shadow_pipeline_options(
         settings,
         bias,
-        vec![BuildingVertex::layout()],
+        vec![Some(BuildingVertex::layout())],
         Face::Back,
         FragmentOption::None,
     );
@@ -528,7 +543,7 @@ pub fn render_terrain_shadows(
     let opts = shadow_pipeline_options(
         settings,
         bias,
-        vec![Vertex::desc()],
+        vec![Some(Vertex::desc())],
         Face::Back,
         FragmentOption::None,
     );
@@ -565,7 +580,7 @@ pub fn render_cars_shadows(
     let opts = shadow_pipeline_options(
         settings,
         bias,
-        vec![CarVertex::layout(), CarInstance::layout()],
+        vec![Some(CarVertex::layout()), Some(CarInstance::layout())],
         Face::Front,
         FragmentOption::None,
     );

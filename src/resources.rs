@@ -10,7 +10,7 @@ use crate::ui::ui_editor::Ui;
 use crate::ui::variables::load_colors;
 use crate::world::astronomy::Astronomy;
 use crate::world::game_state::GameState;
-use crate::world::sound::Sounds;
+use crate::world::sound::sound::Sounds;
 use crate::world::statisticals::demands::HOURS_PER_DAY;
 use crate::world::world::World;
 use std::sync::Arc;

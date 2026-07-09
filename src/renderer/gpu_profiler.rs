@@ -266,7 +266,9 @@ impl GpuProfiler {
             }
 
             let slice = slot.readback.slice(..);
-            let mapped = slice.get_mapped_range();
+            let Ok(mapped) = slice.get_mapped_range() else {
+                continue;
+            };
             let timestamps: &[u64] = bytemuck::cast_slice(&mapped);
 
             let mut pairs = Vec::new();

@@ -44,7 +44,7 @@ pub fn run_ticked(resources: &mut Resources) {
     //     let center = WorldPos::new(*pending, LocalPos::new(half_chunk_size, camera.target.local.y, half_chunk_size));
     //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
     // }
-    if resources.simulation.running {
+    if resources.simulation.running() {
         terrain.update(gizmo, camera, aspect, settings, input, time, roads);
     }
     handle_destruction(
@@ -213,7 +213,7 @@ fn handle_destruction(
                             .push(RoadEditorCommand::PreviewDestruction(destroy_type));
                     }
                     if destroy {
-                        roads.road_manager.roads.disable_segment(
+                        roads.road_manager.roads.delete_segment(
                             segment_id,
                             &roads.road_manager.road_types,
                             gizmo,
@@ -273,7 +273,7 @@ fn handle_destruction(
                             .push(RoadEditorCommand::PreviewDestruction(destroy_type));
                     }
                     if input.action_pressed_once("Destroy") {
-                        roads.road_manager.roads.disable_node(
+                        roads.road_manager.roads.delete_node(
                             node_id,
                             &roads.road_manager.road_types,
                             gizmo,
@@ -314,6 +314,7 @@ pub fn run_ui(resources: &mut Resources, event_loop: &dyn ActiveEventLoop) {
         &mut resources.settings,
         event_loop,
         &mut resources.game_state,
+        &mut resources.simulation,
     );
 }
 

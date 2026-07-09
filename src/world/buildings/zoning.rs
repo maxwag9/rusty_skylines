@@ -11,8 +11,9 @@ use crate::world::buildings::buildings::{
     GarageParams, MiscBuildingParams, RoofMaterial, RoofType, WallMaterial,
 };
 use crate::world::camera::Camera;
-use crate::world::cars::car_structs::{Car, CarStorage, SimTime};
+use crate::world::cars::car_structs::{Car, CarId, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
+use crate::world::cars::parking::{ParkingSpotId, ParkingStorage};
 use crate::world::cars::partitions::{Address, DestinationType};
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
@@ -133,10 +134,12 @@ impl District {
                     let up = Vec3::Y;
 
                     car.quat = Quat::from_rotation_arc(forward, up);
-                    car.destination_addr =
-                        zoning
-                            .zoning_storage
-                            .get_work_place_address(car.pos, car_trip_type, rng);
+                    car.destination_addr = zoning.zoning_storage.get_work_place_address(
+                        &buildings.storage,
+                        car.pos,
+                        car_trip_type,
+                        rng,
+                    );
 
                     callback.new_cars.push((lot_id, Some(car)));
                 };
@@ -509,11 +512,11 @@ impl District {
                 continue;
             };
 
-            if !seen_segments.insert(lot.segment_ids) {
+            if !seen_segments.insert(lot.segment_id) {
                 continue;
             }
 
-            let Some(road_edges) = road_edge_storage.get(&lot.segment_ids) else {
+            let Some(road_edges) = road_edge_storage.get(&lot.segment_id) else {
                 continue;
             };
 
@@ -899,7 +902,7 @@ fn generate_building(terrain: &Terrain, lot: &Lot) -> Option<Building> {
     Some(Building {
         id: 631864891,
         pos: lot.center,
-        segment_id: lot.segment_ids,
+        segment_id: lot.segment_id,
         lot_id: lot.id,
         level: Default::default(),
         building_params,
@@ -1731,7 +1734,7 @@ impl Zoning {
                             entrance: LotEntrance::new(snap_point.pos, snap_point.lateral),
                             layout: None,
                             zoning_type: new_zoning_type.clone(),
-                            segment_ids: snap_point.segment_id,
+                            segment_id: snap_point.segment_id,
                             district_id: 6378186,
                             building_id: None,
                             land_value: self.zoning_storage.sample_land_value(lot_center.chunk),
@@ -2173,7 +2176,7 @@ pub fn collect_lot_point(
 
 pub type DistrictId = u32;
 pub type LotId = u32;
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub enum TileType {
     Grass,
     Tree,
@@ -2185,10 +2188,35 @@ pub enum TileType {
     Garage,
     Driveway,
 }
+impl TileType {
+    #[inline]
+    pub fn is_drivable(&self) -> bool {
+        match self {
+            TileType::Grass => false,
+            TileType::Tree => false,
+            TileType::Garden => false,
+            TileType::House => false,
+            TileType::HouseBalcony => false,
+            TileType::HouseEntrance => false,
+            TileType::LotEntrance => true,
+            TileType::Garage => true, // TODO: lol drive through he garage
+            TileType::Driveway => true,
+        }
+    }
+}
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Tile {
     Square(TileType),
     Polygon(TileType, Vec<WorldPos>),
+}
+impl Tile {
+    #[inline]
+    pub fn get_tile_type(&self) -> TileType {
+        match self {
+            Tile::Square(tile_type) => *tile_type,
+            Tile::Polygon(tile_type, _) => *tile_type,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub struct Lot {
@@ -2198,7 +2226,7 @@ pub struct Lot {
     pub entrance: LotEntrance, // From this point into the lot
     pub layout: Option<LotLayout>,
     pub zoning_type: ZoningType,
-    pub segment_ids: SegmentId,
+    pub segment_id: SegmentId,
 
     pub district_id: DistrictId,
     pub building_id: Option<BuildingId>,
@@ -2214,7 +2242,7 @@ impl Clone for Lot {
             entrance: self.entrance.clone(),
             layout: None, // Expensive and useless to clone
             zoning_type: self.zoning_type,
-            segment_ids: self.segment_ids,
+            segment_id: self.segment_id,
             district_id: self.district_id,
             building_id: self.building_id,
             land_value: self.land_value,
@@ -2227,7 +2255,8 @@ impl Lot {
         world_pos_chunk_to_id(&self.center)
     }
 
-    pub fn generate_layout(&self) -> LotLayout {
+    pub fn generate_layout(&self, parking_storage: &mut ParkingStorage) -> LotLayout {
+        let mut parking_spots = Vec::new();
         let mut tiles = HashMap::new();
         let mut driveway_entrances = Vec::new();
 
@@ -2239,15 +2268,15 @@ impl Lot {
         let forward = Vec2::new(direction.x, direction.z).normalize_or_zero();
         let right = Vec2::new(forward.y, -forward.x);
 
-        let mut min_x = i32::MAX;
-        let mut max_x = i32::MIN;
-        let mut min_z = i32::MAX;
-        let mut max_z = i32::MIN;
+        let mut min_x = i16::MAX;
+        let mut max_x = i16::MIN;
+        let mut min_z = i16::MAX;
+        let mut max_z = i16::MIN;
 
         for p in &self.bounds {
             let local = origin.delta_xz(*p, right, forward);
-            let gx = local.x.floor() as i32;
-            let gz = local.y.floor() as i32;
+            let gx = local.x.floor() as i16;
+            let gz = local.y.floor() as i16;
 
             min_x = min_x.min(gx);
             max_x = max_x.max(gx);
@@ -2258,8 +2287,8 @@ impl Lot {
         let width = max_x - min_x + 1;
         let depth = max_z - min_z + 1;
 
-        let house_w = ((width as f32) * rng.random_range(0.38..0.52)).round() as i32;
-        let house_d = ((depth as f32) * rng.random_range(0.32..0.45)).round() as i32;
+        let house_w = ((width as f32) * rng.random_range(0.38..0.52)).round() as i16;
+        let house_d = ((depth as f32) * rng.random_range(0.32..0.45)).round() as i16;
 
         let garage_w = rng.random_range(2..=3);
         let garage_d = rng.random_range(2..=4);
@@ -2354,13 +2383,67 @@ impl Lot {
                     }
                 };
 
-                tiles.insert((x, z), tile);
+                tiles.insert(TilePos::new(x, z), tile);
+            }
+        }
+
+        const PARK_W: i16 = 2;
+        const PARK_L: i16 = 4;
+        for z in (min_z + 1)..=(house_z0 - PARK_L + 1) {
+            let mut x = driveway_x0;
+
+            while x + PARK_W - 1 <= driveway_x1 {
+                let mut valid = true;
+                let mut parking_tiles = [TilePos::new(0, 0); 8];
+                let mut parking_tile_count = 0;
+
+                'check: for dx in 0..PARK_W {
+                    for dz in 0..PARK_L {
+                        let tile_pos = TilePos::new(x + dx, z + dz);
+                        match tiles.get(&tile_pos) {
+                            Some(Tile::Square(TileType::Driveway))
+                            | Some(Tile::Square(TileType::LotEntrance)) => {
+                                parking_tiles[parking_tile_count] = tile_pos;
+                                parking_tile_count += 1;
+                            }
+                            _ => {
+                                valid = false;
+                                break 'check;
+                            }
+                        }
+                    }
+                }
+
+                if valid {
+                    let center = origin.add_vec2(
+                        right * (x as f32 + PARK_W as f32 * 0.5)
+                            + forward * (z as f32 + PARK_L as f32 * 0.5),
+                    );
+                    let lot_info = Some(ParkingSpotLotInfo {
+                        lot_id: self.id,
+                        tiles: parking_tiles,
+                    });
+                    let id = parking_storage.spawn(ParkingSpot::new(
+                        center,
+                        forward.extend(0.0),
+                        lot_info,
+                    ));
+
+                    parking_spots.push(id);
+
+                    // Skip this whole parking space to not create overlapping spaces!!
+                    x += PARK_W;
+                } else {
+                    x += 1;
+                }
             }
         }
 
         LotLayout {
             tiles,
             driveway_entrances,
+            unoccupied_parking_spots: parking_spots,
+            occupied_parking_spots: vec![],
         }
     }
     /// Designed for once per second.
@@ -2484,7 +2567,7 @@ impl Lot {
         let tiles = if let Some(layout) = &self.layout {
             &layout.tiles
         } else {
-            &self.generate_layout().tiles
+            return 0.0;
         };
         tiles
             .values()
@@ -2496,12 +2579,81 @@ impl Lot {
             .sum()
     }
 }
-#[derive(Serialize, Deserialize, Clone)]
-pub struct LotLayout {
-    pub tiles: HashMap<(i32, i32), Tile>,
-    pub driveway_entrances: Vec<LotEntrance>,
+#[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Debug)]
+pub struct TilePos {
+    pub x: i16,
+    pub z: i16,
+}
+impl TilePos {
+    pub fn new(x: i16, z: i16) -> Self {
+        Self { x, z }
+    }
+    #[inline]
+    pub fn offset(self, dx: i16, dz: i16) -> Self {
+        Self {
+            x: self.x + dx,
+            z: self.z + dz,
+        }
+    }
+    #[inline]
+    pub fn get_tiles_plus(&self) -> [TilePos; 5] {
+        [
+            *self,
+            self.offset(0, 1),
+            self.offset(1, 0),
+            self.offset(0, -1),
+            self.offset(-1, 0),
+        ]
+    }
+    #[inline]
+    pub fn get_neighbors_plus(&self) -> [TilePos; 4] {
+        [
+            self.offset(0, 1),
+            self.offset(1, 0),
+            self.offset(0, -1),
+            self.offset(-1, 0),
+        ]
+    }
 }
 #[derive(Serialize, Deserialize, Clone)]
+pub struct LotLayout {
+    pub tiles: HashMap<TilePos, Tile>,
+    pub driveway_entrances: Vec<LotEntrance>,
+    pub unoccupied_parking_spots: Vec<ParkingSpotId>,
+    pub occupied_parking_spots: Vec<ParkingSpotId>,
+}
+
+impl LotLayout {
+    #[inline]
+    pub fn get_tilepos_for_pos(&self, pos: WorldPos, lot_entrance: LotEntrance) -> TilePos {
+        let origin = lot_entrance.pos;
+        let direction = lot_entrance.dir;
+        let forward = Vec2::new(direction.x, direction.z).normalize_or_zero();
+        let right = Vec2::new(forward.y, -forward.x);
+
+        let local = origin.delta_xz(pos, right, forward);
+
+        TilePos::new(local.x.floor() as i16, local.y.floor() as i16)
+    }
+
+    #[inline]
+    pub fn get_tile_for_pos(&self, pos: WorldPos, lot_entrance: LotEntrance) -> Option<&Tile> {
+        self.tiles.get(&self.get_tilepos_for_pos(pos, lot_entrance))
+    }
+
+    #[inline]
+    pub fn get_pos_for_tilepos(&self, tile_pos: TilePos, lot_entrance: LotEntrance) -> WorldPos {
+        let origin = lot_entrance.pos;
+        let direction = lot_entrance.dir;
+
+        let forward = Vec2::new(direction.x, direction.z).normalize_or_zero();
+        let right = Vec2::new(forward.y, -forward.x);
+
+        origin.add_vec2(right * (tile_pos.x as f32 + 0.5) + forward * (tile_pos.z as f32 + 0.5))
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct LotEntrance {
     pub pos: WorldPos,
     pub dir: Vec3,
@@ -2510,6 +2662,31 @@ impl LotEntrance {
     pub fn new(pos: WorldPos, dir: Vec3) -> Self {
         LotEntrance { pos, dir }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ParkingSpot {
+    pub id: ParkingSpotId,
+    pub pos: WorldPos,
+    pub dir: Vec3,
+    pub occupied: Option<CarId>,
+    pub lot_info: Option<ParkingSpotLotInfo>,
+}
+impl ParkingSpot {
+    pub fn new(pos: WorldPos, dir: Vec3, lot_info: Option<ParkingSpotLotInfo>) -> Self {
+        ParkingSpot {
+            id: 0,
+            pos,
+            dir,
+            occupied: None,
+            lot_info,
+        }
+    }
+}
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ParkingSpotLotInfo {
+    pub lot_id: LotId,
+    pub tiles: [TilePos; 8],
 }
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct ZoningStorage {
@@ -2525,6 +2702,7 @@ pub struct ZoningStorage {
 impl ZoningStorage {
     pub fn get_work_place_address(
         &self,
+        buildings: &BuildingStorage,
         pos: WorldPos,
         car_trip_type: CarTripType,
         rng: &mut impl Rng,
@@ -2572,9 +2750,17 @@ impl ZoningStorage {
         }
 
         let lot = self.get_lot(chosen?)?;
+        let building_id = lot.building_id?;
+        let building = buildings.get(building_id)?;
+        let partition_id = buildings.get_partition_of_building(building_id)?;
 
         Some(Address {
-            destination: DestinationType::Building(lot.building_id?),
+            destination: DestinationType::Building(
+                lot.district_id,
+                partition_id,
+                lot.segment_id,
+                building_id,
+            ),
         })
     }
     pub fn get_work_place(

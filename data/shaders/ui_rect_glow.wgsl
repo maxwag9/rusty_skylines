@@ -64,7 +64,7 @@ struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
     @location(0) world_pos: vec2<f32>,
     @location(1) local_pos: vec2<f32>,
-    @location(2) rect_index: u32,
+    @location(2) @interpolate(flat) rect_index: u32,
 };
 
 @vertex

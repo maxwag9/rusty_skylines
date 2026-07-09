@@ -242,7 +242,7 @@ impl Value {
             Value::String(s) => s.parse().ok(),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Value::Array(arr) => Some(arr.len() as f64),
-            Value::Null => Some(0.0),
+            Value::Null => None,
         }
     }
 
@@ -300,6 +300,12 @@ impl Value {
     pub fn is_bool(&self) -> Option<Value> {
         match self {
             Value::Bool(n) => Some(self.clone()),
+            _ => None,
+        }
+    }
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(n) => Some(*n),
             _ => None,
         }
     }

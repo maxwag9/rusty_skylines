@@ -192,10 +192,9 @@ fn mesh_segment(
     let mut max_lane: Option<(i8, LaneId)> = None;
 
     for &lane_id in segment.lanes() {
-        let lane = storage.lane(lane_id);
-        if lane.is_disabled() {
+        let Some(lane) = storage.lane_safe(lane_id) else {
             continue;
-        }
+        };
 
         let lane_idx = lane.lane_index();
 
@@ -1011,14 +1010,9 @@ impl RoadMeshManager {
         // Store intersection results for segment meshing
         let mut intersection_results: HashMap<NodeId, IntersectionMeshResult> = HashMap::new();
 
-        let node_ids: Vec<NodeId> = match chunk_id {
-            Some(cid) => storage.nodes_in_chunk(cid),
-            None => storage.get_active_node_ids(),
-        };
-
         // === PASS 1: Build intersection meshes and collect boundary data ===
-        for node_id in &node_ids {
-            let Some(node) = storage.node(*node_id) else {
+        for node_id in storage.iter_node_ids_optionally_chunked(chunk_id) {
+            let Some(node) = storage.node(node_id) else {
                 continue;
             };
 
@@ -1036,7 +1030,7 @@ impl RoadMeshManager {
                     &mut indices,
                     gizmo,
                 );
-                intersection_results.insert(*node_id, result);
+                intersection_results.insert(node_id, result);
             } else {
                 // Dead end or single connection
                 let center = node.pos();
@@ -1047,8 +1041,9 @@ impl RoadMeshManager {
                     .iter()
                     .chain(node.outgoing_lanes().iter())
                 {
-                    let lane = storage.lane(*lane_id);
-                    connected_lanes_info.push((lane.lane_index(), road_type.lane_width));
+                    if let Some(lane) = storage.lane_safe(*lane_id) {
+                        connected_lanes_info.push((lane.lane_index(), road_type.lane_width));
+                    }
                 }
 
                 if connected_lanes_info.is_empty() {
@@ -1056,7 +1051,7 @@ impl RoadMeshManager {
                     continue;
                 }
 
-                let cap_direction = compute_cap_direction(gizmo, *node_id, node, storage);
+                let cap_direction = compute_cap_direction(gizmo, node_id, node, storage);
 
                 mesh_node(
                     terrain,
@@ -1088,10 +1083,10 @@ impl RoadMeshManager {
         //     }
         // }
         for seg_id in segment_ids {
-            let segment = storage.segment(seg_id);
-            if !segment.enabled {
+            let Some(segment) = storage.segment_safe(seg_id) else {
                 continue;
-            }
+            };
+
             let Some(road_type) = road_types.get_road_type(segment.road_type_id) else {
                 continue;
             };
@@ -1197,7 +1192,9 @@ fn compute_cap_direction(
         .iter()
         .chain(node.outgoing_lanes().iter())
     {
-        let lane = storage.lane(*lane_id);
+        let Some(lane) = storage.lane_safe(*lane_id) else {
+            continue;
+        };
         let pts = &lane.geometry().points;
 
         let dir = if lane.from_node() == node_id {
@@ -1236,9 +1233,9 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
     for seg_id in segs {
         seg_id.hash(&mut hasher);
 
-        let seg = storage.segment(seg_id);
-
-        seg.enabled.hash(&mut hasher);
+        let Some(seg) = storage.segment_safe(seg_id) else {
+            continue;
+        };
 
         let (l, r) = storage.lane_counts_for_segment(seg);
 
@@ -1246,7 +1243,7 @@ pub fn compute_topo_version(chunk_id: ChunkId, storage: &RoadStorage) -> u64 {
         r.hash(&mut hasher);
     }
 
-    let mut nodes = storage.nodes_in_chunk(chunk_id);
+    let mut nodes = storage.nodes_in_chunk(chunk_id).collect::<Vec<NodeId>>();
     nodes.sort_unstable();
 
     for node_id in nodes {

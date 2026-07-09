@@ -243,7 +243,7 @@ pub fn render_sky<'a>(
                 topology: PrimitiveTopology::TriangleStrip,
                 depth_stencil: sky_depth_stencil.clone(),
                 msaa_samples,
-                vertex_layouts: Vec::from([STARS_VERTEX_LAYOUT]),
+                vertex_layouts: Vec::from([Some(STARS_VERTEX_LAYOUT)]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
                 },
@@ -332,7 +332,7 @@ pub fn render_terrain<'a>(
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0xFF)),
             msaa_samples,
-            vertex_layouts: Vec::from([Vertex::desc()]),
+            vertex_layouts: Vec::from([Some(Vertex::desc())]),
             cull_mode: Some(Face::Front),
             fragment: FragmentOption::Default {
                 targets: targets.clone(),
@@ -354,7 +354,7 @@ pub fn render_terrain<'a>(
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0)),
             msaa_samples,
-            vertex_layouts: Vec::from([Vertex::desc()]),
+            vertex_layouts: Vec::from([Some(Vertex::desc())]),
             cull_mode: Some(Face::Front),
             fragment: FragmentOption::Default { targets },
             shadow,
@@ -406,7 +406,7 @@ pub fn render_water<'a>(
                 bias: Default::default(),
             }),
             msaa_samples,
-            vertex_layouts: Vec::from([SimpleVertex::layout()]),
+            vertex_layouts: Vec::from([Some(SimpleVertex::layout())]),
             fragment: FragmentOption::Default { targets },
             ..Default::default()
         },
@@ -461,7 +461,7 @@ pub fn render_roads<'a>(
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
             msaa_samples,
-            vertex_layouts: Vec::from([AdvancedVertex::layout()]),
+            vertex_layouts: Vec::from([Some(AdvancedVertex::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
                 targets: targets.clone(),
@@ -500,7 +500,7 @@ pub fn render_roads<'a>(
                 bias: preview_bias,
             }),
             msaa_samples,
-            vertex_layouts: Vec::from([AdvancedVertex::layout()]),
+            vertex_layouts: Vec::from([Some(AdvancedVertex::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default { targets },
             shadow,
@@ -553,7 +553,7 @@ pub fn render_buildings<'a>(
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
             msaa_samples,
-            vertex_layouts: Vec::from([BuildingVertex::layout()]),
+            vertex_layouts: Vec::from([Some(BuildingVertex::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
                 targets: targets.clone(),
@@ -601,7 +601,7 @@ pub fn render_gizmo<'a>(
                     bias: Default::default(),
                 }),
                 msaa_samples,
-                vertex_layouts: Vec::from([ThinLineVtxRender::layout()]),
+                vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
                 },
@@ -629,7 +629,7 @@ pub fn render_gizmo<'a>(
                     bias: Default::default(),
                 }),
                 msaa_samples,
-                vertex_layouts: Vec::from([ThickLineVtxRender::layout()]),
+                vertex_layouts: Vec::from([Some(ThickLineVtxRender::layout())]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
                 },
@@ -658,7 +658,7 @@ pub fn render_gizmo<'a>(
                     bias: Default::default(),
                 }),
                 msaa_samples,
-                vertex_layouts: Vec::from([ThinLineVtxRender::layout()]),
+                vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
                 },
@@ -686,7 +686,7 @@ pub fn render_gizmo<'a>(
                     bias: Default::default(),
                 }),
                 msaa_samples,
-                vertex_layouts: Vec::from([TextVtxRender::layout()]),
+                vertex_layouts: Vec::from([Some(TextVtxRender::layout())]),
                 fragment: FragmentOption::Default { targets },
                 sampler: SamplerDescriptor {
                     label: Some("Text Sampler"),
@@ -735,7 +735,7 @@ pub fn render_cars<'a>(
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(Default::default(), settings)),
             msaa_samples: settings.msaa_samples,
-            vertex_layouts: Vec::from([CarVertex::layout(), CarInstance::layout()]),
+            vertex_layouts: Vec::from([Some(CarVertex::layout()), Some(CarInstance::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default { targets },
             shadow: shadow.clone(),
@@ -766,7 +766,7 @@ pub fn render_instance_ids<'a>(
             topology: TriangleList,
             depth_stencil: None,
             msaa_samples: 1, // IMPORTANT
-            vertex_layouts: vec![CarVertex::layout(), CarInstance::layout()],
+            vertex_layouts: vec![Some(CarVertex::layout()), Some(CarInstance::layout())],
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
                 targets: vec![Some(ColorTargetState {
@@ -790,7 +790,7 @@ pub fn render_instance_ids<'a>(
         topology: TriangleList,
         depth_stencil: None,
         msaa_samples: 1,
-        vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
+        vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
         cull_mode: Some(Face::Back),
         fragment: FragmentOption::Default {
             targets: vec![Some(ColorTargetState {
@@ -835,7 +835,7 @@ pub fn render_props<'a>(
         topology: TriangleList,
         depth_stencil: Some(depth_stencil(Default::default(), settings)),
         msaa_samples: settings.msaa_samples,
-        vertex_layouts: Vec::from([PropVertex::layout(), GpuPropInstance::layout()]),
+        vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
         cull_mode: Some(Face::Back),
         fragment: FragmentOption::Default {
             targets: targets.clone(),

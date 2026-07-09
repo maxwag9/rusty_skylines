@@ -971,10 +971,9 @@ fn carve_lanes_with_polygon(
             .collect();
 
         for lane_id in all_lanes {
-            let lane = storage.lane(lane_id);
-            if !lane.is_enabled() {
+            let Some(lane) = storage.lane_safe(lane_id) else {
                 continue;
-            }
+            };
 
             let pts = lane.polyline();
             if pts.len() < 2 {
@@ -1016,7 +1015,7 @@ fn carve_lanes_with_polygon(
     }
 
     for (lane_id, geom) in edits {
-        storage.lane_mut(lane_id).replace_geometry(geom);
+        storage.lane_mut(lane_id).map(|l| l.replace_geometry(geom));
     }
 }
 
@@ -1742,7 +1741,7 @@ pub fn gather_arms(
     node_id: NodeId,
     gizmo: &mut Gizmo,
 ) -> Vec<Arm> {
-    let segment_ids = storage.enabled_segments_connected_to_node(node_id);
+    let segment_ids = storage.segments_connected_to_node(node_id);
     // let node = match storage.node(node_id) {
     //     Some(n) => n,
     //     None => return Vec::new(),
@@ -1765,7 +1764,7 @@ pub fn gather_arms(
                 .lanes()
                 .iter()
                 .copied()
-                .filter(|id| storage.lane(*id).is_enabled())
+                .filter(|id| storage.lane_safe(*id).is_some())
                 .collect();
 
             if lane_ids.is_empty() {
@@ -1848,7 +1847,7 @@ fn build_node_lanes_for_intersection(
     let node_pos = node.pos();
 
     // Gather ALL lanes connected to this node and classify them geometrically
-    let connected_segments = storage.enabled_segments_connected_to_node(node_id);
+    let connected_segments = storage.segments_connected_to_node(node_id);
 
     let mut incoming_lanes: Vec<(LaneId, usize, WorldPos, Vec3)> = Vec::new(); // (id, node_idx, endpoint, direction_into_node)
     let mut outgoing_lanes: Vec<(LaneId, usize, WorldPos, Vec3)> = Vec::new(); // (id, node_idx, endpoint, direction_out_of_node)
@@ -1859,10 +1858,9 @@ fn build_node_lanes_for_intersection(
         let segment_ends_here = segment.end() == node_id;
 
         for lane_id in segment.lanes() {
-            let lane = storage.lane(*lane_id);
-            if !lane.is_enabled() {
+            let Some(lane) = storage.lane_safe(*lane_id) else {
                 continue;
-            }
+            };
 
             let pts = lane.polyline();
             if pts.len() < 2 {
@@ -1958,72 +1956,73 @@ fn build_node_lanes_for_intersection(
     }
 
     let mut node_lanes = Vec::new();
-    let lane_idx_base = storage.node_lane_count_for_node(node_id);
-    for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
-        let in_lane = storage.lane(*in_id);
+    if let Some(lane_idx_base) = storage.node_lane_count_for_node(node_id) {
+        for (in_id, in_node_idx, in_pt, in_dir) in &incoming_lanes {
+            let in_lane = storage.lane(*in_id);
 
-        for (out_id, out_node_idx, out_pt, out_dir) in &outgoing_lanes {
-            // Skip same lane
-            if in_id == out_id {
-                continue;
-            }
+            for (out_id, out_node_idx, out_pt, out_dir) in &outgoing_lanes {
+                // Skip same lane
+                if in_id == out_id {
+                    continue;
+                }
 
-            // Skip same segment (no U-turns within same road)
-            let out_lane = storage.lane(*out_id);
-            // if in_lane.segment() == out_lane.segment() {
-            //     continue;
-            // }
+                // Skip same segment (no U-turns within same road)
+                let out_lane = storage.lane(*out_id);
+                // if in_lane.segment() == out_lane.segment() {
+                //     continue;
+                // }
 
-            // Angle-based filtering
-            // in_dir points INTO the intersection (direction of incoming traffic)
-            // out_dir points OUT OF the intersection (direction of outgoing traffic)
-            //
-            // For a straight-through: in_dir ≈ out_dir → dot ≈ 1
-            // For 90° turn: dot ≈ 0
-            // For U-turn (180°): dot ≈ -1
-            let dot = in_dir.dot(*out_dir);
+                // Angle-based filtering
+                // in_dir points INTO the intersection (direction of incoming traffic)
+                // out_dir points OUT OF the intersection (direction of outgoing traffic)
+                //
+                // For a straight-through: in_dir ≈ out_dir → dot ≈ 1
+                // For 90° turn: dot ≈ 0
+                // For U-turn (180°): dot ≈ -1
+                let dot = in_dir.dot(*out_dir);
 
-            // Filter out U-turns and very sharp turns
-            // if dot < -0.99 {
-            //     continue;
-            // }
+                // Filter out U-turns and very sharp turns
+                // if dot < -0.99 {
+                //     continue;
+                // }
 
-            // Compute turn geometry
-            let chord = in_pt.distance_to(*out_pt);
-            let tightness = compute_turn_tightness(chord, dot, intersection_params);
+                // Compute turn geometry
+                let chord = in_pt.distance_to(*out_pt);
+                let tightness = compute_turn_tightness(chord, dot, intersection_params);
 
-            let geom = generate_turn_geometry(
-                terrain,
-                *in_pt,
-                *in_dir,
-                *out_pt,
-                *out_dir,
-                intersection_params.turn_samples,
-                tightness,
-            );
-
-            // Debug: draw the turn curve
-            let turn_pts = &geom.points;
-            for i in 0..turn_pts.len().saturating_sub(1) {
-                gizmo.line(
-                    turn_pts[i],
-                    turn_pts[i + 1],
-                    [1.0, 1.0, 0.0, 1.0],
-                    ROAD_GIZMO_THICKNESS,
-                    DEBUG_DRAW_DURATION,
+                let geom = generate_turn_geometry(
+                    terrain,
+                    *in_pt,
+                    *in_dir,
+                    *out_pt,
+                    *out_dir,
+                    intersection_params.turn_samples,
+                    tightness,
                 );
+
+                // Debug: draw the turn curve
+                let turn_pts = &geom.points;
+                for i in 0..turn_pts.len().saturating_sub(1) {
+                    gizmo.line(
+                        turn_pts[i],
+                        turn_pts[i + 1],
+                        [1.0, 1.0, 0.0, 1.0],
+                        ROAD_GIZMO_THICKNESS,
+                        DEBUG_DRAW_DURATION,
+                    );
+                }
+
+                let nl = NodeLane::new(
+                    (lane_idx_base + node_lanes.len()) as NodeLaneId,
+                    vec![LaneRef::Lane(*in_id, *in_node_idx as PolyIdx)],
+                    vec![LaneRef::Lane(*out_id, *out_node_idx as PolyIdx)],
+                    geom,
+                    50.0,
+                    0,
+                );
+
+                node_lanes.push(nl);
             }
-
-            let nl = NodeLane::new(
-                (lane_idx_base + node_lanes.len()) as NodeLaneId,
-                vec![LaneRef::Lane(*in_id, *in_node_idx as PolyIdx)],
-                vec![LaneRef::Lane(*out_id, *out_node_idx as PolyIdx)],
-                geom,
-                50.0,
-                0,
-            );
-
-            node_lanes.push(nl);
         }
     }
 

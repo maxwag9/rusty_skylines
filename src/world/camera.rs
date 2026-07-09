@@ -60,11 +60,20 @@ impl Camera {
         let eye = Vec3::ZERO;
         let target = -self.orbit_offset();
 
-        let view = Mat4::look_at_rh(eye, target, Vec3::Y);
+        let view = glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y);
         let proj = if settings.reversed_depth_z {
-            Mat4::perspective_infinite_reverse_rh(self.fov.to_radians(), aspect, self.near)
+            glam::camera::rh::proj::directx::perspective_infinite_reverse(
+                self.fov.to_radians(),
+                aspect,
+                self.near,
+            )
         } else {
-            Mat4::perspective_rh(self.fov.to_radians(), aspect, self.near, self.far)
+            glam::camera::rh::proj::directx::perspective(
+                self.fov.to_radians(),
+                aspect,
+                self.near,
+                self.far,
+            )
         };
         self.view = view;
         self.proj = proj;

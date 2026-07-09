@@ -4,6 +4,7 @@ pub mod drag_hue_point;
 use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
+use crate::simulation::Simulation;
 use crate::ui::action_parser::{TouchEventKind, parse_action};
 use crate::ui::menu::Menu;
 use crate::ui::parser::{Value, eval_expr};
@@ -411,6 +412,7 @@ pub struct CommandContext<'a> {
     pub settings: &'a mut Settings,
     pub event_loop: &'a dyn ActiveEventLoop,
     pub game_state: &'a mut GameState,
+    pub simulation: &'a mut Simulation,
 }
 
 // ==================== COMMAND QUEUE ====================
@@ -758,9 +760,6 @@ impl CommandQueue {
                 name,
                 value,
             } => {
-                //println!("Pre to-value: {}", value);
-                let value = string_to_value(ctx, &element_ref, value);
-                //println!("Post to-value: {}", value);
                 let initial_name = name.clone();
                 let name = string_to_value(ctx, &element_ref, name);
                 //println!("After string to value: {}", name);
@@ -769,6 +768,10 @@ impl CommandQueue {
                         "'{initial_name}' in set_var() wasn't resolved to string"
                     ));
                 };
+                //println!("Pre to-value: {}", value);
+                let value = string_to_value(ctx, &element_ref, value);
+                //println!("Post to-value: {}", value);
+
                 let (field_type, name) = match name.split_once(':') {
                     Some((field_type, base)) => (field_type, base),
                     None => ("None", name),
@@ -1668,6 +1671,7 @@ pub fn process_commands(
     settings: &mut Settings,
     event_loop: &dyn ActiveEventLoop,
     game_state: &mut GameState,
+    simulation: &mut Simulation,
 ) {
     let mut ctx = CommandContext {
         world,
@@ -1678,6 +1682,7 @@ pub fn process_commands(
         settings,
         event_loop,
         game_state,
+        simulation,
     };
 
     command_queue.drain(&mut ctx);
@@ -1811,6 +1816,17 @@ pub fn set_element_property(
                     road_type.lanes_each_direction.1 = lanes as RightLaneCount;
                 }
                 ctx.ui.variables.set_i64(name, lanes);
+            }
+        }
+        "sim_running" => {
+            let sim_running = new_val.is_truthy();
+
+            ctx.simulation.set_running(sim_running);
+        }
+        "sim_speed" => {
+            if let Some(sim_speed) = new_val.as_f64() {
+                ctx.simulation.set_speed_permanent(sim_speed as f32);
+                ctx.ui.variables.set_f64(name, sim_speed);
             }
         }
         _ => {}

@@ -63,7 +63,9 @@ impl Default for RoadStyleParams {
 }
 
 /// Stable, monotonically increasing node identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[repr(transparent)]
 pub struct NodeId(pub u32);
 
@@ -670,42 +672,42 @@ pub enum EditorState {
     CurvePickEnd { start: Anchor, control: WorldPos },
 }
 
-pub struct IdAllocator {
-    next_node: u32,
-    next_segment: u32,
-    next_lane: u32,
-}
-
-impl IdAllocator {
-    pub fn new() -> Self {
-        Self {
-            next_node: 0,
-            next_segment: 0,
-            next_lane: 0,
-        }
-    }
-    pub fn update(&mut self, real_roads_storage: &RoadStorage) {
-        self.next_node = real_roads_storage.nodes.len() as u32;
-        self.next_segment = real_roads_storage.segments.len() as u32;
-        self.next_lane = real_roads_storage.lanes.len() as u32;
-    }
-    pub fn alloc_node(&mut self) -> NodeId {
-        let id = NodeId::new(self.next_node);
-        self.next_node += 1;
-        id
-    }
-
-    pub fn alloc_segment(&mut self) -> SegmentId {
-        let id = SegmentId::new(self.next_segment);
-        self.next_segment += 1;
-        id
-    }
-    fn alloc_lane(&mut self) -> LaneId {
-        let id = LaneId::new(self.next_lane);
-        self.next_lane += 1;
-        id
-    }
-}
+// pub struct IdAllocator {
+//     next_node: u32,
+//     next_segment: u32,
+//     next_lane: u32,
+// }
+//
+// impl IdAllocator {
+//     pub fn new() -> Self {
+//         Self {
+//             next_node: 0,
+//             next_segment: 0,
+//             next_lane: 0,
+//         }
+//     }
+//     pub fn update(&mut self, real_roads_storage: &RoadStorage) {
+//         self.next_node = real_roads_storage.nodes.len() as u32;
+//         self.next_segment = real_roads_storage.segments.len() as u32;
+//         self.next_lane = real_roads_storage.lanes.len() as u32;
+//     }
+//     pub fn alloc_node(&mut self) -> NodeId {
+//         let id = NodeId::new(self.next_node);
+//         self.next_node += 1;
+//         id
+//     }
+//
+//     pub fn alloc_segment(&mut self) -> SegmentId {
+//         let id = SegmentId::new(self.next_segment);
+//         self.next_segment += 1;
+//         id
+//     }
+//     fn alloc_lane(&mut self) -> LaneId {
+//         let id = LaneId::new(self.next_lane);
+//         self.next_lane += 1;
+//         id
+//     }
+// }
 
 #[derive(Debug, Clone)]
 pub struct CrossingPoint {

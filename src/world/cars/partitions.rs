@@ -1,7 +1,7 @@
 use crate::helpers::positions::{ChunkCoord, WorldPos};
-use crate::world::buildings::buildings::{BuildingId, BuildingStorage, Buildings};
-use crate::world::buildings::zoning::{DistrictId, ZoningStorage};
-use crate::world::roads::road_structs::NodeId;
+use crate::world::buildings::buildings::{BuildingId, Buildings};
+use crate::world::buildings::zoning::DistrictId;
+use crate::world::roads::road_structs::{NodeId, SegmentId};
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -23,51 +23,34 @@ pub enum RouteStatus {
     Invalid,
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DestinationType {
     // Node(NodeId),
     // Segment(LaneId, LaneT),
-    Building(BuildingId),
+    Building(DistrictId, PartitionId, SegmentId, BuildingId),
 }
 impl DestinationType {
-    pub fn as_building(&self) -> Option<BuildingId> {
-        match self {
-            DestinationType::Building(building_id) => Some(*building_id),
+    #[inline]
+    pub fn as_building(&self) -> Option<(DistrictId, PartitionId, SegmentId, BuildingId)> {
+        match *self {
+            DestinationType::Building(district_id, partition_id, segment_id, building_id) => {
+                Some((district_id, partition_id, segment_id, building_id))
+            }
         }
+    }
+    #[inline]
+    pub fn as_building_id(&self) -> Option<BuildingId> {
+        self.as_building().map(|(_, _, _, b_id)| b_id)
     }
 }
 #[derive(Debug)]
 pub struct Address {
     pub destination: DestinationType,
 }
-impl Address {
-    pub fn partition(&self, buildings: &BuildingStorage) -> Option<PartitionId> {
-        match self.destination {
-            DestinationType::Building(b_id) => buildings.get_partition_of_building(b_id),
-        }
-    }
-    pub fn district(
-        &self,
-        buildings: &BuildingStorage,
-        zoning_storage: &ZoningStorage,
-    ) -> Option<DistrictId> {
-        match self.destination {
-            DestinationType::Building(b_id) => Some(
-                zoning_storage
-                    .get_lot(buildings.get(b_id)?.lot_id)?
-                    .district_id,
-            ),
-        }
-    }
-    #[inline]
-    pub fn building_id(&self) -> Option<BuildingId> {
-        self.destination.as_building()
-    }
-}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Partition {
-    pub buildings: Vec<BuildingId>,
-    // Maybe nodes later idk
+    pub buildings: Vec<BuildingId>, // Maybe nodes later idk
 }
 impl Partition {
     pub fn chunk_coords(&self, buildings: &Buildings) -> Vec<ChunkCoord> {

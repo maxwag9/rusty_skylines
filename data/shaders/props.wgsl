@@ -39,7 +39,7 @@ struct VertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) world_pos: vec3<f32>,
     @location(3) instance_color: vec4<f32>,
-    @location(4) texture_id: u32,
+    @location(4) @interpolate(flat) texture_id: u32,
     @location(5) curr_pos_cs: vec4<f32>,
     @location(6) prev_pos_cs: vec4<f32>,
     @location(7) misc: vec4<f32>,

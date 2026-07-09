@@ -14,41 +14,75 @@ use std::time::Instant;
 use wgpu::SurfaceConfiguration;
 
 pub struct Simulation {
-    pub running: bool,
     pub tick: u64,
     last_update: Instant,
+    speed: f32,
+    pub old_speed: f32,
+    temporary_speed: Option<f32>, // While a key is held
 }
 
 impl Simulation {
     pub fn new() -> Self {
         Self {
-            running: true,
             tick: 0,
             last_update: Instant::now(),
+            speed: 1.0,
+            old_speed: 1.0,
+            temporary_speed: None,
         }
     }
 
     pub fn toggle(&mut self) {
-        if self.running {
+        if self.running() {
             self.stop();
         } else {
             self.start();
         }
+    }
+    fn print_toggle(&self) {
         println!(
             "Simulation {}",
-            if self.running { "started" } else { "paused" }
+            if self.running() { "started" } else { "paused" }
         );
     }
-
     pub fn start(&mut self) {
-        self.running = true;
+        if self.running() {
+            return;
+        }
+
         self.last_update = Instant::now();
+        self.speed = self.old_speed.max(1.0);
+        self.print_toggle();
     }
 
     pub fn stop(&mut self) {
-        self.running = false;
-    }
+        if !self.running() {
+            return;
+        }
 
+        self.old_speed = self.speed;
+        self.speed = 0.0;
+        self.print_toggle();
+    }
+    pub fn set_running(&mut self, new_running: bool) {
+        if new_running {
+            self.start()
+        } else {
+            self.stop()
+        }
+    }
+    pub fn set_speed_permanent(&mut self, speed: f32) {
+        self.speed = speed;
+    }
+    pub fn set_speed_temporary(&mut self, speed: Option<f32>) {
+        self.temporary_speed = speed;
+    }
+    pub fn running(&self) -> bool {
+        self.speed > 0.0
+    }
+    pub fn speed(&self) -> f32 {
+        self.temporary_speed.unwrap_or(self.speed)
+    }
     pub fn process_simulation_state_commands(&mut self, command: &Command) {
         match command {
             Command::ToggleSimulation => self.toggle(),
@@ -62,7 +96,7 @@ impl Simulation {
         ui: &mut Ui,
         settings: &Settings,
     ) {
-        if !self.running {
+        if !self.running() {
             return;
         }
 

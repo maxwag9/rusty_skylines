@@ -13,6 +13,7 @@ use crate::simulation::Ticker;
 use crate::ui::input::Input;
 use crate::world::camera::Camera;
 use crate::world::cars::car_subsystem::Cars;
+use crate::world::cars::parking::ParkingStorage;
 use crate::world::roads::road_preview::{PreviewGpuMesh, RoadAppearanceGpu, RoadPreviewState};
 use crate::world::roads::road_structs::RoadEditorCommand;
 use crate::world::statisticals::CityState;
@@ -202,6 +203,7 @@ pub struct Roads {
     pub road_commands: Vec<RoadEditorCommand>,
     pub tick_20hz: Ticker,
     pub preview_state: RoadPreviewState,
+    pub parking: ParkingStorage,
 }
 impl Roads {
     pub fn new() -> Self {
@@ -211,6 +213,7 @@ impl Roads {
             road_editor: RoadEditor::new(),
             road_commands: vec![],
             preview_state: RoadPreviewState::new(),
+            parking: ParkingStorage::new(),
         }
     }
     /// World-only update: runs the editor, applies commands to road storage and car subsystem.

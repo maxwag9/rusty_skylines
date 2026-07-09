@@ -38,7 +38,7 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
     @location(0) local_pos: vec2<f32>,
-    @location(1) circle_index: u32,
+    @location(1) @interpolate(flat) circle_index: u32,
 };
 
 @vertex

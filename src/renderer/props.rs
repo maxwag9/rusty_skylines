@@ -662,7 +662,7 @@ impl Props {
         let opts = shadow_pipeline_options(
             settings,
             bias,
-            vec![PropVertex::layout(), GpuPropInstance::layout()],
+            vec![Some(PropVertex::layout()), Some(GpuPropInstance::layout())],
             Face::Back,
             FragmentOption::Default { targets: vec![] },
         );

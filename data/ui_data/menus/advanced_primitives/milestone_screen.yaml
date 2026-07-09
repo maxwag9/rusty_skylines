@@ -44,43 +44,31 @@ elements:
     roundness: 0.03
     border_thickness_percentage: 0.002
   # exiting circle
-  #  - !Circle
-  #    id: ball
-  #    actions:
-  #      - on:n button:a set(str:self.center.x, {self.center.x} + {ball.velocity.x} * {ball.speed})
-  #      - on:n button:a set(str:self.center.y, {self.center.y} + {ball.velocity.y} * {ball.speed})
-  #      - on:n button:a if({self.center.y} < {self.radius}, if({ball.velocity.y} * {ball.speed} < 0, set(str:ball.velocity.y, -{ball.velocity.y})))
-  #      - on:n button:a if({self.center.y} > {screen.y} - {self.radius}, if({ball.velocity.y} * {ball.speed} > 0, set(str:ball.velocity.y, -{ball.velocity.y})))
-  #      - on:n button:a if({self.center.x} - {self.radius} < {left_paddle.center.x} + {left_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {left_paddle.center.x} - {left_paddle.size.x}*0.5 && {self.center.y} > {left_paddle.center.y} - {left_paddle.size.y}*0.5 && {self.center.y} < {left_paddle.center.y} + {left_paddle.size.y}*0.5 && {ball.velocity.x} < 0, set(str:ball.velocity.x, -{ball.velocity.x}))
-  #      - on:n button:a if({self.center.x} - {self.radius} < {right_paddle.center.x} + {right_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {right_paddle.center.x} - {right_paddle.size.x}*0.5 && {self.center.y} > {right_paddle.center.y} - {right_paddle.size.y}*0.5 && {self.center.y} < {right_paddle.center.y} + {right_paddle.size.y}*0.5 && {ball.velocity.x} > 0, set(str:ball.velocity.x, -{ball.velocity.x}))
-  #      - on:n button:a if({self.center.x} < 0, set(str:ball.visitor_score, {ball.visitor_score} + 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, random(-1.5, 1.5)); set(str:self.center.x, {screen.x} * 0.5); set(str:self.center.y, {screen.y} * 0.5); )
-  #      - on:n button:a if({self.center.x} > {screen.x}, inc(str:ball.home_score, 1))
-  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.x, -1.5))
-  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.y, random(-1.5, 1.5)))
-  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.x, {screen.x} * 0.5))
-  #      - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.y, {screen.y} * 0.5))
-  #    style: Hue Circle
-  #    x: 0.6
-  #    y: 0.5
-  #    radius: 0.02804
-  #    fill_color:
-  #      - 0.5
-  #      - 0.5
-  #      - 0.5
-  #      - 0.98
-  #    glow_color:
-  #      - 0.2
-  #      - 0.0
-  #      - 0.7
-  #      - 0.98
-  #    glow_misc:
-  #      glow_size: 40.0
-  #      glow_speed: 5.0
-  #      glow_intensity: 0.5
-  #    misc:
-  #      active: true
-  #      pressable: false
-  #      editable: true
+  - !Circle
+    id: exiting button
+    actions:
+      - on:release button:a, close_all_layers(str:Milestones)
+    x: 0.6
+    y: 0.5
+    radius: 0.02804
+    fill_color:
+      - 0.5
+      - 0.5
+      - 0.5
+      - 0.98
+    glow_color:
+      - 0.2
+      - 0.0
+      - 0.7
+      - 0.98
+    glow_misc:
+      glow_size: 40.0
+      glow_speed: 5.0
+      glow_intensity: 0.5
+    misc:
+      active: true
+      pressable: false
+      editable: true
   # Grand text
   - !Text
     id: grand_text

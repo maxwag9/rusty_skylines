@@ -5,9 +5,10 @@ use crate::renderer::textures::material_keys::terrain_material_keys;
 use crate::ui::input::Input;
 use crate::ui::parser::Value;
 use crate::ui::variables::Variables;
-use crate::world::buildings::zoning::{Lot, LotId, Tile, TileType, Zoning, ZoningType};
+use crate::world::buildings::zoning::{Lot, LotId, Tile, TilePos, TileType, Zoning, ZoningType};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{ChunkDistance, SimTime};
+use crate::world::cars::parking::ParkingStorage;
 use crate::world::cars::partitions::{PartitionId, PartitionManager};
 use crate::world::roads::road_mesh_manager::{ChunkId, RoadMeshManager, chunk_id_to_coord};
 use crate::world::roads::road_structs::SegmentId;
@@ -1070,6 +1071,7 @@ impl BuildingRenderer {
         props: &mut Props,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
+        parking_storage: &mut ParkingStorage,
         device: &Device,
         queue: &Queue,
         camera: &Camera,
@@ -1088,6 +1090,7 @@ impl BuildingRenderer {
                     chunk_id,
                     buildings,
                     zoning,
+                    parking_storage,
                     gizmo,
                 )
             } else {
@@ -1175,6 +1178,7 @@ impl BuildingMeshManager {
         cid: ChunkId,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
+        parking_storage: &mut ParkingStorage,
         gizmo: &mut Gizmo,
     ) -> BuildingChunkMesh {
         let mut mesh = BuildingMeshBuilder {
@@ -1310,7 +1314,7 @@ impl BuildingMeshManager {
 
             let mut roof_tiles: Vec<RoofTile> = Vec::new();
             if lot.layout.is_none() {
-                let lot_layout = lot.generate_layout();
+                let lot_layout = lot.generate_layout(parking_storage);
                 lot.layout = Some(lot_layout);
             }
 
@@ -1318,7 +1322,7 @@ impl BuildingMeshManager {
                 continue;
             };
             let tiles = &layout.tiles;
-            for ((x, z), tile) in tiles.iter() {
+            for (&TilePos { x, z }, tile) in tiles.iter() {
                 let direction = lot.entrance.dir;
 
                 let forward = Vec2::new(direction.x, direction.z).normalize();
@@ -1326,17 +1330,17 @@ impl BuildingMeshManager {
                 let mut tile_origin = lot
                     .entrance
                     .pos
-                    .add_vec2(right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5));
+                    .add_vec2(right * (x as f32 + 0.5) + forward * (z as f32 + 0.5));
                 tile_origin.local.y = terrain.get_height_at(tile_origin, true);
                 let is_house_tile = |tp: Option<&Tile>| {
                     matches!(tp, Some(Tile::Square(TileType::House)))
                         || matches!(tp, Some(Tile::Square(TileType::Garage)))
                 };
 
-                let south_open = !is_house_tile(tiles.get(&(*x, *z - 1)));
-                let east_open = !is_house_tile(tiles.get(&(*x + 1, *z)));
-                let north_open = !is_house_tile(tiles.get(&(*x, *z + 1)));
-                let west_open = !is_house_tile(tiles.get(&(*x - 1, *z)));
+                let south_open = !is_house_tile(tiles.get(&TilePos::new(x, z - 1)));
+                let east_open = !is_house_tile(tiles.get(&TilePos::new(x + 1, z)));
+                let north_open = !is_house_tile(tiles.get(&TilePos::new(x, z + 1)));
+                let west_open = !is_house_tile(tiles.get(&TilePos::new(x - 1, z)));
                 match tile {
                     Tile::Square(tile_type) => {
                         let zero_height = lot.entrance.pos.local.y;
@@ -1346,9 +1350,10 @@ impl BuildingMeshManager {
                         let mut points: Vec<WorldPos> = corners_local
                             .iter()
                             .map(|(cx, cz)| {
-                                let mut corner = lot.entrance.pos.add_vec2(
-                                    right * (*x as f32 + cx) + forward * (*z as f32 + cz),
-                                );
+                                let mut corner = lot
+                                    .entrance
+                                    .pos
+                                    .add_vec2(right * (x as f32 + cx) + forward * (z as f32 + cz));
                                 corner.local.y = terrain.get_height_at(corner, true);
                                 corner
                             })
@@ -1365,7 +1370,7 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     grass_id,
                                 );
                             }
@@ -1375,11 +1380,11 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     garden_id,
                                 );
                                 let mut center = lot.entrance.pos.add_vec2(
-                                    right * (*x as f32 + 0.5) + forward * (*z as f32 + 0.5),
+                                    right * (x as f32 + 0.5) + forward * (z as f32 + 0.5),
                                 );
                                 center.local.y = zero_height;
                                 let prop_instance_id = props.place_prop(
@@ -1405,7 +1410,7 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     garden_id,
                                 );
                             }
@@ -1419,7 +1424,7 @@ impl BuildingMeshManager {
                                     roof_y,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     wall_id,
                                     south_open,
                                     east_open,
@@ -1428,8 +1433,7 @@ impl BuildingMeshManager {
                                 );
 
                                 roof_tiles.push(RoofTile {
-                                    x: *x,
-                                    z: *z,
+                                    tile_pos: TilePos::new(x, z),
                                     base_y: roof_y,
                                 });
                             }
@@ -1439,7 +1443,7 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     notex_id,
                                 );
                             }
@@ -1449,7 +1453,7 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     notex_id,
                                 );
                             }
@@ -1459,7 +1463,7 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     notex_id,
                                 );
                             }
@@ -1474,7 +1478,7 @@ impl BuildingMeshManager {
                                         roof_y,
                                         right,
                                         forward,
-                                        (*x, *z),
+                                        TilePos::new(x, z),
                                         wall_id,
                                         south_open,
                                         east_open,
@@ -1483,8 +1487,7 @@ impl BuildingMeshManager {
                                     );
 
                                     roof_tiles.push(RoofTile {
-                                        x: *x,
-                                        z: *z,
+                                        tile_pos: TilePos::new(x, z),
                                         base_y: roof_y,
                                     });
                                 }
@@ -1495,7 +1498,7 @@ impl BuildingMeshManager {
                                     zero_height,
                                     right,
                                     forward,
-                                    (*x, *z),
+                                    TilePos::new(x, z),
                                     driveway_id,
                                 );
                             }
@@ -1537,6 +1540,7 @@ impl BuildingMeshManager {
         chunk_id: ChunkId,
         buildings: &mut Buildings,
         zoning: &mut Zoning,
+        parking_storage: &mut ParkingStorage,
         gizmo: &mut Gizmo,
     ) -> &BuildingChunkMesh {
         let mesh = self.build_mesh_for_chunk(
@@ -1546,6 +1550,7 @@ impl BuildingMeshManager {
             chunk_id,
             buildings,
             zoning,
+            parking_storage,
             gizmo,
         );
         self.chunk_cache.insert(chunk_id, mesh);
@@ -1564,7 +1569,7 @@ impl BuildingMeshBuilder {
         height: f32,
         right: Vec2,
         forward: Vec2,
-        tile_pos: (i32, i32),
+        tile_pos: TilePos,
         material_id: u32,
     ) {
         let corners_local = [(0.0_f32, 0.0_f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
@@ -1573,7 +1578,7 @@ impl BuildingMeshBuilder {
             .iter()
             .map(|(cx, cz)| {
                 let mut corner = lot.entrance.pos.add_vec2(
-                    right * (tile_pos.0 as f32 + cx) + forward * (tile_pos.1 as f32 + cz),
+                    right * (tile_pos.x as f32 + cx) + forward * (tile_pos.z as f32 + cz),
                 );
 
                 corner.local.y = height;
@@ -1641,7 +1646,7 @@ impl BuildingMeshBuilder {
         end_height: f32,
         right: Vec2,
         forward: Vec2,
-        tile_pos: (i32, i32),
+        tile_pos: TilePos,
         material_id: u32,
         south_open: bool,
         east_open: bool,
@@ -1658,7 +1663,7 @@ impl BuildingMeshBuilder {
             let mut corner = lot
                 .entrance
                 .pos
-                .add_vec2(right * (tile_pos.0 as f32 + cx) + forward * (tile_pos.1 as f32 + cz));
+                .add_vec2(right * (tile_pos.x as f32 + cx) + forward * (tile_pos.z as f32 + cz));
             corner.local.y = y;
             corner
         };
@@ -1910,10 +1915,10 @@ impl BuildingMeshBuilder {
         let north = Vec3::new(forward.x, 0.0, forward.y);
         let south = -north;
 
-        let tile_map: HashMap<(i32, i32), f32> =
-            roof_tiles.iter().map(|t| ((t.x, t.z), t.base_y)).collect();
+        let tile_map: HashMap<TilePos, f32> =
+            roof_tiles.iter().map(|t| (t.tile_pos, t.base_y)).collect();
 
-        let mut visited: HashSet<(i32, i32)> = HashSet::new();
+        let mut visited: HashSet<TilePos> = HashSet::new();
 
         macro_rules! emit_thick_quad {
             ($a:expr, $b:expr, $c:expr, $d:expr, $normal:expr, $material:expr) => {{
@@ -1953,12 +1958,7 @@ impl BuildingMeshBuilder {
             while let Some(pos) = queue.pop_front() {
                 component.push(pos);
 
-                let neighbors = [
-                    (pos.0 - 1, pos.1),
-                    (pos.0 + 1, pos.1),
-                    (pos.0, pos.1 - 1),
-                    (pos.0, pos.1 + 1),
-                ];
+                let neighbors = pos.get_neighbors_plus();
 
                 for n in neighbors {
                     if visited.contains(&n) {
@@ -1974,14 +1974,14 @@ impl BuildingMeshBuilder {
                 }
             }
 
-            let component_set: HashSet<(i32, i32)> = component.iter().copied().collect();
+            let component_set: HashSet<TilePos> = component.iter().copied().collect();
 
             let mut min_x = f32::INFINITY;
             let mut min_z = f32::INFINITY;
             let mut max_x = f32::NEG_INFINITY;
             let mut max_z = f32::NEG_INFINITY;
 
-            for &(x, z) in &component {
+            for &TilePos { x, z } in &component {
                 min_x = min_x.min(x as f32);
                 min_z = min_z.min(z as f32);
                 max_x = max_x.max(x as f32 + 1.0);
@@ -1990,16 +1990,16 @@ impl BuildingMeshBuilder {
 
             match roof {
                 RoofType::Flat => {
-                    for &(x, z) in &component {
+                    for &TilePos { x, z } in &component {
                         let x0 = x as f32;
                         let x1 = x0 + 1.0;
                         let z0 = z as f32;
                         let z1 = z0 + 1.0;
 
-                        let west_missing = !component_set.contains(&(x - 1, z));
-                        let east_missing = !component_set.contains(&(x + 1, z));
-                        let south_missing = !component_set.contains(&(x, z - 1));
-                        let north_missing = !component_set.contains(&(x, z + 1));
+                        let west_missing = !component_set.contains(&TilePos::new(x - 1, z));
+                        let east_missing = !component_set.contains(&TilePos::new(x + 1, z));
+                        let south_missing = !component_set.contains(&TilePos::new(x, z - 1));
+                        let north_missing = !component_set.contains(&TilePos::new(x, z + 1));
 
                         let sw = (
                             x0 - if west_missing { overhang } else { 0.0 },
@@ -2091,16 +2091,16 @@ impl BuildingMeshBuilder {
                     let dir = Vec2::new(direction_rad.cos(), direction_rad.sin());
 
                     let mut min_proj = f32::INFINITY;
-                    for &(x, z) in &component {
+                    for &TilePos { x, z } in &component {
                         let x0 = x as f32;
                         let x1 = x0 + 1.0;
                         let z0 = z as f32;
                         let z1 = z0 + 1.0;
 
-                        let west_missing = !component_set.contains(&(x - 1, z));
-                        let east_missing = !component_set.contains(&(x + 1, z));
-                        let south_missing = !component_set.contains(&(x, z - 1));
-                        let north_missing = !component_set.contains(&(x, z + 1));
+                        let west_missing = !component_set.contains(&TilePos::new(x - 1, z));
+                        let east_missing = !component_set.contains(&TilePos::new(x + 1, z));
+                        let south_missing = !component_set.contains(&TilePos::new(x, z - 1));
+                        let north_missing = !component_set.contains(&TilePos::new(x, z + 1));
 
                         let corners = [
                             (
@@ -2131,16 +2131,16 @@ impl BuildingMeshBuilder {
                         base_y + (proj - min_proj) * rise_per_unit
                     };
 
-                    for &(x, z) in &component {
+                    for &TilePos { x, z } in &component {
                         let x0 = x as f32;
                         let x1 = x0 + 1.0;
                         let z0 = z as f32;
                         let z1 = z0 + 1.0;
 
-                        let west_missing = !component_set.contains(&(x - 1, z));
-                        let east_missing = !component_set.contains(&(x + 1, z));
-                        let south_missing = !component_set.contains(&(x, z - 1));
-                        let north_missing = !component_set.contains(&(x, z + 1));
+                        let west_missing = !component_set.contains(&TilePos::new(x - 1, z));
+                        let east_missing = !component_set.contains(&TilePos::new(x + 1, z));
+                        let south_missing = !component_set.contains(&TilePos::new(x, z - 1));
+                        let north_missing = !component_set.contains(&TilePos::new(x, z + 1));
 
                         let sw_xy = (
                             x0 - if west_missing { overhang } else { 0.0 },
@@ -2245,16 +2245,16 @@ impl BuildingMeshBuilder {
                             }
                         };
 
-                        for &(x, z) in &component {
+                        for &TilePos { x, z } in &component {
                             let x0 = x as f32;
                             let x1 = x0 + 1.0;
                             let z0 = z as f32;
                             let z1 = z0 + 1.0;
 
-                            let west_missing = !component_set.contains(&(x - 1, z));
-                            let east_missing = !component_set.contains(&(x + 1, z));
-                            let south_missing = !component_set.contains(&(x, z - 1));
-                            let north_missing = !component_set.contains(&(x, z + 1));
+                            let west_missing = !component_set.contains(&TilePos::new(x - 1, z));
+                            let east_missing = !component_set.contains(&TilePos::new(x + 1, z));
+                            let south_missing = !component_set.contains(&TilePos::new(x, z - 1));
+                            let north_missing = !component_set.contains(&TilePos::new(x, z + 1));
 
                             let sw_xy = (
                                 x0 - if west_missing { overhang } else { 0.0 },
@@ -2416,16 +2416,16 @@ impl BuildingMeshBuilder {
                             }
                         };
 
-                        for &(x, z) in &component {
+                        for &TilePos { x, z } in &component {
                             let x0 = x as f32;
                             let x1 = x as f32 + 1.0;
                             let z0 = z as f32;
                             let z1 = z as f32 + 1.0;
 
-                            let west_missing = !component_set.contains(&(x - 1, z));
-                            let east_missing = !component_set.contains(&(x + 1, z));
-                            let south_missing = !component_set.contains(&(x, z - 1));
-                            let north_missing = !component_set.contains(&(x, z + 1));
+                            let west_missing = !component_set.contains(&TilePos::new(x - 1, z));
+                            let east_missing = !component_set.contains(&TilePos::new(x + 1, z));
+                            let south_missing = !component_set.contains(&TilePos::new(x, z - 1));
+                            let north_missing = !component_set.contains(&TilePos::new(x, z + 1));
 
                             let sw_xy = (
                                 x0 - if west_missing { overhang } else { 0.0 },
@@ -2584,8 +2584,7 @@ impl BuildingMeshBuilder {
 
 #[derive(Clone, Copy, Debug)]
 struct RoofTile {
-    x: i32,
-    z: i32,
+    tile_pos: TilePos,
     base_y: f32,
 }
 

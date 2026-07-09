@@ -6,6 +6,7 @@ use crate::data::Settings;
 use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
 use crate::resources::{CommandQueues, Time};
+use crate::simulation::Simulation;
 use crate::ui::action_parser::actions_to_uicommands;
 use crate::ui::actions::{CommandQueue, UiCommand, process_commands};
 use crate::ui::helper::calc_move_speed;
@@ -226,6 +227,7 @@ impl Ui {
         settings: &mut Settings,
         event_loop: &dyn ActiveEventLoop,
         game_state: &mut GameState,
+        simulation: &mut Simulation,
     ) {
         if !self.touch_manager.options.show_gui {
             return;
@@ -332,6 +334,7 @@ impl Ui {
             settings,
             event_loop,
             game_state,
+            simulation,
         );
 
         if self.touch_manager.selection.selection_changed {

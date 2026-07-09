@@ -4,5 +4,6 @@ pub mod car_render;
 mod car_simulation;
 pub mod car_structs;
 pub mod car_subsystem;
+pub mod parking;
 pub mod partitions;
 pub mod signfinding;

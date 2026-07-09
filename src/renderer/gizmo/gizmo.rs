@@ -376,15 +376,15 @@ impl Gizmo {
                 1.0,
             ];
 
-            let node_indices = region.node_indices();
-            if node_indices.is_empty() {
+            let node_ids = region.node_ids();
+            if node_ids.is_empty() {
                 continue;
             }
 
             let mut positions: Vec<WorldPos> = Vec::new();
 
-            for &node_idx in node_indices {
-                if let Some(node) = road_storage.node(NodeId::new(node_idx)) {
+            for &node_id in node_ids {
+                if let Some(node) = road_storage.node(node_id) {
                     let pos = node.pos();
                     positions.push(pos);
                     self.circle(pos, 4.0, color, thickness, duration);
@@ -494,7 +494,7 @@ impl Gizmo {
         }
 
         if let Some(address) = &car.destination_addr {
-            if let Some(building) = buildings.storage.get(address.destination.as_building()) {
+            if let Some(building) = buildings.storage.get(address.destination.as_building_id()) {
                 if let Some(lot) = zoning.zoning_storage.get_lot(building.lot_id) {
                     let pos = car.pos.add_vec3(Vec3::new(0.0, 5.0, 0.0));
                     self.text(
@@ -505,7 +505,7 @@ impl Gizmo {
                                 car,
                                 road_storage,
                                 building.pos,
-                                lot.segment_ids
+                                lot.segment_id
                             )
                         ),
                         pos,
@@ -554,8 +554,8 @@ impl Gizmo {
                     segment_id,
                     possible_lanes,
                 } => {
-                    for lane_id in possible_lanes {
-                        let Some(lane) = road_storage.lanes.get(lane_id.index()) else {
+                    for &lane_id in possible_lanes {
+                        let Some(lane) = road_storage.lane_safe(lane_id) else {
                             continue;
                         };
                         self.polyline(lane.polyline(), color, 5.0, false, thickness, 0.0);
@@ -595,7 +595,7 @@ impl Gizmo {
                     possible_paths,
                     to_segment_id,
                 } => {
-                    let Some(node) = road_storage.nodes.get(node_id.index()) else {
+                    let Some(node) = road_storage.node(*node_id) else {
                         continue;
                     };
                     for path in possible_paths {
@@ -1199,38 +1199,29 @@ impl Gizmo {
             return;
         }
         // Road visualization
-        let render_disabled = false;
         let render_lane_arrows = false;
 
         for storage in [&road_manager.roads, &road_manager.preview_roads] {
-            for (_node_id, node) in storage.iter_enabled_nodes() {
+            for (_node_id, node) in storage.iter_nodes() {
                 // Node circle
                 let node_pos = node.pos();
-                let node_color = if node.is_enabled() {
-                    [0.0, 0.0, 0.9, 1.0]
-                } else {
-                    [1.0, 0.0, 0.0, 1.0]
-                };
+                let node_color = [0.0, 0.0, 0.9, 1.0];
+
                 self.circle(node_pos, 2.0, node_color, 0.0, 0.0);
 
                 // Incoming lanes
                 for &lane_id in node.incoming_lanes() {
-                    let lane = storage.lane(lane_id);
-                    if !lane.is_enabled() && !render_disabled {
+                    let Some(lane) = storage.lane_safe(lane_id) else {
                         continue;
-                    }
+                    };
 
                     let segment = storage.segment(lane.segment());
                     let is_forward = lane.from_node() == segment.start();
 
-                    let color = if lane.is_enabled() {
-                        if is_forward {
-                            [0.0, 0.9, 0.0, 1.0]
-                        } else {
-                            [0.2, 0.9, 0.0, 1.0]
-                        }
+                    let color = if is_forward {
+                        [0.0, 0.9, 0.0, 1.0]
                     } else {
-                        [1.0, 0.05, 0.0, 1.0]
+                        [0.2, 0.9, 0.0, 1.0]
                     };
 
                     // Convert polyline to WorldPos
@@ -1260,15 +1251,7 @@ impl Gizmo {
 
                 // Node lanes
                 for node_lane in node.node_lanes() {
-                    if !node_lane.is_enabled() && !render_disabled {
-                        continue;
-                    }
-
-                    let color = if node_lane.is_enabled() {
-                        [0.7, 0.5, 0.0, 1.0]
-                    } else {
-                        [1.0, 0.05, 0.0, 1.0]
-                    };
+                    let color = [0.7, 0.5, 0.0, 1.0];
 
                     let points: &Vec<WorldPos> = node_lane.polyline();
 
@@ -1314,16 +1297,14 @@ impl Gizmo {
                     }
                 }
             }
-            for (segment_id, segment) in storage.iter_enabled_segments() {
+            for (segment_id, segment) in storage.iter_segments() {
                 let mut left_lane = None;
                 let mut right_lane = None;
 
                 for &lane_id in segment.lanes() {
-                    let lane = storage.lane(lane_id);
-
-                    if !lane.is_enabled() && !render_disabled {
+                    let Some(lane) = storage.lane_safe(lane_id) else {
                         continue;
-                    }
+                    };
 
                     let idx = lane.lane_index();
 
@@ -1484,12 +1465,9 @@ impl Gizmo {
         }
     }
     pub fn visualize_road_node_numbers(&mut self, storage: &RoadStorage) {
-        for (id, node) in storage.nodes.iter().enumerate() {
-            if !node.is_enabled() {
-                continue;
-            };
+        for (id, node) in storage.iter_nodes() {
             self.text(
-                format!("Node ID: {}", id.to_string()),
+                format!("Node ID: {}", id.raw()),
                 node.pos(),
                 1.0,
                 [1.0, 1.0, 1.0, 1.0],

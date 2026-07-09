@@ -239,7 +239,7 @@ impl Renderer {
         if settings.render_debug_print {
             print!(" [render] after submit, before present");
         }
-        frame.present();
+        self.queue.present(frame);
         if settings.render_debug_print {
             print!(" [render] after present");
         }
@@ -393,6 +393,7 @@ impl Renderer {
             &mut self.props,
             buildings,
             zoning,
+            &mut roads.parking,
             &self.device,
             &self.queue,
             camera,
@@ -625,34 +626,34 @@ impl Renderer {
                 })
                 .ok();
 
-            let data = buffer_slice.get_mapped_range();
-
-            // Handle row padding when saving
-            if padded_bytes_per_row != unpadded_bytes_per_row {
-                // Strip padding
-                let mut pixels = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
-                for row in 0..height {
-                    let start = (row * padded_bytes_per_row) as usize;
-                    let end = start + unpadded_bytes_per_row as usize;
-                    pixels.extend_from_slice(&data[start..end]);
+            if let Ok(data) = buffer_slice.get_mapped_range() {
+                // Handle row padding when saving
+                if padded_bytes_per_row != unpadded_bytes_per_row {
+                    // Strip padding
+                    let mut pixels = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
+                    for row in 0..height {
+                        let start = (row * padded_bytes_per_row) as usize;
+                        let end = start + unpadded_bytes_per_row as usize;
+                        pixels.extend_from_slice(&data[start..end]);
+                    }
+                    image::save_buffer(
+                        next_screenshot_path(),
+                        &pixels,
+                        width,
+                        height,
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
+                } else {
+                    image::save_buffer(
+                        next_screenshot_path(),
+                        &data,
+                        width,
+                        height,
+                        image::ColorType::Rgba8,
+                    )
+                    .unwrap();
                 }
-                image::save_buffer(
-                    next_screenshot_path(),
-                    &pixels,
-                    width,
-                    height,
-                    image::ColorType::Rgba8,
-                )
-                .unwrap();
-            } else {
-                image::save_buffer(
-                    next_screenshot_path(),
-                    &data,
-                    width,
-                    height,
-                    image::ColorType::Rgba8,
-                )
-                .unwrap();
             }
         }
         // encoder.copy_texture_to_texture(
@@ -1471,6 +1472,7 @@ pub fn create_surface_and_adapter(
         power_preference: PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("No suitable GPU adapters found");
 
@@ -1507,6 +1509,7 @@ pub fn create_surface_config(
     let config = SurfaceConfiguration {
         usage: TextureUsages::RENDER_ATTACHMENT,
         format,
+        color_space: SurfaceColorSpace::Auto,
         width: size.width.max(1),
         height: size.height.max(1),
         present_mode,

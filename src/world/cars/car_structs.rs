@@ -2,7 +2,9 @@ use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::world::cars::car_simulation::CarTrajectory;
 use crate::world::cars::car_subsystem::make_random_car;
 use crate::world::cars::partitions::{Address, DestinationType};
-use crate::world::cars::signfinding::{CarSignfindingTrajectory, SFTurnIdentification};
+use crate::world::cars::signfinding::{
+    CarSignfindingTrajectory, SFTurnIdentification, SignFindingTrip,
+};
 use crate::world::roads::road_structs::{PolyIdx, SegmentId};
 use crate::world::roads::roads::{LaneRef, RoadStorage};
 use glam::{Quat, Vec3};
@@ -951,14 +953,20 @@ pub struct Car {
     pub current_lane: Option<LaneRef>, // current lane
     //pub next_lane: Option<LaneRef>, // next lane if known
     pub destination_addr: Option<Address>,
-
+    pub trip: Option<SignFindingTrip>,
     pub last_turn: Option<SFTurnIdentification>,
 
     pub spawn_time: SimTime,
 
     pub driver_profile: DriverProfile,
+    pub mode: CarMode,
 }
-
+#[derive(Debug, Clone)]
+pub enum CarMode {
+    Driving,
+    Parking { path: Vec<WorldPos> },
+    Parked,
+}
 impl Default for Car {
     fn default() -> Car {
         Self {
@@ -984,13 +992,15 @@ impl Default for Car {
             brake: 0.0,
             current_lane: None,
             destination_addr: Some(Address {
-                destination: DestinationType::Building(0),
+                destination: DestinationType::Building(0, 0, SegmentId(0), 0), // TODO: Should be None?
             }),
+            trip: None,
             last_turn: None,
             spawn_time: 0.0,
             driver_profile: DriverProfile::Normal,
             gear: 0,
             wheel_radius: 0.34,
+            mode: CarMode::Driving,
         }
     }
 }

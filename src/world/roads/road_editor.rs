@@ -22,7 +22,7 @@ const MIN_SEGMENT_LENGTH: f64 = 1.0;
 const CROSSING_SNAP_TO_NODE_RADIUS: f64 = 20.0;
 
 pub struct RoadEditor {
-    allocator: IdAllocator,
+    //allocator: IdAllocator,
     pub style: RoadStyleParams,
     pub pending_outside_commands: Vec<RoadEditorCommand>,
     pub pending_chunk_rebuilds: Vec<ChunkId>,
@@ -31,7 +31,7 @@ pub struct RoadEditor {
 impl RoadEditor {
     pub fn new() -> Self {
         Self {
-            allocator: IdAllocator::new(),
+            //allocator: IdAllocator::new(),
             style: RoadStyleParams::default(),
             pending_outside_commands: Vec::new(),
             pending_chunk_rebuilds: Vec::new(),
@@ -54,7 +54,7 @@ impl RoadEditor {
         };
         let road_type_id = road_manager.road_types.add_road_type(&road_type);
         self.style.set_road_type_id(road_type_id);
-        self.allocator.update(&road_manager.roads);
+        //self.allocator.update(&road_manager.roads);
         let storage = &road_manager.roads;
         let mut output = Vec::new();
 
@@ -161,7 +161,7 @@ impl RoadEditor {
     fn handle_straight_pick_end(
         &mut self,
         terrain_renderer: &Terrain,
-        road_manager: &RoadManager,
+        road_manager: &mut RoadManager,
         start: &Anchor,
         snap: &SnapResult,
         place_pressed: bool,
@@ -170,7 +170,7 @@ impl RoadEditor {
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) {
-        let storage = &road_manager.roads;
+        let storage = &mut road_manager.roads;
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
@@ -353,7 +353,7 @@ impl RoadEditor {
     fn handle_curve_pick_end(
         &mut self,
         terrain_renderer: &Terrain,
-        road_manager: &RoadManager,
+        road_manager: &mut RoadManager,
         start: &Anchor,
         control: WorldPos,
         snap: &SnapResult,
@@ -363,7 +363,7 @@ impl RoadEditor {
         output: &mut Vec<RoadEditorCommand>,
         gizmo: &mut Gizmo,
     ) {
-        let storage = &road_manager.roads;
+        let storage = &mut road_manager.roads;
         let Some(start_pos) = start.planned_node.position(storage) else {
             output.push(RoadEditorCommand::PreviewError(
                 PreviewError::MissingNodeData,
@@ -551,7 +551,7 @@ impl RoadEditor {
 
         let excluded_segments = self.get_excluded_segments(storage, start_anchor, end_anchor);
 
-        for (lane_id, _) in storage.iter_enabled_lanes() {
+        for (lane_id, _) in storage.iter_lanes() {
             let lane = storage.lane(lane_id);
             let seg_id = lane.segment();
 
@@ -629,7 +629,7 @@ impl RoadEditor {
             }
         }
 
-        for (node_id, node) in storage.iter_enabled_nodes() {
+        for (node_id, node) in storage.iter_nodes() {
             if self.is_node_in_anchor(node_id, start_anchor)
                 || self.is_node_in_anchor(node_id, end_anchor)
             {
@@ -678,10 +678,9 @@ impl RoadEditor {
         let mut closest_abs_idx = i8::MAX;
 
         for lane_id in segment.lanes() {
-            let lane = storage.lane(*lane_id);
-            if !lane.is_enabled() {
+            let Some(lane) = storage.lane_safe(*lane_id) else {
                 continue;
-            }
+            };
 
             let idx = lane.lane_index();
             if idx == 1 {
@@ -767,15 +766,21 @@ impl RoadEditor {
         for anchor in [start_anchor, end_anchor] {
             match &anchor.planned_node {
                 PlannedNode::Split { lane_id, .. } => {
-                    excluded.insert(storage.lane(*lane_id).segment());
+                    if let Some(lane) = storage.lane_safe(*lane_id) {
+                        excluded.insert(lane.segment());
+                    }
                 }
                 PlannedNode::Existing(node_id) => {
                     if let Some(node) = storage.node(*node_id) {
                         for lane_id in node.incoming_lanes() {
-                            excluded.insert(storage.lane(*lane_id).segment());
+                            if let Some(lane) = storage.lane_safe(*lane_id) {
+                                excluded.insert(lane.segment());
+                            }
                         }
                         for lane_id in node.outgoing_lanes() {
-                            excluded.insert(storage.lane(*lane_id).segment());
+                            if let Some(lane) = storage.lane_safe(*lane_id) {
+                                excluded.insert(lane.segment());
+                            }
                         }
                     }
                 }
@@ -972,7 +977,7 @@ impl RoadEditor {
     fn commit_road_with_crossings(
         &mut self,
         terrain_renderer: &Terrain,
-        storage: &RoadStorage,
+        storage: &mut RoadStorage,
         road_type: &RoadType,
         start: &Anchor,
         end: &Anchor,
@@ -1087,8 +1092,9 @@ impl RoadEditor {
                 continue;
             }
 
-            let segment_id = self.allocator.alloc_segment();
+            let segment_id = storage.alloc_segment_id();
             cmds.push(RoadCommand::AddSegment {
+                id: segment_id,
                 start: from.node_id,
                 end: to.node_id,
                 structure: road_type.structure(),
@@ -1098,6 +1104,7 @@ impl RoadEditor {
 
             self.emit_lanes_from_centerline(
                 terrain_renderer,
+                storage,
                 road_type,
                 &mut cmds,
                 segment_id,
@@ -1196,7 +1203,7 @@ impl RoadEditor {
     ) -> Option<(NodeId, WorldPos, f64)> {
         let mut best: Option<(NodeId, WorldPos, f64)> = None;
 
-        for (id, node) in storage.iter_enabled_nodes() {
+        for (id, node) in storage.iter_nodes() {
             let node_pos = node.pos();
             let dist = pos.distance_to(node_pos);
 
@@ -1237,10 +1244,9 @@ impl RoadEditor {
         let mut closest_abs_idx = i8::MAX;
 
         for lane_id in segment.lanes() {
-            let lane = storage.lane(*lane_id);
-            if !lane.is_enabled() {
+            let Some(lane) = storage.lane_safe(*lane_id) else {
                 continue;
-            }
+            };
 
             let idx = lane.lane_index();
             if idx == 1 {
@@ -1362,13 +1368,17 @@ impl RoadEditor {
                 let node = storage.node(id).unwrap();
 
                 for lane_id in node.incoming_lanes() {
-                    let lane = storage.lane(*lane_id);
+                    let Some(lane) = storage.lane_safe(*lane_id) else {
+                        continue;
+                    };
                     let dir = lane_direction_at_node(lane, id);
                     in_lanes.push((lane_id.clone(), dir));
                 }
 
                 for lane_id in node.outgoing_lanes() {
-                    let lane = storage.lane(*lane_id);
+                    let Some(lane) = storage.lane_safe(*lane_id) else {
+                        continue;
+                    };
                     let dir = lane_direction_at_node(lane, id);
                     out_lanes.push((lane_id.clone(), dir));
                 }
@@ -1468,7 +1478,7 @@ impl RoadEditor {
 
     fn resolve_anchor(
         &mut self,
-        storage: &RoadStorage,
+        storage: &mut RoadStorage,
         anchor: &Anchor,
         chunk_id: ChunkId,
         cmds: &mut Vec<RoadCommand>,
@@ -1479,8 +1489,11 @@ impl RoadEditor {
                 Some((*id, node.pos()))
             }
             PlannedNode::New { pos } => {
-                let node_id = self.allocator.alloc_node();
-                cmds.push(RoadCommand::AddNode { world_pos: *pos });
+                let node_id = storage.alloc_node_id();
+                cmds.push(RoadCommand::AddNode {
+                    id: node_id,
+                    world_pos: *pos,
+                });
                 Some((node_id, *pos))
             }
             PlannedNode::Split { lane_id, pos, .. } => {
@@ -1498,14 +1511,14 @@ impl RoadEditor {
 
     fn plan_split(
         &mut self,
-        storage: &RoadStorage,
+        storage: &mut RoadStorage,
         lane_id: LaneId,
         split_pos: WorldPos,
         chunk_id: ChunkId,
     ) -> Option<(Vec<RoadCommand>, NodeId, [NodeId; 2])> {
         let lane = storage.lane(lane_id);
         let old_segment_id = lane.segment();
-        let old_segment = storage.segment(old_segment_id);
+        let old_segment = storage.segment(old_segment_id).clone();
 
         let a_id = old_segment.start();
         let Some(mut old_a_node) = storage.node(a_id).cloned() else {
@@ -1553,28 +1566,22 @@ impl RoadEditor {
         //     chunk_id,
         // });
 
-        cmds.push(RoadCommand::DisableSegment {
+        cmds.push(RoadCommand::DeleteSegment {
             segment_id: old_segment_id,
             chunk_id,
         });
 
-        cmds.push(RoadCommand::EnableNode {
-            node_id: a_id,
-            chunk_id,
-        });
-        cmds.push(RoadCommand::EnableNode {
-            node_id: b_id,
-            chunk_id,
-        });
-        let new_node_id = self.allocator.alloc_node();
+        let new_node_id = storage.alloc_node_id();
         cmds.push(RoadCommand::AddNode {
+            id: new_node_id,
             world_pos: split_pos,
         });
 
-        let seg1_id = self.allocator.alloc_segment();
-        let seg2_id = self.allocator.alloc_segment();
+        let seg1_id = storage.alloc_segment_id();
+        let seg2_id = storage.alloc_segment_id();
 
         cmds.push(RoadCommand::AddSegment {
+            id: seg1_id,
             start: a_id,
             end: new_node_id,
             structure: old_segment.structure(),
@@ -1583,6 +1590,7 @@ impl RoadEditor {
         });
 
         cmds.push(RoadCommand::AddSegment {
+            id: seg2_id,
             start: new_node_id,
             end: b_id,
             structure: old_segment.structure(),
@@ -1595,12 +1603,14 @@ impl RoadEditor {
             //     lane_id: *old_lane_id,
             //     chunk_id,
             // });
-            let old_lane = storage.lane(*old_lane_id);
+            let old_lane = storage.lane(*old_lane_id).clone();
 
             let (geom1, geom2) = split_lane_geometry(old_lane.geometry(), split_pos);
 
             if old_lane.from_node() == a_id {
+                let id = storage.alloc_lane_id();
                 cmds.push(RoadCommand::AddLane {
+                    id,
                     from: a_id,
                     to: new_node_id,
                     segment: seg1_id,
@@ -1611,8 +1621,9 @@ impl RoadEditor {
                     vehicle_mask: old_lane.vehicle_mask(),
                     chunk_id,
                 });
-
+                let id = storage.alloc_lane_id();
                 cmds.push(RoadCommand::AddLane {
+                    id,
                     from: new_node_id,
                     to: b_id,
                     segment: seg2_id,
@@ -1624,7 +1635,9 @@ impl RoadEditor {
                     chunk_id,
                 });
             } else {
+                let id = storage.alloc_lane_id();
                 cmds.push(RoadCommand::AddLane {
+                    id,
                     from: b_id,
                     to: new_node_id,
                     segment: seg2_id,
@@ -1635,8 +1648,9 @@ impl RoadEditor {
                     vehicle_mask: old_lane.vehicle_mask(),
                     chunk_id,
                 });
-
+                let id = storage.alloc_lane_id();
                 cmds.push(RoadCommand::AddLane {
+                    id,
                     from: new_node_id,
                     to: a_id,
                     segment: seg1_id,
@@ -1656,6 +1670,7 @@ impl RoadEditor {
     fn emit_lanes_from_centerline(
         &self,
         terrain: &Terrain,
+        storage: &mut RoadStorage,
         road_type: &RoadType,
         cmds: &mut Vec<RoadCommand>,
         segment: SegmentId,
@@ -1681,7 +1696,9 @@ impl RoadEditor {
                 road_type.structure,
             );
             let geom = LaneGeometry::from_polyline(poly);
+            let id = storage.alloc_lane_id();
             cmds.push(RoadCommand::AddLane {
+                id,
                 from: start,
                 to: end,
                 segment,
@@ -1706,7 +1723,9 @@ impl RoadEditor {
             );
             poly.reverse();
             let geom = LaneGeometry::from_polyline(poly);
+            let id = storage.alloc_lane_id();
             cmds.push(RoadCommand::AddLane {
+                id,
                 from: end,
                 to: start,
                 segment,

@@ -10,7 +10,7 @@ use crate::ui::ui_edit_manager::CreateElementCommand;
 use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
-use crate::world::sound::run_sounds;
+use crate::world::sound::sound::run_sounds;
 use crate::world::world::World;
 use glam::Vec2;
 use std::sync::Arc;
@@ -447,8 +447,9 @@ impl ApplicationHandler for App {
                     );
                 }
 
-                run_interpolation(resources);
                 run_sounds(resources);
+                run_interpolation(resources);
+
                 if resources.settings.render_debug_print {
                     print!("  [event] redraw: before run_render");
                 }
@@ -539,29 +540,29 @@ fn update_time(resources: &mut Resources) {
 
     if can_time_control && input.action_pressed_once("Toggle Stop Time") {
         simulation.toggle();
-
-        if !simulation.running {
+        ui.variables.set_bool("sim_running", simulation.running());
+        if !simulation.running() {
             time.clear_sim_accumulator();
         }
     }
 
-    let mut time_speed = if simulation.running { 1.0 } else { 0.0 };
+    let mut sim_speed = simulation.speed();
 
+    simulation.set_speed_temporary(None);
     for (action, speed) in TIME_SPEED_BINDINGS {
         if can_time_control && input.action_down(action) {
-            time_speed = speed;
-            simulation.running = true;
+            simulation.set_speed_temporary(Some(speed));
             break;
         }
     }
 
-    if !simulation.running {
-        time_speed = 0.0;
+    if !simulation.running() {
+        sim_speed = 0.0;
     }
 
-    resources.ui.variables.set_f64("time_speed", time_speed);
+    resources.ui.variables.set_f64("sim_speed", sim_speed);
 
-    time.begin_frame(time_speed);
+    time.begin_frame(sim_speed);
 
     {
         let ui = &mut resources.ui;

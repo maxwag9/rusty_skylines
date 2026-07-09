@@ -470,7 +470,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -494,7 +494,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -522,7 +522,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -551,7 +551,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -579,7 +579,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -610,7 +610,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -631,7 +631,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -653,7 +653,7 @@ impl UiRenderer {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,
                                 depth_stencil: None,
-                                vertex_layouts: vec![UiVertexPoly::desc()],
+                                vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
                                 ..Default::default()
                             };
@@ -681,7 +681,7 @@ impl UiRenderer {
                     topology: TriangleList,
                     msaa_samples: 1,
                     depth_stencil: None,
-                    vertex_layouts: vec![UiVertexText::desc()],
+                    vertex_layouts: vec![Some(UiVertexText::desc())],
                     fragment: FragmentOption::Default { targets },
                     ..Default::default()
                 };
