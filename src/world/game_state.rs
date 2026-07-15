@@ -29,6 +29,7 @@ pub enum LoadResult {
     CantGetData(Error),
     CantDecompress(Error),
     CantDecodeData(postcard::Error),
+    EmptyName,
 }
 #[derive(Debug)]
 pub enum SaveResult {
@@ -96,6 +97,9 @@ impl GameState {
 
     pub fn load(&mut self, save_name: &str, world: &mut World, props: &mut Props) -> LoadResult {
         let safe_name = sanitize(save_name);
+        if safe_name.is_empty() {
+            return LoadResult::EmptyName;
+        }
         let path = saves_dir().join(format!("{}.rss", safe_name));
         let detected_version: Option<SaveVersion>;
         match path.try_exists() {

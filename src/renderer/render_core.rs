@@ -404,7 +404,9 @@ impl Renderer {
             &self.rt_subsystem,
             time.total_game_time,
             &roads.road_manager,
+            &roads.parking,
             buildings,
+            &zoning.zoning_storage,
             settings,
             camera,
         );

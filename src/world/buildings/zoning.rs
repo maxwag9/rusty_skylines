@@ -13,7 +13,7 @@ use crate::world::buildings::buildings::{
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::{Car, CarId, CarStorage, SimTime};
 use crate::world::cars::car_subsystem::make_random_car;
-use crate::world::cars::parking::{ParkingSpotId, ParkingStorage};
+use crate::world::cars::parking::{PARK_L, PARK_W, ParkingSpotId, ParkingStorage};
 use crate::world::cars::partitions::{Address, DestinationType};
 use crate::world::roads::road_mesh_manager::{
     ChunkId, Edges, RoadEdgeStorage, RoadEdges, RoadMeshManager, chunk_id_to_coord,
@@ -2332,7 +2332,7 @@ impl Lot {
         let entrance_tile_pos = origin
             .add_vec2(right * (entrance_x as f32 + 0.5) + forward * (entrance_z as f32 + 0.5));
 
-        let inward_dir = forward.extend(0.0);
+        let inward_dir = Vec3::new(forward.x, 0.0, forward.y);
 
         driveway_entrances.push(LotEntrance::new(entrance_tile_pos, inward_dir));
 
@@ -2387,9 +2387,9 @@ impl Lot {
             }
         }
 
-        const PARK_W: i16 = 2;
-        const PARK_L: i16 = 4;
-        for z in (min_z + 1)..=(house_z0 - PARK_L + 1) {
+        let mut z = min_z + 1;
+
+        while z <= house_z0 - PARK_L + 1 {
             let mut x = driveway_x0;
 
             while x + PARK_W - 1 <= driveway_x1 {
@@ -2419,24 +2419,27 @@ impl Lot {
                         right * (x as f32 + PARK_W as f32 * 0.5)
                             + forward * (z as f32 + PARK_L as f32 * 0.5),
                     );
+
                     let lot_info = Some(ParkingSpotLotInfo {
                         lot_id: self.id,
                         tiles: parking_tiles,
                     });
+
                     let id = parking_storage.spawn(ParkingSpot::new(
                         center,
-                        forward.extend(0.0),
+                        Vec3::new(forward.x, 0.0, forward.y), // Game is Y-up, so this is the correct way!
                         lot_info,
                     ));
 
                     parking_spots.push(id);
 
-                    // Skip this whole parking space to not create overlapping spaces!!
                     x += PARK_W;
                 } else {
                     x += 1;
                 }
             }
+
+            z += PARK_L;
         }
 
         LotLayout {

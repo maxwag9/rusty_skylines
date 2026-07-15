@@ -295,8 +295,10 @@ pub fn make_path_to_parking_spot(
             let Some(layout) = lot.layout.as_ref() else {
                 return Err(ParkingPathError::LotLayoutDoesntExist);
             };
-
-            let start = layout.get_tilepos_for_pos(car.pos, lot.entrance);
+            let Some(entrance) = layout.driveway_entrances.first() else {
+                return Err(ParkingPathError::NoDriveWayEntrance);
+            };
+            let start = layout.get_tilepos_for_pos(entrance.pos, lot.entrance);
             let parking_tiles = lot_info.tiles; // [TilePos; 8]
 
             let mut queue = VecDeque::new();
@@ -322,9 +324,9 @@ pub fn make_path_to_parking_spot(
                         continue;
                     };
 
-                    if !tile.get_tile_type().is_drivable() {
-                        continue;
-                    }
+                    // if !tile.get_tile_type().is_drivable() {
+                    //     continue;
+                    // }
 
                     came_from.insert(neighbor, current);
                     queue.push_back(neighbor);
@@ -345,13 +347,17 @@ pub fn make_path_to_parking_spot(
             }
 
             tile_path.push(start);
+            if tile_path.len() < 2 {
+                return Err(ParkingPathError::ParkingSpotReached);
+            }
             tile_path.reverse();
 
-            let path = tile_path
+            let path: Vec<WorldPos> = tile_path
                 .into_iter()
                 .map(|tile| layout.get_pos_for_tilepos(tile, lot.entrance))
                 .collect();
 
+            println!("Parking path length: {}", path.len());
             Ok(path)
         }
         None => {
@@ -366,6 +372,8 @@ pub enum ParkingPathError {
     LotLayoutDoesntExist,
     NoPath,
     DespawnTheCar,
+    NoDriveWayEntrance,
+    ParkingSpotReached,
 }
 pub fn make_new_signfinding_traj(
     car: &Car,

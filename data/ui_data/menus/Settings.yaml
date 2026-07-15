@@ -104,6 +104,30 @@ layers:
           editable: true
         editing_tool: false
       - !Advanced
+        name: checkbox_render_parking_gizmo
+        ap_name: checkbox
+        ap_var: render_parking_gizmo
+        x: 0.6
+        y: 0.4
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: checkbox_render_lot_info
+        ap_name: checkbox
+        ap_var: render_lot_info
+        x: 0.4
+        y: 0.4
+        scale: 2.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
         name: checkbox_simple_car_following
         ap_name: checkbox
         ap_var: simple_car_following

@@ -640,11 +640,16 @@ pub fn build_intersection_at_node(
         }
     }
 
-    storage.node_mut(node_id).clear_node_lanes();
+    if let Some(node) = storage.node_mut_safe(node_id) {
+        node.clear_node_lanes();
+    }
 
     let node_lanes =
         build_node_lanes_for_intersection(terrain, storage, road_types, node_id, params, gizmo);
-    storage.node_mut(node_id).add_node_lanes(node_lanes);
+
+    if let Some(node) = storage.node_mut_safe(node_id) {
+        storage.node_mut(node_id).add_node_lanes(node_lanes);
+    }
 
     affected_chunks
 }

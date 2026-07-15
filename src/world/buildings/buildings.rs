@@ -1314,6 +1314,7 @@ impl BuildingMeshManager {
 
             let mut roof_tiles: Vec<RoofTile> = Vec::new();
             if lot.layout.is_none() {
+                //println!("making layout {}", building.id);
                 let lot_layout = lot.generate_layout(parking_storage);
                 lot.layout = Some(lot_layout);
             }

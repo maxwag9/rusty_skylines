@@ -703,6 +703,8 @@ define_settings! {
     RenderRtGizmo => render_rt_gizmo: bool = false; Bool,
     Noclip => noclip: bool = false; Bool,
     RenderDebugPrint => render_debug_print: bool = false; Bool,
+    RenderParkingGizmo => render_parking_gizmo: bool = false; Bool,
+    RenderLotInfo => render_lot_info: bool = false; Bool,
 }
 
 impl Settings {

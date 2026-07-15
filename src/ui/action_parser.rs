@@ -520,8 +520,8 @@ define_commands! {
     "exit" | "quit"
         => ExitGame,
 
-    "show_interaction" => ShowInteraction {element_ref: ElementRef, event_kind: TouchEventKind, buttons: MouseButtons, color: String},
-
+    "show_interaction" => ShowInteraction { element_ref: ElementRef, event_kind: TouchEventKind, buttons: MouseButtons, color: String, shadow: bool },
+    "snap_to" => SnapTo { element_ref: ElementRef, offset: String },
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
         => Print { element_ref: ElementRef, statement: String },

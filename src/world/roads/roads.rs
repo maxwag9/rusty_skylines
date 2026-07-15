@@ -2494,7 +2494,7 @@ pub fn apply_road_command(
     let road_types = &road_manager.road_types;
     match road_command {
         RoadCommand::AddNode { id, world_pos } => {
-            println!("{:?} {}", id, is_preview);
+            //println!("{:?} {}", id, is_preview);
             storage.add_node(*id, *world_pos);
             if !is_preview {
                 cars.add_spawning_node(*id);
@@ -2658,9 +2658,7 @@ pub fn apply_road_command(
             }
             let arms = gather_arms(storage, road_types, *node_id, gizmo);
 
-            if let Some(node) = storage.node_mut_safe(*node_id) {
-                node.arms = arms;
-            }
+            storage.node_mut(*node_id).arms = arms;
 
             build_intersection_at_node(
                 terrain,
@@ -2674,7 +2672,7 @@ pub fn apply_road_command(
             );
             // Twice is correct
             let arms = gather_arms(storage, road_types, *node_id, gizmo);
-
+            //println!("node {:?} exists: {}", node_id, storage.node(*node_id).is_some());
             storage.node_mut(*node_id).arms = arms;
             CommandResult::Ok
         }
@@ -2682,9 +2680,6 @@ pub fn apply_road_command(
             old_segment,
             chunk_id,
         } => {
-            if old_segment.raw() as usize >= storage.segment_count() {
-                return CommandResult::InvalidReference;
-            }
             storage.delete_segment(*old_segment, road_types, gizmo);
             CommandResult::Ok
         }
@@ -2745,7 +2740,7 @@ pub fn apply_command(
             let mut affected_chunk: Option<ChunkId> = None;
             let result = match road_command {
                 RoadCommand::AddNode { id, world_pos } => {
-                    println!("{:?} {}", id, is_preview);
+                    //println!("{:?} {}", id, is_preview);
                     storage.add_node(id, world_pos);
                     gather_arms(storage, road_types, id, gizmo);
                     if !is_preview {
@@ -2841,9 +2836,6 @@ pub fn apply_command(
                     CommandResult::Ok
                 }
                 RoadCommand::DeleteNode { node_id, chunk_id } => {
-                    if node_id.raw() as usize >= storage.node_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     storage.delete_node(node_id, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
@@ -2852,17 +2844,11 @@ pub fn apply_command(
                     segment_id,
                     chunk_id,
                 } => {
-                    if segment_id.raw() as usize >= storage.segment_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     storage.delete_segment(segment_id, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
                 }
                 RoadCommand::DeleteLane { lane_id, chunk_id } => {
-                    if lane_id.raw() as usize >= storage.lane_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     storage.delete_lane(lane_id, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
@@ -2872,9 +2858,6 @@ pub fn apply_command(
                     chunk_id,
                     control,
                 } => {
-                    if node_id.raw() as usize >= storage.node_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     let id = storage.attach_control(node_id, control.clone());
                     affected_chunk = Some(chunk_id);
                     CommandResult::ControlAttached(chunk_id, id)
@@ -2884,9 +2867,6 @@ pub fn apply_command(
                     control_id,
                     chunk_id,
                 } => {
-                    if node_id.raw() as usize >= storage.node_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     storage.delete_control(node_id, control_id);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
@@ -2896,9 +2876,6 @@ pub fn apply_command(
                     control_id,
                     chunk_id,
                 } => {
-                    if node_id.raw() as usize >= storage.node_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     storage.enable_control(node_id, control_id);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok
@@ -2909,12 +2886,10 @@ pub fn apply_command(
                     chunk_id,
                     recalc_clearance: clear,
                 } => {
-                    if node_id.raw() as usize >= storage.node_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     let arms = gather_arms(storage, road_types, node_id, gizmo);
 
                     storage.node_mut(node_id).arms = arms;
+
                     build_intersection_at_node(
                         terrain, storage, road_types, node_id, &params, clear, settings, gizmo,
                     );
@@ -2929,9 +2904,6 @@ pub fn apply_command(
                     old_segment,
                     chunk_id,
                 } => {
-                    if old_segment.raw() as usize >= storage.segment_count() {
-                        return CommandResult::InvalidReference;
-                    }
                     storage.delete_segment(old_segment, road_types, gizmo);
                     affected_chunk = Some(chunk_id);
                     CommandResult::Ok

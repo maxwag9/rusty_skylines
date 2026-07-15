@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 pub struct Variables {
-    vars: HashMap<String, Value>,
+    pub vars: HashMap<String, Value>,
 }
 
 impl Variables {
@@ -94,14 +94,8 @@ impl Variables {
         };
         let value = initialize_value(field_type, Some(value.into()));
         let (base, suffix_opt) = match base.rsplit_once('.') {
-            Some((base, suffix)) => {
-                if Self::component_index(suffix).is_some() {
-                    (base, Some(suffix))
-                } else {
-                    (base, None)
-                }
-            }
-            None => (base, None),
+            Some((left, suffix)) if Self::component_index(suffix).is_some() => (left, Some(suffix)),
+            _ => (base, None),
         };
         //println!("In variables set() base: {:?}, suffix: {:?}", base, suffix_opt);
         let suffix = match suffix_opt {
@@ -138,7 +132,7 @@ impl Variables {
     }
 
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
-        //println!("In variabled.get(): {}", name);
+        //println!("In variables.get(): {}", name);
         let mut base = name;
         let mut suffixes: Vec<&str> = Vec::new();
 
@@ -150,7 +144,9 @@ impl Variables {
                 break;
             }
         }
-
+        // println!("base = {:?}", base);
+        // println!("suffixes = {:?}", suffixes);
+        // println!("exists = {:?}", self.vars.get(base)); // or self.vars.get(base).is_some()
         let mut value: Cow<'_, Value> = Cow::Borrowed(self.vars.get(base)?);
 
         for suffix in suffixes.into_iter().rev() {
@@ -165,7 +161,9 @@ impl Variables {
                 continue;
             }
 
-            let idx = Self::component_index(suffix)?;
+            let Some(idx) = Self::component_index(suffix) else {
+                break;
+            };
 
             value = match value {
                 Cow::Borrowed(v) => match v {

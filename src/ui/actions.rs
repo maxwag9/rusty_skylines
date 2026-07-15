@@ -31,107 +31,6 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
-// ==================== COMMAND TYPE ENUM ====================
-
-/// Canonical command type identifier for pattern matching and legacy conversion.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
-pub enum UiCommandType {
-    // Menus
-    OpenMenu,
-    CloseMenu,
-    ToggleMenu,
-    MenuActive,
-
-    // Layers
-    OpenLayer,
-    CloseLayer,
-    ToggleLayer,
-
-    // Variables
-    SetVar,
-    IncVar,
-    DecVar,
-    MulVar,
-    ToggleBool,
-    Clamp,
-
-    // Action state management
-    StartAction,
-    StopAction,
-    RemoveAction,
-
-    // World renderer
-    SetPickRadius,
-    GrowPickRadius,
-    ShrinkPickRadius,
-
-    // Flow control
-    Delay,
-    Halt,
-    Skip,
-    If,
-    IfVarEq,
-
-    // Debug
-    Print,
-    DebugVars,
-    DebugMenus,
-    DebugActions,
-
-    // Events
-    EmitEvent,
-
-    // No-op
-    Noop,
-}
-
-impl UiCommandType {
-    /// Get the name for this command type.
-    pub fn name(self) -> &'static str {
-        match self {
-            UiCommandType::OpenMenu => "open_menu",
-            UiCommandType::CloseMenu => "close_menu",
-            UiCommandType::ToggleMenu => "toggle_menu",
-            UiCommandType::MenuActive => "menu_active",
-
-            UiCommandType::OpenLayer => "open_layer",
-            UiCommandType::CloseLayer => "close_layer",
-            UiCommandType::ToggleLayer => "toggle_layer",
-
-            UiCommandType::SetVar => "set_var",
-            UiCommandType::IncVar => "inc",
-            UiCommandType::DecVar => "dec",
-            UiCommandType::MulVar => "mul",
-            UiCommandType::ToggleBool => "toggle_bool",
-            UiCommandType::Clamp => "clamp",
-
-            UiCommandType::StartAction => "start_action",
-            UiCommandType::StopAction => "stop_action",
-            UiCommandType::RemoveAction => "remove_action",
-
-            UiCommandType::SetPickRadius => "set_pick_radius",
-            UiCommandType::GrowPickRadius => "grow_pick_radius",
-            UiCommandType::ShrinkPickRadius => "shrink_pick_radius",
-
-            UiCommandType::Delay => "delay",
-            UiCommandType::Halt => "halt",
-            UiCommandType::Skip => "skip",
-            UiCommandType::If => "if",
-            UiCommandType::IfVarEq => "if_var_eq",
-
-            UiCommandType::Print => "print",
-            UiCommandType::DebugVars => "debug_vars",
-            UiCommandType::DebugMenus => "debug_menus",
-            UiCommandType::DebugActions => "debug_actions",
-
-            UiCommandType::EmitEvent => "emit_event",
-
-            UiCommandType::Noop => "noop",
-        }
-    }
-}
-
-// ==================== COMMAND ENUM ====================
 
 /// A fully-specified UI command with all data embedded.
 /// Can be queued and executed without the original parsing context.
@@ -305,6 +204,11 @@ pub enum UiCommand {
         event_kind: TouchEventKind,
         buttons: MouseButtons,
         color: String,
+        shadow: bool,
+    },
+    SnapTo {
+        element_ref: ElementRef,
+        offset: String,
     },
     // ===== DEBUG COMMANDS =====
     Print {
@@ -1435,7 +1339,14 @@ impl CommandQueue {
                 event_kind,
                 buttons,
                 color,
+                shadow,
             } => {
+                let shadow_name = format!("{}_shadow", element_ref.id).as_str();
+                let shadow_command =
+                    format!(r#"on:always on:r button:a as:"" set(str:self.color.fill, )"#,);
+                // if let Some(shadow_elem) = ctx.ui.menus.get_mut(&element_ref.menu).and_then(|m|m.get_element_mut(element_ref.layer.as_str(), shadow_name)) {
+                //     shadow_elem.set_pos()
+                // }
                 let mut hasher = DefaultHasher::new();
                 element_ref.hash(&mut hasher);
                 let element_hash = hasher.finish();
@@ -1526,6 +1437,10 @@ impl CommandQueue {
 
                 CommandResult::Ok
             }
+            UiCommand::SnapTo {
+                element_ref,
+                offset,
+            } => CommandResult::Ok,
             // ===== DEBUG COMMANDS =====
             UiCommand::Print {
                 element_ref,
@@ -2169,8 +2084,9 @@ pub fn send_element_properties_to_variables(
                         .unwrap_or(Value::Null),
                 ); // f64
                 let size = element.size().value_size2().unwrap_or(Value::Null);
-                //println!("{:?}", element.size());
+
                 variables.set_var("self.size", size);
+                //println!("In sending: {:?}", variables.get("self.size"));
                 let color_components = element.color_components();
                 variables.set_array(
                     "self.color_components",

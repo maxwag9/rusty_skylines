@@ -40,7 +40,15 @@ impl Menu {
             _ => None,
         })
     }
+    pub fn get_element_mut(
+        &mut self,
+        layer_name: &str,
+        element_id: &str,
+    ) -> Option<&mut UiElement> {
+        let layer = self.layers.iter_mut().find(|l| l.name == layer_name)?;
 
+        layer.elements.iter_mut().find_map(|e| Some(e))
+    }
     pub fn rebuild_layer_cache_index(
         &mut self,
         settings: &Settings,

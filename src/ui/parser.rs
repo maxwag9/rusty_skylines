@@ -5,9 +5,6 @@ use rand::RngExt;
 use rand::rngs::ThreadRng;
 use std::fmt;
 
-// ------------------------------------------------------------
-// Value type
-// ------------------------------------------------------------
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Null,
@@ -1853,8 +1850,9 @@ fn tokenize_expr(input: &str) -> Vec<Token> {
                 }
             } else if c.is_alphabetic() || c == '_' {
                 let mut s = String::new();
+
                 while let Some(&d) = chars.peek() {
-                    if d.is_alphanumeric() || d == '_' {
+                    if d.is_alphanumeric() || d == '_' || d == '.' {
                         s.push(d);
                         chars.next();
                     } else {
@@ -1865,7 +1863,7 @@ fn tokenize_expr(input: &str) -> Vec<Token> {
                 match s.as_str() {
                     "true" => tokens.push(Token::True),
                     "false" => tokens.push(Token::False),
-                    "null" | "nil" | "none" => tokens.push(Token::Null),
+                    "null" | "none" => tokens.push(Token::Null),
                     _ => tokens.push(Token::Ident(s)),
                 }
             } else {
@@ -2211,11 +2209,21 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
 
                 match prop_tok {
-                    Token::Ident(prop) => {
-                        left = match get_property(&left, &prop) {
+                    Token::Ident(name) => {
+                        // println!("LEFT before property = {:?}", left);
+                        // println!("name = {:?}", name);
+                        left = match get_property(&left, &name) {
                             Some(v) => v,
-                            None => Value::String(format!("{}.{}", value_to_text(&left), prop)),
+                            None => {
+                                let full = format!("{}.{}", value_to_text(&left), name);
+
+                                match self.vars.get(&full) {
+                                    Some(v) => v.into_owned(),
+                                    None => Value::String(full),
+                                }
+                            }
                         };
+                        //println!("LEFT after property = {:?}", left);
                     }
                     Token::Number(n) => {
                         if n.fract() == 0.0 && n >= 0.0 {
@@ -2422,6 +2430,11 @@ impl<'a> Parser<'a> {
             }
 
             Token::Ident(name) => {
+                //println!("In Ident: {}", name);
+                if let Some(val) = self.vars.get(&name) {
+                    //println!("In Ident succeeded: {}: {}", name, val);
+                    return Ok(val.into_owned());
+                }
                 if self.peek() == Token::LParen {
                     self.pos += 1;
                     let mut args = Vec::new();
@@ -2941,7 +2954,7 @@ fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
 
 pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
     let tokens = tokenize_expr(expr);
-    //println!("{:?}", expr);
+    //println!("Expr input: {:?}", expr);
     let result = Parser::new(&tokens, vars, settings).parse();
     match result {
         Ok(result) => Some(result),

@@ -10,12 +10,12 @@ use crate::renderer::ray_tracing::structs::{Aabb, Blas, BvhNode, Tlas};
 use crate::ui::ui_editor::Ui;
 use crate::ui::vertex::{LineVtxWorld, TextVtxRender, ThickLineVtxRender, ThinLineVtxRender};
 use crate::world::buildings::buildings::Buildings;
-use crate::world::buildings::zoning::{Zoning, point_in_polygon_xz};
+use crate::world::buildings::zoning::{Zoning, ZoningStorage, point_in_polygon_xz};
 use crate::world::camera::Camera;
 use crate::world::cars::car_structs::CarStorage;
+use crate::world::cars::parking::{PARK_L, PARK_W, ParkingStorage};
 use crate::world::cars::partitions::PartitionId;
 use crate::world::cars::signfinding::{SFTurnType, get_last_turn};
-use crate::world::roads::road_structs::NodeId;
 use crate::world::roads::roads::{RoadManager, RoadStorage};
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::Vec3;
@@ -340,7 +340,7 @@ impl Gizmo {
 
             // draw lines from centroid to each building so it's clear what belongs to what
             for &pos in &positions {
-                self.arrow(barycenter, pos, [r, g, b, 0.95], true, 0.1, 0.0);
+                self.arrow(barycenter, pos, [r, g, b, 0.95], true, false, 0.1, 0.0);
             }
         }
     }
@@ -767,6 +767,7 @@ impl Gizmo {
             center.add_vec3(direction),
             color,
             false,
+            true,
             thickness,
             duration,
         );
@@ -808,6 +809,7 @@ impl Gizmo {
             sun_end,
             [1.0, 1.0, 0.0, 1.0],
             false,
+            false,
             thickness,
             duration,
         );
@@ -816,6 +818,7 @@ impl Gizmo {
             origin,
             moon_end,
             [1.0, 1.0, 1.0, 1.0],
+            false,
             false,
             thickness,
             duration,
@@ -832,6 +835,7 @@ impl Gizmo {
         end: WorldPos,
         color: [f32; 4],
         dashed: bool,
+        with_start_stopper: bool,
         thickness: f32,
         duration: f32,
     ) {
@@ -887,6 +891,11 @@ impl Gizmo {
         }
 
         self.push(verts, thickness, duration, false);
+
+        let right = Vec3::new(dir.z, 0.0, -dir.x).normalize() * thickness;
+        let left_start = start.sub_vec3(right);
+        let right_end = start.add_vec3(right);
+        self.line(left_start, right_end, color, thickness, duration);
     }
 
     // Polyline (anchor + relative points for now, or full WorldPos slice)
@@ -1151,7 +1160,9 @@ impl Gizmo {
         rt_subsystem: &RTSubsystem,
         total_game_time: f64,
         road_manager: &RoadManager,
+        parking: &ParkingStorage,
         buildings: &Buildings,
+        zoning: &ZoningStorage,
         settings: &Settings,
         camera: &Camera,
     ) {
@@ -1195,6 +1206,67 @@ impl Gizmo {
                 );
             }
         }
+        if settings.render_parking_gizmo {
+            for parking_spot in parking.iter() {
+                let Some(ps) = parking_spot else { continue };
+                let forward = ps.dir.normalize();
+                let right = Vec3::new(forward.z, 0.0, -forward.x);
+
+                let half_w = PARK_W as f32 * 0.5;
+                let half_l = PARK_L as f32 * 0.5;
+
+                let corners = [
+                    ps.pos.add_vec3(-forward * half_l - right * half_w), // back left
+                    ps.pos.add_vec3(-forward * half_l + right * half_w), // back right
+                    ps.pos.add_vec3(forward * half_l + right * half_w),  // front right
+                    ps.pos.add_vec3(forward * half_l - right * half_w),  // front left
+                ];
+                self.polyline(
+                    corners.as_slice(),
+                    [1.0, 0.0, 0.0, 0.5],
+                    0.0,
+                    true,
+                    0.1,
+                    0.0,
+                );
+            }
+        }
+        if settings.render_lot_info {
+            for lot in zoning
+                .lots_in_chunks(camera.eye_world().chunk.get_chunks_3x3())
+                .iter()
+                .flat_map(|&lot_id| zoning.get_lot(lot_id))
+            {
+                let entrance = lot.entrance;
+                self.arrow(
+                    entrance.pos,
+                    entrance.pos.add_vec3(entrance.dir.normalize()),
+                    [1.0, 0.2, 0.0, 1.0],
+                    false,
+                    true,
+                    0.05,
+                    0.0,
+                );
+                let dir = entrance.dir.normalize();
+                let right = Vec3::new(dir.z, 0.0, -dir.x).normalize() * 0.3;
+                let left_start = entrance.pos.sub_vec3(right);
+                let right_end = entrance.pos.add_vec3(right);
+                self.line(left_start, right_end, [1.0, 0.2, 0.0, 1.0], 0.05, 0.0);
+                if let Some(layout) = lot.layout.as_ref() {
+                    for entrance in layout.driveway_entrances.iter() {
+                        self.arrow(
+                            entrance.pos,
+                            entrance.pos.add_vec3(entrance.dir.normalize()),
+                            [0.8, 0.6, 0.0, 1.0],
+                            false,
+                            true,
+                            0.05,
+                            0.0,
+                        );
+                    }
+                }
+            }
+        }
         if !settings.render_lanes_gizmo {
             return;
         }
@@ -1231,7 +1303,7 @@ impl Gizmo {
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
-                            self.arrow(*last, node_pos, color, false, 0.0, 0.0);
+                            self.arrow(*last, node_pos, color, false, false, 0.0, 0.0);
                         }
                     }
                     if let Some(&middle) = points.get(points.len() / 2) {
@@ -1259,7 +1331,7 @@ impl Gizmo {
 
                     if render_lane_arrows {
                         if let Some(last) = points.last() {
-                            self.arrow(*last, node_pos, color, false, 0.0, 0.0);
+                            self.arrow(*last, node_pos, color, false, true, 0.0, 0.0);
                         }
                     }
                     if let Some(first) = points.first() {

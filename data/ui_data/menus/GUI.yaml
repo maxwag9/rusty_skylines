@@ -284,6 +284,7 @@ layers:
         id: set_none_zone
         actions:
           - set(str:new_zone_type, none)
+          - on:r set(str:cursor_mode, Zoning)
           - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
         x: 0.16796875
         y: 0.96428573
@@ -319,6 +320,7 @@ layers:
         id: set_residential_zone
         actions:
           - set(str:new_zone_type, residential)
+          - on:r set(str:cursor_mode, Zoning)
           - button:a show_interaction([0.005, 0.72, 0.1, 1.0])
         x: 0.19140625
         y: 0.96428573
@@ -402,6 +404,7 @@ layers:
         id: set_commercial_zone
         actions:
           - set(str:new_zone_type, commercial)
+          - on:r set(str:cursor_mode, Zoning)
           - button:a show_interaction([0.005, 0.1, 0.72, 1.0])
         x: 0.21484375
         y: 0.96428573
@@ -437,6 +440,7 @@ layers:
         id: set_industrial_zone
         actions:
           - set(str:new_zone_type, industrial)
+          - on:r set(str:cursor_mode, Zoning)
           - button:a show_interaction([0.72, 0.72, 0.1, 1.0])
         x: 0.23828125
         y: 0.96428573
@@ -472,6 +476,7 @@ layers:
         id: set_office_zone
         actions:
           - set(str:new_zone_type, office)
+          - on:r set(str:cursor_mode, Zoning)
           - button:a show_interaction([0.72, 0.1, 0.72, 1.0])
         x: 0.26171875
         y: 0.96428573

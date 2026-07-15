@@ -3,6 +3,9 @@ use crate::world::buildings::zoning::ParkingSpot;
 use serde::{Deserialize, Serialize};
 use std::slice::{Iter, IterMut};
 
+pub const PARK_W: i16 = 2;
+pub const PARK_L: i16 = 4;
+
 pub type ParkingSpotId = u32;
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct ParkingStorage {
