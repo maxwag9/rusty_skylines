@@ -12,6 +12,7 @@
 
 use crate::data::Settings;
 use crate::renderer::ui_text_rendering::{Anchor, anchor_to};
+use crate::resources::Time;
 use crate::ui::selections::SelectionManager;
 use crate::ui::ui_editor::{GuiOptions, TouchableElement, Ui, get_element};
 use crate::ui::ui_runtime::UiRuntimes;
@@ -21,11 +22,9 @@ use crate::ui::vertex::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::time::Duration;
 use tracing::error;
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
 
 /// Configuration for touch behavior - data-driven, easy to tweak
 #[derive(Clone, Debug)]
@@ -62,10 +61,6 @@ impl Default for TouchConfig {
     }
 }
 
-// ============================================================================
-// CORE TYPES
-// ============================================================================
-
 /// Reference to an element (menu/layer/id)
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ElementRef {
@@ -74,7 +69,15 @@ pub struct ElementRef {
     pub id: String,
     pub kind: ElementKind,
 }
-
+impl fmt::Display for ElementRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}/{}/{} ({})",
+            self.menu, self.layer, self.id, self.kind
+        )
+    }
+}
 impl ElementRef {
     pub fn action(&self, ui: &Ui) -> Vec<String> {
         match get_element(&ui.menus, self) {
@@ -309,6 +312,10 @@ pub enum TouchEvent {
         actions: Vec<String>,
         buttons: MouseButtons,
     },
+    StartUp {
+        element: ElementRef,
+        actions: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -385,7 +392,7 @@ impl Touchable for UiButtonCircle {
     }
 
     fn is_pressable(&self) -> bool {
-        self.misc.pressable
+        self.misc.touchable
     }
 
     fn is_editable(&self, override_mode: bool) -> bool {
@@ -460,7 +467,7 @@ impl Touchable for UiButtonPolygon {
     }
 
     fn is_pressable(&self) -> bool {
-        self.misc.pressable
+        self.misc.touchable
     }
 
     fn is_editable(&self, override_mode: bool) -> bool {
@@ -530,7 +537,7 @@ impl Touchable for UiButtonRect {
     }
 
     fn is_pressable(&self) -> bool {
-        self.misc.pressable
+        self.misc.touchable
     }
 
     fn is_editable(&self, override_mode: bool) -> bool {
@@ -597,7 +604,7 @@ impl Touchable for UiButtonText {
     }
 
     fn is_pressable(&self) -> bool {
-        self.misc.pressable
+        self.misc.touchable
     }
 
     fn is_editable(&self, override_mode: bool) -> bool {
@@ -660,7 +667,7 @@ impl Touchable for UiButtonHandle {
     }
 
     fn is_pressable(&self) -> bool {
-        self.misc.pressable
+        self.misc.touchable
     }
 
     fn is_editable(&self, override_mode: bool) -> bool {
@@ -785,7 +792,7 @@ impl HitDetector {
                 c.id.clone(),
                 ElementKind::Circle,
                 c.misc.active,
-                c.misc.pressable,
+                c.misc.touchable,
                 &c.misc.editable,
                 c.actions.clone(),
             ),
@@ -793,7 +800,7 @@ impl HitDetector {
                 p.id.clone(),
                 ElementKind::Polygon,
                 p.misc.active,
-                p.misc.pressable,
+                p.misc.touchable,
                 &p.misc.editable,
                 p.actions.clone(),
             ),
@@ -801,7 +808,7 @@ impl HitDetector {
                 t.id.clone(),
                 ElementKind::Text,
                 t.misc.active,
-                t.misc.pressable,
+                t.misc.touchable,
                 &t.misc.editable,
                 t.actions.clone(),
             ),
@@ -809,7 +816,7 @@ impl HitDetector {
                 h.id.clone(),
                 ElementKind::Handle,
                 h.misc.active,
-                h.misc.pressable,
+                h.misc.touchable,
                 &h.misc.editable,
                 vec![],
             ),
@@ -818,7 +825,7 @@ impl HitDetector {
                 r.id.clone(),
                 ElementKind::Rect,
                 r.misc.active,
-                r.misc.pressable,
+                r.misc.touchable,
                 &r.misc.editable,
                 r.actions.clone(),
             ),
@@ -1294,7 +1301,13 @@ impl UiTouchManager {
     }
 
     /// Update touch manager with new input
-    pub fn update(&mut self, dt: f32, input: InputSnapshot, elements: &Vec<TouchableElement>) {
+    pub fn update(
+        &mut self,
+        dt: f32,
+        input: InputSnapshot,
+        elements: &Vec<TouchableElement>,
+        time: &Time,
+    ) {
         self.accumulated_time += dt;
         self.selection.reset_frame_flags();
         self.events.clear();
@@ -1326,18 +1339,6 @@ impl UiTouchManager {
         if self.selection.is_box_selecting() && input.buttons.pressed() {
             self.events.push(TouchEvent::BoxSelectMove {
                 current: input.position,
-            });
-        }
-        for touchable_element in elements {
-            // Important for when not hovering and such, super important for always-on functions!
-            self.events.push(TouchEvent::Nothing {
-                element: ElementRef::new(
-                    touchable_element.menu,
-                    touchable_element.layer,
-                    touchable_element.element.id(),
-                    touchable_element.element.kind(),
-                ),
-                actions: touchable_element.element.actions(),
             });
         }
 

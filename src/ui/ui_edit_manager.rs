@@ -15,6 +15,7 @@ use crate::ui::vertex::*;
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
+use strum_macros::EnumIter;
 
 /// Maximum number of undo steps to keep
 const MAX_UNDO_HISTORY: usize = 100;
@@ -898,7 +899,7 @@ impl UIEditCommand for MoveVertexCommand {
 }
 
 /// Color properties that can be changed
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, EnumIter)]
 pub enum ColorComponent {
     Fill,
     Border,
@@ -1008,6 +1009,7 @@ pub struct DuplicateElementCommand {
     pub to_element: ElementRef,
     pub cached_element: Option<UiElement>,
     pub optional_center: Option<[f32; 2]>,
+    pub optional_actions: Option<Vec<String>>,
 }
 
 impl UIEditCommand for DuplicateElementCommand {
@@ -1037,6 +1039,10 @@ impl UIEditCommand for DuplicateElementCommand {
         if let Some(cached_element) = &mut self.cached_element {
             if let Some(center) = self.optional_center {
                 cached_element.set_pos(center[0], center[1]);
+            }
+            //println!("new actions: {:?}", self.optional_actions);
+            if let Some(actions) = self.optional_actions.clone() {
+                cached_element.set_actions(actions);
             }
             let mut element = cached_element.clone();
             element.set_id(&self.to_element.id);

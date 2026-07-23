@@ -42,13 +42,11 @@ layers:
           - on:r set(str:show_world, true)
           - on:r set(str:editor_mode, false)
           - on:r set(str:override_mode, false)
-          - on:r close_all_menus
-          - on:r open_menu(str:Debug_Menu)
+          - on:r call(open_play_menus)
           - on:r load_save(str:first_save_ever, false)
-          - on:r open_menu(str:GUI)
         x: 0.5
         y: 0.3
-        pt: 20.0
+        pt: 23.0
         color:
           - 1.0
           - 1.0
@@ -60,11 +58,10 @@ layers:
         actions:
           - on:r set(str:editor_mode, false)
           - on:r set(str:override_mode, false)
-          - on:r close_all_menus
-          - on:r open_menu(str:Settings)
+          - on:r call(open_settings_menus)
         x: 0.5
         y: 0.35
-        pt: 15.0
+        pt: 18.0
         color:
           - 1.0
           - 1.0
@@ -74,10 +71,10 @@ layers:
       - !Text
         id: exit_text
         actions:
-          - on:r exit
+          - on:r exit_game()
         x: 0.5
         y: 0.4
-        pt: 15.0
+        pt: 18.0
         color:
           - 0.1
           - 0.1
@@ -113,7 +110,7 @@ layers:
       - !Text
         id: add_circle_test
         actions:
-          - on:r add(str:self.menu, str:self.layer, str:heytherewhatsup, str:circle, [self.center.x, {self.center.y}+{self.center.y}*0.2])
+          - on:r add(self.menu, self.layer, str:heytherewhatsup, str:circle, [self.center.x, {self.center.y}+{self.center.y}*0.2], false)
         x: 0.2
         y: 0.35
         pt: 18.0
@@ -126,7 +123,7 @@ layers:
       - !Text
         id: clone_test
         actions:
-          - on:r clone(str:self.menu, str:self.layer, str:self.id, str:self.menu, str:self.layer, str:heytherewhatsupduped, [self.center.x, {self.center.y}+{self.center.y}*0.2])
+          - on:r clone(self.menu, self.layer, self.id, self.menu, self.layer, str:heytherewhatsupduped, [self.center.x, {self.center.y}+{self.center.y}*0.2], false)
         x: 0.2
         y: 0.45
         pt: 18.0
@@ -139,7 +136,7 @@ layers:
       - !Text
         id: delete_test
         actions:
-          - on:r delete(str:self.menu, str:self.layer, str:heytherewhatsupduped)
+          - on:r delete(self.menu, self.layer, str:heytherewhatsupduped, false)
         x: 0.1
         y: 0.5
         pt: 18.0

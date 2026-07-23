@@ -12,6 +12,7 @@
 //! - Mutable operations must occur outside simulation ticks
 
 use crate::data::Settings;
+use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::positions::{ChunkCoord, LocalPos, WorldPos, chunk_size};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::systems::systems::RoadDestroyType;
@@ -35,6 +36,7 @@ use crate::world::terrain::chunk_builder::ChunkMeshLod;
 use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use glam::{Vec2, Vec3};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
@@ -47,13 +49,14 @@ pub const METERS_PER_LANE_POLYLINE_STEP: f64 = 2.0;
 type PartitionId = u32;
 /// One physical "leg" of an intersection, a direction you can come from or go to.
 /// Arms are sorted by bearing angle (clockwise from north, or whatever convention).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[revisioned(revision = 1)]
 pub struct Arm {
     segment_id: SegmentId,
     /// Bearing angle in radians [0, 2π), CCW from +X axis
     bearing: f32,
     /// Direction vector pointing AWAY from node center (normalized)
-    direction: Vec3,
+    direction: SerializableVec3,
     /// Half-width of the road at this arm (lanes + sidewalk)
     half_width: f32,
     /// Length of this arm/corridor
@@ -79,7 +82,7 @@ impl Arm {
         Self {
             segment_id: segment,
             bearing,
-            direction: direction.normalize_or_zero(),
+            direction: SerializableVec3::from(direction.normalize_or_zero()),
             half_width,
             corridor_length,
             incoming_lanes: Vec::new(),
@@ -198,7 +201,7 @@ impl Arm {
     }
 
     pub fn direction(&self) -> Vec3 {
-        self.direction
+        self.direction.as_vec3()
     }
 
     pub fn half_width(&self) -> f32 {
@@ -284,13 +287,15 @@ impl Arm {
 
     /// Get the position of the right edge at a given distance from center
     pub fn right_edge_at(&self, center: WorldPos, distance: f32) -> WorldPos {
-        let offset = self.direction * distance + self.right_perpendicular() * self.half_width;
+        let offset =
+            self.direction.as_vec3() * distance + self.right_perpendicular() * self.half_width;
         center.add_vec3(offset)
     }
 
     /// Get the position of the left edge at a given distance from center
     pub fn left_edge_at(&self, center: WorldPos, distance: f32) -> WorldPos {
-        let offset = self.direction * distance + self.left_perpendicular() * self.half_width;
+        let offset =
+            self.direction.as_vec3() * distance + self.left_perpendicular() * self.half_width;
         center.add_vec3(offset)
     }
 
@@ -331,7 +336,8 @@ impl Arm {
 // }
 /// Intersection anchor point in 3D space.
 /// Every node is an intersection with attachable traffic controls.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone)]
+#[revisioned(revision = 1)]
 pub struct Node {
     pos: WorldPos,
     /// Sorted by bearing, clockwise
@@ -500,7 +506,8 @@ impl Node {
 
 /// Road segment connecting two nodes, containing multiple lanes.
 /// Segments are grouping/metadata; lanes are the first-class graph edges.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct Segment {
     pub start: NodeId,
     pub end: NodeId,
@@ -582,6 +589,7 @@ impl Segment {
 /// Directed lane edge connecting two nodes within a segment.
 /// Lanes are the primary graph edges for pathfinding and simulation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[revisioned(revision = 1)]
 pub struct Lane {
     from: NodeId,
     to: NodeId,
@@ -670,6 +678,7 @@ impl Lane {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub enum LaneRef {
     Lane(LaneId, PolyIdx),
     NodeLane(NodeId, NodeLaneId, PolyIdx),
@@ -690,6 +699,7 @@ impl Hash for NodeLane {
 }
 /// Directed lane edge connecting two segments within a node or connecting NodeLanes with each other.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct NodeLane {
     id: NodeLaneId,
     merging: Vec<LaneRef>,
@@ -764,6 +774,7 @@ impl NodeLane {
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct LaneGeometry {
     pub points: Vec<WorldPos>, // polyline
     pub lengths: Vec<f64>,     // cumulative arc length
@@ -826,6 +837,7 @@ impl LaneGeometry {
 pub type RoadRegionId = u32;
 
 #[derive(Serialize, Deserialize, Clone)]
+#[revisioned(revision = 1)]
 pub struct RoadRegion {
     nodes: Vec<NodeId>,
 }
@@ -848,7 +860,8 @@ impl RoadRegion {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone)]
+#[revisioned(revision = 1)]
 pub struct RoadStorage {
     pub nodes: Vec<Option<Node>>,
     nodes_free_list: Vec<NodeId>,
@@ -1882,6 +1895,7 @@ impl RoadStorage {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+#[revisioned(revision = 1)]
 pub struct RoadTypes {
     road_types: HashMap<RoadTypeId, RoadType>,
 }
@@ -3219,7 +3233,7 @@ fn compute_lane_geometries(
 
     // Forward lanes (right side: travel from start to end)
     for i in 0..right_count {
-        let lane_index = (i as i8) + 1;
+        let lane_index = (i as i8).saturating_add(1);
         let polyline = offset_polyline(
             terrain_renderer,
             centerline,
@@ -3362,6 +3376,7 @@ const BREAD_CRUMB_ALPHA: f32 = 0.1;
 /// Tracks a running average that forgets old data exponentially.
 /// Recent reports matter more than ancient ones.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct EMA {
     duration: f32,
     count: u16, // how many samples we've seen (useful for "is this trustworthy?")

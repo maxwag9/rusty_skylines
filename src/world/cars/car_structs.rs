@@ -10,6 +10,7 @@ use crate::world::roads::roads::{LaneRef, RoadStorage};
 use glam::{Quat, Vec3};
 use rand::rngs::ThreadRng;
 use rayon::iter::IntoParallelRefMutIterator;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::slice::{Iter, IterMut};
@@ -247,6 +248,7 @@ impl VehicleType {
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Deserialize, Serialize)]
+#[revisioned(revision = 1)]
 pub enum ChunkDistance {
     #[default]
     Close,

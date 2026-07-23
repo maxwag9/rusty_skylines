@@ -1,0 +1,56 @@
+name: plus_icon
+elements:
+  - !Rect
+    id: east_west
+    x: 0.0
+    y: 0.0
+    w: 0.08
+    h: 0.01
+    rotation: 0.0
+    color:
+      - 0.03
+      - 0.83
+      - 0.03
+      - 0.6
+    border_color:
+      - 0.1
+      - 0.1
+      - 0.1
+      - 0.9
+    texture: null
+    roundness: 0.4
+    border_thickness_percentage: 0.0
+    fade: 0.0
+    blur: 4.0
+    glow_misc: { }
+    misc:
+      active: true
+      pressable: false
+      editable: false
+  - !Rect
+    id: north_south
+    x: 0.0
+    y: 0.0
+    w: 0.01
+    h: 0.1
+    rotation: 0.0
+    color:
+      - 0.03
+      - 0.83
+      - 0.93
+      - 0.6
+    border_color:
+      - 0.1
+      - 0.1
+      - 0.1
+      - 0.9
+    texture: null
+    roundness: 0.4
+    border_thickness_percentage: 0.0
+    fade: 0.0
+    blur: 4.0
+    glow_misc: { }
+    misc:
+      active: true
+      pressable: false
+      editable: false

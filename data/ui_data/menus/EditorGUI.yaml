@@ -1,2 +1,129 @@
 name: EditorGUI
-layers: [ ]
+layers:
+  - name: overlay
+    order: 169520
+    elements:
+      - !Rect
+        id: Background
+        actions:
+          - on:press button:any in:any, set(str:drag_offset, ({self.center}-{mouse_pos}));
+          - on:drag button:any in:any, set(str:self.center, ({mouse_pos}+{drag_offset}));
+        x: 0.5
+        y: 0.5
+        w: 0.5
+        h: 0.1
+        rotation: 0.0
+        color:
+          - 0.03
+          - 0.03
+          - 0.03
+          - 0.6
+        border_color:
+          - 0.1
+          - 0.1
+          - 0.1
+          - 0.9
+        texture: null
+        roundness: 0.4
+        border_thickness_percentage: 0.002
+        fade: 0.0
+        blur: 4.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: false
+      - !Rect
+        id: Father
+        actions:
+          - button:any in:any as:"[str:Background]", set(str:self.center, [({as.center.x}-({as.size.x}*0.4)), as.center.y]);
+        x: 0.4
+        y: 0.5
+        w: 0.1
+        h: 0.04
+        rotation: 0.0
+        color:
+          - 0.03
+          - 0.83
+          - 0.03
+          - 0.6
+        border_color:
+          - 0.1
+          - 0.1
+          - 0.1
+          - 0.9
+        texture: null
+        roundness: 0.4
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 4.0
+        glow_misc: { }
+        misc:
+          active: false
+          pressable: true
+          editable: false
+      - !Circle
+        id: add
+        actions:
+          - button:any in:any as:"[str:Background]", set(str:self.center, [({as.center.x}-({as.size.x}*0.4)), as.center.y]); set(str:self.radius, {as.size.y}*0.40)
+        x: 0.0
+        y: 0.0
+        radius: 0.02
+        fill_color:
+          - 0.1
+          - 0.9
+          - 0.0
+          - 0.98
+        glow_color:
+          - 0.1
+          - 0.9
+          - 0.0
+          - 0.98
+        glow_misc:
+          glow_size: 20.0
+          glow_speed: 1.0
+          glow_intensity: 0.5
+        misc:
+          active: true
+          pressable: true
+          editable: false
+      - !Advanced
+        name: add_plus_icon
+        ap_name: plus_icon
+        ap_var:
+        actions:
+          - in:any button:any as:["overlay", "add"], set(str:self.center, {as.center}); set(str:self.color.fill, [1.0, 1.0, 1.0, 1.0]);
+        x: 0.0
+        y: 0.0
+        scale: 1.0
+        misc:
+          active: true
+          pressable: false
+          editable: true
+        editing_tool: false
+      - !Circle
+        id: delete
+        actions:
+          - button:any in:any as:"[str:Background]", set(str:self.center, [({as.center.x}-({as.size.x}*0.25)), as.center.y]); set(str:self.radius, {as.size.y}*0.40)
+        x: 0.0
+        y: 0.0
+        radius: 0.02
+        fill_color:
+          - 0.9
+          - 0.1
+          - 0.0
+          - 0.98
+        glow_color:
+          - 0.8
+          - 0.0
+          - 0.1
+          - 0.98
+        glow_misc:
+          glow_size: 20.0
+          glow_speed: 1.0
+          glow_intensity: 0.5
+        misc:
+          active: true
+          pressable: true
+          editable: false
+    editing_tool: true

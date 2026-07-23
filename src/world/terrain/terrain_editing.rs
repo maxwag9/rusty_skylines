@@ -12,6 +12,7 @@ use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::terrain::terrain_threads::{LoadedChunksSnapshot, TerrainEditsSnapshot};
 use glam::Vec2;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use wgpu::{Device, Queue};
 pub type EditId = u64;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[revisioned(revision = 1)]
 pub enum TerrainEditSource {
     Player,
     Building(BuildingId),
@@ -34,6 +36,7 @@ pub enum TerrainEditSource {
 /// Operations are applied in order; later flat-type ops take priority through
 /// weighted blending. Raise is always additive regardless of order.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub enum TerrainEdit {
     /// Additive raise / lower brush with smooth radial falloff.
     /// Use `strength < 0` to lower.

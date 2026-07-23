@@ -647,8 +647,20 @@ impl UiRenderer {
                             pass.set_vertex_buffer(0, self.pipelines.quad_buffer.slice(..));
                             pass.draw(0..4, rect_idx..rect_idx + 1);
 
-                            let targets =
-                                color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
+                            let good_blend = BlendState {
+                                color: BlendComponent {
+                                    src_factor: BlendFactor::One,
+                                    dst_factor: BlendFactor::OneMinusSrcAlpha,
+                                    operation: BlendOperation::Add,
+                                },
+                                alpha: BlendComponent {
+                                    src_factor: BlendFactor::One,
+                                    dst_factor: BlendFactor::OneMinusSrcAlpha,
+                                    operation: BlendOperation::Add,
+                                },
+                            };
+
+                            let targets = color_target_ui(pipelines, Some(good_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
                                 msaa_samples: 1,

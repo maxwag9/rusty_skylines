@@ -22,7 +22,7 @@ use rand::RngExt;
 use rand::rngs::ThreadRng;
 use rand_distr::num_traits::Zero;
 use rayon::iter::IntoParallelRefMutIterator;
-use serde::{Deserialize, Serialize};
+use revision::revisioned;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -33,7 +33,8 @@ use wgpu::{Device, Queue, VertexAttribute, VertexFormat};
 use wgpu_render_manager::generator::{TextureKey, TextureParams};
 use wgpu_render_manager::renderer::RenderManager;
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, Default, Hash)]
+#[derive(Debug, Copy, Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub enum BuildingUsage {
     #[default]
     Residential,
@@ -75,7 +76,8 @@ impl Display for BuildingUsage {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct Color(pub [f32; 4]);
 
 impl Color {
@@ -98,7 +100,8 @@ impl DerefMut for Color {
 }
 pub type BuildingId = u32;
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub enum RoofType {
     /// Just a flat Roof
     #[default]
@@ -129,23 +132,27 @@ impl Hash for RoofType {
         }
     }
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub enum RoofMaterial {
     #[default]
     Shingles,
     Metal,
     Custom(TextureKey),
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub struct MiscBuildingParams {
     pub window_material_accent: WallMaterial,
     pub solar_modules: bool,
     pub antenna: bool,
     pub usage: BuildingUsage,
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub struct BasementParams {}
-#[derive(Serialize, Deserialize, Clone, Hash)]
+#[derive(Clone, Hash)]
+#[revisioned(revision = 1)]
 pub enum WallMaterial {
     Paint(Color),
     Custom(TextureKey),
@@ -155,7 +162,8 @@ impl Default for WallMaterial {
         WallMaterial::Paint(Color::white())
     }
 }
-#[derive(Serialize, Deserialize, Clone, Hash)]
+#[derive(Clone, Hash)]
+#[revisioned(revision = 1)]
 pub enum DrivewayMaterial {
     Bricks,
     Custom(TextureKey),
@@ -172,17 +180,20 @@ impl Hash for Color {
         self[2].to_bits().hash(state);
     }
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub enum GardenLook {
     #[default]
     Normal,
     Overgrown,
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub struct GardenParams {
     pub look: GardenLook,
 }
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct GarageParams {
     pub story_height: f32,
     pub num_stories: u16,
@@ -193,7 +204,8 @@ impl Hash for GarageParams {
         self.num_stories.hash(state);
     }
 }
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct BuildingParams {
     pub roof: RoofType,
     pub roof_material: RoofMaterial,
@@ -233,7 +245,8 @@ impl Hash for BuildingParams {
         self.miscellaneous.hash(state);
     }
 }
-#[derive(Serialize, Deserialize, Clone, Default, Hash)]
+#[derive(Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub struct BuildingParamsLevels {
     pub level0: BuildingParams,
     pub level1: BuildingParams,
@@ -242,7 +255,8 @@ pub struct BuildingParamsLevels {
     pub level4: BuildingParams,
     pub level5: BuildingParams,
 }
-#[derive(Serialize, Deserialize, Copy, Clone, Default, Hash)]
+#[derive(Copy, Clone, Default, Hash)]
+#[revisioned(revision = 1)]
 pub enum BuildingLevel {
     #[default]
     Level0,
@@ -264,14 +278,15 @@ impl BuildingLevel {
         }
     }
 }
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum BuildingComplaint {
     NotEnoughWorkers,
     NotEnoughCustomers,
     NotEnoughJobs,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Clone, Debug, Default)]
+#[revisioned(revision = 1)]
 pub struct BuildingOccupancy {
     pub workers: u32,
     pub residential_capacity: u32,
@@ -386,7 +401,8 @@ impl BuildingOccupancy {
         }
     }
 }
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct Building {
     pub id: BuildingId,
     pub pos: WorldPos,
@@ -436,7 +452,8 @@ impl Buildings {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct BuildingStorage {
     pub building_chunk_storage: BuildingChunkStorage,
     buildings: Vec<Option<Building>>,
@@ -674,7 +691,8 @@ impl BuildingStorage {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct BuildingChunk {
     pub distance: ChunkDistance,
     pub building_ids: Vec<BuildingId>,
@@ -696,7 +714,8 @@ impl BuildingChunk {
         }
     }
 }
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct BuildingChunkStorage {
     close: HashMap<ChunkCoord, BuildingChunk>,
     medium: HashMap<ChunkCoord, BuildingChunk>,

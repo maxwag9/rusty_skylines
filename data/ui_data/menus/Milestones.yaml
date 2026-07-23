@@ -6,10 +6,9 @@ layers:
       - !Advanced
         name: milestone_screen_300
         ap_name: milestone_screen
-        ap_var: "300"
+        ap_var: '300'
         x: 0.0
         y: 0.0
-        scale: 1.0
         misc:
           active: true
           pressable: false

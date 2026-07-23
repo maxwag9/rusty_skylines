@@ -257,10 +257,13 @@ pub struct Input {
     parsed: HashMap<String, Vec<ParsedKeyCombo>>,
     warned_missing: HashSet<String>,
     repeat_timers: HashMap<String, RepeatTimer>,
-    action_last_down: HashMap<String, bool>,
-    named_last_down: HashMap<NamedKey, bool>,
+
+    generation: u64,
+    action_cache: HashMap<String, CachedEdge>,
+    gameplay_cache: HashMap<String, CachedEdge>,
+    combo_cache: HashMap<String, CachedEdge>,
+
     logical_just_pressed: HashSet<NamedKey>,
-    pub gameplay_last_down: HashMap<String, bool>,
     pub gameplay_repeat_timers: HashMap<String, RepeatTimer>,
     pub gamepad_buttons: HashMap<GamepadButton, bool>,
     pub left_stick: Vec2,
@@ -294,11 +297,15 @@ impl Input {
             parsed,
             warned_missing: HashSet::new(),
             repeat_timers: HashMap::new(),
-            action_last_down: HashMap::new(),
-            named_last_down: HashMap::new(),
+
+            generation: 0,
+            action_cache: HashMap::new(),
+            gameplay_cache: HashMap::new(),
+            combo_cache: HashMap::new(),
+
             logical_just_pressed: HashSet::new(),
-            gameplay_last_down: HashMap::new(),
             gameplay_repeat_timers: HashMap::new(),
+
             gamepad_buttons: HashMap::new(),
             left_stick: Vec2::ZERO,
             right_stick: Vec2::ZERO,
@@ -308,6 +315,29 @@ impl Input {
             clipboard,
             gilrs: Gilrs::new().expect("Failed to initialize gilrs"),
         }
+    }
+
+    fn mark_changed(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn cached_edge_for(
+        generation: u64,
+        cache: &mut HashMap<String, CachedEdge>,
+        key: &str,
+        now_down: bool,
+    ) -> CachedEdge {
+        let entry = cache.entry(key.to_string()).or_default();
+
+        if entry.generation != generation {
+            let prev_down = entry.down;
+            entry.pressed_once = now_down && !prev_down;
+            entry.released = prev_down && !now_down;
+            entry.down = now_down;
+            entry.generation = generation;
+        }
+
+        *entry
     }
 
     pub fn begin_frame(&mut self, now: f64) {
@@ -320,6 +350,8 @@ impl Input {
         self.mouse.update_just_states();
         self.text_chars.clear();
         self.logical_just_pressed.clear();
+
+        self.mark_changed();
     }
     pub fn reset_all(&mut self, now: f64) {
         self.now = now;
@@ -339,12 +371,10 @@ impl Input {
         self.scroll_left_hit = false;
         self.scroll_right_hit = false;
 
-        self.action_last_down.clear();
-        self.named_last_down.clear();
-        self.gameplay_last_down.clear();
+        self.logical_just_pressed.clear();
+
         self.repeat_timers.clear();
         self.gameplay_repeat_timers.clear();
-        self.logical_just_pressed.clear();
     }
 
     pub fn handle_mouse_button(&mut self, button: MouseButton, state: ElementState) {
@@ -430,23 +460,33 @@ impl Input {
     }
 
     pub fn set_physical(&mut self, key: PhysicalKey, down: bool) {
-        self.physical.insert(key, down);
+        let old = self.physical.get(&key).copied().unwrap_or(false);
+        if old != down {
+            self.physical.insert(key, down);
+            self.mark_changed();
+        }
     }
 
     pub fn set_logical(&mut self, key: NamedKey, down: bool) {
-        if down {
-            let was_down = self.logical.get(&key).copied().unwrap_or(false);
-            if !was_down {
+        let old = self.logical.get(&key).copied().unwrap_or(false);
+        if old != down {
+            if down {
                 self.logical_just_pressed.insert(key);
             }
+            self.logical.insert(key, down);
+            self.mark_changed();
         }
-        self.logical.insert(key, down);
     }
+
     pub fn set_character(&mut self, ch: &str, down: bool) {
-        if down {
-            self.text_chars.insert(ch.to_string());
+        let changed = if down {
+            self.text_chars.insert(ch.to_string())
         } else {
-            self.text_chars.remove(ch);
+            self.text_chars.remove(ch)
+        };
+
+        if changed {
+            self.mark_changed();
         }
     }
 
@@ -460,19 +500,54 @@ impl Input {
             _ => return,
         };
 
+        let changed = state.pressed != down;
+
         if down && !state.pressed {
             state.just_pressed = true;
         }
-
         if !down && state.pressed {
             state.just_released = true;
         }
 
         state.pressed = down;
+
+        if changed {
+            self.mark_changed();
+        }
     }
 
     pub fn set_gamepad_button(&mut self, button: GamepadButton, down: bool) {
-        self.gamepad_buttons.insert(button, down);
+        let old = self.gamepad_buttons.get(&button).copied().unwrap_or(false);
+        if old != down {
+            self.gamepad_buttons.insert(button, down);
+            self.mark_changed();
+        }
+    }
+
+    pub fn add_scroll_delta(&mut self, delta: Vec2) {
+        self.mouse.scroll_delta += delta;
+
+        let mut changed = false;
+
+        if delta.y > 0.0 && !self.scroll_up_hit {
+            self.scroll_up_hit = true;
+            changed = true;
+        } else if delta.y < 0.0 && !self.scroll_down_hit {
+            self.scroll_down_hit = true;
+            changed = true;
+        }
+
+        if delta.x > 0.0 && !self.scroll_right_hit {
+            self.scroll_right_hit = true;
+            changed = true;
+        } else if delta.x < 0.0 && !self.scroll_left_hit {
+            self.scroll_left_hit = true;
+            changed = true;
+        }
+
+        if changed {
+            self.mark_changed();
+        }
     }
 
     pub fn set_left_stick(&mut self, v: Vec2) {
@@ -489,24 +564,6 @@ impl Input {
 
     pub fn set_right_trigger(&mut self, v: f32) {
         self.right_trigger = v;
-    }
-
-    pub fn add_scroll_delta(&mut self, delta: Vec2) {
-        self.mouse.scroll_delta += delta;
-
-        // vertical
-        if delta.y > 0.0 {
-            self.scroll_up_hit = true;
-        } else if delta.y < 0.0 {
-            self.scroll_down_hit = true;
-        }
-
-        // horizontal
-        if delta.x > 0.0 {
-            self.scroll_right_hit = true;
-        } else if delta.x < 0.0 {
-            self.scroll_left_hit = true;
-        }
     }
 
     fn parse_all(keybinds: &Keybinds) -> HashMap<String, Vec<ParsedKeyCombo>> {
@@ -548,7 +605,12 @@ impl Input {
             println!("Warning: action '{action}' has no keybind");
             self.warned_missing.insert(action.to_string());
         }
+
         false
+    }
+    #[inline]
+    pub fn action_known(&self, action: &str) -> bool {
+        self.parsed.contains_key(action)
     }
 
     pub fn action_down(&mut self, action: &str) -> bool {
@@ -562,28 +624,20 @@ impl Input {
         if !self.ensure_known_action(action) {
             return false;
         }
-        let now = self.action_down_raw(action);
-        let last = self
-            .action_last_down
-            .entry(action.to_string())
-            .or_insert(false);
-        let fired = now && !*last;
-        *last = now;
-        fired
+
+        let now_down = self.action_down_raw(action);
+        let generation = self.generation;
+        Self::cached_edge_for(generation, &mut self.action_cache, action, now_down).pressed_once
     }
 
     pub fn action_released(&mut self, action: &str) -> bool {
         if !self.ensure_known_action(action) {
             return false;
         }
+
         let now_down = self.action_down_raw(action);
-        let last_down = self
-            .action_last_down
-            .entry(action.to_string())
-            .or_insert(false);
-        let released = *last_down && !now_down;
-        *last_down = now_down;
-        released
+        let generation = self.generation;
+        Self::cached_edge_for(generation, &mut self.action_cache, action, now_down).released
     }
 
     pub fn action_repeat(&mut self, action: &str) -> bool {
@@ -644,25 +698,23 @@ impl Input {
     }
 
     pub fn gameplay_pressed_once(&mut self, action: &str) -> bool {
-        let now = self.gameplay_down(action);
-        let last = self
-            .gameplay_last_down
-            .entry(action.to_string())
-            .or_insert(false);
-        let fired = now && !*last;
-        *last = now;
-        fired
+        if !self.ensure_known_action(action) {
+            return false;
+        }
+
+        let now_down = self.gameplay_down(action);
+        let generation = self.generation;
+        Self::cached_edge_for(generation, &mut self.gameplay_cache, action, now_down).pressed_once
     }
 
     pub fn gameplay_released(&mut self, action: &str) -> bool {
-        let now = self.gameplay_down(action);
-        let last = self
-            .gameplay_last_down
-            .entry(action.to_string())
-            .or_insert(false);
-        let released = *last && !now;
-        *last = now;
-        released
+        if !self.ensure_known_action(action) {
+            return false;
+        }
+
+        let now_down = self.gameplay_down(action);
+        let generation = self.generation;
+        Self::cached_edge_for(generation, &mut self.gameplay_cache, action, now_down).released
     }
 
     pub fn gameplay_repeat(&mut self, action: &str) -> bool {
@@ -684,33 +736,22 @@ impl Input {
         if let Some(combo) = parse_combo(combo_str) {
             combo.matches(self)
         } else {
+            println!("Parsing failed, Invalid combo: {}", combo_str);
             false
         }
     }
 
-    // /// Check if combo was just pressed this frame
-    // pub fn combo_pressed_once(&mut self, combo_str: &str) -> bool {
-    //     let now = self.combo_down(combo_str);
-    //     let last = self
-    //         .named_last_down
-    //         .entry(combo_str.to_string())
-    //         .or_insert(false);
-    //     let fired = now && !*last;
-    //     *last = now;
-    //     fired
-    // }
-    //
-    // /// Check if combo was just released this frame
-    // pub fn combo_released(&mut self, combo_str: &str) -> bool {
-    //     let now = self.combo_down(combo_str);
-    //     let last = self
-    //         .named_last_down
-    //         .entry(combo_str.to_string())
-    //         .or_insert(false);
-    //     let released = *last && !now;
-    //     *last = now;
-    //     released
-    // }
+    pub fn combo_pressed_once(&mut self, combo_str: &str) -> bool {
+        let now_down = self.combo_down(combo_str);
+        let generation = self.generation;
+        Self::cached_edge_for(generation, &mut self.combo_cache, combo_str, now_down).pressed_once
+    }
+
+    pub fn combo_released(&mut self, combo_str: &str) -> bool {
+        let now_down = self.combo_down(combo_str);
+        let generation = self.generation;
+        Self::cached_edge_for(generation, &mut self.combo_cache, combo_str, now_down).released
+    }
 
     /// Check combo with key repeat
     pub fn combo_repeat(&mut self, combo_str: &str) -> bool {
@@ -722,7 +763,13 @@ impl Input {
         timer.tick(self.now, down)
     }
 }
-
+#[derive(Default, Clone, Copy)]
+struct CachedEdge {
+    generation: u64,
+    down: bool,
+    pressed_once: bool,
+    released: bool,
+}
 fn parse_combo(s: &str) -> Option<ParsedKeyCombo> {
     let mut require_ctrl = false;
     let mut require_shift = false;
@@ -914,7 +961,7 @@ fn map_to_named(token: &str) -> Option<NamedKey> {
 }
 
 fn map_to_gamepad(token: &str) -> Option<GamepadButton> {
-    println!("{}", token);
+    //println!("{}", token);
     match token {
         "PadA" => Some(GamepadButton::ACross),
         "PadB" => Some(GamepadButton::BCircle),

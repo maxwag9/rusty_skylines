@@ -6,11 +6,13 @@ use crate::world::statisticals::education::EducationLevel;
 use crate::world::statisticals::money::CorporateTaxConfig;
 use crate::world::statisticals::transports::TransportStats;
 use rand::Rng;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 
 pub const HOURS_PER_DAY: f64 = 24.0;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct ZoningDemand {
     pub demography: Demography, // BTW! This is ONE District!!
     pub corporate_tax_config: CorporateTaxConfig,

@@ -33,7 +33,9 @@ use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use crate::world::world::World;
 use glam::UVec2;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::{Duration, Instant};
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -60,6 +62,7 @@ pub struct Renderer {
     // render-only subsystems & caches
     pub render_manager: RenderManager,
     pub shader_watcher: Option<ShaderWatcher>,
+    pub screenshot_sender: Sender<ScreenshotJob>,
     pub pipelines: Pipelines,
     pub ui_renderer: UiRenderer,
     pub profiler: GpuProfiler,
@@ -122,6 +125,7 @@ impl Renderer {
             rt_subsystem,
             props: Props::new(device),
             building_renderer,
+            screenshot_sender: make_screenshot_thread(),
         }
     }
 
@@ -629,33 +633,16 @@ impl Renderer {
                 .ok();
 
             if let Ok(data) = buffer_slice.get_mapped_range() {
-                // Handle row padding when saving
-                if padded_bytes_per_row != unpadded_bytes_per_row {
-                    // Strip padding
-                    let mut pixels = Vec::with_capacity((unpadded_bytes_per_row * height) as usize);
-                    for row in 0..height {
-                        let start = (row * padded_bytes_per_row) as usize;
-                        let end = start + unpadded_bytes_per_row as usize;
-                        pixels.extend_from_slice(&data[start..end]);
-                    }
-                    image::save_buffer(
-                        next_screenshot_path(),
-                        &pixels,
+                self.screenshot_sender
+                    .send(ScreenshotJob {
+                        pixels: data.to_vec(),
                         width,
                         height,
-                        image::ColorType::Rgba8,
-                    )
+                        padded_bytes_per_row,
+                        unpadded_bytes_per_row,
+                        path: next_screenshot_path(),
+                    })
                     .unwrap();
-                } else {
-                    image::save_buffer(
-                        next_screenshot_path(),
-                        &data,
-                        width,
-                        height,
-                        image::ColorType::Rgba8,
-                    )
-                    .unwrap();
-                }
             }
         }
         // encoder.copy_texture_to_texture(
@@ -1709,4 +1696,52 @@ pub fn create_color_attachment_clear(resolved_view: &TextureView) -> RenderPassC
             store: StoreOp::Store,
         },
     }
+}
+
+struct ScreenshotJob {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    padded_bytes_per_row: u32,
+    unpadded_bytes_per_row: u32,
+    path: PathBuf,
+}
+
+fn make_screenshot_thread() -> Sender<ScreenshotJob> {
+    let (tx, rx) = mpsc::channel::<ScreenshotJob>();
+
+    thread::spawn(move || {
+        while let Ok(job) = rx.recv() {
+            if job.padded_bytes_per_row != job.unpadded_bytes_per_row {
+                let mut pixels =
+                    Vec::with_capacity((job.unpadded_bytes_per_row * job.height) as usize);
+
+                for row in 0..job.height {
+                    let start = (row * job.padded_bytes_per_row) as usize;
+                    let end = start + job.unpadded_bytes_per_row as usize;
+                    pixels.extend_from_slice(&job.pixels[start..end]);
+                }
+
+                image::save_buffer(
+                    job.path,
+                    &pixels,
+                    job.width,
+                    job.height,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            } else {
+                image::save_buffer(
+                    job.path,
+                    &job.pixels,
+                    job.width,
+                    job.height,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+        }
+    });
+
+    tx
 }

@@ -1,3 +1,4 @@
+use crate::helpers::implementations::SerializableVec3;
 use crate::helpers::positions::{ChunkCoord, WorldPos};
 use crate::renderer::gizmo::gizmo::Gizmo;
 use crate::resources::Time;
@@ -36,6 +37,7 @@ use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::SeedableRng;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -46,11 +48,13 @@ const SNAP_RADIUS: f64 = 20.0;
 const EPS: f64 = 0.0001;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub enum DistrictType {
     AutomaticallyMade,
     PlayerMade,
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct District {
     pub id: DistrictId,
     pub name: String,
@@ -128,7 +132,7 @@ impl District {
                 if let Some((lot_entrance, car_trip_type)) =
                     Lot::get_car_spawn(zoning, buildings, schedule, lot_id, rng)
                 {
-                    let dir = -lot_entrance.dir; // Flip in_dir to become out_dir
+                    let dir = -lot_entrance.dir.as_vec3(); // Flip in_dir to become out_dir
                     let mut car = make_random_car(lot_entrance.pos, rng);
                     let forward = dir.normalize();
                     let up = Vec3::Y;
@@ -918,6 +922,7 @@ struct ZoningState {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub enum ZoningType {
     None,
     Residential,
@@ -2177,6 +2182,7 @@ pub fn collect_lot_point(
 pub type DistrictId = u32;
 pub type LotId = u32;
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[revisioned(revision = 1)]
 pub enum TileType {
     Grass,
     Tree,
@@ -2205,6 +2211,7 @@ impl TileType {
     }
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[revisioned(revision = 1)]
 pub enum Tile {
     Square(TileType),
     Polygon(TileType, Vec<WorldPos>),
@@ -2218,7 +2225,7 @@ impl Tile {
         }
     }
 }
-#[derive(Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct Lot {
     pub id: LotId,
     pub bounds: Vec<WorldPos>,
@@ -2583,6 +2590,7 @@ impl Lot {
     }
 }
 #[derive(Serialize, Deserialize, Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[revisioned(revision = 1)]
 pub struct TilePos {
     pub x: i16,
     pub z: i16,
@@ -2618,7 +2626,8 @@ impl TilePos {
         ]
     }
 }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone)]
+#[revisioned(revision = 1)]
 pub struct LotLayout {
     pub tiles: HashMap<TilePos, Tile>,
     pub driveway_entrances: Vec<LotEntrance>,
@@ -2656,14 +2665,18 @@ impl LotLayout {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Clone, Copy)]
+#[revisioned(revision = 1)]
 pub struct LotEntrance {
     pub pos: WorldPos,
-    pub dir: Vec3,
+    pub dir: SerializableVec3,
 }
 impl LotEntrance {
     pub fn new(pos: WorldPos, dir: Vec3) -> Self {
-        LotEntrance { pos, dir }
+        LotEntrance {
+            pos,
+            dir: SerializableVec3::from(dir),
+        }
     }
 }
 
@@ -2691,7 +2704,8 @@ pub struct ParkingSpotLotInfo {
     pub lot_id: LotId,
     pub tiles: [TilePos; 8],
 }
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Default, Clone)]
+#[revisioned(revision = 1)]
 pub struct ZoningStorage {
     districts: Vec<Option<District>>,
     district_next_ticks: HashMap<DistrictId, SimTime>,

@@ -33,7 +33,7 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
     @location(0) local_pos: vec2<f32>,    // world-space (pixel) position
-    @location(1) handle_index: u32,
+    @location(1) @interpolate(flat) handle_index: u32,
 };
 
 const PI: f32 = 3.141592653589793;

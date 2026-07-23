@@ -376,9 +376,11 @@ pub struct AdvancedPrimitiveYaml {
 
     #[serde(default)]
     pub ap_var: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
     pub x: f32,
     pub y: f32,
-    #[serde(skip_serializing_if = "is_one")]
+    #[serde(default)]
     pub scale: f32,
     pub misc: MiscButtonSettingsYaml,
     #[serde(default)]
@@ -389,6 +391,7 @@ pub struct AdvancedPrimitive {
     pub id: String,
     pub ap_name: String,
     pub ap_var: String,
+    pub actions: Vec<String>,
     pub x: f32,
     pub y: f32,
     pub scale: f32,
@@ -403,6 +406,7 @@ impl AdvancedPrimitive {
             id: yaml.name.clone(),
             ap_name: yaml.ap_name.clone(),
             ap_var: yaml.ap_var.clone(),
+            actions: yaml.actions.clone(),
             x: yaml.x,
             y: yaml.y,
             scale: yaml.scale,
@@ -410,7 +414,7 @@ impl AdvancedPrimitive {
                 active: yaml.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: yaml.misc.pressable,
+                touchable: yaml.misc.touchable,
                 editable: Editability::from_bool(yaml.misc.editable),
             },
             editing_tool: yaml.editing_tool,
@@ -422,12 +426,13 @@ impl AdvancedPrimitive {
             name: self.id.clone(),
             ap_name: self.ap_name.clone(),
             ap_var: self.ap_var.clone(),
+            actions: self.actions.clone(),
             x: self.x,
             y: self.y,
             scale: self.scale,
             misc: MiscButtonSettingsYaml {
                 active: self.misc.active,
-                pressable: self.misc.pressable,
+                touchable: self.misc.touchable,
                 editable: self.misc.editable.to_bool(),
             },
             editing_tool: self.editing_tool,
@@ -463,6 +468,7 @@ impl AdvancedPrimitive {
             name: self.id,
             ap_name: Some(self.ap_name),
             order,
+            actions: self.actions,
             elements,
             active: self.misc.active,
             ap_var: self.ap_var,
@@ -488,8 +494,7 @@ pub struct UiButtonRectYaml {
     )]
     pub id: String,
 
-    #[serde(default)]
-    #[serde(deserialize_with = "string_or_vec")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -594,7 +599,7 @@ impl UiButtonRect {
                 active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: e.misc.pressable,
+                touchable: e.misc.touchable,
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
@@ -844,6 +849,18 @@ impl UiElement {
         }
     }
 
+    pub fn is_touchable(&self) -> bool {
+        match self {
+            UiElement::Text(t) => t.misc.touchable,
+            UiElement::Circle(c) => c.misc.touchable,
+            UiElement::Outline(o) => o.misc.touchable,
+            UiElement::Handle(h) => h.misc.touchable,
+            UiElement::Polygon(p) => p.misc.touchable,
+            UiElement::Rect(r) => r.misc.touchable,
+            UiElement::Advanced(ap) => ap.misc.touchable,
+        }
+    }
+
     pub fn actions(&self) -> Vec<String> {
         match self {
             UiElement::Text(t) => t.actions.clone(),
@@ -853,6 +870,52 @@ impl UiElement {
             UiElement::Polygon(p) => p.actions.clone(),
             UiElement::Rect(r) => r.actions.clone(),
             UiElement::Advanced(_) => vec![],
+        }
+    }
+
+    pub fn set_actions(&mut self, actions: Vec<String>) {
+        match self {
+            UiElement::Text(e) => {
+                e.actions = actions;
+            }
+            UiElement::Circle(e) => {
+                e.actions = actions;
+            }
+            UiElement::Handle(e) => {}
+            UiElement::Outline(e) => {}
+            UiElement::Polygon(e) => {
+                e.actions = actions;
+            }
+            UiElement::Rect(e) => {
+                e.actions = actions;
+            }
+            UiElement::Advanced(e) => {}
+        }
+    }
+
+    pub fn set_active(&mut self, active: bool) {
+        match self {
+            UiElement::Text(e) => {
+                e.misc.active = active;
+            }
+            UiElement::Circle(e) => {
+                e.misc.active = active;
+            }
+            UiElement::Handle(e) => {
+                e.misc.active = active;
+            }
+            UiElement::Outline(e) => {
+                e.misc.active = active;
+            }
+            UiElement::Polygon(e) => {
+                e.misc.active = active;
+            }
+            UiElement::Rect(e) => {
+                e.misc.active = active;
+            }
+            UiElement::Advanced(e) => {
+                e.misc.active = active;
+            }
         }
     }
 
@@ -1380,6 +1443,7 @@ pub struct RuntimeLayer {
     pub name: String,
     pub ap_name: Option<String>,
     pub order: u32,
+    pub actions: Vec<String>,
     pub elements: Vec<UiElement>,
     pub active: bool,
     pub ap_var: String,
@@ -1554,6 +1618,10 @@ impl RuntimeLayer {
         }
         false
     }
+
+    pub fn activate_all_elements(&mut self) {
+        self.elements.iter_mut().for_each(|e| e.set_active(true))
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1563,6 +1631,9 @@ pub struct UiLayerYaml {
 
     #[serde(default, skip_serializing_if = "is_default")] // Skips if 0
     pub order: u32,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
 
     // Skips if None or Empty Vector
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1586,6 +1657,7 @@ impl Default for UiLayerYaml {
         Self {
             name: "Layer".to_string(),
             order: 0,
+            actions: vec![],
             elements: None,
             active: true,
             opaque: false,
@@ -1778,7 +1850,7 @@ pub struct MiscButtonSettings {
     pub active: bool,
     pub touched_time: f32,
     pub is_touched: bool,
-    pub pressable: bool,
+    pub touchable: bool,
     pub editable: Editability,
 }
 
@@ -1786,7 +1858,7 @@ impl MiscButtonSettings {
     pub fn to_yaml(&self) -> MiscButtonSettingsYaml {
         MiscButtonSettingsYaml {
             active: self.active,
-            pressable: self.pressable,
+            touchable: self.touchable,
             editable: self.editable.to_bool(),
         }
     }
@@ -1796,8 +1868,8 @@ impl MiscButtonSettings {
 pub struct MiscButtonSettingsYaml {
     #[serde(default)]
     pub active: bool,
-    #[serde(default)]
-    pub pressable: bool,
+    #[serde(default, alias = "pressable")]
+    pub touchable: bool,
     #[serde(default)]
     pub editable: bool,
 }
@@ -1806,7 +1878,7 @@ impl Default for MiscButtonSettingsYaml {
     fn default() -> Self {
         Self {
             active: true,
-            pressable: true,
+            touchable: true,
             editable: true,
         }
     }
@@ -1975,7 +2047,7 @@ impl UiButtonText {
                 active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: e.misc.pressable,
+                touchable: e.misc.touchable,
                 editable: Editability::from_bool(e.misc.editable),
             },
             width: 50.0,
@@ -2064,7 +2136,7 @@ impl UiButtonCircle {
                 active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: e.misc.pressable,
+                touchable: e.misc.touchable,
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
@@ -2134,7 +2206,7 @@ impl UiButtonHandle {
                 active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: e.misc.pressable,
+                touchable: e.misc.touchable,
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
@@ -2185,7 +2257,7 @@ impl UiButtonOutline {
                 active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: e.misc.pressable,
+                touchable: e.misc.touchable,
                 editable: Editability::from_bool(e.misc.editable),
             },
             yaml_element,
@@ -2245,7 +2317,7 @@ impl UiButtonPolygon {
                 active: e.misc.active,
                 touched_time: 0.0,
                 is_touched: false,
-                pressable: e.misc.pressable,
+                touchable: e.misc.touchable,
                 editable: Editability::from_bool(e.misc.editable),
             },
             tri_count: 0,
@@ -2512,6 +2584,7 @@ impl Default for AdvancedPrimitive {
             id: "default".to_string(),
             ap_name: "".to_string(),
             ap_var: String::new(),
+            actions: vec![],
             x: 0.0,
             y: 0.0,
             scale: 1.0,
@@ -2549,7 +2622,7 @@ impl Default for MiscButtonSettings {
             active: true,
             touched_time: 0.0,
             is_touched: false,
-            pressable: true,
+            touchable: true,
             editable: Editability::Editable,
         }
     }
@@ -2577,8 +2650,7 @@ pub struct UiButtonTextYaml {
     )]
     pub id: String,
 
-    #[serde(default)]
-    #[serde(deserialize_with = "string_or_vec")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2636,8 +2708,7 @@ pub struct UiButtonCircleYaml {
     )]
     pub id: String,
 
-    #[serde(default)]
-    #[serde(deserialize_with = "string_or_vec")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2804,8 +2875,7 @@ pub struct UiButtonPolygonYaml {
     )]
     pub id: String,
 
-    #[serde(default)]
-    #[serde(deserialize_with = "string_or_vec")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
 
     #[serde(

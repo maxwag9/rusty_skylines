@@ -4,8 +4,9 @@ use crate::world::statisticals::money::{IncomeDistribution, NUM_INCOME_CLASSES, 
 use rand::{Rng, RngExt};
 use rand_distr::Distribution;
 use rand_distr::Poisson;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -22,6 +23,7 @@ pub const WORKHORSE_AGE_RANGE: RangeInclusive<usize> =
     *YOUNG_ADULT_AGE_RANGE.start()..=*ADULT_AGE_RANGE.end();
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter)]
+#[revisioned(revision = 1)]
 pub enum LifeStage {
     Infant,     // 0–1
     Child,      // 2–7
@@ -82,6 +84,7 @@ impl From<LifeStage> for usize {
     }
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct LifeStageConfig {
     /// Multiplied against `base_mortality_rate` for citizens in this stage.
     pub mortality_multiplier: f64,
@@ -128,6 +131,7 @@ impl LifeStageConfig {
 
 /// Demographic state at a single point in time
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct DemographySnapshot {
     pub total_game_time: f64,
     pub population: u32,
@@ -138,9 +142,10 @@ pub struct DemographySnapshot {
 
 /// Rolling daily snapshots, capped at `capacity` (oldest dropped automatically).
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct DemographyHistory {
     /// One entry per in-game day, newest at the back.
-    pub daily: VecDeque<DemographySnapshot>,
+    pub daily: Vec<DemographySnapshot>,
 
     // Accumulators — reset on each flush
     pending_births: u32,
@@ -150,14 +155,14 @@ pub struct DemographyHistory {
 impl DemographyHistory {
     pub fn new() -> Self {
         Self {
-            daily: VecDeque::with_capacity((10.0 * DAYS_PER_YEAR) as usize),
+            daily: Vec::with_capacity((10.0 * DAYS_PER_YEAR) as usize),
             pending_births: 0,
             pending_deaths: 0,
         }
     }
 
     pub fn latest(&self) -> Option<&DemographySnapshot> {
-        self.daily.back()
+        self.daily.last()
     }
 
     fn accumulate(&mut self, births: u32, deaths: u32) {
@@ -166,15 +171,22 @@ impl DemographyHistory {
     }
 
     fn new_day(&mut self, total_game_time: f64, population: u32, ages: Groups) {
-        self.daily.push_back(DemographySnapshot {
+        self.daily.push(DemographySnapshot {
             total_game_time,
             population,
             ages,
             births: self.pending_births,
             deaths: self.pending_deaths,
         });
+
         self.pending_births = 0;
         self.pending_deaths = 0;
+
+        // Keep only the last 10 years of history.
+        // let max = (10.0 * DAYS_PER_YEAR) as usize;
+        // if self.daily.len() > max {
+        //     self.daily.remove(0);
+        // }
     }
 }
 
@@ -188,6 +200,7 @@ pub struct DemographyTick {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, Hash)]
+#[revisioned(revision = 1)]
 pub struct Groups {
     age_groups: [u32; MAX_AGE],
     education_groups: [[u32; EducationLevel::LEVELS]; MAX_AGE],
@@ -310,6 +323,7 @@ impl Groups {
     }
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct Demography {
     pub population: u32,
 

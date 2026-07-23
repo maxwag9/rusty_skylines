@@ -2,6 +2,7 @@ use crate::resources::Time;
 use crate::world::statisticals::demography::{Groups, LifeStage};
 use rand::RngExt;
 use rand::prelude::ThreadRng;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +50,7 @@ impl EducationLevel {
     }
 }
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct Education {
     non_educated_population_factor: f64,
     low_educated_population_factor: f64,

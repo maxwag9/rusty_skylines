@@ -1,9 +1,11 @@
 use crate::data::Settings;
 #[allow(unused_mut, unused_assignments)]
 use crate::ui::actions::UiCommand;
+use crate::ui::actions::{CommandContext, ElementContext, string_to_value};
 use crate::ui::input::Input;
 use crate::ui::menu::Menu;
-use crate::ui::ui_editor::Ui;
+use crate::ui::parser::Value;
+use crate::ui::ui_editor::{Ui, get_element_kind};
 use crate::ui::ui_touch_manager::UiTouchManager;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons, TouchEvent};
 use crate::ui::variables::Variables;
@@ -11,108 +13,81 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 
 /// Helper trait for parsing argument types
-trait ParseArg: Sized {
-    fn parse_arg(
-        settings: &Settings,
-        variables: &mut Variables,
-        menus: &HashMap<String, Menu>,
-        touch_manager: &UiTouchManager,
-        element: &ElementRef,
-        s: &str,
-    ) -> Option<Self>;
+pub trait ParseArg: Sized {
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self>;
 }
-
 impl ParseArg for String {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        Some(s.to_string())
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let s = args.get(*idx)?.clone();
+        *idx += 1;
+        Some(s)
     }
 }
 
+impl ParseArg for Option<String> {
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        if let Some(s) = args.get(*idx) {
+            *idx += 1;
+            Some(Some(s.clone()))
+        } else {
+            Some(None)
+        }
+    }
+}
 impl ParseArg for f32 {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        s.parse().ok()
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let value = args.get(*idx)?.parse().ok()?;
+        *idx += 1;
+        Some(value)
     }
 }
 
 impl ParseArg for f64 {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        s.parse().ok()
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let value = args.get(*idx)?.parse().ok()?;
+        *idx += 1;
+        Some(value)
     }
 }
 
 impl ParseArg for i32 {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        s.parse().ok()
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let value = args.get(*idx)?.parse().ok()?;
+        *idx += 1;
+        Some(value)
     }
 }
 
 impl ParseArg for u32 {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        s.parse().ok()
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let value = args.get(*idx)?.parse().ok()?;
+        *idx += 1;
+        Some(value)
     }
 }
 
 impl ParseArg for usize {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        s.parse().ok()
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let value = args.get(*idx)?.parse().ok()?;
+        *idx += 1;
+        Some(value)
     }
 }
 
 impl ParseArg for bool {
-    fn parse_arg(
-        _settings: &Settings,
-        _variables: &mut Variables,
-        _menus: &HashMap<String, Menu>,
-        _touch_manager: &UiTouchManager,
-        _element: &ElementRef,
-        s: &str,
-    ) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" | "on" | "enabled" => Some(true),
-            "false" | "0" | "no" | "off" | "disabled" => Some(false),
-            _ => None,
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        let value = args.get(*idx)?.parse().ok()?;
+        *idx += 1;
+        Some(value)
+    }
+}
+impl ParseArg for Option<bool> {
+    fn parse_arg(args: &[String], idx: &mut usize) -> Option<Self> {
+        if let Some(value) = args.get(*idx) {
+            *idx += 1;
+            Some(Some(value.parse().ok()?))
+        } else {
+            Some(None)
         }
     }
 }
@@ -128,12 +103,12 @@ macro_rules! define_commands {
 
         pub fn make_ui_command(
             settings: &Settings,
-            variables: &mut Variables,
+            variables: &Variables,
             menus: &HashMap<String, Menu>,
             touch_manager: &UiTouchManager,
             func_name: &str,
             args: Vec<String>,
-            element: &ElementRef,
+            element_ctx: &ElementContext,
             event_kind: &TouchEventKind,
             buttons: &MouseButtons
         ) -> Option<UiCommand> {
@@ -142,7 +117,7 @@ macro_rules! define_commands {
             match name.as_str() {
                 $(
                     $( $name )|+ => {
-                        define_commands!(@build settings, variables, menus, touch_manager, args, element, event_kind, buttons, $variant $( { $( $field : $ftype ),* } )?)
+                        define_commands!(@build settings, variables, menus, touch_manager, args, element_ctx, event_kind, buttons, $variant $( { $( $field : $ftype ),* } )?)
                     }
                 ),*,
                 _ => {
@@ -154,17 +129,17 @@ macro_rules! define_commands {
     };
 
     // unit variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $event_kind:ident, $buttons:ident, $variant:ident) => {
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $event_kind:ident, $buttons:ident, $variant:ident) => {
     Some(UiCommand::$variant)
     };
 
     // struct variant
-    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element:ident, $event_kind:ident, $buttons:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
+    (@build $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $element_ctx:ident, $event_kind:ident, $buttons:ident, $variant:ident { $( $field:ident : $ftype:ty ),* }) => {{
         let mut idx = 0usize;
 
         $(
             let $field = define_commands!(
-                @parse $settings, $vars, $menus, $tm, $args, idx, $element, $event_kind, $buttons, $field, $ftype
+                @parse $settings, $vars, $menus, $tm, $args, idx, $element_ctx, $event_kind, $buttons, $field, $ftype
             )?;
         )*
 
@@ -176,70 +151,25 @@ macro_rules! define_commands {
     // -----------------------------
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, element_ref, $ftype:ty) => {{
-        Some($element.clone())
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, element_ctx, $ftype:ty) => {{
+        Some($element_ctx.clone())
     }};
 
     // SPECIAL FIELD: event_kind
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, event_kind, $ftype:ty) => {{
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, event_kind, $ftype:ty) => {{
         Some($event_kind.clone())
     }};
 
     // SPECIAL FIELD: buttons
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, buttons, $ftype:ty) => {{
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, buttons, $ftype:ty) => {{
         Some($buttons.clone())
     }};
 
-    // -----------------------------
-    // SPECIAL FIELD: args
-    // -----------------------------
-
-    // (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-    //     $element:ident, $event_kind:ident, $buttons:ident, args, $ftype:ty) => {{
-    //     if let Some(raw) = $args.get($idx) {
-    //         #[allow(unused_assignments)]
-    //         {
-    //             $idx += 1;
-    //         }
-    //
-    //         let mut parts = Vec::new();
-    //         let mut start = 0;
-    //         let mut depth = 0isize; // Track () [] {}
-    //         let bytes = raw.as_bytes();
-    //
-    //         for i in 0..bytes.len() {
-    //             match bytes[i] {
-    //                 b'(' | b'[' | b'{' => depth += 1,
-    //                 b')' | b']' | b'}' => depth -= 1,
-    //                 b';' if depth == 0 => {
-    //                     // Only split on ';' if I are not inside brackets/parens
-    //                     let part = raw[start..i].trim();
-    //                     if !part.is_empty() {
-    //                         parts.push(part.to_string());
-    //                     }
-    //                     start = i + 1;
-    //                 }
-    //                 _ => {}
-    //             }
-    //         }
-    //
-    //         // Don't forget the last string after the final ';'
-    //         let part = raw[start..].trim();
-    //         if !part.is_empty() {
-    //             parts.push(part.to_string())
-    //         }
-    //
-    //         Some(parts)
-    //     } else {
-    //         Some(Vec::new())
-    //     }
-    // }};
-
     // SPECIAL FIELD: commands
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, commands, $ftype:ty) => {{
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, commands, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -259,9 +189,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
-                                cmds.push(cmd);
-                            }
+                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
                         }
                         start = i + 1;
                     }
@@ -272,9 +200,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
-                    cmds.push(cmd);
-                }
+                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
             }
 
             Some(cmds)
@@ -285,7 +211,7 @@ macro_rules! define_commands {
 
     // SPECIAL FIELD: then / else_branch
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, then, $ftype:ty) => {{
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, then, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -305,9 +231,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
-                                cmds.push(cmd);
-                            }
+                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
                         }
                         start = i + 1;
                     }
@@ -318,9 +242,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
-                    cmds.push(cmd);
-                }
+                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
             }
 
             Some(cmds)
@@ -330,7 +252,7 @@ macro_rules! define_commands {
     }};
 
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, else_branch, $ftype:ty) => {{
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, else_branch, $ftype:ty) => {{
         if let Some(raw) = $args.get($idx) {
             #[allow(unused_assignments)]
             {
@@ -350,9 +272,7 @@ macro_rules! define_commands {
                         // Only split on ';' if we are not inside brackets/parens
                         let part = raw[start..i].trim();
                         if !part.is_empty() {
-                            if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
-                                cmds.push(cmd);
-                            }
+                            cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
                         }
                         start = i + 1;
                     }
@@ -363,9 +283,7 @@ macro_rules! define_commands {
             // Don't forget the last command after the final ';'
             let part = raw[start..].trim();
             if !part.is_empty() {
-                if let Some(cmd) = parse_primitive_action($settings, $vars, $menus, $tm, part, $element, $event_kind, $buttons) {
-                    cmds.push(cmd);
-                }
+                cmds.extend(parse_primitive_action($settings, $vars, $menus, $tm, part, $element_ctx, $event_kind, $buttons))
             }
 
             Some(cmds)
@@ -374,7 +292,7 @@ macro_rules! define_commands {
         }
     }};
 
-    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element:ident, $event_kind:ident, $buttons:ident) => {{
+    (@branch $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident, $element_ctx:ident, $event_kind:ident, $buttons:ident) => {{
         let raw = $args.get($idx)?;
         #[allow(unused_assignments)]
         {
@@ -384,7 +302,7 @@ macro_rules! define_commands {
         let cmds = raw.split(';')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .filter_map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element, $event_kind, $buttons))
+            .map(|s| parse_primitive_action($settings, $vars, $menus, $tm, s, $element_ctx, $event_kind, $buttons)).flatten()
             .collect();
 
         Some(cmds)
@@ -392,20 +310,9 @@ macro_rules! define_commands {
 
     // GENERIC FIELD PARSER
     (@parse $settings:ident, $vars:ident, $menus:ident, $tm:ident, $args:ident, $idx:ident,
-        $element:ident, $event_kind:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
+        $element_ctx:ident, $event_kind:ident, $buttons:ident, $field:ident, $ftype:ty) => {{
 
-        let val = <$ftype as ParseArg>::parse_arg(
-            $settings,
-            $vars,
-            $menus,
-            $tm,
-            $element,
-            $args.get($idx)?
-        )?;
-        #[allow(unused_assignments)]
-        {
-            $idx += 1;
-        }
+        let val = <$ftype as ParseArg>::parse_arg(&$args, &mut $idx)?;
         Some(val)
     }};
 }
@@ -414,79 +321,76 @@ macro_rules! define_commands {
 define_commands! {
     // ===== MENU COMMANDS =====
     "open_menu" | "openmenu"
-        => OpenMenu { element_ref: ElementRef, menu_name: String },
+        => OpenMenu { element_ctx: ElementContext, menu_name: String },
 
     "close_menu" | "closemenu"
-        => CloseMenu { element_ref: ElementRef, menu_name: String },
+        => CloseMenu { element_ctx: ElementContext, menu_name: String },
 
     "close_all_menus" | "closeall"
         => CloseAllMenus,
     "close_all_layers"
-        => CloseAllLayers { element_ref: ElementRef, menu_name: String },
+        => CloseAllLayers { element_ctx: ElementContext, menu_name: String },
     "toggle_menu" | "togglemenu"
-        => ToggleMenu { element_ref: ElementRef, menu_name: String },
+        => ToggleMenu { element_ctx: ElementContext, menu_name: String },
 
     "menu_active" | "menuactive"
-        => MenuActive { element_ref: ElementRef, menu_name: String },
+        => MenuActive { element_ctx: ElementContext, menu_name: String },
 
     // ===== LAYER COMMANDS =====
     "open_layer" | "openlayer"
-        => OpenLayer { element_ref: ElementRef, menu_name: String, layer_name: String },
+        => OpenLayer { element_ctx: ElementContext, menu_name: String, layer_name: String },
 
     "close_layer" | "closelayer"
-        => CloseLayer { element_ref: ElementRef, menu_name: String, layer_name: String },
+        => CloseLayer { element_ctx: ElementContext, menu_name: String, layer_name: String },
 
     "toggle_layer" | "togglelayer"
-        => ToggleLayer { element_ref: ElementRef, menu_name: String, layer_name: String },
+        => ToggleLayer { element_ctx: ElementContext, menu_name: String, layer_name: String },
 
     // ===== VARIABLE COMMANDS =====
     "set_var" | "setvar" | "set"
-        => SetVar { element_ref: ElementRef, name: String, value: String },
+        => SetVar { element_ctx: ElementContext, name: String, value: String },
 
     "inc_var" | "incvar" | "inc"
-        => IncVar { element_ref: ElementRef, name: String, amount: String },
+        => IncVar { element_ctx: ElementContext, name: String, amount: String },
 
     "dec_var" | "decvar" | "dec"
-        => DecVar { element_ref: ElementRef, name: String, amount: String },
+        => DecVar { element_ctx: ElementContext, name: String, amount: String },
 
     "mul_var" | "mulvar" | "mul"
-        => MulVar { element_ref: ElementRef, name: String, factor: String },
+        => MulVar { element_ctx: ElementContext, name: String, factor: String },
 
     "toggle_var" | "togglevar" | "toggle"
-        => ToggleVar { element_ref: ElementRef, name: String },
+        => ToggleVar { element_ctx: ElementContext, name: String },
 
     "clamp" | "clampvar"
-        => Clamp { element_ref: ElementRef, name: String, min: String, max: String },
-
-    "set_var_expr" | "setexpr" | "set_expr"
-        => SetVarExpr { element_ref: ElementRef, name: String, expr: String },
+        => Clamp { element_ctx: ElementContext, name: String, min: String, max: String },
 
     // ===== FLOW CONTROL =====
     "delay" | "wait" | "sleep"
-        => Delay { element_ref: ElementRef, seconds: String },
+        => Delay { element_ctx: ElementContext, seconds: String },
 
     "halt" | "break"
         => Halt,
 
     "skip"
         => Skip { count: usize },
-    "for" | "forin" => For { element_ref: ElementRef, value: String, commands: Vec<UiCommand> },
-    "if" => If { element_ref: ElementRef, condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
+    "for" | "forin" => For { element_ctx: ElementContext, value: String, commands: Vec<UiCommand> },
+    "if" => If { element_ctx: ElementContext, condition: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand> },
 
     "ifvareq"
-        => IfVarEq { element_ref: ElementRef, var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
+        => IfVarEq { element_ctx: ElementContext, var_name: String, value: String, then: Vec<UiCommand>, else_branch: Vec<UiCommand>},
 
     "add_element" | "addelem" | "add"
-        => AddElement { element_ref: ElementRef, menu: String, layer: String, id: String, kind: String, center: String, undoable: bool},
+        => AddElement { element_ctx: ElementContext, menu: String, layer: String, id: String, kind: String, center: String, actions: String, undoable: bool},
 
     "add_ap" | "addap"
-        => AddAP { element_ref: ElementRef, menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
+        => AddAP { element_ctx: ElementContext, menu: String, name: String, ap_name: String, ap_var: String, center: String, scale: String, is_temporary: bool},
 
     "del_ap" | "delap"
-        => DeleteAP { element_ref: ElementRef, menu: String, layer: String, reference_id: String},
+        => DeleteAP { element_ctx: ElementContext, menu: String, layer: String, reference_id: String},
 
     "clone_element" | "cloneelem" | "clone"
-        => CloneElement { element_ref: ElementRef,
+        => CloneElement { element_ctx: ElementContext,
         from_menu: String,
         from_layer: String,
         from_id: String,
@@ -494,11 +398,12 @@ define_commands! {
         to_layer: String,
         to_id: String,
         center: String,
+        actions: String,
         undoable: bool
     },
 
     "clone_layer" | "clonelayer"
-        => CloneLayer { element_ref: ElementRef,
+        => CloneLayer { element_ctx: ElementContext,
         from_menu: String,
         from_layer: String,
         to_menu: String,
@@ -506,25 +411,24 @@ define_commands! {
         undoable: bool},
 
     "delete_element" | "delelem" | "delete"
-        => DeleteElement {element_ref: ElementRef, menu: String, layer: String, id: String, undoable: bool},
+        => DeleteElement { element_ctx: ElementContext, menu: String, layer: String, id: String, undoable: bool},
 
     "delete_layer" | "dellayer"
-        => DeleteLayer {element_ref: ElementRef, menu: String, layer: String, undoable: bool},
+        => DeleteLayer { element_ctx: ElementContext, menu: String, layer: String, undoable: bool},
 
     "save" | "savegame"
         => SaveGame,
 
     "load" | "loadgame" | "load_save"
-        => LoadSave { element_ref: ElementRef, save_name: String, without_saving: bool  },
+        => LoadSave { element_ctx: ElementContext, save_name: String, without_saving: bool  },
 
-    "exit" | "quit"
+    "exit_game" | "leave_game"
         => ExitGame,
 
-    "show_interaction" => ShowInteraction { element_ref: ElementRef, event_kind: TouchEventKind, buttons: MouseButtons, color: String, shadow: bool },
-    "snap_to" => SnapTo { element_ref: ElementRef, offset: String },
+    "show_interaction" => ShowInteraction { element_ctx: ElementContext, event_kind: TouchEventKind, buttons: MouseButtons, color: String, shadow: bool },
     // ===== DEBUG COMMANDS =====
     "print" | "log" | "echo"
-        => Print { element_ref: ElementRef, statement: String },
+        => Print { element_ctx: ElementContext, statement: String },
 
     "debug_vars" | "debugvars"
         => DebugVars,
@@ -532,12 +436,7 @@ define_commands! {
     "debug_menus" | "debugmenus"
         => DebugMenus,
 
-    "debug_actions" | "debugactions"
-        => DebugActions,
-
-    // ===== EVENT COMMANDS =====
-    "emit_event" | "emitevent" | "emit"
-        => EmitEvent { element_ref: ElementRef, event_name: String },
+    "call" => Call { element_ctx: ElementContext, event_kind: TouchEventKind, buttons: MouseButtons, function_name: String, args: Option<String> },
 
     // ===== UTILITY =====
     "noop" | "no_op" | "none"
@@ -561,13 +460,9 @@ pub enum TouchEventKind {
     Always,
     Activated,
     Deactivated,
+    StartUp,
 }
-pub fn actions_to_uicommands(
-    ui: &mut Ui,
-    event: &TouchEvent,
-    settings: &Settings,
-    input: &mut Input,
-) -> Vec<UiCommand> {
+pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Vec<UiCommand> {
     let (event_kind, actions, element, buttons) = match event {
         TouchEvent::HoverEnter { actions, element } => (
             TouchEventKind::HoverEnter,
@@ -629,7 +524,7 @@ pub fn actions_to_uicommands(
             delta,
         } => {
             //println!("SCROLLED!!");
-            ui.variables.set_f64("scroll_delta", *delta);
+            ctx.ui.variables.set_f64("scroll_delta", *delta);
             (
                 TouchEventKind::ScrollOnElement,
                 actions,
@@ -670,49 +565,74 @@ pub fn actions_to_uicommands(
             buttons,
             ..
         } => (TouchEventKind::Deactivated, actions, element, *buttons),
+        TouchEvent::StartUp { actions, element } => (
+            TouchEventKind::StartUp,
+            actions,
+            element,
+            MouseButtons::default(),
+        ),
         _ => return vec![],
     };
 
     let mut cmds = Vec::new();
+    let layer_actions = ctx
+        .ui
+        .menus
+        .get(element.menu.as_str())
+        .and_then(|m| m.layers.iter().find(|l| l.name == element.layer))
+        .map(|l| l.actions.clone())
+        .unwrap_or_default();
 
     for action in actions
         .iter()
-        .chain(ui.global_actions.actions.clone().iter())
+        .chain(ctx.ui.global_actions.element_actions.clone().iter())
+        .chain(layer_actions.iter())
     {
-        if let Some(cmd) = parse_action(action, ui, settings, input, &event_kind, &buttons, element)
-        {
-            cmds.push(cmd);
-        }
+        let element_ctx = ElementContext {
+            self_element: Some(element.clone()),
+            as_element: None,
+        };
+        cmds.extend(parse_action(
+            action,
+            ctx,
+            &event_kind,
+            &buttons,
+            element_ctx,
+        ))
     }
     cmds
 }
 pub fn parse_action(
     action: &String,
-    ui: &mut Ui,
-    settings: &Settings,
-    input: &mut Input,
+    ctx: &mut CommandContext,
     event_kind: &TouchEventKind,
     buttons: &MouseButtons,
-    element: &ElementRef,
-) -> Option<UiCommand> {
+    mut element_ctx: ElementContext,
+) -> Vec<UiCommand> {
     let mut action_owned = action.clone();
 
-    let filters = parse_action_filters(&mut action_owned);
+    let filters = parse_action_filters(ctx, &mut element_ctx, &mut action_owned);
 
-    if filters_match(input, settings, &filters, &event_kind, &buttons) {
+    if filters_match(
+        &mut ctx.world.input,
+        ctx.settings,
+        &filters,
+        &event_kind,
+        &buttons,
+    ) {
         // Now action_owned only contains the actual command
         return parse_primitive_action(
-            settings,
-            &mut ui.variables,
-            &ui.menus,
-            &ui.touch_manager,
+            ctx.settings,
+            &ctx.ui.variables,
+            &ctx.ui.menus,
+            &ctx.ui.touch_manager,
             action_owned.trim(),
-            element,
+            &element_ctx,
             event_kind,
             buttons,
         );
     };
-    None
+    vec![]
 }
 /// Handle a single action string that may be an event wrapper
 fn handle_action_str(
@@ -721,12 +641,12 @@ fn handle_action_str(
     event_kind: &TouchEventKind,
     buttons: &MouseButtons,
     action: &str,
-    element: &ElementRef,
-) -> Option<UiCommand> {
+    element_ctx: &ElementContext,
+) -> Vec<UiCommand> {
     let s = action.trim();
 
     if s.is_empty() {
-        return None;
+        return vec![];
     }
 
     let bytes = s.as_bytes();
@@ -740,7 +660,7 @@ fn handle_action_str(
 
     // Must have identifier followed by '(' for it to be a wrapper
     if pos == 0 || pos >= len || bytes[pos] != b'(' {
-        return None;
+        return vec![];
     }
 
     let wrapper = &s[..pos];
@@ -765,11 +685,11 @@ fn handle_action_str(
 
     let close_paren = match close_paren {
         Some(cp) => cp,
-        None => return None, // Unbalanced parens
+        None => return vec![], // Unbalanced parens
     };
 
     let inner = s[open_paren + 1..close_paren].trim();
-    process_inner_content(settings, ui, event_kind, buttons, inner, element)
+    process_inner_content(settings, ui, event_kind, buttons, inner, element_ctx)
 }
 
 /// Process the inner content of a matched event wrapper
@@ -779,12 +699,12 @@ fn process_inner_content(
     event_kind: &TouchEventKind,
     buttons: &MouseButtons,
     inner: &str,
-    element: &ElementRef,
-) -> Option<UiCommand> {
+    element_ctx: &ElementContext,
+) -> Vec<UiCommand> {
     let s = inner.trim();
 
     if s.is_empty() {
-        return None;
+        return vec![];
     }
 
     // Split by top-level commas and process each part
@@ -801,23 +721,30 @@ fn process_inner_content(
                 let last_part = s[part_start..i].trim();
                 if !last_part.is_empty() {
                     // Try as nested event wrapper first
-                    if let Some(cmd) =
-                        handle_action_str(settings, ui, event_kind, buttons, last_part, element)
-                    {
-                        return Some(cmd);
+                    let cmds = handle_action_str(
+                        settings,
+                        ui,
+                        event_kind,
+                        buttons,
+                        last_part,
+                        element_ctx,
+                    );
+                    if !cmds.is_empty() {
+                        return cmds;
                     }
                     // Try as primitive action
-                    if let Some(cmd) = parse_primitive_action(
+                    let cmds = parse_primitive_action(
                         settings,
                         &mut ui.variables,
                         &ui.menus,
                         &ui.touch_manager,
                         last_part,
-                        element,
+                        element_ctx,
                         event_kind,
                         buttons,
-                    ) {
-                        return Some(cmd);
+                    );
+                    if !cmds.is_empty() {
+                        return cmds;
                     }
                 }
                 part_start = i + 1;
@@ -830,26 +757,27 @@ fn process_inner_content(
     let last_part = s[part_start..].trim();
     if !last_part.is_empty() {
         // Try as nested event wrapper
-        if let Some(cmd) = handle_action_str(settings, ui, event_kind, buttons, last_part, element)
-        {
-            return Some(cmd);
+        let cmds = handle_action_str(settings, ui, event_kind, buttons, last_part, element_ctx);
+        if !cmds.is_empty() {
+            return cmds;
         }
         // Try as primitive action
-        if let Some(cmd) = parse_primitive_action(
+        let cmds = parse_primitive_action(
             settings,
             &mut ui.variables,
             &ui.menus,
             &ui.touch_manager,
             last_part,
-            element,
+            element_ctx,
             event_kind,
             buttons,
-        ) {
-            return Some(cmd);
+        );
+        if !cmds.is_empty() {
+            return cmds;
         }
     }
 
-    None
+    vec![]
 }
 
 /// Parse arguments from a string into a Vec<String>
@@ -1014,32 +942,103 @@ fn parse_arguments(args_str: &str) -> Vec<String> {
     args
 }
 
-/// Parse a primitive action and create a UiCommand
-/// Handles: "action_name" or "action_name(arg1, arg2, ...)"
+fn split_top_level_semicolons(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let len = s.len();
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut paren_depth = 0isize;
+    let mut bracket_depth = 0isize;
+    let mut brace_depth = 0isize;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for i in 0..len {
+        let b = bytes[i];
+
+        if in_string {
+            if escape {
+                escape = false;
+                continue;
+            }
+            match b {
+                b'\\' => escape = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match b {
+            b'"' => in_string = true,
+            b'(' => paren_depth += 1,
+            b')' => paren_depth -= 1,
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth -= 1,
+            b'{' => brace_depth += 1,
+            b'}' => brace_depth -= 1,
+            b';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                let part = s[start..i].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+
+    let part = s[start..].trim();
+    if !part.is_empty() {
+        parts.push(part);
+    }
+
+    parts
+}
+
 fn parse_primitive_action(
     settings: &Settings,
-    variables: &mut Variables,
+    variables: &Variables,
     menus: &HashMap<String, Menu>,
     touch_manager: &UiTouchManager,
     action: &str,
-    element: &ElementRef,
+    element_ctx: &ElementContext,
     event_kind: &TouchEventKind,
     buttons: &MouseButtons,
-) -> Option<UiCommand> {
+) -> Vec<UiCommand> {
     let s = action.trim();
 
     if s.is_empty() {
-        return None;
+        return Vec::new();
     }
 
-    // Check for function-call style: name(args)
+    let chained = split_top_level_semicolons(s);
+    if chained.len() > 1 {
+        return chained
+            .into_iter()
+            .flat_map(|part| {
+                parse_primitive_action(
+                    settings,
+                    variables,
+                    menus,
+                    touch_manager,
+                    part,
+                    element_ctx,
+                    event_kind,
+                    buttons,
+                )
+            })
+            .collect();
+    }
+
+    let mut out = Vec::new();
+
     if let Some(open_paren) = s.find('(') {
         let func_name = s[..open_paren].trim();
-
-        // Find matching close paren
         let bytes = s.as_bytes();
         let mut depth = 0isize;
         let mut close_paren = None;
+
         for i in open_paren..s.len() {
             match bytes[i] {
                 b'(' => depth += 1,
@@ -1058,39 +1057,61 @@ fn parse_primitive_action(
             let args_str = s[open_paren + 1..close_paren].trim();
             let args: Vec<String> = parse_arguments(args_str);
 
-            //println!("Primitive action: {}({:#?})", func_name, args); // Debug
-
-            let command = make_ui_command(
+            if let Some(cmd) = make_ui_command(
                 settings,
                 variables,
                 menus,
                 touch_manager,
                 func_name,
                 args,
-                element,
+                element_ctx,
                 event_kind,
                 buttons,
-            );
-            //println!("Command: {:?}", command);
-            return command;
+            ) {
+                out.push(cmd);
+            }
+
+            let rest = s[close_paren + 1..].trim();
+            if let Some(rest) = rest.strip_prefix(';') {
+                out.extend(parse_primitive_action(
+                    settings,
+                    variables,
+                    menus,
+                    touch_manager,
+                    rest,
+                    element_ctx,
+                    event_kind,
+                    buttons,
+                ));
+            }
+
+            return out;
         }
     }
 
-    //println!("Simple action: {}", s); // Debug
-    make_ui_command(
+    if let Some(cmd) = make_ui_command(
         settings,
         variables,
         menus,
         touch_manager,
         s,
         Vec::new(),
-        element,
+        element_ctx,
         event_kind,
         buttons,
-    )
+    ) {
+        out.push(cmd);
+    }
+
+    out
 }
 
-fn button_matches(input: &mut Input, button: ParsedButton, buttons: &MouseButtons) -> bool {
+fn button_matches(
+    input: &mut Input,
+    button: ParsedButton,
+    buttons: &MouseButtons,
+    keybind_trigger: KeyBindTrigger,
+) -> bool {
     let state = match button {
         ParsedButton::Any => return true,
         ParsedButton::Left => &buttons.left,
@@ -1098,24 +1119,60 @@ fn button_matches(input: &mut Input, button: ParsedButton, buttons: &MouseButton
         ParsedButton::Middle => &buttons.middle,
         ParsedButton::Back => &buttons.back,
         ParsedButton::Forward => &buttons.forward,
-        ParsedButton::Key(s) => {
-            let s = s.as_str();
-            return if input.ensure_known_action(s) {
-                input.action_down(s)
-            } else {
-                input.combo_down(s)
+        ParsedButton::Key(key) => {
+            return match keybind_trigger {
+                KeyBindTrigger::Down => {
+                    if input.action_known(&key) {
+                        input.action_down(&key)
+                    } else {
+                        input.combo_down(&key)
+                    }
+                }
+
+                KeyBindTrigger::Press => {
+                    if input.action_known(&key) {
+                        input.action_pressed_once(&key)
+                    } else {
+                        input.combo_pressed_once(&key)
+                    }
+                }
+
+                KeyBindTrigger::Release => {
+                    if input.action_known(&key) {
+                        let r = input.action_released(&key);
+                        r
+                    } else {
+                        input.combo_released(&key)
+                    }
+                }
+                KeyBindTrigger::Repeat => {
+                    if input.action_known(&key) {
+                        let r = input.action_repeat(&key);
+                        r
+                    } else {
+                        input.combo_repeat(&key)
+                    }
+                }
             };
-        } // } else {
-          //     println!("Invalid button filter: button:{}", value);
-          //     return None;
+        }
     };
     state.pressed || state.just_released
 }
+
 #[derive(Default, Debug)]
 struct ActionFilters {
     buttons: Vec<ParsedButton>,
     events: Vec<TouchEventKind>,
+    keybind_trigger: KeyBindTrigger,
     modes: Vec<String>,
+}
+#[derive(Default, Debug, Copy, Clone)]
+enum KeyBindTrigger {
+    #[default]
+    Down,
+    Press,
+    Release,
+    Repeat,
 }
 
 struct ParsedAction {
@@ -1123,7 +1180,11 @@ struct ParsedAction {
     command: String,
 }
 
-fn parse_action_filters(action: &mut String) -> ActionFilters {
+fn parse_action_filters(
+    ctx: &mut CommandContext,
+    element_ctx: &mut ElementContext,
+    action: &mut String,
+) -> ActionFilters {
     let mut filters = ActionFilters::default();
     let mut consumed = 0;
 
@@ -1141,8 +1202,10 @@ fn parse_action_filters(action: &mut String) -> ActionFilters {
         }
 
         let parsed = try_parse_button(rest, &mut filters)
+            .or_else(|| try_parse_trigger(rest, &mut filters))
             .or_else(|| try_parse_on(rest, &mut filters))
-            .or_else(|| try_parse_in(rest, &mut filters));
+            .or_else(|| try_parse_in(rest, &mut filters))
+            .or_else(|| try_parse_as(rest, &mut filters, element_ctx, ctx));
 
         let Some(used) = parsed else {
             break;
@@ -1183,6 +1246,26 @@ fn try_parse_button(input: &str, filters: &mut ActionFilters) -> Option<usize> {
     Some(consumed)
 }
 
+fn try_parse_trigger(input: &str, filters: &mut ActionFilters) -> Option<usize> {
+    let (value, consumed) = parse_prefixed_value(input, "trigger:")?;
+
+    filters.keybind_trigger = match value.to_ascii_lowercase().as_str() {
+        "down" | "d" => KeyBindTrigger::Down,
+        "press" | "p" => KeyBindTrigger::Press,
+        "release" | "r" => KeyBindTrigger::Release,
+        "repeat" | "rp" => KeyBindTrigger::Repeat,
+        _ => {
+            println!(
+                "Invalid Keybind trigger: {}, options are: down, d, press, p, release, r, repeat, rp",
+                value
+            );
+            return None;
+        }
+    };
+
+    Some(consumed)
+}
+
 fn try_parse_on(input: &str, filters: &mut ActionFilters) -> Option<usize> {
     let (value, consumed) = parse_prefixed_value(input, "on:")?;
 
@@ -1203,6 +1286,7 @@ fn try_parse_on(input: &str, filters: &mut ActionFilters) -> Option<usize> {
         "desel" => TouchEventKind::DeSelect,
         "activated" => TouchEventKind::Activated,
         "deactivated" => TouchEventKind::Deactivated,
+        "startup" => TouchEventKind::StartUp,
         _ => {
             println!("Invalid on filter: on:{}", value);
             return None;
@@ -1219,6 +1303,115 @@ fn try_parse_in(input: &str, filters: &mut ActionFilters) -> Option<usize> {
     Some(consumed)
 }
 
+fn try_parse_as(
+    input: &str,
+    filters: &mut ActionFilters,
+    element_ctx: &mut ElementContext,
+    ctx: &mut CommandContext,
+) -> Option<usize> {
+    let (raw, consumed) = parse_prefixed_value(input, "as:")?;
+    let Some(arr) = Value::parse_array(&ctx.settings, &ctx.ui.variables, raw.as_str()) else {
+        return Some(consumed);
+    };
+    let self_element = if let Some(current) = element_ctx.self_element.as_ref() {
+        current
+    } else if arr.len() == 3 {
+        &ElementRef::default()
+    } else {
+        return Some(consumed);
+    };
+    let mut resolve = |s: String| string_to_value(ctx, element_ctx, s).into_string();
+    //println!("{:?}", arr);
+    let (menu, layer, id) = match arr.as_slice() {
+        [id] => (
+            self_element.menu.clone(),
+            self_element.layer.clone(),
+            resolve(id.to_string()),
+        ),
+        [layer, id] => (
+            self_element.menu.clone(),
+            resolve(layer.to_string()),
+            resolve(id.to_string()),
+        ),
+        [menu, layer, id, ..] => (
+            resolve(menu.to_string()),
+            resolve(layer.to_string()),
+            resolve(id.to_string()),
+        ),
+        [] => return Some(consumed),
+    };
+    let Some(kind) = get_element_kind(&ctx.ui.menus, menu.as_str(), layer.as_str(), id.as_str())
+    else {
+        return Some(consumed);
+    }; // grad sport gleich sport, hmm grad sport, deswegen schwitze ich mama
+    let as_element = Some(ElementRef {
+        menu,
+        layer,
+        id,
+        kind,
+    });
+    //println!("{:?}", as_element);
+    element_ctx.as_element = as_element;
+
+    Some(consumed)
+}
+// fn try_parse_as(
+//     input: &str,
+//     filters: &mut ActionFilters,
+//     element_ctx: &mut ElementContext,
+//     ctx: &mut CommandContext
+// ) -> Option<usize> {
+//     let (raw, consumed) = parse_prefixed_value(input, "as:")?;
+//     let arr = Value::parse_array(&ctx.settings, &ctx.ui.variables, raw.as_str())?;
+//     let self_element = if let Some(current) = element_ctx.self_element.as_ref() {
+//         current
+//     } else if arr.len() == 3 {
+//         &ElementRef::default()
+//     } else { return Some(consumed) };
+//     let mut resolve = |s: String| string_to_value(ctx, element_ctx, s).into_string();
+//
+//
+//     let (menu, layer) = match arr.as_slice() {
+//         [_id] => (
+//             self_element.menu.clone(),
+//             self_element.layer.clone()
+//         ),
+//         [layer, _id] => (
+//             self_element.menu.clone(),
+//             resolve(layer.to_string())
+//         ),
+//         [menu, layer, _id, ..] => (
+//             resolve(menu.to_string()),
+//             resolve(layer.to_string())
+//         ),
+//         [] => return Some(consumed),
+//     };
+//     let mut as_elements = Vec::new();
+//     let mut resolve_ids = |id: &Value| {
+//         if let Some(arr_id) = id.as_array() {
+//             for id in arr_id.iter() {
+//                 let id = id.to_string();
+//                 let Some(kind) = get_element_kind(&ctx.ui.menus, menu.as_str(), layer.as_str(), id.as_str()) else { continue };
+//                 as_elements.push(ElementRef {
+//                     menu: menu.clone(),
+//                     layer: layer.clone(),
+//                     id,
+//                     kind
+//                 })
+//             }
+//         }
+//     };
+//     match arr.as_slice() {
+//         [id] => resolve_ids(id),
+//         [_layer, id] => resolve_ids(id),
+//         [_menu, _layer, id, ..] => resolve_ids(id),
+//         [] => return Some(consumed),
+//     };
+//     // grad sport gleich sport, hmm grad sport, deswegen schwitze ich mama
+//     element_ctx.as_elements = as_elements;
+//
+//     Some(consumed)
+// }
 fn parse_prefixed_value(input: &str, prefix: &str) -> Option<(String, usize)> {
     let rest = input.strip_prefix(prefix)?;
 
@@ -1243,17 +1436,42 @@ fn parse_prefixed_value(input: &str, prefix: &str) -> Option<(String, usize)> {
 }
 
 fn parse_bare_value(input: &str) -> Option<(String, usize)> {
-    let end = input
-        .char_indices()
-        .find(|&(_, c)| c.is_whitespace() || c == ',')
-        .map(|(i, _)| i)
-        .unwrap_or(input.len());
+    let mut square_depth = 0;
+    let mut curly_depth = 0;
+    let mut round_depth = 0;
 
-    if end == 0 {
-        return None;
+    for (i, c) in input.char_indices() {
+        match c {
+            '[' => square_depth += 1,
+            ']' => square_depth -= 1,
+            '{' => curly_depth += 1,
+            '}' => curly_depth -= 1,
+            '(' => round_depth += 1,
+            ')' => round_depth -= 1,
+
+            c if c.is_whitespace() && square_depth == 0 && curly_depth == 0 && round_depth == 0 => {
+                if i == 0 {
+                    return None;
+                }
+                return Some((input[..i].to_string(), i));
+            }
+
+            ',' if square_depth == 0 && curly_depth == 0 && round_depth == 0 => {
+                if i == 0 {
+                    return None;
+                }
+                return Some((input[..i].to_string(), i));
+            }
+
+            _ => {}
+        }
     }
 
-    Some((input[..end].to_string(), end))
+    if input.is_empty() {
+        None
+    } else {
+        Some((input.to_string(), input.len()))
+    }
 }
 
 fn parse_quoted_value(input: &str) -> Option<(String, usize)> {
@@ -1284,10 +1502,6 @@ fn trim_leading_whitespace(s: &str) -> (&str, usize) {
     (trimmed, consumed)
 }
 
-fn starts_with_filter_prefix(s: &str) -> bool {
-    s.starts_with("button:") || s.starts_with("on:") || s.starts_with("in:")
-}
-
 fn filters_match(
     input: &mut Input,
     settings: &Settings,
@@ -1300,7 +1514,7 @@ fn filters_match(
         let any_button_matches = filters
             .buttons
             .iter()
-            .any(|b| button_matches(input, b.clone(), buttons));
+            .any(|b| button_matches(input, b.clone(), buttons, filters.keybind_trigger));
         if !any_button_matches {
             return false;
         }
@@ -1325,6 +1539,7 @@ fn filters_match(
         let any_mode_matches = filters.modes.iter().any(|m| match m.as_str() {
             "editor_mode" => settings.editor_mode,
             "play_mode" => !settings.editor_mode,
+            "any" => true,
             // Add more modes here as needed
             other => {
                 println!("Unknown mode filter: '{}'", other);

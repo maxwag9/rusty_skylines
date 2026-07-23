@@ -4,6 +4,39 @@ layers:
     order: 2
     elements:
       - !Rect
+        id: Background
+        actions: [ ]
+        x: 0.5
+        y: 0.5
+        w: 1.0
+        h: 1.0
+        rotation: 0.0
+        color:
+          - 0.03
+          - 0.03
+          - 0.03
+          - 1.0
+        border_color:
+          - 0.1
+          - 0.1
+          - 0.1
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: false
+          editable: false
+      - !Rect
         id: Center Line
         actions: [ ]
         x: 0.5
@@ -51,10 +84,7 @@ layers:
       - !Text
         id: back_text
         actions:
-          - on:r set(str:editor_mode, false)
-          - on:r set(str:override_mode, false)
-          - on:r close_all_menus
-          - on:r open_menu(str:MainMenu)
+          - on:r call(open_main_menus)
         x: 0.1
         y: 0.05
         pt: 18.0
@@ -134,17 +164,16 @@ layers:
           - on:n button:a set(str:self.center.y, {self.center.y} + {ball.velocity.y} * {ball.speed})
           - on:n button:a if({self.center.y} < {self.radius}, if({ball.velocity.y} * {ball.speed} < 0, set(str:ball.velocity.y, -{ball.velocity.y})))
           - on:n button:a if({self.center.y} > {screen.y} - {self.radius}, if({ball.velocity.y} * {ball.speed} > 0, set(str:ball.velocity.y, -{ball.velocity.y})))
-          - on:n button:a if({self.center.x} - {self.radius} < {left_paddle.center.x} + {left_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {left_paddle.center.x} - {left_paddle.size.x}*0.5 && {self.center.y} > {left_paddle.center.y} - {left_paddle.size.y}*0.5 && {self.center.y} < {left_paddle.center.y} + {left_paddle.size.y}*0.5 && {ball.velocity.x} < 0, set(str:ball.velocity.x, -{ball.velocity.x}); set(str:left_paddle.knock_x, -15); set(str:ball.squish, 0.65))
-          - on:n button:a if({self.center.x} - {self.radius} < {right_paddle.center.x} + {right_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {right_paddle.center.x} - {right_paddle.size.x}*0.5 && {self.center.y} > {right_paddle.center.y} - {right_paddle.size.y}*0.5 && {self.center.y} < {right_paddle.center.y} + {right_paddle.size.y}*0.5 && {ball.velocity.x} > 0, set(str:ball.velocity.x, -{ball.velocity.x}); set(str:right_paddle.knock_x, 15); set(str:ball.squish, 0.65))
-          - on:n button:a if({self.center.x} < 0, set(str:ball.visitor_score, {ball.visitor_score} + 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, random(-1.5, 1.5)); set(str:self.center.x, {screen.x} * 0.5); set(str:self.center.y, {screen.y} * 0.5); )
-          - on:n button:a if({self.center.x} > {screen.x}, inc(str:ball.home_score, 1))
-          - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.x, -1.5))
-          - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.y, random(-1.5, 1.5)))
-          - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.x, {screen.x} * 0.5))
-          - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.y, {screen.y} * 0.5))
-          # Smooth squish recovery (lerp back to 1.0)
-          - on:n button:a set(str:ball.squish, {ball.squish} * 0.78 + 0.22)
-          - on:n button:a set(str:self.radius, {ball.orig_radius} * {ball.squish})
+        #    - on:n button:a if({self.center.x} - {self.radius} < {left_paddle.center.x} + {left_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {left_paddle.center.x} - {left_paddle.size.x}*0.5 && {self.center.y} > {left_paddle.center.y} - {left_paddle.size.y}*0.5 && {self.center.y} < {left_paddle.center.y} + {left_paddle.size.y}*0.5 && {ball.velocity.x} < 0, set(str:ball.velocity.x, -{ball.velocity.x}); set(str:left_paddle.knock_x, -15); set(str:ball.squish, 0.65))
+        #    - on:n button:a if({self.center.x} - {self.radius} < {right_paddle.center.x} + {right_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {right_paddle.center.x} - {right_paddle.size.x}*0.5 && {self.center.y} > {right_paddle.center.y} - {right_paddle.size.y}*0.5 && {self.center.y} < {right_paddle.center.y} + {right_paddle.size.y}*0.5 && {ball.velocity.x} > 0, set(str:ball.velocity.x, -{ball.velocity.x}); set(str:right_paddle.knock_x, 15); set(str:ball.squish, 0.65))
+        #    - on:n button:a if({self.center.x} < 0, set(str:ball.visitor_score, {ball.visitor_score} + 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, random(-1.5, 1.5)); set(str:self.center.x, {screen.x} * 0.5); set(str:self.center.y, {screen.y} * 0.5); )
+        #    - on:n button:a if({self.center.x} > {screen.x}, inc(str:ball.home_score, 1))
+        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.x, -1.5))
+        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.y, random(-1.5, 1.5)))
+        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.x, {screen.x} * 0.5))
+        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.y, {screen.y} * 0.5))
+        #    - on:n button:a set(str:ball.squish, {ball.squish} * 0.78 + 0.22)
+        #    - on:n button:a set(str:self.radius, {ball.orig_radius} * {ball.squish})
         style: Hue Circle
         x: 0.6
         y: 0.5
@@ -175,10 +204,10 @@ layers:
           - on:n button:"KeyS" if({self.center.y} + {self.size.y}*0.5 < {screen.y} - ({paddle_speed}+1), set(str:self.center.y, {self.center.y} + {paddle_speed}))
           - on:n button:a set(str:left_paddle.size, self.size)
           - on:n button:a set(str:left_paddle.center, self.center)
-          # Smooth physics knockback + spring return
           - on:n button:a if({left_paddle.knock_x} != 0.0, set(str:self.center.x, {self.center.x} + {left_paddle.knock_x}); set(str:left_paddle.knock_x, {left_paddle.knock_x} * 0.82))
           - on:n button:a set(str:self.center.x, {self.center.x} * 0.92 + {left_paddle.orig_center_x} * 0.08)
-        x: 0.02
+          #- button:a show_interaction([0.5, 1.0, 0.5, 1.0], true)
+        x: 0.014140624
         y: 0.5
         w: 0.02
         h: 0.2
@@ -219,12 +248,10 @@ layers:
           - on:n button:"ArrowDown" if({self.center.y} + {self.size.y}*0.5 < {screen.y} - ({paddle_speed}+1), set(str:self.center.y, {self.center.y} + {paddle_speed}))
           - on:n button:a set(str:right_paddle.size, self.size)
           - on:n button:a set(str:right_paddle.center, self.center)
-          # Smooth physics knockback + spring return
-          - on:n button:a if({right_paddle.knock_x} != 0.0,
-            set(str:self.center.x, {self.center.x} + {right_paddle.knock_x});
-            set(str:right_paddle.knock_x, {right_paddle.knock_x} * 0.82))
+          - on:n button:a if({right_paddle.knock_x} != 0.0, set(str:self.center.x, {self.center.x} + {right_paddle.knock_x}); set(str:right_paddle.knock_x, {right_paddle.knock_x} * 0.82))
           - on:n button:a set(str:self.center.x, {self.center.x} * 0.92 + {right_paddle.orig_center_x} * 0.08)
-        x: 0.98
+          #- button:a show_interaction([1.0, 0.5, 0.5, 1.0], true)
+        x: 0.9858594
         y: 0.5
         w: 0.02
         h: 0.2

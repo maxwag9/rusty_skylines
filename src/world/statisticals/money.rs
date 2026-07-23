@@ -5,12 +5,14 @@ use crate::world::roads::road_structs::{CrossingPoint, RoadType};
 use crate::world::statisticals::demands::JobOccupancy;
 use crate::world::statisticals::demography::{Groups, LifeStage, MAX_AGE};
 use rand::{Rng, RngExt};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
 #[derive(Serialize, Deserialize, Clone)]
+#[revisioned(revision = 1)]
 pub struct Economy {
     pub money: i64, // Dollars? Euros? Depends on everything in my game, depends on supply chains, supply and demand, the third housing crisis and the obese president ruling the country!
                     // TAXES!! Handled in district updates
@@ -65,6 +67,7 @@ pub fn calculate_road_cost(
 /// Stored on `Demography` so it can be tuned per-scenario (e.g. a flat-tax
 /// reform or austerity policy) without touching the distribution logic.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct TaxConfig {
     /// Annual pre-tax income in € for a fully-productive worker of each class.
     /// [Poor, Working, Middle, Upper, Wealthy]
@@ -174,6 +177,7 @@ impl IncomeClass {
 /// - **`apply_annual_transitions`** — a per-LifeStage Markov matrix drives
 ///   income mobility once per simulated year.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct IncomeDistribution {
     /// `shares[ic][age]` ∈ [0, 1]. Each column sums to 1.0.
     shares: [[f64; MAX_AGE]; NUM_INCOME_CLASSES],
@@ -388,6 +392,7 @@ fn stage_transition_matrix(stage: &LifeStage) -> IncomeTransitionMatrix {
 
 /// Revenue and tax parameters for one non-residential zone type.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct ZoneTaxBand {
     /// Annual gross revenue per m² of *total* floor area (all storeys),
     /// at full efficiency and full occupancy.
@@ -399,6 +404,7 @@ pub struct ZoneTaxBand {
 /// Per-district corporate tax config. Stored on `ZoningDemand`, completely
 /// decoupled from the residential `TaxConfig` on `Demography`.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct CorporateTaxConfig {
     pub commercial: ZoneTaxBand,
     pub industrial: ZoneTaxBand,

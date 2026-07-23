@@ -233,7 +233,6 @@ impl Time {
         };
 
         self.total_time += self.render_dt as f64;
-        self.frame_count += 1;
 
         let speed_changed = (time_speed - self.current_time_speed).abs() > 1e-6;
         self.speed_just_changed = speed_changed;
@@ -251,6 +250,9 @@ impl Time {
 
         // time_speed scaling only applies to the sim accumulator
         self.sim_accumulator += self.render_dt * time_speed.abs();
+    }
+    pub fn end_frame(&mut self) {
+        self.frame_count += 1;
     }
     pub fn update_achieved_speed(&mut self, steps: u32) {
         self.achieved_speed_window_steps += steps;
@@ -336,6 +338,11 @@ impl Time {
             self.total_game_time = (self.total_game_time - dt).max(0.0);
         };
         self.update_hour();
+    }
+
+    #[inline]
+    pub fn game_just_started(&self) -> bool {
+        self.frame_count == 0
     }
 }
 

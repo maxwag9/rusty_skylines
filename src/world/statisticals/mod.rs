@@ -3,6 +3,7 @@ use crate::world::buildings::buildings::Buildings;
 use crate::world::buildings::zoning::Zoning;
 use crate::world::statisticals::money::Economy;
 use crate::world::statisticals::schedule::Schedule;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 
 pub mod demands;
@@ -13,6 +14,7 @@ pub mod schedule;
 pub mod transports;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
+#[revisioned(revision = 1)]
 pub struct CityState {
     pub world_population: u64,
     pub schedule: Schedule,

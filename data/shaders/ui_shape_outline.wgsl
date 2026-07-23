@@ -44,13 +44,13 @@ var<storage, read> poly_vertices: array<UiVertexPoly>;
 struct VertexInput {
     @location(0) pos: vec2<f32>,   // unit quad vertices (e.g. in [-1, 1])
     @location(1) color: vec4<f32>, // unused here, but kept for compatibility
-    @builtin(instance_index) instance: u32,
+    @builtin(instance_index)  instance: u32,
 };
 
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
     @location(0) local_pos: vec2<f32>, // world/screen-space position in pixels
-    @location(1) shape_index: u32,
+    @location(1) @interpolate(flat) shape_index: u32,
     @location(2) center: vec2<f32>,
 };
 const MAX_POLY_VERTS: u32 = 64u;

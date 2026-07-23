@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_variables)]
 use crate::world::roads::road_mesh_manager::{ChunkId, chunk_coord_to_id};
 use glam::{Vec2, Vec3};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -19,17 +20,20 @@ pub fn set_chunk_size(cs: ChunkSize) {
 }
 pub const CHUNK_MIN_Y: f32 = -1024.0;
 pub const CHUNK_MAX_Y: f32 = 4096.0;
+#[revisioned(revision = 1)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Hash, Eq, PartialEq, Default)]
 pub struct ChunkCoord {
     pub x: i32,
     pub z: i32,
 }
+#[revisioned(revision = 1)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub struct LocalPos {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
+#[revisioned(revision = 1)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Hash)]
 pub struct WorldPos {
     pub chunk: ChunkCoord,

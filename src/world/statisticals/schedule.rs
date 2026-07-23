@@ -1,7 +1,9 @@
 use crate::resources::Time;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[revisioned(revision = 1)]
 pub enum SchedulePhase {
     Night,
     CommuteToWork,
@@ -12,6 +14,7 @@ pub enum SchedulePhase {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[revisioned(revision = 1)]
 pub struct Schedule {
     pub phase: SchedulePhase,
 

@@ -5,9 +5,9 @@ elements:
     id: Zoning Border
     actions:
       - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_height, {self.size.y})
-      - on:activated button:a, print(zoning_demand_indicator_{ap}_border_height)
+      #- on:activated button:a, print(zoning_demand_indicator_{ap}_border_height)
       - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_y, {self.center.y})
-      - on:activated button:a, print(zoning_demand_indicator_{ap}_border_y)
+      #- on:activated button:a, print(zoning_demand_indicator_{ap}_border_y)
     x: 0.0
     y: 0.0
     w: 0.0105

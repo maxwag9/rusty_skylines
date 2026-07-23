@@ -1,3 +1,29 @@
-actions:
+element_actions:
   - button:r, on:r, in:editor_mode, open_layer(str:Editor_Menu, str:Color Picker)
   - button:a, on:desel, in:editor_mode, close_layer(str:Editor_Menu, str:Color Picker)
+
+global_actions:
+
+  # Menus for each screen
+  - button:a, on:startup in:any, set(str:main_menus, [MainMenu, EditorGUI]);
+  - button:a, on:startup in:any, set(str:settings_menus, [Settings]);
+  - button:a, on:startup in:any, set(str:play_menus, [GUI]);
+  - button:a, on:startup in:any, set(str:editor_menus, [Editor_Menu, EditorGUI]);
+  #  - button:a, if(!{bool(before_editor_mode)} && {editor_mode}, print(AMOGUSZ); close_all_menus(); call(open_editor_menus))
+  #  - button:a, if({bool(before_editor_mode)} && !{editor_mode}, close_all_menus(); open_menu(prev_menus))
+  #  - button:a, set(str:before_editor_mode, editor_mode)
+  #- button:a, if(!editor_mode, set(str:prev_menus, active_menus))
+  - button:any on:startup in:any, set(str:open_prev, "button:a in:any, close_all_menus(); open_menu(prev_menus);")
+  - button:any on:startup in:any, set(str:open_main_menus, "button:a in:any, set(str:editor_mode, false); set(str:show_gui, true); set(str:prev_menus, active_menus); close_all_menus(); open_menu(main_menus)")
+  - button:any on:startup in:any, set(str:open_settings_menus, "button:a, set(str:prev_menus, active_menus); close_all_menus(); open_menu(settings_menus)")
+  - button:any on:startup in:any, set(str:open_play_menus, "button:a, set(str:prev_menus, active_menus); close_all_menus(); open_menu(play_menus); if(debug_mode == true, open_menu(Debug_Menu); );" )
+  - button:any on:startup in:any, set(str:open_editor_menus, "button:a in:any, set(str:prev_menus, active_menus); open_menu(editor_menus); set(str:editor_mode, true); set(str:show_gui, true); set(str:show_world, false); close_all_layers(Editor_Menu);")
+  - button:a, on:startup in:any, set(str:editor_mode, false); call(open_main_menus);
+  #
+  #  - button:a, on:startup, set(str:func_name, ["button:l on:release, print(hi)", "button:r on:down, print(you have chosen the dark side!! {args.0})"])
+  #  - button:a on:always, call(func_name, ["HURENSOHN HAHA!!"])
+  - button:"Leave Game" trigger:r, menu_active(MainMenu); if({_result}==true, exit_game());
+  - button:"Exit to Main Menu" trigger:r in:any, call(open_main_menus); #  #if({_result} == true, )
+  #
+  - button:"KeyQ" trigger:r in:any, debug_menus();
+  - button:"Toggle editor mode" trigger:repeat in:any, toggle(str:editor_mode); if({editor_mode}, call(open_editor_menus));

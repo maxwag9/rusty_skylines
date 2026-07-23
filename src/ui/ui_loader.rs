@@ -369,6 +369,7 @@ fn synth_layer(rng: &mut SimpleRng, menu_idx: usize, layer_idx: usize) -> UiLaye
     UiLayerYaml {
         name,
         order: order as u32,
+        actions: vec![], // TODO: make actions be synthesized, would create crazy things!
         elements: Some(elements),
         active: true,
         opaque: rng.next_bool(),
@@ -393,7 +394,7 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         text: synth_text_string(rng),
         misc: MiscButtonSettingsYaml {
             active: true,
-            pressable: rng.next_bool(),
+            touchable: rng.next_bool(),
             editable: rng.next_bool(),
         },
         input_box: rng.next_bool(),
@@ -443,7 +444,7 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
         },
         misc: MiscButtonSettingsYaml {
             active: true,
-            pressable: rng.next_bool(),
+            touchable: rng.next_bool(),
             editable: rng.next_bool(),
         },
     }
@@ -481,7 +482,7 @@ fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
         },
         misc: MiscButtonSettingsYaml {
             active: true,
-            pressable: rng.next_bool(),
+            touchable: rng.next_bool(),
             editable: rng.next_bool(),
         },
         parent: None,
@@ -528,7 +529,7 @@ fn synth_outline(rng: &mut SimpleRng) -> UiButtonOutlineYaml {
         },
         misc: MiscButtonSettingsYaml {
             active: true,
-            pressable: rng.next_bool(),
+            touchable: rng.next_bool(),
             editable: rng.next_bool(),
         },
     }
@@ -560,7 +561,7 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
         vertices: verts,
         misc: MiscButtonSettingsYaml {
             active: true,
-            pressable: rng.next_bool(),
+            touchable: rng.next_bool(),
             editable: rng.next_bool(),
         },
     }

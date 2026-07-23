@@ -1,9 +1,11 @@
 use crate::world::buildings::zoning::ZoningType;
 use crate::world::statisticals::schedule::SchedulePhase;
 use rand::{Rng, RngExt};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[revisioned(revision = 1)]
 pub struct TransportStats {
     pub commuting_outbound: u32,
     pub commuting_inbound: u32,

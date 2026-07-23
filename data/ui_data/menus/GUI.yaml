@@ -7,9 +7,9 @@ layers:
         id: GUI Upper Background
         actions: [ ]
         x: 0.5
-        y: 0.945
+        y: 0.959
         w: 1.0
-        h: 0.03
+        h: 0.08
         rotation: 0.0
         color:
           - 0.025
@@ -75,7 +75,6 @@ layers:
         ap_var: sim_running
         x: 0.03
         y: 0.96
-        scale: 1.0
         misc:
           active: true
           pressable: false
@@ -110,8 +109,7 @@ layers:
       - !Text
         id: world_population_text
         actions:
-          #- button:a print({world_population}>3&&!bool({reached_300_pop}))
-          - button:a if({world_population}>300 && !bool({reached_300_pop}), set_var(str:reached_300_pop, true); close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_300_citizens))
+          - button:a if({world_population}>300 && !bool({reached_300_pop}), set_var(str:reached_300_pop); close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_300_citizens))
           - button:a if({world_population}>1200, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_1200_citizens))
           - button:a if({world_population}>4500, close_all_layers(str:Milestones); open_layer(str:Milestones, str:milestone_4500_citizens))
         x: 0.87
@@ -280,78 +278,6 @@ layers:
           - 1.0
           - 0.9
         text: 'Office Attractiveness: {office_attractiveness}'
-      - !Rect
-        id: set_none_zone
-        actions:
-          - set(str:new_zone_type, none)
-          - on:r set(str:cursor_mode, Zoning)
-          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
-        x: 0.16796875
-        y: 0.96428573
-        w: 0.02
-        h: 0.02
-        rotation: 0.0
-        color:
-          - 0.72
-          - 0.72
-          - 0.65
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.003
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
-        misc:
-          active: true
-          pressable: true
-          editable: true
-      - !Rect
-        id: set_residential_zone
-        actions:
-          - set(str:new_zone_type, residential)
-          - on:r set(str:cursor_mode, Zoning)
-          - button:a show_interaction([0.005, 0.72, 0.1, 1.0])
-        x: 0.19140625
-        y: 0.96428573
-        w: 0.02
-        h: 0.02
-        rotation: 0.0
-        color:
-          - 0.005
-          - 0.72
-          - 0.1
-          - 0.99
-        border_color:
-          - 1.0
-          - 1.0
-          - 1.0
-          - 1.0
-        texture: null
-        roundness: 0.0
-        border_thickness_percentage: 0.001
-        fade: 0.0
-        blur: 0.0
-        glow_color:
-          - 0.0
-          - 0.0
-          - 0.0
-          - 0.0
-        glow_misc: { }
-        misc:
-          active: true
-          pressable: true
-          editable: true
       - !Advanced
         name: residential_demand_indicator
         ap_name: zoning_demand_indicator
@@ -401,11 +327,182 @@ layers:
           editable: true
         editing_tool: false
       - !Rect
+        id: set_none_zone_shadow
+        actions: [ ]
+        x: 0.16992188
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0072000003
+          - 0.0072000003
+          - 0.0064999997
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.003
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_none_zone
+        actions:
+          - set(str:new_zone_type, none)
+          - on:r set(str:cursor_mode, Zoning)
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0], true)
+        x: 0.16796875
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.72
+          - 0.72
+          - 0.65
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.003
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_residential_zone_shadow
+        actions: [ ]
+        x: 0.19335938
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.00005
+          - 0.0072000003
+          - 0.001
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_residential_zone
+        actions:
+          - set(str:new_zone_type, residential)
+          - on:r set(str:cursor_mode, Zoning)
+          - button:a show_interaction([0.005, 0.72, 0.1, 1.0], true)
+        x: 0.19140625
+        y: 0.96428573
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.005
+          - 0.72
+          - 0.1
+          - 0.99
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_commercial_zone_shadow
+        actions: [ ]
+        x: 0.21679688
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.00005
+          - 0.001
+          - 0.0072000003
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
         id: set_commercial_zone
         actions:
           - set(str:new_zone_type, commercial)
           - on:r set(str:cursor_mode, Zoning)
-          - button:a show_interaction([0.005, 0.1, 0.72, 1.0])
+          - button:a show_interaction([0.005, 0.1, 0.72, 1.0], true)
         x: 0.21484375
         y: 0.96428573
         w: 0.02
@@ -423,7 +520,40 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.001
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_industrial_zone_shadow
+        actions: [ ]
+        x: 0.24023438
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0072000003
+          - 0.0072000003
+          - 0.001
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -441,7 +571,7 @@ layers:
         actions:
           - set(str:new_zone_type, industrial)
           - on:r set(str:cursor_mode, Zoning)
-          - button:a show_interaction([0.72, 0.72, 0.1, 1.0])
+          - button:a show_interaction([0.72, 0.72, 0.1, 1.0], true)
         x: 0.23828125
         y: 0.96428573
         w: 0.02
@@ -459,7 +589,40 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.001
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_office_zone_shadow
+        actions: [ ]
+        x: 0.26367188
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0072000003
+          - 0.001
+          - 0.0072000003
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -477,7 +640,7 @@ layers:
         actions:
           - set(str:new_zone_type, office)
           - on:r set(str:cursor_mode, Zoning)
-          - button:a show_interaction([0.72, 0.1, 0.72, 1.0])
+          - button:a show_interaction([0.72, 0.1, 0.72, 1.0], true)
         x: 0.26171875
         y: 0.96428573
         w: 0.02
@@ -495,7 +658,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.001
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -529,7 +692,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.003
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -539,6 +702,42 @@ layers:
           - 0.0
         glow_misc: { }
         misc:
+          active: false
+          pressable: true
+          editable: true
+      - !Rect
+        id: set_cursor_to_destruction_shadow
+        actions: [ ]
+        x: 0.6599219
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0072000003
+          - 0.0002
+          - 0.0005
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 0.0
+          - 1.0
+        texture: null
+        roundness: 0.1
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.6
+          - 0.0
+          - 0.0
+          - 1.0
+        glow_misc:
+          glow_size: 10.0
+          glow_speed: 0.1
+          glow_intensity: 0.5
+        misc:
           active: true
           pressable: true
           editable: true
@@ -546,7 +745,7 @@ layers:
         id: set_cursor_to_destruction
         actions:
           - on:r set(str:cursor_mode, Destruction)
-          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0], true)
         x: 0.65796876
         y: 0.96428573
         w: 0.02
@@ -564,7 +763,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.1
-        border_thickness_percentage: 0.02
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -581,11 +780,44 @@ layers:
           pressable: true
           editable: true
       - !Rect
+        id: set_cursor_to_road_shadow
+        actions: [ ]
+        x: 0.096953124
+        y: 0.9664286
+        w: 0.02
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0002
+          - 0.0002
+          - 0.0005
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
         id: set_cursor_to_road
         actions:
           - on:r set(str:cursor_mode, Roads)
-          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
-        x: 0.057968747
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0], true)
+        x: 0.095
         y: 0.96428573
         w: 0.02
         h: 0.02
@@ -602,7 +834,40 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.003
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: add_road_lane_shadow
+        actions: [ ]
+        x: 0.121953115
+        y: 0.9664286
+        w: 0.014999999
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0042
+          - 0.0082
+          - 0.0045
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -619,10 +884,10 @@ layers:
         id: add_road_lane
         actions:
           - on:r inc(str:lanes, 1)
-          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
-        x: 0.09796875
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0], true)
+        x: 0.11999999
         y: 0.96428573
-        w: 0.02
+        w: 0.014999999
         h: 0.02
         rotation: 0.0
         color:
@@ -637,7 +902,40 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.003
+        border_thickness_percentage: 0.0
+        fade: 0.0
+        blur: 0.0
+        glow_color:
+          - 0.0
+          - 0.0
+          - 0.0
+          - 0.0
+        glow_misc: { }
+        misc:
+          active: true
+          pressable: true
+          editable: true
+      - !Rect
+        id: less_road_lane_shadow
+        actions: [ ]
+        x: 0.071953125
+        y: 0.9664286
+        w: 0.014999999
+        h: 0.02
+        rotation: 0.0
+        color:
+          - 0.0082
+          - 0.0042
+          - 0.0045
+          - 0.693
+        border_color:
+          - 1.0
+          - 1.0
+          - 1.0
+          - 1.0
+        texture: null
+        roundness: 0.0
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:
@@ -654,10 +952,10 @@ layers:
         id: less_road_lane
         actions:
           - on:r dec(str:lanes, 1)
-          - button:a show_interaction([0.72, 0.72, 0.72, 1.0])
-        x: 0.02796875
+          - button:a show_interaction([0.72, 0.72, 0.72, 1.0], true)
+        x: 0.07
         y: 0.96428573
-        w: 0.02
+        w: 0.014999999
         h: 0.02
         rotation: 0.0
         color:
@@ -672,7 +970,7 @@ layers:
           - 1.0
         texture: null
         roundness: 0.0
-        border_thickness_percentage: 0.003
+        border_thickness_percentage: 0.0
         fade: 0.0
         blur: 0.0
         glow_color:

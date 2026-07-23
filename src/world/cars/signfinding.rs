@@ -107,6 +107,7 @@ use glam::{Quat, Vec3, bool};
 use rand::distr::weighted::WeightedIndex;
 use rand::rngs::ThreadRng;
 use rand_distr::Distribution;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
@@ -147,12 +148,14 @@ pub struct SignFindingTrip {
     pub sections: Vec<SFSection>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct BreadCrumb {
     pub bread_crumb_destination: BreadCrumbDestination,
     pub ema: EMA,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub enum BreadCrumbDestination {
     Coarse {
         district_id: DistrictId,

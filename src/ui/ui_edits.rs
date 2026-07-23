@@ -637,14 +637,14 @@ pub fn delete_element(
 ) -> Result<UiElement, String> {
     let menu = menus
         .get_mut(&element.menu)
-        .ok_or_else(|| format!("Menu '{}' doesn't exist", element.menu))?;
+        .ok_or_else(|| format!("Delete_element: Menu '{}' doesn't exist", element.menu))?;
     let layer = menu
         .layers
         .iter_mut()
         .find(|l| l.name == element.layer)
         .ok_or_else(|| {
             format!(
-                "Layer '{}' not found in menu '{}'",
+                "Delete_element: Layer '{}' not found in menu '{}'",
                 element.layer, element.menu
             )
         })?;
@@ -663,7 +663,7 @@ pub fn delete_element(
         Ok(removed)
     } else {
         Err(format!(
-            "Element '{}' not found in layer '{}'",
+            "Delete_element: Element '{}' not found in layer '{}'",
             element.id, element.layer
         ))
     }

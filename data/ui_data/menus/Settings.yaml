@@ -18,10 +18,7 @@ layers:
       - !Text
         id: settings_to_main_menu_text
         actions:
-          - on:r set(editor_mode, false)
-          - on:r set(override_mode, false)
-          - on:r close_all_menus
-          - on:r open_menu(MainMenu)
+          - on:r call(open_main_menus)
         x: 0.05
         y: 0.05
         pt: 21.991756
@@ -157,7 +154,6 @@ layers:
         ap_var: tonemapping_state
         x: 0.1
         y: 0.6
-        scale: 1.0
         misc:
           active: true
           pressable: false
@@ -169,7 +165,6 @@ layers:
         ap_var: present_mode
         x: 0.1
         y: 0.7
-        scale: 1.0
         misc:
           active: true
           pressable: false

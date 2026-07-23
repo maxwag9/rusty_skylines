@@ -8,6 +8,7 @@ use crate::world::roads::roads::{RoadStorage, RoadTypes};
 use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_editing::TerrainEdit;
 use crate::world::world::World;
+use revision::revisioned;
 use sanitize_filename::sanitize;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -28,9 +29,11 @@ pub enum LoadResult {
     CantGetExtension,
     CantGetData(Error),
     CantDecompress(Error),
-    CantDecodeData(postcard::Error),
+    CantDecodeData(revision::Error),
     EmptyName,
+    CantCreateSave(SaveResult),
 }
+
 #[derive(Debug)]
 pub enum SaveResult {
     Success,
@@ -39,7 +42,7 @@ pub enum SaveResult {
     CantWriteFile(Error),
     CantCreateDir(Error),
     CantCompress(Error),
-    CantEncodeData(postcard::Error),
+    CantEncodeData(revision::Error),
     CantGetExtension(String),
     WrongExtension(String),
     EmptySaveName,
@@ -65,8 +68,8 @@ version={version}\n\
 timestamp_unix={timestamp}\n\
 chunk_size={chunk_size:?}\n\
 compression=zstd\n\
-serialization=postcard\n\
 payload=compressed_binary\n\
+all_of_this_crap_is_for_your_enjoyment\n\
 \n",
         magic = SAVE_MAGIC,
         name = sanitize_header_value(&save.name),
@@ -136,21 +139,9 @@ impl GameState {
                     Ok(d) => d,
                     Err(e) => return LoadResult::CantDecompress(e),
                 };
-                let save_state = match detected_version {
-                    // Old format: needs migration
-                    Some(SaveVersion::Alpha1_6_16a) => {
-                        match postcard::from_bytes::<SaveStateAlpha1_6_16a>(&decompressed) {
-                            Ok(old) => old.upgrade_to_latest(),
-                            Err(e) => return LoadResult::CantDecodeData(e),
-                        }
-                    }
-                    // Current format or unknown: deserialize directly as SaveState
-                    Some(SaveVersion::Alpha1_7_2a) | None => {
-                        match postcard::from_bytes::<SaveState>(&decompressed) {
-                            Ok(s) => s,
-                            Err(e) => return LoadResult::CantDecodeData(e),
-                        }
-                    }
+                let save_state = match revision::from_slice::<SaveState>(&decompressed) {
+                    Ok(s) => s,
+                    Err(e) => return LoadResult::CantDecodeData(e),
                 };
 
                 self.current_save = save_state;
@@ -159,9 +150,16 @@ impl GameState {
             Ok(false) => {
                 self.current_save = SaveState::default();
                 self.current_save.name = save_name.to_string();
-                return LoadResult::FileNonExistent(
-                    path.to_str().unwrap_or("unknown path").to_string(),
-                );
+
+                match self.save(world, props) {
+                    SaveResult::Success => {
+                        // Load the save I just created.
+                        return self.load(save_name, world, props);
+                    }
+                    e => {
+                        return LoadResult::CantCreateSave(e);
+                    }
+                }
             }
             Err(e) => return LoadResult::PathError(e),
         }
@@ -170,14 +168,11 @@ impl GameState {
         LoadResult::Success(detected_version.unwrap_or(SaveVersion::current()))
     }
 
-    pub fn save_as_version(
-        &mut self,
-        world: &World,
-        props: &Props,
-        target_version: Option<SaveVersion>,
-    ) -> SaveResult {
+    pub fn save(&mut self, world: &World, props: &Props) -> SaveResult {
         let safe_name = sanitize(&self.current_save.name).to_string();
-
+        if safe_name.is_empty() {
+            return SaveResult::EmptySaveName;
+        }
         // if safe_name.is_empty() {
         //     let base_name = "New World";
         //     safe_name = base_name.to_string();
@@ -219,24 +214,9 @@ impl GameState {
 
         self.current_save.save(world, props);
 
-        let serialized = match target_version {
-            Some(ver) => match SaveStateVersioned::from_latest(self.current_save.clone(), ver) {
-                Ok(versioned) => match versioned {
-                    SaveStateVersioned::Alpha1_6_16a(v) => match postcard::to_stdvec(&v) {
-                        Ok(d) => d,
-                        Err(e) => return SaveResult::CantEncodeData(e),
-                    },
-                    SaveStateVersioned::Alpha1_7_2a(v) => match postcard::to_stdvec(&v) {
-                        Ok(d) => d,
-                        Err(e) => return SaveResult::CantEncodeData(e),
-                    },
-                },
-                Err(e) => return SaveResult::DowngradeError(e),
-            },
-            None => match postcard::to_stdvec(&self.current_save) {
-                Ok(d) => d,
-                Err(e) => return SaveResult::CantEncodeData(e),
-            },
+        let serialized = match revision::to_vec(&self.current_save) {
+            Ok(d) => d,
+            Err(e) => return SaveResult::CantEncodeData(e),
         };
 
         let compressed = match zstd::encode_all(&serialized[..], 10) {
@@ -265,10 +245,6 @@ impl GameState {
 
         SaveResult::Success
     }
-
-    pub fn save(&mut self, world: &World, props: &Props) -> SaveResult {
-        self.save_as_version(world, props, None)
-    }
 }
 
 impl Default for GameState {
@@ -277,145 +253,6 @@ impl Default for GameState {
         save.current_save = SaveState::new();
         save
     }
-}
-
-pub trait UpgradeToLatest {
-    fn upgrade_to_latest(self) -> SaveState;
-}
-
-pub trait DowngradeFrom<T> {
-    fn downgrade_from(from: T) -> Self;
-}
-
-macro_rules! define_migrations {
-    (
-        latest = $latest_variant:ident($latest:ty);
-        enum $enum_name:ident {
-            $(
-                $variant:ident($from_ty:ty) => $next_variant:ident($to_ty:ty) {
-                    upgrade: {
-                        copy: [ $( $up_copy:ident ),* $(,)? ]
-                        $(, default:   [ $( $up_default_field:ident : $up_default_ty:ty ),* $(,)? ] )?
-                        $(, transform: [ $( $up_xform_field:ident : $up_xform_closure:expr ),* $(,)? ] )?
-                        $(,)?
-                    }
-                    $(, downgrade: {
-                        copy: [ $( $down_copy:ident ),* $(,)? ]
-                        $(, default:   [ $( $down_default_field:ident : $down_default_ty:ty ),* $(,)? ] )?
-                        $(, transform: [ $( $down_xform_field:ident : $down_xform_closure:expr ),* $(,)? ] )?
-                        $(,)?
-                    })?
-                    $(,)?
-                }
-            ),+ $(,)?
-        }
-    ) => {
-        #[derive(Serialize, Deserialize)]
-        pub enum $enum_name {
-            $( $variant($from_ty), )+
-            $latest_variant($latest),
-        }
-
-        $(
-            impl From<$from_ty> for $to_ty {
-                fn from(v: $from_ty) -> Self {
-                    $($(
-                        let $up_xform_field = { let v_ref = &v; ($up_xform_closure)(v_ref) };
-                    )*)?
-                    Self {
-                        $( $up_copy: v.$up_copy, )*
-                        $( $( $up_default_field: <$up_default_ty>::default(), )* )?
-                        $( $( $up_xform_field, )* )?
-                    }
-                }
-            }
-
-            impl UpgradeToLatest for $from_ty {
-                fn upgrade_to_latest(self) -> SaveState {
-                    <$to_ty>::from(self).upgrade_to_latest()
-                }
-            }
-
-            $(
-                impl DowngradeFrom<$to_ty> for $from_ty {
-                    fn downgrade_from(v: $to_ty) -> Self {
-                        $($(
-                            let $down_xform_field = { let v_ref = &v; ($down_xform_closure)(v_ref) };
-                        )*)?
-                        Self {
-                            $( $down_copy: v.$down_copy, )*
-                            $( $( $down_default_field: <$down_default_ty>::default(), )* )?
-                            $( $( $down_xform_field, )* )?
-                        }
-                    }
-                }
-            )?
-        )+
-
-        impl UpgradeToLatest for $latest {
-            fn upgrade_to_latest(self) -> SaveState { self }
-        }
-
-        impl $enum_name {
-            pub fn into_latest(self) -> $latest {
-                match self {
-                    $( Self::$variant(v) => v.upgrade_to_latest(), )+
-                    Self::$latest_variant(v) => v,
-                }
-            }
-        }
-    };
-}
-
-define_migrations! {
-    latest = Alpha1_7_2a(SaveState);
-    enum SaveStateVersioned {
-        Alpha1_6_16a(SaveStateAlpha1_6_16a) => Alpha1_7_2a(SaveState) {
-            upgrade: {
-                copy: [
-                    name, chunk_size, timestamp_unix,
-                    player_pos, player_yaw, player_pitch,
-                    terrain_edits, roads,
-                ],
-                default:   [zones: ZoningStorage, buildings: BuildingStorage, partitions: PartitionManager, road_types: RoadTypes, city_state: CityState, props: SavedProps],
-                transform: [version: |_v: &SaveStateAlpha1_6_16a| SaveVersion::current()],
-            },
-            downgrade: {
-                copy: [
-                    name, chunk_size, timestamp_unix,
-                    player_pos, player_yaw, player_pitch,
-                    terrain_edits, roads, props,
-                ],
-                transform: [version: |v: &SaveState| v.version.to_string()],
-                // zones is dropped
-            },
-        },
-    }
-}
-
-impl SaveStateVersioned {
-    pub fn from_latest(latest: SaveState, target_version: SaveVersion) -> Result<Self, String> {
-        match target_version {
-            SaveVersion::Alpha1_7_2a => Ok(Self::Alpha1_7_2a(latest)),
-            SaveVersion::Alpha1_6_16a => Ok(Self::Alpha1_6_16a(
-                SaveStateAlpha1_6_16a::downgrade_from(latest),
-            )),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Default)]
-pub struct SaveStateAlpha1_6_16a {
-    pub name: String,
-    pub chunk_size: ChunkSize,
-    pub version: String,
-    pub timestamp_unix: u128,
-    pub player_pos: WorldPos,
-    pub player_yaw: f32,
-    pub player_pitch: f32,
-    pub terrain_edits: Vec<TerrainEdit>,
-    pub roads: RoadStorage,
-    pub props: SavedProps,
 }
 
 #[derive(
@@ -432,18 +269,18 @@ pub struct SaveStateAlpha1_6_16a {
     Clone,
     Debug,
 )]
+#[revisioned(revision = 1)]
 pub enum SaveVersion {
     #[default]
-    #[strum(serialize = "Alpha v1.6.16")]
-    Alpha1_6_16a,
-    Alpha1_7_2a,
+    AlphaV1_8_3a,
 }
 impl SaveVersion {
     pub fn current() -> SaveVersion {
         SaveVersion::iter().max().unwrap()
     }
 }
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[revisioned(revision = 1)]
+#[derive(Default, Clone)]
 pub struct SaveState {
     pub name: String,
     pub chunk_size: ChunkSize,
@@ -457,7 +294,6 @@ pub struct SaveState {
     pub road_types: RoadTypes,
     pub partitions: PartitionManager,
     pub props: SavedProps,
-    #[serde(default)]
     pub zones: ZoningStorage,
     pub buildings: BuildingStorage,
     pub city_state: CityState,

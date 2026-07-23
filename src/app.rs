@@ -1,13 +1,11 @@
 use crate::data::Cycle;
-use crate::helpers::paths::data_dir;
 use crate::resources::Resources;
 use crate::simulation::update_picked_pos;
 use crate::systems::input::run_inputs;
 use crate::systems::small_systems::run_commands;
 use crate::systems::systems::{run_interpolation, run_render, run_sim, run_ticked, run_ui};
-use crate::ui::actions::UiCommand;
+use crate::ui::actions::{ElementContext, UiCommand};
 use crate::ui::ui_edit_manager::CreateElementCommand;
-use crate::ui::ui_touch_manager::ElementRef;
 use crate::ui::vertex::UiButtonCircle;
 use crate::ui::vertex::UiElement::Circle;
 use crate::world::sound::sound::run_sounds;
@@ -191,15 +189,15 @@ impl ApplicationHandler for App {
                     settings.reversed_depth_z = !settings.reversed_depth_z;
                 }
                 // Toggle editor mode
-                if input.action_repeat("Toggle editor mode") {
-                    settings.editor_mode = !settings.editor_mode;
-                    ui.touch_manager.editor.enabled = settings.editor_mode;
-                    ui.variables.set_bool("editor_mode", settings.editor_mode);
-                    settings.show_world = !settings.editor_mode;
-                    ui.variables.set_bool("show_world", settings.show_world);
-                    settings.show_gui = true;
-                    ui.variables.set_bool("show_gui", settings.show_gui);
-                }
+                // if input.action_repeat("Toggle editor mode") {
+                //     settings.editor_mode = !settings.editor_mode;
+                //     ui.variables.set_bool("editor_mode", settings.editor_mode);
+                //     settings.show_world = !settings.editor_mode;
+                //     ui.variables.set_bool("show_world", settings.show_world);
+                //     settings.show_gui = true;
+                //     ui.variables.set_bool("show_gui", settings.show_gui);
+                // }
+                ui.touch_manager.editor.enabled = settings.editor_mode;
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
                     settings.override_mode = !settings.override_mode;
@@ -235,14 +233,14 @@ impl ApplicationHandler for App {
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
-                    match ui.save_gui_to_file(
-                        data_dir("ui_data/menus"),
-                        data_dir("ui_data/menus/advanced_primitives"),
-                        resources.window.surface_size(),
-                    ) {
-                        Ok(_) => println!("GUI layout saved"),
-                        Err(e) => eprintln!("Failed to save GUI layout: {e}"),
-                    }
+                    // match ui.save_gui_to_file(
+                    //     data_dir("ui_data/menus"),
+                    //     data_dir("ui_data/menus/advanced_primitives"),
+                    //     resources.window.surface_size(),
+                    // ) {
+                    //     Ok(_) => println!("GUI layout saved"),
+                    //     Err(e) => eprintln!("Failed to save GUI layout: {e}"),
+                    // }
                 }
                 if input.action_pressed_once("Toggle Cursor Mode") {
                     world.events.send(world.terrain.cursor.mode.next_command());
@@ -252,51 +250,50 @@ impl ApplicationHandler for App {
                         .command_queues
                         .ui_command_queue
                         .push(UiCommand::ToggleMenu {
-                            element_ref: ElementRef::default(),
+                            element_ctx: ElementContext::default(),
                             menu_name: "str:Debug_Menu".to_string(),
                         });
-                    let debug_menu_active = ui.menus.get("Debug_Menu").unwrap().active;
-                    ui.variables.set_bool("debug_mode", debug_menu_active);
                 }
-                let main_menu_active = resources.ui.menus.get("MainMenu").unwrap().active;
-
-                if !main_menu_active && input.action_released("Exit to Main Menu") {
-                    let cmds: Vec<UiCommand> = vec![
-                        UiCommand::OpenMenu {
-                            element_ref: ElementRef::default(),
-                            menu_name: "str:MainMenu".to_string(),
-                        },
-                        UiCommand::CloseMenu {
-                            element_ref: ElementRef::default(),
-                            menu_name: "str:Editor_Menu".to_string(),
-                        },
-                        UiCommand::CloseMenu {
-                            element_ref: ElementRef::default(),
-                            menu_name: "str:Debug_Menu".to_string(),
-                        },
-                        UiCommand::SetVar {
-                            element_ref: ElementRef::default(),
-                            name: "str:editor_mode".to_string(),
-                            value: "false".to_string(),
-                        },
-                        // UiCommand::SetVar {
-                        //     element_ref: ElementRef::default(),
-                        //     name: "show_world".to_string(),
-                        //     value: "false".to_string(),
-                        // },
-                        UiCommand::SetVar {
-                            element_ref: ElementRef::default(),
-                            name: "str:override_mode".to_string(),
-                            value: "false".to_string(),
-                        },
-                    ];
-                    resources.command_queues.ui_command_queue.push_many(cmds);
-                } else if main_menu_active && input.action_released("Leave Game") {
-                    resources
-                        .command_queues
-                        .ui_command_queue
-                        .push(UiCommand::ExitGame);
-                }
+                let debug_menu_active = ui
+                    .menus
+                    .get("Debug_Menu")
+                    .map(|m| m.active)
+                    .unwrap_or(false);
+                ui.variables.set_bool("debug_mode", debug_menu_active);
+                let main_menu_active = resources
+                    .ui
+                    .menus
+                    .get("MainMenu")
+                    .map(|m| m.active)
+                    .unwrap_or(false);
+                //println!("{}", input.action_released("Exit to Main Menu"));
+                // if !main_menu_active && input.action_released("Exit to Main Menu") {
+                //     let cmds: Vec<UiCommand> = vec![
+                //         UiCommand::CloseAllMenus,
+                //         UiCommand::OpenMenu {
+                //             element_ctx: ElementContext::default(),
+                //             menu_name: "str:MainMenu".to_string(),
+                //         },
+                //         UiCommand::SetVar {
+                //             element_ctx: ElementContext::default(),
+                //             name: "str:editor_mode".to_string(),
+                //             value: "false".to_string(),
+                //         },
+                //         // UiCommand::SetVar {
+                //         //     element_ref: ElementRef::default(),
+                //         //     name: "show_world".to_string(),
+                //         //     value: "false".to_string(),
+                //         // },
+                //         UiCommand::SetVar {
+                //             element_ctx: ElementContext::default(),
+                //             name: "str:override_mode".to_string(),
+                //             value: "false".to_string(),
+                //         },
+                //     ];
+                //     resources.command_queues.ui_command_queue.push_many(cmds);
+                // } else if main_menu_active && input.action_released("Leave Game") {
+                //     resources.command_queues.ui_command_queue.push(UiCommand::ExitGame);
+                // }
                 // Add GUI element
                 if input.action_repeat("Add GUI element")
                     && resources.ui.touch_manager.editor.enabled
@@ -335,10 +332,14 @@ impl ApplicationHandler for App {
                     let pos = input.mouse.pos;
                     let delta = input.mouse.delta;
 
-                    resources.ui.variables.set_f64("mouse_pos.x", pos.x);
-                    resources.ui.variables.set_f64("mouse_pos_delta.x", delta.x);
-                    resources.ui.variables.set_f64("mouse_pos.y", pos.y);
-                    resources.ui.variables.set_f64("mouse_pos_delta.y", delta.y);
+                    resources
+                        .ui
+                        .variables
+                        .set_array("mouse_pos", pos.to_array());
+                    resources
+                        .ui
+                        .variables
+                        .set_array("mouse_pos_delta", delta.to_array());
                     // camera rotation ONLY if needed & dragging
                     if input.mouse.buttons.middle.pressed {
                         let cam_controller = &mut resources.world.world_state.cam_controller;
@@ -461,6 +462,7 @@ impl ApplicationHandler for App {
                 let elapsed = frame_start.elapsed();
                 let target =
                     Duration::from_secs_f32(resources.world.time.target_frametime.max(0.0));
+                resources.world.time.end_frame();
                 if target > Duration::ZERO && elapsed < target {
                     thread::sleep(target - elapsed);
                 }
@@ -661,5 +663,12 @@ fn update_time(resources: &mut Resources) {
                     .highly_educated_population(district.zoning_demand.demography.population),
             );
         }
+        let active_menus = ui
+            .menus
+            .iter()
+            .filter(|(menu_name, menu)| menu.active == true)
+            .map(|(menu_name, menu)| menu_name.clone())
+            .collect::<Vec<String>>();
+        ui.variables.set_array("active_menus", active_menus);
     }
 }

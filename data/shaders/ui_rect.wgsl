@@ -52,8 +52,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 fn vs_main(in: VertexInput, @builtin(instance_index) instance: u32) -> VertexOutput {
     let rect = rects[instance];
 
-    let padding = 2.0;
-    let half_size = rect.half_size + padding;
+    let half_size = rect.half_size;
 
     let c = cos(rect.rotation);
     let s = sin(rect.rotation);
@@ -89,7 +88,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let d = sd_rounded_box(in.local_pos, half_size, roundness);
 
-    let aa = fwidth(d) * 1.5;
+    let aa = max(fwidth(d), 0.75);
     var alpha = 1.0 - smoothstep(-aa, aa, d);
 
     var color = in.color;
@@ -116,5 +115,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color = mix(color, vec4<f32>(1.0, 1.0, 1.0, color.a), 0.2);
     }
 
-    return vec4<f32>(color.rgb, color.a * alpha);
+    let final_alpha = color.a * alpha;
+    return vec4<f32>(color.rgb * final_alpha, final_alpha);
 }

@@ -8,6 +8,7 @@ use crate::world::camera::Camera;
 use crate::world::terrain::terrain_subsystem::{CursorMode, Terrain};
 use bytemuck::{Pod, Zeroable};
 use glam::{Mat4, Quat, Vec3};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f32::consts::PI;
@@ -194,7 +195,8 @@ pub struct SavePropChunk {
     pub chunk_coord: ChunkCoord,
     pub archetype_instances: HashMap<ArchetypeId, Vec<PropInstanceId>>,
 }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone)]
+#[revisioned(revision = 1)]
 pub struct SavedPropInstance {
     pub archetype: String,
     pub pos: WorldPos,
@@ -205,7 +207,8 @@ pub struct SavedPropInstance {
     pub variant: u16,
     pub wind_strength: f32,
 }
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Default, Clone)]
+#[revisioned(revision = 1)]
 pub struct SavedProps {
     pub instances: Vec<SavedPropInstance>,
 }

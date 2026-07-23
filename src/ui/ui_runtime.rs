@@ -1,18 +1,15 @@
-use crate::ui::actions::ActionState;
 use crate::ui::vertex::*;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct UiRuntimes {
     pub elements: HashMap<String, ButtonRuntime>,
-    pub action_states: HashMap<String, ActionState>,
 }
 
 impl UiRuntimes {
     pub fn new() -> Self {
         Self {
             elements: HashMap::new(),
-            action_states: HashMap::new(),
         }
     }
 

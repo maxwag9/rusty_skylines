@@ -17,7 +17,7 @@ pub enum Value {
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.to_string_value().fmt(f)
+        self.to_string().fmt(f)
     }
 }
 
@@ -29,9 +29,10 @@ impl Value {
         with_expr: bool,
         with_post_expr: bool,
     ) -> Self {
-        let s = Self::replace_inline_variables(variables, s);
+        let s = Self::replace_inline_variables(variables, settings, s);
+        //println!("After replace: '{}'", s);
         let s = s.trim();
-
+        //println!("In from_str: {}", s);
         if s.is_empty() {
             return Value::String(String::new());
         }
@@ -59,8 +60,7 @@ impl Value {
                 "strexpr" => {
                     //println!("strexpr was given: {}", value);
                     let s = Value::String(
-                        Value::from_str(settings, variables, value, true, false)
-                            .into_string_value(),
+                        Value::from_str(settings, variables, value, true, false).into_string(),
                     );
                     //println!("strexpr gave: {}", s);
                     return s;
@@ -374,28 +374,28 @@ impl Value {
             Value::Null => false,
         }
     }
-    pub fn to_string_value(&self) -> String {
+    pub fn to_string(&self) -> String {
         match self {
             Value::F64(n) => n.to_string(),
             Value::I64(n) => n.to_string(),
             Value::String(s) => s.clone(),
             Value::Bool(b) => b.to_string(),
             Value::Array(arr) => {
-                let items: Vec<String> = arr.iter().map(|v| v.to_string_value()).collect();
+                let items: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                 format!("[{}]", items.join(", "))
             }
             Value::Null => "null".to_string(),
         }
     }
 
-    pub fn into_string_value(self) -> String {
+    pub fn into_string(self) -> String {
         match self {
             Value::F64(n) => n.to_string(),
             Value::I64(n) => n.to_string(),
             Value::String(s) => s, // moved, no clone
             Value::Bool(b) => b.to_string(),
             Value::Array(arr) => {
-                let items: Vec<String> = arr.into_iter().map(|v| v.into_string_value()).collect();
+                let items: Vec<String> = arr.into_iter().map(|v| v.into_string()).collect();
                 format!("[{}]", items.join(", "))
             }
             Value::Null => "null".to_string(),
@@ -458,7 +458,7 @@ impl Value {
     }
 
     /// Parse an array from a string like "[1, 2, 3]" or "1, 2, 3"
-    fn parse_array(settings: &Settings, variables: &Variables, s: &str) -> Option<Vec<Value>> {
+    pub fn parse_array(settings: &Settings, variables: &Variables, s: &str) -> Option<Vec<Value>> {
         let s = s.trim();
 
         // Handle empty input
@@ -492,7 +492,7 @@ impl Value {
 
         Some(result)
     }
-    fn replace_inline_variables(variables: &Variables, s: &str) -> String {
+    fn replace_inline_variables(variables: &Variables, settings: &Settings, s: &str) -> String {
         let mut result = String::with_capacity(s.len());
         let mut chars = s.chars().peekable();
 
@@ -512,7 +512,7 @@ impl Value {
 
                 if found_end && !var_name.is_empty() {
                     // Try to load the variable
-                    if let Some(value) = Self::load_variable(variables, &var_name) {
+                    if let Some(value) = get_var_opt(variables, settings, var_name.as_str()) {
                         // Replace with the variable's string representation
                         result.push_str(&value.to_string());
                     } else {
@@ -1162,7 +1162,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
         "isarray" => |args| Some(Value::Bool(matches!(args.first(), Some(Value::Array(_))))),
 
         // Conversion functions
-        "str" => |args| Some(Value::String(args.first()?.clone().into_string_value())),
+        "str" => |args| Some(Value::String(args.first()?.clone().into_string())),
         "bool" => |args| Some(Value::Bool(args.first()?.is_truthy())),
         "int" => |args| Some(args.first()?.clone().to_i64()),
         "float" => |args| Some(args.first()?.clone().to_f64()),
@@ -2054,7 +2054,7 @@ impl<'a> Parser<'a> {
             if let Value::String(ref l) = left {
                 if matches!(op, Token::Ident(_) | Token::StrLit(_) | Token::LBrace) {
                     let right = self.parse_primary()?;
-                    left = Value::String(format!("{}{}", l, value_to_text(&right)));
+                    left = Value::String(format!("{}{}", l, right.to_string()));
                     continue;
                 }
             }
@@ -2215,12 +2215,9 @@ impl<'a> Parser<'a> {
                         left = match get_property(&left, &name) {
                             Some(v) => v,
                             None => {
-                                let full = format!("{}.{}", value_to_text(&left), name);
+                                let full = format!("{}.{}", left.to_string(), name);
 
-                                match self.vars.get(&full) {
-                                    Some(v) => v.into_owned(),
-                                    None => Value::String(full),
-                                }
+                                get_var(&self.vars, &self.settings, full.as_str())
                             }
                         };
                         //println!("LEFT after property = {:?}", left);
@@ -2231,20 +2228,13 @@ impl<'a> Parser<'a> {
                             left = match get_index(&left, &idx) {
                                 Some(v) => v,
                                 None => {
-                                    let full_name =
-                                        format!("{}.{}", value_to_text(&left), n as i64);
-                                    match self.vars.get(full_name.as_str()) {
-                                        None => Value::String(full_name),
-                                        Some(val) => val.into_owned(),
-                                    }
+                                    let full_name = format!("{}.{}", left.to_string(), n as i64);
+                                    get_var(&self.vars, &self.settings, full_name.as_str())
                                 }
                             };
                         } else {
-                            let full_name = format!("{}.{}", value_to_text(&left), n as i64);
-                            left = match self.vars.get(full_name.as_str()) {
-                                None => Value::String(full_name),
-                                Some(val) => val.into_owned(),
-                            };
+                            let full_name = format!("{}.{}", left.to_string(), n as i64);
+                            left = get_var(&self.vars, &self.settings, full_name.as_str());
                         }
                     }
                     Token::LBrace => {
@@ -2263,15 +2253,11 @@ impl<'a> Parser<'a> {
 
                         let resolved = match &key {
                             Value::I64(_) | Value::F64(_) => get_index(&left, &key),
-                            _ => get_property(&left, &value_to_text(&key)),
+                            _ => get_property(&left, &key.to_string()),
                         };
 
                         left = resolved.unwrap_or_else(|| {
-                            Value::String(format!(
-                                "{}.{}",
-                                value_to_text(&left),
-                                value_to_text(&key)
-                            ))
+                            Value::String(format!("{}.{}", &left.to_string(), &key.to_string()))
                         });
                     }
                     _ => {
@@ -2431,9 +2417,8 @@ impl<'a> Parser<'a> {
 
             Token::Ident(name) => {
                 //println!("In Ident: {}", name);
-                if let Some(val) = self.vars.get(&name) {
-                    //println!("In Ident succeeded: {}: {}", name, val);
-                    return Ok(val.into_owned());
+                if let Some(val) = get_var_opt(&self.vars, &self.settings, name.as_str()) {
+                    return Ok(val);
                 }
                 if self.peek() == Token::LParen {
                     self.pos += 1;
@@ -2497,11 +2482,22 @@ impl<'a> Parser<'a> {
         }
     }
 }
-
-fn value_to_text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        _ => v.to_string(),
+fn get_var(variables: &Variables, settings: &Settings, name: &str) -> Value {
+    if let Some(key) = SettingKey::from_str(name) {
+        return settings.read_setting(key).to_value();
+    }
+    match variables.get(name) {
+        Some(v) => v.into_owned(),
+        None => Value::String(name.to_string()),
+    }
+}
+fn get_var_opt(variables: &Variables, settings: &Settings, name: &str) -> Option<Value> {
+    if let Some(key) = SettingKey::from_str(name) {
+        return Some(settings.read_setting(key).to_value());
+    }
+    match variables.get(name) {
+        Some(v) => Some(v.into_owned()),
+        None => None,
     }
 }
 
@@ -2509,31 +2505,24 @@ fn eval_binary(left: Value, right: Value, op: &Token, pos: usize) -> ParseResult
     match op {
         Token::Plus => add_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
             operation: "addition".to_string(),
-            expected: "number or string".to_string(),
+            expected: "number, string, or array".to_string(),
             found: format!("{} + {}", left.type_name(), right.type_name()),
             pos,
         }),
-        Token::Minus => {
-            let a = left.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "subtraction".to_string(),
-                expected: "number".to_string(),
-                found: left.type_name().to_string(),
-                pos,
-            })?;
-            let b = right.as_f64().ok_or(ParseError::TypeMismatch {
-                operation: "subtraction".to_string(),
-                expected: "number".to_string(),
-                found: right.type_name().to_string(),
-                pos,
-            })?;
-            Ok(Value::F64(a - b))
-        }
-        Token::Star => multiply_values(left, right).ok_or(ParseError::TypeMismatch {
-            operation: "multiplication".to_string(),
-            expected: "number".to_string(),
-            found: "incompatible types".to_string(),
+        Token::Minus => sub_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+            operation: "subtraction".to_string(),
+            expected: "number or array".to_string(),
+            found: format!("{} - {}", left.type_name(), right.type_name()),
             pos,
         }),
+        Token::Star => {
+            multiply_values(left.clone(), right.clone()).ok_or(ParseError::TypeMismatch {
+                operation: "multiplication".to_string(),
+                expected: "number, string, or array".to_string(),
+                found: format!("{} * {}", left.type_name(), right.type_name()),
+                pos,
+            })
+        }
         Token::Slash | Token::Percent => {
             let a = left.as_f64().ok_or(ParseError::TypeMismatch {
                 operation: "div/mod".to_string(),
@@ -2698,6 +2687,26 @@ fn call_builtin(name: &str, args: Vec<Value>) -> Option<Value> {
     get_builtin(name)?(args)
 }
 
+fn combine_array_values<F>(left: Vec<Value>, right: Vec<Value>, mut op: F) -> Option<Vec<Value>>
+where
+    F: FnMut(Value, Value) -> Option<Value>,
+{
+    let min_len = left.len().min(right.len());
+    let mut out = Vec::with_capacity(left.len().max(right.len()));
+
+    for i in 0..min_len {
+        out.push(op(left[i].clone(), right[i].clone())?);
+    }
+
+    if left.len() > right.len() {
+        out.extend(left[min_len..].iter().cloned());
+    } else if right.len() > left.len() {
+        out.extend(right[min_len..].iter().cloned());
+    }
+
+    Some(out)
+}
+
 fn add_values(a: Value, b: Value) -> Option<Value> {
     match (a, b) {
         (Value::F64(x), Value::F64(y)) => Some(Value::F64(x + y)),
@@ -2711,9 +2720,8 @@ fn add_values(a: Value, b: Value) -> Option<Value> {
         (Value::String(x), Value::String(y)) => Some(Value::String(x + &y)),
         (Value::Bool(x), Value::String(y)) => Some(Value::String(format!("{}{}", x, y))),
         (Value::String(x), Value::Bool(y)) => Some(Value::String(format!("{}{}", x, y))),
-        (Value::Array(mut x), Value::Array(y)) => {
-            x.extend(y);
-            Some(Value::Array(x))
+        (Value::Array(x), Value::Array(y)) => {
+            combine_array_values(x, y, add_values).map(Value::Array)
         }
         (Value::Array(mut x), v) => {
             x.push(v);
@@ -2729,11 +2737,26 @@ fn add_values(a: Value, b: Value) -> Option<Value> {
     }
 }
 
+fn sub_values(a: Value, b: Value) -> Option<Value> {
+    match (a, b) {
+        (Value::F64(x), Value::F64(y)) => Some(Value::F64(x - y)),
+        (Value::I64(x), Value::F64(y)) => Some(Value::F64(x as f64 - y)),
+        (Value::F64(x), Value::I64(y)) => Some(Value::F64(x - y as f64)),
+        (Value::I64(x), Value::I64(y)) => Some(Value::I64(x - y)),
+        (Value::Array(x), Value::Array(y)) => {
+            combine_array_values(x, y, sub_values).map(Value::Array)
+        }
+        _ => None,
+    }
+}
+
 fn multiply_values(l: Value, r: Value) -> Option<Value> {
     match (&l, &r) {
-        (Value::String(s), Value::I64(n)) | (Value::I64(n), Value::String(s)) => {
-            Some(Value::String(s.repeat(*n as usize)))
+        (Value::Array(x), Value::Array(y)) => {
+            combine_array_values(x.clone(), y.clone(), multiply_values).map(Value::Array)
         }
+        (Value::String(s), Value::I64(n)) => Some(Value::String(s.repeat(*n as usize))),
+        (Value::I64(n), Value::String(s)) => Some(Value::String(s.repeat(*n as usize))),
         _ => Some(Value::F64(l.as_f64()? * r.as_f64()?)),
     }
 }
@@ -2874,7 +2897,7 @@ fn format_slot(src: &str, vars: &Variables, settings: &Settings) -> String {
             None => return src.to_string(),
         };
     }
-    value.into_string_value()
+    value.into_string()
 }
 
 fn split_format_chain(src: &str) -> (&str, Vec<&str>) {
@@ -2991,7 +3014,7 @@ pub fn resolve_template(template: &str, vars: &Variables, settings: &Settings) -
                 let val = if let Some(key) = SettingKey::from_str(inside) {
                     settings.read_setting(key).to_string()
                 } else {
-                    Value::from_str(settings, vars, inside.trim(), true, true).into_string_value()
+                    Value::from_str(settings, vars, inside.trim(), true, true).into_string()
                 };
                 out.push_str(&val);
             } else {
@@ -3080,6 +3103,8 @@ fn insert_thousands_commas(digits: &str) -> String {
         .collect()
 }
 fn is_component_suffix(s: &str) -> bool {
-    matches!(s, "x" | "y" | "z" | "w" | "r" | "g" | "b" | "h" | "s" | "v")
-        || s.parse::<usize>().is_ok()
+    matches!(
+        s,
+        "x" | "y" | "z" | "w" | "r" | "g" | "b" | "a" | "h" | "s" | "v"
+    ) || s.parse::<usize>().is_ok()
 }

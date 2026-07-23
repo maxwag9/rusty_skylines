@@ -4,6 +4,7 @@ use crate::helpers::positions::WorldPos;
 use crate::systems::systems::RoadDestroyType;
 use crate::world::roads::roads::{RoadCommand, RoadStorage, RoadTypes};
 use glam::Vec3;
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -67,6 +68,7 @@ impl Default for RoadStyleParams {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
 )]
 #[repr(transparent)]
+#[revisioned(revision = 1)]
 pub struct NodeId(pub u32);
 
 impl NodeId {
@@ -105,6 +107,7 @@ impl From<NodeId> for u32 {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
 )]
 #[repr(transparent)]
+#[revisioned(revision = 1)]
 pub struct SegmentId(pub u32);
 
 impl SegmentId {
@@ -141,6 +144,7 @@ impl From<SegmentId> for u32 {
 /// Stable, monotonically increasing lane identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
+#[revisioned(revision = 1)]
 pub struct LaneId(pub u32);
 
 impl LaneId {
@@ -184,6 +188,7 @@ pub type PolyIdx = u32;
 /// Stable identifier for traffic control attachments within a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
+#[revisioned(revision = 1)]
 pub struct ControlId(u32);
 
 impl ControlId {
@@ -204,6 +209,7 @@ impl ControlId {
 }
 /// Physical structure type of a road segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub enum StructureType {
     Surface,
     Bridge,
@@ -218,6 +224,7 @@ impl Default for StructureType {
 
 /// Traffic signal configuration (no ticking logic).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct TrafficSignal {
     /// Duration of each phase in seconds.
     pub phase_durations: Vec<f32>,
@@ -244,6 +251,7 @@ impl TrafficSignal {
 
 /// Traffic control device attached to a node intersection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub enum TrafficControl {
     None,
     Signal(TrafficSignal),
@@ -259,10 +267,11 @@ impl Default for TrafficControl {
 
 /// Attached control with stable ID for removal/modification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[revisioned(revision = 1)]
 pub struct AttachedControl {
-    pub(crate) id: ControlId,
-    pub(crate) control: TrafficControl,
-    pub(crate) enabled: bool,
+    pub id: ControlId,
+    pub control: TrafficControl,
+    pub enabled: bool,
 }
 
 impl AttachedControl {
@@ -290,6 +299,7 @@ impl AttachedControl {
 pub type LeftLaneCount = usize;
 pub type RightLaneCount = usize;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[revisioned(revision = 1)]
 pub struct RoadType {
     pub name: String,
 

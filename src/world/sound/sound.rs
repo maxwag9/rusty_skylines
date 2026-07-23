@@ -6,7 +6,7 @@ use cpal::{
     Device, Host, HostId, SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfig,
 };
 
-use crate::world::sound::MAX_CARS_AUDIO;
+use crate::world::sound::{MAX_CARS_AUDIO, with_stderr_suppressed};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -299,7 +299,7 @@ impl Sounds {
         stream_error: Arc<AtomicBool>,
         sample_counter: Arc<AtomicU64>,
     ) -> Result<Stream, AudioError> {
-        let available_hosts = cpal::available_hosts();
+        let available_hosts = with_stderr_suppressed(|| cpal::available_hosts());
         if available_hosts.is_empty() {
             return Err(AudioError::NoHostsAvailable);
         }
@@ -307,12 +307,16 @@ impl Sounds {
         let attempts = Self::build_all_attempts(&available_hosts);
 
         for attempt in &attempts {
-            match Self::try_build_stream(
-                attempt,
-                Arc::clone(&state),
-                Arc::clone(&stream_error),
-                Arc::clone(&sample_counter),
-            ) {
+            let result = with_stderr_suppressed(|| {
+                Self::try_build_stream(
+                    attempt,
+                    Arc::clone(&state),
+                    Arc::clone(&stream_error),
+                    Arc::clone(&sample_counter),
+                )
+            });
+
+            match result {
                 Ok(stream) => {
                     println!(
                         "Audio initialized: {}, buffer size: {:?}",
@@ -325,20 +329,7 @@ impl Sounds {
             }
         }
 
-        // Nuclear fallback with retries
-        for retry in 0..3 {
-            if retry > 0 {
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            if let Ok(stream) = Self::nuclear_fallback(
-                Arc::clone(&state),
-                Arc::clone(&stream_error),
-                Arc::clone(&sample_counter),
-            ) {
-                return Ok(stream);
-            }
-        }
-
+        // ...
         Err(AudioError::ExhaustedAllOptions)
     }
 

@@ -126,7 +126,7 @@ impl Variables {
             "x" | "r" | "h" => Some(0),
             "y" | "g" | "s" => Some(1),
             "z" | "b" | "v" => Some(2),
-            "w" => Some(3),
+            "w" | "a" => Some(3),
             _ => s.parse::<usize>().ok(),
         }
     }
@@ -146,7 +146,7 @@ impl Variables {
         }
         // println!("base = {:?}", base);
         // println!("suffixes = {:?}", suffixes);
-        // println!("exists = {:?}", self.vars.get(base)); // or self.vars.get(base).is_some()
+        //println!("exists = {:?}", self.vars.get(base)); // or self.vars.get(base).is_some()
         let mut value: Cow<'_, Value> = Cow::Borrowed(self.vars.get(base)?);
 
         for suffix in suffixes.into_iter().rev() {
@@ -262,7 +262,7 @@ pub fn initialize_value(field_type: &str, value: Option<Value>) -> Value {
     let value = match field_type.as_str() {
         "f" | "f64" | "f32" => value.to_f64(),
         "i" | "i64" | "i32" => value.to_i64(),
-        "str" | "string" | "s" => Value::String(value.into_string_value()),
+        "str" | "string" | "s" => Value::String(value.into_string()),
         "bool" | "b" => Value::Bool(value.is_truthy()),
         _ => value,
     };

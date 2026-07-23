@@ -3,6 +3,7 @@ use crate::world::buildings::buildings::{BuildingId, Buildings};
 use crate::world::buildings::zoning::DistrictId;
 use crate::world::roads::road_structs::{NodeId, SegmentId};
 use crate::world::roads::roads::{RoadRegionId, RoadStorage};
+use revision::revisioned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -49,8 +50,9 @@ pub struct Address {
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
+#[revisioned(revision = 1)]
 pub struct Partition {
-    pub buildings: Vec<BuildingId>, // Maybe nodes later idk
+    pub buildings: Vec<BuildingId>,
 }
 impl Partition {
     pub fn chunk_coords(&self, buildings: &Buildings) -> Vec<ChunkCoord> {
@@ -72,6 +74,7 @@ impl Partition {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[revisioned(revision = 1)]
 pub struct PartitionStorage {
     pub partitions: Vec<Partition>,
     pub alive: Vec<bool>,
@@ -312,6 +315,7 @@ impl Default for PartitionStorage {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[revisioned(revision = 1)]
 pub struct PartitionManager {
     pub storage: PartitionStorage,
     regions: HashMap<PartitionId, RoadRegionId>,

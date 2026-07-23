@@ -1240,14 +1240,14 @@ impl Gizmo {
                 let entrance = lot.entrance;
                 self.arrow(
                     entrance.pos,
-                    entrance.pos.add_vec3(entrance.dir.normalize()),
+                    entrance.pos.add_vec3(entrance.dir.as_vec3().normalize()),
                     [1.0, 0.2, 0.0, 1.0],
                     false,
                     true,
                     0.05,
                     0.0,
                 );
-                let dir = entrance.dir.normalize();
+                let dir = entrance.dir.as_vec3().normalize();
                 let right = Vec3::new(dir.z, 0.0, -dir.x).normalize() * 0.3;
                 let left_start = entrance.pos.sub_vec3(right);
                 let right_end = entrance.pos.add_vec3(right);
@@ -1256,7 +1256,7 @@ impl Gizmo {
                     for entrance in layout.driveway_entrances.iter() {
                         self.arrow(
                             entrance.pos,
-                            entrance.pos.add_vec3(entrance.dir.normalize()),
+                            entrance.pos.add_vec3(entrance.dir.as_vec3().normalize()),
                             [0.8, 0.6, 0.0, 1.0],
                             false,
                             true,
@@ -1477,7 +1477,11 @@ impl Gizmo {
         moon_direction: Vec3,
         scale_with_orbit: bool,
     ) {
-        let debug_menu_active = ui.menus.get("Debug_Menu").unwrap().active;
+        let debug_menu_active = ui
+            .menus
+            .get("Debug_Menu")
+            .map(|m| m.active)
+            .unwrap_or(false);
         ui.variables.set_bool("debug_mode", debug_menu_active);
         if debug_menu_active {
             let scale = scale_with_orbit

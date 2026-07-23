@@ -49,6 +49,11 @@ impl Menu {
 
         layer.elements.iter_mut().find_map(|e| Some(e))
     }
+
+    pub fn get_layer_mut(&mut self, layer_name: &str) -> Option<&mut RuntimeLayer> {
+        self.layers.iter_mut().find(|l| l.name == layer_name)
+    }
+
     pub fn rebuild_layer_cache_index(
         &mut self,
         settings: &Settings,

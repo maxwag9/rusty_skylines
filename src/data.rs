@@ -357,32 +357,10 @@ pub enum SettingOp {
     Set(SettingValue),
 }
 
-// ============ Conversion Trait ============
-
-// Helper for parsing enums from command strings
-fn parse_enum_from_str<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
-    #[derive(Deserialize)]
-    struct Wrapper<T> {
-        value: T,
-    }
-    // Try with quotes (for simple enum variants)
-    let toml_str = format!("value = \"{}\"", s);
-    if let Ok(w) = toml::from_str::<Wrapper<T>>(&toml_str) {
-        return Some(w.value);
-    }
-    // Try raw (for complex values)
-    let toml_str = format!("value = {}", s);
-    toml::from_str::<Wrapper<T>>(&toml_str)
-        .ok()
-        .map(|w| w.value)
-}
-
-// ============ Updated Conversion Trait ============
-
 pub trait SettingConvert: Sized + Clone {
     fn to_setting_value(&self) -> SettingValue;
     fn from_setting_value(value: SettingValue) -> Option<Self>;
-    fn from_value(arg: &Value) -> Option<Self>;
+    fn from_value(value: &Value) -> Option<Self>;
 }
 
 // Primitives
@@ -396,8 +374,8 @@ impl SettingConvert for bool {
             _ => None,
         }
     }
-    fn from_value(arg: &Value) -> Option<Self> {
-        Some(arg.is_truthy())
+    fn from_value(value: &Value) -> Option<Self> {
+        Some(value.is_truthy())
     }
 }
 
@@ -411,8 +389,8 @@ impl SettingConvert for u16 {
             _ => None,
         }
     }
-    fn from_value(arg: &Value) -> Option<Self> {
-        arg.as_i64().map(|i| i as u16)
+    fn from_value(value: &Value) -> Option<Self> {
+        value.as_i64().map(|i| i as u16)
     }
 }
 
@@ -426,8 +404,8 @@ impl SettingConvert for u32 {
             _ => None,
         }
     }
-    fn from_value(arg: &Value) -> Option<Self> {
-        arg.as_i64().map(|i| i as u32)
+    fn from_value(value: &Value) -> Option<Self> {
+        value.as_i64().map(|i| i as u32)
     }
 }
 
@@ -441,8 +419,8 @@ impl SettingConvert for f32 {
             _ => None,
         }
     }
-    fn from_value(arg: &Value) -> Option<Self> {
-        match arg {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
             Value::F64(v) => Some(*v as f32),
             Value::I64(v) => Some(*v as f32),
             other => None,
@@ -460,12 +438,12 @@ impl SettingConvert for f64 {
             _ => None,
         }
     }
-    fn from_value(arg: &Value) -> Option<Self> {
-        arg.as_f64().map(|f| f)
+    fn from_value(value: &Value) -> Option<Self> {
+        value.as_f64().map(|f| f)
     }
 }
 
-// Vectors - not easily settable from single CommandArg
+// Vectors - not easily settable from single Commandvalue
 impl SettingConvert for [f32; 2] {
     fn to_setting_value(&self) -> SettingValue {
         SettingValue::Vec2(*self)
@@ -476,7 +454,7 @@ impl SettingConvert for [f32; 2] {
             _ => None,
         }
     }
-    fn from_value(_arg: &Value) -> Option<Self> {
+    fn from_value(_value: &Value) -> Option<Self> {
         None
     }
 }
@@ -491,7 +469,7 @@ impl SettingConvert for [f32; 3] {
             _ => None,
         }
     }
-    fn from_value(_arg: &Value) -> Option<Self> {
+    fn from_value(_value: &Value) -> Option<Self> {
         None
     }
 }
@@ -506,7 +484,7 @@ impl SettingConvert for [f32; 4] {
             _ => None,
         }
     }
-    fn from_value(_arg: &Value) -> Option<Self> {
+    fn from_value(_value: &Value) -> Option<Self> {
         None
     }
 }
@@ -528,8 +506,8 @@ macro_rules! impl_setting_convert_enum {
                     }
                 }
 
-                fn from_value(arg: &Value) -> Option<Self> {
-                    arg.to_string_value().parse().ok()
+                fn from_value(value: &Value) -> Option<Self> {
+                    value.to_string().parse().ok()
                 }
             }
         )*
@@ -645,12 +623,11 @@ macro_rules! define_settings {
                 }
             }
 
-            /// Convert a CommandArg to the appropriate SettingValue for this key
-            pub fn parse_command_arg(self, arg: &Value) -> Option<SettingValue> {
+            /// Convert a Value to the appropriate SettingValue for this key
+            pub fn from_value(self, value: &Value) -> Option<SettingValue> {
                 match self {
                     $(SettingKey::$key => {
-                        <$ty as SettingConvert>::from_value(arg)
-                            .map(|v| v.to_setting_value())
+                        <$ty as SettingConvert>::from_value(value).map(|v| v.to_setting_value())
                     },)*
                 }
             }
