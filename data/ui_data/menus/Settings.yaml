@@ -5,23 +5,22 @@ layers:
     elements:
       - !Text
         id: settings_text
-        actions: [ ]
-        x: 0.45
-        y: 0.05
-        pt: 19.396805
+        x: 960
+        y: 50
+        pt: 30
         color:
-          - 1.0
-          - 1.0
-          - 1.0
+          - 0.63
+          - 0.68
+          - 0.94
           - 1.0
         text: Settings
       - !Text
         id: settings_to_main_menu_text
         actions:
           - on:r call(open_main_menus)
-        x: 0.05
-        y: 0.05
-        pt: 21.991756
+        x: 100
+        y: 50
+        pt: 22
         color:
           - 1.0
           - 1.0
@@ -37,7 +36,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -49,7 +48,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -61,7 +60,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -73,7 +72,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -85,7 +84,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -97,7 +96,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -109,7 +108,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -121,7 +120,7 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
@@ -133,41 +132,85 @@ layers:
         scale: 2.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
         name: checkbox_always_day
         ap_name: checkbox
         ap_var: always_day
-        x: 0.1
-        y: 0.4
-        scale: 2.0
+        x: 880
+        y: 680
+        scale: 1.0
         misc:
           active: true
-          pressable: false
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: checkbox_tonemap_ui
+        ap_name: checkbox
+        ap_var: tonemap_ui
+        x: 880
+        y: 540
+        scale: 1.0
+        misc:
+          active: true
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
         name: tonemapping_state_dropdown
         ap_name: dropdown
         ap_var: tonemapping_state
-        x: 0.1
-        y: 0.6
+        x: 200
+        y: 640
+        scale: 1.0
         misc:
           active: true
-          pressable: false
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: color_grade_state_dropdown
+        ap_name: dropdown
+        ap_var: color_grading_state
+        x: 200
+        y: 740
+        scale: 1.0
+        misc:
+          active: true
+          touchable: false
           editable: true
         editing_tool: false
       - !Advanced
         name: present_mode_dropdown
         ap_name: dropdown
         ap_var: present_mode
-        x: 0.1
-        y: 0.7
+        x: 200
+        y: 840
+        scale: 1.0
         misc:
           active: true
-          pressable: false
+          touchable: false
+          editable: true
+        editing_tool: false
+      - !Advanced
+        name: msaa_slider
+        ap_name: slider
+        ap_var:
+          - "msaa_samples"
+          - "MSAA"
+          - "1"
+          - "8"
+          - "1"
+          - "{supported_msaa_levels}"
+        x: 1600
+        y: 800
+        scale: 1.5
+        misc:
+          active: true
+          touchable: false
           editable: true
         editing_tool: false
     editing_tool: false

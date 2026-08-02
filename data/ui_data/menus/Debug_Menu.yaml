@@ -5,10 +5,9 @@ layers:
     elements:
       - !Text
         id: fps_text
-        actions: [ ]
         x: 0.0
         y: 0.0
-        pt: 15.0
+        pt: 14.999999
         color:
           - 1.0
           - 0.0
@@ -18,23 +17,21 @@ layers:
         anchor: TopLeft
       - !Text
         id: frametime_main_pass_text
-        actions: [ ]
         x: 0.0
-        y: 0.06428572
-        pt: 15.0
+        y: 20
+        pt: 14.999999
         color:
           - 1.0
           - 0.0
           - 1.0
           - 1.0
-        text: 'Total everything: {{total_frametime}:.2}ms, Sky: {{sky_frametime}:.2}ms, Stars: {{stars_frametime}:.2}ms, Terrain: {{terrain_frametime}:.2}ms, Water: {{water_frametime}:.2}ms, Roads: {{roads_frametime}:.2}ms  Reversed Depth Z: {reversed_depth_z}'
+        text: 'Total everything: {{total_frametime}:.2}ms, Sky: {{sky_frametime}:.2}ms, Stars: {{stars_frametime}:.2}ms, Terrain: {{terrain_frametime}:.2}ms, Water: {{water_frametime}:.2}ms, Roads: {{roads_frametime}:.2}ms, Reversed Depth Z: {reversed_depth_z}, MSAA: {{msaa_samples}x}'
         anchor: TopLeft
       - !Text
         id: gtao_frametimes_text
-        actions: [ ]
         x: 0.0
-        y: 0.08571429
-        pt: 15.0
+        y: 40
+        pt: 14.999999
         color:
           - 1.0
           - 0.2
@@ -44,10 +41,9 @@ layers:
         anchor: TopLeft
       - !Text
         id: fog_frametime_text
-        actions: [ ]
-        x: -0.0
-        y: 0.10714286
-        pt: 15.0
+        x: 0
+        y: 60
+        pt: 14.999999
         color:
           - 1.0
           - 0.0
@@ -57,10 +53,9 @@ layers:
         anchor: TopLeft
       - !Text
         id: shadows_frametime_text
-        actions: [ ]
-        x: -0.0
-        y: 0.12857144
-        pt: 15.0
+        x: 0
+        y: 80
+        pt: 14.999999
         color:
           - 1.0
           - 0.0
@@ -70,10 +65,9 @@ layers:
         anchor: TopLeft
       - !Text
         id: sky_info_text
-        actions: [ ]
         x: 0.00037002563
-        y: 0.021275112
-        pt: 15.0
+        y: 100
+        pt: 14.999999
         color:
           - 0.3
           - 0.5
@@ -83,10 +77,9 @@ layers:
         anchor: TopLeft
       - !Text
         id: player_info_text
-        actions: [ ]
         x: -0.0
-        y: 0.042857144
-        pt: 15.0
+        y: 120
+        pt: 14.999999
         color:
           - 0.0
           - 0.5
@@ -96,10 +89,9 @@ layers:
         anchor: TopLeft
       - !Text
         id: world_info_text
-        actions: [ ]
         x: 0.0
-        y: 0.16142859
-        pt: 15.0
+        y: 140
+        pt: 14.999999
         color:
           - 1.0
           - 0.89762557

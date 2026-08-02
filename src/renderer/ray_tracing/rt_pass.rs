@@ -16,6 +16,7 @@ use wgpu::{
 use wgpu_render_manager::compute_system::ComputePipelineOptions;
 use wgpu_render_manager::pipelines::PipelineOptions;
 use wgpu_render_manager::renderer::RenderManager;
+use crate::renderer::ui_pipelines::multisample_state;
 
 pub fn update_rt_instances(
     rt: &mut RTSubsystem,
@@ -138,7 +139,7 @@ pub fn render_ray_tracing(
 
         let options = PipelineOptions::default()
             .with_topology(TriangleList)
-            .with_msaa(msaa_samples)
+            .with_multisample_state(multisample_state(msaa_samples))
             .with_target(ColorTargetState {
                 format: pipelines.msaa.hdr.texture().format(),
                 blend: Some(BlendState {

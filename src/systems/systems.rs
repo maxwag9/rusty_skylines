@@ -32,10 +32,11 @@ pub fn run_ticked(resources: &mut Resources) {
         &mut world.input,
         &mut world.city_state,
     );
-    let (settings, gizmo, road_mesh_manager) = (
+    let (settings, gizmo, road_mesh_manager, props) = (
         &mut resources.settings,
         &mut renderer.gizmo,
         &renderer.road_renderer.mesh_manager,
+        &mut renderer.props
     );
     let aspect = renderer.config.width as f32 / renderer.config.height as f32;
 
@@ -45,7 +46,7 @@ pub fn run_ticked(resources: &mut Resources) {
     //     gizmo.square(center, half_chunk_size, [1.0, 0.0, 0.0, 1.0], 0.0, 0.0);
     // }
     if resources.simulation.running() {
-        terrain.update(gizmo, camera, aspect, settings, input, time, roads);
+        terrain.update(gizmo, camera, aspect, settings, input, time, roads, props, variables);
     }
     handle_destruction(
         gizmo,

@@ -22,6 +22,8 @@ use glam::Vec3;
 use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::mem;
+use std::sync::{Mutex, OnceLock};
 use tracing::error;
 use wgpu::{Buffer, BufferDescriptor, BufferUsages, Device, Queue, SurfaceConfiguration};
 use wgpu_text::glyph_brush::ab_glyph::{FontArc, PxScale, Rect};
@@ -29,6 +31,21 @@ use wgpu_text::glyph_brush::{
     BrushAction, Extra, GlyphBrush, GlyphBrushBuilder, OwnedSection, Section, Text,
 };
 
+static PENDING_GIZMO_RENDERS: OnceLock<Mutex<Vec<PendingGizmoRender>>> = OnceLock::new();
+
+fn pending_gizmo_renders() -> &'static Mutex<Vec<PendingGizmoRender>> {
+    PENDING_GIZMO_RENDERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+pub fn push_gizmo_render(render: PendingGizmoRender) {
+    if let Ok(mut queue) = pending_gizmo_renders().lock() {
+        queue.push(render);
+    }
+}
+pub fn push_gizmo_renders(renders: Vec<PendingGizmoRender>) {
+    if let Ok(mut queue) = pending_gizmo_renders().lock() {
+        queue.extend(renders);
+    }
+}
 const CIRCLE_SEGMENT_COUNT: usize = 16;
 pub const DEBUG_DRAW_DURATION: f32 = 20.0; // Seconds
 pub const ROAD_GIZMO_THICKNESS: f32 = 0.0; // M!
@@ -111,18 +128,21 @@ impl PendingGizmoTextRender {
         h.finish()
     }
 }
-pub struct Gizmo {
-    pub pending_renders: Vec<PendingGizmoRender>,
+pub struct GizmoBuffers {
     pub thin_buffer: Buffer,
     pub thick_buffer: Buffer,
     pub filled_buffer: Buffer,
     pub text_buffer: Buffer,
-    total_game_time: f64,
     pub brush: GlyphBrush<GlyphQuad, Extra>,
+    text_glyph_cache: HashMap<u64, Vec<GlyphQuad>>,
+}
+pub struct Gizmo {
+    pub pending_renders: Vec<PendingGizmoRender>,
+    pub gizmo_buffers: Option<GizmoBuffers>,
+    total_game_time: f64,
     pub text_raster_factor: f32, // good start: 48.0
     pub text_raster_min: f32,    // good start: 8.0
-    pub text_raster_max: f32,    // good start: 256.0
-    text_glyph_cache: HashMap<u64, Vec<GlyphQuad>>,
+    pub text_raster_max: f32    // good start: 256.0
 }
 
 #[derive(Default)]
@@ -137,7 +157,7 @@ impl Gizmo {
         device: &Device,
         config: &SurfaceConfiguration,
         font_arc: &FontArc,
-        msaa_samples: u32,
+        msaa_samples: u32
     ) -> Self {
         let thin_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Gizmo Thin VB"),
@@ -165,26 +185,37 @@ impl Gizmo {
         });
         let brush: GlyphBrush<GlyphQuad, Extra> = GlyphBrushBuilder::using_font(font_arc.clone())
             .initial_cache_size((2048, 2048))
-            .cache_redraws(true)
-            .build();
-        Self {
-            pending_renders: Vec::new(),
+            .cache_redraws(true).build();
+        let gizmo_buffers = Some(GizmoBuffers {
             thin_buffer,
             thick_buffer,
             filled_buffer,
             text_buffer,
-            total_game_time: 0.0,
             brush,
+            text_glyph_cache: Default::default(),
+        });
+        Self {
+            pending_renders: Vec::new(),
+            gizmo_buffers,
+            total_game_time: 0.0,
             text_raster_factor: 2048.0,
             text_raster_min: 8.0,
-            text_raster_max: 128.0,
-            text_glyph_cache: HashMap::new(),
+            text_raster_max: 128.0
+        }
+    }
+    pub fn new_empty() -> Self {
+        Self {
+            pending_renders: Vec::new(),
+            gizmo_buffers: None,
+            total_game_time: 0.0,
+            text_raster_factor: 2048.0,
+            text_raster_min: 8.0,
+            text_raster_max: 128.0
         }
     }
     pub fn clear(&mut self) {
         let now = self.total_game_time;
-        self.pending_renders
-            .retain(|g| now - g.start_time < g.duration as f64);
+        self.pending_renders.retain(|g| now - g.start_time < g.duration as f64);
     }
 
     pub fn update_buffers(
@@ -197,17 +228,17 @@ impl Gizmo {
         let thick_count = batches.thick_vertices.len() as u32;
         let filled_count = batches.filled_vertices.len() as u32;
         let text_count = batches.text_vertices.len() as u32;
-
+        let Some(gb) = self.gizmo_buffers.as_mut() else { return (0, 0, 0, 0) };
         // Update thin line buffer
         if thin_count > 0 {
             let byte_size = (batches.thin_vertices.len() * size_of::<ThinLineVtxRender>()) as u64;
-            if byte_size > self.thin_buffer.size() {
-                let new_size = (self.thin_buffer.size() * 2).max(byte_size);
+            if byte_size > gb.thin_buffer.size() {
+                let new_size = (gb.thin_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Thin Buffer tried to become larger than the max_buffer_size");
                     return (0, 0, 0, 0);
                 }
-                self.thin_buffer = device.create_buffer(&BufferDescriptor {
+                gb.thin_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Thin VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -215,7 +246,7 @@ impl Gizmo {
                 });
             }
             queue.write_buffer(
-                &self.thin_buffer,
+                &gb.thin_buffer,
                 0,
                 bytemuck::cast_slice(&batches.thin_vertices),
             );
@@ -223,13 +254,13 @@ impl Gizmo {
         // Update thick geometry buffer
         if thick_count > 0 {
             let byte_size = (batches.thick_vertices.len() * size_of::<ThickLineVtxRender>()) as u64;
-            if byte_size > self.thick_buffer.size() {
-                let new_size = (self.thick_buffer.size() * 2).max(byte_size);
+            if byte_size > gb.thick_buffer.size() {
+                let new_size = (gb.thick_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Thick Buffer tried to become larger than the max_buffer_size");
                     return (0, 0, 0, 0);
                 }
-                self.thick_buffer = device.create_buffer(&BufferDescriptor {
+                gb.thick_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Thick VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -238,7 +269,7 @@ impl Gizmo {
             }
             queue.write_buffer(
                 // Error here
-                &self.thick_buffer,
+                &gb.thick_buffer,
                 0,
                 bytemuck::cast_slice(&batches.thick_vertices),
             );
@@ -246,13 +277,13 @@ impl Gizmo {
         // Update filled buffer
         if filled_count > 0 {
             let byte_size = (batches.filled_vertices.len() * size_of::<ThinLineVtxRender>()) as u64;
-            if byte_size > self.filled_buffer.size() {
-                let new_size = (self.filled_buffer.size() * 2).max(byte_size);
+            if byte_size > gb.filled_buffer.size() {
+                let new_size = (gb.filled_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Filled Buffer tried to become larger than the max_buffer_size");
                     return (0, 0, 0, 0);
                 }
-                self.filled_buffer = device.create_buffer(&BufferDescriptor {
+                gb.filled_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Filled VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -260,7 +291,7 @@ impl Gizmo {
                 });
             }
             queue.write_buffer(
-                &self.filled_buffer,
+                &gb.filled_buffer,
                 0,
                 bytemuck::cast_slice(&batches.filled_vertices),
             );
@@ -268,13 +299,13 @@ impl Gizmo {
         // Update text geometry buffer
         if text_count > 0 {
             let byte_size = (batches.text_vertices.len() * size_of::<TextVtxRender>()) as u64;
-            if byte_size > self.text_buffer.size() {
-                let new_size = (self.text_buffer.size() * 2).max(byte_size);
+            if byte_size > gb.text_buffer.size() {
+                let new_size = (gb.text_buffer.size() * 2).max(byte_size);
                 if new_size > device.limits().max_buffer_size {
                     error!("Gizmo Text Buffer tried to become larger than the max_buffer_size");
                     return (0, 0, 0, 0);
                 }
-                self.text_buffer = device.create_buffer(&BufferDescriptor {
+                gb.text_buffer = device.create_buffer(&BufferDescriptor {
                     label: Some("Gizmo Text VB"),
                     size: new_size,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
@@ -282,7 +313,7 @@ impl Gizmo {
                 });
             }
             queue.write_buffer(
-                &self.text_buffer,
+                &gb.text_buffer,
                 0,
                 bytemuck::cast_slice(&batches.text_vertices),
             );
@@ -1164,10 +1195,16 @@ impl Gizmo {
         buildings: &Buildings,
         zoning: &ZoningStorage,
         settings: &Settings,
-        camera: &Camera,
+        camera: &Camera
     ) {
         self.total_game_time = total_game_time;
         let target = camera.target;
+
+        let mut renders = pending_gizmo_renders().lock().unwrap_or_else(|e| e.into_inner());
+        let mut taken_renders = mem::take(&mut *renders);
+        taken_renders.iter_mut().for_each(|render| render.start_time = self.total_game_time);
+        self.pending_renders.extend(taken_renders);
+
 
         if settings.render_partitions_gizmo {
             self.visualize_partitions(buildings);
@@ -1840,6 +1877,7 @@ impl Gizmo {
     ) -> GizmoBatches {
         let mut batches = GizmoBatches::default();
         let eye = camera.eye_world();
+        let Some(gb) = self.gizmo_buffers.as_mut() else { return batches; };
 
         for render in self.pending_renders.iter_mut() {
             if render.filled {
@@ -1865,8 +1903,7 @@ impl Gizmo {
                     .clamp(self.text_raster_min, self.text_raster_max);
 
                 let step = 2.0;
-                let raster_scale =
-                    ((raw / step).round() * step).clamp(self.text_raster_min, self.text_raster_max);
+                let raster_scale = ((raw / step).round() * step).clamp(self.text_raster_min, self.text_raster_max);
 
                 for t in text.section.text.iter_mut() {
                     t.scale = PxScale::from(raster_scale);
@@ -1874,20 +1911,17 @@ impl Gizmo {
 
                 let section = text.section.to_borrowed();
 
-                let color = section
-                    .text
-                    .first()
-                    .map(|t| t.extra.color)
-                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                let color = section.text.first().map(|t| t.extra.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
 
                 let key = text.glyph_cache_key(raster_scale);
 
                 // ---- Process this section individually ----
                 // No more slicing a shared fresh_glyphs array.
                 // Each queue+process cycle yields exactly this section's quads.
-                self.brush.queue(&section);
 
-                let process_result = self.brush.process_queued(
+                gb.brush.queue(&section);
+
+                let process_result = gb.brush.process_queued(
                     |rect, tex_data| {
                         let width = rect.width();
                         let height = rect.height();
@@ -1923,11 +1957,11 @@ impl Gizmo {
 
                 let glyphs: Vec<GlyphQuad> = match process_result {
                     Ok(BrushAction::Draw(fresh)) => {
-                        self.text_glyph_cache.insert(key, fresh.clone());
+                        gb.text_glyph_cache.insert(key, fresh.clone());
                         fresh
                     }
                     Ok(BrushAction::ReDraw) => {
-                        self.text_glyph_cache.get(&key).cloned().unwrap_or_default()
+                        gb.text_glyph_cache.get(&key).cloned().unwrap_or_default()
                     }
                     Err(err) => {
                         error!("{}", err);
@@ -2004,14 +2038,10 @@ impl Gizmo {
 
                 text.vertices = verts;
 
-                batches
-                    .text_vertices
-                    .extend(text.vertices.iter().map(|v| v.to_render(eye)));
+                batches.text_vertices.extend(text.vertices.iter().map(|v| v.to_render(eye)));
             } else {
                 // Only thin-line renders go here
-                batches
-                    .thin_vertices
-                    .extend(render.vertices.iter().map(|v| v.to_render(eye)));
+                batches.thin_vertices.extend(render.vertices.iter().map(|v| v.to_render(eye)));
             }
         }
 

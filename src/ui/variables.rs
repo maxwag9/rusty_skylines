@@ -75,7 +75,7 @@ impl Variables {
 
         if let Some(Value::Array(a)) = self.vars.get_mut(base) {
             if idx >= a.len() {
-                a.resize(idx + 1, Value::Null);
+                a.resize(idx + 1, Value::None);
             }
             a[idx] = array_value;
         }
@@ -116,7 +116,7 @@ impl Variables {
         if let Some(Value::Array(a)) = self.vars.get_mut(base) {
             //println!("Array: {:?}", a);
             if idx >= a.len() {
-                a.resize(idx + 1, Value::Null);
+                a.resize(idx + 1, Value::None);
             }
             a[idx] = value;
         }
@@ -258,7 +258,7 @@ impl Variables {
 /// Force the value to be the target value!
 pub fn initialize_value(field_type: &str, value: Option<Value>) -> Value {
     let field_type = field_type.to_ascii_lowercase();
-    let value = value.unwrap_or(Value::Null);
+    let value = value.unwrap_or(Value::None);
     let value = match field_type.as_str() {
         "f" | "f64" | "f32" => value.to_f64(),
         "i" | "i64" | "i32" => value.to_i64(),

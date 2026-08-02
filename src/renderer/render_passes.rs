@@ -24,6 +24,7 @@ use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::*;
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions, ShadowOptions};
 use wgpu_render_manager::renderer::RenderManager;
+use crate::renderer::ui_pipelines::multisample_state;
 
 pub struct RenderPassConfig {
     pub background_color: Color,
@@ -235,6 +236,7 @@ pub fn render_sky<'a>(
     let targets = color_and_normals_and_motion_targets(pipelines);
     gpu_timestamp!(encoder, profiler, "Stars", {
         let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
+        //pass.draw_indexed_indirect()
         // Stars
         render_manager.render(
             &[],
@@ -242,7 +244,7 @@ pub fn render_sky<'a>(
             &PipelineOptions {
                 topology: PrimitiveTopology::TriangleStrip,
                 depth_stencil: sky_depth_stencil.clone(),
-                msaa_samples,
+                multisample_state: multisample_state(msaa_samples),
                 vertex_layouts: Vec::from([Some(STARS_VERTEX_LAYOUT)]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
@@ -265,7 +267,7 @@ pub fn render_sky<'a>(
             &PipelineOptions {
                 topology: Default::default(),
                 depth_stencil: sky_depth_stencil,
-                msaa_samples,
+                multisample_state: multisample_state(msaa_samples),
                 vertex_layouts: Vec::new(),
                 fragment: FragmentOption::Default { targets },
                 ..Default::default()
@@ -331,7 +333,7 @@ pub fn render_terrain<'a>(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0xFF)),
-            msaa_samples,
+            multisample_state: multisample_state(msaa_samples),
             vertex_layouts: Vec::from([Some(Vertex::desc())]),
             cull_mode: Some(Face::Front),
             fragment: FragmentOption::Default {
@@ -353,7 +355,7 @@ pub fn render_terrain<'a>(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(make_stencil(0)),
-            msaa_samples,
+            multisample_state: multisample_state(msaa_samples),
             vertex_layouts: Vec::from([Some(Vertex::desc())]),
             cull_mode: Some(Face::Front),
             fragment: FragmentOption::Default { targets },
@@ -405,7 +407,7 @@ pub fn render_water<'a>(
                 },
                 bias: Default::default(),
             }),
-            msaa_samples,
+            multisample_state: multisample_state(msaa_samples),
             vertex_layouts: Vec::from([Some(SimpleVertex::layout())]),
             fragment: FragmentOption::Default { targets },
             ..Default::default()
@@ -460,7 +462,7 @@ pub fn render_roads<'a>(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
-            msaa_samples,
+            multisample_state: multisample_state(msaa_samples),
             vertex_layouts: Vec::from([Some(AdvancedVertex::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
@@ -499,7 +501,7 @@ pub fn render_roads<'a>(
                 stencil: Default::default(),
                 bias: preview_bias,
             }),
-            msaa_samples,
+            multisample_state: multisample_state(msaa_samples),
             vertex_layouts: Vec::from([Some(AdvancedVertex::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default { targets },
@@ -552,7 +554,7 @@ pub fn render_buildings<'a>(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(base_bias, settings)),
-            msaa_samples,
+            multisample_state: multisample_state(msaa_samples),
             vertex_layouts: Vec::from([Some(BuildingVertex::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
@@ -582,10 +584,14 @@ pub fn render_gizmo<'a>(
 ) {
     let pass = &mut create_world_pass(encoder, pipelines, config, msaa_samples, false);
     let targets = color_and_normals_and_motion_targets(pipelines);
+
     let batches = gizmo.collect_batches(camera, pipelines, queue);
     let (thin_count, thick_count, filled_count, text_count) =
         gizmo.update_buffers(device, queue, &batches);
-
+    let Some(gb) = gizmo.gizmo_buffers.as_mut() else {
+        gizmo.clear();
+        return
+    };
     // Render thin lines with LineList
     if thin_count > 0 {
         render_manager.render(
@@ -600,7 +606,7 @@ pub fn render_gizmo<'a>(
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                msaa_samples,
+                multisample_state: multisample_state(msaa_samples),
                 vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
@@ -610,7 +616,7 @@ pub fn render_gizmo<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
-        pass.set_vertex_buffer(0, gizmo.thin_buffer.slice(..));
+        pass.set_vertex_buffer(0, gb.thin_buffer.slice(..));
         pass.draw(0..thin_count, 0..1);
     }
 
@@ -628,7 +634,7 @@ pub fn render_gizmo<'a>(
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                msaa_samples,
+                multisample_state: multisample_state(msaa_samples),
                 vertex_layouts: Vec::from([Some(ThickLineVtxRender::layout())]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
@@ -639,7 +645,7 @@ pub fn render_gizmo<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
-        pass.set_vertex_buffer(0, gizmo.thick_buffer.slice(..));
+        pass.set_vertex_buffer(0, gb.thick_buffer.slice(..));
         pass.draw(0..thick_count, 0..1);
     }
 
@@ -657,7 +663,7 @@ pub fn render_gizmo<'a>(
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                msaa_samples,
+                multisample_state: multisample_state(msaa_samples),
                 vertex_layouts: Vec::from([Some(ThinLineVtxRender::layout())]),
                 fragment: FragmentOption::Default {
                     targets: targets.clone(),
@@ -667,7 +673,7 @@ pub fn render_gizmo<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
-        pass.set_vertex_buffer(0, gizmo.filled_buffer.slice(..));
+        pass.set_vertex_buffer(0, gb.filled_buffer.slice(..));
         pass.draw(0..filled_count, 0..1);
     }
 
@@ -685,7 +691,7 @@ pub fn render_gizmo<'a>(
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                msaa_samples,
+                multisample_state: multisample_state(msaa_samples),
                 vertex_layouts: Vec::from([Some(TextVtxRender::layout())]),
                 fragment: FragmentOption::Default { targets },
                 sampler: SamplerDescriptor {
@@ -703,7 +709,7 @@ pub fn render_gizmo<'a>(
             &[&pipelines.buffers.camera],
             pass,
         );
-        pass.set_vertex_buffer(0, gizmo.text_buffer.slice(..));
+        pass.set_vertex_buffer(0, gb.text_buffer.slice(..));
         pass.draw(0..text_count, 0..1);
     }
 
@@ -734,7 +740,7 @@ pub fn render_cars<'a>(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: Some(depth_stencil(Default::default(), settings)),
-            msaa_samples: settings.msaa_samples,
+            multisample_state: multisample_state(settings.msaa_samples),
             vertex_layouts: Vec::from([Some(CarVertex::layout()), Some(CarInstance::layout())]),
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default { targets },
@@ -765,7 +771,7 @@ pub fn render_instance_ids<'a>(
         &PipelineOptions {
             topology: TriangleList,
             depth_stencil: None,
-            msaa_samples: 1, // IMPORTANT
+            multisample_state: multisample_state(1), // IMPORTANT MSAA = 1!
             vertex_layouts: vec![Some(CarVertex::layout()), Some(CarInstance::layout())],
             cull_mode: Some(Face::Back),
             fragment: FragmentOption::Default {
@@ -789,7 +795,7 @@ pub fn render_instance_ids<'a>(
     let opts = PipelineOptions {
         topology: TriangleList,
         depth_stencil: None,
-        msaa_samples: 1,
+        multisample_state: multisample_state(1), // IMPORTANT MSAA = 1!
         vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
         cull_mode: Some(Face::Back),
         fragment: FragmentOption::Default {
@@ -810,7 +816,7 @@ pub fn render_instance_ids<'a>(
         camera,
         terrain,
         pipelines,
-        settings,
+        settings
     );
 }
 
@@ -834,7 +840,11 @@ pub fn render_props<'a>(
     let opts = PipelineOptions {
         topology: TriangleList,
         depth_stencil: Some(depth_stencil(Default::default(), settings)),
-        msaa_samples: settings.msaa_samples,
+        multisample_state: MultisampleState {
+            count: settings.msaa_samples,
+            mask: !0,
+            alpha_to_coverage_enabled: false, //settings.msaa_samples > 2
+        },
         vertex_layouts: Vec::from([Some(PropVertex::layout()), Some(GpuPropInstance::layout())]),
         cull_mode: Some(Face::Back),
         fragment: FragmentOption::Default {
@@ -843,6 +853,7 @@ pub fn render_props<'a>(
         shadow: shadow.clone(),
         ..Default::default()
     };
+
     // Draw all props
     props.render(
         render_manager,
@@ -852,7 +863,7 @@ pub fn render_props<'a>(
         camera,
         terrain,
         pipelines,
-        settings,
+        settings
     );
 }
 

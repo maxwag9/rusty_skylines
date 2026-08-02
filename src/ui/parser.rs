@@ -1,13 +1,15 @@
+use std::collections::HashSet;
 use crate::data::{SettingKey, Settings};
 use crate::helpers::hsv::{HSV, hsv_to_rgb};
 use crate::ui::variables::{Variables, initialize_value};
 use rand::RngExt;
 use rand::rngs::ThreadRng;
 use std::fmt;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    Null,
+    None,
     F64(f64),
     I64(i64),
     Bool(bool),
@@ -186,7 +188,7 @@ impl Value {
         if with_expr {
             let expr_value = match eval_expr(s, variables, settings) {
                 Some(value) => match value {
-                    Value::Null => {
+                    Value::None => {
                         //println!("Input: {}, Output: Null!!!", s);
                         Value::String(s.to_string())
                     }
@@ -239,7 +241,7 @@ impl Value {
             Value::String(s) => s.parse().ok(),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Value::Array(arr) => Some(arr.len() as f64),
-            Value::Null => None,
+            Value::None => None,
         }
     }
 
@@ -249,7 +251,7 @@ impl Value {
             Value::I64(v) => Value::F64(v as f64),
             Value::Bool(v) => Value::F64(if v { 1.0 } else { 0.0 }),
             Value::String(s) => s.parse::<f64>().map(Value::F64).unwrap_or(Value::F64(1.0)),
-            Value::Null => Value::F64(0.0),
+            Value::None => Value::F64(0.0),
             Value::Array(_) => Value::F64(0.0),
         }
     }
@@ -268,7 +270,7 @@ impl Value {
             Value::String(s) => s.parse().ok(),
             Value::Bool(b) => Some(if *b { 1 } else { 0 }),
             Value::Array(arr) => Some(arr.len() as i64),
-            Value::Null => Some(0),
+            Value::None => Some(0),
         }
     }
 
@@ -284,7 +286,7 @@ impl Value {
             }
             Value::Bool(v) => Value::I64(if v { 1 } else { 0 }),
             Value::String(s) => s.parse::<i64>().map(Value::I64).unwrap_or(Value::I64(1)),
-            Value::Null => Value::I64(0),
+            Value::None => Value::I64(0),
             Value::Array(_) => Value::I64(0),
         }
     }
@@ -371,7 +373,7 @@ impl Value {
                 }
             }
             Value::Array(arr) => !arr.is_empty(),
-            Value::Null => false,
+            Value::None => false,
         }
     }
     pub fn to_string(&self) -> String {
@@ -384,7 +386,7 @@ impl Value {
                 let items: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
                 format!("[{}]", items.join(", "))
             }
-            Value::Null => "null".to_string(),
+            Value::None => "null".to_string(),
         }
     }
 
@@ -398,12 +400,12 @@ impl Value {
                 let items: Vec<String> = arr.into_iter().map(|v| v.into_string()).collect();
                 format!("[{}]", items.join(", "))
             }
-            Value::Null => "null".to_string(),
+            Value::None => "null".to_string(),
         }
     }
 
     pub fn is_null(&self) -> bool {
-        matches!(self, Value::Null)
+        matches!(self, Value::None)
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -413,7 +415,7 @@ impl Value {
             Value::String(_) => "string",
             Value::Bool(_) => "bool",
             Value::Array(_) => "array",
-            Value::Null => "null",
+            Value::None => "null",
         }
     }
 
@@ -713,6 +715,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             max_val.map(Value::F64)
         },
         "clamp" => |args| {
+            //println!("clamp args: {:?}", args);
             let val = args.first()?.as_f64()?;
             let min = args.get(1)?.as_f64()?;
             let max = args.get(2)?.as_f64()?;
@@ -1069,6 +1072,24 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             }
         },
 
+        "nearest" => |args| {
+            let choices = match args.get(1) {
+                Some(Value::Array(arr)) => arr.iter().filter_map(|v| v.as_f64()),
+                _ => return args.get(0).cloned(),
+            };
+            //println!("Nearest: {:?}", args);
+            let value = args.get(0)?.as_f64()?;
+
+            let nearest = choices.min_by(|a, b| {
+                (value - *a)
+                    .abs()
+                    .partial_cmp(&(value - *b).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+
+            Some(Value::F64(nearest))
+        },
+
         "count" => |args| match args.first()? {
             Value::Array(arr) => Some(Value::I64(arr.len() as i64)),
             Value::String(s) => Some(Value::I64(s.chars().count() as i64)),
@@ -1284,7 +1305,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
         "if" => |args| {
             let cond = args.first()?.is_truthy();
             let yes = args.get(1)?.clone();
-            let no = args.get(2).cloned().unwrap_or(Value::Null);
+            let no = args.get(2).cloned().unwrap_or(Value::None);
             Some(if cond { yes } else { no })
         },
         "ifnull" => |args| {
@@ -1309,7 +1330,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                     return Some(arg.clone());
                 }
             }
-            Some(Value::Null)
+            Some(Value::None)
         },
         "choose" => |args| {
             let idx = args.first()?.as_f64()? as usize;
@@ -1330,7 +1351,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
             if pairs.len() % 2 == 1 {
                 Some(pairs.last()?.clone())
             } else {
-                Some(Value::Null)
+                Some(Value::None)
             }
         },
         "map" => |args| {
@@ -1403,7 +1424,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
         "empty" => |args| match args.first() {
             Some(Value::String(s)) => Some(Value::Bool(s.is_empty())),
             Some(Value::Array(arr)) => Some(Value::Bool(arr.is_empty())),
-            Some(Value::Null) => Some(Value::Bool(true)),
+            Some(Value::None) => Some(Value::Bool(true)),
             _ => Some(Value::Bool(false)),
         },
         "hsv_to_rgb" => |args| match args.first() {
@@ -1423,7 +1444,7 @@ fn get_builtin(name: &str) -> Option<BuiltinFn> {
                 };
                 Some(Value::from_vec(hsv_to_rgb(hsv)))
             }
-            _ => Some(Value::Null),
+            _ => Some(Value::None),
         },
         "random" => |args| {
             //println!("{:?}", args);
@@ -2302,7 +2323,7 @@ impl<'a> Parser<'a> {
             Token::StrLit(s) => Ok(Value::String(s)),
             Token::True => Ok(Value::Bool(true)),
             Token::False => Ok(Value::Bool(false)),
-            Token::Null => Ok(Value::Null),
+            Token::Null => Ok(Value::None),
 
             Token::Minus => Ok(Value::F64(
                 -(self
@@ -2731,8 +2752,8 @@ fn add_values(a: Value, b: Value) -> Option<Value> {
             y.insert(0, v);
             Some(Value::Array(y))
         }
-        (Value::String(s), Value::Null) => Some(Value::String(s)),
-        (Value::Null, Value::String(s)) => Some(Value::String(s)),
+        (Value::String(s), Value::None) => Some(Value::String(s)),
+        (Value::None, Value::String(s)) => Some(Value::String(s)),
         _ => None,
     }
 }
@@ -2762,6 +2783,10 @@ fn multiply_values(l: Value, r: Value) -> Option<Value> {
 }
 
 fn get_property(value: &Value, prop: &str) -> Option<Value> {
+    match prop {
+        "exists" => return Some(Value::Bool(value_exists(value))),
+        _ => {}
+    }
     match value {
         Value::String(s) => string_property(s, prop),
         Value::Array(arr) => array_property(arr, prop),
@@ -2770,7 +2795,16 @@ fn get_property(value: &Value, prop: &str) -> Option<Value> {
         _ => None,
     }
 }
-
+fn value_exists(value: &Value) -> bool {
+    match value {
+        Value::None => { false }
+        Value::F64(_) => { true }
+        Value::I64(_) => { true }
+        Value::Bool(_) => { true }
+        Value::String(_) => { true }
+        Value::Array(_) => { true }
+    }
+}
 fn string_property(s: &str, prop: &str) -> Option<Value> {
     Some(match prop {
         "length" | "len" => Value::I64(s.len() as i64),
@@ -2975,6 +3009,13 @@ fn apply_modifier(value: Value, modifier: &str) -> Option<Value> {
     None
 }
 
+static PRINTED_PARSE_ERRORS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn printed_parse_errors() -> &'static Mutex<HashSet<String>> {
+    PRINTED_PARSE_ERRORS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+
 pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Value> {
     let tokens = tokenize_expr(expr);
     //println!("Expr input: {:?}", expr);
@@ -2982,7 +3023,14 @@ pub fn eval_expr(expr: &str, vars: &Variables, settings: &Settings) -> Option<Va
     match result {
         Ok(result) => Some(result),
         Err(e) => {
-            //println!("ParseError for '{}': {}", expr, e);
+            if settings.print_parse_errors {
+                let err = format!("ParseError for '{}': {}", expr, e);
+                let mut printed = printed_parse_errors().lock().unwrap();
+
+                if printed.insert(err.clone()) {
+                    eprintln!("{err}");
+                }
+            }
             None
         }
     }

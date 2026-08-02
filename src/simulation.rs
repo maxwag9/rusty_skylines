@@ -147,22 +147,26 @@ impl Simulation {
 }
 
 pub fn update_picked_pos(
-    terrain_subsystem: &mut Terrain,
+    terrain: &mut Terrain,
     camera: &Camera,
     settings: &Settings,
     config: &SurfaceConfiguration,
-    input_state: &Input,
+    input: &Input
 ) {
+    if !settings.show_world {
+        terrain.last_picked = None;
+        return;
+    }
     let (view, proj, view_proj) = camera.matrices();
     let ray = WorldRay::from_mouse(
-        Vec2::new(input_state.mouse.pos.x, input_state.mouse.pos.y),
+        Vec2::new(input.mouse.pos.x, input.mouse.pos.y),
         config.width as f32,
         config.height as f32,
         view,
         proj,
-        camera.eye_world(),
+        camera.eye_world()
     );
-    terrain_subsystem.pick_terrain_point(ray);
+    terrain.pick_terrain_point(ray);
 }
 
 #[derive(Clone)]

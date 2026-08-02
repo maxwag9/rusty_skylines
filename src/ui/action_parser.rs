@@ -109,7 +109,7 @@ macro_rules! define_commands {
             func_name: &str,
             args: Vec<String>,
             element_ctx: &ElementContext,
-            event_kind: &TouchEventKind,
+            event_kind: &ActionEvent,
             buttons: &MouseButtons
         ) -> Option<UiCommand> {
             let name = func_name.to_ascii_lowercase();
@@ -443,7 +443,7 @@ define_commands! {
         => Noop
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
-pub enum TouchEventKind {
+pub enum ActionEvent {
     HoverEnter,
     Hovering,
     HoverExit,
@@ -461,23 +461,26 @@ pub enum TouchEventKind {
     Activated,
     Deactivated,
     StartUp,
+    ScreenResize,
+    DragStart,
+    DragEnd,
 }
 pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Vec<UiCommand> {
     let (event_kind, actions, element, buttons) = match event {
         TouchEvent::HoverEnter { actions, element } => (
-            TouchEventKind::HoverEnter,
+            ActionEvent::HoverEnter,
             actions,
             element,
             MouseButtons::default(),
         ),
         TouchEvent::Hovering { actions, element } => (
-            TouchEventKind::Hovering,
+            ActionEvent::Hovering,
             actions,
             element,
             MouseButtons::default(),
         ),
         TouchEvent::HoverExit { actions, element } => (
-            TouchEventKind::HoverExit,
+            ActionEvent::HoverExit,
             actions,
             element,
             MouseButtons::default(),
@@ -487,37 +490,49 @@ pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Ve
             element,
             buttons,
             ..
-        } => (TouchEventKind::Press, actions, element, *buttons),
+        } => (ActionEvent::Press, actions, element, *buttons),
         TouchEvent::Down {
             actions,
             element,
             buttons,
             ..
-        } => (TouchEventKind::Down, actions, element, *buttons),
+        } => (ActionEvent::Down, actions, element, *buttons),
         TouchEvent::Release {
             actions,
             element,
             buttons,
             ..
-        } => (TouchEventKind::Release, actions, element, *buttons),
+        } => (ActionEvent::Release, actions, element, *buttons),
         TouchEvent::Click {
             actions,
             element,
             buttons,
             ..
-        } => (TouchEventKind::Click, actions, element, *buttons),
+        } => (ActionEvent::Click, actions, element, *buttons),
         TouchEvent::DoubleClick {
             actions,
             element,
             buttons,
             ..
-        } => (TouchEventKind::DoubleClick, actions, element, *buttons),
+        } => (ActionEvent::DoubleClick, actions, element, *buttons),
+        TouchEvent::DragStart {
+            element,
+            actions,
+            buttons,
+            ..
+        } => (ActionEvent::DragStart, actions, element, *buttons),
         TouchEvent::DragMove {
             element,
             actions,
             buttons,
             ..
-        } => (TouchEventKind::DragMove, actions, element, *buttons),
+        } => (ActionEvent::DragMove, actions, element, *buttons),
+        TouchEvent::DragEnd {
+            element,
+            actions,
+            buttons,
+            ..
+        } => (ActionEvent::DragEnd, actions, element, *buttons),
         TouchEvent::ScrollOnElement {
             actions,
             element,
@@ -526,7 +541,7 @@ pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Ve
             //println!("SCROLLED!!");
             ctx.ui.variables.set_f64("scroll_delta", *delta);
             (
-                TouchEventKind::ScrollOnElement,
+                ActionEvent::ScrollOnElement,
                 actions,
                 element,
                 MouseButtons::default(),
@@ -535,20 +550,20 @@ pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Ve
         TouchEvent::SelectionRequested { element, .. } => {
             //println!("{:?}", element);
             (
-                TouchEventKind::Select,
+                ActionEvent::Select,
                 &vec![],
                 element,
                 MouseButtons::default(),
             )
         }
         TouchEvent::DeselectAllRequested {} => (
-            TouchEventKind::DeSelect,
+            ActionEvent::DeSelect,
             &vec![],
             &ElementRef::default(),
             MouseButtons::default(),
         ),
         TouchEvent::Nothing { element, actions } => (
-            TouchEventKind::Nothing,
+            ActionEvent::Nothing,
             actions,
             element,
             MouseButtons::default(),
@@ -558,15 +573,21 @@ pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Ve
             element,
             buttons,
             ..
-        } => (TouchEventKind::Activated, actions, element, *buttons),
+        } => (ActionEvent::Activated, actions, element, *buttons),
         TouchEvent::Deactivated {
             actions,
             element,
             buttons,
             ..
-        } => (TouchEventKind::Deactivated, actions, element, *buttons),
+        } => (ActionEvent::Deactivated, actions, element, *buttons),
         TouchEvent::StartUp { actions, element } => (
-            TouchEventKind::StartUp,
+            ActionEvent::StartUp,
+            actions,
+            element,
+            MouseButtons::default(),
+        ),
+        TouchEvent::ScreenResize { actions, element } => (
+            ActionEvent::ScreenResize,
             actions,
             element,
             MouseButtons::default(),
@@ -605,7 +626,7 @@ pub fn actions_to_uicommands(ctx: &mut CommandContext, event: &TouchEvent) -> Ve
 pub fn parse_action(
     action: &String,
     ctx: &mut CommandContext,
-    event_kind: &TouchEventKind,
+    event_kind: &ActionEvent,
     buttons: &MouseButtons,
     mut element_ctx: ElementContext,
 ) -> Vec<UiCommand> {
@@ -638,7 +659,7 @@ pub fn parse_action(
 fn handle_action_str(
     settings: &Settings,
     ui: &mut Ui,
-    event_kind: &TouchEventKind,
+    event_kind: &ActionEvent,
     buttons: &MouseButtons,
     action: &str,
     element_ctx: &ElementContext,
@@ -696,7 +717,7 @@ fn handle_action_str(
 fn process_inner_content(
     settings: &Settings,
     ui: &mut Ui,
-    event_kind: &TouchEventKind,
+    event_kind: &ActionEvent,
     buttons: &MouseButtons,
     inner: &str,
     element_ctx: &ElementContext,
@@ -1003,7 +1024,7 @@ fn parse_primitive_action(
     touch_manager: &UiTouchManager,
     action: &str,
     element_ctx: &ElementContext,
-    event_kind: &TouchEventKind,
+    event_kind: &ActionEvent,
     buttons: &MouseButtons,
 ) -> Vec<UiCommand> {
     let s = action.trim();
@@ -1162,7 +1183,7 @@ fn button_matches(
 #[derive(Default, Debug)]
 struct ActionFilters {
     buttons: Vec<ParsedButton>,
-    events: Vec<TouchEventKind>,
+    events: Vec<ActionEvent>,
     keybind_trigger: KeyBindTrigger,
     modes: Vec<String>,
 }
@@ -1216,10 +1237,6 @@ fn parse_action_filters(
 
     action.drain(..consumed);
 
-    if filters.buttons.is_empty() {
-        filters.buttons.push(ParsedButton::Left);
-    }
-
     filters
 }
 
@@ -1270,23 +1287,26 @@ fn try_parse_on(input: &str, filters: &mut ActionFilters) -> Option<usize> {
     let (value, consumed) = parse_prefixed_value(input, "on:")?;
 
     let event = match value.to_ascii_lowercase().as_str() {
-        "a" | "always" => TouchEventKind::Always,
-        "n" | "nothing" => TouchEventKind::Nothing,
-        "hover_enter" | "hoverenter" | "h_enter" => TouchEventKind::HoverEnter,
-        "hovering" | "hover" | "h" => TouchEventKind::Hovering,
-        "hover_exit" | "hoverexit" | "h_exit" => TouchEventKind::HoverExit,
-        "press" | "p" => TouchEventKind::Press,
-        "release" | "r" => TouchEventKind::Release,
-        "click" | "c" => TouchEventKind::Click,
-        "double_click" | "doubleclick" | "dc" => TouchEventKind::DoubleClick,
-        "drag_move" | "dragging" | "drag" | "dr" => TouchEventKind::DragMove,
-        "down" | "d" | "hold" => TouchEventKind::Down,
-        "scroll" | "s" => TouchEventKind::ScrollOnElement,
-        "sel" => TouchEventKind::Select,
-        "desel" => TouchEventKind::DeSelect,
-        "activated" => TouchEventKind::Activated,
-        "deactivated" => TouchEventKind::Deactivated,
-        "startup" => TouchEventKind::StartUp,
+        "a" | "always" => ActionEvent::Always,
+        "n" | "nothing" => ActionEvent::Nothing,
+        "hover_enter" | "hoverenter" | "h_enter" => ActionEvent::HoverEnter,
+        "hovering" | "hover" | "h" => ActionEvent::Hovering,
+        "hover_exit" | "hoverexit" | "h_exit" => ActionEvent::HoverExit,
+        "press" | "p" => ActionEvent::Press,
+        "release" | "r" => ActionEvent::Release,
+        "click" | "c" => ActionEvent::Click,
+        "double_click" | "doubleclick" | "dc" => ActionEvent::DoubleClick,
+        "drag_start" => ActionEvent::DragStart,
+        "drag_move" | "dragging" | "drag" | "dr" => ActionEvent::DragMove,
+        "drag_end" => ActionEvent::DragEnd,
+        "down" | "d" | "hold" => ActionEvent::Down,
+        "scroll" | "s" => ActionEvent::ScrollOnElement,
+        "sel" => ActionEvent::Select,
+        "desel" => ActionEvent::DeSelect,
+        "activated" => ActionEvent::Activated,
+        "deactivated" => ActionEvent::Deactivated,
+        "startup" => ActionEvent::StartUp,
+        "screen_resize" => ActionEvent::ScreenResize,
         _ => {
             println!("Invalid on filter: on:{}", value);
             return None;
@@ -1506,7 +1526,7 @@ fn filters_match(
     input: &mut Input,
     settings: &Settings,
     filters: &ActionFilters,
-    event_kind: &TouchEventKind,
+    event_kind: &ActionEvent,
     buttons: &MouseButtons,
 ) -> bool {
     // Check button filters (if any specified, at least one must match)
@@ -1524,7 +1544,7 @@ fn filters_match(
     if !filters.events.is_empty() {
         let any_event_matches = filters.events.iter().any(|e| e == event_kind);
         if !any_event_matches {
-            if !filters.events.iter().any(|e| e == &TouchEventKind::Always) {
+            if !filters.events.iter().any(|e| e == &ActionEvent::Always) {
                 return false;
             }
         }
@@ -1564,4 +1584,28 @@ enum ParsedButton {
     Forward,
     Any,
     Key(String),
+}
+fn testing_slider() {
+    let min: f64 = 1.0;
+    let max: f64 = 10.0;
+    let step = 1.0;
+
+    let slider_bar_width = 140.0;
+    let slider_bar_middle_x = 410.0;
+    let knob_x = 334.0;
+    let mouse_x = 362.0;
+
+    let min_px = slider_bar_middle_x - slider_bar_width * 0.5;
+    let max_px = slider_bar_middle_x + slider_bar_width * 0.5;
+    let num_steps: f64 = (min - max).abs();
+    let px_per_step: f64 = slider_bar_width / num_steps;
+
+
+    let target_x = mouse_x;
+    let left_step = target_x - px_per_step;
+    let right_step = target_x + px_per_step;
+    let abs_left = (target_x - left_step).abs();
+    let abs_right = (target_x - right_step).abs();
+
+    let knob_x = if abs_left < abs_right { left_step } else { right_step };
 }

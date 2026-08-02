@@ -382,8 +382,8 @@ fn synth_text(rng: &mut SimpleRng) -> UiButtonTextYaml {
         id: format!("t_{}", rng.next_u64()),
         actions: vec![],
         style: "None".to_string(),
-        x: rng.next_f32_range(0.0, 1.0),
-        y: rng.next_f32_range(0.0, 1.0),
+        x: rng.next_i32_range(0, 1920) as i16,
+        y: rng.next_i32_range(0, 1080) as i16,
         pt: rng.next_f32_range(4.0, 50.1),
         color: [
             rng.next_f32_range(0.0, 2.0),
@@ -407,8 +407,8 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
         id: format!("c_{}", rng.next_u64()),
         actions: vec![],
         style: "Bent".to_string(),
-        x: rng.next_f32_range(0.0, 1.0),
-        y: rng.next_f32_range(0.0, 1.0),
+        x: rng.next_i32_range(0, 1920) as i16,
+        y: rng.next_i32_range(0, 1080) as i16,
         radius: rng.next_f32_range(0.0, 0.3),
         inside_border_thickness_percentage: rng.next_f32_range(0.0, 0.3),
         border_thickness_percentage: rng.next_f32_range(0.0, 0.3),
@@ -453,8 +453,8 @@ fn synth_circle(rng: &mut SimpleRng) -> UiButtonCircleYaml {
 fn synth_handle(rng: &mut SimpleRng) -> UiButtonHandleYaml {
     UiButtonHandleYaml {
         id: format!("h_{}", rng.next_u64()),
-        x: rng.next_f32_range(0.0, 1.0),
-        y: rng.next_f32_range(0.0, 1.0),
+        x: rng.next_i32_range(0, 1920) as i16,
+        y: rng.next_i32_range(0, 1080) as i16,
         radius: rng.next_f32_range(0.0, 0.3),
         handle_color: [
             rng.next_f32_range(0.0, 2.0),
@@ -555,8 +555,8 @@ fn synth_polygon(rng: &mut SimpleRng) -> UiButtonPolygonYaml {
         id: format!("p_{}", rng.next_u64()),
         actions: vec![],
         style: "BentPoly".to_string(),
-        x: 0.0,
-        y: 0.0,
+        x: rng.next_i32_range(0, 1920) as i16,
+        y: rng.next_i32_range(0, 1080) as i16,
         scale: 1.0,
         vertices: verts,
         misc: MiscButtonSettingsYaml {

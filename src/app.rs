@@ -1,3 +1,4 @@
+use crate::data::SettingKey;
 use crate::data::Cycle;
 use crate::resources::Resources;
 use crate::simulation::update_picked_pos;
@@ -20,6 +21,8 @@ use winit::event::{ElementState, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowAttributes, WindowId};
+use crate::helpers::paths::data_dir;
+use crate::renderer::shadows::create_csm_shadow_texture;
 
 const TIME_SPEED_BINDINGS: [(&str, f32); 7] = [
     ("Speed up Time 100x", 100.0),
@@ -94,10 +97,7 @@ impl ApplicationHandler for App {
             .ui
             .variables
             .set_string("cursor_mode", format!("{:#?}", world.terrain.cursor.mode));
-        resources.ui.variables.set_array(
-            "screen",
-            vec![window.surface_size().width, window.surface_size().height],
-        );
+        resources.ui.variables.set_array("screen", vec![window.surface_size().width, window.surface_size().height]);
 
         let width = 32u16;
         let height = 32u16;
@@ -197,7 +197,6 @@ impl ApplicationHandler for App {
                 //     settings.show_gui = true;
                 //     ui.variables.set_bool("show_gui", settings.show_gui);
                 // }
-                ui.touch_manager.editor.enabled = settings.editor_mode;
                 // Toggle override_mode
                 if input.action_repeat("Toggle override mode") {
                     settings.override_mode = !settings.override_mode;
@@ -227,20 +226,19 @@ impl ApplicationHandler for App {
                     ui.variables
                         .set_bool("override_mode", settings.override_mode);
                     settings.editor_mode = false;
-                    ui.touch_manager.editor.enabled = settings.editor_mode;
                     ui.variables.set_bool("editor_mode", settings.editor_mode)
                 }
 
                 // Save GUI
                 if input.action_pressed_once("Save GUI layout") {
-                    // match ui.save_gui_to_file(
-                    //     data_dir("ui_data/menus"),
-                    //     data_dir("ui_data/menus/advanced_primitives"),
-                    //     resources.window.surface_size(),
-                    // ) {
-                    //     Ok(_) => println!("GUI layout saved"),
-                    //     Err(e) => eprintln!("Failed to save GUI layout: {e}"),
-                    // }
+                    match ui.save_gui_to_file(
+                        data_dir("ui_data/menus"),
+                        data_dir("ui_data/menus/advanced_primitives"),
+                        resources.window.surface_size(),
+                    ) {
+                        Ok(_) => println!("GUI layout saved"),
+                        Err(e) => eprintln!("Failed to save GUI layout: {e}")
+                    }
                 }
                 if input.action_pressed_once("Toggle Cursor Mode") {
                     world.events.send(world.terrain.cursor.mode.next_command());
@@ -397,22 +395,27 @@ impl ApplicationHandler for App {
                     println!("[event] redraw requested");
                 }
                 let frame_start = Instant::now();
-                update_time(resources);
+                update_stuff(resources);
 
                 run_inputs(resources);
 
+                resources.settings.new_settings_changes();
+
                 run_ui(resources, event_loop);
 
+                resources.settings.new_settings_changes();
+                apply_settings(resources);
+                
                 run_commands(resources);
                 run_ticked(resources);
+
+                resources.settings.new_settings_changes();
+
                 let mut steps = 0u32;
 
                 // If speed just changed, skip sim this frame for clean transition
                 if !resources.world.time.speed_just_changed {
-                    resources
-                        .world
-                        .time
-                        .clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
+                    resources.world.time.clamp_sim_accumulator(MAX_SIM_STEPS_PER_FRAME);
 
                     let sim_budget = Duration::from_secs_f32(
                         (resources.world.time.target_frametime * 0.6).max(0.0),
@@ -431,10 +434,7 @@ impl ApplicationHandler for App {
 
                 // Update achieved speed (windowed measurement)
                 resources.world.time.update_achieved_speed(steps);
-                resources
-                    .ui
-                    .variables
-                    .set_f64("achieved_time_speed", resources.world.time.achieved_speed);
+                resources.ui.variables.set_f64("achieved_time_speed", resources.world.time.achieved_speed);
 
                 // Render
                 {
@@ -510,7 +510,7 @@ impl ApplicationHandler for App {
     }
 }
 
-fn update_time(resources: &mut Resources) {
+fn update_stuff(resources: &mut Resources) {
     let Resources {
         world,
         settings,
@@ -526,6 +526,9 @@ fn update_time(resources: &mut Resources) {
         terrain,
         ..
     } = world;
+
+    settings.update_change_tracking();
+
     update_picked_pos(
         terrain,
         &world_state.camera,
@@ -670,5 +673,18 @@ fn update_time(resources: &mut Resources) {
             .map(|(menu_name, menu)| menu_name.clone())
             .collect::<Vec<String>>();
         ui.variables.set_array("active_menus", active_menus);
+    }
+}
+fn apply_settings(resources: &mut Resources) {
+    let changed = resources.settings.take_changed();
+
+    for key in changed {
+        match key {
+            SettingKey::MsaaSamples => resources.render_core.update_msaa(&resources.settings),
+
+            SettingKey::ShadowMapSize => resources.render_core.pipelines.resources.csm_shadows = create_csm_shadow_texture(&resources.render_core.device, resources.settings.shadow_map_size, "Sun CSM"),
+
+            _ => {}
+        }
     }
 }

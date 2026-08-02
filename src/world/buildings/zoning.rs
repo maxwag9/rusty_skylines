@@ -3372,7 +3372,7 @@ pub fn draw_area(
     if let Some(mut c) = variables
         .get(key)
         .as_deref()
-        .unwrap_or(&Value::Null)
+        .unwrap_or(&Value::None)
         .as_color4()
     {
         if let Some(m) = color_multiplier {

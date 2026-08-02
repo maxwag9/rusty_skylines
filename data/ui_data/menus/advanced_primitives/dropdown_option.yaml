@@ -21,11 +21,11 @@ elements:
       - on:release button:left, set(strexpr:split("{ap}", ".").0, {ap})
       - on:release button:left, ifvareq({split("{ap}", ".").0}_open, bool:false, forin({split("{ap}", ".").0}.options, del_ap(self.menu, strexpr:dd_{split("{ap}", ".").0}_layer, strexpr:{split("{ap}", ".").0}_Option_{idx})))
       #- on:release button:left, print(After:, {split("{ap}", ".").0}_open)
-      - button:a show_interaction(self.color.fill)
-    x: 0.0
-    y: 0.0
-    w: 0.15
-    h: 0.03
+      - show_interaction([0.2, 0.2, 0.2, 1.0], false)
+    x: 0
+    y: 0
+    w: 160
+    h: 40
     color:
       - 0.2
       - 0.2
@@ -41,9 +41,9 @@ elements:
 
   - !Text
     id: Option Text
-    x: 0.000
-    y: 0.005
-    pt: 10.0
+    x: 0
+    y: 0
+    pt: 11.0
     color:
       - 1.0
       - 1.0
@@ -51,3 +51,7 @@ elements:
       - 1.0
     text: "{{ap}}"
     anchor: Center
+    misc:
+      active: true
+      touchable: false
+      editable: true

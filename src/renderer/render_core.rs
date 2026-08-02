@@ -3,7 +3,6 @@ use crate::gpu_timestamp;
 use crate::helpers::paths::{compute_shader_dir, next_screenshot_path, shader_dir, texture_dir};
 use crate::helpers::positions::WorldPos;
 use crate::renderer::gizmo::gizmo::Gizmo;
-//use crate::renderer::gizmo::partition_gizmo::PartitionGizmo;
 use crate::renderer::gpu_profiler::GpuProfiler;
 use crate::renderer::gtao::gtao::{GtaoBlurParams, GtaoUpsampleApplyParams};
 use crate::renderer::pipelines::Pipelines;
@@ -12,11 +11,9 @@ use crate::renderer::ray_tracing::rt_pass::render_ray_tracing;
 use crate::renderer::ray_tracing::rt_subsystem::RTSubsystem;
 use crate::renderer::render_passes::*;
 use crate::renderer::shader_watcher::ShaderWatcher;
-use crate::renderer::shadows::{
-    CSM_CASCADES, ShadowMatUniform, render_buildings_shadows, render_cars_shadows,
-    render_roads_shadows, render_terrain_shadows,
-};
+use crate::renderer::shadows::{render_buildings_shadows, render_cars_shadows, render_roads_shadows, render_terrain_shadows, ShadowMatUniform, CSM_CASCADES};
 use crate::renderer::ui::{ScreenUniform, UiRenderer};
+use crate::renderer::ui_pipelines::multisample_state;
 use crate::renderer::uniform_updates::UniformUpdater;
 use crate::resources::Time;
 use crate::ui::input::Input;
@@ -34,12 +31,12 @@ use crate::world::world::World;
 use glam::UVec2;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
+use wgpu::wgt::PollType;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Rgba8UnormSrgb;
-use wgpu::wgt::PollType;
 use wgpu::*;
 use wgpu_render_manager::compute_system::{BufferSet, ComputePipelineOptions};
 use wgpu_render_manager::fullscreen::{DebugVisualization, DepthDebugParams};
@@ -49,6 +46,7 @@ use wgpu_render_manager::renderer::RenderManager;
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
+use crate::ui::variables::Variables;
 
 pub struct Renderer {
     // gpu objects
@@ -59,7 +57,6 @@ pub struct Renderer {
     pub msaa_samples: u32,
     pub old_window_size: PhysicalSize<u32>,
 
-    // render-only subsystems & caches
     pub render_manager: RenderManager,
     pub shader_watcher: Option<ShaderWatcher>,
     pub screenshot_sender: Sender<ScreenshotJob>,
@@ -72,7 +69,7 @@ pub struct Renderer {
     pub car_renderer: CarRenderSubsystem,
     pub building_renderer: BuildingRenderer,
     pub gizmo: Gizmo,
-    pub props: Props,
+    pub props: Props
 }
 
 impl Renderer {
@@ -84,6 +81,7 @@ impl Renderer {
         adapter: Adapter,
         settings: &Settings,
         camera: &Camera,
+        props: Props
     ) -> Self {
         let shader_watcher = ShaderWatcher::new().ok();
 
@@ -123,7 +121,7 @@ impl Renderer {
             gizmo,
             profiler,
             rt_subsystem,
-            props: Props::new(device),
+            props,
             building_renderer,
             screenshot_sender: make_screenshot_thread(),
         }
@@ -160,7 +158,7 @@ impl Renderer {
         self.ui_renderer.brush.resize_view(
             new_size.width as f32,
             new_size.height as f32,
-            &self.queue,
+            &self.queue
         );
     }
 
@@ -263,7 +261,7 @@ impl Renderer {
         let camera = &world.world_state.camera;
         let astronomy = &world.time.astronomy;
         let terrain = &mut world.terrain;
-        self.update_defines();
+        self.update_defines(settings);
 
         self.check_shader_changes(ui_loader);
 
@@ -330,7 +328,7 @@ impl Renderer {
         updater.update_fog_uniforms(&self.config, camera);
         updater.update_sky_uniforms(astronomy);
         updater.update_water_uniforms();
-        updater.update_tonemapping_uniforms(&settings.tonemapping_state);
+        updater.update_tonemapping_uniforms(settings.tonemapping_state, settings.color_grading_state);
         updater.update_ssao_uniforms(time, settings, camera.prev_view_proj);
     }
 
@@ -793,17 +791,17 @@ impl Renderer {
                 &self.queue,
             );
         });
-        let pass = &mut create_id_pass(encoder, &self.pipelines);
-        render_instance_ids(
-            pass,
-            &mut self.render_manager,
-            &self.pipelines,
-            &mut self.car_renderer,
-            settings,
-            camera,
-            &self.props,
-            terrain,
-        );
+        // let pass = &mut create_id_pass(encoder, &self.pipelines);
+        // render_instance_ids(
+        //     pass,
+        //     &mut self.render_manager,
+        //     &self.pipelines,
+        //     &mut self.car_renderer,
+        //     settings,
+        //     camera,
+        //     &self.props,
+        //     terrain,
+        // );
     }
     fn execute_gtao_pass(
         &mut self,
@@ -961,7 +959,7 @@ impl Renderer {
 
             let options = PipelineOptions::default()
                 .with_topology(TriangleList)
-                .with_msaa(self.msaa_samples)
+                .with_multisample_state(multisample_state(self.msaa_samples))
                 .with_target(ColorTargetState {
                     format: self.pipelines.msaa.hdr.texture().format(),
                     blend: Some(BlendState {
@@ -1026,7 +1024,7 @@ impl Renderer {
             //   alpha: keep destination alpha
             let options = PipelineOptions::default()
                 .with_topology(TriangleList)
-                .with_msaa(self.msaa_samples)
+                .with_multisample_state(multisample_state(self.msaa_samples))
                 .with_target(ColorTargetState {
                     format: self.pipelines.msaa.hdr.texture().format(),
                     blend: Some(BlendState {
@@ -1342,7 +1340,7 @@ impl Renderer {
 
         let options = PipelineOptions {
             topology: TriangleList,
-            msaa_samples: 1, // No MSAA for post-processing!
+            multisample_state: multisample_state(1), // No MSAA for post-processing!
             depth_stencil: None,
             vertex_layouts: vec![],
             cull_mode: None,
@@ -1368,7 +1366,7 @@ impl Renderer {
             &[&self.pipelines.resolved.hdr, &self.pipelines.resolved.ui], // Sample FROM non-msaa hdr and FROM non-msaa UI
             shader_dir().join("tonemap.wgsl").as_path(),
             &options,
-            &[&self.pipelines.buffers.tonemapping],
+            &[&self.pipelines.buffers.tonemapping, &self.pipelines.buffers.color_grading],
             &mut pass,
         );
 
@@ -1388,11 +1386,13 @@ impl Renderer {
 
         self.update_msaa(settings);
     }
-    pub fn update_msaa(&mut self, settings: &mut Settings) {
-        self.render_manager
-            .update_define("MSAA".to_string(), self.msaa_samples > 1);
+    pub fn update_msaa(&mut self, settings: &Settings) {
+        //println!("Updating msaa");
+        self.msaa_samples = settings.msaa_samples;
+        self.render_manager.update_define("MSAA".to_string(), self.msaa_samples > 1);
         self.pipelines.resize(&self.config, self.msaa_samples);
         self.ui_renderer.pipelines.msaa_samples = self.msaa_samples;
+
         self.render_manager.invalidate_bind_groups();
     }
     fn reload_all_shaders(&mut self, changed: &[PathBuf]) -> anyhow::Result<()> {
@@ -1431,10 +1431,10 @@ impl Renderer {
         }
     }
 
-    fn update_defines(&mut self) {
+    fn update_defines(&mut self, settings: &Settings) {
         let msaa_on = self.msaa_samples > 1;
-        self.render_manager
-            .update_define("MSAA".to_string(), msaa_on);
+        self.render_manager.update_define("MSAA".to_string(), msaa_on);
+        self.render_manager.update_define("TONEMAP_UI".to_string(), settings.tonemap_ui);
     }
 }
 
@@ -1474,7 +1474,8 @@ pub fn create_surface_config(
     surface: &Surface,
     adapter: &Adapter,
     settings: &mut Settings,
-    size: PhysicalSize<u32>,
+    variables: &mut Variables,
+    size: PhysicalSize<u32>
 ) -> (SurfaceConfiguration, u32) {
     let surface_caps = surface.get_capabilities(adapter);
 
@@ -1508,6 +1509,8 @@ pub fn create_surface_config(
     };
 
     let caps = adapter.get_texture_format_features(config.format);
+    let msaa_options = get_supported_msaa_levels(adapter, format);
+    variables.set_array("supported_msaa_levels", msaa_options);
     let msaa_samples = clamp_to_supported_msaa(caps, settings.msaa_samples);
     settings.msaa_samples = msaa_samples;
     (config, msaa_samples)

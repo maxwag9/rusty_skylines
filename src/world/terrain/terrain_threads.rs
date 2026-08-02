@@ -1,7 +1,5 @@
 use crate::helpers::positions::{ChunkCoord, LodStep};
-use crate::world::terrain::chunk_builder::{
-    ChunkBuilder, ChunkHeightGrid, ChunkState, CpuChunkMesh,
-};
+use crate::world::terrain::chunk_builder::{ChunkBuilder, ChunkHeightGrid, ChunkState, CpuChunkMesh, TreeSpawningParams};
 use crate::world::terrain::terrain_editing::TerrainEdit;
 use crate::world::terrain::terrain_gen::TerrainGenerator;
 use crossbeam_channel::{Receiver, unbounded};
@@ -42,6 +40,7 @@ pub struct PendingChunkRequest {
 
     pub terrain_edits_snapshot: TerrainEditsSnapshot,
     pub loaded_snapshot: Arc<LoadedChunksSnapshot>,
+    pub tree_spawning_params: TreeSpawningParams
 }
 
 impl PendingChunkRequest {
@@ -246,7 +245,6 @@ impl WorkQueue {
     }
 }
 pub type LoadedChunksSnapshot = HashMap<ChunkCoord, LoadedChunkSnapshot>;
-// ─── ChunkWorkerPool ──────────────────────────────────────────────────────────
 
 pub struct ChunkWorkerPool {
     pub result_rx: Receiver<CpuChunkMesh>,
@@ -260,7 +258,7 @@ pub struct ChunkWorkerPool {
 }
 
 impl ChunkWorkerPool {
-    pub fn new(worker_count: usize, terrain_gen: TerrainGenerator) -> Self {
+    pub fn new(worker_count: usize, terrain_gen: &TerrainGenerator) -> Self {
         let (result_tx, result_rx) = unbounded::<CpuChunkMesh>();
 
         let queue = Arc::new(WorkQueue::new());
@@ -269,7 +267,7 @@ impl ChunkWorkerPool {
 
         for _ in 0..worker_count {
             let result_tx = result_tx.clone();
-            let terrain = terrain_gen.clone();
+            let terrain_gen = TerrainGenerator::from_terrain_gen(terrain_gen);
             let queue = queue.clone();
 
             std::thread::spawn(move || {
@@ -293,9 +291,10 @@ impl ChunkWorkerPool {
                         job.state,
                         job.version,
                         &job.version_atomic,
-                        &terrain,
+                        &terrain_gen,
                         &job.terrain_edits_snapshot,
                         &job.loaded_snapshot,
+                        job.tree_spawning_params
                     );
                     // ALWAYS remove from pending, regardless of outcome
                     queue.remove(job.coord);

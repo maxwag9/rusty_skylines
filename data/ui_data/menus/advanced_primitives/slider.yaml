@@ -1,0 +1,119 @@
+name: slider
+elements:
+
+  - !Rect
+    id: Slider Background
+    actions: [ ]
+    x: 0
+    y: 0
+    w: 150
+    h: 40
+    color:
+      - 0.00
+      - 0.00
+      - 0.00
+      - 0.8
+    border_color:
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.2
+    roundness: 0.05
+    border_thickness_percentage: 0.04
+
+  - !Rect
+    id: slider_bar
+    actions: [ ]
+    x: 0
+    y: 0
+    w: 140
+    h: 10
+    color:
+      - 0.9
+      - 0.9
+      - 0.9
+      - 0.9
+    roundness: 0.3
+
+  - !Circle
+    id: Slider knob
+    actions:
+      - on:startup as:["slider_bar"],
+        set(str:min_px, {as.center.x} - {as.size.x} * 0.5);
+        set(str:target_pos, {min_px}+(({ap.0}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}));
+      - on:h_enter, set(str:self.radius, {self.radius}*1.1)
+      - on:h_exit, set(str:self.radius, {self.radius}/1.1)
+      - on:drag_move as:["slider_bar"],
+        set(str:min_px, {as.center.x} - {as.size.x} * 0.5);
+        set(str:max_px, {as.center.x} + {as.size.x} * 0.5);
+        set(str:clamped_mouse_x, clamp({mouse_pos.x}, {min_px}, {max_px}));
+        set(str:mouse_t, ({clamped_mouse_x}-{min_px})/({max_px}-{min_px}));
+        set(str:slider_value, {ap.2}+{mouse_t}*({ap.3}-{ap.2}));
+        set(str:snapped_slider_value, round({slider_value}/{ap.4})*{ap.4});
+        set(str:{ap.0}, {snapped_slider_value});
+        set(str:target_pos, {min_px}+(({ap.0}-{ap.2})/({ap.3}-{ap.2})*{as.size.x}));
+      - on:always, set(str:self.center.x, {self.center.x} + ({target_pos} - {self.center.x}) * 0.08);
+    x: 0.0
+    y: 0.0
+    radius: 15
+    fill_color:
+      - 0.5
+      - 0.5
+      - 0.5
+      - 0.98
+    glow_color:
+      - 0.2
+      - 0.0
+      - 0.7
+      - 0.98
+    glow_misc:
+      glow_size: 4.0
+      glow_speed: 5.0
+      glow_intensity: 0.5
+    misc:
+      active: true
+      pressable: true
+      editable: true
+  - !Text
+    id: slider_value_text
+    actions: [ ]
+    x: 0
+    y: 0
+    pt: 16.0
+    color:
+      - 1
+      - 0.0
+      - 1
+      - 0.9
+    text: '{{ap.1}:} {{{ap.0}}:.2}'
+    anchor: Center
+    misc:
+      active: true
+      pressable: false
+      editable: true
+  - !Text
+    id: slider_min_text
+    x: -73
+    y: -16
+    pt: 8.0
+    color:
+      - 0.5
+      - 0.5
+      - 0.5
+      - 0.8
+    text: '{{{ap.2}}:.2}'
+    anchor: Center
+  - !Text
+    id: slider_max_text
+    x: 73
+    y: -16
+    pt: 8.0
+    color:
+      - 0.5
+      - 0.5
+      - 0.5
+      - 0.8
+    text: '{{{ap.3}}:.2}'
+    anchor: Center
+
+    #if({ap.5}.exists, set(str:{ap.0}, nearest(snapped_slider_value, {ap.5})), set(str:{ap.0}, {snapped_slider_value}));

@@ -4,6 +4,8 @@ use crate::helpers::positions::{ChunkCoord, WorldPos, chunk_size};
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use std::f32::consts::PI;
 use wgpu::Extent3d;
+use crate::renderer::props::Props;
+use crate::world::terrain::chunk_builder::TreeSpawner;
 
 const TAU: f32 = PI * 2.0;
 
@@ -325,20 +327,15 @@ pub struct TerrainGenerator {
     rock: FastNoiseLite,
 
     continent_shape_noise: FastNoiseLite,
-}
-
-impl Clone for TerrainGenerator {
-    fn clone(&self) -> Self {
-        Self::new(self.p)
-    }
+    pub tree_spawner: TreeSpawner
 }
 
 impl TerrainGenerator {
-    pub fn new(terrain_params: TerrainParams) -> Self {
-        Self::with_params(terrain_params)
+    pub fn new(terrain_params: TerrainParams, props: &Props) -> Self {
+        Self::with_params(terrain_params, Some(props), None)
     }
 
-    pub fn with_params(mut p: TerrainParams) -> Self {
+    pub fn with_params(mut p: TerrainParams, props: Option<&Props>, tree_spawner: Option<TreeSpawner>) -> Self {
         let seed = p.seed;
         p.world_scale = p.world_scale.max(0.000001);
 
@@ -393,7 +390,9 @@ impl TerrainGenerator {
 
         let detail = make_fbm(seed.wrapping_add(9001), 0.020, 4, 0.55);
         let rock = make_fbm(seed.wrapping_add(9002), 0.012, 3, 0.55);
-
+        let tree_spawner = tree_spawner.unwrap_or_else(|| {
+            TreeSpawner::new(props.expect("Props required when creating a new TreeSpawner"))
+        });
         Self {
             p,
             macro_elev,
@@ -411,9 +410,12 @@ impl TerrainGenerator {
             warp_small,
             detail,
             rock,
+            tree_spawner
         }
     }
-
+    pub fn from_terrain_gen(terrain_gen: &TerrainGenerator) -> TerrainGenerator {
+        TerrainGenerator::with_params(terrain_gen.p, None, Some(terrain_gen.tree_spawner.clone()))
+    }
     #[inline]
     fn scaled_coords_f64(&self, p: &WorldPos) -> (f64, f64) {
         let (wx, wz) = world_xz_f64(p);
@@ -911,127 +913,6 @@ impl TerrainGenerator {
         col = lerp_hsv(col, snow_col, snow.clamp(0.0, 1.0));
 
         hsv_to_rgb(col)
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Tree placement
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// Returns local (x, z) positions within the chunk where trees should be placed.
-    ///
-    /// Uses a jittered grid so trees aren't perfectly regular, but sampling is
-    /// O(chunk_cells) with no spatial data structures needed.
-    ///
-    /// `grid_spacing` controls how densely the chunk is sampled (e.g. 6 means
-    /// one candidate per 6×6 block). Lower = denser forest, higher = sparser.
-    /// A value of 4–8 works well for most use-cases.
-    pub fn tree_positions(&self, chunk_x: i32, chunk_z: i32, grid_spacing: u32) -> Vec<[f32; 2]> {
-        use crate::helpers::positions::{ChunkCoord, LocalPos};
-
-        let gs = grid_spacing.max(1);
-        let cs = chunk_size() as u32;
-        let cols = cs / gs;
-        let mut out = Vec::new();
-
-        for gz in 0..cols {
-            for gx in 0..cols {
-                // Stable, unique seed per cell — incorporates chunk position so
-                // identical cells in different chunks don't produce the same jitter.
-                let cell_seed = (chunk_x as u32)
-                    .wrapping_mul(0x9e3779b9)
-                    .wrapping_add((chunk_z as u32).wrapping_mul(0x517cc1b7))
-                    .wrapping_add(gz.wrapping_mul(0x45d9f3b))
-                    .wrapping_add(gx)
-                    .wrapping_add(self.p.seed.wrapping_mul(0xdeadbeef));
-
-                // Jitter within cell
-                let jx = hash01(cell_seed) * gs as f32;
-                let jz = hash01(cell_seed.wrapping_add(1)) * gs as f32;
-
-                let lx = gx as f32 * gs as f32 + jx;
-                let lz = gz as f32 * gs as f32 + jz;
-
-                // Clamp strictly inside chunk
-                if lx < 0.0 || lx >= cs as f32 || lz < 0.0 || lz >= cs as f32 {
-                    continue;
-                }
-
-                let wp = WorldPos {
-                    chunk: ChunkCoord {
-                        x: chunk_x,
-                        z: chunk_z,
-                    },
-                    local: LocalPos {
-                        x: lx,
-                        z: lz,
-                        y: 0.0,
-                    },
-                };
-
-                let h = self.height(&wp);
-                let h_norm = (h - self.p.sea_level) / self.p.height_scale;
-
-                // Below water or barely above — no trees
-                if h_norm < 0.015 {
-                    continue;
-                }
-
-                // Above treeline — bare rock/snow
-                if h_norm > 0.80 {
-                    continue;
-                }
-
-                let m = self.moisture(&wp, h);
-
-                // Too dry for any tree growth
-                if m < 0.22 {
-                    continue;
-                }
-
-                let lat = self.latitude_factor(&wp);
-
-                // Approximate temperature (no re-running full color pipeline)
-                let t_noise = noise2_f64(
-                    &self.macro_elev,
-                    (wp.chunk.x as f64 * cs as f64 + lx as f64) * self.p.world_scale as f64,
-                    (wp.chunk.z as f64 * cs as f64 + lz as f64) * self.p.world_scale as f64,
-                    0.020,
-                );
-                let temp = ((1.0 - lat).powf(1.6) + t_noise * 0.05).clamp(0.0, 1.0);
-
-                // Too cold (polar / high alpine)
-                if temp < 0.12 {
-                    continue;
-                }
-
-                // Slope check — trees don't grow on steep cliffs
-                let (gx_s, gz_s) = grad2_f64(
-                    &self.hills,
-                    (wp.chunk.x as f64 * cs as f64 + lx as f64) * self.p.world_scale as f64,
-                    (wp.chunk.z as f64 * cs as f64 + lz as f64) * self.p.world_scale as f64,
-                    0.8,
-                );
-                let slope = (gx_s * gx_s + gz_s * gz_s).sqrt();
-                if slope > 0.55 {
-                    continue;
-                }
-
-                // Density function: moist + warm + lowland = dense forest;
-                // marginal conditions = sparse. Roll against a hash to thin out.
-                let alt_penalty = smoothstep(0.55, 0.80, h_norm); // fewer trees near peaks
-                let density = (m - 0.22) / 0.78       // moisture drive (0..1)
-                    * (0.30 + 0.70 * temp)             // colder biomes are sparser
-                    * (1.0 - alt_penalty * 0.85)       // altitude thins canopy
-                    * (1.0 - slope / 0.55 * 0.40); // steeper = sparser
-
-                let roll = hash01(cell_seed.wrapping_add(2));
-                if roll < density {
-                    out.push([lx, lz]);
-                }
-            }
-        }
-
-        out
     }
 
     #[inline]

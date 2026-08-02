@@ -1,4 +1,6 @@
-use crate::helpers::positions::{ChunkCoord, LocalPos, LodStep, WorldPos, chunk_size};
+use crate::helpers::positions::{chunk_size, ChunkCoord, LocalPos, LodStep, WorldPos};
+use crate::renderer::gizmo::gizmo::{push_gizmo_renders, Gizmo};
+use crate::renderer::props::{ArchetypeId, PropInstance, Props};
 use crate::ui::vertex::Vertex;
 use crate::world::terrain::terrain_editing::{apply_edits_with_stitching, recompute_patch_minmax};
 use crate::world::terrain::terrain_gen::TerrainGenerator;
@@ -6,9 +8,15 @@ use crate::world::terrain::terrain_subsystem::append_edge_skirts;
 use crate::world::terrain::terrain_threads::{
     ChunkWorkerPool, LoadedChunksSnapshot, TerrainEditsSnapshot,
 };
+use fastnoise_lite::{FastNoiseLite, NoiseType};
 use glam::Vec3;
-use std::sync::Arc;
+use rand::rngs::SmallRng;
+use rand::{Rng, RngExt, SeedableRng};
+use std::mem::take;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
+use strum::IntoEnumIterator;
+use strum_macros::{Display, EnumIter};
 
 #[derive(Clone)]
 pub struct ChunkHeightGrid {
@@ -195,8 +203,7 @@ pub fn regenerate_vertices_from_height_grid(
                     .and_then(|n| n.pos_z.as_ref())
                     .and_then(|edge| edge.get(gx).copied())
                     .unwrap_or_else(|| {
-                        let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z + cell))
-                            .normalize();
+                        let pos = WorldPos::new(chunk, LocalPos::new(local_x, 0.0, local_z + cell)).normalize();
                         terrain_gen.height(&pos)
                     })
             };
@@ -221,14 +228,14 @@ pub fn regenerate_vertices_from_height_grid(
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct GpuChunkHandle {
+pub struct GpuChunkHandle {
     pub base_vertex: i32,
-    pub(crate) first_index_above: u32,
-    pub(crate) index_count_above: u32,
-    pub(crate) first_index_under: u32,
-    pub(crate) index_count_under: u32,
-    pub(crate) page: usize,
-    pub(crate) vertex_count: u32,
+    pub first_index_above: u32,
+    pub index_count_above: u32,
+    pub first_index_under: u32,
+    pub index_count_under: u32,
+    pub page: usize,
+    pub vertex_count: u32
 }
 
 pub struct ChunkBuilder;
@@ -240,6 +247,7 @@ pub struct CpuChunkMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub height_grid: Arc<ChunkHeightGrid>,
+    pub tree_placements: Vec<PropInstance>
 }
 
 /// Pre-computed cell data for greedy meshing decisions
@@ -274,6 +282,7 @@ impl ChunkBuilder {
         terrain_gen: &TerrainGenerator,
         terrain_edits_snapshot: &TerrainEditsSnapshot,
         loaded_chunks_snapshot: &LoadedChunksSnapshot,
+        tree_spawning_params: TreeSpawningParams
     ) -> Option<CpuChunkMesh> {
         let step = state.step;
         let stepf = step as f32;
@@ -287,7 +296,7 @@ impl ChunkBuilder {
         let cells_z = verts_z - 1;
         let total_cells = cells_x * cells_z;
 
-        let (mut heights, colors) = Self::sample_terrain_batch(chunk_coord, step, terrain_gen);
+        let (heights, moistures, colors) = Self::sample_terrain_batch(chunk_coord, step, terrain_gen);
 
         if !ChunkWorkerPool::still_current(version_atomic, version) {
             return None;
@@ -307,7 +316,7 @@ impl ChunkBuilder {
 
         recompute_patch_minmax(&mut height_grid);
 
-        heights = height_grid.heights.clone();
+        let heights = height_grid.heights.as_slice();
 
         let normals = Self::compute_normals_batch(
             chunk_coord,
@@ -316,7 +325,7 @@ impl ChunkBuilder {
             inv_step,
             verts_x,
             verts_z,
-            &heights,
+            heights,
             terrain_gen,
         );
 
@@ -325,16 +334,24 @@ impl ChunkBuilder {
         }
 
         let has_edits = terrain_edits_snapshot.has_edits_on_chunk(chunk_coord);
-
+        let tree_placements = if has_edits {
+            // conservative: skip auto-trees on hand-edited terrain to avoid
+            // floating/clipping trees where the player flattened ground
+            Vec::new()
+        } else {
+            let veg_samples = TreeSpawner::gather_vegetation_samples(chunk_coord, terrain_gen);
+            terrain_gen.tree_spawner.spawn_trees_for_chunk(chunk_coord, &veg_samples, terrain_gen, tree_spawning_params)
+        };
+        //println!("Trees: {}", tree_placements.len());
         let (mut vertices, mut indices) = if has_edits {
             Self::build_simple_grid(
                 chunk_coord,
                 step_usize,
                 verts_x,
                 verts_z,
-                &heights,
+                heights,
                 &colors,
-                &normals,
+                &normals
             )
         } else {
             Self::build_greedy_mesh(
@@ -345,11 +362,11 @@ impl ChunkBuilder {
                 cells_x,
                 cells_z,
                 total_cells,
-                &heights,
+                heights,
                 &colors,
                 &normals,
                 version,
-                version_atomic,
+                version_atomic
             )?
         };
 
@@ -358,7 +375,7 @@ impl ChunkBuilder {
             &mut vertices,
             &mut indices,
             &height_grid,
-            chunk_coord,
+            chunk_coord
         );
 
         Some(CpuChunkMesh {
@@ -368,6 +385,7 @@ impl ChunkBuilder {
             vertices,
             indices,
             height_grid: Arc::new(height_grid),
+            tree_placements
         })
     }
 
@@ -532,12 +550,13 @@ impl ChunkBuilder {
         Some((vertices, indices))
     }
 
+    // Expensive as fuck!!
     #[inline]
     fn sample_terrain_batch(
         chunk_coord: ChunkCoord,
         step: LodStep,
         terrain_gen: &TerrainGenerator,
-    ) -> (Vec<f32>, Vec<[f32; 3]>) {
+    ) -> (Vec<f32>, Vec<f32>, Vec<[f32; 3]>) {
         let cs = chunk_size();
         let step_usize = step as usize;
         let verts_x = (cs / step + 1) as usize;
@@ -545,6 +564,7 @@ impl ChunkBuilder {
         let total = verts_x * verts_z;
 
         let mut heights = Vec::with_capacity(total);
+        let mut moistures = Vec::with_capacity(total);
         let mut colors = Vec::with_capacity(total);
 
         for gx in 0..verts_x {
@@ -559,16 +579,13 @@ impl ChunkBuilder {
                 let c = terrain_gen.color(&world_pos, h, m);
 
                 heights.push(h);
+                moistures.push(m);
                 colors.push(c);
             }
         }
 
-        (heights, colors)
+        (heights, moistures, colors)
     }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // NORMAL COMPUTATION
-    // ═══════════════════════════════════════════════════════════════════
 
     fn compute_normals_batch(
         chunk_coord: ChunkCoord,
@@ -1001,5 +1018,322 @@ fn build_height_grid_from_heights(
         nz,
         heights,
         patch_minmax,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Display, EnumIter, Eq, Hash, PartialEq)]
+pub enum TreeKind {
+    Oak,
+    Pine,
+    Birch,
+    DeadTree,
+}
+
+pub const VEG_GRID_SIZE: usize = 32;
+
+#[derive(Clone, Copy)]
+pub struct VegetationSample {
+    pub position: LocalPos, // .y = terrain height at this sample
+    pub moisture: f32,
+    pub normal: [f32; 3],
+}
+#[derive(Clone, Copy)]
+pub struct TreeSpawningParams {
+    pub forest_cluster_strength: f32,
+}
+#[derive(Clone)]
+pub struct TreeSpawner {
+    pub kind_to_archetype_id: Vec<ArchetypeId>,
+
+    /// Broad deterministic forest map.
+    forest_noise: Arc<FastNoiseLite>,
+    /// Smaller deterministic carving noise to break up blobs.
+    forest_carve_noise: Arc<FastNoiseLite>,
+}
+
+impl TreeSpawner {
+    pub fn new(props: &Props) -> TreeSpawner {
+        let mut kind_to_archetype_id: Vec<ArchetypeId> = Vec::new();
+        for kind in TreeKind::iter() {
+            let Some(archetype_id) = props.get_archetype_id_for_name(kind.to_string().as_str()) else { continue };
+            kind_to_archetype_id.push(archetype_id);
+        }
+
+        let mut forest_noise = FastNoiseLite::new();
+        forest_noise.set_noise_type(Some(NoiseType::OpenSimplex2));
+
+        let mut forest_carve_noise = FastNoiseLite::new();
+        forest_carve_noise.set_noise_type(Some(NoiseType::OpenSimplex2));
+
+        TreeSpawner {
+            kind_to_archetype_id,
+            forest_noise: Arc::new(forest_noise),
+            forest_carve_noise: Arc::new(forest_carve_noise),
+        }
+    }
+
+    pub fn gather_vegetation_samples(
+        chunk_coord: ChunkCoord,
+        terrain_gen: &TerrainGenerator,
+    ) -> Vec<VegetationSample> {
+        //let gizmo = &mut Gizmo::new_empty();
+        let cs = chunk_size() as f32;
+        let cell_size = cs / VEG_GRID_SIZE as f32;
+        let mut samples = Vec::with_capacity(VEG_GRID_SIZE * VEG_GRID_SIZE);
+
+        for gx in 0..VEG_GRID_SIZE {
+            for gz in 0..VEG_GRID_SIZE {
+                let x = (gx as f32 + 0.5) * cell_size;
+                let z = (gz as f32 + 0.5) * cell_size;
+
+                let wp = WorldPos::new(chunk_coord, LocalPos::new(x, 0.0, z));
+                let h = terrain_gen.height(&wp);
+                let m = terrain_gen.moisture(&wp, h);
+                let n = Self::normal_at(terrain_gen, chunk_coord, x, z, cell_size);
+                let local_pos = LocalPos::new(x, h, z);
+                //gizmo.cross(WorldPos::new(chunk_coord, local_pos), 20.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
+
+                samples.push(VegetationSample {
+                    position: local_pos,
+                    moisture: m,
+                    normal: n,
+                });
+            }
+        }
+
+        //println!("gether vegetation samples gizmo pending render length: {}", gizmo.pending_renders.len());
+        //push_gizmo_renders(take(&mut gizmo.pending_renders));
+
+        samples
+    }
+
+    fn normal_at(
+        terrain_gen: &TerrainGenerator,
+        chunk_coord: ChunkCoord,
+        x: f32,
+        z: f32,
+        cell_size: f32,
+    ) -> [f32; 3] {
+        let eps = (cell_size * 0.25).max(0.1);
+        let h = |x: f32, z: f32| {
+            terrain_gen.height(&WorldPos::new(chunk_coord, LocalPos::new(x, 0.0, z)))
+        };
+
+        let dx = (h(x + eps, z) - h(x - eps, z)) / (2.0 * eps);
+        let dz = (h(x, z + eps) - h(x, z - eps)) / (2.0 * eps);
+
+        let n = [-dx, 1.0, -dz];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
+        [n[0] / len, n[1] / len, n[2] / len]
+    }
+
+    pub fn spawn_trees_for_chunk(
+        &self,
+        chunk_coord: ChunkCoord,
+        veg_samples: &[VegetationSample],
+        terrain_gen: &TerrainGenerator,
+        tree_spawning_params: TreeSpawningParams,
+    ) -> Vec<PropInstance> {
+        debug_assert_eq!(veg_samples.len(), VEG_GRID_SIZE * VEG_GRID_SIZE);
+        let gizmo = &mut Gizmo::new_empty();
+        let cs = chunk_size() as f32;
+        let cell_size = cs / VEG_GRID_SIZE as f32;
+        let mut rng = Self::rng_for_chunk(chunk_coord);
+        let mut placements = Vec::new();
+
+        let strength = tree_spawning_params.forest_cluster_strength.clamp(0.0, 1.0);
+
+        for sample in veg_samples {
+            if sample.normal[1] < 0.75 {
+                continue;
+            }
+
+            let h = sample.position.y;
+            let m = sample.moisture;
+
+            let base_density = Self::tree_density(h, m);
+            if base_density <= 0.0 {
+                continue;
+            }
+
+            let world_x = chunk_coord.x as f32 * cs + sample.position.x;
+            let world_z = chunk_coord.z as f32 * cs + sample.position.z;
+
+            let forest_blob: f32 = self.forest_blob_factor(world_x, world_z, h, m);
+            // min = min.min(forest_blob);
+            // max = max.max(forest_blob);
+            // sum += forest_blob;
+            //
+            // let color = [
+            //     forest_blob,
+            //     0.0,
+            //     1.0 - forest_blob,
+            //     1.0
+            // ];
+            //
+            // gizmo.cross(
+            //     WorldPos::new(chunk_coord, sample.position),
+            //     2.0,
+            //     color,
+            //     0.0,
+            //     20.0,
+            // );
+            // Hard gate when strength is high.
+            // This is what stops the "tree blanket".
+            let mut density = base_density;
+            density *= 1.0 - strength + forest_blob * strength;
+
+            // Strong clustering should make plains mostly empty.
+            // if forest_blob < 0.35 {
+            //     continue;
+            // }
+
+            // If the blob is strong, let it spawn multiple trees.
+            let mut tree_count = 1usize;
+            if strength > 0.0 {
+                let extra = (forest_blob * forest_blob * 6.0 * strength).floor() as usize;
+                tree_count += extra;
+            }
+
+            for _ in 0..tree_count {
+                if rng.random::<f32>() > density {
+                    continue;
+                }
+
+                let jitter_x = rng.random_range(-cell_size * 0.5..cell_size * 0.5);
+                let jitter_z = rng.random_range(-cell_size * 0.5..cell_size * 0.5);
+
+                let local_x = (sample.position.x + jitter_x).clamp(0.0, cs - 0.01);
+                let local_z = (sample.position.z + jitter_z).clamp(0.0, cs - 0.01);
+
+                let h_exact = terrain_gen.height(&WorldPos::new(
+                    chunk_coord,
+                    LocalPos::new(local_x, 0.0, local_z),
+                ));
+
+                let scale = rng.random_range(0.85..1.2);
+                let rotation_y_rad = rng.random_range(0.0..std::f32::consts::TAU);
+                let world_pos = WorldPos::new(chunk_coord, LocalPos::new(local_x, h_exact, local_z));
+                //gizmo.cross(world_pos, 2.0, [1.0, 0.0, 0.0, 1.0], 0.0, 10.0);
+                placements.push(PropInstance {
+                    id: None,
+                    archetype_id: Some(self.archetype_id_of_kind(self.pick_kind(h, m, &mut rng))),
+                    pos: world_pos,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    scale,
+                    rotation_y_rad,
+                    seed: rng.random(),
+                    variant: 0,
+                    wind_strength: 1.0,
+                    generated: true,
+                });
+            }
+        }
+        push_gizmo_renders(take(&mut gizmo.pending_renders));
+
+
+        // println!(
+        //     "blob min {:.2} max {:.2} avg {:.2}",
+        //     min,
+        //     max,
+        //     sum / veg_samples.len() as f32
+        // );
+
+        placements
+    }
+
+    /// This is the actual forest map.
+    /// It is broad, deterministic, and has hard-ish blob boundaries.
+    /// Terrain only nudges it, it does not decide it alone.
+    fn forest_blob_factor(&self, world_x: f32, world_z: f32, height: f32, moisture: f32) -> f32 {
+        let cs = chunk_size() as f32;
+
+        // Very broad scale for large forest regions.
+        let macro_scale = 1.0 / (cs * 0.5);
+        let carve_scale = 1.0 / (cs * 4.5);
+
+        let macro_n = self.forest_noise.get_noise_2d(world_x * macro_scale, world_z * macro_scale);
+        let carve_n = self.forest_carve_noise.get_noise_2d(world_x * carve_scale, world_z * carve_scale);
+
+        let macro01 = ((macro_n + 1.0) * 0.5).clamp(0.0, 1.0);
+        let carve01 = ((carve_n + 1.0) * 0.5).clamp(0.0, 1.0);
+
+        // Broad blob mask, not a tiny speckle mask.
+        let blob = Self::smoothstep(0.56, 0.80, macro01);
+
+        // Carve holes inside blobs so it does not become a solid carpet.
+        let holes = 1.0 - Self::smoothstep(0.38, 0.72, carve01);
+
+        // Terrain influences it, but weakly.
+        // Low wet areas are more likely forest, high dry areas less likely.
+        let plains_factor = if height <= 18.0 {
+            1.0
+        } else if height >= 90.0 {
+            0.0
+        } else {
+            1.0 - ((height - 18.0) / (90.0 - 18.0)).clamp(0.0, 1.0)
+        };
+
+        let wet_factor = moisture.clamp(0.0, 1.0);
+
+        let terrain = (0.35 + 0.45 * wet_factor + 0.20 * (1.0 - plains_factor)).clamp(0.0, 1.0);
+        // println!(
+        //     "macro={} macro01={} blob={} carve01={} holes={}",
+        //     macro_n,
+        //     macro01,
+        //     blob,
+        //     carve01,
+        //     holes,
+        // );
+        (blob * holes * terrain).clamp(0.0, 1.0)
+    }
+
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    fn tree_density(height: f32, moisture: f32) -> f32 {
+        if height < 2.0 || height > 1800.0 {
+            return 0.0;
+        }
+
+        let altitude_factor = (1.0 - ((height - 60.0) / 1200.0).max(0.0)).clamp(0.0, 1.0);
+        let moisture_factor = moisture.clamp(0.0, 1.0);
+
+        (altitude_factor * moisture_factor).powf(1.5) * 0.35
+    }
+
+    fn pick_kind(&self, height: f32, moisture: f32, rng: &mut impl Rng) -> TreeKind {
+        if moisture > 0.7 {
+            TreeKind::Pine
+        } else if height > 120.0 {
+            TreeKind::DeadTree
+        } else if rng.random_bool(0.9) {
+            TreeKind::Oak
+        } else {
+            TreeKind::Birch
+        }
+    }
+
+    fn archetype_id_of_kind(&self, kind: TreeKind) -> ArchetypeId {
+        let idx = TreeKind::iter().position(|k| k == kind).unwrap_or(0);
+        self.kind_to_archetype_id.get(idx).copied().unwrap_or(0)
+    }
+
+    fn rng_for_chunk(chunk_coord: ChunkCoord) -> SmallRng {
+        const TREE_SALT: u64 = 0x7A_5E_ED_5E_ED_00_01;
+        let x = chunk_coord.x as i64 as u64;
+        let z = chunk_coord.z as i64 as u64;
+        let mut seed = x
+            .wrapping_mul(0x9E3779B97F4A7C15)
+            ^ z.wrapping_mul(0xC2B2AE3D27D4EB4F)
+            ^ TREE_SALT;
+
+        seed = (seed ^ (seed >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        seed = (seed ^ (seed >> 27)).wrapping_mul(0x94D049BB133111EB);
+        seed ^= seed >> 31;
+
+        SmallRng::seed_from_u64(seed)
     }
 }

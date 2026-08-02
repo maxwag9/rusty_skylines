@@ -15,6 +15,7 @@ use crate::world::roads::road_subsystem::RoadRenderSubsystem;
 use crate::world::terrain::terrain_subsystem::{Terrain, TerrainRenderSubsystem};
 use glam::dcamera::rh::proj::directx::orthographic;
 use glam::{Mat4, Vec3, Vec4};
+use rand_distr::num_traits::clamp;
 use wgpu::PrimitiveTopology::TriangleList;
 use wgpu::TextureFormat::Depth32Float;
 use wgpu::{
@@ -23,6 +24,7 @@ use wgpu::{
 };
 use wgpu_render_manager::pipelines::{FragmentOption, PipelineOptions};
 use wgpu_render_manager::renderer::RenderManager;
+use crate::renderer::ui_pipelines::multisample_state;
 
 pub const CSM_CASCADES: usize = 4;
 #[repr(C)]
@@ -53,6 +55,7 @@ pub fn create_shadow_mat_uniform_buffer(device: &Device) -> Buffer {
 }
 
 pub fn create_csm_shadow_texture(device: &Device, size: u32, label: &str) -> CascadedShadowMap {
+    let size = clamp(size, 1, 8192);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(&format!(
             "CSM Shadow Map Array ({CSM_CASCADES} layers). {label}"
@@ -413,7 +416,7 @@ pub fn shadow_pipeline_options<'a>(
             stencil: StencilState::default(),
             bias,
         }),
-        msaa_samples: 1,
+        multisample_state: multisample_state(1),
         vertex_layouts,
         cull_mode: Some(cull_mode),
 

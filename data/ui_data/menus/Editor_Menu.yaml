@@ -5,7 +5,6 @@ layers:
     elements:
       - !Rect
         id: add_circle_bg
-        actions: [ ]
         x: 0.10796875
         y: 0.9
         w: 0.04
@@ -34,7 +33,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: true
       - !Circle
         id: Add Circle
@@ -62,11 +61,10 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
       - !Circle
         id: '9683'
-        actions: [ ]
         x: 0.8455063
         y: 0.93613005
         radius: 0.042793334
@@ -84,12 +82,11 @@ layers:
         glow_misc: { }
       - !Polygon
         id: '5660'
-        actions: [ ]
-        x: -10.146484
-        y: 5.2734375
+        x: 7.6098633
+        y: 4.0680804
         vertices:
           - pos:
-              - 0.8578537
+              - 0.8578538
               - 0.85722375
             color:
               - 1.0
@@ -98,7 +95,7 @@ layers:
               - 1.0
           - pos:
               - 0.9186829
-              - 0.8571847
+              - 0.85718465
             color:
               - 1.0
               - 1.0
@@ -113,23 +110,23 @@ layers:
               - 0.0
               - 1.0
           - pos:
-              - 0.856781
+              - 0.85678107
               - 0.970731
             color:
               - 1.0
               - 1.0
               - 1.0
               - 1.0
+    active: false
     editing_tool: false
   - name: editor_information
     order: 3
     elements:
       - !Text
         id: mouse_pos_delta_text
-        actions: [ ]
         x: 0.04323
         y: 0.56015
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -138,10 +135,9 @@ layers:
         text: 'Mouse Position change since last frame: {{mouse_pos_delta.x}:.2}, {{mouse_pos_delta.y}:.2}'
       - !Text
         id: selected_menu_text
-        actions: [ ]
         x: 0.0559
         y: 0.07343
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -150,10 +146,9 @@ layers:
         text: 'Selected Menu: {selected_menu}'
       - !Text
         id: selected_layer_text
-        actions: [ ]
         x: 0.055430003
         y: 0.11689
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -162,10 +157,9 @@ layers:
         text: 'Selected Layer: {selected_layer}'
       - !Text
         id: selected_element_text
-        actions: [ ]
         x: 0.05632
         y: 0.15672
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -174,10 +168,9 @@ layers:
         text: 'Selected GUI element ID: {selected_ui_element_id}'
       - !Text
         id: editing_text_text
-        actions: [ ]
         x: 0.06232
         y: 0.1938
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -186,10 +179,9 @@ layers:
         text: 'Editing Text?: {editing_text}'
       - !Text
         id: selected_text.being_edited_text
-        actions: [ ]
         x: 0.06187
         y: 0.22553998
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -198,10 +190,9 @@ layers:
         text: 'Editing selected Text?: {selected_text.being_edited}'
       - !Text
         id: selected_layer.order_text
-        actions: [ ]
         x: 0.06519
         y: 0.28678
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -210,10 +201,9 @@ layers:
         text: 'Selected Layer Order: {selected_layer.order}'
       - !Text
         id: selected_element.z_index_text
-        actions: [ ]
         x: 0.05342
         y: 0.32652
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -222,10 +212,9 @@ layers:
         text: 'Selected GUI element z_index: {selected_element.z_index}'
       - !Text
         id: mouse_pos_text
-        actions: [ ]
         x: 0.05984
         y: 0.37815
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -234,10 +223,9 @@ layers:
         text: 'Mouse Position: {{mouse_pos.x}:.0}, {{mouse_pos.y}:.0}'
       - !Text
         id: any_text.being_hovered_text
-        actions: [ ]
         x: 0.0574
         y: 0.46259004
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -246,10 +234,9 @@ layers:
         text: 'Any Text being hovered: {any_text.being_hovered}'
       - !Text
         id: selected_text.being_hovered_text
-        actions: [ ]
         x: 0.04919
         y: 0.49596
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -258,10 +245,9 @@ layers:
         text: 'Selected Text being hovered: {selected_text.being_hovered}'
       - !Text
         id: color_picker.color_text
-        actions: [ ]
         x: 0.052539997
         y: 0.43811
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -270,10 +256,9 @@ layers:
         text: 'Color: , R={{color_picker.r}:.2}, G={{color_picker.g}:.2}, B={{color_picker.b}:.2}, H={{color_picker.h}:.2}, S={{color_picker.s}:.2}, V={{color_picker.v}:.2},'
       - !Text
         id: editor_mode_text
-        actions: [ ]
         x: 0.056269996
         y: 0.52738
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.6
           - 1.0
@@ -282,7 +267,6 @@ layers:
         text: 'Editor Mode: {editor_mode}'
       - !Circle
         id: fard circle
-        actions: [ ]
         x: 0.29095
         y: 0.53456
         radius: 0.05804
@@ -314,7 +298,6 @@ layers:
     elements:
       - !Rect
         id: Color Picker Body
-        actions: [ ]
         x: 0.36384544
         y: 0.5413755
         w: 0.19713876
@@ -343,11 +326,10 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
       - !Text
         id: Color Picker Title
-        actions: [ ]
         x: 0.3345982
         y: 0.4296485
         pt: 19.188313
@@ -359,14 +341,13 @@ layers:
         text: ColorPicker
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
       - !Text
         id: Color Picker Red Input Box
-        actions: [ ]
         x: 0.29990196
         y: 0.62142855
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.7
           - 0.7
@@ -375,15 +356,14 @@ layers:
         text: 'Red: {{color_picker_color.r}:.2}'
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
         input_box: true
       - !Text
         id: Color Picker Green Input Box
-        actions: [ ]
         x: 0.30307388
         y: 0.64189106
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.7
           - 0.7
@@ -392,15 +372,14 @@ layers:
         text: 'Green: {{color_picker_color.g}:.2}'
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
         input_box: true
       - !Text
         id: Color Picker Blue Input Box
-        actions: [ ]
         x: 0.30085945
         y: 0.6596226
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.7
           - 0.7
@@ -409,7 +388,7 @@ layers:
         text: 'Blue: {{color_picker_color.b}:.2}'
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
         input_box: true
       - !Circle
@@ -438,7 +417,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: true
+          touchable: true
           editable: false
       - !Circle
         id: Color Picker Drag Circle
@@ -460,7 +439,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: false
     active: false
     editing_tool: false

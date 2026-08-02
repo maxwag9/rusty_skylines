@@ -5,7 +5,7 @@ use crate::data::{SettingKey, SettingOp, Settings};
 use crate::helpers::paths::rusty_skylines_dir;
 use crate::renderer::props::Props;
 use crate::simulation::Simulation;
-use crate::ui::action_parser::{TouchEventKind, parse_action};
+use crate::ui::action_parser::{parse_action, ActionEvent};
 use crate::ui::menu::Menu;
 use crate::ui::parser::Value;
 use crate::ui::ui_edit_manager::{
@@ -13,18 +13,18 @@ use crate::ui::ui_edit_manager::{
     DeleteElementCommand, DuplicateElementCommand, MoveElementCommand, ResizeElementCommand,
 };
 use crate::ui::ui_editor::{
-    Ui, get_element, get_element_mut, get_element_position, get_element_size,
+    get_element, get_element_mut, get_element_position, get_element_size, Ui,
 };
-use crate::ui::ui_edits::{SizeProperty, create_element, delete_element};
+use crate::ui::ui_edits::{create_element, delete_element, SizeProperty};
 use crate::ui::ui_text_editing::HitResult;
 use crate::ui::ui_touch_manager::{ElementRef, MouseButtons};
-use crate::ui::variables::{Variables, initialize_value, save_colors};
+use crate::ui::variables::{initialize_value, save_colors, Variables};
 use crate::ui::vertex::{
     AdvancedPrimitive, ElementKind, UiButtonCircle, UiButtonHandle, UiButtonOutline,
     UiButtonPolygon, UiButtonRect, UiButtonText, UiElement,
 };
 use crate::world::buildings::zoning::ZoningType;
-use crate::world::game_state::{GameState, LoadResult, SaveResult, SaveState};
+use crate::world::game_state::{get_available_saves, GameState, LoadResult, SaveResult, SaveState};
 use crate::world::roads::road_structs::{LeftLaneCount, RightLaneCount};
 use crate::world::world::World;
 use glam::Vec2;
@@ -204,7 +204,7 @@ pub enum UiCommand {
     ExitGame,
     ShowInteraction {
         element_ctx: ElementContext,
-        event_kind: TouchEventKind,
+        event_kind: ActionEvent,
         buttons: MouseButtons,
         color: String,
         shadow: bool,
@@ -218,7 +218,7 @@ pub enum UiCommand {
 
     Call {
         element_ctx: ElementContext,
-        event_kind: TouchEventKind,
+        event_kind: ActionEvent,
         buttons: MouseButtons,
         function_name: String,
         args: Option<String>,
@@ -1043,7 +1043,7 @@ impl CommandQueue {
                 let element_ctx = &element_ctx;
                 let val = string_to_value(ctx, element_ctx, value);
                 match val {
-                    Value::Null => {}
+                    Value::None => {}
                     Value::F64(n) => {
                         let vec = (0..n as i64).map(|i| Value::F64(i as f64)).collect();
                         self.execute_multiple_for(vec, commands, ctx);
@@ -1125,7 +1125,7 @@ impl CommandQueue {
                 ap_var,
                 center,
                 scale,
-                is_temporary,
+                is_temporary
             } => {
                 let element_ctx = &element_ctx;
                 let center = string_to_value(ctx, element_ctx, center);
@@ -1144,16 +1144,22 @@ impl CommandQueue {
                 let menu = string_to_value(ctx, element_ctx, menu).into_string();
                 let name = string_to_value(ctx, element_ctx, name).into_string();
                 let ap_name = string_to_value(ctx, element_ctx, ap_name).into_string();
-                let ap_var = string_to_value(ctx, element_ctx, ap_var).into_string();
+                let ap_vars = string_to_value(ctx, element_ctx, ap_var);
+                let Some(ap_vars) = ap_vars.as_array().map(|arr| arr.iter().map(|v| v.to_string()).collect()).or(ap_vars.as_string().map(|str| vec![str.to_string()])) else {
+                    return CommandResult::Error(
+                        "AP Vars in AddAP was not an array or single argument".to_string()
+                    );
+                };
                 //println!("Adding AP: {} {} {} {:?} {}", name, ap_name, ap_var, center, scale);
                 let ap = {
                     let mut ap = AdvancedPrimitive::default();
                     ap.id = name.clone();
                     ap.set_pos(center);
                     ap.ap_name = ap_name;
-                    ap.ap_var = ap_var;
+                    ap.ap_vars = ap_vars;
                     ap.scale = scale as f32;
                     ap.is_temporary = is_temporary;
+                    ap.scale_my_coords = false;
                     ap
                 };
                 let Some(layer) = element_ctx
@@ -1173,7 +1179,7 @@ impl CommandQueue {
                     &mut ctx.ui.touch_manager,
                     &mut ctx.ui.menus,
                     &mut ctx.ui.variables,
-                    &ctx.world.input.mouse,
+                    &ctx.world.input.mouse
                 );
                 CommandResult::Ok
             }
@@ -1386,10 +1392,11 @@ impl CommandQueue {
                     CommandResult::Ok
                 } else {
                     let result = delete_element(&mut ctx.ui.menus, &element);
-                    match result {
-                        Ok(ok) => CommandResult::Ok,
-                        Err(err) => CommandResult::Error(err.to_string()),
-                    }
+                    CommandResult::Ok
+                    // match result {
+                    //     Ok(ok) => CommandResult::Ok,
+                    //     Err(err) => CommandResult::Error(err.to_string()),
+                    // }
                 }
             }
 
@@ -1520,13 +1527,15 @@ impl CommandQueue {
                     &buttons,
                     element_ctx.clone(),
                 ));
-                commands.extend(parse_action(
+                if shadow {
+                    commands.extend(parse_action(
                     &shadow_master_command,
                     ctx,
                     &event_kind,
                     &buttons,
                     element_ctx.clone(),
-                ));
+                    ))
+                };
 
                 for command in commands {
                     self.execute_one(command, ctx);
@@ -1572,52 +1581,129 @@ impl CommandQueue {
                 args,
             } => {
                 let element_ctx = &element_ctx;
-                let actions = string_to_value(ctx, element_ctx, function_name);
-                let actions: Vec<String> = if let Some(action) = actions.as_string() {
-                    vec![action.to_string()]
-                } else if let Some(actions) = actions.as_array() {
-                    let mut result = Vec::with_capacity(actions.len());
 
-                    for a in actions {
-                        let Some(action) = a.as_string() else {
-                            return CommandResult::Error(
-                                "In call(), action in array wasn't a string".to_string(),
-                            );
-                        };
-
-                        result.push(action.to_string());
-                    }
-
-                    result
-                } else {
-                    return CommandResult::Error(
-                        "actions in call() weren't resolved to string or array of strings"
-                            .to_string(),
-                    );
-                };
-                if actions.is_empty() {
-                    return CommandResult::Ok;
-                }
-                let args: Vec<Value> = if let Some(args) = args {
-                    let args = string_to_value(ctx, element_ctx, args);
-                    args.as_array().unwrap_or(vec![])
-                } else {
-                    vec![]
-                };
-
-                ctx.ui.variables.set_array("args", args); // So I can use args.4 for example.
-                for action in actions.iter() {
-                    let commands =
-                        parse_action(action, ctx, &event_kind, &buttons, element_ctx.clone());
-                    for command in commands {
-                        self.execute_one(command, ctx);
+                fn parse_args_call(ctx: &mut CommandContext, element_ctx: &ElementContext, args: Option<String>) -> Vec<Value> {
+                    if let Some(args) = args {
+                        let args = string_to_value(ctx, element_ctx, args);
+                        args.as_array().unwrap_or(vec![])
+                    } else {
+                        vec![]
                     }
                 }
-                CommandResult::Ok
+                fn parse_action_call(
+                    cq: &mut CommandQueue,
+                    ctx: &mut CommandContext,
+                    element_ctx: &ElementContext,
+                    event_kind: &ActionEvent,
+                    buttons: &MouseButtons,
+                    function_name: String,
+                    args: Option<String>,
+                ) -> CommandResult {
+                    let actions = string_to_value(ctx, element_ctx, function_name);
+                    let actions: Vec<String> = if let Some(action) = actions.as_string() {
+                        vec![action.to_string()]
+                    } else if let Some(actions) = actions.as_array() {
+                        let mut result = Vec::with_capacity(actions.len());
+
+                        for a in actions {
+                            let Some(action) = a.as_string() else {
+                                return CommandResult::Error(
+                                    "In call(), action in array wasn't a string".to_string(),
+                                );
+                            };
+
+                            result.push(action.to_string());
+                        }
+
+                        result
+                    } else {
+                        return CommandResult::Error(
+                            "actions in call() weren't resolved to string or array of strings"
+                                .to_string(),
+                        );
+                    };
+                    if actions.is_empty() {
+                        return CommandResult::Ok;
+                    }
+
+                    let args = parse_args_call(ctx, element_ctx, args);
+
+                    ctx.ui.variables.set_array("args", args); // So I can use args.4 for example.
+                    for action in actions.iter() {
+                        let commands =
+                            parse_action(action, ctx, &event_kind, &buttons, element_ctx.clone());
+                        for command in commands {
+                            cq.execute_one(command, ctx);
+                        }
+                    }
+                    CommandResult::Ok
+                }
+
+                fn parse_rust_call(
+                    ctx: &mut CommandContext,
+                    element_ctx: &ElementContext,
+                    function_name: String,
+                    args: Option<String>,
+                ) -> CommandResult {
+                    let function_name = string_to_value(ctx, element_ctx, function_name);
+                    let Some(function_name) = function_name.as_string() else {
+                        return CommandResult::Error(
+                            "Rust function in call() wasn't resolved to string, use 'str:' as in 'call(rust:str:function_name, [args])'".to_string(),
+                        );
+                    };
+
+                    let args = parse_args_call(ctx, element_ctx, args);
+
+                    //ctx.ui.variables.set_array("args", args); // So I can use args.4 for example. not needed in rust... most likely...
+
+                    call_rust(ctx, function_name, args);
+
+                    CommandResult::Ok
+                }
+
+                if let Some((left, right)) = function_name.split_once(':') {
+                    match left {
+                        "rust" | "RUST" => parse_rust_call(
+                            ctx,
+                            element_ctx,
+                            right.to_string(),
+                            args,
+                        ),
+                        _ => parse_action_call(
+                            self,
+                            ctx,
+                            element_ctx,
+                            &event_kind,
+                            &buttons,
+                            function_name,
+                            args,
+                        ),
+                    }
+                } else {
+                    parse_action_call(
+                        self,
+                        ctx,
+                        element_ctx,
+                        &event_kind,
+                        &buttons,
+                        function_name,
+                        args,
+                    )
+                }
             }
 
             UiCommand::Noop => CommandResult::Ok,
         }
+    }
+}
+
+fn call_rust(ctx: &mut CommandContext, function_name: &str, args: Vec<Value>) {
+    match function_name {
+        "get_saves" => {
+            let saves: Vec<Value> = get_available_saves().into_iter().map(|save| Value::Array(save.to_values())).collect();
+            ctx.ui.variables.set_array("saves", saves);
+        }
+        _ => {}
     }
 }
 
@@ -2213,11 +2299,11 @@ pub fn send_element_properties_to_variables(
             "size",
             "color_components",
         ] {
-            variables.set_var(&format!("{prefix}.{property}"), Value::Null);
+            variables.set_var(&format!("{prefix}.{property}"), Value::None);
         }
 
         for component in ColorComponent::iter() {
-            variables.set_var(&format!("{prefix}.color.{component}"), Value::Null);
+            variables.set_var(&format!("{prefix}.color.{component}"), Value::None);
         }
     }
     fn send_properties(
@@ -2249,33 +2335,29 @@ pub fn send_element_properties_to_variables(
 
                     variables.set_array(&format!("{prefix}.center"), element.center());
 
-                    variables.set_var(
-                        &format!("{prefix}.radius"),
-                        element
+                    variables.set_var(&format!("{prefix}.radius"),
+                                      element
                             .size()
                             .radius()
                             .map(|r| Value::F64(r as f64))
-                            .unwrap_or(Value::Null),
+                                          .unwrap_or(Value::None),
                     );
 
-                    variables.set_var(
-                        &format!("{prefix}.pt"),
-                        element
+                    variables.set_var(&format!("{prefix}.pt"),
+                                      element
                             .size()
                             .pt()
                             .map(|r| Value::F64(r as f64))
-                            .unwrap_or(Value::Null),
+                                          .unwrap_or(Value::None),
                     );
 
-                    variables.set_var(
-                        &format!("{prefix}.size"),
-                        element.size().value_size2().unwrap_or(Value::Null),
+                    variables.set_var(&format!("{prefix}.size"),
+                                      element.size().value_size2().unwrap_or(Value::None),
                     );
 
                     let color_components = element.color_components();
 
-                    variables.set_array(
-                        &format!("{prefix}.color_components"),
+                    variables.set_array(&format!("{prefix}.color_components"),
                         color_components
                             .iter()
                             .map(|c| Value::String(c.to_string()))
@@ -2349,7 +2431,7 @@ fn test_send_properties_to_variables() {
                 actions: vec![],
                 elements: vec![UiElement::Rect(rect)],
                 active: true,
-                ap_var: "".to_string(),
+                ap_vars: vec![],
                 cache: Default::default(),
                 dirty: Default::default(),
                 gpu: Default::default(),

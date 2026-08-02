@@ -21,14 +21,14 @@ elements:
       - on:release on:sel button:left, ifvareq({ap}_open, bool:false, forin({ap}.options, del_ap(self.menu, self.layer, {ap}_Option_{idx})))
 
       # Visual feedback for the main button
-      - button:a show_interaction(self.color.fill)
+      - show_interaction(self.color.fill, false)
     #      - on:hovering, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.5, 0.5, 0.5, 1.0]), set(self.color.fill, [0.2, 0.2, 0.2, 1.0]))
     #      - on:hover_exit, ifvareq({ap}_open, bool:true, set(self.color.fill, [0.4, 0.4, 0.4, 1.0]), set(self.color.fill, [0.1, 0.1, 0.1, 1.0]))
 
-    x: 0.0
-    y: 0.0
-    w: 0.15
-    h: 0.03
+    x: 0
+    y: 0
+    w: 160
+    h: 40
     color:
       - 0.1
       - 0.1
@@ -45,8 +45,8 @@ elements:
   - !Text
     id: Main Button Text
     x: 0.000
-    y: 0.005
-    pt: 11.0
+    y: 0
+    pt: 12.0
     color:
       - 1.0
       - 1.0
@@ -55,3 +55,7 @@ elements:
     # Evaluates to the currently selected option string
     text: "{ap}: {{ap}}"
     anchor: Center
+    misc:
+      active: true
+      touchable: false
+      editable: true

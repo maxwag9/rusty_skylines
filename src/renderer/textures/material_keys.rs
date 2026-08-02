@@ -1,4 +1,4 @@
-use wgpu_render_manager::generator::{TextureKey, TextureParams};
+use wgpu_render_manager::generator::{MipmapMode, TextureKey, TextureParams};
 
 pub fn road_material_keys() -> Vec<TextureKey> {
     vec![
@@ -13,6 +13,7 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "goo".to_string(),
@@ -25,6 +26,7 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "asphalt".to_string(),
@@ -37,6 +39,7 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "asphalt".to_string(),
@@ -49,6 +52,7 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "asphalt".to_string(),
@@ -61,6 +65,7 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "asphalt".to_string(),
@@ -73,6 +78,7 @@ pub fn road_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 512,
+            mipmap_mode: MipmapMode::Generate
         },
     ]
 }
@@ -89,6 +95,7 @@ pub fn cars_material_keys() -> Vec<TextureKey> {
             ..Default::default()
         },
         resolution: 512,
+        mipmap_mode: MipmapMode::Generate
     }]
 }
 
@@ -108,6 +115,7 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "grass".to_string(),
@@ -123,6 +131,7 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "rock".to_string(),
@@ -138,6 +147,7 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "rock".to_string(),
@@ -153,6 +163,7 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
+            mipmap_mode: MipmapMode::Generate
         },
         TextureKey {
             shader_id: "dirt".to_string(),
@@ -168,6 +179,7 @@ pub fn terrain_material_keys() -> Vec<TextureKey> {
                 ..Default::default()
             },
             resolution: 1024,
+            mipmap_mode: MipmapMode::Generate
         },
     ]
 }

@@ -7,7 +7,7 @@ use crate::renderer::shadows::CSM_CASCADES;
 use crate::simulation::Simulation;
 use crate::ui::actions::CommandQueue;
 use crate::ui::ui_editor::Ui;
-use crate::ui::variables::load_colors;
+use crate::ui::variables::{load_colors, Variables};
 use crate::world::astronomy::Astronomy;
 use crate::world::game_state::GameState;
 use crate::world::sound::sound::Sounds;
@@ -18,6 +18,7 @@ use std::time::Instant;
 use wgpu::Surface;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
+use crate::renderer::props::Props;
 
 pub struct CommandQueues {
     pub ui_command_queue: CommandQueue,
@@ -49,11 +50,12 @@ pub struct Resources {
 impl Resources {
     pub fn new(window: Arc<Box<dyn Window>>, event_loop: &dyn ActiveEventLoop) -> Self {
         let mut settings = Settings::load(rusty_skylines_dir("settings.toml"));
+        let mut variables = Variables::new();
         let editor_mode = settings.editor_mode.clone();
 
         let (surface, adapter, size) = create_surface_and_adapter(window.clone(), event_loop);
         print!("[app] surface + adapter created");
-        let (config, msaa_samples) = create_surface_config(&surface, &adapter, &mut settings, size);
+        let (config, msaa_samples) = create_surface_config(&surface, &adapter, &mut settings, &mut variables, size);
         println!(
             "[app] surface config: {}x{}, format={:?}, present_mode={:?}, alpha_mode={:?}, msaa={}",
             config.width,
@@ -69,15 +71,14 @@ impl Resources {
         print!("[app] surface configured");
 
         let mut game_state = GameState::new();
-        let mut world_core = World::new(device, queue, &settings, &mut game_state);
+        let props = Props::new(device);
+        let mut world_core = World::new(device, queue, &settings, &mut game_state, &props);
         let camera = &mut world_core.world_state.camera;
 
-        let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera);
+        let render_core = Renderer::new(device, queue, &config, size, adapter, &settings, camera, props);
 
-        let mut ui_loader = Ui::new(&settings, window.surface_size());
-        ui_loader
-            .variables
-            .set_bool("editor_mode", settings.editor_mode);
+        let mut ui_loader = Ui::new(&settings, variables, window.surface_size());
+        ui_loader.variables.set_bool("editor_mode", settings.editor_mode);
         load_colors(
             rusty_skylines_dir("colors.toml"),
             &settings,

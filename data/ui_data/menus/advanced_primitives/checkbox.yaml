@@ -8,8 +8,8 @@ elements:
       - button:a show_interaction(self.color.fill)
     x: 0.0
     y: 0.0
-    w: 0.02
-    h: 0.02
+    w: 60
+    h: 60
     color:
       - 0.00
       - 0.00
@@ -31,8 +31,8 @@ elements:
       - on:release on:activated button:a, ifvareq({ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
     x: 0.0
     y: 0.0
-    w: 0.010
-    h: 0.010
+    w: 40
+    h: 40
     color:
       - 0.00
       - 0.50
@@ -42,8 +42,8 @@ elements:
   - !Text
     id: setting_text
     x: 0.00
-    y: 0.04
-    pt: 8.0
+    y: -55
+    pt: 10.0
     color:
       - 1.0
       - 1.0

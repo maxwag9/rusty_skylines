@@ -5,11 +5,10 @@ layers:
     elements:
       - !Rect
         id: Buttons Background
-        actions: [ ]
-        x: 0.5
-        y: 0.4
-        w: 0.2
-        h: 0.3
+        x: 960
+        y: 450
+        w: 400
+        h: 400
         rotation: 0.0
         color:
           - 0.01
@@ -34,7 +33,7 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
       - !Text
         id: play_text
@@ -44,8 +43,8 @@ layers:
           - on:r set(str:override_mode, false)
           - on:r call(open_play_menus)
           - on:r load_save(str:first_save_ever, false)
-        x: 0.5
-        y: 0.3
+        x: 960
+        y: 350
         pt: 23.0
         color:
           - 1.0
@@ -59,8 +58,8 @@ layers:
           - on:r set(str:editor_mode, false)
           - on:r set(str:override_mode, false)
           - on:r call(open_settings_menus)
-        x: 0.5
-        y: 0.35
+        x: 960
+        y: 440
         pt: 18.0
         color:
           - 1.0
@@ -72,8 +71,8 @@ layers:
         id: exit_text
         actions:
           - on:r exit_game()
-        x: 0.5
-        y: 0.4
+        x: 960
+        y: 620
         pt: 18.0
         color:
           - 0.1
@@ -96,7 +95,7 @@ layers:
           - on:r set(str:ball.visitor_score, 0)
         x: 0.8
         y: 0.9
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.1
           - 0.8

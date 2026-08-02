@@ -28,13 +28,15 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use wgpu::{Buffer, Device, IndexFormat, Queue, RenderPass};
+use crate::renderer::props::Props;
+use crate::ui::variables::Variables;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkCoords {
     pub chunk_coord: ChunkCoord, // Y IS UP/DOWN LIKE IN MINECRAFT NOT CRINGE Z LIKE BLENDER ETC. (Blender is awesome)
-    pub dist2: i32,
+    pub dist2: i32, // In chunk space
 }
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VisibleChunk {
     pub coords: ChunkCoords,
     pub id: ChunkId,
@@ -158,11 +160,16 @@ impl TerrainJobs {
         pending: &VecDeque<CpuChunkMesh>,
         visible: &Vec<VisibleChunk>,
         lod_map: &HashMap<ChunkCoord, LodStep>,
+        variables: &Variables
     ) {
         let pending_coords: HashSet<ChunkCoord> =
             pending.iter().map(|cpu| cpu.chunk_coord).collect();
         let mut close_jobs_sent = 0usize;
         let mut far_jobs_sent = 0usize;
+
+        let tree_spawning_params = TreeSpawningParams {
+            forest_cluster_strength: variables.get_f64("forest_cluster_strength").unwrap_or(1.0) as f32
+        };
 
         for v in visible.iter() {
             if close_jobs_sent >= self.max_close_jobs_per_frame
@@ -236,6 +243,7 @@ impl TerrainJobs {
                 in_progress: Arc::new(AtomicBool::new(false)),
                 terrain_edits_snapshot,
                 loaded_snapshot: Arc::new(loaded_snapshot),
+                tree_spawning_params
             });
 
             if close_jobs_sent < self.max_close_jobs_per_frame {
@@ -404,6 +412,7 @@ impl Terrain {
         queue: &Queue,
         settings: &Settings,
         save_state: &mut SaveState,
+        props: &Props
     ) -> Self {
         let cs = chunk_size() as f32;
         let view_radius_render = (64f32 * (64f32 / cs)) as usize;
@@ -419,12 +428,12 @@ impl Terrain {
 
         let mut terrain_params = TerrainParams::default();
         terrain_params.seed = 144;
-        let terrain_gen = TerrainGenerator::new(terrain_params);
+        let terrain_gen = TerrainGenerator::new(terrain_params, props);
 
         let threads = num_cpus::get_physical().saturating_sub(1).max(1);
         println!("Using {} chunk workers", threads);
 
-        let workers = ChunkWorkerPool::new(threads, terrain_gen.clone());
+        let workers = ChunkWorkerPool::new(threads, &terrain_gen);
         Self {
             tick: Ticker::new(60.0),
             cursor: Cursor::new(),
@@ -468,6 +477,8 @@ impl Terrain {
         input_state: &mut Input,
         _time: &Time,
         roads: &mut Roads,
+        props: &mut Props,
+        variables: &Variables
     ) {
         let t_frame = Instant::now();
 
@@ -483,7 +494,7 @@ impl Terrain {
         let frame = self.frame_state(settings, camera, aspect);
 
         let t0 = Instant::now();
-        self.drain_finished_meshes();
+        self.drain_finished_meshes(props);
         self.frame_timings.drain_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
         let t0 = Instant::now();
@@ -516,6 +527,7 @@ impl Terrain {
             &self.pending_results,
             &self.visible,
             &self.lod_map,
+            variables
         );
         self.frame_timings.dispatch_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
@@ -606,7 +618,7 @@ impl Terrain {
         }
     }
 
-    pub fn drain_finished_meshes(&mut self) {
+    pub fn drain_finished_meshes(&mut self, props: &mut Props) {
         let mut recv_ms = 0.0;
         let mut rebuild_ms = 0.0;
         let mut gpu_ms = 0.0;
@@ -630,13 +642,7 @@ impl Terrain {
 
             let coord = cpu.chunk_coord;
 
-            if !self
-                .terrain_jobs
-                .workers
-                .is_current_version(coord, cpu.version)
-            {
-                continue;
-            }
+            if !self.terrain_jobs.workers.is_current_version(coord, cpu.version) { continue; }
 
             let t0 = Instant::now();
 
@@ -690,6 +696,8 @@ impl Terrain {
             );
 
             insert_ms += t0.elapsed().as_secs_f32() * 1000.0;
+
+            props.replace_generated_instances(coord, cpu.tree_placements);
         }
 
         self.frame_timings.drain_recv_ms = recv_ms;

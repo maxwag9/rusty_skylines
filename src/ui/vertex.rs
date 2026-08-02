@@ -6,16 +6,25 @@ use crate::ui::helper::ensure_ccw;
 use crate::ui::ui_edit_manager::ColorComponent;
 use crate::ui::ui_edits::SizeProperty;
 use crate::ui::ui_touch_manager::ElementRef;
+use crate::ui::variables::Variables;
 use serde::de::Visitor;
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
 use wgpu::{vertex_attr_array, *};
-use wgpu_text::glyph_brush::OwnedSection;
 use wgpu_text::glyph_brush::ab_glyph::Rect;
+use wgpu_text::glyph_brush::OwnedSection;
 use winit::dpi::PhysicalSize;
 
+const SCALING_EPSILON: f32 = 0.1; // pixels, 0.1 is good because You probably won't move an element by just 0.1 pixels willingly, impossible.
+fn snap(value: f32, original: f32) -> f32 {
+    if (value - original).abs() < SCALING_EPSILON { // pixels
+        original
+    } else {
+        value
+    }
+}
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ThinLineVtxRender {
@@ -374,12 +383,15 @@ pub struct AdvancedPrimitiveYaml {
     #[serde(default)]
     pub ap_name: String,
 
-    #[serde(default)]
-    pub ap_var: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "ap_var", deserialize_with = "deserialize_string_or_vec")]
+    pub ap_vars: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
     pub actions: Vec<String>,
-    pub x: f32,
-    pub y: f32,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub x: i16,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub y: i16,
+
     #[serde(default)]
     pub scale: f32,
     pub misc: MiscButtonSettingsYaml,
@@ -390,7 +402,7 @@ pub struct AdvancedPrimitiveYaml {
 pub struct AdvancedPrimitive {
     pub id: String,
     pub ap_name: String,
-    pub ap_var: String,
+    pub ap_vars: Vec<String>,
     pub actions: Vec<String>,
     pub x: f32,
     pub y: f32,
@@ -398,6 +410,7 @@ pub struct AdvancedPrimitive {
     pub misc: MiscButtonSettings,
     pub editing_tool: bool,
     pub is_temporary: bool,
+    pub scale_my_coords: bool
 }
 
 impl AdvancedPrimitive {
@@ -405,10 +418,10 @@ impl AdvancedPrimitive {
         Self {
             id: yaml.name.clone(),
             ap_name: yaml.ap_name.clone(),
-            ap_var: yaml.ap_var.clone(),
+            ap_vars: yaml.ap_vars.clone(),
             actions: yaml.actions.clone(),
-            x: yaml.x,
-            y: yaml.y,
+            x: yaml.x as f32,
+            y: yaml.y as f32,
             scale: yaml.scale,
             misc: MiscButtonSettings {
                 active: yaml.misc.active,
@@ -419,16 +432,17 @@ impl AdvancedPrimitive {
             },
             editing_tool: yaml.editing_tool,
             is_temporary: false,
+            scale_my_coords: true
         }
     }
     pub fn to_yaml(&self) -> AdvancedPrimitiveYaml {
         AdvancedPrimitiveYaml {
             name: self.id.clone(),
             ap_name: self.ap_name.clone(),
-            ap_var: self.ap_var.clone(),
+            ap_vars: self.ap_vars.clone(),
             actions: self.actions.clone(),
-            x: self.x,
-            y: self.y,
+            x: self.x as i16,
+            y: self.y as i16,
             scale: self.scale,
             misc: MiscButtonSettingsYaml {
                 active: self.misc.active,
@@ -443,20 +457,21 @@ impl AdvancedPrimitive {
         settings: &Settings,
         advanced_primitives: &HashMap<String, UiLayerYaml>,
         order: u32,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<u32>
     ) -> RuntimeLayer {
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = if self.scale_my_coords { self.x * x_scale } else { self.x };
+        let y = if self.scale_my_coords { self.y * y_scale } else { self.y };
+
         let elements = if let Some(ap_template) = advanced_primitives.get(&self.ap_name) {
-            ap_template
-                .elements
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
+            ap_template.elements.clone().unwrap_or_default().into_iter()
                 .filter_map(|e| UiElement::from_yaml(e, window_size))
                 .map(|mut el| {
-                    el.scale_by(self.scale);
-                    el.offset_pos_normalized(self.x, self.y, window_size);
+                    el.scale_by(self.scale * y_scale);
+                    el.translate(x, y);
                     el.set_editable(&self.misc.editable);
-                    el.set_aps(&self.ap_var);
+                    el.set_aps(self.ap_vars.as_slice());
                     el
                 })
                 .collect()
@@ -471,13 +486,13 @@ impl AdvancedPrimitive {
             actions: self.actions,
             elements,
             active: self.misc.active,
-            ap_var: self.ap_var,
+            ap_vars: self.ap_vars,
             cache: Default::default(),
             dirty: LayerDirty::all(),
             gpu: Default::default(),
             opaque: false,
             saveable: false,
-            editing_tool: self.editing_tool,
+            editing_tool: self.editing_tool
         }
     }
 
@@ -494,7 +509,7 @@ pub struct UiButtonRectYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -502,10 +517,14 @@ pub struct UiButtonRectYaml {
         skip_serializing_if = "is_none_string"
     )]
     pub style: String,
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub x: i16,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub y: i16,
+    #[serde(deserialize_with = "deserialize_u16_from_number")]
+    pub w: u16,
+    #[serde(deserialize_with = "deserialize_u16_from_number")]
+    pub h: u16,
     #[serde(default)]
     pub rotation: f32, // DEGREES!!! 360 ftw!
     #[serde(default)]
@@ -556,26 +575,12 @@ pub struct UiButtonRect {
 
 impl UiButtonRect {
     pub fn from_yaml(e: UiButtonRectYaml, window_size: PhysicalSize<u32>) -> Self {
-        let x = if e.x < 2.0 {
-            window_size.width as f32 * e.x
-        } else {
-            e.x
-        };
-        let y = if e.y < 2.0 {
-            window_size.height as f32 * e.y
-        } else {
-            e.y
-        };
-        let w = if e.w < 2.0 {
-            window_size.width as f32 * e.w
-        } else {
-            e.w
-        };
-        let h = if e.h < 2.0 {
-            window_size.height as f32 * e.h
-        } else {
-            e.h
-        };
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = e.x as f32 * x_scale;
+        let y = e.y as f32 * y_scale;
+        let w = e.w as f32 * x_scale;
+        let h = e.h as f32 * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonRect {
             id: e.id,
@@ -607,14 +612,27 @@ impl UiButtonRect {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonRectYaml {
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        let x = self.x * x_scale_reverse;
+        let y = self.y * y_scale_reverse;
+        let w = self.w * x_scale_reverse;
+        let h = self.h * y_scale_reverse;
+        let (x, y, w, h) = if let Some(yaml_element) = self.yaml_element.as_ref() {
+            let x = snap(x, yaml_element.x as f32);
+            let y = snap(y, yaml_element.y as f32);
+            let w = snap(w, yaml_element.w as f32);
+            let h = snap(h, yaml_element.h as f32);
+            (x as i16, y as i16, w as u16, h as u16)
+        } else { (x as i16, y as i16, w as u16, h as u16) };
         UiButtonRectYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
             style: self.style.clone(),
-            x: self.x / window_size.width as f32,
-            y: self.y / window_size.height as f32,
-            w: self.w / window_size.width as f32,
-            h: self.h / window_size.height as f32,
+            x,
+            y,
+            w,
+            h,
             rotation: self.rotation,
             color: self.color,
             border_color: self.border_color,
@@ -1015,7 +1033,7 @@ impl UiElement {
     pub fn scale_by(&mut self, scale: f32) {
         match self {
             UiElement::Text(t) => {
-                t.pt = t.original_pt * scale;
+                t.pt = t.pt * scale;
             }
             UiElement::Circle(c) => {
                 c.radius = c.original_radius * scale;
@@ -1105,41 +1123,6 @@ impl UiElement {
         }
     }
 
-    pub fn set_pos_normalized(&mut self, norm_x: f32, norm_y: f32, window_size: PhysicalSize<u32>) {
-        // Convert normalized coordinates (0.0..1.0) to pixel coordinates
-        let x = if norm_x < 1.5 {
-            norm_x * window_size.width as f32
-        } else {
-            norm_x
-        };
-
-        let y = if norm_y < 1.5 {
-            norm_y * window_size.height as f32
-        } else {
-            norm_y
-        };
-
-        self.set_pos(x, y);
-    }
-    pub fn offset_pos_normalized(
-        &mut self,
-        norm_x: f32,
-        norm_y: f32,
-        window_size: PhysicalSize<u32>,
-    ) {
-        let offset_x = if norm_x < 1.5 {
-            norm_x * window_size.width as f32
-        } else {
-            norm_x
-        };
-
-        let offset_y = if norm_y < 1.5 {
-            norm_y * window_size.height as f32
-        } else {
-            norm_y
-        };
-        self.translate(offset_x, offset_y);
-    }
     fn misc_mut(&mut self) -> &mut MiscButtonSettings {
         match self {
             UiElement::Text(t) => &mut t.misc,
@@ -1152,25 +1135,51 @@ impl UiElement {
         }
     }
 
-    pub fn set_aps(&mut self, ap_var: &str) {
+    pub fn set_aps(&mut self, ap_vars: &[String]) {
         match self {
-            UiElement::Circle(e) => Self::replace_actions(&mut e.actions, ap_var),
+            UiElement::Circle(e) => Self::replace_actions(&mut e.actions, ap_vars),
             UiElement::Handle(e) => {}
-            UiElement::Polygon(e) => Self::replace_actions(&mut e.actions, ap_var),
+            UiElement::Polygon(e) => Self::replace_actions(&mut e.actions, ap_vars),
             UiElement::Text(e) => {
-                Self::replace_actions(&mut e.actions, ap_var);
-                e.text = e.template.replace("{ap}", ap_var);
-                e.template = e.text.clone();
+                Self::replace_actions(&mut e.actions, ap_vars);
+
+                let mut text = e.template.clone();
+
+                Self::replace_aps(&mut text, ap_vars);
+
+                e.text = text.clone();
+                e.template = text;
             }
             UiElement::Outline(e) => {}
-            UiElement::Rect(e) => Self::replace_actions(&mut e.actions, ap_var),
+            UiElement::Rect(e) => Self::replace_actions(&mut e.actions, ap_vars),
             UiElement::Advanced(e) => {}
         }
     }
+    fn replace_aps(text: &mut String, ap_vars: &[String]) {
+        while let Some(start) = text.find("{ap") {
+            let rest = &text[start..];
 
-    fn replace_actions(actions: &mut Vec<String>, ap_var: &str) {
-        for action in actions.iter_mut() {
-            *action = action.replace("{ap}", ap_var);
+            let (end, idx) = if rest.starts_with("{ap}") {
+                (start + 4, 0)
+            } else if rest.starts_with("{ap.") {
+                if let Some(close_rel) = rest.find('}') {
+                    let end = start + close_rel + 1;
+                    let component = &text[start + 4..end - 1]; // between "{ap." and "}"
+                    let idx = Variables::component_index(component).unwrap_or(0);
+                    (end, idx)
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            };
+
+            text.replace_range(start..end, &ap_vars[idx]);
+        }
+    }
+    fn replace_actions(actions: &mut Vec<String>, ap_vars: &[String]) {
+        for action in actions {
+            Self::replace_aps(action, ap_vars);
         }
     }
     pub fn set_editable(&mut self, editable: &Editability) {
@@ -1184,12 +1193,21 @@ impl UiElement {
         // Get current pixel position
         let current_pos = self.center();
 
-        // Infer normalized position from old window size
-        let norm_x = current_pos[0] / old_window_size.width as f32;
-        let norm_y = current_pos[1] / old_window_size.height as f32;
+        let x_scale = new_window_size.width as f32 / old_window_size.width as f32;
+        let y_scale = new_window_size.height as f32 / old_window_size.height as f32;
+        let x = current_pos[0] * x_scale;
+        let y = current_pos[1] * y_scale;
 
-        // Reapply normalized position with new window size
-        self.set_pos_normalized(norm_x, norm_y, new_window_size);
+        self.set_pos(x, y);
+        self.scale_by(y_scale);
+
+        match self {
+            UiElement::Text(t) => {
+                let full_y_scale = new_window_size.height as f32 / 1080.0;
+                t.pt = t.original_pt * full_y_scale;
+            }
+            _ => {}
+        }
     }
     /// Replaces self if same variant and matching id. Returns true if replaced.
     pub fn replace_if_matches(&mut self, new_state: &UiElement) -> bool {
@@ -1446,7 +1464,7 @@ pub struct RuntimeLayer {
     pub actions: Vec<String>,
     pub elements: Vec<UiElement>,
     pub active: bool,
-    pub ap_var: String,
+    pub ap_vars: Vec<String>,
     // NEW: cached GPU data!!!
     pub cache: LayerCache,
 
@@ -1527,12 +1545,6 @@ impl RuntimeLayer {
         }
     }
 
-    // simplified resize_element using the helper
-    pub fn resize_element(&mut self, id: &str, scale: f32) {
-        if let Some(el) = self.find_element_mut(id) {
-            el.scale_by(scale);
-        }
-    }
     pub fn find_element_mut(&mut self, id: &str) -> Option<&mut UiElement> {
         self.elements.iter_mut().find(|e| e.id() == id)
     }
@@ -1632,7 +1644,7 @@ pub struct UiLayerYaml {
     #[serde(default, skip_serializing_if = "is_default")] // Skips if 0
     pub order: u32,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
     pub actions: Vec<String>,
 
     // Skips if None or Empty Vector
@@ -1678,9 +1690,10 @@ pub struct UiVertex {
 impl UiVertex {
     fn from_yaml(v: UiVertexYaml, id: usize, window_size: PhysicalSize<u32>) -> Self {
         let mut pos = v.pos;
-        pos[0] *= window_size.width as f32;
-        pos[1] *= window_size.height as f32;
-
+        let x_scale_reverse = window_size.width as f32 / 1920.0;
+        let y_scale_reverse = window_size.height as f32 / 1080.0;
+        pos[0] *= x_scale_reverse;
+        pos[1] *= y_scale_reverse;
         UiVertex {
             pos,
             color: v.color,
@@ -1692,8 +1705,10 @@ impl UiVertex {
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiVertexYaml {
         let mut pos = self.pos;
-        pos[0] /= window_size.width as f32;
-        pos[1] /= window_size.height as f32;
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        pos[0] *= x_scale_reverse;
+        pos[1] *= y_scale_reverse;
         UiVertexYaml {
             pos,
             color: self.color,
@@ -2019,17 +2034,11 @@ pub struct UiButtonHandle {
 
 impl UiButtonText {
     pub fn from_yaml(e: UiButtonTextYaml, window_size: PhysicalSize<u32>) -> Self {
-        let x = if e.x < 2.0 {
-            window_size.width as f32 * e.x
-        } else {
-            e.x
-        };
-        let y = if e.y < 2.0 {
-            window_size.height as f32 * e.y
-        } else {
-            e.y
-        };
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = e.x as f32 * x_scale;
+        let y = e.y as f32 * y_scale;
+        let pt = e.pt * y_scale;
         let length = e.text.len();
         let yaml_element = Some(e.clone());
         UiButtonText {
@@ -2038,7 +2047,7 @@ impl UiButtonText {
             style: e.style.clone(),
             x,
             y,
-            pt: e.pt,
+            pt,
             original_pt: e.pt,
             color: e.color,
             text: e.text.clone(),
@@ -2068,16 +2077,24 @@ impl UiButtonText {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonTextYaml {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        let x = self.x * x_scale_reverse;
+        let y = self.y * y_scale_reverse;
+        let pt = self.y * y_scale_reverse;
+        let (x, y, pt) = if let Some(yaml_element) = self.yaml_element.as_ref() {
+            let x = snap(x, yaml_element.x as f32);
+            let y = snap(y, yaml_element.y as f32);
+            let pt = snap(pt, self.original_pt);
+            (x as i16, y as i16, pt)
+        } else { (x as i16, y as i16, pt) };
         UiButtonTextYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
             style: self.style.clone(),
-
-            x: self.x / window_size.width as f32,
-            y: self.y / window_size.height as f32,
-
-            pt: self.pt,
+            x,
+            y,
+            pt,
             color: self.color,
             text: self.template.clone(),
             misc: self.misc.to_yaml(),
@@ -2094,23 +2111,11 @@ impl UiButtonText {
 
 impl UiButtonCircle {
     pub fn from_yaml(e: UiButtonCircleYaml, window_size: PhysicalSize<u32>) -> Self {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        let radius = scale * e.radius;
-        let x = if e.x < 2.0 {
-            window_size.width as f32 * e.x
-        } else {
-            e.x
-        };
-        let y = if e.y < 2.0 {
-            window_size.height as f32 * e.y
-        } else {
-            e.y
-        };
-        let radius = if e.radius < 2.0 {
-            scale * e.radius
-        } else {
-            e.radius
-        };
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = e.x as f32 * x_scale;
+        let y = e.y as f32 * y_scale;
+        let r = e.radius * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonCircle {
             id: e.id,
@@ -2118,8 +2123,8 @@ impl UiButtonCircle {
             style: e.style,
             x,
             y,
-            radius,
-            original_radius: radius,
+            radius: r,
+            original_radius: e.radius,
             inside_border_thickness_percentage: e.inside_border_thickness_percentage,
             border_thickness_percentage: e.border_thickness_percentage,
             fade: e.fade,
@@ -2144,15 +2149,25 @@ impl UiButtonCircle {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonCircleYaml {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        let x = self.x * x_scale_reverse;
+        let y = self.y * y_scale_reverse;
+        let r = self.radius * y_scale_reverse;
+        let (x, y, r) = if let Some(yaml_element) = self.yaml_element.as_ref() {
+            let x = snap(x, yaml_element.x as f32);
+            let y = snap(y, yaml_element.y as f32);
+            let r = snap(r, yaml_element.radius);
+            (x as i16, y as i16, r)
+        } else { (x as i16, y as i16, r) };
         UiButtonCircleYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
             style: self.style.clone(),
-            x: self.x / window_size.width as f32,
-            y: self.y / window_size.height as f32,
+            x,
+            y,
 
-            radius: self.radius / scale,
+            radius: r,
             inside_border_thickness_percentage: self.inside_border_thickness_percentage,
             border_thickness_percentage: self.border_thickness_percentage,
 
@@ -2175,28 +2190,17 @@ impl UiButtonCircle {
 
 impl UiButtonHandle {
     pub fn from_yaml(e: UiButtonHandleYaml, window_size: PhysicalSize<u32>) -> Self {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
-        let x = if e.x < 2.0 {
-            window_size.width as f32 * e.x
-        } else {
-            e.x
-        };
-        let y = if e.y < 2.0 {
-            window_size.height as f32 * e.y
-        } else {
-            e.y
-        };
-        let radius = if e.radius < 2.0 {
-            scale * e.radius
-        } else {
-            e.radius
-        };
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = e.x as f32 * x_scale;
+        let y = e.y as f32 * y_scale;
+        let r = e.radius * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonHandle {
             id: e.id,
             x,
             y,
-            radius,
+            radius: r,
             handle_color: e.handle_color,
             handle_misc: e.handle_misc,
             sub_handle_color: e.sub_handle_color,
@@ -2214,12 +2218,22 @@ impl UiButtonHandle {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonHandleYaml {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        let x = self.x * x_scale_reverse;
+        let y = self.y * y_scale_reverse;
+        let r = self.radius * y_scale_reverse;
+        let (x, y, r) = if let Some(yaml_element) = self.yaml_element.as_ref() {
+            let x = snap(x, yaml_element.x as f32);
+            let y = snap(y, yaml_element.y as f32);
+            let r = snap(r, yaml_element.radius);
+            (x as i16, y as i16, r)
+        } else { (x as i16, y as i16, r) };
         UiButtonHandleYaml {
             id: self.id.clone(),
-            x: self.x / window_size.width as f32,
-            y: self.y / window_size.height as f32,
-            radius: self.radius / scale,
+            x,
+            y,
+            radius: r,
 
             handle_color: self.handle_color,
             handle_misc: self.handle_misc.clone(),
@@ -2240,7 +2254,11 @@ impl UiButtonHandle {
 
 impl UiButtonOutline {
     pub fn from_yaml(e: UiButtonOutlineYaml, window_size: PhysicalSize<u32>) -> Self {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = e.shape_data.x * x_scale;
+        let y = e.shape_data.y * y_scale;
+        let r = e.shape_data.radius * y_scale;
         let yaml_element = Some(e.clone());
         UiButtonOutline {
             id: e.id,
@@ -2248,7 +2266,12 @@ impl UiButtonOutline {
             mode: e.mode,
             vertex_offset: 0,
             vertex_count: 0,
-            shape_data: e.shape_data.scale_from_normalized(window_size, scale),
+            shape_data: ShapeData {
+                x,
+                y,
+                radius: r,
+                border_thickness: e.shape_data.border_thickness,
+            },
             dash_color: e.dash_color,
             dash_misc: e.dash_misc,
             sub_dash_color: e.sub_dash_color,
@@ -2265,13 +2288,28 @@ impl UiButtonOutline {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonOutlineYaml {
-        let scale = (window_size.width as f32 * window_size.height as f32).sqrt();
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        let x = self.shape_data.x * x_scale_reverse;
+        let y = self.shape_data.y * y_scale_reverse;
+        let r = self.shape_data.radius * y_scale_reverse;
+        let (x, y, r) = if let Some(yaml_element) = self.yaml_element.as_ref() {
+            let x = snap(x, yaml_element.shape_data.x);
+            let y = snap(y, yaml_element.shape_data.y);
+            let r = snap(r, yaml_element.shape_data.radius);
+            (x, y, r)
+        } else { (x, y, r) };
         UiButtonOutlineYaml {
             id: self.id.clone(),
             parent: self.parent.clone(),
 
             mode: self.mode,
-            shape_data: self.shape_data.scale_to_normalized(window_size, scale),
+            shape_data: ShapeData {
+                x,
+                y,
+                radius: r,
+                border_thickness: self.shape_data.border_thickness,
+            },
 
             dash_color: self.dash_color,
             dash_misc: self.dash_misc.clone(),
@@ -2302,12 +2340,16 @@ impl UiButtonPolygon {
             .collect();
 
         ensure_ccw(&mut verts);
-
+        let x_scale = window_size.width as f32 / 1920.0;
+        let y_scale = window_size.height as f32 / 1080.0;
+        let x = e.x as f32 * x_scale;
+        let y = e.y as f32 * y_scale;
+        let scale = e.scale * y_scale;
         let mut polygon = UiButtonPolygon {
             id: e.id,
-            x: e.x,
-            y: e.y,
-            scale: e.scale,
+            x,
+            y,
+            scale,
             cache_valid: false,
             actions: e.actions,
             style: e.style,
@@ -2328,16 +2370,25 @@ impl UiButtonPolygon {
     }
 
     pub fn to_yaml(&self, window_size: PhysicalSize<u32>) -> UiButtonPolygonYaml {
+        let x_scale_reverse = 1920.0 / window_size.width as f32;
+        let y_scale_reverse = 1080.0 / window_size.height as f32;
+        let x = self.x * x_scale_reverse;
+        let y = self.y * y_scale_reverse;
+        let scale = self.scale * y_scale_reverse;
+        let (x, y, r) = if let Some(yaml_element) = self.yaml_element.as_ref() {
+            let x = snap(x, yaml_element.x as f32);
+            let y = snap(y, yaml_element.y as f32);
+            let scale = snap(scale, yaml_element.scale);
+            (x as i16, y as i16, scale)
+        } else { (x as i16, y as i16, scale) };
         UiButtonPolygonYaml {
             id: self.id.clone(),
             actions: self.actions.clone(),
             style: self.style.clone(),
-
-            x: self.x,
-            y: self.y,
-            scale: self.scale,
-            vertices: self
-                .unscaled_vertices
+            x,
+            y,
+            scale,
+            vertices: self.unscaled_vertices
                 .iter()
                 .map(|v| v.to_yaml(window_size))
                 .collect(),
@@ -2583,7 +2634,7 @@ impl Default for AdvancedPrimitive {
         Self {
             id: "default".to_string(),
             ap_name: "".to_string(),
-            ap_var: String::new(),
+            ap_vars: vec![],
             actions: vec![],
             x: 0.0,
             y: 0.0,
@@ -2591,6 +2642,7 @@ impl Default for AdvancedPrimitive {
             misc: MiscButtonSettings::default(),
             editing_tool: false,
             is_temporary: false,
+            scale_my_coords: true
         }
     }
 }
@@ -2650,7 +2702,7 @@ pub struct UiButtonTextYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2659,8 +2711,10 @@ pub struct UiButtonTextYaml {
     )]
     pub style: String,
 
-    pub x: f32,
-    pub y: f32,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub x: i16,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub y: i16,
 
     #[serde(skip_serializing_if = "is_default")]
     pub pt: f32,
@@ -2686,8 +2740,8 @@ impl Default for UiButtonTextYaml {
             id: "None".to_string(),
             actions: Vec::new(),
             style: "None".to_string(),
-            x: 0.0,
-            y: 0.0,
+            x: 0,
+            y: 0,
             pt: 14.0,
             color: [1.0, 1.0, 1.0, 1.0],
             text: String::new(),
@@ -2708,7 +2762,7 @@ pub struct UiButtonCircleYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2717,8 +2771,10 @@ pub struct UiButtonCircleYaml {
     )]
     pub style: String,
 
-    pub x: f32,
-    pub y: f32,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub x: i16,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub y: i16,
     pub radius: f32,
 
     #[serde(skip_serializing_if = "is_default")]
@@ -2751,8 +2807,8 @@ impl Default for UiButtonCircleYaml {
             id: "None".to_string(),
             actions: Vec::new(),
             style: "None".to_string(),
-            x: 0.0,
-            y: 0.0,
+            x: 0,
+            y: 0,
             radius: 0.0,
             inside_border_thickness_percentage: 0.0,
             border_thickness_percentage: 0.0,
@@ -2777,8 +2833,10 @@ pub struct UiButtonHandleYaml {
     )]
     pub id: String,
 
-    pub x: f32,
-    pub y: f32,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub x: i16,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub y: i16,
     pub radius: f32,
 
     pub handle_color: [f32; 4],
@@ -2802,8 +2860,8 @@ impl Default for UiButtonHandleYaml {
     fn default() -> Self {
         Self {
             id: "None".to_string(),
-            x: 0.0,
-            y: 0.0,
+            x: 0,
+            y: 0,
             radius: 0.0,
             handle_color: [1.0, 1.0, 1.0, 1.0],
             handle_misc: HandleMisc::default(),
@@ -2846,7 +2904,7 @@ pub struct UiButtonOutlineYaml {
     pub sub_dash_misc: DashMisc,
 
     #[serde(skip_serializing_if = "is_default")]
-    pub misc: MiscButtonSettingsYaml,
+    pub misc: MiscButtonSettingsYaml
 }
 
 impl Default for UiButtonOutlineYaml {
@@ -2875,7 +2933,7 @@ pub struct UiButtonPolygonYaml {
     )]
     pub id: String,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_string_or_vec")]
     pub actions: Vec<String>,
 
     #[serde(
@@ -2883,8 +2941,10 @@ pub struct UiButtonPolygonYaml {
         skip_serializing_if = "is_none_string"
     )]
     pub style: String,
-    pub x: f32,
-    pub y: f32,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub x: i16,
+    #[serde(deserialize_with = "deserialize_i16_from_number")]
+    pub y: i16,
     #[serde(skip_serializing_if = "is_one")]
     pub scale: f32,
     // If vertices are empty, we might as well skip, but usually polygon has data
@@ -2901,8 +2961,8 @@ impl Default for UiButtonPolygonYaml {
             id: "None".to_string(),
             actions: vec![],
             style: "None".to_string(),
-            x: 0.0,
-            y: 0.0,
+            x: 0,
+            y: 0,
             scale: 1.0,
             vertices: Vec::new(),
             misc: MiscButtonSettingsYaml::default(),
@@ -2982,4 +3042,87 @@ where
     }
 
     deserializer.deserialize_any(StringOrVec)
+}
+
+fn deserialize_i16_from_number<'de, D>(deserializer: D) -> Result<i16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+
+    match value {
+        serde_yaml::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i as i16)
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.round() as i16)
+            } else {
+                Err(de::Error::custom("invalid number"))
+            }
+        }
+        _ => Err(de::Error::custom("expected number"))
+    }
+}
+fn deserialize_u16_from_number<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+
+    match value {
+        serde_yaml::Value::Number(n) => {
+            if let Some(i) = n.as_u64() {
+                Ok(i as u16)
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.round() as u16)
+            } else {
+                Err(de::Error::custom("invalid number"))
+            }
+        }
+        _ => Err(de::Error::custom("expected number"))
+    }
+}
+
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrVecVisitor;
+
+    impl<'de> Visitor<'de> for StringOrVecVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or a sequence of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![value.to_string()])
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![value])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVecVisitor)
 }

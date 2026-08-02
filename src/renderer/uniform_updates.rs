@@ -1,8 +1,6 @@
 use crate::data::Settings;
 use crate::renderer::gtao::gtao::GtaoParams;
-use crate::renderer::pipelines::{
-    FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_camera_uniforms,
-};
+use crate::renderer::pipelines::{FogUniforms, Pipelines, ToneMappingState, ToneMappingUniforms, make_new_camera_uniforms, ColorGrade, ColorGradeState};
 use crate::renderer::shadows::compute_csm_matrices;
 use crate::resources::Time;
 use crate::world::astronomy::Astronomy;
@@ -85,13 +83,19 @@ impl<'a> UniformUpdater<'a> {
             bytemuck::bytes_of(&fog_uniforms),
         );
     }
-    pub fn update_tonemapping_uniforms(&self, tonemapping_state: &ToneMappingState) {
+    pub fn update_tonemapping_uniforms(&self, tonemapping_state: ToneMappingState, color_grade_state: ColorGradeState) {
         let tonemapping_uniforms = ToneMappingUniforms::from_state(tonemapping_state);
+        let color_grade_uniforms = ColorGrade::from_state(color_grade_state);
 
         self.queue.write_buffer(
             &self.pipelines.buffers.tonemapping,
             0,
             bytemuck::bytes_of(&tonemapping_uniforms),
+        );
+        self.queue.write_buffer(
+            &self.pipelines.buffers.color_grading,
+            0,
+            bytemuck::bytes_of(&color_grade_uniforms),
         );
     }
     pub fn update_sky_uniforms(&self, astronomy: &Astronomy) {

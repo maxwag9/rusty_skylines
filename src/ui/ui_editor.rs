@@ -7,9 +7,9 @@ use crate::helpers::paths::data_dir;
 use crate::renderer::props::Props;
 use crate::resources::{CommandQueues, Time};
 use crate::simulation::Simulation;
-use crate::ui::action_parser::{TouchEventKind, actions_to_uicommands, parse_action};
+use crate::ui::action_parser::{actions_to_uicommands, parse_action, ActionEvent};
 use crate::ui::actions::{
-    CommandContext, CommandQueue, ElementContext, UiCommand, process_commands,
+    process_commands, CommandContext, CommandQueue, ElementContext, UiCommand,
 };
 use crate::ui::helper::calc_move_speed;
 use crate::ui::input::{Input, Mouse};
@@ -24,7 +24,7 @@ use crate::ui::ui_loader::{
     load_advanced_primitives_from_directory, load_global_actions, load_legacy_gui_layout,
     load_menus_from_directory,
 };
-use crate::ui::ui_text_editing::{HitResult, MouseSnapshot, handle_text_editing};
+use crate::ui::ui_text_editing::{handle_text_editing, HitResult, MouseSnapshot};
 use crate::ui::ui_touch_manager::{
     DragCoordinator, ElementRef, HitDetector, InputSnapshot, MouseButtons, NavigationDirection,
     TouchEvent, UiTouchManager, ZoomState,
@@ -96,7 +96,7 @@ pub struct GlobalActions {
     pub global_actions: Vec<String>,
 }
 impl Ui {
-    pub fn new(settings: &Settings, window_size: PhysicalSize<u32>) -> Self {
+    pub fn new(settings: &Settings, variables: Variables, window_size: PhysicalSize<u32>) -> Self {
         let menus_dir = data_dir("ui_data/menus");
         let ap_dir = data_dir("ui_data/menus/advanced_primitives");
         let legacy_path = data_dir("ui_data/gui_layout.yaml");
@@ -127,15 +127,14 @@ impl Ui {
             menus: HashMap::new(),
             aps: advanced_primitives,
             global_actions,
-            variables: Variables::new(),
+            variables,
             console_lines: VecDeque::new(),
             touch_manager: UiTouchManager::new(settings),
             ui_edit_manager: UiEditManager::new(),
             drag_start_state: None,
             element_clipboard: None,
         };
-        let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> =
-            HashMap::new(); // menu name, av.
+        let mut advanced_primitive_refs: HashMap<String, Vec<(AdvancedPrimitive, u32)>> = HashMap::new(); // menu name, ap.
         // Load menus
         for menu_yaml in menu_files {
             let mut layers: Vec<RuntimeLayer> = Vec::new();
@@ -148,11 +147,11 @@ impl Ui {
                     .into_iter()
                     .flat_map(|t| match t.advanced_primitive() {
                         None => UiElement::from_yaml(t, window_size),
-                        Some(av) => {
+                        Some(ap) => {
                             advanced_primitive_refs
                                 .entry(menu_yaml.name.clone())
                                 .or_default()
-                                .push((av.clone(), l.order));
+                                .push((ap.clone(), l.order));
 
                             UiElement::from_yaml(t, window_size)
                         }
@@ -167,7 +166,7 @@ impl Ui {
                     opaque: l.opaque,
                     actions: l.actions,
                     elements,
-                    ap_var: String::new(),
+                    ap_vars: vec![],
                     cache: LayerCache::default(),
                     gpu: LayerGpu::default(),
                     dirty: LayerDirty::all(),
@@ -204,11 +203,7 @@ impl Ui {
         loader
     }
     pub fn resize(&mut self, old_size: PhysicalSize<u32>, new_size: PhysicalSize<u32>) {
-        let scale_old = (old_size.width as f32 * old_size.height as f32).sqrt();
-        let scale_new = (new_size.width as f32 * new_size.height as f32).sqrt();
-        let scale_factor = scale_new / scale_old;
-        self.menus
-            .values_mut()
+        self.menus.values_mut()
             .flat_map(|m| m.layers.iter_mut())
             .flat_map(|l| {
                 l.dirty.mark_all(); // Dirty all elements so they actually get updated lol
@@ -216,10 +211,9 @@ impl Ui {
             })
             .for_each(|e| {
                 e.rescale_to_window(old_size, new_size);
-                e.scale_by(scale_factor.powi(2));
             });
-        self.variables
-            .set_array("screen", vec![new_size.width, new_size.height]);
+        self.variables.set_array("screen", vec![new_size.width, new_size.height]);
+        self.touch_manager.add_screen_resize_event = true;
     }
     pub fn handle_touches(
         &mut self,
@@ -233,6 +227,7 @@ impl Ui {
         game_state: &mut GameState,
         simulation: &mut Simulation,
     ) {
+        self.touch_manager.editor.enabled = settings.editor_mode;
         if !self.touch_manager.options.show_gui {
             return;
         }
@@ -253,9 +248,8 @@ impl Ui {
         let input_snapshot = self.create_input_snapshot(input);
 
         // Collect elements - borrow only self.menus
-        let elements = Self::collect_touchable_elements(&self.menus);
-        self.touch_manager
-            .update(dt, input_snapshot, &elements, &world.time);
+        let elements = Self::collect_touchable_elements(&self.menus, settings.editor_mode);
+        self.touch_manager.update(dt, input_snapshot, &elements, &world.time);
         for (menu_name, menu) in self.menus.iter() {
             for layer in menu.layers.iter() {
                 for element in layer.iter_all() {
@@ -304,7 +298,12 @@ impl Ui {
                             actions: element.actions(),
                         });
                     }
-
+                    if self.touch_manager.add_screen_resize_event {
+                        self.touch_manager.events.push(TouchEvent::ScreenResize {
+                            element: element_ref.clone(),
+                            actions: element.actions(),
+                        });
+                    }
                     // Important for when not hovering and such, super important for always-on functions!
                     self.touch_manager.events.push(TouchEvent::Nothing {
                         element: element_ref,
@@ -313,7 +312,7 @@ impl Ui {
                 }
             }
         }
-
+        self.touch_manager.add_screen_resize_event = false;
         // Process all emitted events and // COLLECTING ui actions
         let result = self.process_touch_events(
             &mut command_queues.ui_command_queue,
@@ -345,8 +344,7 @@ impl Ui {
 
         // Execute actions
         let top_hit = self.get_current_hit_for_actions();
-        if top_hit.is_some() {
-            // || self.touch_manager.editor.enabled {
+        if top_hit.is_some() { //|| self.touch_manager.editor.enabled || !settings.show_world {
             world.terrain.last_picked = None;
         }
 
@@ -363,7 +361,7 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation,
+            simulation
         );
 
         if self.touch_manager.selection.selection_changed {
@@ -374,10 +372,10 @@ impl Ui {
                             menu_name,
                             layer.name.as_str(),
                             text.id.as_str(),
-                            ElementKind::Text,
+                            ElementKind::Text
                         );
                         if self.touch_manager.selection.is_selected(&text_ref) {
-                            text.being_edited = false;
+                            //text.being_edited = false; // Wtf?!
                             text.clear_selection();
                             layer.dirty.mark_texts()
                         }
@@ -409,7 +407,7 @@ impl Ui {
     }
 
     /// Collect all touchable elements from menus - return references, not owned Strings
-    fn collect_touchable_elements(menus: &'_ HashMap<String, Menu>) -> Vec<TouchableElement<'_>> {
+    fn collect_touchable_elements(menus: &'_ HashMap<String, Menu>, editor_mode: bool) -> Vec<TouchableElement<'_>> {
         let mut elements = Vec::new();
 
         for (menu_name, menu) in menus {
@@ -423,13 +421,13 @@ impl Ui {
                 }
 
                 for (idx, element) in layer.elements.iter().enumerate() {
-                    if element.is_active() && element.is_touchable() {
+                    if element.is_active() && (editor_mode || element.is_touchable()) { // Everything is touchable in editor mode
                         elements.push(TouchableElement {
                             menu: menu_name.as_str(),   // &'a str - borrows from HashMap key
                             layer: layer.name.as_str(), // &'a str - borrows from Layer in Menu
                             order: layer.order,
                             idx,
-                            element,
+                            element
                         });
                     }
                 }
@@ -467,7 +465,7 @@ impl Ui {
             settings,
             event_loop,
             game_state,
-            simulation,
+            simulation
         };
         // COLLECTING ui actions
         push_commands(ui_command_queue, ctx, &events);
@@ -545,6 +543,8 @@ impl Ui {
             // ----------------------------------------------------------------
             TouchEvent::DragStart {
                 element,
+                actions,
+                buttons,
                 start_position,
                 vertex_index,
             } => {
@@ -562,6 +562,8 @@ impl Ui {
             }
             TouchEvent::DragEnd {
                 element,
+                actions,
+                buttons,
                 start_position,
                 end_position,
                 vertex_index,
@@ -611,6 +613,7 @@ impl Ui {
                 self.handle_navigate_direction(*direction, result);
             }
             TouchEvent::StartUp { .. } => {}
+            _ => {}
         }
     }
 
@@ -941,13 +944,11 @@ impl Ui {
         result: &mut EventProcessingResult,
     ) {
         // Find all elements in box
-        let elements: Vec<TouchableElement> = Self::collect_touchable_elements(&self.menus);
+        let elements: Vec<TouchableElement> = Self::collect_touchable_elements(&self.menus, self.touch_manager.editor.enabled);
 
         let selected = HitDetector::find_in_box(start, end, &elements);
 
-        self.touch_manager
-            .selection
-            .set_from_box(selected, &mut self.menus);
+        self.touch_manager.selection.set_from_box(selected, &mut self.menus);
         result.update_selection = true;
     }
 
@@ -1363,8 +1364,6 @@ impl Ui {
         // Convert touch manager's current hover to legacy HitResult for action system
         self.touch_manager.hovered().map(|hover| HitResult {
             element: hover.element.clone(),
-            layer_order: 0,
-            element_order: 0,
             actions: hover.actions.clone(),
         })
     }
@@ -1394,7 +1393,7 @@ impl Ui {
         &mut self,
         menus_dir: PathBuf,
         ap_dir: PathBuf,
-        window_size: PhysicalSize<u32>,
+        window_size: PhysicalSize<u32>
     ) -> anyhow::Result<()> {
         fs::create_dir_all(&menus_dir)?;
         fs::create_dir_all(&ap_dir)?;
@@ -1438,9 +1437,7 @@ impl Ui {
         menu: &Menu,
         window_size: PhysicalSize<u32>,
     ) -> MenuYaml {
-        let layers = menu
-            .layers
-            .iter()
+        let layers = menu.layers.iter()
             .filter(|l| l.saveable)
             .map(|l| UiLayerYaml {
                 name: l.name.clone(),
@@ -1455,8 +1452,7 @@ impl Ui {
                         .collect(),
                 ),
                 editing_tool: l.editing_tool,
-            })
-            .collect();
+            }).collect();
 
         MenuYaml {
             name: menu_name.to_string(),
@@ -1901,10 +1897,7 @@ impl Ui {
         let mut changed: bool = false;
         let now = time.total_time;
 
-        self.touch_manager
-            .config
-            .zoom_states
-            .retain(|_, state| now - state.last_used <= 2.0);
+        self.touch_manager.config.zoom_states.retain(|_, state| now - state.last_used <= 2.0);
         let do_resize_bigger_scroll = input_state.action_repeat("Resize Element Bigger Scroll");
         let do_resize_smaller_scroll = input_state.action_repeat("Resize Element Smaller Scroll");
         let do_resize_bigger = input_state.action_repeat("Resize Element Bigger");
@@ -2075,7 +2068,7 @@ impl Ui {
             ap_name: None,
             order: 900,
             active: true,
-            ap_var: String::new(),
+            ap_vars: vec![],
             cache: LayerCache::default(),
             actions: vec![],
             elements: vec![],
@@ -2091,7 +2084,7 @@ impl Ui {
             ap_name: None,
             order: 950,
             active: true,
-            ap_var: String::new(),
+            ap_vars: vec![],
             cache: LayerCache::default(),
             actions: vec![],
             elements: vec![],
@@ -2151,7 +2144,7 @@ fn push_commands(
             ui_command_queue.push_many(parse_action(
                 action,
                 ctx,
-                &TouchEventKind::StartUp,
+                &ActionEvent::StartUp,
                 buttons,
                 element_ctx.clone(),
             ));
@@ -2159,7 +2152,7 @@ fn push_commands(
         ui_command_queue.push_many(parse_action(
             action,
             ctx,
-            &TouchEventKind::Always,
+            &ActionEvent::Always,
             buttons,
             element_ctx,
         ));
@@ -2225,15 +2218,15 @@ pub fn get_layer(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<
 
     Some(layer)
 }
-pub fn get_layer_ap_var(menus: &HashMap<String, Menu>, element: &ElementRef) -> String {
+pub fn get_layer_ap_var(menus: &HashMap<String, Menu>, element: &ElementRef) -> Vec<String> {
     let Some(menu) = menus.get(&element.menu) else {
-        return String::new();
+        return vec![];
     };
     let Some(layer) = menu.layers.iter().find(|l| l.name == element.layer) else {
-        return String::new();
+        return vec![];
     };
 
-    layer.ap_var.clone()
+    layer.ap_vars.clone()
 }
 pub fn is_layer_editor_tool(menus: &HashMap<String, Menu>, element: &ElementRef) -> Option<bool> {
     let menu = menus.get(&element.menu)?;
@@ -2284,14 +2277,12 @@ pub fn get_element_kind(
     menus: &HashMap<String, Menu>,
     menu: &str,
     layer: &str,
-    id: &str,
+    id: &str
 ) -> Option<ElementKind> {
     let menu = menus.get(menu)?;
     let layer = menu.layers.iter().find(|l| l.name == layer)?;
 
-    layer
-        .elements
-        .iter()
+    layer.elements.iter()
         .find(|e| e.id() == id)
         .map(|e| e.kind())
 }
@@ -2301,5 +2292,5 @@ pub struct TouchableElement<'a> {
     pub layer: &'a str,
     pub order: u32,
     pub idx: usize,
-    pub element: &'a UiElement,
+    pub element: &'a UiElement
 }

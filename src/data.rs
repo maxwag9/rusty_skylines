@@ -1,4 +1,4 @@
-use crate::renderer::pipelines::ToneMappingState;
+use crate::renderer::pipelines::{ColorGradeState, ToneMappingState};
 use crate::ui::parser::Value;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
@@ -165,7 +165,9 @@ impl_cycle!(LodCenterType: LodCenterType::Eye, LodCenterType::Target);
 
 impl_cycle!(ShadowType: ShadowType::OFF, ShadowType::CSM, ShadowType::RT);
 
-impl_cycle!(ToneMappingState: ToneMappingState::Off, ToneMappingState::Cinematic, ToneMappingState::GoldenHour, ToneMappingState::Night, ToneMappingState::Overcast, ToneMappingState::SunnyDay);
+impl_cycle!(ToneMappingState: ToneMappingState::Off, ToneMappingState::Cinematic, ToneMappingState::GoldenHour, ToneMappingState::Mexico, ToneMappingState::Night, ToneMappingState::Overcast, ToneMappingState::SunnyDay);
+
+impl_cycle!(ColorGradeState: ColorGradeState::Off, ColorGradeState::Mexico, ColorGradeState::Vintage, ColorGradeState::Cold, ColorGradeState::HighContrast);
 
 // ============ Simplified SettingValue ============
 
@@ -177,7 +179,7 @@ pub enum SettingKind {
     Val,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum SettingValue {
     Bool(bool),
@@ -521,7 +523,8 @@ impl_setting_convert_enum!(
     DebugViewState,
     InternalMenu,
     LodCenterType,
-    ToneMappingState
+    ToneMappingState,
+    ColorGradeState
 );
 
 // ============ Settings Macros ============
@@ -568,20 +571,34 @@ macro_rules! define_settings {
     ($(
         $key:ident => $field:ident : $ty:ty = $default:expr ; $kind:ident
     ),* $(,)?) => {
-        #[derive(Debug, Deserialize, Serialize, Clone)]
+        #[derive(Debug, Deserialize, Serialize)]
         #[serde(default)]
         pub struct Settings {
             $(pub $field: $ty,)*
+
+            #[serde(skip)]
+            #[serde(default)]
+            tracker: SettingsTracker,
         }
 
         impl Default for Settings {
             fn default() -> Self {
                 Self {
                     $($field: $default,)*
+                    tracker: SettingsTracker::default()
                 }
             }
         }
-
+        impl Clone for Settings {
+            fn clone(&self) -> Self {
+                Self {
+                    $(
+                        $field: self.$field.clone(),
+                    )*
+                    tracker: SettingsTracker::default(),
+                }
+            }
+        }
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
         #[serde(rename_all = "snake_case")]
         pub enum SettingKey {
@@ -589,6 +606,21 @@ macro_rules! define_settings {
         }
 
         impl SettingKey {
+            pub fn all() -> &'static [SettingKey] {
+                &[
+                    $(SettingKey::$key,)*
+                ]
+            }
+
+            pub fn count() -> usize {
+                Self::all().len()
+            }
+
+            pub fn index(self) -> usize {
+                match self {
+                    $(SettingKey::$key => SettingKey::$key as usize,)*
+                }
+            }
             /// Parse a snake_case string into a SettingKey
             pub fn from_str(s: &str) -> Option<Self> {
                 match s {
@@ -634,12 +666,74 @@ macro_rules! define_settings {
         }
 
         impl Settings {
+            pub fn update_change_tracking(&mut self) {
+                let current = SettingsSnapshot {
+                    values: SettingKey::all()
+                        .iter()
+                        .map(|k| k.read(self))
+                        .collect(),
+                };
+
+                if let Some(previous) = &self.tracker.previous {
+                    self.tracker.changed = current
+                        .values
+                        .iter()
+                        .zip(&previous.values)
+                        .map(|(a, b)| a != b)
+                        .collect();
+                } else {
+                    self.tracker.changed = vec![false; SettingKey::count()];
+                }
+
+                self.tracker.previous = Some(Box::new(current));
+            }
+
+            pub fn new_settings_changes(&mut self) {
+                let current = SettingsSnapshot {
+                    values: SettingKey::all()
+                        .iter()
+                        .map(|k| k.read(self))
+                        .collect(),
+                };
+
+                if let Some(previous) = &self.tracker.previous {
+                    self.tracker.changed = current
+                        .values
+                        .iter()
+                        .zip(&previous.values)
+                        .map(|(a, b)| a != b)
+                        .collect();
+                } else {
+                    self.tracker.changed = vec![false; SettingKey::count()];
+                }
+
+                self.tracker.previous = Some(Box::new(current));
+            }
+
+            pub fn setting_changed(&self, key: SettingKey) -> bool {
+                self.tracker.changed[key.index()]
+            }
             pub fn read_setting(&self, key: SettingKey) -> SettingValue {
                 key.read(self)
             }
 
             pub fn apply_setting(&mut self, key: SettingKey, op: SettingOp) {
                 key.apply(self, op)
+            }
+
+            pub fn take_changed(&mut self) -> Vec<SettingKey> {
+                let mut changed = Vec::new();
+
+                for key in SettingKey::all() {
+                    if self.tracker.changed[key.index()] {
+                        changed.push(*key);
+                    }
+                }
+
+                // Clear after consuming
+                self.tracker.changed.fill(false);
+
+                changed
             }
         }
     };
@@ -670,6 +764,7 @@ define_settings! {
     RenderNodeIdsGizmo => render_node_ids_gizmo: bool = false; Bool,
     RenderChunkBounds => render_chunk_bounds: bool = false; Bool,
     TonemappingState => tonemapping_state: ToneMappingState = ToneMappingState::default(); Cycle,
+    ColorGradingState => color_grading_state: ColorGradeState = ColorGradeState::default(); Cycle,
     DebugViewState => debug_view_state: DebugViewState = DebugViewState::Off; Cycle,
     StartingMenu => starting_menu: InternalMenu = InternalMenu::default(); Cycle,
     LodCenter => lod_center: LodCenterType = LodCenterType::default(); Cycle,
@@ -682,6 +777,8 @@ define_settings! {
     RenderDebugPrint => render_debug_print: bool = false; Bool,
     RenderParkingGizmo => render_parking_gizmo: bool = false; Bool,
     RenderLotInfo => render_lot_info: bool = false; Bool,
+    TonemapUi => tonemap_ui: bool = true; Bool,
+    PrintParseErrors => print_parse_errors: bool = false; Bool
 }
 
 impl Settings {
@@ -725,4 +822,16 @@ impl Settings {
         fs::write(path, toml_str)?;
         Ok(())
     }
+}
+
+
+#[derive(Debug, Default)]
+pub struct SettingsTracker {
+    previous: Option<Box<SettingsSnapshot>>,
+    changed: Vec<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct SettingsSnapshot {
+    values: Vec<SettingValue>,
 }

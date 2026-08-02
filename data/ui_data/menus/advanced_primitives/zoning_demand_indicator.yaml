@@ -8,10 +8,10 @@ elements:
       #- on:activated button:a, print(zoning_demand_indicator_{ap}_border_height)
       - on:activated button:a, set(str:zoning_demand_indicator_{ap}_border_y, {self.center.y})
       #- on:activated button:a, print(zoning_demand_indicator_{ap}_border_y)
-    x: 0.0
-    y: 0.0
-    w: 0.0105
-    h: 0.011
+    x: 0
+    y: 0
+    w: 30
+    h: 40
     color:
       - 0.00
       - 0.00
@@ -32,10 +32,10 @@ elements:
       - on:a button:a set(str:self.center.y, ({zoning_demand_indicator_{ap}_border_y} + 0.5 * {zoning_demand_indicator_{ap}_border_height}) - 0.5 * ({zoning_demand_indicator_{ap}_border_height}*{{ap}}))
       - button:a show_interaction(self.color.fill)
       #- on:release, ifvareq(str:{ap}, bool:false, set_var(str:self.color.fill, [0.5, 0.0, 0.0, 1.0]), set_var(str:self.color.fill, [0.0, 0.5, 0.0, 1.0]))
-    x: 0.0
-    y: 0.0
-    w: 0.010
-    h: 0.010
+    x: 0
+    y: 0
+    w: 28
+    h: 38
     color:
       - 0.00
       - 0.50
@@ -44,13 +44,13 @@ elements:
     roundness: 0.1
   - !Text
     id: zoning_value_text
-    x: 0.00
-    y: 0.00
+    x: 0
+    y: 0
     pt: 8.0
     color:
       - 0.94
       - 0.02
       - 0.09
       - 0.9
-    text: '{{{ap}}:.2}'
+    text: '{float({{ap}}:.2)}'
     anchor: Center

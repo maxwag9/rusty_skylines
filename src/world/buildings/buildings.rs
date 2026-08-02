@@ -30,7 +30,7 @@ use std::ops::{Deref, DerefMut};
 use std::slice::{Iter, IterMut};
 use wgpu::util::DeviceExt;
 use wgpu::{Device, Queue, VertexAttribute, VertexFormat};
-use wgpu_render_manager::generator::{TextureKey, TextureParams};
+use wgpu_render_manager::generator::{MipmapMode, TextureKey, TextureParams};
 use wgpu_render_manager::renderer::RenderManager;
 
 #[derive(Debug, Copy, Clone, Default, Hash)]
@@ -1247,6 +1247,7 @@ impl BuildingMeshManager {
                         .with_primary_color(**color)
                         .with_secondary_color([0.0, 0.0, 0.0, 1.0]),
                     512,
+                    MipmapMode::Generate
                 ),
                 WallMaterial::Custom(key) => key.clone(),
             };
@@ -1258,17 +1259,20 @@ impl BuildingMeshManager {
                     .with_scale(0.5)
                     .with_roughness(0.4),
                 512,
+                MipmapMode::Generate
             );
             let roof_key = match &level.roof_material {
                 RoofMaterial::Shingles => TextureKey::new(
                     "shingles",
                     TextureParams::default().with_primary_color([0.4, 0.15, 0.05, 1.0]),
                     512,
+                    MipmapMode::Generate
                 ),
                 RoofMaterial::Metal => TextureKey::new(
                     "metal_roof",
                     TextureParams::default().with_primary_color([0.2, 0.2, 0.2, 1.0]),
                     512,
+                    MipmapMode::Generate
                 ),
                 RoofMaterial::Custom(key) => key.clone(),
             };
@@ -1277,6 +1281,7 @@ impl BuildingMeshManager {
                     "paint",
                     TextureParams::default().with_primary_color(**color),
                     512,
+                    MipmapMode::Generate
                 ),
                 WallMaterial::Custom(key) => key.clone(),
             };
@@ -1289,6 +1294,7 @@ impl BuildingMeshManager {
                         .with_roughness(0.0)
                         .with_scale(5.0),
                     512,
+                    MipmapMode::Generate
                 ),
                 DrivewayMaterial::Custom(key) => key.clone(),
             };
@@ -1420,6 +1426,7 @@ impl BuildingMeshManager {
                                         color: [1.0, 1.0, 1.0, 1.0],
                                         wind_strength: 0.2,
                                         variant: 0,
+                                        generated: false
                                     },
                                 );
                                 prop_instance_ids.push(prop_instance_id);

@@ -11,6 +11,7 @@ use crate::world::statisticals::CityState;
 use crate::world::terrain::terrain_subsystem::Terrain;
 use crate::world::world_state::WorldState;
 use wgpu::{Device, Queue};
+use crate::renderer::props::Props;
 
 pub struct World {
     pub world_state: WorldState,
@@ -31,9 +32,10 @@ impl World {
         queue: &Queue,
         settings: &Settings,
         game_state: &mut GameState,
+        props: &Props
     ) -> Self {
         let world_state = WorldState::new();
-        let terrain = Terrain::new(device, queue, settings, &mut game_state.current_save);
+        let terrain = Terrain::new(device, queue, settings, &mut game_state.current_save, props);
         Self {
             world_state,
             time: Time::new(),

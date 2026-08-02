@@ -10,7 +10,7 @@ use std::ops::Range;
 use winit::keyboard::NamedKey;
 
 #[derive(Clone, Copy)]
-pub(crate) struct MouseSnapshot {
+pub struct MouseSnapshot {
     pub mx: f32,
     pub my: f32,
     pub pressed: bool,
@@ -31,16 +31,12 @@ impl MouseSnapshot {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct HitResult {
+pub struct HitResult {
     pub element: ElementRef,
-    pub layer_order: u32,
-    pub actions: Vec<String>,
-    pub(crate) element_order: usize,
+    pub actions: Vec<String>
 }
 
-// ============================================================================
 // TEXT EDITING
-// ============================================================================
 
 /// Handle text editing with undo support
 pub fn handle_text_editing(
@@ -49,7 +45,7 @@ pub fn handle_text_editing(
     menus: &mut HashMap<String, Menu>,
     edit_manager: &mut UiEditManager,
     input: &mut Input,
-    mouse_snapshot: MouseSnapshot,
+    mouse_snapshot: MouseSnapshot
 ) {
     for sel in &selection.selected {
         let sel_menu = sel.menu.clone();
@@ -103,7 +99,7 @@ pub fn process_text_editing_input(
     input: &mut Input,
     mouse_snapshot: MouseSnapshot,
     text: &mut UiButtonText,
-    dirty: &mut LayerDirty,
+    dirty: &mut LayerDirty
 ) {
     if handle_mouse_caret_selection(editor, mouse_snapshot, text) {
         return;

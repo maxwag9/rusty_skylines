@@ -313,7 +313,7 @@ impl UiRenderer {
             let targets = color_target(pipelines, Some(BlendState::ALPHA_BLENDING));
             let options = &PipelineOptions {
                 topology: TriangleList,
-                msaa_samples: settings.msaa_samples,
+                multisample_state: multisample_state(settings.msaa_samples),
                 depth_stencil: None,
                 vertex_layouts: vec![],
                 cull_mode: None,
@@ -468,7 +468,7 @@ impl UiRenderer {
                                 color_target_ui(pipelines, Some(self.pipelines.additive_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -492,7 +492,7 @@ impl UiRenderer {
                                 color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -520,7 +520,7 @@ impl UiRenderer {
                             let targets = color_target_ui(pipelines, self.pipelines.good_blend);
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -549,7 +549,7 @@ impl UiRenderer {
                         if let (Some(bg1), Some(vbo)) = (poly_bg.as_ref(), &layer.gpu.poly_vbo) {
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -577,7 +577,7 @@ impl UiRenderer {
                             let targets = color_target_ui(pipelines, self.pipelines.good_blend);
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -608,7 +608,7 @@ impl UiRenderer {
                                 color_target_ui(pipelines, Some(self.pipelines.additive_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -629,7 +629,7 @@ impl UiRenderer {
                                 color_target_ui(pipelines, Some(self.pipelines.additive_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -663,7 +663,7 @@ impl UiRenderer {
                             let targets = color_target_ui(pipelines, Some(good_blend));
                             let options = &PipelineOptions {
                                 topology: PrimitiveTopology::TriangleStrip,
-                                msaa_samples: 1,
+                                multisample_state: multisample_state(1),
                                 depth_stencil: None,
                                 vertex_layouts: vec![Some(UiVertexPoly::desc())],
                                 fragment: FragmentOption::Default { targets },
@@ -691,7 +691,7 @@ impl UiRenderer {
                 let targets = color_target_ui(pipelines, Some(BlendState::ALPHA_BLENDING));
                 let options = &PipelineOptions {
                     topology: TriangleList,
-                    msaa_samples: 1,
+                    multisample_state: multisample_state(1),
                     depth_stencil: None,
                     vertex_layouts: vec![Some(UiVertexText::desc())],
                     fragment: FragmentOption::Default { targets },

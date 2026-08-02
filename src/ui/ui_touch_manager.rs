@@ -121,7 +121,7 @@ pub struct HitTestResult {
     pub distance: f32,
     /// For polygon: which vertex was hit, if any
     pub vertex_index: Option<usize>,
-    pub text_being_edited: Option<bool>,
+    pub text_being_edited: Option<bool>
 }
 
 impl HitTestResult {
@@ -247,6 +247,8 @@ pub enum TouchEvent {
     // Drag events
     DragStart {
         element: ElementRef,
+        actions: Vec<String>,
+        buttons: MouseButtons,
         start_position: [f32; 2],
         vertex_index: Option<usize>,
     },
@@ -260,6 +262,8 @@ pub enum TouchEvent {
     },
     DragEnd {
         element: ElementRef,
+        actions: Vec<String>,
+        buttons: MouseButtons,
         start_position: [f32; 2],
         end_position: [f32; 2],
         vertex_index: Option<usize>,
@@ -313,6 +317,10 @@ pub enum TouchEvent {
         buttons: MouseButtons,
     },
     StartUp {
+        element: ElementRef,
+        actions: Vec<String>,
+    },
+    ScreenResize {
         element: ElementRef,
         actions: Vec<String>,
     },
@@ -1011,6 +1019,8 @@ impl DragCoordinator {
             if drag_element.kind != ElementKind::Handle {
                 events.push(TouchEvent::DragStart {
                     element: drag_element,
+                    actions: drag.actions.clone(),
+                    buttons: drag.buttons,
                     start_position: drag.start_position,
                     vertex_index: drag.vertex_index,
                 });
@@ -1046,6 +1056,8 @@ impl DragCoordinator {
         if drag.threshold_exceeded {
             Some(TouchEvent::DragEnd {
                 element: drag.element,
+                actions: drag.actions,
+                buttons: drag.buttons,
                 start_position: drag.start_position,
                 end_position: drag.current_position,
                 vertex_index: drag.vertex_index,
@@ -1106,7 +1118,7 @@ pub struct EditorTouchExtension {
     /// Original radius when resize started
     pub original_radius: f32,
     /// Active vertex being dragged (for polygons)
-    pub active_vertex: Option<usize>,
+    pub active_vertex: Option<usize>
 }
 
 impl EditorTouchExtension {
@@ -1228,9 +1240,7 @@ impl TouchEventQueue {
     }
 }
 
-// ============================================================================
 // GLOBAL INTERACTION STATE
-// ============================================================================
 
 /// High-level interaction mode
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1240,7 +1250,7 @@ pub enum InteractionMode {
     Pressing,
     Dragging,
     BoxSelecting,
-    TextEditing,
+    TextEditing
 }
 
 impl Default for InteractionMode {
@@ -1276,6 +1286,7 @@ pub struct UiTouchManager {
     accumulated_time: f32,
     pub options: GuiOptions,
     pub element_actives: HashMap<ElementRef, bool>,
+    pub add_screen_resize_event: bool
 }
 
 impl UiTouchManager {
@@ -1297,6 +1308,7 @@ impl UiTouchManager {
                 show_gui: settings.show_gui,
             },
             element_actives: HashMap::new(),
+            add_screen_resize_event: true,
         }
     }
 
@@ -1306,7 +1318,7 @@ impl UiTouchManager {
         dt: f32,
         input: InputSnapshot,
         elements: &Vec<TouchableElement>,
-        time: &Time,
+        time: &Time
     ) {
         self.accumulated_time += dt;
         self.selection.reset_frame_flags();

@@ -1,6 +1,7 @@
 use crate::helpers::paths::saves_dir;
-use crate::helpers::positions::{ChunkSize, WorldPos, chunk_size, set_chunk_size};
+use crate::helpers::positions::{chunk_size, set_chunk_size, ChunkSize, WorldPos};
 use crate::renderer::props::{Props, SavedProps};
+use crate::ui::parser::Value;
 use crate::world::buildings::buildings::BuildingStorage;
 use crate::world::buildings::zoning::ZoningStorage;
 use crate::world::cars::partitions::PartitionManager;
@@ -19,7 +20,7 @@ use std::{fs, mem};
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter, EnumString};
 
-#[derive(Debug)]
+#[derive(Display, Debug)]
 pub enum LoadResult {
     Success(SaveVersion),
     FileNotFound(PathBuf),
@@ -33,8 +34,56 @@ pub enum LoadResult {
     EmptyName,
     CantCreateSave(SaveResult),
 }
-
-#[derive(Debug)]
+// impl fmt::Display for LoadResult {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         match self {
+//             LoadResult::Success(version) => {
+//                 write!(f, "Success({})", version)
+//             }
+// 
+//             LoadResult::FileNotFound(path) => {
+//                 write!(f, "FileNotFound({})", path.display())
+//             }
+// 
+//             LoadResult::WrongExtension(path) => {
+//                 write!(f, "WrongExtension({})", path.display())
+//             }
+// 
+//             LoadResult::PathError(err) => {
+//                 write!(f, "PathError({})", err)
+//             }
+// 
+//             LoadResult::FileNonExistent(name) => {
+//                 write!(f, "FileNonExistent({})", name)
+//             }
+// 
+//             LoadResult::CantGetExtension => {
+//                 write!(f, "CantGetExtension")
+//             }
+// 
+//             LoadResult::CantGetData(err) => {
+//                 write!(f, "CantGetData({})", err)
+//             }
+// 
+//             LoadResult::CantDecompress(err) => {
+//                 write!(f, "CantDecompress({})", err)
+//             }
+// 
+//             LoadResult::CantDecodeData(err) => {
+//                 write!(f, "CantDecodeData({})", err)
+//             }
+// 
+//             LoadResult::EmptyName => {
+//                 write!(f, "EmptyName")
+//             }
+// 
+//             LoadResult::CantCreateSave(result) => {
+//                 write!(f, "CantCreateSave({})", result)
+//             }
+//         }
+//     }
+// }
+#[derive(Display, Debug)]
 pub enum SaveResult {
     Success,
     NotAFile,
@@ -49,7 +98,97 @@ pub enum SaveResult {
     DowngradeError(String),
 }
 
+// impl fmt::Display for SaveResult {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         match self {
+//             SaveResult::Success => {
+//                 write!(f, "Success")
+//             }
+// 
+//             SaveResult::NotAFile => {
+//                 write!(f, "NotAFile")
+//             }
+// 
+//             SaveResult::CantWriteFile(err) => {
+//                 write!(f, "CantWriteFile({})", err)
+//             }
+// 
+//             SaveResult::CantCreateDir(err) => {
+//                 write!(f, "CantCreateDir({})", err)
+//             }
+// 
+//             SaveResult::CantCompress(err) => {
+//                 write!(f, "CantCompress({})", err)
+//             }
+// 
+//             SaveResult::CantEncodeData(err) => {
+//                 write!(f, "CantEncodeData({})", err)
+//             }
+// 
+//             SaveResult::CantGetExtension(ext) => {
+//                 write!(f, "CantGetExtension({})", ext)
+//             }
+// 
+//             SaveResult::WrongExtension(ext) => {
+//                 write!(f, "WrongExtension({})", ext)
+//             }
+// 
+//             SaveResult::EmptySaveName => {
+//                 write!(f, "EmptySaveName")
+//             }
+// 
+//             SaveResult::DowngradeError(msg) => {
+//                 write!(f, "DowngradeError({})", msg)
+//             }
+//         }
+//     }
+// }
+
 const SAVE_MAGIC: &str = "RSS1";
+
+#[derive(Debug, Clone)]
+pub struct SaveHeader {
+    pub name: String,
+    pub version: SaveVersion,
+    pub timestamp_unix: u128,
+    pub chunk_size: ChunkSize,
+}
+impl Default for SaveHeader {
+    fn default() -> Self {
+        SaveHeader {
+            name: String::new(),
+            version: SaveVersion::current(),
+            timestamp_unix: 0,
+            chunk_size: default_chunk_size(),
+        }
+    }
+}
+macro_rules! parse_save_header {
+    ($bytes:expr, $($field:ident : $ty:ty),* $(,)?) => {{
+        let text = String::from_utf8_lossy($bytes);
+
+        let mut header = SaveHeader::default();
+
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+
+            match key {
+                $(
+                    stringify!($field) => {
+                        if let Ok(parsed) = value.trim().parse::<$ty>() {
+                            header.$field = parsed;
+                        }
+                    }
+                )*
+                _ => {}
+            }
+        }
+
+        header
+    }};
+}
 
 fn sanitize_header_value(s: &str) -> String {
     s.chars()
@@ -90,11 +229,13 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
 }
 pub struct GameState {
     pub current_save: SaveState,
+    pub inside_save: bool
 }
 impl GameState {
     pub fn new() -> Self {
         Self {
             current_save: SaveState::default(),
+            inside_save: false
         }
     }
 
@@ -104,7 +245,7 @@ impl GameState {
             return LoadResult::EmptyName;
         }
         let path = saves_dir().join(format!("{}.rss", safe_name));
-        let detected_version: Option<SaveVersion>;
+        let detected_version: SaveVersion;
         match path.try_exists() {
             Ok(true) => {
                 if let Some(ext) = path.extension() {
@@ -126,14 +267,8 @@ impl GameState {
                     (b"" as &[u8], &data[..])
                 };
 
-                fn parse_version_from_header(header: &str) -> Option<SaveVersion> {
-                    header
-                        .lines()
-                        .find_map(|l| l.strip_prefix("version="))
-                        .and_then(|v| v.trim().parse().ok())
-                }
-                detected_version =
-                    parse_version_from_header(&String::from_utf8_lossy(header_bytes));
+                let header = parse_the_save_header(header_bytes);
+                detected_version = header.version.clone();
 
                 let decompressed = match zstd::decode_all(payload) {
                     Ok(d) => d,
@@ -154,6 +289,7 @@ impl GameState {
                 match self.save(world, props) {
                     SaveResult::Success => {
                         // Load the save I just created.
+                        self.inside_save = true;
                         return self.load(save_name, world, props);
                     }
                     e => {
@@ -165,7 +301,8 @@ impl GameState {
         }
 
         self.current_save.load(world, props);
-        LoadResult::Success(detected_version.unwrap_or(SaveVersion::current()))
+        self.inside_save = true;
+        LoadResult::Success(detected_version)
     }
 
     pub fn save(&mut self, world: &World, props: &Props) -> SaveResult {
@@ -372,4 +509,109 @@ impl SaveState {
 
 fn default_chunk_size() -> ChunkSize {
     128
+}
+
+pub struct SaveInfo {
+    pub name: String,
+    pub load_result: LoadResult,
+    pub timestamp_unix: u128,
+    pub chunk_size: ChunkSize,
+}
+impl SaveInfo {
+    pub fn to_values(self) -> Vec<Value> {
+        vec![
+            Value::String(self.name.clone()),
+            Value::String(format!("{:?}", self.load_result)),
+            Value::I64(self.timestamp_unix as i64),
+            Value::I64(self.chunk_size as i64),
+        ]
+    }
+}
+pub fn get_available_saves() -> Vec<SaveInfo> {
+    let mut saves = Vec::new();
+
+    let dir = saves_dir();
+
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return saves,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Only .rss files
+        if path.extension().and_then(|e| e.to_str()) != Some("rss") {
+            continue;
+        }
+
+        let fallback_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
+        let data = match fs::read(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                saves.push(SaveInfo {
+                    name: fallback_name,
+                    load_result: LoadResult::CantGetData(e),
+                    timestamp_unix: Default::default(),
+                    chunk_size: Default::default(),
+                });
+                continue;
+            }
+        };
+
+        let (header_bytes, payload) = if let Some(end) = find_header_end(&data) {
+            (&data[..end], &data[end..])
+        } else {
+            (b"" as &[u8], &data[..])
+        };
+
+        let header = parse_the_save_header(header_bytes);
+
+        let save_name = if header.name.is_empty() {
+            fallback_name
+        } else {
+            header.name
+        };
+
+        let version = header.version;
+        let timestamp = header.timestamp_unix;
+
+
+        // Validate actual save data
+        let result = match zstd::decode_all(payload) {
+            Ok(decoded) => {
+                match revision::from_slice::<SaveState>(&decoded) {
+                    Ok(_) => LoadResult::Success(version.clone()),
+                    Err(e) => LoadResult::CantDecodeData(e),
+                }
+            }
+            Err(e) => LoadResult::CantDecompress(e),
+        };
+
+        saves.push(SaveInfo {
+            name: save_name,
+            load_result: result,
+            timestamp_unix: timestamp,
+            chunk_size: header.chunk_size,
+        });
+    }
+
+    // newest saves first
+    saves.sort_by(|a, b| b.timestamp_unix.cmp(&a.timestamp_unix));
+
+    saves
+}
+
+fn parse_the_save_header(data: &[u8]) -> SaveHeader {
+    parse_save_header!(
+        data,
+        timestamp_unix: u128,
+        version: SaveVersion,
+        chunk_size: ChunkSize
+    )
 }

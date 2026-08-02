@@ -50,7 +50,8 @@ pub enum ToneMappingState {
     GoldenHour,
     Overcast,
     Night,
-    Cinematic, // original, kept for reference
+    Cinematic,
+    Mexico,
     Off,
 }
 #[repr(C)]
@@ -75,14 +76,15 @@ impl Default for ToneMappingUniforms {
 }
 
 impl ToneMappingUniforms {
-    pub fn from_state(state: &ToneMappingState) -> Self {
+    pub fn from_state(state: ToneMappingState) -> Self {
         match state {
             ToneMappingState::SunnyDay => Self::sunny_day(),
             ToneMappingState::GoldenHour => Self::golden_hour(),
             ToneMappingState::Overcast => Self::overcast(),
             ToneMappingState::Night => Self::night(),
             ToneMappingState::Cinematic => Self::cinematic(),
-            ToneMappingState::Off => Self::off(),
+            ToneMappingState::Mexico => Self::mexico(),
+            ToneMappingState::Off => Self::off()
         }
     }
 
@@ -146,6 +148,18 @@ impl ToneMappingUniforms {
         }
     }
 
+    /// Hot desert cinematography — harsh sun, dusty atmosphere, orange highlights,
+    /// deep shadows and a gritty high-contrast film look.
+    fn mexico() -> Self {
+        Self {
+            a: 3.20,
+            b: 0.008,
+            c: 2.43,
+            d: 0.78,
+            e: 0.090,
+        }
+    }
+
     /// Disabled — linear passthrough, useful for debugging HDR values.
     fn off() -> Self {
         Self {
@@ -158,6 +172,98 @@ impl ToneMappingUniforms {
     }
 }
 
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, Display, EnumString,
+)]
+pub enum ColorGradeState {
+    #[default]
+    Off,
+    Mexico,
+    Cold,
+    Vintage,
+    HighContrast,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ColorGrade {
+    lift: [f32; 4],
+    gamma: [f32; 4],
+    gain: [f32; 4],
+}
+
+impl Default for ColorGrade {
+    fn default() -> Self {
+        Self {
+            lift: [0.0, 0.0, 0.0, 0.0],
+            gamma: [1.0, 1.0, 1.0, 0.0],
+            gain: [1.0, 1.0, 1.0, 0.0],
+        }
+    }
+}
+
+impl ColorGrade {
+    pub fn from_state(state: ColorGradeState) -> Self {
+        match state {
+            ColorGradeState::Mexico => Self::mexico(),
+            ColorGradeState::Cold => Self::cold(),
+            ColorGradeState::Vintage => Self::vintage(),
+            ColorGradeState::HighContrast => Self::high_contrast(),
+            ColorGradeState::Off => Self::off()
+        }
+    }
+
+    /// Hot dusty desert cinematography.
+    /// Cyan shadows, orange mids, golden highlights.
+    fn mexico() -> Self {
+        Self {
+            // Cyan/greenish shadows against the orange world
+            lift: [-0.035, 0.005, 0.035, 0.0],
+
+            // Crush blues, push red/yellow mids
+            gamma: [1.25, 1.05, 0.75, 0.0],
+
+            // Nuclear desert sunlight
+            gain: [1.35, 1.15, 0.75, 0.0],
+        }
+    }
+
+    /// Cold blue cinematic look.
+    fn cold() -> Self {
+        Self {
+            lift: [0.000, 0.005, 0.020, 0.0],
+            gamma: [0.95, 1.00, 1.10, 0.0],
+            gain: [0.90, 1.00, 1.15, 0.0],
+        }
+    }
+
+    /// Old film / faded colors.
+    fn vintage() -> Self {
+        Self {
+            lift: [0.015, 0.010, 0.005, 0.0],
+            gamma: [1.05, 1.05, 1.00, 0.0],
+            gain: [1.00, 0.95, 0.85, 0.0],
+        }
+    }
+
+    /// Strong game-like contrast.
+    fn high_contrast() -> Self {
+        Self {
+            lift: [-0.025, -0.025, -0.025, 0.0],
+            gamma: [1.15, 1.15, 1.15, 0.0],
+            gain: [1.10, 1.10, 1.10, 0.0],
+        }
+    }
+
+    /// Disabled color grading.
+    fn off() -> Self {
+        Self {
+            lift: [0.0, 0.0, 0.0, 0.0],
+            gamma: [1.0, 1.0, 1.0, 0.0],
+            gain: [1.0, 1.0, 1.0, 0.0],
+        }
+    }
+}
 pub struct MeshBuffers {
     pub vertex: Buffer,
     pub index: Buffer,
@@ -207,6 +313,7 @@ pub struct UniformBuffers {
     pub water: Buffer,
     pub fog: Buffer,
     pub tonemapping: Buffer,
+    pub color_grading: Buffer,
     pub pick: Buffer,
     pub gtao: Buffer,
     pub gtao_blur: Buffer,
@@ -266,6 +373,7 @@ impl Pipelines {
             water: create_water_buffer(device),
             fog: create_fog_buffer(device),
             tonemapping: create_tonemapping_buffer(device),
+            color_grading: create_color_grade_buffer(device),
             pick: create_pick_buffer(device),
             gtao: create_gtao_buffer(device, settings),
             gtao_blur: create_gtao_blur_buffer(device, settings),
@@ -280,7 +388,7 @@ impl Pipelines {
             resolved,
             post_fx,
             buffers: uniforms,
-            resources,
+            resources
         })
     }
 

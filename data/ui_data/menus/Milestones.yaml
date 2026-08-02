@@ -9,9 +9,10 @@ layers:
         ap_var: '300'
         x: 0.0
         y: 0.0
+        scale: 0.0
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
         editing_tool: false
     editing_tool: false

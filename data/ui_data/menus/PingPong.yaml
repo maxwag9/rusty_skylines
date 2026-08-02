@@ -5,7 +5,6 @@ layers:
     elements:
       - !Rect
         id: Background
-        actions: [ ]
         x: 0.5
         y: 0.5
         w: 1.0
@@ -34,11 +33,10 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: false
       - !Rect
         id: Center Line
-        actions: [ ]
         x: 0.5
         y: 0.5
         w: 0.02
@@ -67,11 +65,10 @@ layers:
         glow_misc: { }
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
       - !Text
         id: ping_pong_text
-        actions: [ ]
         x: 0.5
         y: 0.07
         pt: 25.0
@@ -100,7 +97,7 @@ layers:
           - on:d inc(str:ball.speed, 0.1)
         x: 0.1
         y: 0.09
-        pt: 15.0
+        pt: 14.999999
         color:
           - 0.1
           - 1.0
@@ -113,7 +110,7 @@ layers:
           - on:d dec(str:ball.speed, 0.1)
         x: 0.1
         y: 0.12
-        pt: 15.0
+        pt: 14.999999
         color:
           - 1.0
           - 0.1
@@ -122,7 +119,6 @@ layers:
         text: Make ball slower...
       - !Text
         id: home_score_text
-        actions: [ ]
         x: 0.05
         y: 0.02
         pt: 16.0
@@ -134,11 +130,10 @@ layers:
         text: 'Home Score: {ball.home_score}'
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
       - !Text
         id: visitor_score_text
-        actions: [ ]
         x: 0.9
         y: 0.02
         pt: 16.0
@@ -150,7 +145,7 @@ layers:
         text: 'Visitor Score: {ball.visitor_score}'
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
     editing_tool: false
   - name: pingpong_moving_stuff
@@ -164,16 +159,6 @@ layers:
           - on:n button:a set(str:self.center.y, {self.center.y} + {ball.velocity.y} * {ball.speed})
           - on:n button:a if({self.center.y} < {self.radius}, if({ball.velocity.y} * {ball.speed} < 0, set(str:ball.velocity.y, -{ball.velocity.y})))
           - on:n button:a if({self.center.y} > {screen.y} - {self.radius}, if({ball.velocity.y} * {ball.speed} > 0, set(str:ball.velocity.y, -{ball.velocity.y})))
-        #    - on:n button:a if({self.center.x} - {self.radius} < {left_paddle.center.x} + {left_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {left_paddle.center.x} - {left_paddle.size.x}*0.5 && {self.center.y} > {left_paddle.center.y} - {left_paddle.size.y}*0.5 && {self.center.y} < {left_paddle.center.y} + {left_paddle.size.y}*0.5 && {ball.velocity.x} < 0, set(str:ball.velocity.x, -{ball.velocity.x}); set(str:left_paddle.knock_x, -15); set(str:ball.squish, 0.65))
-        #    - on:n button:a if({self.center.x} - {self.radius} < {right_paddle.center.x} + {right_paddle.size.x}*0.5 && {self.center.x} + {self.radius} > {right_paddle.center.x} - {right_paddle.size.x}*0.5 && {self.center.y} > {right_paddle.center.y} - {right_paddle.size.y}*0.5 && {self.center.y} < {right_paddle.center.y} + {right_paddle.size.y}*0.5 && {ball.velocity.x} > 0, set(str:ball.velocity.x, -{ball.velocity.x}); set(str:right_paddle.knock_x, 15); set(str:ball.squish, 0.65))
-        #    - on:n button:a if({self.center.x} < 0, set(str:ball.visitor_score, {ball.visitor_score} + 1); set(str:ball.velocity.x, 1.5); set(str:ball.velocity.y, random(-1.5, 1.5)); set(str:self.center.x, {screen.x} * 0.5); set(str:self.center.y, {screen.y} * 0.5); )
-        #    - on:n button:a if({self.center.x} > {screen.x}, inc(str:ball.home_score, 1))
-        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.x, -1.5))
-        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:ball.velocity.y, random(-1.5, 1.5)))
-        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.x, {screen.x} * 0.5))
-        #    - on:n button:a if({self.center.x} > {screen.x}, set(str:self.center.y, {screen.y} * 0.5))
-        #    - on:n button:a set(str:ball.squish, {ball.squish} * 0.78 + 0.22)
-        #    - on:n button:a set(str:self.radius, {ball.orig_radius} * {ball.squish})
         style: Hue Circle
         x: 0.6
         y: 0.5
@@ -194,7 +179,7 @@ layers:
           glow_intensity: 0.5
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
       - !Rect
         id: left paddle
@@ -206,7 +191,6 @@ layers:
           - on:n button:a set(str:left_paddle.center, self.center)
           - on:n button:a if({left_paddle.knock_x} != 0.0, set(str:self.center.x, {self.center.x} + {left_paddle.knock_x}); set(str:left_paddle.knock_x, {left_paddle.knock_x} * 0.82))
           - on:n button:a set(str:self.center.x, {self.center.x} * 0.92 + {left_paddle.orig_center_x} * 0.08)
-          #- button:a show_interaction([0.5, 1.0, 0.5, 1.0], true)
         x: 0.014140624
         y: 0.5
         w: 0.02
@@ -238,7 +222,7 @@ layers:
           glow_intensity: 0.5
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
       - !Rect
         id: right paddle
@@ -250,7 +234,6 @@ layers:
           - on:n button:a set(str:right_paddle.center, self.center)
           - on:n button:a if({right_paddle.knock_x} != 0.0, set(str:self.center.x, {self.center.x} + {right_paddle.knock_x}); set(str:right_paddle.knock_x, {right_paddle.knock_x} * 0.82))
           - on:n button:a set(str:self.center.x, {self.center.x} * 0.92 + {right_paddle.orig_center_x} * 0.08)
-          #- button:a show_interaction([1.0, 0.5, 0.5, 1.0], true)
         x: 0.9858594
         y: 0.5
         w: 0.02
@@ -282,6 +265,6 @@ layers:
           glow_intensity: 0.5
         misc:
           active: true
-          pressable: false
+          touchable: false
           editable: true
     editing_tool: false
