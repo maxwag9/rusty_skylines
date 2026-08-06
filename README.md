@@ -10,7 +10,7 @@ A Cities: Skylines inspired game featuring better features and way better perfor
 
 ---
 ## Priorities:
-- **Small game size** (under 50 MB TOTAL, currently 9MB)  🥵 Compared to Cities Skylines 2 at 60000MB  
+- **Small game size** (under 50 MB TOTAL, currently 9MB)  🥵 Compared to Cities Skylines 2 at 85000MB  
 
 - Procedural textures and models, no big assets  
 
@@ -20,7 +20,7 @@ A Cities: Skylines inspired game featuring better features and way better perfor
 
 - **GRIDLESS** procedural building  
 
-- Great Graphics, running at target: RTX 4060, 2560x1440, 100FPS  
+- Great™ Graphics, running at target: RTX 4060, 2560x1440, 100FPS  
 
 - Overall, multithreaded highly parallel simulation for nearly everything, with deferred, long tick rates per chunk  
 
@@ -50,7 +50,7 @@ The 3D scene has:
 
 - Roads, and cars driving using Signfinding to find their way
   
-- Props and trees
+- Props and trees (forests added recently)
 
 - Fully procedural buildings
 
@@ -74,8 +74,8 @@ Driving a car with WASD.
 
 Minecraft-style Keybinds: F1 to hide GUI, F2 to take a screenshot, F3 to toggle the Debug overlay, C to ZOOM!
 
-A WIP GUI Editor with the ability to edit any GUI in-game and save it,
-allowing expressions and logic and animations to be available through modding (WIP!!) 
+A CRAZY WIP GUI Editor with the ability to edit any GUI in-game and save it,
+allowing expressions and logic and animations to be available through modding (WIP!!) (New parser)
 
 Hot-reloadable shaders (and by extension texture shaders!)
 
